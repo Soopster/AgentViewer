@@ -341,6 +341,7 @@ export default function MessageView({ messages, loading, session }: Props) {
           <div style={{ position: 'relative' }}>
             {/* Continuous timeline track */}
             <div
+              className="timeline-line"
               style={{
                 position: 'absolute',
                 left: 9,

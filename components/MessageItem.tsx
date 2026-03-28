@@ -2399,9 +2399,9 @@ export default function MessageItem({ message }: { message: ThreadedMessage }) {
   const style = ROLE_STYLE[message.role]
 
   return (
-    <div style={{ display: 'flex', gap: 18, marginBottom: 36 }}>
+    <div className={`msg msg--${message.role}`} style={{ display: 'flex', gap: 18, marginBottom: 36 }}>
       {/* Left column: dot */}
-      <div style={{ width: 20, flexShrink: 0, paddingTop: 3 }}>
+      <div className="msg-dot" style={{ width: 20, flexShrink: 0, paddingTop: 3 }}>
         <div
           style={{
             width: 13,
@@ -2415,9 +2415,9 @@ export default function MessageItem({ message }: { message: ThreadedMessage }) {
       </div>
 
       {/* Right column */}
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div className="msg-body" style={{ flex: 1, minWidth: 0 }}>
         {/* Label row */}
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
+        <div className="msg-label" style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
           <span
             style={{
               fontFamily: "'Oxanium', monospace",
@@ -2460,7 +2460,7 @@ export default function MessageItem({ message }: { message: ThreadedMessage }) {
         </div>
 
         {/* Content blocks */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="msg-blocks" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {message.blocks.map((block, i) => renderBlock(block, i))}
         </div>
       </div>

@@ -118,6 +118,46 @@
   --t-other:     #5a9e5a;
 }
 
+/* ── Design tokens ── imessage ───────────────────────────────────────────── */
+[data-theme="imessage"] {
+  /* Backgrounds — iOS system palette */
+  --bg:          #f2f2f7;
+  --surface:     #ffffff;
+  --surface-2:   #f2f2f7;
+  --surface-3:   #e5e5ea;
+
+  /* Borders */
+  --border:      rgba(60, 60, 67, 0.18);
+  --border-2:    rgba(60, 60, 67, 0.28);
+
+  /* Text */
+  --text:        #1c1c1e;
+  --text-2:      #48484a;
+  --text-3:      #aeaeb2;
+
+  /* iOS Blue (primary / assistant) */
+  --violet:      #007aff;
+  --violet-glow: rgba(0, 122, 255, 0.15);
+  /* iOS Green (user / sent) */
+  --cyan:        #34c759;
+  --cyan-glow:   rgba(52, 199, 89, 0.12);
+
+  /* Semantic */
+  --green:       #34c759;
+  --red:         #ff3b30;
+  --amber:       #ff9500;
+
+  /* Tool palette — iOS tints */
+  --t-bash:      #ff9500;
+  --t-edit:      #34c759;
+  --t-write:     #007aff;
+  --t-read:      #5856d6;
+  --t-grep:      #ff3b30;
+  --t-glob:      #af52de;
+  --t-agent:     #ff2d55;
+  --t-other:     #8e8e93;
+}
+
 /* ── Design tokens ── paper ──────────────────────────────────────────────── */
 [data-theme="paper"] {
   /* Backgrounds — clean Material paper whites */
@@ -204,6 +244,101 @@ body {
     radial-gradient(ellipse at 80% 70%, rgba(106, 27, 154, 0.03) 0%, transparent 45%),
     radial-gradient(circle, rgba(180, 190, 220, 0.18) 1px, transparent 1px);
   background-size: auto, auto, 28px 28px;
+}
+
+/* ── iMessage body + layout ──────────────────────────────────────────────── */
+[data-theme="imessage"] body {
+  background: #f2f2f7;
+  background-image: none;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+}
+
+/* Hide the vertical timeline track line */
+[data-theme="imessage"] .timeline-line { display: none !important; }
+
+/* Message row: stack dot-free, align to bottom for bubble tails */
+[data-theme="imessage"] .msg {
+  gap: 0 !important;
+  margin-bottom: 3px !important;
+  padding: 0 16px !important;
+  align-items: flex-end !important;
+}
+
+/* User (sent) messages — right-aligned */
+[data-theme="imessage"] .msg--user {
+  flex-direction: row-reverse !important;
+}
+
+/* Hide timeline dot */
+[data-theme="imessage"] .msg-dot { display: none !important; }
+
+/* Body column: auto-width up to 78%, don't force-fill the row */
+[data-theme="imessage"] .msg-body {
+  flex: 0 1 auto !important;
+  max-width: 78% !important;
+  min-width: 0 !important;
+}
+
+/* Label row: smaller, muted */
+[data-theme="imessage"] .msg-label {
+  padding: 0 14px !important;
+  margin-bottom: 3px !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif !important;
+}
+[data-theme="imessage"] .msg--user .msg-label {
+  flex-direction: row-reverse !important;
+}
+
+/* ── Bubble shell ── */
+[data-theme="imessage"] .msg-blocks {
+  border-radius: 18px 18px 18px 5px !important;
+  padding: 10px 14px !important;
+  background: #e5e5ea;
+  /* Scope CSS vars inside assistant (gray) bubbles */
+  --text:      #1c1c1e;
+  --text-2:    #48484a;
+  --text-3:    #8e8e93;
+  --surface:   rgba(255, 255, 255, 0.85);
+  --surface-2: rgba(242, 242, 247, 0.9);
+  --surface-3: rgba(229, 229, 234, 0.7);
+  --border:    rgba(60, 60, 67, 0.14);
+  --border-2:  rgba(60, 60, 67, 0.22);
+  --bg:        #e5e5ea;
+}
+
+/* User (sent) bubble — iOS blue */
+[data-theme="imessage"] .msg--user .msg-blocks {
+  border-radius: 18px 18px 5px 18px !important;
+  background: #007aff;
+  /* Redefine all text/surface vars for white-on-blue readability */
+  --text:      #ffffff;
+  --text-2:    rgba(255, 255, 255, 0.85);
+  --text-3:    rgba(255, 255, 255, 0.55);
+  --violet:    #ffffff;
+  --cyan:      rgba(255, 255, 255, 0.9);
+  --green:     rgba(255, 255, 255, 0.9);
+  --amber:     rgba(255, 255, 255, 0.9);
+  --surface:   rgba(255, 255, 255, 0.18);
+  --surface-2: rgba(255, 255, 255, 0.12);
+  --surface-3: rgba(255, 255, 255, 0.08);
+  --border:    rgba(255, 255, 255, 0.22);
+  --border-2:  rgba(255, 255, 255, 0.35);
+  --bg:        #007aff;
+  /* Tool colors — white variants inside blue bubble */
+  --t-bash:    rgba(255, 255, 255, 0.9);
+  --t-edit:    rgba(255, 255, 255, 0.9);
+  --t-write:   rgba(255, 255, 255, 0.9);
+  --t-read:    rgba(255, 255, 255, 0.9);
+  --t-grep:    rgba(255, 255, 255, 0.9);
+  --t-glob:    rgba(255, 255, 255, 0.9);
+  --t-agent:   rgba(255, 255, 255, 0.9);
+  --t-other:   rgba(255, 255, 255, 0.7);
+}
+
+/* Add spacing after a group when the next sender changes */
+[data-theme="imessage"] .msg--user + .msg--assistant,
+[data-theme="imessage"] .msg--assistant + .msg--user {
+  margin-top: 12px !important;
 }
 
 /* ── Scrollbars ──────────────────────────────────────────────────────────── */

@@ -8,7 +8,7 @@ export const metadata: Metadata = {
 
 // Runs synchronously before first paint — prevents a flash of the wrong theme.
 // Safe: this is a static literal, not user-supplied content.
-const themeScript = `(function(){var t=localStorage.getItem('theme');if(t==='light'||t==='dark'||t==='terminal'||t==='paper'){document.documentElement.dataset.theme=t;}})()`
+const themeScript = `(function(){var t=localStorage.getItem('theme');if(t==='light'||t==='dark'||t==='terminal'||t==='paper'||t==='imessage'){document.documentElement.dataset.theme=t;}})()`
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
