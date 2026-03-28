@@ -11,6 +11,7 @@
     "@anthropic-ai/claude-agent-sdk": "latest",
     "@types/react-syntax-highlighter": "^15.5.13",
     "diff": "^8.0.4",
+    "marked": "^17.0.5",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

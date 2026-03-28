@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback } from 'react'
 import type { SessionMessage, Session, SendState } from '@/lib/types'
 import { buildThreadedMessages } from '@/lib/threading'
+import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import MessageItem from './MessageItem'
 
 type Props = {
@@ -88,6 +89,14 @@ export default function MessageView({ messages, loading, session }: Props) {
       sendMessage()
     }
   }, [sendMessage])
+
+  const handleExport = useCallback(() => {
+    if (!session) return
+    const dirName  = session.tag ?? session.cwd?.split('/').pop() ?? session.sessionId
+    const safeName = dirName.replace(/[^a-z0-9\-_]/gi, '-').toLowerCase()
+    const html = exportSessionToHtml(session, messages)
+    downloadHtml(html, `${safeName}_${session.sessionId.slice(0, 8)}.html`)
+  }, [session, messages])
 
   if (!session) {
     return (
@@ -236,6 +245,38 @@ export default function MessageView({ messages, loading, session }: Props) {
             {threaded.length} turns · {messages.length} events
           </span>
         )}
+
+        {/* Export button */}
+        <button
+          onClick={handleExport}
+          title="Export session to HTML"
+          style={{
+            flexShrink: 0,
+            height: 26,
+            padding: '0 10px',
+            background: 'rgba(56,217,245,0.07)',
+            border: '1px solid rgba(56,217,245,0.18)',
+            borderRadius: 5,
+            cursor: 'pointer',
+            color: 'var(--text-3)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            letterSpacing: '0.08em',
+            transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.background    = 'rgba(56,217,245,0.13)'
+            e.currentTarget.style.color         = 'var(--cyan)'
+            e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.35)'
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.background    = 'rgba(56,217,245,0.07)'
+            e.currentTarget.style.color         = 'var(--text-3)'
+            e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.18)'
+          }}
+        >
+          EXPORT
+        </button>
 
         {/* Live pill */}
         <div
