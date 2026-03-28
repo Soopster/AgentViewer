@@ -105,7 +105,7 @@ export default function MessageView({ messages, loading, session }: Props) {
       <div
         style={{
           padding: '0 28px',
-          height: 48,
+          height: 52,
           borderBottom: '1px solid var(--border)',
           flexShrink: 0,
           display: 'flex',
@@ -118,7 +118,7 @@ export default function MessageView({ messages, loading, session }: Props) {
         <span
           style={{
             fontFamily: "'Oxanium', monospace",
-            fontSize: 13,
+            fontSize: 14,
             fontWeight: 600,
             letterSpacing: '0.06em',
             color: 'var(--text)',
@@ -133,7 +133,7 @@ export default function MessageView({ messages, loading, session }: Props) {
           <span
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
+              fontSize: 11,
               color: 'var(--text-3)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -150,7 +150,7 @@ export default function MessageView({ messages, loading, session }: Props) {
           <span
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
+              fontSize: 11,
               color: 'var(--text-3)',
               flexShrink: 0,
             }}
@@ -185,7 +185,7 @@ export default function MessageView({ messages, loading, session }: Props) {
           <span
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
+              fontSize: 11,
               color: 'var(--green)',
               letterSpacing: '0.08em',
             }}

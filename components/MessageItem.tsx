@@ -4,6 +4,8 @@ import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { diffLines } from 'diff'
+import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
 import type { Components } from 'react-markdown'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
@@ -32,24 +34,24 @@ function toolColor(name: string) {
 
 const mdComponents: Components = {
   p:          ({ children }) => (
-    <p style={{ margin: '0 0 10px', lineHeight: 1.7, color: 'var(--text)' }}>{children}</p>
+    <p style={{ margin: '0 0 12px', lineHeight: 1.75, color: 'var(--text)' }}>{children}</p>
   ),
   h1: ({ children }) => (
     <h1 style={{
-      margin: '18px 0 8px', fontSize: 17, fontWeight: 700,
+      margin: '20px 0 10px', fontSize: 19, fontWeight: 700,
       fontFamily: "'Oxanium', monospace", letterSpacing: '0.04em',
       color: 'var(--text)', borderBottom: '1px solid var(--border)', paddingBottom: 6,
     }}>{children}</h1>
   ),
   h2: ({ children }) => (
     <h2 style={{
-      margin: '14px 0 6px', fontSize: 15, fontWeight: 600,
+      margin: '16px 0 8px', fontSize: 17, fontWeight: 600,
       fontFamily: "'Oxanium', monospace", letterSpacing: '0.03em',
       color: 'var(--text)',
     }}>{children}</h2>
   ),
   h3: ({ children }) => (
-    <h3 style={{ margin: '10px 0 4px', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{children}</h3>
+    <h3 style={{ margin: '12px 0 6px', fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{children}</h3>
   ),
   strong:     ({ children }) => <strong style={{ fontWeight: 600, color: 'var(--text)' }}>{children}</strong>,
   em:         ({ children }) => <em style={{ fontStyle: 'italic', color: 'var(--text-2)' }}>{children}</em>,
@@ -59,59 +61,73 @@ const mdComponents: Components = {
     </a>
   ),
   blockquote: ({ children }) => (
-    <blockquote style={{ margin: '8px 0', paddingLeft: 12, borderLeft: '2px solid var(--border-2)', color: 'var(--text-2)' }}>
+    <blockquote style={{ margin: '10px 0', paddingLeft: 14, borderLeft: '2px solid var(--border-2)', color: 'var(--text-2)' }}>
       {children}
     </blockquote>
   ),
-  ul: ({ children }) => <ul style={{ margin: '4px 0 10px', paddingLeft: 20, color: 'var(--text)' }}>{children}</ul>,
-  ol: ({ children }) => <ol style={{ margin: '4px 0 10px', paddingLeft: 20, color: 'var(--text)' }}>{children}</ol>,
-  li: ({ children }) => <li style={{ marginBottom: 3, lineHeight: 1.65 }}>{children}</li>,
-  hr: () => <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '14px 0' }} />,
+  ul: ({ children }) => <ul style={{ margin: '6px 0 12px', paddingLeft: 22, color: 'var(--text)' }}>{children}</ul>,
+  ol: ({ children }) => <ol style={{ margin: '6px 0 12px', paddingLeft: 22, color: 'var(--text)' }}>{children}</ol>,
+  li: ({ children }) => <li style={{ marginBottom: 4, lineHeight: 1.7 }}>{children}</li>,
+  hr: () => <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '16px 0' }} />,
   table: ({ children }) => (
-    <div style={{ overflowX: 'auto', marginBottom: 10 }}>
-      <table style={{ borderCollapse: 'collapse', fontSize: 13, color: 'var(--text)', width: '100%' }}>
+    <div style={{ overflowX: 'auto', marginBottom: 12 }}>
+      <table style={{ borderCollapse: 'collapse', fontSize: 14, color: 'var(--text)', width: '100%' }}>
         {children}
       </table>
     </div>
   ),
   th: ({ children }) => (
-    <th style={{ padding: '5px 12px', borderBottom: '1px solid var(--border-2)', textAlign: 'left', fontWeight: 600, color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>
+    <th style={{ padding: '6px 14px', borderBottom: '1px solid var(--border-2)', textAlign: 'left', fontWeight: 600, color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>
       {children}
     </th>
   ),
   td: ({ children }) => (
-    <td style={{ padding: '5px 12px', borderBottom: '1px solid var(--border)' }}>{children}</td>
+    <td style={{ padding: '6px 14px', borderBottom: '1px solid var(--border)' }}>{children}</td>
   ),
   code: ({ className, children, ...rest }) => {
+    const language = className?.replace('language-', '') ?? ''
     const isFenced = !!className
     if (isFenced) {
+      const codeString = String(children).replace(/\n$/, '')
       return (
-        <code style={{ display: 'block', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#94a3b8', whiteSpace: 'pre', overflowX: 'auto' }} className={className} {...rest}>
-          {children}
-        </code>
+        <div style={{ margin: '10px 0', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
+          {language && (
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+              padding: '3px 12px',
+              background: 'var(--surface-2)',
+              borderBottom: '1px solid var(--border)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10, color: 'var(--text-3)',
+              letterSpacing: '0.06em',
+            }}>
+              {language}
+            </div>
+          )}
+          <SyntaxHighlighter
+            language={language || 'text'}
+            style={atomOneDark}
+            customStyle={{
+              margin: 0,
+              padding: '12px 16px',
+              fontSize: 13,
+              lineHeight: 1.65,
+              background: 'var(--surface)',
+              overflowX: 'auto',
+            }}
+          >
+            {codeString}
+          </SyntaxHighlighter>
+        </div>
       )
     }
     return (
-      <code style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, background: 'var(--surface-3)', color: 'var(--violet)', padding: '1px 5px', borderRadius: 3 }} {...rest}>
+      <code style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, background: 'var(--surface-3)', color: 'var(--violet)', padding: '2px 6px', borderRadius: 3 }} {...rest}>
         {children}
       </code>
     )
   },
-  pre: ({ children }) => (
-    <pre style={{
-      background: 'var(--surface)',
-      border: '1px solid var(--border)',
-      borderRadius: 6,
-      padding: '10px 14px',
-      overflowX: 'auto',
-      margin: '8px 0',
-      fontSize: 12,
-      lineHeight: 1.6,
-      fontFamily: "'IBM Plex Mono', monospace",
-    }}>
-      {children}
-    </pre>
-  ),
+  pre: ({ children }) => <>{children}</>,
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -158,8 +174,8 @@ function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
     <div
       style={{
         fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: 12,
-        lineHeight: 1.55,
+        fontSize: 13,
+        lineHeight: 1.6,
         overflowX: 'auto',
         maxHeight: 500,
         overflowY: 'auto',
@@ -226,25 +242,25 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
           onMouseLeave={() => setHovered(false)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
-            padding: '6px 12px',
+            padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
             cursor: 'pointer', userSelect: 'none',
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>EDIT</span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>EDIT</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
             {basename(filePath)}
           </span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--text-3)', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--text-3)', flexShrink: 0 }}>
             {sign}
           </span>
-          <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+          <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
         </div>
       }
       body={open ? (
         <>
-          <div style={{ padding: '2px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div style={{ padding: '2px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {filePath}
           </div>
           <DiffView oldStr={oldStr} newStr={newStr} />
@@ -275,29 +291,29 @@ function WriteToolCard({ thread }: { thread: ToolThread }) {
           onMouseLeave={() => setHovered(false)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
-            padding: '6px 12px',
+            padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
             cursor: 'pointer', userSelect: 'none',
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>WRITE</span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>WRITE</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
             {basename(filePath)}
           </span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
             {lines} lines
           </span>
-          <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+          <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
         </div>
       }
       body={open ? (
         <>
-          <div style={{ padding: '2px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div style={{ padding: '2px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {filePath}
           </div>
           <pre style={{
-            margin: 0, padding: '10px 14px', fontSize: 12,
+            margin: 0, padding: '10px 14px', fontSize: 13,
             fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)',
             background: 'var(--surface)', overflowX: 'auto', maxHeight: 500, overflowY: 'auto',
             whiteSpace: 'pre', lineHeight: 1.6, borderTop: '1px solid var(--border)',
@@ -329,13 +345,13 @@ function GenericToolCard({ thread }: { thread: ToolThread }) {
           onMouseLeave={() => setHovered(false)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
-            padding: '6px 12px',
+            padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
             cursor: 'pointer', userSelect: 'none',
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
             {toolUse.name.toUpperCase()}
           </span>
           {!open && preview !== null && (
@@ -343,12 +359,12 @@ function GenericToolCard({ thread }: { thread: ToolThread }) {
               {preview}
             </span>
           )}
-          <span style={{ color: 'var(--text-3)', fontSize: 10, marginLeft: 'auto' }}>{open ? '▲' : '▼'}</span>
+          <span style={{ color: 'var(--text-3)', fontSize: 11, marginLeft: 'auto' }}>{open ? '▲' : '▼'}</span>
         </div>
       }
       body={open ? (
         <pre style={{
-          padding: '10px 14px', fontSize: 12, margin: 0,
+          padding: '10px 14px', fontSize: 13, margin: 0,
           fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)',
           background: 'var(--surface)', overflowX: 'auto', maxHeight: 280, overflowY: 'auto',
           borderTop: '1px solid var(--border)', lineHeight: 1.6,
@@ -382,12 +398,12 @@ function AskUserQuestionCard({ thread }: { thread: ToolThread }) {
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
-        padding: '6px 12px',
+        padding: '8px 14px',
         background: 'linear-gradient(to right, var(--violet-glow), transparent)',
       }}>
         <span style={{
           fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 10, fontWeight: 600, letterSpacing: '0.06em',
+          fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
           color: 'var(--violet)',
           background: 'rgba(139,128,240,0.1)',
           border: '1px solid rgba(139,128,240,0.22)',
@@ -399,7 +415,7 @@ function AskUserQuestionCard({ thread }: { thread: ToolThread }) {
         </span>
         <span style={{
           fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 10,
+          fontSize: 11,
           color: answered ? 'var(--green)' : 'var(--amber)',
           marginLeft: 'auto', flexShrink: 0,
         }}>
@@ -433,7 +449,7 @@ function AUQQuestionBlock({ q, resultStr }: { q: AUQQuestion; resultStr: string 
         {q.header && (
           <span style={{
             fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 9, fontWeight: 600, letterSpacing: '0.06em',
+            fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
             color: 'var(--text-3)',
             background: 'var(--surface-3)',
             border: '1px solid var(--border)',
@@ -488,7 +504,7 @@ function AUQQuestionBlock({ q, resultStr }: { q: AUQQuestion; resultStr: string 
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{
                     fontFamily: "'IBM Plex Sans', sans-serif",
-                    fontSize: 12, fontWeight: selected ? 600 : 400,
+                    fontSize: 13, fontWeight: selected ? 600 : 400,
                     color: selected ? 'var(--text)' : 'var(--text-2)',
                     display: 'flex', alignItems: 'center', gap: 6,
                   }}>
@@ -496,7 +512,7 @@ function AUQQuestionBlock({ q, resultStr }: { q: AUQQuestion; resultStr: string 
                     {opt.preview && (
                       <span style={{
                         fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 9, color: 'var(--text-3)',
+                        fontSize: 11, color: 'var(--text-3)',
                         border: '1px solid var(--border)',
                         borderRadius: 3,
                         padding: '0 4px',
@@ -610,27 +626,27 @@ function ToolSearchCard({ thread }: { thread: ToolThread }) {
         onMouseLeave={() => setHovered(false)}
         style={{
           display: 'flex', alignItems: 'center', gap: 8,
-          padding: '6px 12px',
+          padding: '8px 14px',
           background: `linear-gradient(to right, rgba(56,217,245,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
           cursor: 'pointer', userSelect: 'none',
           transition: 'background 0.15s ease',
         }}
       >
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
           TOOLSEARCH
         </span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
           {query}
         </span>
         {toolRefs.length > 0 && (
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--green)', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--green)', flexShrink: 0 }}>
             {toolRefs.length} tool{toolRefs.length !== 1 ? 's' : ''}
           </span>
         )}
         {isError && (
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--red)', flexShrink: 0 }}>error</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--red)', flexShrink: 0 }}>error</span>
         )}
-        <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+        <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
       </div>
 
       {/* Result */}
@@ -658,19 +674,19 @@ function BashCard({ thread }: { thread: ToolThread }) {
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           style={{
-            display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 12px',
+            display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0, marginTop: 2 }}>BASH</span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.55 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0, marginTop: 2 }}>BASH</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.55 }}>
             {command}
           </span>
         </div>
       }
       body={input.description ? (
-        <div style={{ padding: '2px 12px', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', background: 'var(--surface)' }}>
+        <div style={{ padding: '2px 12px', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', background: 'var(--surface)' }}>
           {input.description}
         </div>
       ) : undefined}
@@ -696,19 +712,19 @@ function ReadCard({ thread }: { thread: ToolThread }) {
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           style={{
-            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+            display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>READ</span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>READ</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
             {basename(filePath)}
           </span>
           {rangeLabel && (
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0 }}>{rangeLabel}</span>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>{rangeLabel}</span>
           )}
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
             {filePath}
           </span>
         </div>
@@ -739,13 +755,13 @@ function GrepCard({ thread }: { thread: ToolThread }) {
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           style={{
-            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+            display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>GREP</span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>GREP</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flexShrink: 0 }}>
             /{pattern}/
           </span>
           {location && (
@@ -754,7 +770,7 @@ function GrepCard({ thread }: { thread: ToolThread }) {
             </span>
           )}
           {countLabel && (
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: lineCount! > 0 ? 'var(--green)' : 'var(--text-3)', flexShrink: 0 }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: lineCount! > 0 ? 'var(--green)' : 'var(--text-3)', flexShrink: 0 }}>
               {countLabel}
             </span>
           )}
@@ -781,13 +797,13 @@ function GlobCard({ thread }: { thread: ToolThread }) {
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           style={{
-            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+            display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>GLOB</span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>GLOB</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {pattern}
           </span>
           {path && (
@@ -796,7 +812,7 @@ function GlobCard({ thread }: { thread: ToolThread }) {
             </span>
           )}
           {fileCount !== null && (
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: fileCount > 0 ? 'var(--green)' : 'var(--text-3)', flexShrink: 0 }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: fileCount > 0 ? 'var(--green)' : 'var(--text-3)', flexShrink: 0 }}>
               {fileCount} file{fileCount !== 1 ? 's' : ''}
             </span>
           )}
@@ -821,17 +837,17 @@ function TodoWriteCard({ thread }: { thread: ToolThread }) {
 
   return (
     <div style={{ border: '1px solid var(--border)', borderLeft: '2px solid var(--violet)', borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: 'linear-gradient(to right, var(--violet-glow), transparent)' }}>
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--violet)', fontWeight: 500, letterSpacing: '0.06em' }}>TODOWRITE</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', background: 'linear-gradient(to right, var(--violet-glow), transparent)' }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--violet)', fontWeight: 500, letterSpacing: '0.06em' }}>TODOWRITE</span>
         <span style={{ flex: 1 }} />
-        {counts.completed > 0  && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--green)'  }}>{counts.completed} done</span>}
-        {counts.in_progress > 0 && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--amber)'  }}>{counts.in_progress} active</span>}
-        {counts.pending > 0    && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>{counts.pending} pending</span>}
+        {counts.completed > 0  && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--green)'  }}>{counts.completed} done</span>}
+        {counts.in_progress > 0 && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--amber)'  }}>{counts.in_progress} active</span>}
+        {counts.pending > 0    && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>{counts.pending} pending</span>}
       </div>
       <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 5, background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
         {todos.map((todo, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: TODO_COLOR[todo.status] ?? 'var(--text-3)', flexShrink: 0, marginTop: 1, width: 12, textAlign: 'center' }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: TODO_COLOR[todo.status] ?? 'var(--text-3)', flexShrink: 0, marginTop: 1, width: 12, textAlign: 'center' }}>
               {TODO_ICON[todo.status] ?? '○'}
             </span>
             <span style={{ fontSize: 13, color: todo.status === 'completed' ? 'var(--text-3)' : 'var(--text)', textDecoration: todo.status === 'completed' ? 'line-through' : 'none', lineHeight: 1.5 }}>
@@ -883,34 +899,34 @@ function AgentCard({ thread }: { thread: ToolThread }) {
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{
-          display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
           background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
           cursor: resultText ? 'pointer' : 'default', userSelect: 'none',
           transition: 'background 0.15s ease',
         }}
       >
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
           {input.run_in_background ? 'AGENT ⟳' : 'AGENT'}
         </span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
           {input.description ?? ''}
         </span>
         {input.subagent_type && (
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
             {input.subagent_type}
           </span>
         )}
         {thread.result && (
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: statusColors[status] ?? 'var(--text-3)', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: statusColors[status] ?? 'var(--text-3)', flexShrink: 0 }}>
             {statusLabels[status] ?? status}
           </span>
         )}
-        {resultText && <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>}
+        {resultText && <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>}
       </div>
 
       {/* Stats row for completed synchronous agents */}
       {status === 'completed' && (totalTokens != null || totalToolUseCount != null || totalDurationMs != null) && (
-        <div style={{ display: 'flex', gap: 16, padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+        <div style={{ display: 'flex', gap: 16, padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
           {totalTokens    != null && <span>⬡ {totalTokens.toLocaleString()} tok</span>}
           {totalToolUseCount != null && <span>⚙ {totalToolUseCount} tools</span>}
           {totalDurationMs   != null && <span>⏱ {(totalDurationMs / 1000).toFixed(1)}s</span>}
@@ -920,7 +936,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
 
       {/* Output file path for async agents */}
       {status === 'async_launched' && outputFile && (
-        <div style={{ padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+        <div style={{ padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
           {outputFile}
         </div>
       )}
@@ -949,9 +965,9 @@ function PlanModeCard({ thread }: { thread: ToolThread }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
       <div style={{ flex: 1, height: 1, background: `linear-gradient(to right, transparent, ${color}44)` }} />
-      <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.14em', color, display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 11, fontWeight: 600, letterSpacing: '0.14em', color, display: 'flex', alignItems: 'center', gap: 6 }}>
         {label}
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 400, fontSize: 9, color: 'var(--text-3)', letterSpacing: '0.04em' }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 400, fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.04em' }}>
           {sub}
         </span>
       </div>
@@ -976,13 +992,13 @@ function SkillCard({ thread }: { thread: ToolThread }) {
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           style={{
-            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+            display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
             background: `linear-gradient(to right, rgba(139,128,240,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>SKILL</span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, fontWeight: 500, flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>SKILL</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, fontWeight: 500, flexShrink: 0 }}>
             {skillName}
           </span>
           {args && (
@@ -1027,25 +1043,25 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
           onMouseLeave={() => setHovered(false)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
-            padding: '6px 12px',
+            padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
             cursor: 'pointer', userSelect: 'none',
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
             EDIT
           </span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {basename(filePath)}
           </span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0, border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px' }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0, border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px' }}>
             {edits.length} edit{edits.length !== 1 ? 's' : ''}
           </span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: deltaColor, flexShrink: 0 }}>
             {deltaLabel}
           </span>
-          <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+          <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
         </div>
       }
       body={open ? (
@@ -1055,7 +1071,7 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
             background: 'var(--surface)',
             borderTop: '1px solid var(--border)',
             fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 10, color: 'var(--text-3)',
+            fontSize: 11, color: 'var(--text-3)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {filePath}
@@ -1069,7 +1085,7 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
                   borderTop: '1px solid var(--border)',
                   background: 'var(--surface)',
                   fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 10, color: 'var(--text-3)',
+                  fontSize: 11, color: 'var(--text-3)',
                   userSelect: 'none',
                 }}>
                   <span>{i + 1} / {edits.length}</span>
@@ -1131,27 +1147,27 @@ function WebSearchCard({ thread }: { thread: ToolThread }) {
         onMouseLeave={() => setHovered(false)}
         style={{
           display: 'flex', alignItems: 'center', gap: 8,
-          padding: '6px 12px',
+          padding: '8px 14px',
           background: `linear-gradient(to right, rgba(56,217,245,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
           cursor: 'pointer', userSelect: 'none',
           transition: 'background 0.15s ease',
         }}
       >
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
           WEBSEARCH
         </span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
           {query}
         </span>
         {results !== null && (
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: results.length > 0 ? 'var(--green)' : 'var(--text-3)', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: results.length > 0 ? 'var(--green)' : 'var(--text-3)', flexShrink: 0 }}>
             {results.length} result{results.length !== 1 ? 's' : ''}
           </span>
         )}
         {isError && (
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--red)', flexShrink: 0 }}>error</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--red)', flexShrink: 0 }}>error</span>
         )}
-        <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+        <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
       </div>
 
       {/* Body */}
@@ -1167,7 +1183,7 @@ function WebSearchCard({ thread }: { thread: ToolThread }) {
                   background: i % 2 === 0 ? 'var(--surface)' : 'transparent',
                 }}>
                   {r.title && (
-                    <div style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--text)', lineHeight: 1.4 }}>
+                    <div style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.4 }}>
                       {r.title}
                     </div>
                   )}
@@ -1177,7 +1193,7 @@ function WebSearchCard({ thread }: { thread: ToolThread }) {
                     </div>
                   )}
                   {r.page_age && (
-                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
                       {r.page_age}
                     </div>
                   )}
@@ -1217,15 +1233,15 @@ function WebFetchCard({ thread }: { thread: ToolThread }) {
           onMouseLeave={() => setHovered(false)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
-            padding: '6px 12px',
+            padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
             transition: 'background 0.15s ease',
           }}
         >
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
             WEBFETCH
           </span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, fontWeight: 500, flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, fontWeight: 500, flexShrink: 0 }}>
             {hostname}
           </span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-3)', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1273,7 +1289,7 @@ function NotebookEditCard({ thread }: { thread: ToolThread }) {
           onMouseLeave={() => setHovered(false)}
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
-            padding: '6px 12px',
+            padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
             cursor: hasBody ? 'pointer' : 'default',
             userSelect: 'none',
@@ -1282,7 +1298,7 @@ function NotebookEditCard({ thread }: { thread: ToolThread }) {
         >
           <span style={{
             fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 10, color: c, fontWeight: 500,
+            fontSize: 11, color: c, fontWeight: 500,
             letterSpacing: '0.06em', flexShrink: 0,
           }}>
             NOTEBOOK
@@ -1291,14 +1307,14 @@ function NotebookEditCard({ thread }: { thread: ToolThread }) {
             fontFamily: "'IBM Plex Mono', monospace",
             color: 'var(--text)', flex: 1,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            fontSize: 12,
+            fontSize: 13,
           }}>
             {basename(notebookPath)}
           </span>
           {cellNumber !== undefined && (
             <span style={{
               fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10, color: 'var(--text-2)',
+              fontSize: 11, color: 'var(--text-2)',
               background: 'var(--surface-2)',
               border: '1px solid var(--border)',
               borderRadius: 3,
@@ -1310,7 +1326,7 @@ function NotebookEditCard({ thread }: { thread: ToolThread }) {
           )}
           <span style={{
             fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 10, color: chipColor,
+            fontSize: 11, color: chipColor,
             background: 'var(--surface-2)',
             border: `1px solid ${chipColor}44`,
             borderRadius: 3,
@@ -1321,7 +1337,7 @@ function NotebookEditCard({ thread }: { thread: ToolThread }) {
             {editMode}
           </span>
           {hasBody && (
-            <span style={{ color: 'var(--text-3)', fontSize: 10, flexShrink: 0 }}>
+            <span style={{ color: 'var(--text-3)', fontSize: 11, flexShrink: 0 }}>
               {open ? '▲' : '▼'}
             </span>
           )}
@@ -1334,7 +1350,7 @@ function NotebookEditCard({ thread }: { thread: ToolThread }) {
             background: 'var(--surface)',
             borderTop: '1px solid var(--border)',
             fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 10, color: 'var(--text-3)',
+            fontSize: 11, color: 'var(--text-3)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {notebookPath}
@@ -1345,7 +1361,7 @@ function NotebookEditCard({ thread }: { thread: ToolThread }) {
             background: 'var(--surface)',
             borderTop: '1px solid var(--border)',
             fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 12,
+            fontSize: 13,
             lineHeight: 1.6,
             maxHeight: 300,
             overflowY: 'auto',
@@ -1383,7 +1399,7 @@ function WorktreeCard({ thread }: { thread: ToolThread }) {
       <div style={{ flex: 1, height: 1, background: `linear-gradient(to right, transparent, ${color}44)` }} />
       <div style={{
         fontFamily: "'Oxanium', monospace",
-        fontSize: 10, fontWeight: 600, letterSpacing: '0.14em',
+        fontSize: 11, fontWeight: 600, letterSpacing: '0.14em',
         color,
         display: 'flex', alignItems: 'center', gap: 6,
       }}>
@@ -1391,7 +1407,7 @@ function WorktreeCard({ thread }: { thread: ToolThread }) {
         {sub && (
           <span style={{
             fontFamily: "'IBM Plex Mono', monospace",
-            fontWeight: 400, fontSize: 9,
+            fontWeight: 400, fontSize: 11,
             color: 'var(--text-3)',
             letterSpacing: '0.04em',
           }}>
@@ -1433,16 +1449,16 @@ function TaskCard({ thread }: { thread: ToolThread }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
         background: `linear-gradient(to right, rgba(245,158,11,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
         transition: 'background 0.15s ease',
       }}
     >
-      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
         TASK
       </span>
       {name === 'TaskCreate' && (
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {input.subject ?? ''}
         </span>
       )}
@@ -1453,18 +1469,18 @@ function TaskCard({ thread }: { thread: ToolThread }) {
       )}
       {(name === 'TaskGet' || name === 'TaskUpdate' || name === 'TaskStop') && (
         <>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flexShrink: 0 }}>
             #{input.taskId ?? ''}
           </span>
           {name === 'TaskUpdate' && input.status && (
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: TASK_COLOR[input.status] ?? 'var(--text-3)', background: 'var(--surface-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: TASK_COLOR[input.status] ?? 'var(--text-3)', background: 'var(--surface-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
               {input.status}
             </span>
           )}
           <span style={{ flex: 1 }} />
         </>
       )}
-      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text-3)', letterSpacing: '0.04em', flexShrink: 0 }}>
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.04em', flexShrink: 0 }}>
         {name === 'TaskCreate' ? 'create'
           : name === 'TaskList'   ? 'list'
           : name === 'TaskGet'    ? 'get'
@@ -1486,14 +1502,14 @@ function TaskCard({ thread }: { thread: ToolThread }) {
               const st = t.status ?? 'pending'
               return (
                 <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: TASK_COLOR[st] ?? 'var(--text-3)', flexShrink: 0, marginTop: 1, width: 12, textAlign: 'center' }}>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: TASK_COLOR[st] ?? 'var(--text-3)', flexShrink: 0, marginTop: 1, width: 12, textAlign: 'center' }}>
                     {TASK_ICON[st] ?? '○'}
                   </span>
                   <span style={{ fontSize: 13, color: st === 'completed' ? 'var(--text-3)' : 'var(--text)', lineHeight: 1.5, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {t.subject ?? t.id ?? '—'}
                   </span>
                   {t.id && (
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0 }}>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
                       #{t.id}
                     </span>
                   )}
@@ -1537,17 +1553,17 @@ function CronCard({ thread }: { thread: ToolThread }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
         background: `linear-gradient(to right, var(--t-glob)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
         transition: 'background 0.15s ease',
       }}
     >
-      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
         CRON
       </span>
       {name === 'CronCreate' && (
         <>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flexShrink: 0 }}>
             {input.cron_expression ?? ''}
           </span>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1562,10 +1578,10 @@ function CronCard({ thread }: { thread: ToolThread }) {
       )}
       {name === 'CronDelete' && (
         <>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {input.task_id ?? ''}
           </span>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--red)', letterSpacing: '0.04em', flexShrink: 0 }}>delete</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--red)', letterSpacing: '0.04em', flexShrink: 0 }}>delete</span>
         </>
       )}
     </div>
@@ -1585,7 +1601,7 @@ function CronCard({ thread }: { thread: ToolThread }) {
                 <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, flexShrink: 0, minWidth: 110 }}>
                   {job.cron_expression ?? '—'}
                 </span>
-                <span style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 12, color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {job.prompt ?? ''}
                 </span>
               </div>
@@ -1633,33 +1649,33 @@ function McpCard({ thread }: { thread: ToolThread }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
         background: `linear-gradient(to right, var(--t-other)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
         cursor: 'pointer', userSelect: 'none', transition: 'background 0.15s ease',
       }}
     >
-      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
         MCP
       </span>
       {name === 'ListMcpResourcesTool' && (
         <>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flexShrink: 0 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flexShrink: 0 }}>
             {serverLabel}
           </span>
           {resources !== null && (
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--green)', background: 'rgba(45,212,160,0.08)', border: '1px solid rgba(45,212,160,0.2)', borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--green)', background: 'rgba(45,212,160,0.08)', border: '1px solid rgba(45,212,160,0.2)', borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
               {resources.length} resource{resources.length !== 1 ? 's' : ''}
             </span>
           )}
         </>
       )}
       {name === 'ReadMcpResourceTool' && (
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {uri.length > 72 ? '…' + uri.slice(-70) : uri}
         </span>
       )}
       <span style={{ flex: 1 }} />
-      <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+      <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
     </div>
   )
 
@@ -1747,9 +1763,9 @@ function resultToString(content: ToolResultBlock['content']): string {
 }
 
 const EXPAND_BTN: React.CSSProperties = {
-  display: 'block', width: '100%', padding: '4px 14px',
+  display: 'block', width: '100%', padding: '6px 14px',
   fontFamily: "'IBM Plex Mono', monospace",
-  fontSize: 10, color: 'var(--text-3)',
+  fontSize: 12, color: 'var(--text-3)',
   background: 'var(--surface)', border: 'none',
   borderTop: '1px solid var(--border)',
   cursor: 'pointer', textAlign: 'left',
@@ -1787,7 +1803,7 @@ function ReadResultSection({ raw }: { raw: string }) {
   const hidden = expanded ? 0 : Math.max(0, totalLines - LIMIT)
 
   const fileBlockStyle: React.CSSProperties = {
-    display: 'flex', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, lineHeight: 1.6,
+    display: 'flex', fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, lineHeight: 1.6,
   }
 
   return (
@@ -1867,7 +1883,7 @@ function GenericResultSection({ raw, isError = false, note }: { raw: string; isE
   const preStyle: React.CSSProperties = {
     padding: '8px 14px', margin: 0,
     fontFamily: "'IBM Plex Mono', monospace",
-    fontSize: 12, color: 'var(--text-2)',
+    fontSize: 13, color: 'var(--text-2)',
     background: 'var(--surface)', overflowX: 'auto',
     whiteSpace: 'pre', lineHeight: 1.6,
   }
@@ -1875,7 +1891,7 @@ function GenericResultSection({ raw, isError = false, note }: { raw: string; isE
   return (
     <div style={{ borderTop: `1px solid ${isError ? 'rgba(240,96,96,0.25)' : 'var(--border)'}` }}>
       <div style={{
-        padding: '3px 12px', fontSize: 10,
+        padding: '3px 12px', fontSize: 11,
         fontFamily: "'IBM Plex Mono', monospace",
         fontWeight: 500, letterSpacing: '0.06em',
         color: isError ? 'var(--red)' : 'var(--green)',
@@ -1928,7 +1944,7 @@ function ImageResultSection({ block }: { block: ImageBlock }) {
     <div style={{ borderTop: '1px solid var(--border)', background: 'var(--bg)', padding: 12 }}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={src} alt="" style={{ maxWidth: '100%', maxHeight: 480, display: 'block', borderRadius: 4, border: '1px solid var(--border)' }} />
-      <div style={{ marginTop: 4, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+      <div style={{ marginTop: 4, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
         {[mediaType, w && h ? `${w} × ${h}` : null].filter(Boolean).join(' · ')}
       </div>
     </div>
@@ -1952,7 +1968,7 @@ function ToolResultSection({ result, toolName }: { result: ToolResultBlock; tool
       <div style={{
         padding: '4px 12px',
         fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: 10, color: 'var(--green)',
+        fontSize: 11, color: 'var(--green)',
         background: 'rgba(45,212,160,0.05)',
         borderTop: '1px solid rgba(45,212,160,0.15)',
         letterSpacing: '0.03em',
@@ -2007,7 +2023,7 @@ function InsightCard({ content }: { content: string }) {
         borderBottom: '1px solid var(--border)',
       }}>
         <span style={{ fontSize: 13, color: 'var(--amber)' }}>★</span>
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--amber)', fontWeight: 600, letterSpacing: '0.08em' }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--amber)', fontWeight: 600, letterSpacing: '0.08em' }}>
           INSIGHT
         </span>
       </div>
@@ -2024,7 +2040,7 @@ function RenderText({ block }: { block: TextBlock }) {
   const parts = splitInsights(block.text)
   if (parts.length === 1 && parts[0].kind === 'text') {
     return (
-      <div style={{ fontSize: 14, wordBreak: 'break-word', lineHeight: 1.7 }}>
+      <div style={{ fontSize: 15, wordBreak: 'break-word', lineHeight: 1.75 }}>
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
           {block.text}
         </ReactMarkdown>
@@ -2037,7 +2053,7 @@ function RenderText({ block }: { block: TextBlock }) {
         part.kind === 'insight'
           ? <InsightCard key={i} content={part.content} />
           : (
-            <div key={i} style={{ fontSize: 14, wordBreak: 'break-word', lineHeight: 1.7 }}>
+            <div key={i} style={{ fontSize: 15, wordBreak: 'break-word', lineHeight: 1.75 }}>
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
                 {part.text}
               </ReactMarkdown>
@@ -2080,7 +2096,7 @@ function RenderThinking({ block }: { block: ThinkingBlock }) {
       >
         <span style={{
           fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 9,
+          fontSize: 11,
           color: 'var(--violet)',
           fontWeight: 600,
           letterSpacing: '0.1em',
@@ -2097,7 +2113,7 @@ function RenderThinking({ block }: { block: ThinkingBlock }) {
           <span style={{
             fontFamily: "'IBM Plex Sans', sans-serif",
             color: 'var(--text-2)',
-            fontSize: 12,
+            fontSize: 13,
             fontStyle: 'italic',
             flex: 1,
             lineHeight: 1.45,
@@ -2109,13 +2125,13 @@ function RenderThinking({ block }: { block: ThinkingBlock }) {
         <span style={{
           fontFamily: "'IBM Plex Mono', monospace",
           color: 'var(--text-3)',
-          fontSize: 10,
+          fontSize: 11,
           flexShrink: 0,
           marginLeft: 'auto',
         }}>
           {words.toLocaleString()} words
         </span>
-        <span style={{ color: 'var(--text-3)', fontSize: 10, flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
+        <span style={{ color: 'var(--text-3)', fontSize: 11, flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
       </div>
       {open && (
         <div style={{
@@ -2127,7 +2143,7 @@ function RenderThinking({ block }: { block: ThinkingBlock }) {
         }}>
           <p style={{
             fontFamily: "'IBM Plex Sans', sans-serif",
-            fontSize: 13,
+            fontSize: 14,
             color: 'rgba(180,170,255,0.75)',
             lineHeight: 1.75,
             fontStyle: 'italic',
@@ -2155,7 +2171,7 @@ function SystemReminderCard({ block }: { block: SystemReminderBlock }) {
       borderLeft: `2px solid ${c}`,
       borderRadius: 6,
       overflow: 'hidden',
-      fontSize: 12,
+      fontSize: 13,
       marginTop: 4,
       opacity: 0.7,
     }}>
@@ -2169,11 +2185,11 @@ function SystemReminderCard({ block }: { block: SystemReminderBlock }) {
           cursor: 'pointer', userSelect: 'none', transition: 'background 0.12s ease',
         }}
       >
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text-3)', fontWeight: 500, letterSpacing: '0.08em', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', fontWeight: 500, letterSpacing: '0.08em', flexShrink: 0 }}>
           SYSTEM
         </span>
         {!open && (
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-3)', fontSize: 10, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-3)', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {block.content.split('\n')[0]}
           </span>
         )}
@@ -2186,7 +2202,7 @@ function SystemReminderCard({ block }: { block: SystemReminderBlock }) {
           borderTop: '1px solid var(--border)',
           background: 'var(--surface)',
           fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 11, lineHeight: 1.5, color: 'var(--text-3)',
+          fontSize: 13, lineHeight: 1.6, color: 'var(--text-3)',
           whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           maxHeight: 300, overflowY: 'auto',
         }}>
@@ -2221,27 +2237,27 @@ function TaskNotificationCard({ block }: { block: TaskNotificationBlock }) {
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{
-          display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
           background: `linear-gradient(to right, var(--violet)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
           cursor: hasResult ? 'pointer' : 'default',
           userSelect: 'none', transition: 'background 0.15s ease',
         }}
       >
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
           TASK
         </span>
-        <span style={{ fontFamily: "'IBM Plex Sans', sans-serif", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontFamily: "'IBM Plex Sans', sans-serif", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {summary}
         </span>
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--green)', flexShrink: 0 }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--green)', flexShrink: 0 }}>
           {status}
         </span>
-        {hasResult && <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>}
+        {hasResult && <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>}
       </div>
 
       {/* Stats row */}
       {(usage.totalTokens != null || usage.toolUses != null || usage.durationMs != null) && (
-        <div style={{ display: 'flex', gap: 16, padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+        <div style={{ display: 'flex', gap: 16, padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
           {usage.totalTokens != null && <span>⬡ {usage.totalTokens.toLocaleString()} tok</span>}
           {usage.toolUses    != null && <span>⚙ {usage.toolUses} tools</span>}
           {usage.durationMs  != null && <span>⏱ {(usage.durationMs / 1000).toFixed(1)}s</span>}
@@ -2250,7 +2266,7 @@ function TaskNotificationCard({ block }: { block: TaskNotificationBlock }) {
 
       {/* Result body */}
       {open && hasResult && (
-        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-2)', fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', fontFamily: "'IBM Plex Mono', monospace", maxHeight: 400, overflowY: 'auto' }}>
+        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-2)', fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap', fontFamily: "'IBM Plex Mono', monospace", maxHeight: 400, overflowY: 'auto' }}>
           {result}
         </div>
       )}
@@ -2279,13 +2295,13 @@ export default function MessageItem({ message }: { message: ThreadedMessage }) {
   const style = ROLE_STYLE[message.role]
 
   return (
-    <div style={{ display: 'flex', gap: 16, marginBottom: 28 }}>
+    <div style={{ display: 'flex', gap: 18, marginBottom: 36 }}>
       {/* Left column: dot */}
-      <div style={{ width: 18, flexShrink: 0, paddingTop: 2 }}>
+      <div style={{ width: 20, flexShrink: 0, paddingTop: 3 }}>
         <div
           style={{
-            width: 12,
-            height: 12,
+            width: 13,
+            height: 13,
             borderRadius: '50%',
             background: style.dot,
             boxShadow: `0 0 0 2px var(--bg), 0 0 10px 3px ${style.glow}`,
@@ -2297,11 +2313,11 @@ export default function MessageItem({ message }: { message: ThreadedMessage }) {
       {/* Right column */}
       <div style={{ flex: 1, minWidth: 0 }}>
         {/* Label row */}
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
           <span
             style={{
               fontFamily: "'Oxanium', monospace",
-              fontSize: 10,
+              fontSize: 11,
               fontWeight: 700,
               letterSpacing: '0.12em',
               color: style.labelColor,
@@ -2313,7 +2329,7 @@ export default function MessageItem({ message }: { message: ThreadedMessage }) {
             <span
               style={{
                 fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 10,
+                fontSize: 11,
                 color: 'var(--text-3)',
               }}
             >
@@ -2323,7 +2339,7 @@ export default function MessageItem({ message }: { message: ThreadedMessage }) {
         </div>
 
         {/* Content blocks */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {message.blocks.map((block, i) => renderBlock(block, i))}
         </div>
       </div>

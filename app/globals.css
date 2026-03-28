@@ -132,8 +132,8 @@ body {
   background-size: auto, auto, 28px 28px;
   color: var(--text);
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   transition: background-color 0.2s ease, color 0.2s ease;
 }

@@ -51,7 +51,7 @@ function SessionRow({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        padding: '9px 14px 9px 22px',
+        padding: '10px 16px 10px 24px',
         borderBottom: '1px solid var(--border)',
         borderLeft: `2px solid ${selected ? 'var(--violet)' : hovered ? 'var(--border-2)' : 'transparent'}`,
         background: selected
@@ -67,7 +67,7 @@ function SessionRow({
       <div
         style={{
           fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 11,
+          fontSize: 12,
           color: selected ? 'var(--violet)' : hovered ? 'var(--text)' : 'var(--text-2)',
           letterSpacing: '0.04em',
           transition: 'color 0.14s ease',
@@ -77,15 +77,15 @@ function SessionRow({
       </div>
 
       {/* Tag + time */}
-      <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
         {session.tag && (
           <span
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 9,
+              fontSize: 11,
               background: selected ? 'rgba(139,128,240,0.16)' : 'rgba(139,128,240,0.08)',
               color: 'var(--violet)',
-              padding: '1px 5px',
+              padding: '1px 6px',
               borderRadius: 3,
               border: '1px solid rgba(139,128,240,0.22)',
               letterSpacing: '0.03em',
@@ -98,7 +98,7 @@ function SessionRow({
           <span
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 9,
+              fontSize: 11,
               color: 'var(--text-3)',
             }}
           >
@@ -136,7 +136,7 @@ function ProjectGroup({
           display: 'flex',
           alignItems: 'center',
           gap: 7,
-          padding: '7px 14px 7px 16px',
+          padding: '8px 14px 8px 16px',
           cursor: 'pointer',
           userSelect: 'none',
           position: 'sticky',
@@ -147,13 +147,13 @@ function ProjectGroup({
           transition: 'background 0.14s ease',
         }}
       >
-        <span style={{ color: 'var(--text-3)', fontSize: 9, flexShrink: 0 }}>
+        <span style={{ color: 'var(--text-3)', fontSize: 10, flexShrink: 0 }}>
           {collapsed ? '▶' : '▼'}
         </span>
         <span
           style={{
             fontFamily: "'Oxanium', monospace",
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: 600,
             letterSpacing: '0.08em',
             textTransform: 'uppercase',
@@ -170,12 +170,12 @@ function ProjectGroup({
         <span
           style={{
             fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 9,
+            fontSize: 11,
             color: 'var(--text-3)',
             background: 'var(--surface-3)',
             border: '1px solid var(--border)',
             borderRadius: 3,
-            padding: '1px 5px',
+            padding: '1px 6px',
             flexShrink: 0,
           }}
         >
@@ -202,8 +202,8 @@ export default function SessionList({ sessions, loading, error, selectedId, onSe
   return (
     <div
       style={{
-        width: 272,
-        minWidth: 272,
+        width: 290,
+        minWidth: 290,
         height: '100vh',
         display: 'flex',
         flexDirection: 'column',
@@ -223,7 +223,7 @@ export default function SessionList({ sessions, loading, error, selectedId, onSe
         <div
           style={{
             fontFamily: "'Oxanium', monospace",
-            fontSize: 15,
+            fontSize: 16,
             fontWeight: 700,
             letterSpacing: '0.1em',
             textTransform: 'uppercase',
@@ -233,15 +233,15 @@ export default function SessionList({ sessions, loading, error, selectedId, onSe
             gap: 8,
           }}
         >
-          <span style={{ color: 'var(--violet)', fontSize: 13, lineHeight: 1 }}>◈</span>
+          <span style={{ color: 'var(--violet)', fontSize: 14, lineHeight: 1 }}>◈</span>
           <span style={{ flex: 1 }}>Agent Viewer</span>
           <ThemeToggle />
         </div>
-        <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
           <span
             style={{
-              width: 6,
-              height: 6,
+              width: 7,
+              height: 7,
               borderRadius: '50%',
               background: 'var(--green)',
               flexShrink: 0,
@@ -252,7 +252,7 @@ export default function SessionList({ sessions, loading, error, selectedId, onSe
           <span
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
+              fontSize: 12,
               color: 'var(--text-3)',
               letterSpacing: '0.04em',
             }}
