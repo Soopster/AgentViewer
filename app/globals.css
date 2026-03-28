@@ -118,6 +118,45 @@
   --t-other:     #5a9e5a;
 }
 
+/* ── Design tokens ── paper ──────────────────────────────────────────────── */
+[data-theme="paper"] {
+  /* Backgrounds — clean Material paper whites */
+  --bg:          #f5f5f5;
+  --surface:     #ffffff;
+  --surface-2:   #f0f2f8;
+  --surface-3:   #e8ebf4;
+
+  /* Borders */
+  --border:      #dde1ef;
+  --border-2:    #bfc6de;
+
+  /* Text */
+  --text:        #212121;
+  --text-2:      #546079;
+  --text-3:      #96a0b8;
+
+  /* Primary accents — Material Blue */
+  --violet:      #1976d2;
+  --violet-glow: rgba(25, 118, 210, 0.10);
+  --cyan:        #0288d1;
+  --cyan-glow:   rgba(2, 136, 209, 0.08);
+
+  /* Semantic */
+  --green:       #2e7d32;
+  --red:         #c62828;
+  --amber:       #e65100;
+
+  /* Tool palette — Material Design colors */
+  --t-bash:      #e65100;
+  --t-edit:      #2e7d32;
+  --t-write:     #0277bd;
+  --t-read:      #1565c0;
+  --t-grep:      #bf360c;
+  --t-glob:      #6a1b9a;
+  --t-agent:     #880e4f;
+  --t-other:     #546e7a;
+}
+
 /* ── Reset ───────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; overflow: hidden; }
@@ -157,6 +196,14 @@ body {
       rgba(57, 211, 83, 0.018) 4px
     );
   background-size: auto, auto;
+}
+
+[data-theme="paper"] body {
+  background-image:
+    radial-gradient(ellipse at 20% 30%, rgba(25, 118, 210, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 70%, rgba(106, 27, 154, 0.03) 0%, transparent 45%),
+    radial-gradient(circle, rgba(180, 190, 220, 0.18) 1px, transparent 1px);
+  background-size: auto, auto, 28px 28px;
 }
 
 /* ── Scrollbars ──────────────────────────────────────────────────────────── */

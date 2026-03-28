@@ -2,14 +2,15 @@
 
 import { useEffect, useState } from 'react'
 
-type Theme = 'dark' | 'light' | 'terminal'
+type Theme = 'dark' | 'light' | 'terminal' | 'paper'
 
-const THEMES: Theme[] = ['dark', 'light', 'terminal']
+const THEMES: Theme[] = ['dark', 'light', 'terminal', 'paper']
 
 const THEME_META: Record<Theme, { icon: string; next: string }> = {
-  dark:     { icon: '☾', next: 'light' },
+  dark:     { icon: '☾', next: 'light'    },
   light:    { icon: '☀', next: 'terminal' },
-  terminal: { icon: '⌨', next: 'dark' },
+  terminal: { icon: '⌨', next: 'paper'    },
+  paper:    { icon: '✦', next: 'dark'     },
 }
 
 const VALID: Set<string> = new Set(THEMES)
