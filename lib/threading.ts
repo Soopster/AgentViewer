@@ -33,12 +33,25 @@ export type SystemReminderBlock = {
   content: string
 }
 
-export type ThreadedBlock = TextBlock | ThinkingBlock | ImageBlock | ToolThread | TaskNotificationBlock | SystemReminderBlock
+export type SlashCommandBlock = {
+  type: 'slash_command'
+  command: string
+  message: string
+  args: string
+}
+
+export type LocalCommandStdoutBlock = {
+  type: 'local_command_stdout'
+  stdout: string
+}
+
+export type ThreadedBlock = TextBlock | ThinkingBlock | ImageBlock | ToolThread | TaskNotificationBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock
 
 export type ThreadedMessage = {
   role: 'user' | 'assistant'
   uuid: string
   timestamp?: string
+  origin?: { kind: string }
   blocks: ThreadedBlock[]
 }
 
@@ -69,22 +82,78 @@ function parseTaskNotification(content: string): TaskNotificationBlock | null {
   }
 }
 
-/** Splits a text string into alternating TextBlocks and SystemReminderBlocks. */
-function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlock> {
-  const out: Array<TextBlock | SystemReminderBlock> = []
-  const matches = [...text.matchAll(/<system-reminder>([\s\S]*?)<\/system-reminder>/g)]
-  if (matches.length === 0) return [{ type: 'text', text }]
+/** Parses a slash-command cluster into a SlashCommandBlock, or null if not present. */
+function parseSlashCommand(text: string): SlashCommandBlock | null {
+  if (!/<command-name>/.test(text)) return null
+  return {
+    type: 'slash_command',
+    command: xmlTag(text, 'command-name'),
+    message: xmlTag(text, 'command-message'),
+    args:    xmlTag(text, 'command-args'),
+  }
+}
 
-  let lastIndex = 0
-  for (const match of matches) {
-    const before = text.slice(lastIndex, match.index).trim()
-    if (before) out.push({ type: 'text', text: before })
-    const content = match[1].trim()
-    if (content) out.push({ type: 'system_reminder', content })
-    lastIndex = (match.index ?? 0) + match[0].length
+type SpecialRegion =
+  | { kind: 'system_reminder'; start: number; end: number; content: string }
+  | { kind: 'local_command_stdout'; start: number; end: number; stdout: string }
+  | { kind: 'slash_command'; start: number; end: number; block: SlashCommandBlock }
+
+/** Finds all special XML regions in text and returns them sorted by position. */
+function findSpecialRegions(text: string): SpecialRegion[] {
+  const regions: SpecialRegion[] = []
+
+  // system-reminder
+  for (const m of text.matchAll(/<system-reminder>([\s\S]*?)<\/system-reminder>/g)) {
+    regions.push({ kind: 'system_reminder', start: m.index!, end: m.index! + m[0].length, content: m[1].trim() })
   }
 
-  const after = text.slice(lastIndex).trim()
+  // local-command-stdout
+  for (const m of text.matchAll(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/g)) {
+    regions.push({ kind: 'local_command_stdout', start: m.index!, end: m.index! + m[0].length, stdout: m[1].trim() })
+  }
+
+  // slash-command cluster: starts at <command-name>, ends at </command-args> (or </command-message> or </command-name>)
+  for (const m of text.matchAll(/<command-name>([\s\S]*?)<\/command-name>/g)) {
+    const start = m.index!
+    // Try to extend to the end of the cluster (command-args or command-message)
+    const argsEnd  = text.indexOf('</command-args>',    start)
+    const msgEnd   = text.indexOf('</command-message>', start)
+    let end = m.index! + m[0].length
+    if (argsEnd  !== -1) end = argsEnd  + '</command-args>'.length
+    else if (msgEnd !== -1) end = msgEnd + '</command-message>'.length
+    const cluster = text.slice(start, end)
+    const block = parseSlashCommand(cluster)
+    if (block) regions.push({ kind: 'slash_command', start, end, block })
+  }
+
+  regions.sort((a, b) => a.start - b.start)
+  return regions
+}
+
+/**
+ * Splits a text string into typed blocks: TextBlock, SystemReminderBlock,
+ * SlashCommandBlock, and LocalCommandStdoutBlock.
+ */
+function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock> {
+  const regions = findSpecialRegions(text)
+  if (regions.length === 0) return [{ type: 'text', text }]
+
+  const out: Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock> = []
+  let cursor = 0
+
+  for (const region of regions) {
+    if (region.start < cursor) continue // overlapping — skip (e.g. sibling command tags already consumed)
+    const before = text.slice(cursor, region.start).trim()
+    if (before) out.push({ type: 'text', text: before })
+
+    if (region.kind === 'system_reminder')     out.push({ type: 'system_reminder',      content: region.content })
+    if (region.kind === 'local_command_stdout') out.push({ type: 'local_command_stdout', stdout:  region.stdout  })
+    if (region.kind === 'slash_command')        out.push(region.block)
+
+    cursor = region.end
+  }
+
+  const after = text.slice(cursor).trim()
   if (after) out.push({ type: 'text', text: after })
 
   return out
@@ -139,7 +208,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
     if (msg.type === 'user' && typeof msg.message.content === 'string') {
       const notif = parseTaskNotification(msg.message.content)
       if (notif) {
-        out.push({ role: 'user', uuid: msg.uuid, timestamp: msg.timestamp, blocks: [notif] })
+        out.push({ role: 'user', uuid: msg.uuid, timestamp: msg.timestamp, origin: msg.origin, blocks: [notif] })
         continue
       }
     }
@@ -178,6 +247,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
         role: msg.type as 'user' | 'assistant',
         uuid: msg.uuid,
         timestamp: msg.timestamp,
+        origin: msg.origin,
         blocks: threadedBlocks,
       })
     }

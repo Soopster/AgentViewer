@@ -55,3 +55,5 @@ export type Session = {
   createdAt?: string
   [key: string]: unknown
 }
+
+export type SendState = 'idle' | 'sending' | 'error'

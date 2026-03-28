@@ -7,7 +7,7 @@ import { diffLines } from 'diff'
 import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
 import type { Components } from 'react-markdown'
-import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock } from '@/lib/threading'
+import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
 
 // ── Tool color palette ────────────────────────────────────────────────────────
@@ -2274,13 +2274,117 @@ function TaskNotificationCard({ block }: { block: TaskNotificationBlock }) {
   )
 }
 
+// ── Slash command card ────────────────────────────────────────────────────────
+
+function SlashCommandCard({ block }: { block: SlashCommandBlock }) {
+  const c = 'var(--cyan)'
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderLeft: `2px solid ${c}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 13,
+      marginTop: 4,
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '7px 14px',
+        background: 'linear-gradient(to right, rgba(34,211,238,0.10), var(--surface))',
+      }}>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          color: c,
+          fontWeight: 600,
+          letterSpacing: '0.08em',
+          flexShrink: 0,
+          background: 'rgba(34,211,238,0.10)',
+          border: '1px solid rgba(34,211,238,0.22)',
+          borderRadius: 3,
+          padding: '1px 6px',
+        }}>
+          CMD
+        </span>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 13,
+          color: c,
+          fontWeight: 600,
+          flexShrink: 0,
+        }}>
+          {block.command}
+        </span>
+        {block.args && (
+          <span style={{
+            fontFamily: "'IBM Plex Sans', sans-serif",
+            fontSize: 13,
+            color: 'var(--text-2)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>
+            {block.args}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Local command stdout card ─────────────────────────────────────────────────
+
+function LocalCommandStdoutCard({ block }: { block: LocalCommandStdoutBlock }) {
+  const c = 'var(--text-3)'
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderLeft: `2px solid ${c}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 13,
+      marginTop: 4,
+      opacity: 0.85,
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '4px 10px',
+        background: 'var(--surface)',
+      }}>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          color: 'var(--text-3)',
+          fontWeight: 500,
+          letterSpacing: '0.08em',
+          flexShrink: 0,
+        }}>
+          STDOUT
+        </span>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 13,
+          color: 'var(--text-2)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {block.stdout}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 function renderBlock(block: ThreadedBlock, i: number): React.ReactNode {
-  if (block.type === 'tool_thread')       return <ToolThreadCard        key={i} thread={block} />
-  if (block.type === 'text')              return <RenderText            key={i} block={block} />
-  if (block.type === 'thinking')          return <RenderThinking        key={i} block={block} />
-  if (block.type === 'image')             return <ImageResultSection    key={i} block={block as ImageBlock} />
-  if (block.type === 'task_notification') return <TaskNotificationCard  key={i} block={block as TaskNotificationBlock} />
-  if (block.type === 'system_reminder')   return <SystemReminderCard    key={i} block={block as SystemReminderBlock} />
+  if (block.type === 'tool_thread')           return <ToolThreadCard          key={i} thread={block} />
+  if (block.type === 'text')                  return <RenderText              key={i} block={block} />
+  if (block.type === 'thinking')              return <RenderThinking          key={i} block={block} />
+  if (block.type === 'image')                 return <ImageResultSection      key={i} block={block as ImageBlock} />
+  if (block.type === 'task_notification')     return <TaskNotificationCard    key={i} block={block as TaskNotificationBlock} />
+  if (block.type === 'system_reminder')       return <SystemReminderCard      key={i} block={block as SystemReminderBlock} />
+  if (block.type === 'slash_command')         return <SlashCommandCard        key={i} block={block as SlashCommandBlock} />
+  if (block.type === 'local_command_stdout')  return <LocalCommandStdoutCard  key={i} block={block as LocalCommandStdoutBlock} />
   return null
 }
 
@@ -2334,6 +2438,23 @@ export default function MessageItem({ message }: { message: ThreadedMessage }) {
               }}
             >
               {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
+          )}
+          {message.origin?.kind && message.origin.kind !== 'task-notification' && (
+            <span
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.1em',
+                color: 'var(--t-other)',
+                background: 'rgba(139,128,240,0.08)',
+                border: '1px solid rgba(139,128,240,0.2)',
+                borderRadius: 3,
+                padding: '1px 5px',
+              }}
+            >
+              {message.origin.kind.toUpperCase()}
             </span>
           )}
         </div>
