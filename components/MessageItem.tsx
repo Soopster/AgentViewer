@@ -1,0 +1,2332 @@
+'use client'
+
+import { useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { diffLines } from 'diff'
+import type { Components } from 'react-markdown'
+import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock } from '@/lib/threading'
+import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
+
+// ── Tool color palette ────────────────────────────────────────────────────────
+
+const TOOL_COLORS: Record<string, string> = {
+  Bash:      'var(--t-bash)',
+  Edit:      'var(--t-edit)',
+  MultiEdit: 'var(--t-edit)',
+  Write:     'var(--t-write)',
+  Read:      'var(--t-read)',
+  Grep:      'var(--t-grep)',
+  Glob:      'var(--t-glob)',
+  Agent:     'var(--t-agent)',
+  WebSearch: 'var(--cyan)',
+  WebFetch:  'var(--t-read)',
+  NotebookEdit: 'var(--t-edit)',
+}
+
+function toolColor(name: string) {
+  return TOOL_COLORS[name] ?? 'var(--t-other)'
+}
+
+// ── Markdown components ───────────────────────────────────────────────────────
+
+const mdComponents: Components = {
+  p:          ({ children }) => (
+    <p style={{ margin: '0 0 10px', lineHeight: 1.7, color: 'var(--text)' }}>{children}</p>
+  ),
+  h1: ({ children }) => (
+    <h1 style={{
+      margin: '18px 0 8px', fontSize: 17, fontWeight: 700,
+      fontFamily: "'Oxanium', monospace", letterSpacing: '0.04em',
+      color: 'var(--text)', borderBottom: '1px solid var(--border)', paddingBottom: 6,
+    }}>{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 style={{
+      margin: '14px 0 6px', fontSize: 15, fontWeight: 600,
+      fontFamily: "'Oxanium', monospace", letterSpacing: '0.03em',
+      color: 'var(--text)',
+    }}>{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 style={{ margin: '10px 0 4px', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{children}</h3>
+  ),
+  strong:     ({ children }) => <strong style={{ fontWeight: 600, color: 'var(--text)' }}>{children}</strong>,
+  em:         ({ children }) => <em style={{ fontStyle: 'italic', color: 'var(--text-2)' }}>{children}</em>,
+  a:          ({ href, children }) => (
+    <a href={href} target="_blank" rel="noreferrer" style={{ color: 'var(--violet)', textDecoration: 'underline' }}>
+      {children}
+    </a>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote style={{ margin: '8px 0', paddingLeft: 12, borderLeft: '2px solid var(--border-2)', color: 'var(--text-2)' }}>
+      {children}
+    </blockquote>
+  ),
+  ul: ({ children }) => <ul style={{ margin: '4px 0 10px', paddingLeft: 20, color: 'var(--text)' }}>{children}</ul>,
+  ol: ({ children }) => <ol style={{ margin: '4px 0 10px', paddingLeft: 20, color: 'var(--text)' }}>{children}</ol>,
+  li: ({ children }) => <li style={{ marginBottom: 3, lineHeight: 1.65 }}>{children}</li>,
+  hr: () => <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '14px 0' }} />,
+  table: ({ children }) => (
+    <div style={{ overflowX: 'auto', marginBottom: 10 }}>
+      <table style={{ borderCollapse: 'collapse', fontSize: 13, color: 'var(--text)', width: '100%' }}>
+        {children}
+      </table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th style={{ padding: '5px 12px', borderBottom: '1px solid var(--border-2)', textAlign: 'left', fontWeight: 600, color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>
+      {children}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td style={{ padding: '5px 12px', borderBottom: '1px solid var(--border)' }}>{children}</td>
+  ),
+  code: ({ className, children, ...rest }) => {
+    const isFenced = !!className
+    if (isFenced) {
+      return (
+        <code style={{ display: 'block', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#94a3b8', whiteSpace: 'pre', overflowX: 'auto' }} className={className} {...rest}>
+          {children}
+        </code>
+      )
+    }
+    return (
+      <code style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, background: 'var(--surface-3)', color: 'var(--violet)', padding: '1px 5px', borderRadius: 3 }} {...rest}>
+        {children}
+      </code>
+    )
+  },
+  pre: ({ children }) => (
+    <pre style={{
+      background: 'var(--surface)',
+      border: '1px solid var(--border)',
+      borderRadius: 6,
+      padding: '10px 14px',
+      overflowX: 'auto',
+      margin: '8px 0',
+      fontSize: 12,
+      lineHeight: 1.6,
+      fontFamily: "'IBM Plex Mono', monospace",
+    }}>
+      {children}
+    </pre>
+  ),
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+function basename(p: string) { return p.split('/').pop() ?? p }
+
+function CardShell({
+  color = 'var(--t-other)',
+  header,
+  body,
+  result,
+  toolName = '',
+}: {
+  color?: string
+  header: React.ReactNode
+  body?: React.ReactNode
+  result: ToolResultBlock | null
+  toolName?: string
+}) {
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderLeft: `2px solid ${color}`,
+        borderRadius: 6,
+        overflow: 'hidden',
+        fontSize: 13,
+        marginTop: 4,
+      }}
+    >
+      {header}
+      {body}
+      {result && <ToolResultSection result={result} toolName={toolName} />}
+    </div>
+  )
+}
+
+// ── Diff view ─────────────────────────────────────────────────────────────────
+
+function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
+  const changes = diffLines(oldStr, newStr)
+
+  return (
+    <div
+      style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 12,
+        lineHeight: 1.55,
+        overflowX: 'auto',
+        maxHeight: 500,
+        overflowY: 'auto',
+        background: 'var(--surface)',
+        borderTop: '1px solid var(--border)',
+      }}
+    >
+      {changes.map((change, ci) => {
+        const lines = change.value.split('\n')
+        if (lines[lines.length - 1] === '') lines.pop()
+
+        const isAdd = change.added
+        const isDel = change.removed
+        const bg     = isAdd ? 'rgba(45,212,160,0.07)' : isDel ? 'rgba(240,96,96,0.07)' : 'transparent'
+        const color  = isAdd ? 'var(--green)'          : isDel ? 'var(--red)'            : 'var(--text-3)'
+        const gutter = isAdd ? 'rgba(45,212,160,0.15)' : isDel ? 'rgba(240,96,96,0.15)'  : 'transparent'
+        const sign   = isAdd ? '+' : isDel ? '−' : ' '
+
+        return lines.map((line, li) => (
+          <div key={`${ci}-${li}`} style={{ display: 'flex', background: bg }}>
+            <span
+              style={{
+                width: 26,
+                flexShrink: 0,
+                textAlign: 'center',
+                background: gutter,
+                color,
+                userSelect: 'none',
+                fontSize: 11,
+                borderRight: '1px solid var(--border)',
+                lineHeight: '1.55em',
+              }}
+            >
+              {sign}
+            </span>
+            <span style={{ color, padding: '0 10px', whiteSpace: 'pre' }}>{line}</span>
+          </div>
+        ))
+      })}
+    </div>
+  )
+}
+
+// ── Edit tool card ────────────────────────────────────────────────────────────
+
+function EditToolCard({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(true)
+  const [hovered, setHovered] = useState(false)
+  const { toolUse, result } = thread
+  const input = toolUse.input as { file_path?: string; old_string?: string; new_string?: string }
+  const filePath = input.file_path ?? ''
+  const oldStr   = input.old_string ?? ''
+  const newStr   = input.new_string ?? ''
+  const delta    = newStr.split('\n').length - oldStr.split('\n').length
+  const sign     = delta > 0 ? `+${delta}` : String(delta)
+  const c        = toolColor(toolUse.name)
+
+  return (
+    <CardShell color={c} result={result} toolName={toolUse.name}
+      header={
+        <div
+          onClick={() => setOpen(v => !v)}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 12px',
+            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            cursor: 'pointer', userSelect: 'none',
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>EDIT</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>
+            {basename(filePath)}
+          </span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--text-3)', flexShrink: 0 }}>
+            {sign}
+          </span>
+          <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+        </div>
+      }
+      body={open ? (
+        <>
+          <div style={{ padding: '2px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {filePath}
+          </div>
+          <DiffView oldStr={oldStr} newStr={newStr} />
+        </>
+      ) : undefined}
+    />
+  )
+}
+
+// ── Write tool card ───────────────────────────────────────────────────────────
+
+function WriteToolCard({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const { toolUse, result } = thread
+  const input    = toolUse.input as { file_path?: string; content?: string }
+  const filePath = input.file_path ?? ''
+  const content  = input.content ?? ''
+  const lines    = content.split('\n').length
+  const c        = toolColor(toolUse.name)
+
+  return (
+    <CardShell color={c} result={result} toolName={toolUse.name}
+      header={
+        <div
+          onClick={() => setOpen(v => !v)}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 12px',
+            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            cursor: 'pointer', userSelect: 'none',
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>WRITE</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>
+            {basename(filePath)}
+          </span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0 }}>
+            {lines} lines
+          </span>
+          <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+        </div>
+      }
+      body={open ? (
+        <>
+          <div style={{ padding: '2px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {filePath}
+          </div>
+          <pre style={{
+            margin: 0, padding: '10px 14px', fontSize: 12,
+            fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)',
+            background: 'var(--surface)', overflowX: 'auto', maxHeight: 500, overflowY: 'auto',
+            whiteSpace: 'pre', lineHeight: 1.6, borderTop: '1px solid var(--border)',
+          }}>
+            {content}
+          </pre>
+        </>
+      ) : undefined}
+    />
+  )
+}
+
+// ── Generic tool card ─────────────────────────────────────────────────────────
+
+function GenericToolCard({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const { toolUse, result } = thread
+  const c = toolColor(toolUse.name)
+  const firstVal = Object.values(toolUse.input)[0]
+  const preview  = firstVal !== undefined ? String(firstVal).slice(0, 90) : null
+
+  return (
+    <CardShell color={c} result={result} toolName={toolUse.name}
+      header={
+        <div
+          onClick={() => setOpen(v => !v)}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 12px',
+            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            cursor: 'pointer', userSelect: 'none',
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+            {toolUse.name.toUpperCase()}
+          </span>
+          {!open && preview !== null && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+              {preview}
+            </span>
+          )}
+          <span style={{ color: 'var(--text-3)', fontSize: 10, marginLeft: 'auto' }}>{open ? '▲' : '▼'}</span>
+        </div>
+      }
+      body={open ? (
+        <pre style={{
+          padding: '10px 14px', fontSize: 12, margin: 0,
+          fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)',
+          background: 'var(--surface)', overflowX: 'auto', maxHeight: 280, overflowY: 'auto',
+          borderTop: '1px solid var(--border)', lineHeight: 1.6,
+        }}>
+          {JSON.stringify(toolUse.input, null, 2)}
+        </pre>
+      ) : undefined}
+    />
+  )
+}
+
+// ── AskUserQuestion card ──────────────────────────────────────────────────────
+
+type AUQOption  = { label: string; description?: string; preview?: string }
+type AUQQuestion = { question: string; header?: string; multiSelect?: boolean; options: AUQOption[] }
+
+function AskUserQuestionCard({ thread }: { thread: ToolThread }) {
+  const input = thread.toolUse.input as { questions?: AUQQuestion[] }
+  const questions = input.questions ?? []
+  const resultStr = thread.result ? resultToString(thread.result.content) : ''
+  const answered  = !!resultStr
+
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderLeft: '2px solid var(--violet)',
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 13,
+    }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '6px 12px',
+        background: 'linear-gradient(to right, var(--violet-glow), transparent)',
+      }}>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 10, fontWeight: 600, letterSpacing: '0.06em',
+          color: 'var(--violet)',
+          background: 'rgba(139,128,240,0.1)',
+          border: '1px solid rgba(139,128,240,0.22)',
+          borderRadius: 3,
+          padding: '1px 5px',
+          flexShrink: 0,
+        }}>
+          ASK USER
+        </span>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 10,
+          color: answered ? 'var(--green)' : 'var(--amber)',
+          marginLeft: 'auto', flexShrink: 0,
+        }}>
+          {answered ? '✓ answered' : '◌ pending'}
+        </span>
+      </div>
+
+      {/* Questions */}
+      <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {questions.map((q, qi) => (
+          <AUQQuestionBlock key={qi} q={q} resultStr={resultStr} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function AUQQuestionBlock({ q, resultStr }: { q: AUQQuestion; resultStr: string }) {
+  const [expandedPreview, setExpandedPreview] = useState<number | null>(null)
+
+  return (
+    <div>
+      {/* Question text */}
+      <div style={{
+        fontFamily: "'IBM Plex Sans', sans-serif",
+        fontSize: 13, fontWeight: 500,
+        color: 'var(--text)',
+        marginBottom: 8,
+        display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        {q.header && (
+          <span style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 9, fontWeight: 600, letterSpacing: '0.06em',
+            color: 'var(--text-3)',
+            background: 'var(--surface-3)',
+            border: '1px solid var(--border)',
+            borderRadius: 3,
+            padding: '1px 5px',
+            flexShrink: 0,
+          }}>
+            {q.header.toUpperCase()}
+          </span>
+        )}
+        {q.question}
+      </div>
+
+      {/* Options */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {q.options.map((opt, oi) => {
+          const selected = resultStr.includes(`"${opt.label}"`) || resultStr.includes(`=${opt.label}`)
+          const previewOpen = expandedPreview === oi
+
+          return (
+            <div key={oi}>
+              <div
+                onClick={() => opt.preview ? setExpandedPreview(previewOpen ? null : oi) : undefined}
+                style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 8,
+                  padding: '6px 10px',
+                  borderRadius: 4,
+                  border: `1px solid ${selected ? 'rgba(139,128,240,0.35)' : 'var(--border)'}`,
+                  background: selected
+                    ? 'linear-gradient(to right, rgba(139,128,240,0.10), rgba(139,128,240,0.04))'
+                    : 'var(--surface)',
+                  cursor: opt.preview ? 'pointer' : 'default',
+                  transition: 'border-color 0.14s ease, background 0.14s ease',
+                }}
+              >
+                {/* Selection indicator */}
+                <span style={{
+                  width: 14, height: 14,
+                  borderRadius: q.multiSelect ? 3 : '50%',
+                  border: `1.5px solid ${selected ? 'var(--violet)' : 'var(--border-2)'}`,
+                  background: selected ? 'var(--violet)' : 'transparent',
+                  flexShrink: 0,
+                  marginTop: 2,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background 0.14s ease, border-color 0.14s ease',
+                }}>
+                  {selected && (
+                    <span style={{ fontSize: 8, color: 'var(--bg)', lineHeight: 1, fontWeight: 700 }}>✓</span>
+                  )}
+                </span>
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontFamily: "'IBM Plex Sans', sans-serif",
+                    fontSize: 12, fontWeight: selected ? 600 : 400,
+                    color: selected ? 'var(--text)' : 'var(--text-2)',
+                    display: 'flex', alignItems: 'center', gap: 6,
+                  }}>
+                    {opt.label}
+                    {opt.preview && (
+                      <span style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 9, color: 'var(--text-3)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 3,
+                        padding: '0 4px',
+                      }}>
+                        {previewOpen ? '▲ preview' : '▼ preview'}
+                      </span>
+                    )}
+                  </div>
+                  {opt.description && (
+                    <div style={{
+                      fontFamily: "'IBM Plex Sans', sans-serif",
+                      fontSize: 11, color: 'var(--text-3)',
+                      marginTop: 2, lineHeight: 1.5,
+                    }}>
+                      {opt.description}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Inline preview pane */}
+              {opt.preview && previewOpen && (
+                <pre style={{
+                  margin: '2px 0 0',
+                  padding: '8px 12px',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11, lineHeight: 1.6,
+                  color: 'var(--text-2)',
+                  background: 'var(--bg)',
+                  border: '1px solid var(--border)',
+                  borderTop: 'none',
+                  borderRadius: '0 0 4px 4px',
+                  overflowX: 'auto',
+                  whiteSpace: 'pre',
+                }}>
+                  {opt.preview}
+                </pre>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── ToolSearch card ───────────────────────────────────────────────────────────
+
+/** Extract every unique tool_name mentioned in a ToolSearch result string. */
+function parseToolRefs(raw: string): string[] {
+  const seen = new Set<string>()
+  const re = /"tool_name"\s*:\s*"([^"]+)"/g
+  let m
+  while ((m = re.exec(raw)) !== null) seen.add(m[1])
+  return [...seen]
+}
+
+function ToolRefChips({ names }: { names: string[] }) {
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', gap: 6,
+      padding: '8px 12px',
+      borderTop: '1px solid var(--border)',
+      background: 'var(--surface)',
+    }}>
+      {names.map(name => {
+        const color = TOOL_COLORS[name] ?? 'var(--t-other)'
+        return (
+          <span key={name} style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            color,
+            background: 'var(--surface-3)',
+            border: `1px solid var(--border-2)`,
+            borderLeft: `2px solid ${color}`,
+            borderRadius: 4,
+            padding: '2px 8px',
+            letterSpacing: '0.02em',
+          }}>
+            {name}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+function ToolSearchCard({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const input    = thread.toolUse.input as { query?: string; max_results?: number }
+  const query    = input.query ?? ''
+  const c        = 'var(--cyan)'
+  const raw      = thread.result ? resultToString(thread.result.content) : ''
+  const toolRefs = parseToolRefs(raw)
+  const isError  = thread.result?.is_error ?? false
+
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderLeft: `2px solid ${c}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 13,
+      marginTop: 4,
+    }}>
+      {/* Header */}
+      <div
+        onClick={() => setOpen(v => !v)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '6px 12px',
+          background: `linear-gradient(to right, rgba(56,217,245,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          cursor: 'pointer', userSelect: 'none',
+          transition: 'background 0.15s ease',
+        }}
+      >
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+          TOOLSEARCH
+        </span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
+          {query}
+        </span>
+        {toolRefs.length > 0 && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--green)', flexShrink: 0 }}>
+            {toolRefs.length} tool{toolRefs.length !== 1 ? 's' : ''}
+          </span>
+        )}
+        {isError && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--red)', flexShrink: 0 }}>error</span>
+        )}
+        <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+      </div>
+
+      {/* Result */}
+      {thread.result && (
+        isError             ? <GenericResultSection raw={raw} isError />
+        : toolRefs.length > 0 ? <ToolRefChips names={toolRefs} />
+        : open              ? <GenericResultSection raw={raw} />
+        : null
+      )}
+    </div>
+  )
+}
+
+// ── Bash card ─────────────────────────────────────────────────────────────────
+
+function BashCard({ thread }: { thread: ToolThread }) {
+  const [hovered, setHovered] = useState(false)
+  const input = thread.toolUse.input as { command?: string; description?: string }
+  const command = input.command ?? ''
+  const c = toolColor('Bash')
+  return (
+    <CardShell color={c} result={thread.result} toolName="Bash"
+      header={
+        <div
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 12px',
+            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0, marginTop: 2 }}>BASH</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.55 }}>
+            {command}
+          </span>
+        </div>
+      }
+      body={input.description ? (
+        <div style={{ padding: '2px 12px', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', background: 'var(--surface)' }}>
+          {input.description}
+        </div>
+      ) : undefined}
+    />
+  )
+}
+
+// ── Read card ─────────────────────────────────────────────────────────────────
+
+function ReadCard({ thread }: { thread: ToolThread }) {
+  const [hovered, setHovered] = useState(false)
+  const input = thread.toolUse.input as { file_path?: string; offset?: number; limit?: number }
+  const filePath = input.file_path ?? ''
+  const c = toolColor('Read')
+  const rangeLabel = [
+    input.offset != null ? `@${input.offset}` : null,
+    input.limit  != null ? `+${input.limit}`  : null,
+  ].filter(Boolean).join(' ')
+  return (
+    <CardShell color={c} result={thread.result} toolName="Read"
+      header={
+        <div
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>READ</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+            {basename(filePath)}
+          </span>
+          {rangeLabel && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0 }}>{rangeLabel}</span>
+          )}
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
+            {filePath}
+          </span>
+        </div>
+      }
+    />
+  )
+}
+
+// ── Grep card ─────────────────────────────────────────────────────────────────
+
+function GrepCard({ thread }: { thread: ToolThread }) {
+  const [hovered, setHovered] = useState(false)
+  const input = thread.toolUse.input as { pattern?: string; path?: string; glob?: string; output_mode?: string }
+  const pattern  = input.pattern ?? ''
+  const location = input.glob ?? input.path ?? ''
+  const c        = toolColor('Grep')
+  const raw      = thread.result && !thread.result.is_error ? resultToString(thread.result.content) : ''
+  const lineCount = raw ? raw.split('\n').filter(l => l.trim()).length : null
+  const countLabel = lineCount !== null
+    ? (input.output_mode === 'files_with_matches' || !input.output_mode)
+      ? `${lineCount} file${lineCount !== 1 ? 's' : ''}`
+      : `${lineCount} lines`
+    : null
+  return (
+    <CardShell color={c} result={thread.result} toolName="Grep"
+      header={
+        <div
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>GREP</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flexShrink: 0 }}>
+            /{pattern}/
+          </span>
+          {location && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-3)', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {location}
+            </span>
+          )}
+          {countLabel && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: lineCount! > 0 ? 'var(--green)' : 'var(--text-3)', flexShrink: 0 }}>
+              {countLabel}
+            </span>
+          )}
+        </div>
+      }
+    />
+  )
+}
+
+// ── Glob card ─────────────────────────────────────────────────────────────────
+
+function GlobCard({ thread }: { thread: ToolThread }) {
+  const [hovered, setHovered] = useState(false)
+  const input = thread.toolUse.input as { pattern?: string; path?: string }
+  const pattern = input.pattern ?? ''
+  const path    = input.path ?? ''
+  const c       = toolColor('Glob')
+  const raw     = thread.result && !thread.result.is_error ? resultToString(thread.result.content) : ''
+  const fileCount = raw ? raw.split('\n').filter(l => l.trim()).length : null
+  return (
+    <CardShell color={c} result={thread.result} toolName="Glob"
+      header={
+        <div
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>GLOB</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {pattern}
+          </span>
+          {path && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-3)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
+              {path}
+            </span>
+          )}
+          {fileCount !== null && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: fileCount > 0 ? 'var(--green)' : 'var(--text-3)', flexShrink: 0 }}>
+              {fileCount} file{fileCount !== 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+      }
+    />
+  )
+}
+
+// ── TodoWrite card ────────────────────────────────────────────────────────────
+
+type TodoItem = { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string }
+
+const TODO_ICON: Record<string, string>  = { completed: '✓', in_progress: '◐', pending: '○' }
+const TODO_COLOR: Record<string, string> = { completed: 'var(--green)', in_progress: 'var(--amber)', pending: 'var(--text-3)' }
+
+function TodoWriteCard({ thread }: { thread: ToolThread }) {
+  const input = thread.toolUse.input as { todos?: TodoItem[] }
+  const todos = input.todos ?? []
+  const counts = { completed: 0, in_progress: 0, pending: 0 }
+  for (const t of todos) counts[t.status] = (counts[t.status] ?? 0) + 1
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderLeft: '2px solid var(--violet)', borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: 'linear-gradient(to right, var(--violet-glow), transparent)' }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--violet)', fontWeight: 500, letterSpacing: '0.06em' }}>TODOWRITE</span>
+        <span style={{ flex: 1 }} />
+        {counts.completed > 0  && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--green)'  }}>{counts.completed} done</span>}
+        {counts.in_progress > 0 && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--amber)'  }}>{counts.in_progress} active</span>}
+        {counts.pending > 0    && <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>{counts.pending} pending</span>}
+      </div>
+      <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 5, background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
+        {todos.map((todo, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: TODO_COLOR[todo.status] ?? 'var(--text-3)', flexShrink: 0, marginTop: 1, width: 12, textAlign: 'center' }}>
+              {TODO_ICON[todo.status] ?? '○'}
+            </span>
+            <span style={{ fontSize: 13, color: todo.status === 'completed' ? 'var(--text-3)' : 'var(--text)', textDecoration: todo.status === 'completed' ? 'line-through' : 'none', lineHeight: 1.5 }}>
+              {todo.content}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Agent card ────────────────────────────────────────────────────────────────
+
+function AgentCard({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const input = thread.toolUse.input as {
+    description?: string; prompt?: string; subagent_type?: string
+    model?: string; run_in_background?: boolean; max_turns?: number
+  }
+  const c   = toolColor('Agent')
+  const raw = thread.result ? resultToString(thread.result.content) : ''
+
+  let parsed: Record<string, unknown> | null = null
+  try { if (raw) parsed = JSON.parse(raw) } catch { /* not JSON */ }
+
+  const status = (parsed?.status as string) ?? (thread.result ? 'unknown' : 'pending')
+  const statusColors: Record<string, string> = {
+    completed: 'var(--green)', async_launched: 'var(--cyan)',
+    sub_agent_entered: 'var(--amber)', unknown: 'var(--text-3)', pending: 'var(--text-3)',
+  }
+  const statusLabels: Record<string, string> = {
+    completed: 'done', async_launched: 'launched', sub_agent_entered: 'entered',
+  }
+  const resultText = (parsed?.content as Array<{ text?: string }>)?.[0]?.text
+    ?? (parsed?.message as string)
+    ?? ''
+  const totalTokens       = parsed?.totalTokens        as number | undefined
+  const totalToolUseCount = parsed?.totalToolUseCount   as number | undefined
+  const totalDurationMs   = parsed?.totalDurationMs     as number | undefined
+  const outputFile        = parsed?.outputFile          as string | undefined
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderLeft: `2px solid ${c}`, borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
+      {/* Header */}
+      <div
+        onClick={() => resultText ? setOpen(v => !v) : undefined}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+          background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          cursor: resultText ? 'pointer' : 'default', userSelect: 'none',
+          transition: 'background 0.15s ease',
+        }}
+      >
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+          {input.run_in_background ? 'AGENT ⟳' : 'AGENT'}
+        </span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
+          {input.description ?? ''}
+        </span>
+        {input.subagent_type && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
+            {input.subagent_type}
+          </span>
+        )}
+        {thread.result && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: statusColors[status] ?? 'var(--text-3)', flexShrink: 0 }}>
+            {statusLabels[status] ?? status}
+          </span>
+        )}
+        {resultText && <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>}
+      </div>
+
+      {/* Stats row for completed synchronous agents */}
+      {status === 'completed' && (totalTokens != null || totalToolUseCount != null || totalDurationMs != null) && (
+        <div style={{ display: 'flex', gap: 16, padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+          {totalTokens    != null && <span>⬡ {totalTokens.toLocaleString()} tok</span>}
+          {totalToolUseCount != null && <span>⚙ {totalToolUseCount} tools</span>}
+          {totalDurationMs   != null && <span>⏱ {(totalDurationMs / 1000).toFixed(1)}s</span>}
+          {input.model && <span>{input.model}</span>}
+        </div>
+      )}
+
+      {/* Output file path for async agents */}
+      {status === 'async_launched' && outputFile && (
+        <div style={{ padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+          {outputFile}
+        </div>
+      )}
+
+      {/* Result text (collapsible) */}
+      {open && resultText && (
+        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, color: 'var(--text-2)', lineHeight: 1.65, maxHeight: 320, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {resultText}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Plan mode card ────────────────────────────────────────────────────────────
+
+function PlanModeCard({ thread }: { thread: ToolThread }) {
+  const isEnter = thread.toolUse.name === 'EnterPlanMode'
+  const input   = thread.toolUse.input as { allowedPrompts?: unknown[] }
+  const color   = isEnter ? 'var(--violet)' : 'var(--green)'
+  const label   = isEnter ? '⊞ PLAN MODE' : '✓ PLAN APPROVED'
+  const sub     = !isEnter && input.allowedPrompts?.length
+    ? `${input.allowedPrompts.length} cmd${input.allowedPrompts.length !== 1 ? 's' : ''} approved`
+    : isEnter ? 'entering' : 'exiting'
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
+      <div style={{ flex: 1, height: 1, background: `linear-gradient(to right, transparent, ${color}44)` }} />
+      <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.14em', color, display: 'flex', alignItems: 'center', gap: 6 }}>
+        {label}
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 400, fontSize: 9, color: 'var(--text-3)', letterSpacing: '0.04em' }}>
+          {sub}
+        </span>
+      </div>
+      <div style={{ flex: 1, height: 1, background: `linear-gradient(to left, transparent, ${color}44)` }} />
+    </div>
+  )
+}
+
+// ── Skill card ────────────────────────────────────────────────────────────────
+
+function SkillCard({ thread }: { thread: ToolThread }) {
+  const [hovered, setHovered] = useState(false)
+  const input = thread.toolUse.input as { skill?: string; args?: string; name?: string }
+  const skillName = input.skill ?? input.name ?? (Object.values(input)[0] as string) ?? ''
+  const args      = input.args ?? ''
+  const c         = 'var(--violet)'
+
+  return (
+    <CardShell color={c} result={thread.result} toolName="Skill"
+      header={
+        <div
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+            background: `linear-gradient(to right, rgba(139,128,240,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>SKILL</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, fontWeight: 500, flexShrink: 0 }}>
+            {skillName}
+          </span>
+          {args && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {args}
+            </span>
+          )}
+        </div>
+      }
+    />
+  )
+}
+
+// ── MultiEdit card ────────────────────────────────────────────────────────────
+
+function MultiEditCard({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(true)
+  const [hovered, setHovered] = useState(false)
+  const { toolUse, result } = thread
+  const input = toolUse.input as {
+    file_path?: string
+    edits?: { old_string?: string; new_string?: string; replace_all?: boolean }[]
+  }
+  const filePath = input.file_path ?? ''
+  const edits = input.edits ?? []
+  const c = toolColor('MultiEdit')
+
+  const totalDelta = edits.reduce((acc, e) => {
+    const oldLines = (e.old_string ?? '').split('\n').length
+    const newLines = (e.new_string ?? '').split('\n').length
+    return acc + (newLines - oldLines)
+  }, 0)
+  const deltaLabel = totalDelta > 0 ? `+${totalDelta}` : totalDelta < 0 ? String(totalDelta) : '±0'
+  const deltaColor = totalDelta > 0 ? 'var(--green)' : totalDelta < 0 ? 'var(--red)' : 'var(--text-3)'
+
+  return (
+    <CardShell color={c} result={result} toolName="MultiEdit"
+      header={
+        <div
+          onClick={() => setOpen(v => !v)}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 12px',
+            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            cursor: 'pointer', userSelect: 'none',
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+            EDIT
+          </span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {basename(filePath)}
+          </span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0, border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px' }}>
+            {edits.length} edit{edits.length !== 1 ? 's' : ''}
+          </span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: deltaColor, flexShrink: 0 }}>
+            {deltaLabel}
+          </span>
+          <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+        </div>
+      }
+      body={open ? (
+        <>
+          <div style={{
+            padding: '2px 12px',
+            background: 'var(--surface)',
+            borderTop: '1px solid var(--border)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10, color: 'var(--text-3)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {filePath}
+          </div>
+          {edits.map((edit, i) => (
+            <div key={i}>
+              {edits.length > 1 && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '2px 12px',
+                  borderTop: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10, color: 'var(--text-3)',
+                  userSelect: 'none',
+                }}>
+                  <span>{i + 1} / {edits.length}</span>
+                  {edit.replace_all && (
+                    <span style={{ color: 'var(--amber)', border: '1px solid var(--border)', borderRadius: 3, padding: '0 4px' }}>replace_all</span>
+                  )}
+                </div>
+              )}
+              <DiffView oldStr={edit.old_string ?? ''} newStr={edit.new_string ?? ''} />
+            </div>
+          ))}
+        </>
+      ) : undefined}
+    />
+  )
+}
+
+// ── WebSearch card ────────────────────────────────────────────────────────────
+
+type WebSearchResult = { url?: string; title?: string; page_age?: string }
+
+function parseWebSearchResults(raw: string): WebSearchResult[] | null {
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed as WebSearchResult[]
+    if (parsed && typeof parsed === 'object') {
+      const sub = (parsed as Record<string, unknown>).results ?? (parsed as Record<string, unknown>).data
+      if (Array.isArray(sub)) return sub as WebSearchResult[]
+    }
+  } catch { /* not JSON */ }
+  return null
+}
+
+function WebSearchCard({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const input = thread.toolUse.input as { query?: string; max_uses?: number }
+  const query = input.query ?? ''
+  const c = 'var(--cyan)'
+  const raw = thread.result ? resultToString(thread.result.content) : ''
+  const isError = thread.result?.is_error ?? false
+  const results = raw ? parseWebSearchResults(raw) : null
+  const PREVIEW = 3
+
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderLeft: `2px solid ${c}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 13,
+      marginTop: 4,
+    }}>
+      {/* Header */}
+      <div
+        onClick={() => setOpen(v => !v)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '6px 12px',
+          background: `linear-gradient(to right, rgba(56,217,245,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          cursor: 'pointer', userSelect: 'none',
+          transition: 'background 0.15s ease',
+        }}
+      >
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+          WEBSEARCH
+        </span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
+          {query}
+        </span>
+        {results !== null && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: results.length > 0 ? 'var(--green)' : 'var(--text-3)', flexShrink: 0 }}>
+            {results.length} result{results.length !== 1 ? 's' : ''}
+          </span>
+        )}
+        {isError && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--red)', flexShrink: 0 }}>error</span>
+        )}
+        <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+      </div>
+
+      {/* Body */}
+      {open && thread.result && (
+        results !== null ? (
+          <div style={{ borderTop: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {(expanded ? results : results.slice(0, PREVIEW)).map((r, i) => (
+                <div key={i} style={{
+                  padding: '8px 12px',
+                  borderBottom: '1px solid var(--border)',
+                  display: 'flex', flexDirection: 'column', gap: 2,
+                  background: i % 2 === 0 ? 'var(--surface)' : 'transparent',
+                }}>
+                  {r.title && (
+                    <div style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--text)', lineHeight: 1.4 }}>
+                      {r.title}
+                    </div>
+                  )}
+                  {r.url && (
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.url}
+                    </div>
+                  )}
+                  {r.page_age && (
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+                      {r.page_age}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            {results.length > PREVIEW && (
+              <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+                {expanded ? '▲ collapse' : `▼ ${results.length - PREVIEW} more result${results.length - PREVIEW !== 1 ? 's' : ''}`}
+              </button>
+            )}
+          </div>
+        ) : (
+          <GenericResultSection raw={raw} isError={isError} />
+        )
+      )}
+    </div>
+  )
+}
+
+// ── WebFetch card ─────────────────────────────────────────────────────────────
+
+function WebFetchCard({ thread }: { thread: ToolThread }) {
+  const [hovered, setHovered] = useState(false)
+  const input = thread.toolUse.input as { url?: string; max_content_tokens?: number }
+  const url = input.url ?? ''
+  const c = toolColor('WebFetch')
+
+  let hostname = url
+  try { hostname = new URL(url).hostname } catch { /* use full url as fallback */ }
+
+  return (
+    <CardShell color={c} result={thread.result} toolName="WebFetch"
+      header={
+        <div
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 12px',
+            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+            WEBFETCH
+          </span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, fontWeight: 500, flexShrink: 0 }}>
+            {hostname}
+          </span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-3)', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {url}
+          </span>
+        </div>
+      }
+    />
+  )
+}
+
+// ── NotebookEdit card ─────────────────────────────────────────────────────────
+
+function NotebookEditCard({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const { toolUse, result } = thread
+  const input = toolUse.input as {
+    notebook_path?: string
+    cell_number?: number
+    new_source?: string
+    cell_type?: string
+    edit_mode?: string
+  }
+  const notebookPath = input.notebook_path ?? ''
+  const cellNumber   = input.cell_number
+  const newSource    = input.new_source
+  const editMode     = input.edit_mode ?? 'replace'
+  const c            = toolColor('NotebookEdit')
+  const hasBody      = !!newSource
+
+  const editModeColor: Record<string, string> = {
+    replace: 'var(--t-edit)',
+    insert:  'var(--green)',
+    delete:  'var(--red)',
+  }
+  const chipColor = editModeColor[editMode] ?? 'var(--text-3)'
+
+  return (
+    <CardShell color={c} result={result} toolName={toolUse.name}
+      header={
+        <div
+          onClick={() => hasBody && setOpen(v => !v)}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 12px',
+            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            cursor: hasBody ? 'pointer' : 'default',
+            userSelect: 'none',
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10, color: c, fontWeight: 500,
+            letterSpacing: '0.06em', flexShrink: 0,
+          }}>
+            NOTEBOOK
+          </span>
+          <span style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            color: 'var(--text)', flex: 1,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            fontSize: 12,
+          }}>
+            {basename(notebookPath)}
+          </span>
+          {cellNumber !== undefined && (
+            <span style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10, color: 'var(--text-2)',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--border)',
+              borderRadius: 3,
+              padding: '1px 5px',
+              flexShrink: 0,
+            }}>
+              cell {cellNumber}
+            </span>
+          )}
+          <span style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10, color: chipColor,
+            background: 'var(--surface-2)',
+            border: `1px solid ${chipColor}44`,
+            borderRadius: 3,
+            padding: '1px 5px',
+            flexShrink: 0,
+            letterSpacing: '0.04em',
+          }}>
+            {editMode}
+          </span>
+          {hasBody && (
+            <span style={{ color: 'var(--text-3)', fontSize: 10, flexShrink: 0 }}>
+              {open ? '▲' : '▼'}
+            </span>
+          )}
+        </div>
+      }
+      body={open && hasBody ? (
+        <>
+          <div style={{
+            padding: '2px 12px',
+            background: 'var(--surface)',
+            borderTop: '1px solid var(--border)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10, color: 'var(--text-3)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {notebookPath}
+          </div>
+          <pre style={{
+            margin: 0,
+            padding: '10px 14px',
+            background: 'var(--surface)',
+            borderTop: '1px solid var(--border)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 12,
+            lineHeight: 1.6,
+            maxHeight: 300,
+            overflowY: 'auto',
+            overflowX: 'auto',
+            whiteSpace: 'pre',
+            color: 'var(--text-2)',
+          }}>
+            {newSource}
+          </pre>
+        </>
+      ) : undefined}
+    />
+  )
+}
+
+// ── Worktree card ─────────────────────────────────────────────────────────────
+
+function WorktreeCard({ thread }: { thread: ToolThread }) {
+  const isEnter = thread.toolUse.name === 'EnterWorktree'
+  const input   = thread.toolUse.input as { name?: string }
+  const color   = 'var(--cyan)'
+
+  const label = isEnter ? '⊙ WORKTREE' : '⊙ WORKTREE EXIT'
+
+  let sub = ''
+  if (isEnter) {
+    sub = input.name ?? ''
+  } else {
+    const raw = thread.result ? resultToString(thread.result.content) : ''
+    sub = raw.split('\n')[0]?.trim() ?? ''
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
+      <div style={{ flex: 1, height: 1, background: `linear-gradient(to right, transparent, ${color}44)` }} />
+      <div style={{
+        fontFamily: "'Oxanium', monospace",
+        fontSize: 10, fontWeight: 600, letterSpacing: '0.14em',
+        color,
+        display: 'flex', alignItems: 'center', gap: 6,
+      }}>
+        {label}
+        {sub && (
+          <span style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontWeight: 400, fontSize: 9,
+            color: 'var(--text-3)',
+            letterSpacing: '0.04em',
+          }}>
+            {sub}
+          </span>
+        )}
+      </div>
+      <div style={{ flex: 1, height: 1, background: `linear-gradient(to left, transparent, ${color}44)` }} />
+    </div>
+  )
+}
+
+// ── Task card ─────────────────────────────────────────────────────────────────
+
+type TaskRecord = { id?: string; subject?: string; status?: string; owner?: string; blockedBy?: string[] }
+
+const TASK_ICON: Record<string, string>  = { completed: '✓', in_progress: '◐', pending: '○' }
+const TASK_COLOR: Record<string, string> = { completed: 'var(--green)', in_progress: 'var(--amber)', pending: 'var(--text-3)' }
+
+function TaskCard({ thread }: { thread: ToolThread }) {
+  const [hovered, setHovered] = useState(false)
+  const { toolUse, result } = thread
+  const name  = toolUse.name
+  const c     = 'var(--amber)'
+  const input = toolUse.input as {
+    subject?: string; description?: string
+    taskId?: string; status?: string; owner?: string
+    addBlockedBy?: string[]; addBlocks?: string[]
+  }
+  const raw = result ? resultToString(result.content) : ''
+
+  let tasks: TaskRecord[] | null = null
+  if (name === 'TaskList' && raw) {
+    try { const p = JSON.parse(raw); if (Array.isArray(p)) tasks = p as TaskRecord[] } catch { /* not JSON */ }
+  }
+
+  const headerContent = (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+        background: `linear-gradient(to right, rgba(245,158,11,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+        transition: 'background 0.15s ease',
+      }}
+    >
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        TASK
+      </span>
+      {name === 'TaskCreate' && (
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {input.subject ?? ''}
+        </span>
+      )}
+      {name === 'TaskList' && (
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', fontSize: 11, flex: 1 }}>
+          {tasks !== null ? `${tasks.length} task${tasks.length !== 1 ? 's' : ''}` : 'list'}
+        </span>
+      )}
+      {(name === 'TaskGet' || name === 'TaskUpdate' || name === 'TaskStop') && (
+        <>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flexShrink: 0 }}>
+            #{input.taskId ?? ''}
+          </span>
+          {name === 'TaskUpdate' && input.status && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: TASK_COLOR[input.status] ?? 'var(--text-3)', background: 'var(--surface-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
+              {input.status}
+            </span>
+          )}
+          <span style={{ flex: 1 }} />
+        </>
+      )}
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text-3)', letterSpacing: '0.04em', flexShrink: 0 }}>
+        {name === 'TaskCreate' ? 'create'
+          : name === 'TaskList'   ? 'list'
+          : name === 'TaskGet'    ? 'get'
+          : name === 'TaskUpdate' ? 'update'
+          : name === 'TaskStop'   ? 'stop'
+          : name}
+      </span>
+    </div>
+  )
+
+  // TaskList with parsed tasks: custom layout
+  if (name === 'TaskList' && tasks !== null) {
+    return (
+      <div style={{ border: '1px solid var(--border)', borderLeft: `2px solid ${c}`, borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
+        {headerContent}
+        {tasks.length > 0 && (
+          <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 5, background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
+            {tasks.map((t, i) => {
+              const st = t.status ?? 'pending'
+              return (
+                <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: TASK_COLOR[st] ?? 'var(--text-3)', flexShrink: 0, marginTop: 1, width: 12, textAlign: 'center' }}>
+                    {TASK_ICON[st] ?? '○'}
+                  </span>
+                  <span style={{ fontSize: 13, color: st === 'completed' ? 'var(--text-3)' : 'var(--text)', lineHeight: 1.5, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {t.subject ?? t.id ?? '—'}
+                  </span>
+                  {t.id && (
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0 }}>
+                      #{t.id}
+                    </span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // All others: use CardShell
+  return (
+    <CardShell color={c} result={result} toolName={name} header={headerContent} />
+  )
+}
+
+// ── Cron card ─────────────────────────────────────────────────────────────────
+
+type CronRecord = { task_id?: string; cron_expression?: string; prompt?: string; next_run?: string }
+
+function CronCard({ thread }: { thread: ToolThread }) {
+  const [hovered, setHovered] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const { toolUse, result } = thread
+  const name  = toolUse.name
+  const c     = 'var(--t-glob)'
+  const input = toolUse.input as { cron_expression?: string; prompt?: string; task_id?: string }
+  const raw   = result ? resultToString(result.content) : ''
+
+  let crons: CronRecord[] | null = null
+  if (name === 'CronList' && raw) {
+    try { const p = JSON.parse(raw); if (Array.isArray(p)) crons = p as CronRecord[] } catch { /* not JSON */ }
+  }
+
+  const CRON_LIMIT = 3
+
+  const headerContent = (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+        background: `linear-gradient(to right, var(--t-glob)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+        transition: 'background 0.15s ease',
+      }}
+    >
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        CRON
+      </span>
+      {name === 'CronCreate' && (
+        <>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flexShrink: 0 }}>
+            {input.cron_expression ?? ''}
+          </span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {(input.prompt ?? '').slice(0, 80)}
+          </span>
+        </>
+      )}
+      {name === 'CronList' && (
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', fontSize: 11, flex: 1 }}>
+          {crons !== null ? `${crons.length} job${crons.length !== 1 ? 's' : ''}` : 'list'}
+        </span>
+      )}
+      {name === 'CronDelete' && (
+        <>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {input.task_id ?? ''}
+          </span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--red)', letterSpacing: '0.04em', flexShrink: 0 }}>delete</span>
+        </>
+      )}
+    </div>
+  )
+
+  // CronList with parsed jobs
+  if (name === 'CronList' && crons !== null) {
+    const visible = expanded ? crons : crons.slice(0, CRON_LIMIT)
+    const hidden  = crons.length - visible.length
+    return (
+      <div style={{ border: '1px solid var(--border)', borderLeft: `2px solid ${c}`, borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
+        {headerContent}
+        {crons.length > 0 && (
+          <div style={{ background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
+            {visible.map((job, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 12px', borderBottom: i < visible.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, flexShrink: 0, minWidth: 110 }}>
+                  {job.cron_expression ?? '—'}
+                </span>
+                <span style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 12, color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {job.prompt ?? ''}
+                </span>
+              </div>
+            ))}
+            {(hidden > 0 || expanded) && (
+              <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+                {expanded ? '▲ collapse' : `▼ ${hidden} more`}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <CardShell color={c} result={result} toolName={name} header={headerContent} />
+  )
+}
+
+// ── MCP card ──────────────────────────────────────────────────────────────────
+
+type McpResource = { uri?: string; name?: string; mimeType?: string }
+
+function McpCard({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(true)
+  const [hovered, setHovered] = useState(false)
+  const { toolUse, result } = thread
+  const name  = toolUse.name
+  const c     = 'var(--t-other)'
+  const input = toolUse.input as { server?: string; uri?: string }
+  const raw   = result ? resultToString(result.content) : ''
+
+  let resources: McpResource[] | null = null
+  if (name === 'ListMcpResourcesTool' && raw) {
+    try { const p = JSON.parse(raw); if (Array.isArray(p)) resources = p as McpResource[] } catch { /* not JSON */ }
+  }
+
+  const serverLabel = input.server ?? 'all servers'
+  const uri = input.uri ?? ''
+
+  const header = (
+    <div
+      onClick={() => setOpen(v => !v)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+        background: `linear-gradient(to right, var(--t-other)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+        cursor: 'pointer', userSelect: 'none', transition: 'background 0.15s ease',
+      }}
+    >
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+        MCP
+      </span>
+      {name === 'ListMcpResourcesTool' && (
+        <>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flexShrink: 0 }}>
+            {serverLabel}
+          </span>
+          {resources !== null && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--green)', background: 'rgba(45,212,160,0.08)', border: '1px solid rgba(45,212,160,0.2)', borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
+              {resources.length} resource{resources.length !== 1 ? 's' : ''}
+            </span>
+          )}
+        </>
+      )}
+      {name === 'ReadMcpResourceTool' && (
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {uri.length > 72 ? '…' + uri.slice(-70) : uri}
+        </span>
+      )}
+      <span style={{ flex: 1 }} />
+      <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+    </div>
+  )
+
+  // ListMcpResourcesTool: show resource chips when open
+  if (name === 'ListMcpResourcesTool') {
+    return (
+      <div style={{ border: '1px solid var(--border)', borderLeft: `2px solid ${c}`, borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
+        {header}
+        {open && resources !== null && resources.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
+            {resources.map((r, i) => (
+              <span key={i} style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11, color: c,
+                background: 'var(--surface-3)',
+                border: '1px solid var(--border-2)',
+                borderLeft: `2px solid ${c}`,
+                borderRadius: 4,
+                padding: '2px 8px',
+                letterSpacing: '0.02em',
+                maxWidth: 220,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+                title={r.uri}
+              >
+                {r.name ?? r.uri ?? '—'}
+              </span>
+            ))}
+          </div>
+        )}
+        {open && result?.is_error && (
+          <GenericResultSection raw={raw} isError />
+        )}
+      </div>
+    )
+  }
+
+  // ReadMcpResourceTool: use CardShell with collapse on header via body
+  return (
+    <CardShell color={c} result={open ? result : null} toolName={name} header={header} />
+  )
+}
+
+// ── Dispatcher ────────────────────────────────────────────────────────────────
+
+function ToolThreadCard({ thread }: { thread: ToolThread }) {
+  const name = thread.toolUse.name
+  if (name === 'Edit')                         return <EditToolCard thread={thread} />
+  if (name === 'MultiEdit')                    return <MultiEditCard thread={thread} />
+  if (name === 'Write')                        return <WriteToolCard thread={thread} />
+  if (name === 'Bash')                         return <BashCard thread={thread} />
+  if (name === 'Read')                         return <ReadCard thread={thread} />
+  if (name === 'Grep')                         return <GrepCard thread={thread} />
+  if (name === 'Glob')                         return <GlobCard thread={thread} />
+  if (name === 'TodoWrite')                    return <TodoWriteCard thread={thread} />
+  if (name === 'Agent')                        return <AgentCard thread={thread} />
+  if (name === 'EnterPlanMode' || name === 'ExitPlanMode') return <PlanModeCard thread={thread} />
+  if (name === 'Skill')                        return <SkillCard thread={thread} />
+  if (name === 'AskUserQuestion')              return <AskUserQuestionCard thread={thread} />
+  if (name === 'ToolSearch')                   return <ToolSearchCard thread={thread} />
+  if (name === 'WebSearch')                    return <WebSearchCard thread={thread} />
+  if (name === 'WebFetch')                     return <WebFetchCard thread={thread} />
+  if (name === 'NotebookEdit')                 return <NotebookEditCard thread={thread} />
+  if (name === 'EnterWorktree' || name === 'ExitWorktree') return <WorktreeCard thread={thread} />
+  if (name === 'TaskCreate' || name === 'TaskList' || name === 'TaskGet' || name === 'TaskUpdate' || name === 'TaskStop') return <TaskCard thread={thread} />
+  if (name === 'CronCreate' || name === 'CronList' || name === 'CronDelete') return <CronCard thread={thread} />
+  if (name === 'ListMcpResourcesTool' || name === 'ReadMcpResourceTool') return <McpCard thread={thread} />
+  return <GenericToolCard thread={thread} />
+}
+
+// ── Tool result renderers ─────────────────────────────────────────────────────
+
+function resultToString(content: ToolResultBlock['content']): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .map(b => ((b as { type: string; text?: string }).type === 'text'
+        ? (b as { text: string }).text
+        : JSON.stringify(b)))
+      .join('\n')
+  }
+  return JSON.stringify(content, null, 2)
+}
+
+const EXPAND_BTN: React.CSSProperties = {
+  display: 'block', width: '100%', padding: '4px 14px',
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 10, color: 'var(--text-3)',
+  background: 'var(--surface)', border: 'none',
+  borderTop: '1px solid var(--border)',
+  cursor: 'pointer', textAlign: 'left',
+  letterSpacing: '0.04em',
+}
+
+function parseFileLines(text: string) {
+  const lines = text.split('\n').map(line => {
+    const tab = line.indexOf('\t')
+    return tab === -1 ? { num: '', code: line } : { num: line.slice(0, tab), code: line.slice(tab + 1) }
+  })
+  if (lines.length && lines[lines.length - 1].num === '' && lines[lines.length - 1].code === '') lines.pop()
+  return lines
+}
+
+function ReadResultSection({ raw }: { raw: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const LIMIT = 25
+
+  const parts = splitResultParts(raw)
+
+  // Pre-compute visible lines per text part, consuming from a shared budget
+  let budget = expanded ? Infinity : LIMIT
+  const processedParts = parts.map(part => {
+    if (part.kind === 'system_reminder') return { ...part, visibleLines: [] as ReturnType<typeof parseFileLines> }
+    const lines = parseFileLines(part.text)
+    const visibleLines = budget > 0 ? lines.slice(0, budget) : []
+    budget = Math.max(0, budget - lines.length)
+    return { ...part, visibleLines }
+  })
+
+  const totalLines = parts
+    .filter((p): p is { kind: 'text'; text: string } => p.kind === 'text')
+    .reduce((n, p) => n + parseFileLines(p.text).length, 0)
+  const hidden = expanded ? 0 : Math.max(0, totalLines - LIMIT)
+
+  const fileBlockStyle: React.CSSProperties = {
+    display: 'flex', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, lineHeight: 1.6,
+  }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)' }}>
+      {processedParts.map((part, i) =>
+        part.kind === 'system_reminder'
+          ? <SystemReminderCard key={i} block={{ type: 'system_reminder', content: part.content }} />
+          : part.visibleLines.length > 0
+            ? (
+              <div key={i} style={fileBlockStyle}>
+                <div style={{ flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', textAlign: 'right', userSelect: 'none', padding: '8px 0', minWidth: 44 }}>
+                  {part.visibleLines.map((l, j) => (
+                    <div key={j} style={{ padding: '0 10px', color: 'var(--text-3)' }}>{l.num}</div>
+                  ))}
+                </div>
+                <div style={{ flex: 1, background: 'var(--bg)', padding: '8px 0', overflow: 'hidden' }}>
+                  {part.visibleLines.map((l, j) => (
+                    <div key={j} style={{ padding: '0 14px', color: 'var(--text-2)', whiteSpace: 'pre' }}>{l.code}</div>
+                  ))}
+                </div>
+              </div>
+            )
+            : null
+      )}
+      {hidden > 0 && (
+        <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+          {expanded ? '▲ collapse' : `▼ ${hidden} more lines`}
+        </button>
+      )}
+    </div>
+  )
+}
+
+type ResultPart =
+  | { kind: 'text'; text: string }
+  | { kind: 'system_reminder'; content: string }
+
+function splitResultParts(raw: string): ResultPart[] {
+  const matches = [...raw.matchAll(/<system-reminder>([\s\S]*?)<\/system-reminder>/g)]
+  if (matches.length === 0) return [{ kind: 'text', text: raw }]
+  const parts: ResultPart[] = []
+  let lastIndex = 0
+  for (const match of matches) {
+    const before = raw.slice(lastIndex, match.index)
+    if (before.trim()) parts.push({ kind: 'text', text: before })
+    const content = match[1].trim()
+    if (content) parts.push({ kind: 'system_reminder', content })
+    lastIndex = (match.index ?? 0) + match[0].length
+  }
+  const after = raw.slice(lastIndex)
+  if (after.trim()) parts.push({ kind: 'text', text: after })
+  return parts
+}
+
+function GenericResultSection({ raw, isError = false, note }: { raw: string; isError?: boolean; note?: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const LIMIT = 20
+
+  const parts = splitResultParts(raw)
+  const hasReminders = parts.some(p => p.kind === 'system_reminder')
+
+  // Pre-compute visible lines across text parts (system-reminder parts don't count toward limit)
+  let budget = expanded ? Infinity : LIMIT
+  const processedParts = parts.map(part => {
+    if (part.kind === 'system_reminder') return { ...part, visibleLines: [] as string[] }
+    const lines = part.text.split('\n')
+    const visibleLines = budget > 0 ? lines.slice(0, budget) : []
+    budget = Math.max(0, budget - lines.length)
+    return { ...part, visibleLines }
+  })
+
+  const totalTextLines = parts
+    .filter((p): p is { kind: 'text'; text: string } => p.kind === 'text')
+    .reduce((n, p) => n + p.text.split('\n').length, 0)
+  const hidden = expanded ? 0 : Math.max(0, totalTextLines - LIMIT)
+
+  const preStyle: React.CSSProperties = {
+    padding: '8px 14px', margin: 0,
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 12, color: 'var(--text-2)',
+    background: 'var(--surface)', overflowX: 'auto',
+    whiteSpace: 'pre', lineHeight: 1.6,
+  }
+
+  return (
+    <div style={{ borderTop: `1px solid ${isError ? 'rgba(240,96,96,0.25)' : 'var(--border)'}` }}>
+      <div style={{
+        padding: '3px 12px', fontSize: 10,
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontWeight: 500, letterSpacing: '0.06em',
+        color: isError ? 'var(--red)' : 'var(--green)',
+        background: isError ? 'rgba(240,96,96,0.06)' : 'rgba(45,212,160,0.05)',
+        display: 'flex', gap: 8,
+      }}>
+        <span>{isError ? '✗ ERROR' : '✓ OK'}</span>
+        {note && <span style={{ fontWeight: 400, color: 'var(--text-3)' }}>{note}</span>}
+      </div>
+
+      {!hasReminders ? (
+        <pre style={preStyle}>{processedParts[0]?.kind === 'text' ? processedParts[0].visibleLines.join('\n') : ''}</pre>
+      ) : (
+        processedParts.map((part, i) =>
+          part.kind === 'system_reminder'
+            ? <SystemReminderCard key={i} block={{ type: 'system_reminder', content: part.content }} />
+            : part.visibleLines.length > 0
+              ? <pre key={i} style={preStyle}>{part.visibleLines.join('\n')}</pre>
+              : null
+        )
+      )}
+
+      {hidden > 0 && (
+        <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+          {expanded ? '▲ collapse' : `▼ ${hidden} more lines`}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function ImageResultSection({ block }: { block: ImageBlock }) {
+  let src = ''
+  let mediaType = ''
+  let w: number | undefined, h: number | undefined
+
+  if (block.source?.type === 'base64') {
+    src = `data:${block.source.media_type};base64,${block.source.data}`
+    mediaType = block.source.media_type
+  } else if (block.file?.base64) {
+    src = `data:${block.file.type};base64,${block.file.base64}`
+    mediaType = block.file.type
+    w = block.file.dimensions?.displayWidth ?? block.file.dimensions?.originalWidth
+    h = block.file.dimensions?.displayHeight ?? block.file.dimensions?.originalHeight
+  }
+
+  if (!src) return null
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', background: 'var(--bg)', padding: 12 }}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt="" style={{ maxWidth: '100%', maxHeight: 480, display: 'block', borderRadius: 4, border: '1px solid var(--border)' }} />
+      <div style={{ marginTop: 4, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+        {[mediaType, w && h ? `${w} × ${h}` : null].filter(Boolean).join(' · ')}
+      </div>
+    </div>
+  )
+}
+
+function ToolResultSection({ result, toolName }: { result: ToolResultBlock; toolName: string }) {
+  // Detect image blocks before calling resultToString (which would base64-dump them)
+  if (Array.isArray(result.content)) {
+    const img = result.content.find((b): b is ImageBlock => (b as ImageBlock).type === 'image')
+    if (img) return <ImageResultSection block={img} />
+  }
+
+  const raw = resultToString(result.content)
+
+  if (result.is_error) return <GenericResultSection raw={raw} isError />
+
+  const nonEmpty = raw.split('\n').filter(l => l.trim())
+  if (nonEmpty.length === 1 && raw.length < 140) {
+    return (
+      <div style={{
+        padding: '4px 12px',
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 10, color: 'var(--green)',
+        background: 'rgba(45,212,160,0.05)',
+        borderTop: '1px solid rgba(45,212,160,0.15)',
+        letterSpacing: '0.03em',
+      }}>
+        ✓ {raw.trim()}
+      </div>
+    )
+  }
+
+  if (toolName === 'Read') return <ReadResultSection raw={raw} />
+
+  const persistedMatch = raw.match(/<persisted-output>[\s\S]*?Preview[^\n]*:\n([\s\S]*)/)
+  if (persistedMatch) return <GenericResultSection raw={persistedMatch[1].trim()} note="· preview" />
+
+  return <GenericResultSection raw={raw} />
+}
+
+// ── Block renderers ───────────────────────────────────────────────────────────
+
+type InsightPart = { kind: 'insight'; content: string } | { kind: 'text'; text: string }
+
+function splitInsights(text: string): InsightPart[] {
+  const matches = [...text.matchAll(/`★ Insight[^`]*`\n([\s\S]*?)\n`[─]+`/g)]
+  if (matches.length === 0) return [{ kind: 'text', text }]
+
+  const parts: InsightPart[] = []
+  let lastIndex = 0
+  for (const match of matches) {
+    const before = text.slice(lastIndex, match.index)
+    if (before.trim()) parts.push({ kind: 'text', text: before })
+    parts.push({ kind: 'insight', content: match[1].trim() })
+    lastIndex = (match.index ?? 0) + match[0].length
+  }
+  const after = text.slice(lastIndex)
+  if (after.trim()) parts.push({ kind: 'text', text: after })
+  return parts
+}
+
+function InsightCard({ content }: { content: string }) {
+  return (
+    <div style={{
+      border: '1px solid var(--amber)',
+      borderLeft: '3px solid var(--amber)',
+      borderRadius: 6,
+      overflow: 'hidden',
+      margin: '8px 0',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '4px 10px',
+        background: 'var(--amber)14',
+        borderBottom: '1px solid var(--border)',
+      }}>
+        <span style={{ fontSize: 13, color: 'var(--amber)' }}>★</span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--amber)', fontWeight: 600, letterSpacing: '0.08em' }}>
+          INSIGHT
+        </span>
+      </div>
+      <div style={{ padding: '8px 14px', fontSize: 13, color: 'var(--text-2)', lineHeight: 1.65 }}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+          {content}
+        </ReactMarkdown>
+      </div>
+    </div>
+  )
+}
+
+function RenderText({ block }: { block: TextBlock }) {
+  const parts = splitInsights(block.text)
+  if (parts.length === 1 && parts[0].kind === 'text') {
+    return (
+      <div style={{ fontSize: 14, wordBreak: 'break-word', lineHeight: 1.7 }}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+          {block.text}
+        </ReactMarkdown>
+      </div>
+    )
+  }
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.kind === 'insight'
+          ? <InsightCard key={i} content={part.content} />
+          : (
+            <div key={i} style={{ fontSize: 14, wordBreak: 'break-word', lineHeight: 1.7 }}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                {part.text}
+              </ReactMarkdown>
+            </div>
+          )
+      )}
+    </>
+  )
+}
+
+function RenderThinking({ block }: { block: ThinkingBlock }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const text      = block.thinking
+  const firstLine = text.split('\n')[0].slice(0, 110)
+  const teaser    = firstLine.length < text.length ? firstLine + '…' : firstLine
+  const words     = text.split(/\s+/).length
+
+  return (
+    <div style={{
+      border: '1px solid rgba(139,128,240,0.2)',
+      borderLeft: '2px solid var(--violet)',
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 13,
+    }}>
+      <div
+        onClick={() => setOpen(v => !v)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          display: 'flex', alignItems: 'flex-start', gap: 8,
+          padding: '7px 12px',
+          background: hovered
+            ? 'linear-gradient(to right, rgba(139,128,240,0.14), rgba(139,128,240,0.04))'
+            : 'linear-gradient(to right, var(--violet-glow), transparent)',
+          cursor: 'pointer', userSelect: 'none',
+          transition: 'background 0.15s ease',
+        }}
+      >
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 9,
+          color: 'var(--violet)',
+          fontWeight: 600,
+          letterSpacing: '0.1em',
+          flexShrink: 0,
+          marginTop: 2,
+          background: 'rgba(139,128,240,0.1)',
+          border: '1px solid rgba(139,128,240,0.22)',
+          borderRadius: 3,
+          padding: '1px 5px',
+        }}>
+          THINK
+        </span>
+        {!open && (
+          <span style={{
+            fontFamily: "'IBM Plex Sans', sans-serif",
+            color: 'var(--text-2)',
+            fontSize: 12,
+            fontStyle: 'italic',
+            flex: 1,
+            lineHeight: 1.45,
+          }}>
+            {teaser}
+          </span>
+        )}
+        {open && <span style={{ flex: 1 }} />}
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          color: 'var(--text-3)',
+          fontSize: 10,
+          flexShrink: 0,
+          marginLeft: 'auto',
+        }}>
+          {words.toLocaleString()} words
+        </span>
+        <span style={{ color: 'var(--text-3)', fontSize: 10, flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
+      </div>
+      {open && (
+        <div style={{
+          padding: '12px 14px',
+          background: 'linear-gradient(180deg, rgba(139,128,240,0.04) 0%, var(--surface) 40px)',
+          borderTop: '1px solid rgba(139,128,240,0.15)',
+          maxHeight: 420,
+          overflowY: 'auto',
+        }}>
+          <p style={{
+            fontFamily: "'IBM Plex Sans', sans-serif",
+            fontSize: 13,
+            color: 'rgba(180,170,255,0.75)',
+            lineHeight: 1.75,
+            fontStyle: 'italic',
+            whiteSpace: 'pre-wrap',
+            margin: 0,
+          }}>
+            {text}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── System reminder card ──────────────────────────────────────────────────────
+
+function SystemReminderCard({ block }: { block: SystemReminderBlock }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const c = 'var(--text-3)'
+
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderLeft: `2px solid ${c}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 12,
+      marginTop: 4,
+      opacity: 0.7,
+    }}>
+      <div
+        onClick={() => setOpen(v => !v)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px',
+          background: hovered ? 'var(--surface-2)' : 'var(--surface)',
+          cursor: 'pointer', userSelect: 'none', transition: 'background 0.12s ease',
+        }}
+      >
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text-3)', fontWeight: 500, letterSpacing: '0.08em', flexShrink: 0 }}>
+          SYSTEM
+        </span>
+        {!open && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-3)', fontSize: 10, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {block.content.split('\n')[0]}
+          </span>
+        )}
+        {open && <span style={{ flex: 1 }} />}
+        <span style={{ color: 'var(--text-3)', fontSize: 9 }}>{open ? '▲' : '▼'}</span>
+      </div>
+      {open && (
+        <pre style={{
+          margin: 0, padding: '8px 12px',
+          borderTop: '1px solid var(--border)',
+          background: 'var(--surface)',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11, lineHeight: 1.5, color: 'var(--text-3)',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          maxHeight: 300, overflowY: 'auto',
+        }}>
+          {block.content}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+// ── Task notification card ────────────────────────────────────────────────────
+
+function TaskNotificationCard({ block }: { block: TaskNotificationBlock }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const c = 'var(--violet)'
+  const { summary, result, usage, status } = block
+  const hasResult = result.trim().length > 0
+
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderLeft: `2px solid ${c}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 13,
+      marginTop: 4,
+    }}>
+      {/* Header */}
+      <div
+        onClick={() => hasResult && setOpen(v => !v)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+          background: `linear-gradient(to right, var(--violet)${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          cursor: hasResult ? 'pointer' : 'default',
+          userSelect: 'none', transition: 'background 0.15s ease',
+        }}
+      >
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+          TASK
+        </span>
+        <span style={{ fontFamily: "'IBM Plex Sans', sans-serif", color: 'var(--text)', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {summary}
+        </span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--green)', flexShrink: 0 }}>
+          {status}
+        </span>
+        {hasResult && <span style={{ color: 'var(--text-3)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>}
+      </div>
+
+      {/* Stats row */}
+      {(usage.totalTokens != null || usage.toolUses != null || usage.durationMs != null) && (
+        <div style={{ display: 'flex', gap: 16, padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+          {usage.totalTokens != null && <span>⬡ {usage.totalTokens.toLocaleString()} tok</span>}
+          {usage.toolUses    != null && <span>⚙ {usage.toolUses} tools</span>}
+          {usage.durationMs  != null && <span>⏱ {(usage.durationMs / 1000).toFixed(1)}s</span>}
+        </div>
+      )}
+
+      {/* Result body */}
+      {open && hasResult && (
+        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-2)', fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', fontFamily: "'IBM Plex Mono', monospace", maxHeight: 400, overflowY: 'auto' }}>
+          {result}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function renderBlock(block: ThreadedBlock, i: number): React.ReactNode {
+  if (block.type === 'tool_thread')       return <ToolThreadCard        key={i} thread={block} />
+  if (block.type === 'text')              return <RenderText            key={i} block={block} />
+  if (block.type === 'thinking')          return <RenderThinking        key={i} block={block} />
+  if (block.type === 'image')             return <ImageResultSection    key={i} block={block as ImageBlock} />
+  if (block.type === 'task_notification') return <TaskNotificationCard  key={i} block={block as TaskNotificationBlock} />
+  if (block.type === 'system_reminder')   return <SystemReminderCard    key={i} block={block as SystemReminderBlock} />
+  return null
+}
+
+// ── Timeline message item ─────────────────────────────────────────────────────
+
+const ROLE_STYLE = {
+  assistant: { dot: 'var(--violet)', glow: 'var(--violet-glow)', label: 'CLAUDE', labelColor: 'var(--violet)' },
+  user:      { dot: 'var(--cyan)',   glow: 'var(--cyan-glow)',   label: 'USER',   labelColor: 'var(--cyan)'   },
+} as const
+
+export default function MessageItem({ message }: { message: ThreadedMessage }) {
+  const style = ROLE_STYLE[message.role]
+
+  return (
+    <div style={{ display: 'flex', gap: 16, marginBottom: 28 }}>
+      {/* Left column: dot */}
+      <div style={{ width: 18, flexShrink: 0, paddingTop: 2 }}>
+        <div
+          style={{
+            width: 12,
+            height: 12,
+            borderRadius: '50%',
+            background: style.dot,
+            boxShadow: `0 0 0 2px var(--bg), 0 0 10px 3px ${style.glow}`,
+            margin: '0 auto',
+          }}
+        />
+      </div>
+
+      {/* Right column */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Label row */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+          <span
+            style={{
+              fontFamily: "'Oxanium', monospace",
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.12em',
+              color: style.labelColor,
+            }}
+          >
+            {style.label}
+          </span>
+          {message.timestamp && (
+            <span
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                color: 'var(--text-3)',
+              }}
+            >
+              {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
+          )}
+        </div>
+
+        {/* Content blocks */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {message.blocks.map((block, i) => renderBlock(block, i))}
+        </div>
+      </div>
+    </div>
+  )
+}

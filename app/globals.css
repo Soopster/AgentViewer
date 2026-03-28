@@ -1,0 +1,187 @@
+@import url('https://fonts.googleapis.com/css2?family=Oxanium:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+/* ── Design tokens ── dark (default) ────────────────────────────────────── */
+:root,
+[data-theme="dark"] {
+  /* Backgrounds */
+  --bg:          #07091c;
+  --surface:     #0c1028;
+  --surface-2:   #101530;
+  --surface-3:   #151c38;
+
+  /* Borders */
+  --border:      #1e2a44;
+  --border-2:    #2d3f66;
+
+  /* Text */
+  --text:        #dde3f5;
+  --text-2:      #7b8db0;
+  --text-3:      #3a4c6a;
+
+  /* Primary accents */
+  --violet:      #8b80f0;
+  --violet-glow: rgba(139, 128, 240, 0.18);
+  --cyan:        #38d9f5;
+  --cyan-glow:   rgba(56, 217, 245, 0.12);
+
+  /* Semantic */
+  --green:       #2dd4a0;
+  --red:         #f06060;
+  --amber:       #eaaa40;
+
+  /* Tool palette */
+  --t-bash:      #eaaa40;
+  --t-edit:      #2dd4a0;
+  --t-write:     #38d9f5;
+  --t-read:      #60a8ff;
+  --t-grep:      #ff9048;
+  --t-glob:      #a885f8;
+  --t-agent:     #f472b6;
+  --t-other:     #7b8db0;
+}
+
+/* ── Design tokens ── light ──────────────────────────────────────────────── */
+[data-theme="light"] {
+  /* Backgrounds */
+  --bg:          #f0f2fa;
+  --surface:     #ffffff;
+  --surface-2:   #eaeef8;
+  --surface-3:   #e2e8f4;
+
+  /* Borders */
+  --border:      #cdd6ea;
+  --border-2:    #aab8d4;
+
+  /* Text */
+  --text:        #111827;
+  --text-2:      #4b5a78;
+  --text-3:      #8e9ab8;
+
+  /* Primary accents */
+  --violet:      #6352d4;
+  --violet-glow: rgba(99, 82, 212, 0.14);
+  --cyan:        #0891b2;
+  --cyan-glow:   rgba(8, 145, 178, 0.12);
+
+  /* Semantic */
+  --green:       #059669;
+  --red:         #dc2626;
+  --amber:       #b45309;
+
+  /* Tool palette */
+  --t-bash:      #b45309;
+  --t-edit:      #059669;
+  --t-write:     #0891b2;
+  --t-read:      #2563eb;
+  --t-grep:      #c2410c;
+  --t-glob:      #7c3aed;
+  --t-agent:     #be185d;
+  --t-other:     #4b5a78;
+}
+
+/* ── Design tokens ── terminal ───────────────────────────────────────────── */
+[data-theme="terminal"] {
+  /* Backgrounds */
+  --bg:          #0a0e0a;
+  --surface:     #0d140d;
+  --surface-2:   #101a10;
+  --surface-3:   #142014;
+
+  /* Borders */
+  --border:      #1a3a1a;
+  --border-2:    #265a26;
+
+  /* Text */
+  --text:        #a3e8a3;
+  --text-2:      #5a9e5a;
+  --text-3:      #2e5a2e;
+
+  /* Primary accents */
+  --violet:      #39d353;
+  --violet-glow: rgba(57, 211, 83, 0.18);
+  --cyan:        #56d364;
+  --cyan-glow:   rgba(86, 211, 100, 0.12);
+
+  /* Semantic */
+  --green:       #39d353;
+  --red:         #f85149;
+  --amber:       #c9a227;
+
+  /* Tool palette — all green-family on terminal */
+  --t-bash:      #c9a227;
+  --t-edit:      #39d353;
+  --t-write:     #56d364;
+  --t-read:      #4ec9b0;
+  --t-grep:      #e5c07b;
+  --t-glob:      #98c379;
+  --t-agent:     #c3e88d;
+  --t-other:     #5a9e5a;
+}
+
+/* ── Reset ───────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+
+/* ── Base ────────────────────────────────────────────────────────────────── */
+body {
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(ellipse at 16% 50%, rgba(139, 128, 240, 0.055) 0%, transparent 52%),
+    radial-gradient(ellipse at 84% 14%, rgba(56, 217, 245, 0.035) 0%, transparent 44%),
+    radial-gradient(circle, rgba(50, 70, 140, 0.13) 1px, transparent 1px);
+  background-size: auto, auto, 28px 28px;
+  color: var(--text);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+[data-theme="light"] body {
+  background-image:
+    radial-gradient(ellipse at 16% 50%, rgba(99, 82, 212, 0.04) 0%, transparent 52%),
+    radial-gradient(ellipse at 84% 14%, rgba(8, 145, 178, 0.03) 0%, transparent 44%),
+    radial-gradient(circle, rgba(100, 120, 180, 0.07) 1px, transparent 1px);
+  background-size: auto, auto, 28px 28px;
+}
+
+[data-theme="terminal"] body {
+  background-image:
+    radial-gradient(ellipse at 50% 40%, rgba(57, 211, 83, 0.06) 0%, transparent 60%),
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 3px,
+      rgba(57, 211, 83, 0.018) 3px,
+      rgba(57, 211, 83, 0.018) 4px
+    );
+  background-size: auto, auto;
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar          { width: 3px; height: 3px; }
+::-webkit-scrollbar-track    { background: transparent; }
+::-webkit-scrollbar-thumb    { background: var(--border-2); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #4a5f90; }
+
+/* ── Animations ──────────────────────────────────────────────────────────── */
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+
+@keyframes dot-pop {
+  from { transform: scale(0); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes orbit-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
