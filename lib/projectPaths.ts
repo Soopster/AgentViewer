@@ -1,6 +1,6 @@
 export function normalizeProjectPath(value: string | null | undefined): string {
   if (!value) return ''
-  return value.replace(/\/+$/, '')
+  return value.replace(/\\/g, '/').replace(/\/+$/, '')
 }
 
 export function sameProjectPath(left: string | null | undefined, right: string | null | undefined): boolean {

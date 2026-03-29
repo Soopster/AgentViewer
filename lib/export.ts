@@ -66,7 +66,7 @@ function resultToString(content: string | ToolResultBlock['content']): string {
 }
 
 function truncateLines(text: string, max: number): string {
-  const lines = text.split('\n')
+  const lines = text.replace(/\r\n/g, '\n').split('\n')
   if (lines.length <= max) return text
   return lines.slice(0, max).join('\n') + `\n[… ${lines.length - max} more lines]`
 }
@@ -218,7 +218,7 @@ function cardHeader(color: string, label: string, preview: string, extra = ''): 
   )
 }
 
-function basename(p: string) { return p.split('/').pop() ?? p }
+function basename(p: string) { return p.replace(/\\/g, '/').split('/').pop() ?? p }
 
 function renderEditCard(thread: ToolThread): string {
   const input = thread.toolUse.input as { file_path?: string; old_string?: string; new_string?: string }
@@ -226,7 +226,7 @@ function renderEditCard(thread: ToolThread): string {
   const filePath = input.file_path ?? ''
   const oldStr   = input.old_string ?? ''
   const newStr   = input.new_string ?? ''
-  const delta    = newStr.split('\n').length - oldStr.split('\n').length
+  const delta    = newStr.replace(/\r\n/g, '\n').split('\n').length - oldStr.replace(/\r\n/g, '\n').split('\n').length
   const sign     = delta > 0 ? `+${delta}` : String(delta)
 
   const header = cardHeader(c, thread.toolUse.name, basename(filePath), `${filePath} · ${sign} lines`)
@@ -639,7 +639,7 @@ body {
 
 export function exportSessionToHtml(session: Session, messages: SessionMessage[]): string {
   const threaded = buildThreadedMessages(messages)
-  const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? session.cwd?.split('/').pop() ?? session.sessionId
+  const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? (session.cwd ? basename(session.cwd) : undefined) ?? session.sessionId
   const messagesHtml = threaded.map(renderMessage).join('\n')
   return buildHtmlDocument(dirName, session, threaded.length, messages.length, messagesHtml)
 }
