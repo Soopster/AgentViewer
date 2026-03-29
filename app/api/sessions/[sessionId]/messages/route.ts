@@ -10,8 +10,10 @@ export async function GET(
 ) {
   const { sessionId } = await params
   const { searchParams } = new URL(request.url)
-  const limit = Math.min(parseInt(searchParams.get('limit') ?? '500'), 2000)
-  const offset = parseInt(searchParams.get('offset') ?? '0')
+  const rawLimit = parseInt(searchParams.get('limit') ?? '', 10)
+  const limit = Math.min(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 500, 2000)
+  const rawOffset = parseInt(searchParams.get('offset') ?? '', 10)
+  const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0
   const providerParam = searchParams.get('provider')
   const provider = isAgentProvider(providerParam) ? providerParam : undefined
 

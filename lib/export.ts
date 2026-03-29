@@ -1,4 +1,4 @@
-import { marked } from 'marked'
+import { marked, Renderer } from 'marked'
 import { diffLines } from 'diff'
 import type { Session, SessionMessage, ToolResultBlock, ImageBlock } from './types'
 import { buildThreadedMessages } from './threading'
@@ -26,8 +26,14 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;')
 }
 
+// Escape raw HTML blocks instead of passing them through verbatim.
+// marked's default behavior lets <script> tags in agent output survive
+// into the exported file, enabling stored XSS when the export is opened.
+const safeRenderer = new Renderer()
+safeRenderer.html = ({ text }: { text: string }) => escapeHtml(text)
+
 function renderMarkdown(text: string): string {
-  const html = marked.parse(text, { async: false }) as string
+  const html = marked.parse(text, { async: false, renderer: safeRenderer }) as string
   return `<div class="text-block">${html}</div>`
 }
 

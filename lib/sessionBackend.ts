@@ -441,11 +441,15 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
   }
 
   if ('title' in body) {
-    await renameSession(sessionId, body.title as string)
+    if (typeof body.title !== 'string') throw new Error('title must be a string')
+    await renameSession(sessionId, body.title)
     return
   }
   if ('tag' in body) {
-    await tagSession(sessionId, (body.tag as string | null | undefined) ?? null)
+    const tag = body.tag === null || body.tag === undefined ? null
+      : typeof body.tag === 'string' ? body.tag
+      : (() => { throw new Error('tag must be a string or null') })()
+    await tagSession(sessionId, tag)
     return
   }
   throw new Error('title or tag required')
