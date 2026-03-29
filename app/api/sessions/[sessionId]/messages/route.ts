@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSessionMessages, query } from '@anthropic-ai/claude-agent-sdk'
-import { clearRunningQuery, setRunningQuery } from '@/lib/sessionRuntime'
+import { listViewSessionMessages, streamViewSessionTurn } from '@/lib/sessionBackend'
 
-// Allow long-running Claude responses (up to 5 min)
-export const maxDuration = 300
+export { maxDuration } from '@/lib/sessionBackend'
 
 export async function GET(
   request: NextRequest,
@@ -15,7 +13,7 @@ export async function GET(
   const offset = parseInt(searchParams.get('offset') ?? '0')
 
   try {
-    const messages = await getSessionMessages(sessionId, { limit, offset })
+    const messages = await listViewSessionMessages(sessionId, { limit, offset })
     return NextResponse.json({ messages })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
@@ -28,69 +26,6 @@ export async function POST(
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
   const { sessionId } = await params
-  const body = await request.json()
-  const userMessage: string = body.message
-  const model: string = body.model ?? 'claude-sonnet-4-6'
-  const resumeSessionAt: string | undefined = body.resumeSessionAt
-  const forkSession: boolean = Boolean(body.forkSession)
-
-  if (!userMessage?.trim()) {
-    return NextResponse.json({ error: 'message is required' }, { status: 400 })
-  }
-
-  const encoder = new TextEncoder()
-  const abortController = new AbortController()
-  request.signal.addEventListener('abort', () => abortController.abort())
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      const q = query({
-        prompt: userMessage,
-        options: {
-          resume: sessionId,
-          model,
-          abortController,
-          enableFileCheckpointing: true,
-          resumeSessionAt,
-          forkSession,
-        },
-      })
-      setRunningQuery(sessionId, q)
-      let emittedSessionEvent = false
-      try {
-        // Emit context usage snapshot before the response begins
-        try {
-          const usage = await q.getContextUsage()
-          controller.enqueue(encoder.encode(`event: context-usage\ndata: ${JSON.stringify(usage)}\n\n`))
-        } catch { /* not available yet — skip */ }
-
-        for await (const msg of q) {
-          if (!emittedSessionEvent && msg.session_id) {
-            emittedSessionEvent = true
-            controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: msg.session_id })}\n\n`))
-          }
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
-        }
-      } catch (err) {
-        if (abortController.signal.aborted) {
-          // Client cancelled — clean exit, no error event
-        } else {
-          const message = err instanceof Error ? err.message : 'Unknown error'
-          controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`))
-        }
-      } finally {
-        clearRunningQuery(sessionId, q)
-        q.close()
-        controller.close()
-      }
-    },
-  })
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'X-Accel-Buffering': 'no',
-    },
-  })
+  const body = await request.json().catch(() => ({}))
+  return streamViewSessionTurn({ sessionId, request, body })
 }

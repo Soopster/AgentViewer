@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { forkSession } from '@anthropic-ai/claude-agent-sdk'
+import { forkViewSession } from '@/lib/sessionBackend'
 
 export async function POST(
   request: NextRequest,
@@ -8,7 +8,7 @@ export async function POST(
   const { sessionId } = await params
   const body = await request.json().catch(() => ({}))
   try {
-    const result = await forkSession(sessionId, { title: body.title, upToMessageId: body.upToMessageId })
+    const result = await forkViewSession({ sessionId, body })
     return NextResponse.json(result)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

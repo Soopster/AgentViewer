@@ -1,21 +1,20 @@
-import type { Query } from '@anthropic-ai/claude-agent-sdk'
+import type { AgentProvider } from './types'
 
-const runningQueries = new Map<string, Query>()
-
-export function setRunningQuery(sessionId: string, query: Query): void {
-  runningQueries.set(sessionId, query)
+type RunningSession = {
+  provider: AgentProvider
+  interrupt: () => Promise<unknown>
 }
 
-export function getRunningQuery(sessionId: string): Query | undefined {
-  return runningQueries.get(sessionId)
+const runningSessions = new Map<string, RunningSession>()
+
+export function setRunningSession(sessionId: string, session: RunningSession): void {
+  runningSessions.set(sessionId, session)
 }
 
-export function clearRunningQuery(sessionId: string, query?: Query): void {
-  if (!query) {
-    runningQueries.delete(sessionId)
-    return
-  }
+export function getRunningSession(sessionId: string): RunningSession | undefined {
+  return runningSessions.get(sessionId)
+}
 
-  const current = runningQueries.get(sessionId)
-  if (current === query) runningQueries.delete(sessionId)
+export function clearRunningSession(sessionId: string): void {
+  runningSessions.delete(sessionId)
 }

@@ -8,9 +8,7 @@ import type {
   ContextUsage,
   SessionInfo,
   SessionModelInfo,
-  SessionDiagnosticCommand,
-  SessionDiagnosticAgent,
-  SessionDiagnosticMcpServer,
+  SessionDiagnosticSection,
 } from '@/lib/types'
 import { buildThreadedMessages, type ThreadedMessage } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
@@ -42,6 +40,11 @@ type RewindPreview = {
   userMessageId: string
   contentPreview: string
   filesChanged: string[]
+}
+
+type RollbackPreview = {
+  numTurns: number
+  turnsRemoved: Array<{ turnId: string; preview: string }>
 }
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
@@ -98,6 +101,10 @@ function extractStreamingAssistantText(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
 
+  if (record.type === 'codex_agent_message_delta' && typeof record.delta === 'string') {
+    return record.delta
+  }
+
   if (record.type === 'stream_event') {
     const event = record.event
     if (!event || typeof event !== 'object') return null
@@ -130,9 +137,48 @@ function formatToolLabel(name: string): string {
     .join(' ')
 }
 
+function codexItemToolLabel(item: Record<string, unknown>): { label: string; detail?: string } | null {
+  const type = typeof item.type === 'string' ? item.type : ''
+  switch (type) {
+    case 'commandExecution':
+      return { label: 'Bash', detail: typeof item.command === 'string' ? item.command : undefined }
+    case 'fileChange':
+      return { label: 'File Change' }
+    case 'mcpToolCall':
+      return {
+        label: typeof item.tool === 'string' ? formatToolLabel(item.tool) : 'MCP',
+        detail: typeof item.server === 'string' ? item.server : undefined,
+      }
+    case 'dynamicToolCall':
+      return { label: typeof item.tool === 'string' ? formatToolLabel(item.tool) : 'Dynamic Tool' }
+    case 'webSearch':
+      return { label: 'Web Search', detail: typeof item.query === 'string' ? item.query : undefined }
+    case 'collabAgentToolCall':
+      return { label: 'Agent', detail: typeof item.tool === 'string' ? item.tool : undefined }
+    default:
+      return null
+  }
+}
+
 function extractLiveToolStart(payload: unknown): { index: number; key: string; label: string; detail?: string } | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
+
+  if (record.type === 'codex_item_started') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return null
+    const itemRecord = item as Record<string, unknown>
+    const tool = codexItemToolLabel(itemRecord)
+    const itemId = typeof itemRecord.id === 'string' ? itemRecord.id : null
+    if (!tool || !itemId) return null
+    return {
+      index: 0,
+      key: itemId,
+      label: tool.label,
+      detail: tool.detail,
+    }
+  }
+
   if (record.type !== 'stream_event') return null
 
   const event = record.event
@@ -160,6 +206,14 @@ function extractLiveToolStart(payload: unknown): { index: number; key: string; l
 function extractLiveToolStopIndex(payload: unknown): number | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
+
+  if (record.type === 'codex_item_completed') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return null
+    const itemRecord = item as Record<string, unknown>
+    return typeof itemRecord.id === 'string' ? 0 : null
+  }
+
   if (record.type !== 'stream_event') return null
 
   const event = record.event
@@ -171,6 +225,17 @@ function extractLiveToolStopIndex(payload: unknown): number | null {
     : null
 }
 
+function extractCodexCompletedToolKey(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  if (record.type !== 'codex_item_completed') return null
+  const item = record.item
+  if (!item || typeof item !== 'object') return null
+  const itemRecord = item as Record<string, unknown>
+  const tool = codexItemToolLabel(itemRecord)
+  return tool && typeof itemRecord.id === 'string' ? itemRecord.id : null
+}
+
 export default function MessageView({ messages, loading, session, projectView, onFork }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
@@ -178,19 +243,19 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
   const [availableModels, setAvailableModels] = useState<SessionModelInfo[]>([])
-  const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-6')
+  const [selectedModel, setSelectedModel] = useState('')
   const [rewindTargetId, setRewindTargetId] = useState('')
+  const [rollbackTurns, setRollbackTurns] = useState(1)
   const [resumeFromMessageId, setResumeFromMessageId] = useState<string | null>(null)
   const [previewingRewind, setPreviewingRewind] = useState(false)
   const [applyingRewind, setApplyingRewind] = useState(false)
   const [rewindPreview, setRewindPreview] = useState<RewindPreview | null>(null)
+  const [rollbackPreview, setRollbackPreview] = useState<RollbackPreview | null>(null)
   const [forking, setForking] = useState(false)
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null)
   const [showDiagnostics, setShowDiagnostics] = useState(false)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
-  const [diagnosticCommands, setDiagnosticCommands] = useState<SessionDiagnosticCommand[]>([])
-  const [diagnosticAgents, setDiagnosticAgents] = useState<SessionDiagnosticAgent[]>([])
-  const [diagnosticMcpServers, setDiagnosticMcpServers] = useState<SessionDiagnosticMcpServer[]>([])
+  const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
   const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
@@ -203,6 +268,8 @@ export default function MessageView({ messages, loading, session, projectView, o
   const abortControllerRef = useRef<AbortController | null>(null)
   const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; sessionId: string } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
+  const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
+  const assistantName = sessionInfo?.provider === 'codex' || session?.provider === 'codex' ? 'Codex' : 'Claude'
 
   // Load session info (git branch, summary, etc.) when session changes
   useEffect(() => {
@@ -216,7 +283,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   useEffect(() => {
     if (!session) {
       setAvailableModels([])
-      setSelectedModel('claude-sonnet-4-6')
+      setSelectedModel('')
       return
     }
 
@@ -225,7 +292,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       .then(data => {
         if (data.error) return
         setAvailableModels(data.models ?? [])
-        setSelectedModel(data.currentModel ?? data.models?.[0]?.value ?? 'claude-sonnet-4-6')
+        setSelectedModel(data.currentModel ?? data.models?.[0]?.value ?? '')
       })
       .catch(() => {})
   }, [session?.sessionId])
@@ -237,10 +304,9 @@ export default function MessageView({ messages, loading, session, projectView, o
     setSessionActionNotice(null)
     setResumeFromMessageId(null)
     setRewindPreview(null)
+    setRollbackPreview(null)
     setShowDiagnostics(false)
-    setDiagnosticCommands([])
-    setDiagnosticAgents([])
-    setDiagnosticMcpServers([])
+    setDiagnosticSections([])
     setOptimisticUserText(null)
     setLiveAssistantText('')
     setLiveToolActivities([])
@@ -398,7 +464,7 @@ export default function MessageView({ messages, loading, session, projectView, o
           if (frame.event === 'error') {
             try {
               const parsed = JSON.parse(frame.data)
-              throw new Error(parsed.error ?? 'Unknown error from Claude')
+              throw new Error(parsed.error ?? 'Unknown agent error')
             } catch (e) { throw e }
           }
 
@@ -406,15 +472,26 @@ export default function MessageView({ messages, loading, session, projectView, o
             const parsed = JSON.parse(frame.data)
             const toolStart = extractLiveToolStart(parsed)
             if (toolStart) {
-              liveToolIndexesRef.current.set(toolStart.index, toolStart.key)
+              if (parsed.type !== 'codex_item_started') {
+                liveToolIndexesRef.current.set(toolStart.index, toolStart.key)
+              }
               setLiveToolActivities((prev) => {
                 const existing = prev.filter((activity) => activity.key !== toolStart.key)
                 return [...existing, { key: toolStart.key, label: toolStart.label, detail: toolStart.detail, status: 'running' }]
               })
             }
 
+            const codexCompletedToolKey = extractCodexCompletedToolKey(parsed)
+            if (codexCompletedToolKey) {
+              setLiveToolActivities((prev) => prev.map((activity) =>
+                activity.key === codexCompletedToolKey
+                  ? { ...activity, status: 'done' }
+                  : activity
+              ))
+            }
+
             const toolStopIndex = extractLiveToolStopIndex(parsed)
-            if (toolStopIndex != null) {
+            if (toolStopIndex != null && parsed.type !== 'codex_item_completed') {
               const activityKey = liveToolIndexesRef.current.get(toolStopIndex)
               if (activityKey) {
                 setLiveToolActivities((prev) => prev.map((activity) =>
@@ -445,7 +522,7 @@ export default function MessageView({ messages, loading, session, projectView, o
           if (frame.event !== 'error') continue
           try {
             const parsed = JSON.parse(frame.data)
-            throw new Error(parsed.error ?? 'Unknown error from Claude')
+            throw new Error(parsed.error ?? 'Unknown agent error')
           } catch (e) { throw e }
         }
       }
@@ -504,7 +581,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   }, [session, forking, onFork])
 
   const handleForkFromMessage = useCallback(async (messageId: string) => {
-    if (!session || forkingMessageId) return
+    if (!session || forkingMessageId || !sessionCapabilities?.messageFork) return
     setForkingMessageId(messageId)
     setSessionActionError(null)
     setSessionActionNotice(null)
@@ -523,35 +600,34 @@ export default function MessageView({ messages, loading, session, projectView, o
     } finally {
       setForkingMessageId(null)
     }
-  }, [forkingMessageId, onFork, session])
+  }, [forkingMessageId, onFork, session, sessionCapabilities?.messageFork])
 
   const toggleResumeFromMessage = useCallback((messageId: string) => {
+    if (!sessionCapabilities?.resumeAtMessage) return
     setResumeFromMessageId((prev) => prev === messageId ? null : messageId)
     setSessionActionError(null)
     setSessionActionNotice(null)
-  }, [])
+  }, [sessionCapabilities?.resumeAtMessage])
 
   const toggleDiagnostics = useCallback(async () => {
     if (!session) return
     const nextOpen = !showDiagnostics
     setShowDiagnostics(nextOpen)
-    if (!nextOpen || diagnosticCommands.length > 0 || diagnosticsLoading) return
+    if (!nextOpen || diagnosticSections.length > 0 || diagnosticsLoading) return
 
     setDiagnosticsLoading(true)
     try {
       const res = await fetch(`/api/sessions/${session.sessionId}/diagnostics`)
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
-      setDiagnosticCommands(data.commands ?? [])
-      setDiagnosticAgents(data.agents ?? [])
-      setDiagnosticMcpServers(data.mcpServers ?? [])
+      setDiagnosticSections(data.sections ?? [])
       if (data.currentModel && !selectedModel) setSelectedModel(data.currentModel)
     } catch (err) {
       setSessionActionError(err instanceof Error ? err.message : 'Failed to load diagnostics')
     } finally {
       setDiagnosticsLoading(false)
     }
-  }, [diagnosticCommands.length, diagnosticsLoading, selectedModel, session, showDiagnostics])
+  }, [diagnosticSections.length, diagnosticsLoading, selectedModel, session, showDiagnostics])
 
   const threaded = buildThreadedMessages(messages)
   const isProject = !!projectView
@@ -562,6 +638,7 @@ export default function MessageView({ messages, loading, session, projectView, o
         role: 'user',
         uuid: 'live-user',
         sessionId: session?.sessionId,
+        provider: session?.provider,
         blocks: [{ type: 'text', text: optimisticUserText }],
       }
     : null
@@ -570,6 +647,7 @@ export default function MessageView({ messages, loading, session, projectView, o
         role: 'assistant',
         uuid: 'live-assistant',
         sessionId: session?.sessionId,
+        provider: session?.provider,
         blocks: [{
           type: 'text',
           text: liveAssistantText.trim()
@@ -581,7 +659,7 @@ export default function MessageView({ messages, loading, session, projectView, o
         }],
       }
     : null
-  const rewindCandidates = messages
+  const rewindCandidates = (sessionCapabilities?.fileRewind ? messages : [])
     .filter((msg) =>
       msg.type === 'user'
       && typeof msg.message.content === 'string'
@@ -594,6 +672,21 @@ export default function MessageView({ messages, loading, session, projectView, o
       timestamp: msg.timestamp,
     }))
   const selectedRewindTarget = rewindCandidates.find((candidate) => candidate.uuid === rewindTargetId) ?? null
+  const rollbackCandidates = sessionCapabilities?.rollback
+    ? (() => {
+        const turns = new Map<string, { turnId: string; preview: string }>()
+        for (const msg of messages) {
+          if (!msg.turnId || turns.has(msg.turnId)) continue
+          const preview = typeof msg.message.content === 'string'
+            ? msg.message.content.replace(/\s+/g, ' ').trim().slice(0, 120)
+            : msg.type === 'assistant'
+            ? 'Assistant output'
+            : 'Turn'
+          turns.set(msg.turnId, { turnId: msg.turnId, preview: preview || msg.turnId })
+        }
+        return Array.from(turns.values())
+      })()
+    : []
   const hasLiveTimeline = threaded.length > 0 || !!liveUserMessage || !!liveAssistantMessage
 
   useEffect(() => {
@@ -661,6 +754,60 @@ export default function MessageView({ messages, loading, session, projectView, o
       setApplyingRewind(false)
     }
   }, [applyingRewind, rewindPreview, selectedModel, session])
+
+  const handleRollbackPreview = useCallback(async () => {
+    if (!session || previewingRewind || applyingRewind || rollbackTurns < 1) return
+
+    setPreviewingRewind(true)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ numTurns: rollbackTurns, dryRun: true }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const turnsRemoved = Array.isArray(data.turnsRemoved)
+        ? data.turnsRemoved.filter((turn: unknown): turn is { turnId: string; preview: string } =>
+            Boolean(turn)
+            && typeof turn === 'object'
+            && typeof (turn as { turnId?: unknown }).turnId === 'string'
+            && typeof (turn as { preview?: unknown }).preview === 'string'
+          )
+        : []
+      setRollbackPreview({ numTurns: rollbackTurns, turnsRemoved })
+      setSessionActionNotice(`Previewed rollback of ${rollbackTurns} turn${rollbackTurns === 1 ? '' : 's'}.`)
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to preview rollback')
+    } finally {
+      setPreviewingRewind(false)
+    }
+  }, [applyingRewind, previewingRewind, rollbackTurns, session])
+
+  const handleApplyRollback = useCallback(async () => {
+    if (!session || !rollbackPreview || applyingRewind) return
+
+    setApplyingRewind(true)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ numTurns: rollbackPreview.numTurns }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      setRollbackPreview(null)
+      setSessionActionNotice(`Rolled back ${rollbackPreview.numTurns} turn${rollbackPreview.numTurns === 1 ? '' : 's'}.`)
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to roll back thread')
+    } finally {
+      setApplyingRewind(false)
+    }
+  }, [applyingRewind, rollbackPreview, session])
 
   if (!session && !projectView) {
     return (
@@ -1039,36 +1186,20 @@ export default function MessageView({ messages, loading, session, projectView, o
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
-                <div>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', marginBottom: 6 }}>
-                    COMMANDS
+                {diagnosticSections.map((section) => (
+                  <div key={section.id}>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', marginBottom: 6 }}>
+                      {section.title}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {section.items.map((item, index) => (
+                        <div key={`${section.id}-${index}`} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>
+                          {item}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>
-                    {diagnosticCommands.slice(0, 10).map((command) => command.name).join(', ') || 'None'}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', marginBottom: 6 }}>
-                    AGENTS
-                  </div>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>
-                    {diagnosticAgents.slice(0, 10).map((agent) => agent.name).join(', ') || 'None'}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', marginBottom: 6 }}>
-                    MCP
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {diagnosticMcpServers.length > 0 ? diagnosticMcpServers.map((server) => (
-                      <div key={server.name} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>
-                        {server.name} · {server.status}
-                      </div>
-                    )) : (
-                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>None</div>
-                    )}
-                  </div>
-                </div>
+                ))}
               </div>
             )}
           </div>
@@ -1111,28 +1242,30 @@ export default function MessageView({ messages, loading, session, projectView, o
                   animationDelay: `${Math.min(i * 16, 320)}ms`,
                 }}
               >
-                {!isProject && (
+                {!isProject && (sessionCapabilities?.messageFork || (msg.role === 'assistant' && sessionCapabilities?.resumeAtMessage)) && (
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, margin: '0 0 8px 0' }}>
-                    <button
-                      onClick={() => handleForkFromMessage(msg.uuid)}
-                      disabled={forkingMessageId === msg.uuid}
-                      style={{
-                        height: 22,
-                        padding: '0 8px',
-                        borderRadius: 4,
-                        border: '1px solid rgba(139,128,240,0.18)',
-                        background: 'rgba(139,128,240,0.07)',
-                        color: 'var(--text-3)',
-                        fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 10,
-                        letterSpacing: '0.06em',
-                        cursor: forkingMessageId === msg.uuid ? 'not-allowed' : 'pointer',
-                        opacity: forkingMessageId === msg.uuid ? 0.5 : 1,
-                      }}
-                    >
-                      {forkingMessageId === msg.uuid ? 'FORKING…' : 'FORK HERE'}
-                    </button>
-                    {msg.role === 'assistant' && (
+                    {sessionCapabilities?.messageFork && (
+                      <button
+                        onClick={() => handleForkFromMessage(msg.uuid)}
+                        disabled={forkingMessageId === msg.uuid}
+                        style={{
+                          height: 22,
+                          padding: '0 8px',
+                          borderRadius: 4,
+                          border: '1px solid rgba(139,128,240,0.18)',
+                          background: 'rgba(139,128,240,0.07)',
+                          color: 'var(--text-3)',
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 10,
+                          letterSpacing: '0.06em',
+                          cursor: forkingMessageId === msg.uuid ? 'not-allowed' : 'pointer',
+                          opacity: forkingMessageId === msg.uuid ? 0.5 : 1,
+                        }}
+                      >
+                        {forkingMessageId === msg.uuid ? 'FORKING…' : 'FORK HERE'}
+                      </button>
+                    )}
+                    {msg.role === 'assistant' && sessionCapabilities?.resumeAtMessage && (
                       <button
                         onClick={() => toggleResumeFromMessage(msg.uuid)}
                         style={{
@@ -1304,7 +1437,7 @@ export default function MessageView({ messages, loading, session, projectView, o
               ))}
             </select>
           </label>
-          {rewindCandidates.length > 0 && (
+          {sessionCapabilities?.fileRewind && rewindCandidates.length > 0 && (
             <>
               <select
                 value={rewindTargetId}
@@ -1347,6 +1480,51 @@ export default function MessageView({ messages, loading, session, projectView, o
                 }}
               >
                 {previewingRewind ? 'PREVIEWING…' : 'PREVIEW REWIND'}
+              </button>
+            </>
+          )}
+          {sessionCapabilities?.rollback && rollbackCandidates.length > 0 && (
+            <>
+              <select
+                value={rollbackTurns}
+                onChange={e => setRollbackTurns(Number(e.target.value))}
+                style={{
+                  height: 28,
+                  minWidth: 180,
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 5,
+                  color: 'var(--text)',
+                  padding: '0 8px',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                }}
+              >
+                {Array.from({ length: Math.min(10, rollbackCandidates.length) }, (_, index) => index + 1).map((value) => (
+                  <option key={value} value={value}>
+                    Roll back {value} turn{value === 1 ? '' : 's'}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleRollbackPreview}
+                disabled={previewingRewind || applyingRewind}
+                style={{
+                  flexShrink: 0,
+                  height: 28,
+                  padding: '0 12px',
+                  background: 'rgba(251,191,36,0.08)',
+                  border: '1px solid rgba(251,191,36,0.22)',
+                  borderRadius: 5,
+                  color: 'var(--yellow, #fbbf24)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.06em',
+                  cursor: previewingRewind || applyingRewind ? 'not-allowed' : 'pointer',
+                  opacity: previewingRewind || applyingRewind ? 0.5 : 1,
+                }}
+              >
+                {previewingRewind ? 'PREVIEWING…' : 'PREVIEW ROLLBACK'}
               </button>
             </>
           )}
@@ -1429,7 +1607,81 @@ export default function MessageView({ messages, loading, session, projectView, o
             </div>
           </div>
         )}
-        {resumeFromMessageId && (
+        {rollbackPreview && (
+          <div
+            style={{
+              marginBottom: 10,
+              padding: '12px 14px',
+              borderRadius: 8,
+              border: '1px solid rgba(251,191,36,0.22)',
+              background: 'rgba(251,191,36,0.06)',
+            }}
+          >
+            <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
+              Rollback Preview
+            </div>
+            <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
+              This removes the last {rollbackPreview.numTurns} turn{rollbackPreview.numTurns === 1 ? '' : 's'} from the Codex thread history. It does not revert files in the workspace.
+            </div>
+            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {rollbackPreview.turnsRemoved.map((turn) => (
+                <div
+                  key={turn.turnId}
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    color: 'var(--text-2)',
+                    padding: '5px 8px',
+                    borderRadius: 5,
+                    background: 'rgba(9,14,22,0.24)',
+                    border: '1px solid var(--border)',
+                  }}
+                >
+                  {turn.preview || turn.turnId}
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+              <button
+                onClick={handleApplyRollback}
+                disabled={applyingRewind}
+                style={{
+                  height: 28,
+                  padding: '0 12px',
+                  background: 'rgba(251,191,36,0.12)',
+                  border: '1px solid rgba(251,191,36,0.28)',
+                  borderRadius: 5,
+                  color: 'var(--yellow, #fbbf24)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.06em',
+                  cursor: applyingRewind ? 'not-allowed' : 'pointer',
+                  opacity: applyingRewind ? 0.5 : 1,
+                }}
+              >
+                {applyingRewind ? 'APPLYING…' : 'APPLY ROLLBACK'}
+              </button>
+              <button
+                onClick={() => setRollbackPreview(null)}
+                style={{
+                  height: 28,
+                  padding: '0 12px',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 5,
+                  color: 'var(--text-3)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.06em',
+                  cursor: 'pointer',
+                }}
+              >
+                CANCEL
+              </button>
+            </div>
+          </div>
+        )}
+        {sessionCapabilities?.resumeAtMessage && resumeFromMessageId && (
           <div style={{
             marginBottom: 10,
             display: 'flex',
@@ -1473,7 +1725,7 @@ export default function MessageView({ messages, loading, session, projectView, o
             }}
             onKeyDown={handleKeyDown}
             disabled={sendState === 'sending'}
-            placeholder={activeToolCount > 0 ? `Claude is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…` : 'Send a message… (⌘↩ to send)'}
+            placeholder={activeToolCount > 0 ? `${assistantName} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…` : 'Send a message… (⌘↩ to send)'}
             rows={1}
             style={{
               flex: 1,

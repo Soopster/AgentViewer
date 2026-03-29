@@ -36,6 +36,7 @@ import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import type { Components } from 'react-markdown'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
+import { getAssistantLabel } from '@/lib/provider'
 import { useCodeTheme } from './CodeThemeContext'
 
 SyntaxHighlighter.registerLanguage('bash', bash)
@@ -2596,12 +2597,15 @@ function fmtTokens(n: number): string {
 // ── Timeline message item ─────────────────────────────────────────────────────
 
 const ROLE_STYLE = {
-  assistant: { dot: 'var(--violet)', glow: 'var(--violet-glow)', label: 'CLAUDE', labelColor: 'var(--violet)' },
+  assistant: { dot: 'var(--violet)', glow: 'var(--violet-glow)', labelColor: 'var(--violet)' },
   user:      { dot: 'var(--cyan)',   glow: 'var(--cyan-glow)',   label: 'USER',   labelColor: 'var(--cyan)'   },
 } as const
 
 export default function MessageItem({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {
   const style = ROLE_STYLE[message.role]
+  const roleLabel = message.role === 'assistant'
+    ? getAssistantLabel(message.provider)
+    : ROLE_STYLE.user.label
 
   return (
     <div className={`msg msg--${message.role}`} style={{ display: 'flex', gap: 18, marginBottom: 36 }}>
@@ -2632,7 +2636,7 @@ export default function MessageItem({ message, showSession }: { message: Threade
               color: style.labelColor,
             }}
           >
-            {style.label}
+            {roleLabel}
           </span>
           {message.timestamp && (
             <span

@@ -2,6 +2,7 @@ import { marked } from 'marked'
 import { diffLines } from 'diff'
 import type { Session, SessionMessage, ToolResultBlock, ImageBlock } from './types'
 import { buildThreadedMessages } from './threading'
+import { getAssistantLabel } from './provider'
 import { getPrimarySessionTag } from './sessionTags'
 import type {
   ThreadedBlock,
@@ -403,7 +404,7 @@ function renderMessage(msg: ThreadedMessage): string {
   const isAssistant = msg.role === 'assistant'
   const dotCls  = isAssistant ? 'message-dot-claude' : 'message-dot-user'
   const labelCls = isAssistant ? 'label-claude' : 'label-user'
-  const label    = isAssistant ? 'CLAUDE' : 'USER'
+  const label    = isAssistant ? getAssistantLabel(msg.provider) : 'USER'
 
   const ts = msg.timestamp ? formatTimestamp(msg.timestamp) : ''
 
@@ -438,7 +439,7 @@ function buildHtmlDocument(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escapeHtml(title)} — Claude Code Session</title>
+<title>${escapeHtml(title)} — ${escapeHtml(getAssistantLabel(session.provider))} Session</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Oxanium:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
 

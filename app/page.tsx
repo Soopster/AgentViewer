@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
-import type { Session, SessionMessage } from '@/lib/types'
+import type { AgentProvider, Session, SessionMessage } from '@/lib/types'
 
 type SessionScopeMode = 'all' | 'project'
 
@@ -16,6 +16,8 @@ export default function Home() {
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
+  const [provider, setProvider] = useState<AgentProvider>('claude')
+  const [switchingProvider, setSwitchingProvider] = useState(false)
   const [sessionScope, setSessionScope] = useState<SessionScopeMode>('all')
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
   // Tracks how many messages we've already loaded so polling can fetch only new ones
@@ -38,15 +40,22 @@ export default function Home() {
     setSessions(data.sessions ?? [])
   }, [activeProjectDir, includeWorktrees, sessionScope])
 
+  const fetchProvider = useCallback(async () => {
+    const r = await fetch('/api/provider')
+    const data = await r.json()
+    if (data.error) throw new Error(data.error)
+    setProvider(data.provider === 'codex' ? 'codex' : 'claude')
+  }, [])
+
   // Keep ref in sync with state (avoids stale closures inside setInterval)
   useEffect(() => { msgCountRef.current = messages.length }, [messages.length])
 
   // Initial session load
   useEffect(() => {
-    fetchSessions()
+    Promise.all([fetchProvider(), fetchSessions()])
       .catch((err) => setSessionsError(err.message))
       .finally(() => setLoadingSessions(false))
-  }, [fetchSessions])
+  }, [fetchProvider, fetchSessions])
 
   // Poll sessions list silently every 5 s
   useEffect(() => {
@@ -189,6 +198,38 @@ export default function Home() {
     selectSession(newSessionId)
   }, [])
 
+  const handleChangeProvider = useCallback(async (nextProvider: AgentProvider) => {
+    if (nextProvider === provider || switchingProvider) return
+    setSwitchingProvider(true)
+    setSessionsError(null)
+    try {
+      const res = await fetch('/api/provider', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: nextProvider }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+
+      setProvider(nextProvider)
+      setSelectedId(null)
+      setSelectedProject(null)
+      setSessionScope('all')
+      setMessages([])
+      setLoadingMessages(false)
+      setLoadingSessions(true)
+      const resessions = await fetch('/api/sessions')
+      const sessionData = await resessions.json()
+      if (!resessions.ok || sessionData.error) throw new Error(sessionData.error ?? `HTTP ${resessions.status}`)
+      setSessions(sessionData.sessions ?? [])
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : 'Failed to switch provider')
+    } finally {
+      setLoadingSessions(false)
+      setSwitchingProvider(false)
+    }
+  }, [fetchSessions, provider, switchingProvider])
+
   return (
     <CodeThemeProvider>
     <div style={{ display: 'flex', height: '100vh' }}>
@@ -196,12 +237,15 @@ export default function Home() {
         sessions={sessions}
         loading={loadingSessions}
         error={sessionsError}
+        provider={provider}
+        switchingProvider={switchingProvider}
         selectedId={selectedId}
         selectedProject={selectedProject?.key ?? null}
         onSelect={selectSession}
         onSelectProject={selectProject}
         onRename={handleRename}
         onTag={handleTag}
+        onChangeProvider={handleChangeProvider}
         scopeMode={sessionScope}
         scopeProjectName={activeProjectName}
         canScopeToProject={!!activeProjectDir}

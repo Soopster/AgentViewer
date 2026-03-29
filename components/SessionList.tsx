@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect } from 'react'
-import type { Session } from '@/lib/types'
+import type { AgentProvider, Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
 import ThemeToggle from './ThemeToggle'
 
@@ -9,12 +9,15 @@ type Props = {
   sessions: Session[]
   loading: boolean
   error: string | null
+  provider: AgentProvider
+  switchingProvider: boolean
   selectedId: string | null
   selectedProject: string | null
   onSelect: (id: string) => void
   onSelectProject: (key: string, sessions: Session[]) => void
   onRename: (sessionId: string, title: string) => void
   onTag: (sessionId: string, tag: string | null) => void
+  onChangeProvider: (provider: AgentProvider) => void
   scopeMode: 'all' | 'project'
   scopeProjectName: string | null
   canScopeToProject: boolean
@@ -461,12 +464,15 @@ export default function SessionList({
   sessions,
   loading,
   error,
+  provider,
+  switchingProvider,
   selectedId,
   selectedProject,
   onSelect,
   onSelectProject,
   onRename,
   onTag,
+  onChangeProvider,
   scopeMode,
   scopeProjectName,
   canScopeToProject,
@@ -561,6 +567,46 @@ export default function SessionList({
               ? `${groups.size} project${groups.size !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
               : `${filteredSessions.length}/${sessions.length} sessions · ${groups.size} projects`}
           </span>
+        </div>
+        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => onChangeProvider('claude')}
+            disabled={switchingProvider}
+            style={{
+              flex: 1,
+              height: 28,
+              borderRadius: 5,
+              border: `1px solid ${provider === 'claude' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+              background: provider === 'claude' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+              color: provider === 'claude' ? 'var(--violet)' : 'var(--text-3)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.06em',
+              cursor: switchingProvider ? 'not-allowed' : 'pointer',
+              opacity: switchingProvider ? 0.6 : 1,
+            }}
+          >
+            CLAUDE
+          </button>
+          <button
+            onClick={() => onChangeProvider('codex')}
+            disabled={switchingProvider}
+            style={{
+              flex: 1,
+              height: 28,
+              borderRadius: 5,
+              border: `1px solid ${provider === 'codex' ? 'rgba(56,217,245,0.32)' : 'var(--border)'}`,
+              background: provider === 'codex' ? 'rgba(56,217,245,0.12)' : 'var(--surface-2)',
+              color: provider === 'codex' ? 'var(--cyan)' : 'var(--text-3)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.06em',
+              cursor: switchingProvider ? 'not-allowed' : 'pointer',
+              opacity: switchingProvider ? 0.6 : 1,
+            }}
+          >
+            CODEX
+          </button>
         </div>
         <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
           <input

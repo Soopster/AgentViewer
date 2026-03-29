@@ -39,6 +39,15 @@ export type ApiMessage = {
   }
 }
 
+export type AgentProvider = 'claude' | 'codex'
+
+export type SessionCapabilities = {
+  messageFork: boolean
+  resumeAtMessage: boolean
+  fileRewind: boolean
+  rollback: boolean
+}
+
 /**
  * A single entry returned by getSessionMessages().
  * The actual message (role + content) is nested under the `message` field —
@@ -52,6 +61,8 @@ export type SessionMessage = {
   parent_tool_use_id: null
   timestamp?: string
   origin?: { kind: string }
+  provider?: AgentProvider
+  turnId?: string
 }
 
 export type Session = {
@@ -63,6 +74,8 @@ export type Session = {
   cwd?: string
   tag?: string | null
   createdAt?: string | number
+  provider?: AgentProvider
+  capabilities?: SessionCapabilities
   [key: string]: unknown
 }
 
@@ -84,20 +97,10 @@ export type SessionModelInfo = {
   supportedEffortLevels?: ('low' | 'medium' | 'high' | 'max')[]
 }
 
-export type SessionDiagnosticCommand = {
-  name: string
-  description?: string
-}
-
-export type SessionDiagnosticAgent = {
-  name: string
-  description?: string
-}
-
-export type SessionDiagnosticMcpServer = {
-  name: string
-  status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'
-  error?: string
+export type SessionDiagnosticSection = {
+  id: string
+  title: string
+  items: string[]
 }
 
 export type SessionInfo = {
@@ -110,4 +113,7 @@ export type SessionInfo = {
   cwd?: string
   tag?: string
   createdAt?: number
+  provider: AgentProvider
+  capabilities: SessionCapabilities
+  currentModel?: string
 }

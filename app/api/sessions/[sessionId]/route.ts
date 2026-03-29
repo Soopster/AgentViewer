@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSessionInfo, renameSession, tagSession } from '@anthropic-ai/claude-agent-sdk'
+import { patchViewSession, readViewSessionInfo } from '@/lib/sessionBackend'
 
 export async function GET(
   _request: NextRequest,
@@ -7,7 +7,7 @@ export async function GET(
 ) {
   const { sessionId } = await params
   try {
-    const info = await getSessionInfo(sessionId)
+    const info = await readViewSessionInfo(sessionId)
     if (!info) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
     return NextResponse.json({ info })
   } catch (err) {
@@ -21,15 +21,9 @@ export async function PATCH(
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
   const { sessionId } = await params
-  const body = await request.json()
+  const body = await request.json().catch(() => ({}))
   try {
-    if ('title' in body) {
-      await renameSession(sessionId, body.title)
-    } else if ('tag' in body) {
-      await tagSession(sessionId, body.tag ?? null)
-    } else {
-      return NextResponse.json({ error: 'title or tag required' }, { status: 400 })
-    }
+    await patchViewSession(sessionId, body)
     return NextResponse.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

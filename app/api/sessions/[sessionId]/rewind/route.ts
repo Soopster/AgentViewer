@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createSessionControlQuery } from '@/lib/sdkControlQuery'
+import { rewindOrRollbackViewSession } from '@/lib/sessionBackend'
 
 export async function POST(
   request: NextRequest,
@@ -7,23 +7,13 @@ export async function POST(
 ) {
   const { sessionId } = await params
   const body = await request.json().catch(() => ({}))
-  const userMessageId: string | undefined = body.userMessageId
-  const model: string = body.model ?? 'claude-sonnet-4-6'
-
-  if (!userMessageId) {
-    return NextResponse.json({ error: 'userMessageId is required' }, { status: 400 })
-  }
-
-  const q = createSessionControlQuery(sessionId, model)
 
   try {
-    await q.initializationResult()
-    const result = await q.rewindFiles(userMessageId, { dryRun: Boolean(body.dryRun) })
+    const result = await rewindOrRollbackViewSession({ sessionId, body })
     return NextResponse.json(result)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
-  } finally {
-    q.close()
+    const status = message.includes('required') ? 400 : 500
+    return NextResponse.json({ error: message }, { status })
   }
 }

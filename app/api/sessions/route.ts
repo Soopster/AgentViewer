@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { listSessions } from '@anthropic-ai/claude-agent-sdk'
+import { listViewSessions } from '@/lib/sessionBackend'
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const includeWorktrees = searchParams.get('includeWorktrees') !== 'false'
 
   try {
-    const sessions = await listSessions({ limit, offset, dir, includeWorktrees: dir ? includeWorktrees : undefined })
+    const sessions = await listViewSessions({ limit, offset, dir, includeWorktrees })
     return NextResponse.json({ sessions })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
