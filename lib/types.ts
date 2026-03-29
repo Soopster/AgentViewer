@@ -39,7 +39,7 @@ export type ApiMessage = {
   }
 }
 
-export type AgentProvider = 'claude' | 'codex' | 'opencode'
+export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot'
 export type ProviderSelection = AgentProvider | 'all'
 
 export type SessionCapabilities = {
@@ -95,7 +95,7 @@ export type SessionModelInfo = {
   displayName: string
   description: string
   supportsEffort?: boolean
-  supportedEffortLevels?: ('low' | 'medium' | 'high' | 'max')[]
+  supportedEffortLevels?: ('low' | 'medium' | 'high' | 'max' | 'xhigh')[]
 }
 
 export type SessionDiagnosticSection = {

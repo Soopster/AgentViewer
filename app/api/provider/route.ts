@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isProviderSelection } from '@/lib/provider'
 import { getConfiguredProvider, setConfiguredProvider } from '@/lib/providerState'
 
 export async function GET() {
@@ -14,8 +15,8 @@ export async function GET() {
 export async function PATCH(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
   const provider = body?.provider
-  if (provider !== 'all' && provider !== 'claude' && provider !== 'codex' && provider !== 'opencode') {
-    return NextResponse.json({ error: 'provider must be all, claude, codex, or opencode' }, { status: 400 })
+  if (!isProviderSelection(provider)) {
+    return NextResponse.json({ error: 'provider must be all, claude, codex, opencode, or copilot' }, { status: 400 })
   }
 
   try {

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { isProviderSelection } from '@/lib/provider'
 import { listViewSessions } from '@/lib/sessionBackend'
 
 export async function GET(request: Request) {
@@ -8,9 +9,7 @@ export async function GET(request: Request) {
   const dir = searchParams.get('dir')?.trim() || undefined
   const includeWorktrees = searchParams.get('includeWorktrees') !== 'false'
   const providerParam = searchParams.get('provider')
-  const provider = providerParam === 'all' || providerParam === 'claude' || providerParam === 'codex' || providerParam === 'opencode'
-    ? providerParam
-    : undefined
+  const provider = isProviderSelection(providerParam) ? providerParam : undefined
 
   try {
     const sessions = await listViewSessions({ limit, offset, dir, includeWorktrees, provider })

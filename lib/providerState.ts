@@ -8,6 +8,7 @@ export function getDefaultProvider(): ProviderSelection {
   if (process.env.AGENT_VIEWER_PROVIDER === 'all') return 'all'
   if (process.env.AGENT_VIEWER_PROVIDER === 'codex') return 'codex'
   if (process.env.AGENT_VIEWER_PROVIDER === 'opencode') return 'opencode'
+  if (process.env.AGENT_VIEWER_PROVIDER === 'copilot') return 'copilot'
   return 'claude'
 }
 
@@ -18,6 +19,7 @@ export async function getConfiguredProvider(): Promise<ProviderSelection> {
     if (parsed.provider === 'all') return 'all'
     if (parsed.provider === 'codex') return 'codex'
     if (parsed.provider === 'opencode') return 'opencode'
+    if (parsed.provider === 'copilot') return 'copilot'
     return 'claude'
   } catch {
     return getDefaultProvider()

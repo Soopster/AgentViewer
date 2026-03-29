@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isAgentProvider } from '@/lib/provider'
 import { patchViewSession, readViewSessionInfo } from '@/lib/sessionBackend'
 
 export async function GET(
@@ -7,9 +8,7 @@ export async function GET(
 ) {
   const { sessionId } = await params
   const providerParam = new URL(request.url).searchParams.get('provider')
-  const provider = providerParam === 'claude' || providerParam === 'codex' || providerParam === 'opencode'
-    ? providerParam
-    : undefined
+  const provider = isAgentProvider(providerParam) ? providerParam : undefined
   try {
     const info = await readViewSessionInfo(sessionId, provider)
     if (!info) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
@@ -26,9 +25,7 @@ export async function PATCH(
 ) {
   const { sessionId } = await params
   const body = await request.json().catch(() => ({}))
-  const provider = body?.provider === 'claude' || body?.provider === 'codex' || body?.provider === 'opencode'
-    ? body.provider
-    : undefined
+  const provider = isAgentProvider(body?.provider) ? body.provider : undefined
   try {
     await patchViewSession(sessionId, body, provider)
     return NextResponse.json({ ok: true })

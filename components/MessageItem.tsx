@@ -2693,16 +2693,26 @@ export default function MessageItem({ message, showSession }: { message: Threade
                 fontSize: 10,
                 fontWeight: 600,
                 letterSpacing: '0.08em',
-                color: message.provider === 'codex' ? 'var(--cyan)' : message.provider === 'opencode' ? 'var(--green)' : 'var(--violet)',
+                color: message.provider === 'codex'
+                  ? 'var(--cyan)'
+                  : message.provider === 'opencode'
+                  ? 'var(--green)'
+                  : message.provider === 'copilot'
+                  ? 'var(--amber)'
+                  : 'var(--violet)',
                 background: message.provider === 'codex'
                   ? 'rgba(56,217,245,0.08)'
                   : message.provider === 'opencode'
                   ? 'rgba(45,212,160,0.08)'
+                  : message.provider === 'copilot'
+                  ? 'rgba(234,170,64,0.08)'
                   : 'rgba(139,128,240,0.08)',
                 border: `1px solid ${message.provider === 'codex'
                   ? 'rgba(56,217,245,0.2)'
                   : message.provider === 'opencode'
                   ? 'rgba(45,212,160,0.2)'
+                  : message.provider === 'copilot'
+                  ? 'rgba(234,170,64,0.2)'
                   : 'rgba(139,128,240,0.2)'}`,
                 borderRadius: 999,
                 padding: '1px 6px',

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
+import { isProviderSelection } from '@/lib/provider'
 import { sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
 
@@ -14,7 +15,7 @@ type ProjectSelection = {
   sessions: Session[]
 }
 
-const ALL_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode']
+const ALL_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot']
 
 function withProviderQuery(path: string, provider?: AgentProvider | 'all'): string {
   if (!provider) return path
@@ -137,7 +138,7 @@ export default function Home() {
     const r = await fetch('/api/provider')
     const data = await r.json()
     if (data.error) throw new Error(data.error)
-    setProvider(data.provider === 'all' || data.provider === 'codex' || data.provider === 'opencode' ? data.provider : 'claude')
+    setProvider(isProviderSelection(data.provider) ? data.provider : 'claude')
   }, [])
 
   // Keep ref in sync with state (avoids stale closures inside setInterval)

@@ -137,6 +137,28 @@ function extractStreamingAssistantText(payload: unknown): string | null {
       : null
   }
 
+  if (record.type === 'copilot_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+
+    if (eventRecord.type === 'assistant.message_delta') {
+      const data = eventRecord.data
+      if (!data || typeof data !== 'object') return null
+      const dataRecord = data as Record<string, unknown>
+      return typeof dataRecord.deltaContent === 'string' ? dataRecord.deltaContent : null
+    }
+
+    if (eventRecord.type === 'assistant.message') {
+      const data = eventRecord.data
+      if (!data || typeof data !== 'object') return null
+      const dataRecord = data as Record<string, unknown>
+      return typeof dataRecord.content === 'string' ? dataRecord.content : null
+    }
+
+    return null
+  }
+
   if (record.type === 'assistant') {
     const message = record.message
     if (!message || typeof message !== 'object') return null
@@ -192,6 +214,25 @@ function opencodeToolLabel(item: Record<string, unknown>): { label: string; deta
   }
 }
 
+function copilotToolLabel(event: Record<string, unknown>): { label: string; detail?: string } | null {
+  if (event.type !== 'tool.execution_start' && event.type !== 'tool.execution_complete') return null
+
+  const data = event.data
+  if (!data || typeof data !== 'object') return null
+  const dataRecord = data as Record<string, unknown>
+  const toolName = typeof dataRecord.toolName === 'string'
+    ? dataRecord.toolName
+    : typeof dataRecord.mcpToolName === 'string'
+    ? dataRecord.mcpToolName
+    : null
+  if (!toolName) return null
+
+  return {
+    label: formatToolLabel(toolName),
+    detail: typeof dataRecord.mcpServerName === 'string' ? dataRecord.mcpServerName : undefined,
+  }
+}
+
 function extractLiveToolStart(payload: unknown): { index: number; key: string; label: string; detail?: string } | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
@@ -236,6 +277,27 @@ function extractLiveToolStart(payload: unknown): { index: number; key: string; l
     return {
       index: -1,
       key: typeof partRecord.callID === 'string' ? partRecord.callID : String(partRecord.id ?? 'tool'),
+      label: tool.label,
+      detail: tool.detail,
+    }
+  }
+
+  if (record.type === 'copilot_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    const tool = copilotToolLabel(eventRecord)
+    if (!tool || eventRecord.type !== 'tool.execution_start') return null
+
+    const data = eventRecord.data
+    if (!data || typeof data !== 'object') return null
+    const dataRecord = data as Record<string, unknown>
+    const toolCallId = typeof dataRecord.toolCallId === 'string' ? dataRecord.toolCallId : null
+    if (!toolCallId) return null
+
+    return {
+      index: -1,
+      key: toolCallId,
       label: tool.label,
       detail: tool.detail,
     }
@@ -325,13 +387,36 @@ function extractCompletedToolKey(payload: unknown): string | null {
       : null
   }
 
+  if (record.type === 'copilot_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'tool.execution_complete') return null
+
+    const data = eventRecord.data
+    if (!data || typeof data !== 'object') return null
+    const dataRecord = data as Record<string, unknown>
+    return typeof dataRecord.toolCallId === 'string' ? dataRecord.toolCallId : null
+  }
+
   return null
 }
 
 function assistantDisplayName(provider: Session['provider'] | SessionInfo['provider'] | undefined): string {
   if (provider === 'codex') return 'Codex'
   if (provider === 'opencode') return 'OpenCode'
+  if (provider === 'copilot') return 'Copilot'
   return 'Claude'
+}
+
+function shouldReplaceLiveAssistantText(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false
+  const record = payload as Record<string, unknown>
+  if (record.type === 'assistant') return true
+  if (record.type !== 'copilot_event') return false
+  const event = record.event
+  if (!event || typeof event !== 'object') return false
+  return (event as Record<string, unknown>).type === 'assistant.message'
 }
 
 function withProviderQuery(path: string, provider?: Session['provider']): string {
@@ -614,7 +699,7 @@ export default function MessageView({ messages, loading, session, projectView, o
             const deltaText = extractStreamingAssistantText(parsed)
             if (deltaText) {
               setLiveAssistantText((prev) =>
-                parsed.type === 'assistant'
+                shouldReplaceLiveAssistantText(parsed)
                   ? deltaText
                   : `${prev}${deltaText}`
               )
@@ -1158,7 +1243,7 @@ export default function MessageView({ messages, loading, session, projectView, o
         )}
 
         {/* Fork button (single session only) */}
-        {!isProject && (
+        {!isProject && session?.provider !== 'copilot' && (
           <button
             onClick={handleFork}
             disabled={forking}

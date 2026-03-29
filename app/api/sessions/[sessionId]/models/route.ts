@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isAgentProvider } from '@/lib/provider'
 import { readViewSessionModels } from '@/lib/sessionBackend'
 
 export async function GET(
@@ -7,9 +8,7 @@ export async function GET(
 ) {
   const { sessionId } = await params
   const providerParam = new URL(request.url).searchParams.get('provider')
-  const provider = providerParam === 'claude' || providerParam === 'codex' || providerParam === 'opencode'
-    ? providerParam
-    : undefined
+  const provider = isAgentProvider(providerParam) ? providerParam : undefined
   try {
     const { models, currentModel } = await readViewSessionModels(sessionId, provider)
     return NextResponse.json({

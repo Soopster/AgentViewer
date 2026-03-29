@@ -5,6 +5,7 @@ Agent Viewer is a Next.js dashboard for browsing and inspecting local agent conv
 - Claude Agent SDK
 - Codex CLI
 - OpenCode
+- GitHub Copilot
 
 It provides a single UI for session browsing, project-level views, message inspection, model/provider switching, tagging, rewind or rollback controls, and diagnostics.
 
@@ -46,6 +47,25 @@ If you already run an OpenCode server, the app can reuse it through:
 
 If not, the backend will attempt managed startup where supported.
 
+### GitHub Copilot
+
+Uses the official `@github/copilot-sdk`.
+
+The Copilot provider expects a working local Copilot CLI environment. The viewer uses the SDK for:
+
+- session listing
+- session resume/history
+- live streaming sends
+- models
+- diagnostics
+
+Local title and tag edits for Copilot are stored in `.agent-viewer-data/` because the viewer does not mutate Copilot session metadata on disk.
+
+Optional environment variables:
+
+- `COPILOT_CLI_URL` to connect to an existing Copilot SDK server
+- `COPILOT_CLI_PATH` to point at a specific Copilot CLI binary
+
 ## Getting Started
 
 Install dependencies:
@@ -80,7 +100,7 @@ The app stores local UI/provider metadata in:
 This directory is intentionally ignored from git. It is used for state such as:
 
 - selected provider
-- locally stored tags for providers that do not support native tags
+- locally stored tags or title overrides for providers that do not support native metadata edits
 
 ## Scripts
 

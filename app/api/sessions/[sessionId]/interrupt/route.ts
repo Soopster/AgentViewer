@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isAgentProvider } from '@/lib/provider'
 import { interruptViewSession } from '@/lib/sessionBackend'
 
 export async function POST(
@@ -7,9 +8,7 @@ export async function POST(
 ) {
   const { sessionId } = await params
   const body = await request.json().catch(() => ({}))
-  const provider = body?.provider === 'claude' || body?.provider === 'codex' || body?.provider === 'opencode'
-    ? body.provider
-    : undefined
+  const provider = isAgentProvider(body?.provider) ? body.provider : undefined
   try {
     void provider
     await interruptViewSession(sessionId)

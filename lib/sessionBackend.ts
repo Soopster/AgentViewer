@@ -8,6 +8,13 @@ import {
   renameSession,
   tagSession,
 } from '@anthropic-ai/claude-agent-sdk'
+import type {
+  GetAuthStatusResponse as CopilotGetAuthStatusResponse,
+  GetStatusResponse as CopilotGetStatusResponse,
+  ModelInfo as CopilotModelInfo,
+  SessionEvent as CopilotSessionEvent,
+  SessionMetadata as CopilotSessionMetadata,
+} from '@github/copilot-sdk'
 import { clearRunningSession, getRunningSession, setRunningSession } from './sessionRuntime'
 import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
@@ -21,6 +28,22 @@ import type {
   SessionModelInfo,
 } from './types'
 import { createSessionControlQuery } from './sdkControlQuery'
+import { getCopilotClient, resumeCopilotSession } from './copilotClient'
+import {
+  deriveCopilotState,
+  mapCopilotDiagnosticsToSections,
+  mapCopilotEventsToSessionMessages,
+  mapCopilotModelsToSessionModels,
+  mapCopilotSessionToInfo,
+  mapCopilotSessionToSession,
+  mapCopilotUsageToContextUsage,
+} from './copilotMapper'
+import {
+  getCopilotStoredMetadata,
+  getCopilotStoredMetadataForSessions,
+  setCopilotStoredTag,
+  setCopilotStoredTitle,
+} from './copilotMetadata'
 import { getCodexClient } from './codexClient'
 import type {
   CodexAppsListResponse,
@@ -72,6 +95,7 @@ import type {
   Part as OpenCodePart,
   Session as OpenCodeSession,
 } from '@opencode-ai/sdk'
+import { sameProjectPath } from './projectPaths'
 
 export const maxDuration = 300
 
@@ -166,6 +190,45 @@ function formatOpenCodeEvent(event: OpenCodeEvent): string {
   return JSON.stringify({ type: 'opencode_event', event })
 }
 
+function formatCopilotEvent(event: CopilotSessionEvent): string {
+  return JSON.stringify({ type: 'copilot_event', event })
+}
+
+async function findCopilotSessionMetadata(sessionId: string): Promise<CopilotSessionMetadata | null> {
+  const client = await getCopilotClient()
+  const sessions = await client.listSessions()
+  return sessions.find((session) => session.sessionId === sessionId) ?? null
+}
+
+async function readCopilotSessionEvents(sessionId: string): Promise<CopilotSessionEvent[]> {
+  const session = await resumeCopilotSession(sessionId)
+  try {
+    return await session.getMessages()
+  } finally {
+    await session.disconnect().catch(() => {})
+  }
+}
+
+async function listCopilotSessions({ limit, offset, dir, includeWorktrees }: ListParams): Promise<Session[]> {
+  const client = await getCopilotClient()
+  const response = dir && !includeWorktrees
+    ? await client.listSessions({ cwd: dir })
+    : await client.listSessions()
+
+  const filtered = dir
+    ? response.filter((session) => {
+        const cwd = session.context?.cwd
+        if (!cwd) return false
+        return includeWorktrees ? sameProjectPath(dir, cwd) : cwd === dir
+      })
+    : response
+
+  const sorted = [...filtered].sort((a, b) => b.modifiedTime.getTime() - a.modifiedTime.getTime())
+  const page = sorted.slice(offset, offset + limit)
+  const stored = await getCopilotStoredMetadataForSessions(page.map((session) => session.sessionId))
+  return page.map((session) => mapCopilotSessionToSession(session, stored[session.sessionId] ?? { title: null, tag: null }))
+}
+
 async function listCodexSessions({ limit, offset, dir }: ListParams): Promise<Session[]> {
   const client = getCodexClient()
   const response = await client.request<CodexThreadListResponse>('thread/list', {
@@ -254,12 +317,13 @@ export async function listViewSessions(params: ListParams): Promise<Session[]> {
   const provider = params.provider ?? await getConfiguredProvider()
   if (provider === 'all') {
     const combinedLimit = Math.max(params.limit + params.offset, 500)
-    const [claude, codex, opencode] = await Promise.all([
+    const [claude, codex, opencode, copilot] = await Promise.all([
       listClaudeSessions({ ...params, provider: 'claude', limit: combinedLimit, offset: 0 }),
       listCodexSessions({ ...params, provider: 'codex', limit: combinedLimit, offset: 0 }),
       listOpenCodeSessions({ ...params, provider: 'opencode', limit: combinedLimit, offset: 0 }),
+      listCopilotSessions({ ...params, provider: 'copilot', limit: combinedLimit, offset: 0 }),
     ])
-    return [...claude, ...codex, ...opencode]
+    return [...claude, ...codex, ...opencode, ...copilot]
       .sort((a, b) => {
         const aTime = Number(a.lastModified ?? a.createdAt ?? 0)
         const bTime = Number(b.lastModified ?? b.createdAt ?? 0)
@@ -273,6 +337,9 @@ export async function listViewSessions(params: ListParams): Promise<Session[]> {
   if (provider === 'opencode') {
     const sessions = await listOpenCodeSessions(params)
     return sessions.slice(params.offset, params.offset + params.limit)
+  }
+  if (provider === 'copilot') {
+    return listCopilotSessions(params)
   }
   return listClaudeSessions(params)
 }
@@ -299,6 +366,24 @@ export async function readViewSessionInfo(sessionId: string, providerOverride?: 
       firstOpenCodePrompt(messages),
       currentOpenCodeModelValue(messages.at(-1)?.info) ?? undefined,
     )
+  }
+  if (provider === 'copilot') {
+    const [metadata, stored, session] = await Promise.all([
+      findCopilotSessionMetadata(sessionId),
+      getCopilotStoredMetadata(sessionId),
+      resumeCopilotSession(sessionId),
+    ])
+
+    try {
+      const [events, currentModel] = await Promise.all([
+        session.getMessages(),
+        session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
+      ])
+
+      return mapCopilotSessionToInfo(sessionId, events, stored, metadata, currentModel.modelId)
+    } finally {
+      await session.disconnect().catch(() => {})
+    }
   }
 
   const info = await getSessionInfo(sessionId)
@@ -343,6 +428,17 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
     }
     throw new Error('title or tag required')
   }
+  if (provider === 'copilot') {
+    if ('title' in body) {
+      await setCopilotStoredTitle(sessionId, typeof body.title === 'string' ? body.title : null)
+      return
+    }
+    if ('tag' in body) {
+      await setCopilotStoredTag(sessionId, typeof body.tag === 'string' ? body.tag : null)
+      return
+    }
+    throw new Error('title or tag required')
+  }
 
   if ('title' in body) {
     await renameSession(sessionId, body.title as string)
@@ -365,6 +461,10 @@ export async function listViewSessionMessages(sessionId: string, params: Message
   if (provider === 'opencode') {
     const messages = await getOpenCodeSessionMessages(sessionId)
     return mapOpenCodeMessagesToSessionMessages(messages).slice(params.offset, params.offset + params.limit)
+  }
+  if (provider === 'copilot') {
+    const events = await readCopilotSessionEvents(sessionId)
+    return mapCopilotEventsToSessionMessages(sessionId, events).slice(params.offset, params.offset + params.limit)
   }
 
   const messages = await getSessionMessages(sessionId, params)
@@ -674,6 +774,91 @@ async function createOpenCodeStream(sessionId: string, request: NextRequest, bod
   })
 }
 
+async function createCopilotStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
+  const userMessage = String(body.message ?? '').trim()
+  const selectedModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null
+  const client = await getCopilotClient()
+  const encoder = new TextEncoder()
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let session: Awaited<ReturnType<typeof resumeCopilotSession>> | null = null
+      let closed = false
+      let emittedError = false
+
+      const close = () => {
+        if (closed) return
+        closed = true
+        controller.close()
+      }
+
+      try {
+        const models = await client.listModels().catch(() => [] as CopilotModelInfo[])
+        const modelsById = new Map(models.map((model) => [model.id, model]))
+
+        const handleEvent = (event: CopilotSessionEvent) => {
+          if (event.type === 'assistant.usage') {
+            const usage = mapCopilotUsageToContextUsage(event, modelsById)
+            controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+          }
+
+          if (event.type === 'session.error') {
+            emittedError = true
+            controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: event.data.message })}\n\n`))
+          }
+
+          controller.enqueue(encoder.encode(`data: ${formatCopilotEvent(event)}\n\n`))
+        }
+
+        session = await resumeCopilotSession(sessionId, {
+          disableResume: false,
+          streaming: true,
+          onEvent: handleEvent,
+        })
+
+        controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`))
+
+        setRunningSession(sessionId, {
+          provider: 'copilot',
+          interrupt: () => session?.abort() ?? Promise.resolve(),
+        })
+
+        request.signal.addEventListener('abort', () => {
+          const running = getRunningSession(sessionId)
+          if (running?.provider === 'copilot') {
+            void running.interrupt().catch(() => {})
+          }
+        })
+
+        if (selectedModel) {
+          const current = await session.rpc.model.getCurrent().catch(() => ({ modelId: undefined }))
+          if (current.modelId !== selectedModel) {
+            await session.setModel(selectedModel)
+          }
+        }
+
+        await session.sendAndWait({ prompt: userMessage }, 300_000)
+      } catch (err) {
+        if (!emittedError) {
+          controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
+        }
+      } finally {
+        clearRunningSession(sessionId)
+        await session?.disconnect().catch(() => {})
+        close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'X-Accel-Buffering': 'no',
+    },
+  })
+}
+
 export async function streamViewSessionTurn(params: SendMessageParams): Promise<Response> {
   const userMessage = String(params.body.message ?? '').trim()
   if (!userMessage) {
@@ -686,6 +871,9 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
   }
   if (provider === 'opencode') {
     return createOpenCodeStream(params.sessionId, params.request, params.body)
+  }
+  if (provider === 'copilot') {
+    return createCopilotStream(params.sessionId, params.request, params.body)
   }
 
   return createClaudeStream(params.sessionId, params.request, params.body)
@@ -725,6 +913,11 @@ export async function forkViewSession({ sessionId, body, provider }: ForkParams)
       })
     }
     return { sessionId: forked.id }
+  }
+  if (resolvedProvider === 'copilot') {
+    void sessionId
+    void body
+    throw new Error('Fork is not supported for GitHub Copilot sessions')
   }
 
   const result = await forkSession(sessionId, {
@@ -768,6 +961,22 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     return {
       models: mapOpenCodeModelsToSessionModels(openCodeData<OpenCodeConfigProvidersResponse>(configResponse)),
       currentModel: currentOpenCodeModelValue(messages.at(-1)?.info),
+    }
+  }
+  if (provider === 'copilot') {
+    const client = await getCopilotClient()
+    const session = await resumeCopilotSession(sessionId)
+    try {
+      const [models, currentModel] = await Promise.all([
+        client.listModels(),
+        session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
+      ])
+      return {
+        models: mapCopilotModelsToSessionModels(models),
+        currentModel: currentModel.modelId ?? null,
+      }
+    } finally {
+      await session.disconnect().catch(() => {})
     }
   }
 
@@ -854,6 +1063,59 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
         formatters: openCodeData<OpenCodeFormatterStatus[]>(formatters),
         mcp: openCodeData<Record<string, OpenCodeMcpStatus>>(mcp),
       }),
+    }
+  }
+  if (provider === 'copilot') {
+    const client = await getCopilotClient()
+    const [metadata, session, status, auth] = await Promise.all([
+      findCopilotSessionMetadata(sessionId),
+      resumeCopilotSession(sessionId),
+      client.getStatus().catch(() => ({ version: 'unknown', protocolVersion: 0 }) as CopilotGetStatusResponse),
+      client.getAuthStatus().catch(() => ({
+        isAuthenticated: false,
+        statusMessage: 'Authentication status unavailable',
+      }) as CopilotGetAuthStatusResponse),
+    ])
+
+    try {
+      const [events, currentModel, mode, tools, quota] = await Promise.all([
+        session.getMessages(),
+        session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
+        session.rpc.mode.get().catch(() => ({ mode: undefined })),
+        client.rpc.tools.list({ model: undefined }).catch(() => ({ tools: [] as Array<{ name: string; description?: string }> })),
+        client.rpc.account.getQuota().catch(() => ({ quotaSnapshots: {} as Record<string, {
+          entitlementRequests: number
+          usedRequests: number
+          remainingPercentage: number
+          overage: number
+          overageAllowedWithExhaustedQuota: boolean
+          resetDate?: string
+        }> })),
+      ])
+
+      const quotaItems = Object.entries(quota.quotaSnapshots).map(([name, snapshot]) => {
+        const remaining = Math.round(snapshot.remainingPercentage * 100)
+        const reset = snapshot.resetDate ? ` · resets ${snapshot.resetDate}` : ''
+        return `${name} · ${snapshot.usedRequests}/${snapshot.entitlementRequests} used · ${remaining}% remaining${reset}`
+      })
+
+      return {
+        currentModel: currentModel.modelId ?? deriveCopilotState(events, metadata).currentModel ?? null,
+        sections: mapCopilotDiagnosticsToSections({
+          sessionId,
+          status,
+          auth,
+          currentModel: currentModel.modelId ?? null,
+          mode: mode.mode ?? null,
+          tools: tools.tools,
+          quotaItems,
+          metadata,
+          events,
+          workspacePath: session.workspacePath,
+        }),
+      }
+    } finally {
+      await session.disconnect().catch(() => {})
     }
   }
 
@@ -963,6 +1225,11 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
       canRewind: true,
       filesChanged,
     }
+  }
+  if (resolvedProvider === 'copilot') {
+    void sessionId
+    void body
+    throw new Error('Rewind is not supported for GitHub Copilot sessions')
   }
 
   const userMessageId = typeof body.userMessageId === 'string' ? body.userMessageId : undefined
