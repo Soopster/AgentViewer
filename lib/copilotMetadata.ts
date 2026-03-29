@@ -11,12 +11,17 @@ type StoredMetadata = {
 
 type MetadataStore = Record<string, StoredMetadata>
 
+let storeCache: MetadataStore | null = null
+
 async function loadMetadataStore(): Promise<MetadataStore> {
+  if (storeCache !== null) return storeCache
   try {
     const contents = await readFile(METADATA_FILE, 'utf8')
     const parsed = JSON.parse(contents) as unknown
-    if (!parsed || typeof parsed !== 'object') return {}
-
+    if (!parsed || typeof parsed !== 'object') {
+      storeCache = {}
+      return storeCache
+    }
     const store: MetadataStore = {}
     for (const [sessionId, value] of Object.entries(parsed as Record<string, unknown>)) {
       if (!value || typeof value !== 'object') continue
@@ -26,13 +31,16 @@ async function loadMetadataStore(): Promise<MetadataStore> {
         tag: typeof record.tag === 'string' && record.tag.trim() ? record.tag : undefined,
       }
     }
-    return store
+    storeCache = store
+    return storeCache
   } catch {
-    return {}
+    storeCache = {}
+    return storeCache
   }
 }
 
 async function saveMetadataStore(store: MetadataStore): Promise<void> {
+  storeCache = store
   await mkdir(DATA_DIR, { recursive: true })
   await writeFile(METADATA_FILE, JSON.stringify(store, null, 2), 'utf8')
 }

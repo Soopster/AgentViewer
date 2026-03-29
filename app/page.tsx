@@ -62,6 +62,9 @@ export default function Home() {
   // Tracks how many messages we've already loaded so polling can fetch only new ones
   const msgCountRef = useRef(0)
   const projectMessageCountsRef = useRef<Map<string, number>>(new Map())
+  // Guards to prevent concurrent poll ticks from overlapping when a fetch takes > interval
+  const pollInFlightRef = useRef(false)
+  const projectPollInFlightRef = useRef(false)
   const selectedSession = sessions.find((s) => s.sessionId === selectedId) ?? null
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? activeProjectDir?.split('/').pop() ?? null
@@ -191,6 +194,8 @@ export default function Home() {
   useEffect(() => {
     if (!selectedId || loadingMessages) return
     const id = setInterval(async () => {
+      if (pollInFlightRef.current) return
+      pollInFlightRef.current = true
       const offset = msgCountRef.current
       try {
         const r = await fetch(withProviderQuery(`/api/sessions/${selectedId}/messages?offset=${offset}&limit=200`, selectedSession?.provider))
@@ -198,7 +203,9 @@ export default function Home() {
         if (!data.error && data.messages?.length > 0) {
           setMessages((prev) => [...prev, ...data.messages])
         }
-      } catch { /* ignore transient errors */ }
+      } catch { /* ignore transient errors */ } finally {
+        pollInFlightRef.current = false
+      }
     }, 2000)
     return () => clearInterval(id)
   }, [loadingMessages, selectedId, selectedSession?.provider])
@@ -207,6 +214,8 @@ export default function Home() {
   useEffect(() => {
     if (!selectedProject) return
     const id = setInterval(async () => {
+      if (projectPollInFlightRef.current) return
+      projectPollInFlightRef.current = true
       try {
         const projectSessions = await fetchProjectSessions(selectedProject.dir, provider)
         const results = await Promise.all(
@@ -235,7 +244,9 @@ export default function Home() {
           ? { ...prev, sessions: projectSessions }
           : prev
         )
-      } catch { /* ignore transient errors */ }
+      } catch { /* ignore transient errors */ } finally {
+        projectPollInFlightRef.current = false
+      }
     }, 2000)
     return () => clearInterval(id)
   }, [fetchProjectSessions, provider, selectedProject])

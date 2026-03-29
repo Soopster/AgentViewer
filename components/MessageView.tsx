@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import type {
   SessionMessage,
   Session,
@@ -827,7 +827,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     }
   }, [diagnosticSections.length, diagnosticsLoading, selectedModel, session, showDiagnostics])
 
-  const threaded = buildThreadedMessages(messages)
+  const threaded = useMemo(() => buildThreadedMessages(messages), [messages])
   const isProject = !!projectView
   const dirName  = projectView?.key ?? session?.cwd?.split('/').pop() ?? session?.sessionId ?? ''
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length

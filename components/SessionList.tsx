@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
@@ -530,19 +530,24 @@ export default function SessionList({
   const [searchText, setSearchText] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
   const normalizedSearch = searchText.trim().toLowerCase()
-  const filteredSessions = sessions.filter((session) => matchesSessionSearch(session, normalizedSearch, activeTag))
-  const groups = groupByProject(filteredSessions)
-  const tagCounts = new Map<string, number>()
-
-  for (const session of sessions) {
-    for (const tag of parseStoredSessionTags(session.tag)) {
-      tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)
+  const filteredSessions = useMemo(
+    () => sessions.filter((session) => matchesSessionSearch(session, normalizedSearch, activeTag)),
+    [sessions, normalizedSearch, activeTag],
+  )
+  const groups = useMemo(() => groupByProject(filteredSessions), [filteredSessions])
+  const tagCounts = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const session of sessions) {
+      for (const tag of parseStoredSessionTags(session.tag)) {
+        map.set(tag, (map.get(tag) ?? 0) + 1)
+      }
     }
-  }
-
-  const popularTags = [...tagCounts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 8)
+    return map
+  }, [sessions])
+  const popularTags = useMemo(
+    () => [...tagCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8),
+    [tagCounts],
+  )
 
   useEffect(() => {
     if (!activeTag) return

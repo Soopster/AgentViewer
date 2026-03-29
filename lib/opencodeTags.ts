@@ -6,23 +6,32 @@ const TAG_FILE = path.join(DATA_DIR, 'opencode-tags.json')
 
 type TagStore = Record<string, string[]>
 
+let storeCache: TagStore | null = null
+
 async function loadTagStore(): Promise<TagStore> {
+  if (storeCache !== null) return storeCache
   try {
     const contents = await readFile(TAG_FILE, 'utf8')
     const parsed = JSON.parse(contents) as unknown
-    if (!parsed || typeof parsed !== 'object') return {}
+    if (!parsed || typeof parsed !== 'object') {
+      storeCache = {}
+      return storeCache
+    }
     const store: TagStore = {}
     for (const [sessionId, tags] of Object.entries(parsed as Record<string, unknown>)) {
       if (!Array.isArray(tags)) continue
       store[sessionId] = tags.filter((value): value is string => typeof value === 'string')
     }
-    return store
+    storeCache = store
+    return storeCache
   } catch {
-    return {}
+    storeCache = {}
+    return storeCache
   }
 }
 
 async function saveTagStore(store: TagStore): Promise<void> {
+  storeCache = store
   await mkdir(DATA_DIR, { recursive: true })
   await writeFile(TAG_FILE, JSON.stringify(store, null, 2), 'utf8')
 }
