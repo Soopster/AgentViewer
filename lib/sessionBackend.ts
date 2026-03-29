@@ -44,8 +44,47 @@ import {
   mapCodexTokenUsageToContextUsage,
 } from './codexMapper'
 import { getCodexStoredTag, getCodexStoredTagsForSessions, setCodexStoredTag } from './codexTags'
+import { getOpenCodeClient } from './opencodeClient'
+import {
+  currentOpenCodeModelValue,
+  decodeOpenCodeModelValue,
+  firstOpenCodePrompt,
+  mapOpenCodeContextUsage,
+  mapOpenCodeDiagnosticsToSections,
+  mapOpenCodeMessagesToSessionMessages,
+  mapOpenCodeModelsToSessionModels,
+  mapOpenCodeSessionToInfo,
+  mapOpenCodeSessionToSession,
+  summarizeOpenCodeDiffs,
+} from './opencodeMapper'
+import { getOpenCodeStoredTag, getOpenCodeStoredTagsForSessions, setOpenCodeStoredTag } from './opencodeTags'
+import type {
+  Agent as OpenCodeAgent,
+  Command as OpenCodeCommand,
+  ConfigProvidersResponse as OpenCodeConfigProvidersResponse,
+  Event as OpenCodeEvent,
+  FileDiff as OpenCodeFileDiff,
+  FormatterStatus as OpenCodeFormatterStatus,
+  LspStatus as OpenCodeLspStatus,
+  McpStatus as OpenCodeMcpStatus,
+  Message as OpenCodeMessage,
+  Part as OpenCodePart,
+  Session as OpenCodeSession,
+} from '@opencode-ai/sdk'
 
 export const maxDuration = 300
+
+const OPENCODE_OPTIONS = {
+  responseStyle: 'data' as const,
+  throwOnError: true as const,
+}
+
+function openCodeData<T>(response: T | { data: T }): T {
+  if (response && typeof response === 'object' && 'data' in response) {
+    return (response as { data: T }).data
+  }
+  return response as T
+}
 
 type ListParams = {
   limit: number
@@ -79,6 +118,49 @@ function codexContextUsageToEventData(contextUsage: ContextUsage): string {
   return `event: context-usage\ndata: ${JSON.stringify(contextUsage)}\n\n`
 }
 
+function openCodeEventSessionId(event: OpenCodeEvent): string | undefined {
+  switch (event.type) {
+    case 'message.updated':
+      return event.properties.info.sessionID
+    case 'message.removed':
+      return event.properties.sessionID
+    case 'message.part.updated':
+      return event.properties.part.sessionID
+    case 'message.part.removed':
+      return event.properties.sessionID
+    case 'permission.updated':
+      return event.properties.sessionID
+    case 'permission.replied':
+      return event.properties.sessionID
+    case 'session.status':
+      return event.properties.sessionID
+    case 'session.idle':
+      return event.properties.sessionID
+    case 'session.compacted':
+      return event.properties.sessionID
+    case 'todo.updated':
+      return event.properties.sessionID
+    case 'command.executed':
+      return event.properties.sessionID
+    case 'session.created':
+      return event.properties.info.id
+    case 'session.updated':
+      return event.properties.info.id
+    case 'session.deleted':
+      return event.properties.info.id
+    case 'session.diff':
+      return event.properties.sessionID
+    case 'session.error':
+      return event.properties.sessionID
+    default:
+      return undefined
+  }
+}
+
+function formatOpenCodeEvent(event: OpenCodeEvent): string {
+  return JSON.stringify({ type: 'opencode_event', event })
+}
+
 async function listCodexSessions({ limit, offset, dir }: ListParams): Promise<Session[]> {
   const client = getCodexClient()
   const response = await client.request<CodexThreadListResponse>('thread/list', {
@@ -107,10 +189,48 @@ async function resumeCodexThread(sessionId: string): Promise<CodexThreadResumeRe
   })
 }
 
+async function listOpenCodeSessions({ dir }: ListParams): Promise<Session[]> {
+  const client = await getOpenCodeClient()
+  const response = await client.session.list({
+    ...OPENCODE_OPTIONS,
+    query: dir ? { directory: dir } : undefined,
+  })
+  const sessions = openCodeData<OpenCodeSession[]>(response)
+  const tags = await getOpenCodeStoredTagsForSessions(sessions.map((session) => session.id))
+  return sessions.map((session) => mapOpenCodeSessionToSession(session, tags[session.id] ?? null))
+}
+
+async function getOpenCodeSession(sessionId: string): Promise<OpenCodeSession> {
+  const client = await getOpenCodeClient()
+  const response = await client.session.get({
+    ...OPENCODE_OPTIONS,
+    path: { id: sessionId },
+  })
+  return openCodeData<OpenCodeSession>(response)
+}
+
+async function getOpenCodeSessionMessages(sessionId: string): Promise<Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>> {
+  const client = await getOpenCodeClient()
+  const response = await client.session.messages({
+    ...OPENCODE_OPTIONS,
+    path: { id: sessionId },
+    query: { limit: 2000 },
+  })
+  return openCodeData<Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>>(response)
+}
+
+function openCodeDirectoryQuery(session: OpenCodeSession): { directory?: string } | undefined {
+  return session.directory ? { directory: session.directory } : undefined
+}
+
 export async function listViewSessions(params: ListParams): Promise<Session[]> {
   const provider = await getConfiguredProvider()
   if (provider === 'codex') {
     return listCodexSessions(params)
+  }
+  if (provider === 'opencode') {
+    const sessions = await listOpenCodeSessions(params)
+    return sessions.slice(params.offset, params.offset + params.limit)
   }
 
   const sessions = await listSessions({
@@ -135,6 +255,19 @@ export async function readViewSessionInfo(sessionId: string): Promise<SessionInf
       getCodexStoredTag(sessionId),
     ])
     return mapCodexThreadToSessionInfo(thread, tag, resume.model)
+  }
+  if (provider === 'opencode') {
+    const [session, messages, tag] = await Promise.all([
+      getOpenCodeSession(sessionId),
+      getOpenCodeSessionMessages(sessionId),
+      getOpenCodeStoredTag(sessionId),
+    ])
+    return mapOpenCodeSessionToInfo(
+      session,
+      tag,
+      firstOpenCodePrompt(messages),
+      currentOpenCodeModelValue(messages.at(-1)?.info) ?? undefined,
+    )
   }
 
   const info = await getSessionInfo(sessionId)
@@ -163,6 +296,22 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
     }
     throw new Error('title or tag required')
   }
+  if (provider === 'opencode') {
+    const client = await getOpenCodeClient()
+    if ('title' in body) {
+      await client.session.update({
+        ...OPENCODE_OPTIONS,
+        path: { id: sessionId },
+        body: { title: typeof body.title === 'string' ? body.title : undefined },
+      })
+      return
+    }
+    if ('tag' in body) {
+      await setOpenCodeStoredTag(sessionId, typeof body.tag === 'string' ? body.tag : null)
+      return
+    }
+    throw new Error('title or tag required')
+  }
 
   if ('title' in body) {
     await renameSession(sessionId, body.title as string)
@@ -181,6 +330,10 @@ export async function listViewSessionMessages(sessionId: string, params: Message
     const thread = await readCodexThread(sessionId, true)
     const messages = mapCodexThreadToMessages(thread)
     return messages.slice(params.offset, params.offset + params.limit)
+  }
+  if (provider === 'opencode') {
+    const messages = await getOpenCodeSessionMessages(sessionId)
+    return mapOpenCodeMessagesToSessionMessages(messages).slice(params.offset, params.offset + params.limit)
   }
 
   const messages = await getSessionMessages(sessionId, params)
@@ -373,6 +526,123 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
   })
 }
 
+async function createOpenCodeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
+  const userMessage = String(body.message ?? '').trim()
+  const selectedModel = decodeOpenCodeModelValue(typeof body.model === 'string' ? body.model : null)
+  const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
+  const client = await getOpenCodeClient()
+  const encoder = new TextEncoder()
+  const abortController = new AbortController()
+
+  request.signal.addEventListener('abort', () => {
+    abortController.abort()
+    const running = getRunningSession(sessionId)
+    if (running?.provider === 'opencode') {
+      void running.interrupt().catch(() => {})
+    }
+  })
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let targetSessionId = sessionId
+      let closed = false
+      const close = () => {
+        if (closed) return
+        closed = true
+        controller.close()
+      }
+
+      try {
+        const events = await client.event.subscribe({
+          ...OPENCODE_OPTIONS,
+          signal: abortController.signal,
+        })
+
+        if (resumeSessionAt) {
+          const forkedResponse = await client.session.fork({
+            ...OPENCODE_OPTIONS,
+            path: { id: sessionId },
+            body: { messageID: resumeSessionAt },
+          })
+          targetSessionId = openCodeData<OpenCodeSession>(forkedResponse).id
+        }
+
+        controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: targetSessionId })}\n\n`))
+
+        setRunningSession(sessionId, {
+          provider: 'opencode',
+          interrupt: () => client.session.abort({
+            ...OPENCODE_OPTIONS,
+            path: { id: targetSessionId },
+          }),
+        })
+        if (targetSessionId !== sessionId) {
+          setRunningSession(targetSessionId, {
+            provider: 'opencode',
+            interrupt: () => client.session.abort({
+              ...OPENCODE_OPTIONS,
+              path: { id: targetSessionId },
+            }),
+          })
+        }
+
+        await client.session.promptAsync({
+          ...OPENCODE_OPTIONS,
+          path: { id: targetSessionId },
+          body: {
+            model: selectedModel ?? undefined,
+            parts: [{ type: 'text', text: userMessage }],
+          },
+        })
+
+        for await (const event of events.stream as AsyncGenerator<OpenCodeEvent>) {
+          const eventSessionId = openCodeEventSessionId(event)
+          if (eventSessionId && eventSessionId !== targetSessionId) continue
+
+          if (event.type === 'message.updated' && event.properties.info.role === 'assistant') {
+            const usage = mapOpenCodeContextUsage(event.properties.info)
+            if (usage) {
+              controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+            }
+          }
+
+          if (event.type === 'session.error') {
+            const message = event.properties.error?.data && 'message' in event.properties.error.data
+              ? String(event.properties.error.data.message)
+              : 'Unknown OpenCode session error'
+            controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`))
+            break
+          }
+
+          controller.enqueue(encoder.encode(`data: ${formatOpenCodeEvent(event)}\n\n`))
+
+          if (event.type === 'session.idle' && event.properties.sessionID === targetSessionId) {
+            break
+          }
+        }
+      } catch (err) {
+        if (!abortController.signal.aborted) {
+          controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
+        }
+      } finally {
+        clearRunningSession(sessionId)
+        if (targetSessionId !== sessionId) {
+          clearRunningSession(targetSessionId)
+        }
+        close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'X-Accel-Buffering': 'no',
+    },
+  })
+}
+
 export async function streamViewSessionTurn(params: SendMessageParams): Promise<Response> {
   const userMessage = String(params.body.message ?? '').trim()
   if (!userMessage) {
@@ -382,6 +652,9 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
   const provider = await getConfiguredProvider()
   if (provider === 'codex') {
     return createCodexStream(params.sessionId, params.request, params.body)
+  }
+  if (provider === 'opencode') {
+    return createOpenCodeStream(params.sessionId, params.request, params.body)
   }
 
   return createClaudeStream(params.sessionId, params.request, params.body)
@@ -402,6 +675,25 @@ export async function forkViewSession({ sessionId, body }: ForkParams): Promise<
       })
     }
     return { sessionId: response.thread.id }
+  }
+  if (provider === 'opencode') {
+    const client = await getOpenCodeClient()
+    const forkedResponse = await client.session.fork({
+      ...OPENCODE_OPTIONS,
+      path: { id: sessionId },
+      body: {
+        messageID: typeof body.upToMessageId === 'string' ? body.upToMessageId : undefined,
+      },
+    })
+    const forked = openCodeData<OpenCodeSession>(forkedResponse)
+    if (typeof body.title === 'string' && body.title.trim()) {
+      await client.session.update({
+        ...OPENCODE_OPTIONS,
+        path: { id: forked.id },
+        body: { title: body.title.trim() },
+      })
+    }
+    return { sessionId: forked.id }
   }
 
   const result = await forkSession(sessionId, {
@@ -430,6 +722,21 @@ export async function readViewSessionModels(sessionId: string): Promise<{ models
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
       currentModel: resume.model,
+    }
+  }
+  if (provider === 'opencode') {
+    const client = await getOpenCodeClient()
+    const session = await getOpenCodeSession(sessionId)
+    const [configResponse, messages] = await Promise.all([
+      client.config.providers({
+        ...OPENCODE_OPTIONS,
+        query: openCodeDirectoryQuery(session),
+      }),
+      getOpenCodeSessionMessages(sessionId),
+    ])
+    return {
+      models: mapOpenCodeModelsToSessionModels(openCodeData<OpenCodeConfigProvidersResponse>(configResponse)),
+      currentModel: currentOpenCodeModelValue(messages.at(-1)?.info),
     }
   }
 
@@ -472,6 +779,50 @@ export async function readViewSessionDiagnostics(sessionId: string): Promise<{ s
         apps: apps.data,
       }),
       currentModel: resume.model,
+    }
+  }
+  if (provider === 'opencode') {
+    const client = await getOpenCodeClient()
+    const session = await getOpenCodeSession(sessionId)
+    const query = openCodeDirectoryQuery(session)
+    const [providers, commands, agents, lsp, formatters, mcp, messages] = await Promise.all([
+      client.config.providers({
+        ...OPENCODE_OPTIONS,
+        query,
+      }),
+      client.command.list({
+        ...OPENCODE_OPTIONS,
+        query,
+      }),
+      client.app.agents({
+        ...OPENCODE_OPTIONS,
+        query,
+      }),
+      client.lsp.status({
+        ...OPENCODE_OPTIONS,
+        query,
+      }),
+      client.formatter.status({
+        ...OPENCODE_OPTIONS,
+        query,
+      }),
+      client.mcp.status({
+        ...OPENCODE_OPTIONS,
+        query,
+      }),
+      getOpenCodeSessionMessages(sessionId),
+    ])
+
+    return {
+      currentModel: currentOpenCodeModelValue(messages.at(-1)?.info),
+      sections: mapOpenCodeDiagnosticsToSections({
+        providers: openCodeData<OpenCodeConfigProvidersResponse>(providers),
+        commands: openCodeData<OpenCodeCommand[]>(commands),
+        agents: openCodeData<OpenCodeAgent[]>(agents),
+        lsp: openCodeData<OpenCodeLspStatus[]>(lsp),
+        formatters: openCodeData<OpenCodeFormatterStatus[]>(formatters),
+        mcp: openCodeData<Record<string, OpenCodeMcpStatus>>(mcp),
+      }),
     }
   }
 
@@ -546,6 +897,40 @@ export async function rewindOrRollbackViewSession({ sessionId, body }: RewindPar
       canRollback: true,
       turnsRemoved: removedTurns,
       remainingTurns: result.thread.turns.length,
+    }
+  }
+  if (provider === 'opencode') {
+    const userMessageId = typeof body.userMessageId === 'string' ? body.userMessageId : undefined
+    if (!userMessageId) {
+      throw new Error('userMessageId is required')
+    }
+
+    const client = await getOpenCodeClient()
+    const diffResponse = await client.session.diff({
+      ...OPENCODE_OPTIONS,
+      path: { id: sessionId },
+      query: { messageID: userMessageId },
+    })
+    const filesChanged = summarizeOpenCodeDiffs(openCodeData<OpenCodeFileDiff[]>(diffResponse))
+
+    if (body.dryRun) {
+      return {
+        mode: 'rewind',
+        canRewind: true,
+        filesChanged,
+      }
+    }
+
+    await client.session.revert({
+      ...OPENCODE_OPTIONS,
+      path: { id: sessionId },
+      body: { messageID: userMessageId },
+    })
+
+    return {
+      mode: 'rewind',
+      canRewind: true,
+      filesChanged,
     }
   }
 

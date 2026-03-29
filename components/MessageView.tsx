@@ -119,6 +119,24 @@ function extractStreamingAssistantText(payload: unknown): string | null {
       : null
   }
 
+  if (record.type === 'opencode_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message.part.updated') return null
+
+    const properties = eventRecord.properties
+    if (!properties || typeof properties !== 'object') return null
+    const propertiesRecord = properties as Record<string, unknown>
+    const part = propertiesRecord.part
+    if (!part || typeof part !== 'object') return null
+    const partRecord = part as Record<string, unknown>
+
+    return partRecord.type === 'text' && typeof propertiesRecord.delta === 'string'
+      ? propertiesRecord.delta
+      : null
+  }
+
   if (record.type === 'assistant') {
     const message = record.message
     if (!message || typeof message !== 'object') return null
@@ -160,6 +178,20 @@ function codexItemToolLabel(item: Record<string, unknown>): { label: string; det
   }
 }
 
+function opencodeToolLabel(item: Record<string, unknown>): { label: string; detail?: string } | null {
+  if (item.type !== 'tool' || typeof item.tool !== 'string') return null
+
+  const state = item.state
+  const detail = state && typeof state === 'object' && typeof (state as Record<string, unknown>).title === 'string'
+    ? (state as Record<string, unknown>).title as string
+    : undefined
+
+  return {
+    label: formatToolLabel(item.tool),
+    detail,
+  }
+}
+
 function extractLiveToolStart(payload: unknown): { index: number; key: string; label: string; detail?: string } | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
@@ -174,6 +206,36 @@ function extractLiveToolStart(payload: unknown): { index: number; key: string; l
     return {
       index: 0,
       key: itemId,
+      label: tool.label,
+      detail: tool.detail,
+    }
+  }
+
+  if (record.type === 'opencode_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message.part.updated') return null
+
+    const properties = eventRecord.properties
+    if (!properties || typeof properties !== 'object') return null
+    const propertiesRecord = properties as Record<string, unknown>
+    const part = propertiesRecord.part
+    if (!part || typeof part !== 'object') return null
+    const partRecord = part as Record<string, unknown>
+    const tool = opencodeToolLabel(partRecord)
+    if (!tool) return null
+
+    const state = partRecord.state
+    if (!state || typeof state !== 'object') return null
+    const status = typeof (state as Record<string, unknown>).status === 'string'
+      ? ((state as Record<string, unknown>).status as string)
+      : ''
+    if (!['pending', 'running', 'completed', 'error'].includes(status)) return null
+
+    return {
+      index: -1,
+      key: typeof partRecord.callID === 'string' ? partRecord.callID : String(partRecord.id ?? 'tool'),
       label: tool.label,
       detail: tool.detail,
     }
@@ -225,15 +287,51 @@ function extractLiveToolStopIndex(payload: unknown): number | null {
     : null
 }
 
-function extractCodexCompletedToolKey(payload: unknown): string | null {
+function extractCompletedToolKey(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
-  if (record.type !== 'codex_item_completed') return null
-  const item = record.item
-  if (!item || typeof item !== 'object') return null
-  const itemRecord = item as Record<string, unknown>
-  const tool = codexItemToolLabel(itemRecord)
-  return tool && typeof itemRecord.id === 'string' ? itemRecord.id : null
+
+  if (record.type === 'codex_item_completed') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return null
+    const itemRecord = item as Record<string, unknown>
+    const tool = codexItemToolLabel(itemRecord)
+    return tool && typeof itemRecord.id === 'string' ? itemRecord.id : null
+  }
+
+  if (record.type === 'opencode_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message.part.updated') return null
+
+    const properties = eventRecord.properties
+    if (!properties || typeof properties !== 'object') return null
+    const propertiesRecord = properties as Record<string, unknown>
+    const part = propertiesRecord.part
+    if (!part || typeof part !== 'object') return null
+    const partRecord = part as Record<string, unknown>
+    const tool = opencodeToolLabel(partRecord)
+    if (!tool) return null
+
+    const state = partRecord.state
+    if (!state || typeof state !== 'object') return null
+    const status = typeof (state as Record<string, unknown>).status === 'string'
+      ? ((state as Record<string, unknown>).status as string)
+      : ''
+
+    return status === 'completed' || status === 'error'
+      ? (typeof partRecord.callID === 'string' ? partRecord.callID : String(partRecord.id ?? 'tool'))
+      : null
+  }
+
+  return null
+}
+
+function assistantDisplayName(provider: Session['provider'] | SessionInfo['provider'] | undefined): string {
+  if (provider === 'codex') return 'Codex'
+  if (provider === 'opencode') return 'OpenCode'
+  return 'Claude'
 }
 
 export default function MessageView({ messages, loading, session, projectView, onFork }: Props) {
@@ -269,7 +367,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; sessionId: string } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
-  const assistantName = sessionInfo?.provider === 'codex' || session?.provider === 'codex' ? 'Codex' : 'Claude'
+  const assistantName = assistantDisplayName(sessionInfo?.provider ?? session?.provider)
 
   // Load session info (git branch, summary, etc.) when session changes
   useEffect(() => {
@@ -472,7 +570,7 @@ export default function MessageView({ messages, loading, session, projectView, o
             const parsed = JSON.parse(frame.data)
             const toolStart = extractLiveToolStart(parsed)
             if (toolStart) {
-              if (parsed.type !== 'codex_item_started') {
+              if (parsed.type === 'stream_event') {
                 liveToolIndexesRef.current.set(toolStart.index, toolStart.key)
               }
               setLiveToolActivities((prev) => {
@@ -481,10 +579,10 @@ export default function MessageView({ messages, loading, session, projectView, o
               })
             }
 
-            const codexCompletedToolKey = extractCodexCompletedToolKey(parsed)
-            if (codexCompletedToolKey) {
+            const completedToolKey = extractCompletedToolKey(parsed)
+            if (completedToolKey) {
               setLiveToolActivities((prev) => prev.map((activity) =>
-                activity.key === codexCompletedToolKey
+                activity.key === completedToolKey
                   ? { ...activity, status: 'done' }
                   : activity
               ))
@@ -662,13 +760,12 @@ export default function MessageView({ messages, loading, session, projectView, o
   const rewindCandidates = (sessionCapabilities?.fileRewind ? messages : [])
     .filter((msg) =>
       msg.type === 'user'
-      && typeof msg.message.content === 'string'
-      && msg.message.content.trim() !== ''
-      && !msg.message.content.trimStart().startsWith('<task-notification>')
+      && extractTextContent(msg.message.content).trim() !== ''
+      && !extractTextContent(msg.message.content).trimStart().startsWith('<task-notification>')
     )
     .map((msg) => ({
       uuid: msg.uuid,
-      content: msg.message.content as string,
+      content: extractTextContent(msg.message.content),
       timestamp: msg.timestamp,
     }))
   const selectedRewindTarget = rewindCandidates.find((candidate) => candidate.uuid === rewindTargetId) ?? null

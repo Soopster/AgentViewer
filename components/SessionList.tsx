@@ -607,6 +607,25 @@ export default function SessionList({
           >
             CODEX
           </button>
+          <button
+            onClick={() => onChangeProvider('opencode')}
+            disabled={switchingProvider}
+            style={{
+              flex: 1,
+              height: 28,
+              borderRadius: 5,
+              border: `1px solid ${provider === 'opencode' ? 'rgba(45,212,160,0.32)' : 'var(--border)'}`,
+              background: provider === 'opencode' ? 'rgba(45,212,160,0.12)' : 'var(--surface-2)',
+              color: provider === 'opencode' ? 'var(--green)' : 'var(--text-3)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.06em',
+              cursor: switchingProvider ? 'not-allowed' : 'pointer',
+              opacity: switchingProvider ? 0.6 : 1,
+            }}
+          >
+            OPENCODE
+          </button>
         </div>
         <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
           <input

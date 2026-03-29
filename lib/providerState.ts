@@ -5,14 +5,18 @@ import type { AgentProvider } from './types'
 const PROVIDER_FILE = path.join(process.cwd(), '.agent-viewer-data', 'provider.json')
 
 export function getDefaultProvider(): AgentProvider {
-  return process.env.AGENT_VIEWER_PROVIDER === 'codex' ? 'codex' : 'claude'
+  if (process.env.AGENT_VIEWER_PROVIDER === 'codex') return 'codex'
+  if (process.env.AGENT_VIEWER_PROVIDER === 'opencode') return 'opencode'
+  return 'claude'
 }
 
 export async function getConfiguredProvider(): Promise<AgentProvider> {
   try {
     const contents = await readFile(PROVIDER_FILE, 'utf8')
     const parsed = JSON.parse(contents) as { provider?: unknown }
-    return parsed.provider === 'codex' ? 'codex' : 'claude'
+    if (parsed.provider === 'codex') return 'codex'
+    if (parsed.provider === 'opencode') return 'opencode'
+    return 'claude'
   } catch {
     return getDefaultProvider()
   }

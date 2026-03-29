@@ -44,7 +44,7 @@ export default function Home() {
     const r = await fetch('/api/provider')
     const data = await r.json()
     if (data.error) throw new Error(data.error)
-    setProvider(data.provider === 'codex' ? 'codex' : 'claude')
+    setProvider(data.provider === 'codex' || data.provider === 'opencode' ? data.provider : 'claude')
   }, [])
 
   // Keep ref in sync with state (avoids stale closures inside setInterval)

@@ -14,8 +14,8 @@ export async function GET() {
 export async function PATCH(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
   const provider = body?.provider
-  if (provider !== 'claude' && provider !== 'codex') {
-    return NextResponse.json({ error: 'provider must be claude or codex' }, { status: 400 })
+  if (provider !== 'claude' && provider !== 'codex' && provider !== 'opencode') {
+    return NextResponse.json({ error: 'provider must be claude, codex, or opencode' }, { status: 400 })
   }
 
   try {

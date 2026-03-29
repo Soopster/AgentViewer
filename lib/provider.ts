@@ -14,10 +14,21 @@ export const CODEX_CAPABILITIES: SessionCapabilities = {
   rollback: true,
 }
 
+export const OPENCODE_CAPABILITIES: SessionCapabilities = {
+  messageFork: true,
+  resumeAtMessage: true,
+  fileRewind: true,
+  rollback: false,
+}
+
 export function getProviderCapabilities(provider: AgentProvider): SessionCapabilities {
-  return provider === 'codex' ? CODEX_CAPABILITIES : CLAUDE_CAPABILITIES
+  if (provider === 'codex') return CODEX_CAPABILITIES
+  if (provider === 'opencode') return OPENCODE_CAPABILITIES
+  return CLAUDE_CAPABILITIES
 }
 
 export function getAssistantLabel(provider: AgentProvider | undefined): string {
-  return provider === 'codex' ? 'CODEX' : 'CLAUDE'
+  if (provider === 'codex') return 'CODEX'
+  if (provider === 'opencode') return 'OPENCODE'
+  return 'CLAUDE'
 }

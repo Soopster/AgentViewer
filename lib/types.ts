@@ -39,7 +39,7 @@ export type ApiMessage = {
   }
 }
 
-export type AgentProvider = 'claude' | 'codex'
+export type AgentProvider = 'claude' | 'codex' | 'opencode'
 
 export type SessionCapabilities = {
   messageFork: boolean
