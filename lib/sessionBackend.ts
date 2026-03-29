@@ -499,6 +499,7 @@ function createClaudeStream(sessionId: string, request: NextRequest, body: Recor
           enableFileCheckpointing: true,
           resumeSessionAt,
           forkSession: forkSessionOnSend,
+          includePartialMessages: true,
         },
       })
 
