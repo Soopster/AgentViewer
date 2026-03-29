@@ -3,11 +3,13 @@
 import { useState, useEffect, useRef } from 'react'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
+import { CodeThemeProvider } from '@/components/CodeThemeContext'
 import type { Session, SessionMessage } from '@/lib/types'
 
 export default function Home() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedProject, setSelectedProject] = useState<{ key: string; sessions: Session[] } | null>(null)
   const [messages, setMessages] = useState<SessionMessage[]>([])
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -41,7 +43,7 @@ export default function Home() {
     return () => clearInterval(id)
   }, [])
 
-  // Poll active session for new messages every 2 s (incremental via offset)
+  // Poll active single session for new messages every 2 s (incremental via offset)
   useEffect(() => {
     if (!selectedId || loadingMessages) return
     const id = setInterval(async () => {
@@ -57,8 +59,27 @@ export default function Home() {
     return () => clearInterval(id)
   }, [selectedId, loadingMessages])
 
+  // Poll project view every 10 s (full refresh across all sessions)
+  useEffect(() => {
+    if (!selectedProject) return
+    const id = setInterval(async () => {
+      try {
+        const results = await Promise.all(
+          selectedProject.sessions.map((s) =>
+            fetch(`/api/sessions/${s.sessionId}/messages`).then((r) => r.json())
+          )
+        )
+        const all = results.flatMap((d) => d.messages ?? []) as SessionMessage[]
+        all.sort((a, b) => (a.timestamp ?? '').localeCompare(b.timestamp ?? ''))
+        setMessages(all)
+      } catch { /* ignore transient errors */ }
+    }, 10_000)
+    return () => clearInterval(id)
+  }, [selectedProject])
+
   async function selectSession(sessionId: string) {
     setSelectedId(sessionId)
+    setSelectedProject(null)
     setLoadingMessages(true)
     setMessages([])
     try {
@@ -73,22 +94,48 @@ export default function Home() {
     }
   }
 
-  const selectedSession = sessions.find((s) => s.sessionId === selectedId)
+  async function selectProject(key: string, projectSessions: Session[]) {
+    setSelectedProject({ key, sessions: projectSessions })
+    setSelectedId(null)
+    setLoadingMessages(true)
+    setMessages([])
+    try {
+      const results = await Promise.all(
+        projectSessions.map((s) =>
+          fetch(`/api/sessions/${s.sessionId}/messages`).then((r) => r.json())
+        )
+      )
+      const all = results.flatMap((d) => d.messages ?? []) as SessionMessage[]
+      all.sort((a, b) => (a.timestamp ?? '').localeCompare(b.timestamp ?? ''))
+      setMessages(all)
+    } catch (err) {
+      console.error('Failed to load project messages:', err)
+    } finally {
+      setLoadingMessages(false)
+    }
+  }
+
+  const selectedSession = sessions.find((s) => s.sessionId === selectedId) ?? null
 
   return (
+    <CodeThemeProvider>
     <div style={{ display: 'flex', height: '100vh' }}>
       <SessionList
         sessions={sessions}
         loading={loadingSessions}
         error={sessionsError}
         selectedId={selectedId}
+        selectedProject={selectedProject?.key ?? null}
         onSelect={selectSession}
+        onSelectProject={selectProject}
       />
       <MessageView
         messages={messages}
         loading={loadingMessages}
-        session={selectedSession ?? null}
+        session={selectedSession}
+        projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length } : undefined}
       />
     </div>
+    </CodeThemeProvider>
   )
 }

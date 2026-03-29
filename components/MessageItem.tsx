@@ -4,43 +4,44 @@ import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { diffLines } from 'diff'
-import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
-import bash from 'react-syntax-highlighter/dist/esm/languages/hljs/bash'
-import c from 'react-syntax-highlighter/dist/esm/languages/hljs/c'
-import cpp from 'react-syntax-highlighter/dist/esm/languages/hljs/cpp'
-import csharp from 'react-syntax-highlighter/dist/esm/languages/hljs/csharp'
-import css from 'react-syntax-highlighter/dist/esm/languages/hljs/css'
-import dart from 'react-syntax-highlighter/dist/esm/languages/hljs/dart'
-import diff from 'react-syntax-highlighter/dist/esm/languages/hljs/diff'
-import dockerfile from 'react-syntax-highlighter/dist/esm/languages/hljs/dockerfile'
-import go from 'react-syntax-highlighter/dist/esm/languages/hljs/go'
-import ini from 'react-syntax-highlighter/dist/esm/languages/hljs/ini'
-import java from 'react-syntax-highlighter/dist/esm/languages/hljs/java'
-import javascript from 'react-syntax-highlighter/dist/esm/languages/hljs/javascript'
-import json from 'react-syntax-highlighter/dist/esm/languages/hljs/json'
-import kotlin from 'react-syntax-highlighter/dist/esm/languages/hljs/kotlin'
-import markdown from 'react-syntax-highlighter/dist/esm/languages/hljs/markdown'
-import php from 'react-syntax-highlighter/dist/esm/languages/hljs/php'
-import powershell from 'react-syntax-highlighter/dist/esm/languages/hljs/powershell'
-import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
-import ruby from 'react-syntax-highlighter/dist/esm/languages/hljs/ruby'
-import rust from 'react-syntax-highlighter/dist/esm/languages/hljs/rust'
-import scss from 'react-syntax-highlighter/dist/esm/languages/hljs/scss'
-import shell from 'react-syntax-highlighter/dist/esm/languages/hljs/shell'
-import sql from 'react-syntax-highlighter/dist/esm/languages/hljs/sql'
-import swift from 'react-syntax-highlighter/dist/esm/languages/hljs/swift'
-import typescript from 'react-syntax-highlighter/dist/esm/languages/hljs/typescript'
-import xml from 'react-syntax-highlighter/dist/esm/languages/hljs/xml'
-import yaml from 'react-syntax-highlighter/dist/esm/languages/hljs/yaml'
+import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
+import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
+import c from 'react-syntax-highlighter/dist/esm/languages/prism/c'
+import cpp from 'react-syntax-highlighter/dist/esm/languages/prism/cpp'
+import csharp from 'react-syntax-highlighter/dist/esm/languages/prism/csharp'
+import css from 'react-syntax-highlighter/dist/esm/languages/prism/css'
+import dart from 'react-syntax-highlighter/dist/esm/languages/prism/dart'
+import diff from 'react-syntax-highlighter/dist/esm/languages/prism/diff'
+import docker from 'react-syntax-highlighter/dist/esm/languages/prism/docker'
+import go from 'react-syntax-highlighter/dist/esm/languages/prism/go'
+import ini from 'react-syntax-highlighter/dist/esm/languages/prism/ini'
+import java from 'react-syntax-highlighter/dist/esm/languages/prism/java'
+import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript'
+import json from 'react-syntax-highlighter/dist/esm/languages/prism/json'
+import jsx from 'react-syntax-highlighter/dist/esm/languages/prism/jsx'
+import kotlin from 'react-syntax-highlighter/dist/esm/languages/prism/kotlin'
+import markdown from 'react-syntax-highlighter/dist/esm/languages/prism/markdown'
+import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup'
+import php from 'react-syntax-highlighter/dist/esm/languages/prism/php'
+import powershell from 'react-syntax-highlighter/dist/esm/languages/prism/powershell'
+import python from 'react-syntax-highlighter/dist/esm/languages/prism/python'
+import ruby from 'react-syntax-highlighter/dist/esm/languages/prism/ruby'
+import rust from 'react-syntax-highlighter/dist/esm/languages/prism/rust'
+import scss from 'react-syntax-highlighter/dist/esm/languages/prism/scss'
+import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql'
+import swift from 'react-syntax-highlighter/dist/esm/languages/prism/swift'
+import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx'
+import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
+import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import type { Components } from 'react-markdown'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
+import { useCodeTheme } from './CodeThemeContext'
 
 SyntaxHighlighter.registerLanguage('bash', bash)
 SyntaxHighlighter.registerLanguage('sh', bash)
 SyntaxHighlighter.registerLanguage('zsh', bash)
-SyntaxHighlighter.registerLanguage('shell', shell)
+SyntaxHighlighter.registerLanguage('shell', bash)
 SyntaxHighlighter.registerLanguage('c', c)
 SyntaxHighlighter.registerLanguage('cpp', cpp)
 SyntaxHighlighter.registerLanguage('csharp', csharp)
@@ -49,8 +50,8 @@ SyntaxHighlighter.registerLanguage('css', css)
 SyntaxHighlighter.registerLanguage('dart', dart)
 SyntaxHighlighter.registerLanguage('scss', scss)
 SyntaxHighlighter.registerLanguage('diff', diff)
-SyntaxHighlighter.registerLanguage('dockerfile', dockerfile)
-SyntaxHighlighter.registerLanguage('docker', dockerfile)
+SyntaxHighlighter.registerLanguage('dockerfile', docker)
+SyntaxHighlighter.registerLanguage('docker', docker)
 SyntaxHighlighter.registerLanguage('go', go)
 SyntaxHighlighter.registerLanguage('java', java)
 SyntaxHighlighter.registerLanguage('ini', ini)
@@ -58,14 +59,14 @@ SyntaxHighlighter.registerLanguage('toml', ini)
 SyntaxHighlighter.registerLanguage('javascript', javascript)
 SyntaxHighlighter.registerLanguage('js', javascript)
 SyntaxHighlighter.registerLanguage('json', json)
-SyntaxHighlighter.registerLanguage('jsx', xml)
+SyntaxHighlighter.registerLanguage('jsx', jsx)
 SyntaxHighlighter.registerLanguage('kotlin', kotlin)
 SyntaxHighlighter.registerLanguage('kt', kotlin)
 SyntaxHighlighter.registerLanguage('markdown', markdown)
 SyntaxHighlighter.registerLanguage('md', markdown)
-SyntaxHighlighter.registerLanguage('html', xml)
-SyntaxHighlighter.registerLanguage('xml', xml)
-SyntaxHighlighter.registerLanguage('svg', xml)
+SyntaxHighlighter.registerLanguage('html', markup)
+SyntaxHighlighter.registerLanguage('xml', markup)
+SyntaxHighlighter.registerLanguage('svg', markup)
 SyntaxHighlighter.registerLanguage('php', php)
 SyntaxHighlighter.registerLanguage('powershell', powershell)
 SyntaxHighlighter.registerLanguage('ps1', powershell)
@@ -77,7 +78,7 @@ SyntaxHighlighter.registerLanguage('rust', rust)
 SyntaxHighlighter.registerLanguage('rs', rust)
 SyntaxHighlighter.registerLanguage('sql', sql)
 SyntaxHighlighter.registerLanguage('swift', swift)
-SyntaxHighlighter.registerLanguage('tsx', xml)
+SyntaxHighlighter.registerLanguage('tsx', tsx)
 SyntaxHighlighter.registerLanguage('typescript', typescript)
 SyntaxHighlighter.registerLanguage('ts', typescript)
 SyntaxHighlighter.registerLanguage('yaml', yaml)
@@ -104,6 +105,50 @@ function toolColor(name: string) {
 }
 
 // ── Markdown components ───────────────────────────────────────────────────────
+
+function MarkdownCodeBlock({ className, children, ...rest }: React.ComponentPropsWithoutRef<'code'>) {
+  const { style: codeStyle } = useCodeTheme()
+  const language = className?.replace('language-', '') ?? ''
+  const isFenced = !!className
+  if (isFenced) {
+    const codeString = String(children).replace(/\n$/, '')
+    return (
+      <div style={{ margin: '10px 0', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
+        {language && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+            padding: '3px 12px',
+            background: 'var(--surface-2)',
+            borderBottom: '1px solid var(--border)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10, color: 'var(--text-3)',
+            letterSpacing: '0.06em',
+          }}>
+            {language}
+          </div>
+        )}
+        <SyntaxHighlighter
+          language={language || undefined}
+          style={codeStyle}
+          customStyle={{
+            margin: 0,
+            padding: '12px 16px',
+            fontSize: 13,
+            lineHeight: 1.65,
+            overflowX: 'auto',
+          }}
+        >
+          {codeString}
+        </SyntaxHighlighter>
+      </div>
+    )
+  }
+  return (
+    <code style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, background: 'var(--surface-3)', color: 'var(--violet)', padding: '2px 6px', borderRadius: 3 }} {...rest}>
+      {children}
+    </code>
+  )
+}
 
 const mdComponents: Components = {
   p:          ({ children }) => (
@@ -157,49 +202,7 @@ const mdComponents: Components = {
   td: ({ children }) => (
     <td style={{ padding: '6px 14px', borderBottom: '1px solid var(--border)' }}>{children}</td>
   ),
-  code: ({ className, children, ...rest }) => {
-    const language = className?.replace('language-', '') ?? ''
-    const isFenced = !!className
-    if (isFenced) {
-      const codeString = String(children).replace(/\n$/, '')
-      return (
-        <div style={{ margin: '10px 0', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
-          {language && (
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
-              padding: '3px 12px',
-              background: 'var(--surface-2)',
-              borderBottom: '1px solid var(--border)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10, color: 'var(--text-3)',
-              letterSpacing: '0.06em',
-            }}>
-              {language}
-            </div>
-          )}
-          <SyntaxHighlighter
-            language={language || undefined}
-            style={atomOneDark}
-            customStyle={{
-              margin: 0,
-              padding: '12px 16px',
-              fontSize: 13,
-              lineHeight: 1.65,
-              background: 'var(--surface)',
-              overflowX: 'auto',
-            }}
-          >
-            {codeString}
-          </SyntaxHighlighter>
-        </div>
-      )
-    }
-    return (
-      <code style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, background: 'var(--surface-3)', color: 'var(--violet)', padding: '2px 6px', borderRadius: 3 }} {...rest}>
-        {children}
-      </code>
-    )
-  },
+  code: MarkdownCodeBlock,
   pre: ({ children }) => <>{children}</>,
 }
 
@@ -299,12 +302,13 @@ function CodeViewer({
   showLineNumbers?: boolean
   startingLineNumber?: number
 }) {
+  const { style: codeStyle } = useCodeTheme()
   const resolvedLanguage = language ?? detectLanguageFromPath(filePath)
 
   return (
     <SyntaxHighlighter
       language={resolvedLanguage || undefined}
-      style={atomOneDark}
+      style={codeStyle}
       showLineNumbers={showLineNumbers}
       startingLineNumber={startingLineNumber}
       wrapLongLines={false}
@@ -313,7 +317,6 @@ function CodeViewer({
         padding: '10px 14px',
         fontSize: 13,
         lineHeight: 1.6,
-        background: 'var(--surface)',
         overflowX: 'auto',
         overflowY: maxHeight ? 'auto' : undefined,
         maxHeight,
@@ -366,53 +369,68 @@ function CardShell({
 
 // ── Diff view ─────────────────────────────────────────────────────────────────
 
-function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
-  const changes = diffLines(oldStr, newStr)
+function DiffView({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath?: string }) {
+  const { style: codeStyle } = useCodeTheme()
+  const language = detectLanguageFromPath(filePath)
+  const changes  = diffLines(oldStr, newStr)
 
   return (
-    <div
-      style={{
-        fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: 13,
-        lineHeight: 1.6,
-        overflowX: 'auto',
-        maxHeight: 500,
-        overflowY: 'auto',
-        background: 'var(--surface)',
-        borderTop: '1px solid var(--border)',
-      }}
-    >
+    <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto', borderTop: '1px solid var(--border)' }}>
       {changes.map((change, ci) => {
-        const lines = change.value.split('\n')
-        if (lines[lines.length - 1] === '') lines.pop()
+        const chunkLines = change.value.split('\n')
+        if (chunkLines[chunkLines.length - 1] === '') chunkLines.pop()
+        if (chunkLines.length === 0) return null
 
         const isAdd = change.added
         const isDel = change.removed
-        const bg     = isAdd ? 'rgba(45,212,160,0.07)' : isDel ? 'rgba(240,96,96,0.07)' : 'transparent'
-        const color  = isAdd ? 'var(--green)'          : isDel ? 'var(--red)'            : 'var(--text-3)'
-        const gutter = isAdd ? 'rgba(45,212,160,0.15)' : isDel ? 'rgba(240,96,96,0.15)'  : 'transparent'
-        const sign   = isAdd ? '+' : isDel ? '−' : ' '
+        const sign      = isAdd ? '+' : isDel ? '−' : ' '
+        const signColor = isAdd ? 'var(--green)' : isDel ? 'var(--red)' : 'var(--text-3)'
+        const bgTint    = isAdd ? 'rgba(45,212,160,0.10)' : isDel ? 'rgba(240,96,96,0.10)' : 'transparent'
+        const gutterBg  = isAdd ? 'rgba(45,212,160,0.18)' : isDel ? 'rgba(240,96,96,0.18)' : 'var(--surface-2)'
+        const borderL   = isAdd ? '2px solid rgba(45,212,160,0.45)' : isDel ? '2px solid rgba(240,96,96,0.45)' : '2px solid transparent'
 
-        return lines.map((line, li) => (
-          <div key={`${ci}-${li}`} style={{ display: 'flex', background: bg }}>
-            <span
-              style={{
-                width: 26,
-                flexShrink: 0,
-                textAlign: 'center',
-                background: gutter,
-                color,
-                userSelect: 'none',
-                fontSize: 11,
-                borderRight: '1px solid var(--border)',
-                lineHeight: '1.55em',
-              }}
-            >
-              {sign}
-            </span>
-            <span style={{ color, padding: '0 10px', whiteSpace: 'pre' }}>{line}</span>
+        return (
+          <div key={ci} style={{ display: 'flex', borderLeft: borderL }}>
+            {/* +/− gutter */}
+            <div style={{
+              flexShrink: 0, width: 22,
+              background: gutterBg,
+              borderRight: '1px solid var(--border)',
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              paddingTop: 1,
+            }}>
+              {chunkLines.map((_, li) => (
+                <span key={li} style={{
+                  display: 'block',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11, lineHeight: '1.6em',
+                  color: signColor, userSelect: 'none',
+                }}>
+                  {sign}
+                </span>
+              ))}
+            </div>
+            {/* Highlighted code */}
+            <div style={{ flex: 1, minWidth: 0, background: bgTint }}>
+              <SyntaxHighlighter
+                language={language || undefined}
+                style={codeStyle}
+                wrapLongLines={false}
+                customStyle={{
+                  margin: 0, padding: '0 10px',
+                  // Transparent only for tinted chunks so bgTint shows through;
+                  // context chunks let the Prism theme control its own background.
+                  ...(isAdd || isDel ? { backgroundColor: 'transparent' } : {}),
+                  fontSize: 13, lineHeight: 1.6,
+                  overflowX: 'visible',
+                }}
+                codeTagProps={{ style: { fontFamily: "'IBM Plex Mono', monospace" } }}
+              >
+                {chunkLines.join('\n')}
+              </SyntaxHighlighter>
+            </div>
           </div>
-        ))
+        )
       })}
     </div>
   )
@@ -462,7 +480,7 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
           <div style={{ padding: '2px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {filePath}
           </div>
-          <DiffView oldStr={oldStr} newStr={newStr} />
+          <DiffView oldStr={oldStr} newStr={newStr} filePath={filePath} />
         </>
       ) : undefined}
     />
@@ -1288,7 +1306,7 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
                   )}
                 </div>
               )}
-              <DiffView oldStr={edit.old_string ?? ''} newStr={edit.new_string ?? ''} />
+              <DiffView oldStr={edit.old_string ?? ''} newStr={edit.new_string ?? ''} filePath={filePath} />
             </div>
           ))}
         </>
@@ -2582,7 +2600,7 @@ const ROLE_STYLE = {
   user:      { dot: 'var(--cyan)',   glow: 'var(--cyan-glow)',   label: 'USER',   labelColor: 'var(--cyan)'   },
 } as const
 
-export default function MessageItem({ message }: { message: ThreadedMessage }) {
+export default function MessageItem({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {
   const style = ROLE_STYLE[message.role]
 
   return (
@@ -2662,6 +2680,22 @@ export default function MessageItem({ message }: { message: ThreadedMessage }) {
               }}
             >
               {message.origin.kind.toUpperCase()}
+            </span>
+          )}
+          {showSession && message.sessionId && (
+            <span
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                letterSpacing: '0.06em',
+                color: 'var(--text-3)',
+                background: 'var(--surface-3)',
+                border: '1px solid var(--border)',
+                borderRadius: 3,
+                padding: '1px 6px',
+              }}
+            >
+              {message.sessionId.slice(-10)}
             </span>
           )}
         </div>

@@ -51,6 +51,7 @@ export type ThreadedBlock = TextBlock | ThinkingBlock | ImageBlock | ToolThread 
 export type ThreadedMessage = {
   role: 'user' | 'assistant'
   uuid: string
+  sessionId?: string
   timestamp?: string
   origin?: { kind: string }
   usage?: ApiMessage['usage']
@@ -210,7 +211,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
     if (msg.type === 'user' && typeof msg.message.content === 'string') {
       const notif = parseTaskNotification(msg.message.content)
       if (notif) {
-        out.push({ role: 'user', uuid: msg.uuid, timestamp: msg.timestamp, origin: msg.origin, blocks: [notif] })
+        out.push({ role: 'user', uuid: msg.uuid, sessionId: msg.session_id, timestamp: msg.timestamp, origin: msg.origin, blocks: [notif] })
         continue
       }
     }
@@ -248,6 +249,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
       out.push({
         role: msg.type as 'user' | 'assistant',
         uuid: msg.uuid,
+        sessionId: msg.session_id,
         timestamp: msg.timestamp,
         origin: msg.origin,
         usage: msg.message.usage,

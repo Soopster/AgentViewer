@@ -5,14 +5,16 @@ import type { SessionMessage, Session, SendState } from '@/lib/types'
 import { buildThreadedMessages } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import MessageItem from './MessageItem'
+import CodeThemeToggle from './CodeThemeToggle'
 
 type Props = {
   messages: SessionMessage[]
   loading: boolean
   session: Session | null
+  projectView?: { key: string; sessionCount: number }
 }
 
-export default function MessageView({ messages, loading, session }: Props) {
+export default function MessageView({ messages, loading, session, projectView }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
   const [sendError, setSendError] = useState<string | null>(null)
@@ -98,7 +100,7 @@ export default function MessageView({ messages, loading, session }: Props) {
     downloadHtml(html, `${safeName}_${session.sessionId.slice(0, 8)}.html`)
   }, [session, messages])
 
-  if (!session) {
+  if (!session && !projectView) {
     return (
       <div
         style={{
@@ -176,7 +178,8 @@ export default function MessageView({ messages, loading, session }: Props) {
   }
 
   const threaded = buildThreadedMessages(messages)
-  const dirName  = session.cwd?.split('/').pop() ?? session.sessionId
+  const isProject = !!projectView
+  const dirName  = projectView?.key ?? session?.cwd?.split('/').pop() ?? session?.sessionId ?? ''
 
   return (
     <div
@@ -201,7 +204,7 @@ export default function MessageView({ messages, loading, session }: Props) {
           background: 'linear-gradient(to right, rgba(139,128,240,0.05) 0%, var(--surface) 40%)',
         }}
       >
-        {/* Project name */}
+        {/* Project / session name */}
         <span
           style={{
             fontFamily: "'Oxanium', monospace",
@@ -215,8 +218,28 @@ export default function MessageView({ messages, loading, session }: Props) {
           {dirName}
         </span>
 
-        {/* Path */}
-        {session.cwd && (
+        {/* Project view badge */}
+        {isProject && (
+          <span
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              fontWeight: 600,
+              letterSpacing: '0.1em',
+              color: 'var(--violet)',
+              background: 'rgba(139,128,240,0.1)',
+              border: '1px solid rgba(139,128,240,0.25)',
+              borderRadius: 3,
+              padding: '2px 7px',
+              flexShrink: 0,
+            }}
+          >
+            ALL SESSIONS
+          </span>
+        )}
+
+        {/* Single-session path */}
+        {!isProject && session?.cwd && (
           <span
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
@@ -232,6 +255,11 @@ export default function MessageView({ messages, loading, session }: Props) {
           </span>
         )}
 
+        <span style={{ flex: 1 }} />
+
+        {/* Code theme picker */}
+        <CodeThemeToggle />
+
         {/* Stats */}
         {!loading && (
           <span
@@ -242,41 +270,45 @@ export default function MessageView({ messages, loading, session }: Props) {
               flexShrink: 0,
             }}
           >
-            {threaded.length} turns · {messages.length} events
+            {isProject
+              ? `${projectView!.sessionCount} sessions · ${threaded.length} turns`
+              : `${threaded.length} turns · ${messages.length} events`}
           </span>
         )}
 
-        {/* Export button */}
-        <button
-          onClick={handleExport}
-          title="Export session to HTML"
-          style={{
-            flexShrink: 0,
-            height: 26,
-            padding: '0 10px',
-            background: 'rgba(56,217,245,0.07)',
-            border: '1px solid rgba(56,217,245,0.18)',
-            borderRadius: 5,
-            cursor: 'pointer',
-            color: 'var(--text-3)',
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            letterSpacing: '0.08em',
-            transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-          }}
-          onMouseEnter={e => {
-            e.currentTarget.style.background    = 'rgba(56,217,245,0.13)'
-            e.currentTarget.style.color         = 'var(--cyan)'
-            e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.35)'
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.background    = 'rgba(56,217,245,0.07)'
-            e.currentTarget.style.color         = 'var(--text-3)'
-            e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.18)'
-          }}
-        >
-          EXPORT
-        </button>
+        {/* Export button (single session only) */}
+        {!isProject && (
+          <button
+            onClick={handleExport}
+            title="Export session to HTML"
+            style={{
+              flexShrink: 0,
+              height: 26,
+              padding: '0 10px',
+              background: 'rgba(56,217,245,0.07)',
+              border: '1px solid rgba(56,217,245,0.18)',
+              borderRadius: 5,
+              cursor: 'pointer',
+              color: 'var(--text-3)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.08em',
+              transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background    = 'rgba(56,217,245,0.13)'
+              e.currentTarget.style.color         = 'var(--cyan)'
+              e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.35)'
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background    = 'rgba(56,217,245,0.07)'
+              e.currentTarget.style.color         = 'var(--text-3)'
+              e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.18)'
+            }}
+          >
+            EXPORT
+          </button>
+        )}
 
         {/* Live pill */}
         <div
@@ -360,15 +392,15 @@ export default function MessageView({ messages, loading, session }: Props) {
                   animationDelay: `${Math.min(i * 16, 320)}ms`,
                 }}
               >
-                <MessageItem message={msg} />
+                <MessageItem message={msg} showSession={isProject} />
               </div>
             ))}
           </div>
         )}
       </div>
 
-      {/* ── Message input ─────────────────────────────── */}
-      <div
+      {/* ── Message input (single session only) ──────── */}
+      {!isProject && <div
         style={{
           padding: '12px 20px 16px',
           borderTop: '1px solid var(--border)',
@@ -444,7 +476,7 @@ export default function MessageView({ messages, loading, session }: Props) {
             {sendState === 'sending' ? 'SENDING…' : 'SEND'}
           </button>
         </div>
-      </div>
+      </div>}
     </div>
   )
 }

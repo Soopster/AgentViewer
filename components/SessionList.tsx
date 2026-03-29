@@ -9,7 +9,9 @@ type Props = {
   loading: boolean
   error: string | null
   selectedId: string | null
+  selectedProject: string | null
   onSelect: (id: string) => void
+  onSelectProject: (key: string, sessions: Session[]) => void
 }
 
 function timeAgo(iso: string): string {
@@ -114,22 +116,26 @@ function ProjectGroup({
   name,
   sessions,
   selectedId,
+  selectedProject,
   onSelect,
+  onSelectProject,
 }: {
   name: string
   sessions: Session[]
   selectedId: string | null
+  selectedProject: string | null
   onSelect: (id: string) => void
+  onSelectProject: (key: string, sessions: Session[]) => void
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const [hovered, setHovered] = useState(false)
-  const hasSelected = sessions.some(s => s.sessionId === selectedId)
+  const isProjectSelected = selectedProject === name
+  const hasSelected = isProjectSelected || sessions.some(s => s.sessionId === selectedId)
 
   return (
     <div>
       {/* Group header */}
       <div
-        onClick={() => setCollapsed(v => !v)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{
@@ -137,20 +143,28 @@ function ProjectGroup({
           alignItems: 'center',
           gap: 7,
           padding: '8px 14px 8px 16px',
-          cursor: 'pointer',
           userSelect: 'none',
           position: 'sticky',
           top: 0,
-          background: hovered ? 'var(--surface-3)' : 'var(--surface-2)',
+          background: isProjectSelected
+            ? 'linear-gradient(to right, rgba(139,128,240,0.12) 0%, var(--surface-2) 70%)'
+            : hovered ? 'var(--surface-3)' : 'var(--surface-2)',
           borderBottom: '1px solid var(--border)',
+          borderLeft: `2px solid ${isProjectSelected ? 'var(--violet)' : 'transparent'}`,
           zIndex: 1,
-          transition: 'background 0.14s ease',
+          transition: 'background 0.14s ease, border-left-color 0.14s ease',
         }}
       >
-        <span style={{ color: 'var(--text-3)', fontSize: 10, flexShrink: 0 }}>
+        {/* Chevron: collapses/expands */}
+        <span
+          onClick={() => setCollapsed(v => !v)}
+          style={{ color: 'var(--text-3)', fontSize: 10, flexShrink: 0, cursor: 'pointer', padding: '2px 4px 2px 0' }}
+        >
           {collapsed ? '▶' : '▼'}
         </span>
+        {/* Name: loads project consolidated view */}
         <span
+          onClick={() => onSelectProject(name, sessions)}
           style={{
             fontFamily: "'Oxanium', monospace",
             fontSize: 12,
@@ -162,6 +176,7 @@ function ProjectGroup({
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
+            cursor: 'pointer',
             transition: 'color 0.14s ease',
           }}
         >
@@ -171,9 +186,9 @@ function ProjectGroup({
           style={{
             fontFamily: "'IBM Plex Mono', monospace",
             fontSize: 11,
-            color: 'var(--text-3)',
-            background: 'var(--surface-3)',
-            border: '1px solid var(--border)',
+            color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
+            background: isProjectSelected ? 'rgba(139,128,240,0.12)' : 'var(--surface-3)',
+            border: `1px solid ${isProjectSelected ? 'rgba(139,128,240,0.3)' : 'var(--border)'}`,
             borderRadius: 3,
             padding: '1px 6px',
             flexShrink: 0,
@@ -196,7 +211,7 @@ function ProjectGroup({
   )
 }
 
-export default function SessionList({ sessions, loading, error, selectedId, onSelect }: Props) {
+export default function SessionList({ sessions, loading, error, selectedId, selectedProject, onSelect, onSelectProject }: Props) {
   const groups = groupByProject(sessions)
 
   return (
@@ -286,7 +301,9 @@ export default function SessionList({ sessions, loading, error, selectedId, onSe
             name={name}
             sessions={groupSessions}
             selectedId={selectedId}
+            selectedProject={selectedProject}
             onSelect={onSelect}
+            onSelectProject={onSelectProject}
           />
         ))}
       </div>
