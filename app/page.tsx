@@ -30,6 +30,22 @@ function messageTimestampMs(message: SessionMessage): number {
   return 0
 }
 
+function sessionMessageKey(message: SessionMessage): string {
+  return `${message.provider ?? 'claude'}:${message.uuid}`
+}
+
+function projectSessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
+  return `${session.provider ?? 'claude'}:${session.sessionId}`
+}
+
+function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): SessionMessage[] {
+  if (incoming.length === 0) return existing
+  const deduped = new Map<string, SessionMessage>()
+  for (const message of existing) deduped.set(sessionMessageKey(message), message)
+  for (const message of incoming) deduped.set(sessionMessageKey(message), message)
+  return [...deduped.values()].sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
+}
+
 export default function Home() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -44,6 +60,7 @@ export default function Home() {
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
   // Tracks how many messages we've already loaded so polling can fetch only new ones
   const msgCountRef = useRef(0)
+  const projectMessageCountsRef = useRef<Map<string, number>>(new Map())
   const selectedSession = sessions.find((s) => s.sessionId === selectedId) ?? null
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? activeProjectDir?.split('/').pop() ?? null
@@ -164,6 +181,11 @@ export default function Home() {
     setMessages([])
   }, [selectedId, sessions])
 
+  useEffect(() => {
+    if (selectedProject) return
+    projectMessageCountsRef.current.clear()
+  }, [selectedProject])
+
   // Poll active single session for new messages every 2 s (incremental via offset)
   useEffect(() => {
     if (!selectedId || loadingMessages) return
@@ -180,30 +202,47 @@ export default function Home() {
     return () => clearInterval(id)
   }, [loadingMessages, selectedId, selectedSession?.provider])
 
-  // Poll project view every 10 s (full refresh across all sessions)
+  // Poll project view every 2 s using per-session incremental fetches.
   useEffect(() => {
     if (!selectedProject) return
     const id = setInterval(async () => {
       try {
         const projectSessions = await fetchProjectSessions(selectedProject.dir, provider)
         const results = await Promise.all(
-          projectSessions.map((session) => fetchSessionMessages(session))
+          projectSessions.map(async (session) => {
+            const key = projectSessionKey(session)
+            const offset = projectMessageCountsRef.current.get(key) ?? 0
+            const limit = offset === 0 ? 2000 : 200
+            const response = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?offset=${offset}&limit=${limit}`, session.provider))
+            const data = await response.json()
+            if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
+            return {
+              key,
+              offset,
+              messages: (data.messages ?? []) as SessionMessage[],
+            }
+          })
         )
-        const all = results.flat() as SessionMessage[]
-        all.sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
-        setMessages(all)
+        for (const result of results) {
+          projectMessageCountsRef.current.set(result.key, result.offset + result.messages.length)
+        }
+        const incoming = results.flatMap((result) => result.messages)
+        if (incoming.length > 0) {
+          setMessages((prev) => mergeMessages(prev, incoming))
+        }
         setSelectedProject((prev) => prev && prev.dir === selectedProject.dir
           ? { ...prev, sessions: projectSessions }
           : prev
         )
       } catch { /* ignore transient errors */ }
-    }, 10_000)
+    }, 2000)
     return () => clearInterval(id)
-  }, [fetchProjectSessions, fetchSessionMessages, provider, selectedProject])
+  }, [fetchProjectSessions, provider, selectedProject])
 
   async function selectSession(session: Session) {
     setSelectedId(session.sessionId)
     setSelectedProject(null)
+    projectMessageCountsRef.current.clear()
     setLoadingMessages(true)
     setMessages([])
     try {
@@ -230,6 +269,9 @@ export default function Home() {
       )
       const all = results.flat() as SessionMessage[]
       all.sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
+      projectMessageCountsRef.current = new Map(
+        sessionsForProject.map((session, index) => [projectSessionKey(session), results[index]?.length ?? 0])
+      )
       setMessages(all)
       setSelectedProject({ key: projectName, dir: projectDir, sessions: sessionsForProject })
     } catch (err) {
