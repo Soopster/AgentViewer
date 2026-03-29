@@ -1,1 +1,0 @@
-- [Agent Viewer project](project_agentviewer.md) — Next.js dashboard using official Claude Agent SDK API for sessions/messages

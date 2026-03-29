@@ -612,83 +612,43 @@ export default function SessionList({
               : `${filteredSessions.length}/${sessions.length} sessions · ${groups.length} projects`}
           </span>
         </div>
-        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-          <button
-            onClick={() => onChangeProvider('claude')}
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              color: 'var(--text-3)',
+              letterSpacing: '0.08em',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            PROVIDER
+          </span>
+          <select
+            value={provider}
+            onChange={(e) => onChangeProvider(e.target.value as ProviderSelection)}
             disabled={switchingProvider}
             style={{
               flex: 1,
-              height: 28,
-              borderRadius: 5,
-              border: `1px solid ${provider === 'claude' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-              background: provider === 'claude' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-              color: provider === 'claude' ? 'var(--violet)' : 'var(--text-3)',
+              height: 30,
+              borderRadius: 6,
+              border: '1px solid var(--border)',
+              background: 'var(--surface-2)',
+              color: 'var(--text)',
+              padding: '0 10px',
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 11,
               letterSpacing: '0.06em',
+              outline: 'none',
               cursor: switchingProvider ? 'not-allowed' : 'pointer',
               opacity: switchingProvider ? 0.6 : 1,
             }}
           >
-            CLAUDE
-          </button>
-          <button
-            onClick={() => onChangeProvider('codex')}
-            disabled={switchingProvider}
-            style={{
-              flex: 1,
-              height: 28,
-              borderRadius: 5,
-              border: `1px solid ${provider === 'codex' ? 'rgba(56,217,245,0.32)' : 'var(--border)'}`,
-              background: provider === 'codex' ? 'rgba(56,217,245,0.12)' : 'var(--surface-2)',
-              color: provider === 'codex' ? 'var(--cyan)' : 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.06em',
-              cursor: switchingProvider ? 'not-allowed' : 'pointer',
-              opacity: switchingProvider ? 0.6 : 1,
-            }}
-          >
-            CODEX
-          </button>
-          <button
-            onClick={() => onChangeProvider('opencode')}
-            disabled={switchingProvider}
-            style={{
-              flex: 1,
-              height: 28,
-              borderRadius: 5,
-              border: `1px solid ${provider === 'opencode' ? 'rgba(45,212,160,0.32)' : 'var(--border)'}`,
-              background: provider === 'opencode' ? 'rgba(45,212,160,0.12)' : 'var(--surface-2)',
-              color: provider === 'opencode' ? 'var(--green)' : 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.06em',
-              cursor: switchingProvider ? 'not-allowed' : 'pointer',
-              opacity: switchingProvider ? 0.6 : 1,
-            }}
-          >
-            OPENCODE
-          </button>
-          <button
-            onClick={() => onChangeProvider('all')}
-            disabled={switchingProvider}
-            style={{
-              flex: 1,
-              height: 28,
-              borderRadius: 5,
-              border: `1px solid ${provider === 'all' ? 'rgba(45,212,160,0.32)' : 'var(--border)'}`,
-              background: provider === 'all' ? 'rgba(45,212,160,0.12)' : 'var(--surface-2)',
-              color: provider === 'all' ? 'var(--green)' : 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.06em',
-              cursor: switchingProvider ? 'not-allowed' : 'pointer',
-              opacity: switchingProvider ? 0.6 : 1,
-            }}
-          >
-            ALL
-          </button>
+            <option value="claude">CLAUDE</option>
+            <option value="codex">CODEX</option>
+            <option value="opencode">OPENCODE</option>
+            <option value="all">ALL</option>
+          </select>
         </div>
         <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
           <input

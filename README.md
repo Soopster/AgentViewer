@@ -1,0 +1,97 @@
+# Agent Viewer
+
+Agent Viewer is a Next.js dashboard for browsing and inspecting local agent conversations across multiple providers:
+
+- Claude Agent SDK
+- Codex CLI
+- OpenCode
+
+It provides a single UI for session browsing, project-level views, message inspection, model/provider switching, tagging, rewind or rollback controls, and diagnostics.
+
+## Features
+
+- Browse sessions by provider or across all providers
+- Group conversations by project
+- View single-session timelines or consolidated project timelines
+- Rename sessions and manage tags
+- Stream live replies in the message view
+- Fork sessions and provider-native continuation controls
+- Rewind or rollback where supported by the underlying provider
+- Inspect provider diagnostics and available models
+
+## Requirements
+
+- Node.js 20+
+- npm
+- At least one supported provider installed and usable locally
+
+## Providers
+
+### Claude
+
+Uses `@anthropic-ai/claude-agent-sdk` on the server side.
+
+### Codex
+
+Uses the official Codex app-server integration. The viewer can connect to the configured local Codex environment through the backend adapter.
+
+### OpenCode
+
+Uses `@opencode-ai/sdk`.
+
+If you already run an OpenCode server, the app can reuse it through:
+
+- `OPENCODE_BASE_URL`
+- `OPENCODE_SERVER_URL`
+
+If not, the backend will attempt managed startup where supported.
+
+## Getting Started
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run the development server:
+
+```bash
+npm run dev
+```
+
+Then open `http://localhost:3000`.
+
+## How To Use
+
+1. Select a provider from the sidebar dropdown.
+2. Choose a session, or click a project group to view a consolidated project timeline.
+3. Use search and tag filters in the sidebar to narrow sessions.
+4. In the message view, use provider-specific controls such as fork, diagnostics, rewind, or rollback.
+
+## Local Data
+
+The app stores local UI/provider metadata in:
+
+```text
+.agent-viewer-data/
+```
+
+This directory is intentionally ignored from git. It is used for state such as:
+
+- selected provider
+- locally stored tags for providers that do not support native tags
+
+## Scripts
+
+```bash
+npm run dev
+npm run build
+npm run start
+```
+
+## Notes
+
+- This project is intended for local use against local agent runtimes.
+- Some features are provider-specific because the underlying SDKs differ.
+- If Next.js behaves oddly after branch changes, clear `.next/` and rebuild.
