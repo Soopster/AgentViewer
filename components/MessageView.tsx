@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
-import type { SessionMessage, Session, SendState } from '@/lib/types'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import type { SessionMessage, Session, SendState, ContextUsage, SessionInfo } from '@/lib/types'
 import { buildThreadedMessages } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import MessageItem from './MessageItem'
@@ -12,28 +12,41 @@ type Props = {
   loading: boolean
   session: Session | null
   projectView?: { key: string; sessionCount: number }
+  onFork?: (newSessionId: string) => void
 }
 
-export default function MessageView({ messages, loading, session, projectView }: Props) {
+export default function MessageView({ messages, loading, session, projectView, onFork }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
   const [sendError, setSendError] = useState<string | null>(null)
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
+  const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
+  const [forking, setForking] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
-  // TODO: Implement this function.
-  // It should POST `inputText` to `/api/sessions/${session.sessionId}/messages`
-  // and drain the SSE response while Claude processes the message.
-  //
-  // The response is an SSE stream — you can drain it with a ReadableStream reader.
-  // New messages will appear automatically via the 2s polling, so you don't need
-  // to parse the SSE events; just wait for the stream to end.
-  //
-  // Constraints to consider:
-  //   - Clear inputText before or after sending?
-  //   - What should happen to sendState on error vs success?
-  //   - Should the textarea auto-focus again after send?
-  //
-  // State available: setSendState('sending' | 'idle' | 'error'), setSendError(msg)
+  // Load session info (git branch, summary, etc.) when session changes
+  useEffect(() => {
+    if (!session) { setSessionInfo(null); return }
+    fetch(`/api/sessions/${session.sessionId}`)
+      .then(r => r.json())
+      .then(data => { if (!data.error) setSessionInfo(data.info) })
+      .catch(() => {})
+  }, [session?.sessionId])
+
+  // Reset context usage when switching sessions
+  useEffect(() => {
+    setContextUsage(null)
+  }, [session?.sessionId])
+
+  const cancelSend = useCallback(() => {
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+    setSendState('idle')
+    setSendError(null)
+    textareaRef.current?.focus()
+  }, [])
+
   const sendMessage = useCallback(async () => {
     if (!session || !inputText.trim() || sendState === 'sending') return
 
@@ -42,16 +55,19 @@ export default function MessageView({ messages, loading, session, projectView }:
     setSendState('sending')
     setSendError(null)
 
-    // Reset textarea height after clearing
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
+
+    const controller = new AbortController()
+    abortControllerRef.current = controller
 
     try {
       const res = await fetch(`/api/sessions/${session.sessionId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text }),
+        signal: controller.signal,
       })
 
       if (!res.ok) {
@@ -61,12 +77,30 @@ export default function MessageView({ messages, loading, session, projectView }:
 
       const reader = res.body!.getReader()
       const decoder = new TextDecoder()
+      let pendingEvent = ''
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
         const chunk = decoder.decode(value)
-        // Surface server-side errors emitted as SSE error events
-        if (chunk.includes('event: error')) {
+        // Track event type across chunks
+        for (const line of chunk.split('\n')) {
+          if (line.startsWith('event: ')) {
+            pendingEvent = line.slice(7).trim()
+          } else if (line.startsWith('data:')) {
+            const dataStr = line.slice(5).trim()
+            if (pendingEvent === 'context-usage') {
+              try { setContextUsage(JSON.parse(dataStr)) } catch { /* ignore */ }
+            } else if (pendingEvent === 'error') {
+              try {
+                const parsed = JSON.parse(dataStr)
+                throw new Error(parsed.error ?? 'Unknown error from Claude')
+              } catch (e) { throw e }
+            }
+            pendingEvent = ''
+          }
+        }
+        // Also handle inline error events (legacy format)
+        if (chunk.includes('event: error') && !pendingEvent) {
           const dataLine = chunk.split('\n').find(l => l.startsWith('data:'))
           if (dataLine) {
             const parsed = JSON.parse(dataLine.slice(5).trim())
@@ -78,10 +112,15 @@ export default function MessageView({ messages, loading, session, projectView }:
       setSendState('idle')
       textareaRef.current?.focus()
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        // User cancelled — already reset by cancelSend()
+        return
+      }
       setSendState('error')
       setSendError(err instanceof Error ? err.message : 'Failed to send message')
-      // Restore the text so the user can retry
       setInputText(text)
+    } finally {
+      abortControllerRef.current = null
     }
   }, [session, inputText, sendState])
 
@@ -99,6 +138,21 @@ export default function MessageView({ messages, loading, session, projectView }:
     const html = exportSessionToHtml(session, messages)
     downloadHtml(html, `${safeName}_${session.sessionId.slice(0, 8)}.html`)
   }, [session, messages])
+
+  const handleFork = useCallback(async () => {
+    if (!session || forking) return
+    setForking(true)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/fork`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      onFork?.(data.sessionId)
+    } catch (err) {
+      console.error('Fork failed:', err)
+    } finally {
+      setForking(false)
+    }
+  }, [session, forking, onFork])
 
   if (!session && !projectView) {
     return (
@@ -238,7 +292,7 @@ export default function MessageView({ messages, loading, session, projectView }:
           </span>
         )}
 
-        {/* Single-session path */}
+        {/* Single-session path + git branch */}
         {!isProject && session?.cwd && (
           <span
             style={{
@@ -252,10 +306,56 @@ export default function MessageView({ messages, loading, session, projectView }:
             }}
           >
             {session.cwd}
+            {sessionInfo?.gitBranch && (
+              <span style={{ color: 'var(--violet)', marginLeft: 8 }}>
+                ⎇ {sessionInfo.gitBranch}
+              </span>
+            )}
           </span>
         )}
 
         <span style={{ flex: 1 }} />
+
+        {/* Context usage bar */}
+        {!isProject && contextUsage && (
+          <div
+            title={`${contextUsage.totalTokens.toLocaleString()} / ${contextUsage.maxTokens.toLocaleString()} tokens (${Math.round(contextUsage.percentage)}%)`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              flexShrink: 0,
+            }}
+          >
+            <span style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              color: contextUsage.percentage > 80 ? 'var(--red, #f87171)' : 'var(--text-3)',
+              letterSpacing: '0.03em',
+            }}>
+              {Math.round(contextUsage.percentage)}%
+            </span>
+            <div style={{
+              width: 56,
+              height: 4,
+              borderRadius: 2,
+              background: 'var(--border-2)',
+              overflow: 'hidden',
+            }}>
+              <div style={{
+                height: '100%',
+                width: `${Math.min(contextUsage.percentage, 100)}%`,
+                borderRadius: 2,
+                backgroundColor: contextUsage.percentage > 80
+                  ? 'var(--red, #f87171)'
+                  : contextUsage.percentage > 60
+                  ? 'var(--yellow, #fbbf24)'
+                  : 'var(--violet)',
+                transition: 'width 0.4s ease',
+              }} />
+            </div>
+          </div>
+        )}
 
         {/* Code theme picker */}
         <CodeThemeToggle />
@@ -274,6 +374,44 @@ export default function MessageView({ messages, loading, session, projectView }:
               ? `${projectView!.sessionCount} sessions · ${threaded.length} turns`
               : `${threaded.length} turns · ${messages.length} events`}
           </span>
+        )}
+
+        {/* Fork button (single session only) */}
+        {!isProject && (
+          <button
+            onClick={handleFork}
+            disabled={forking}
+            title="Fork this session into a new branch"
+            style={{
+              flexShrink: 0,
+              height: 26,
+              padding: '0 10px',
+              background: 'rgba(139,128,240,0.07)',
+              border: '1px solid rgba(139,128,240,0.18)',
+              borderRadius: 5,
+              cursor: forking ? 'not-allowed' : 'pointer',
+              color: 'var(--text-3)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.08em',
+              transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+              opacity: forking ? 0.5 : 1,
+            }}
+            onMouseEnter={e => {
+              if (!forking) {
+                e.currentTarget.style.background    = 'rgba(139,128,240,0.14)'
+                e.currentTarget.style.color         = 'var(--violet)'
+                e.currentTarget.style.borderColor   = 'rgba(139,128,240,0.35)'
+              }
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background    = 'rgba(139,128,240,0.07)'
+              e.currentTarget.style.color         = 'var(--text-3)'
+              e.currentTarget.style.borderColor   = 'rgba(139,128,240,0.18)'
+            }}
+          >
+            {forking ? 'FORKING…' : 'FORK'}
+          </button>
         )}
 
         {/* Export button (single session only) */}
@@ -451,30 +589,52 @@ export default function MessageView({ messages, loading, session, projectView }:
               transition: 'border-color 0.15s, opacity 0.15s',
             }}
           />
-          <button
-            onClick={sendMessage}
-            disabled={sendState === 'sending' || !inputText.trim()}
-            style={{
-              flexShrink: 0,
-              height: 36,
-              padding: '0 14px',
-              background: sendState === 'sending'
-                ? 'rgba(139,128,240,0.15)'
-                : 'rgba(139,128,240,0.18)',
-              border: '1px solid rgba(139,128,240,0.3)',
-              borderRadius: 6,
-              color: sendState === 'sending' ? 'var(--text-3)' : 'var(--violet)',
-              fontFamily: "'Oxanium', monospace",
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: '0.1em',
-              cursor: sendState === 'sending' || !inputText.trim() ? 'not-allowed' : 'pointer',
-              transition: 'background 0.15s, color 0.15s',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {sendState === 'sending' ? 'SENDING…' : 'SEND'}
-          </button>
+          {sendState === 'sending' ? (
+            <button
+              onClick={cancelSend}
+              style={{
+                flexShrink: 0,
+                height: 36,
+                padding: '0 14px',
+                background: 'rgba(248,113,113,0.1)',
+                border: '1px solid rgba(248,113,113,0.3)',
+                borderRadius: 6,
+                color: 'var(--red, #f87171)',
+                fontFamily: "'Oxanium', monospace",
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: '0.1em',
+                cursor: 'pointer',
+                transition: 'background 0.15s',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              CANCEL
+            </button>
+          ) : (
+            <button
+              onClick={sendMessage}
+              disabled={!inputText.trim()}
+              style={{
+                flexShrink: 0,
+                height: 36,
+                padding: '0 14px',
+                background: 'rgba(139,128,240,0.18)',
+                border: '1px solid rgba(139,128,240,0.3)',
+                borderRadius: 6,
+                color: 'var(--violet)',
+                fontFamily: "'Oxanium', monospace",
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: '0.1em',
+                cursor: !inputText.trim() ? 'not-allowed' : 'pointer',
+                transition: 'background 0.15s, color 0.15s',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              SEND
+            </button>
+          )}
         </div>
       </div>}
     </div>

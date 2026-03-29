@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
@@ -115,6 +115,44 @@ export default function Home() {
     }
   }
 
+  // Optimistically update the session title shown by listSessions().
+  const handleRename = useCallback((sessionId: string, title: string) => {
+    setSessions(prev => prev.map(s =>
+      s.sessionId === sessionId ? { ...s, customTitle: title, summary: title } : s
+    ))
+    // Also update selectedProject sessions if active
+    setSelectedProject(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        sessions: prev.sessions.map(s =>
+          s.sessionId === sessionId ? { ...s, customTitle: title, summary: title } : s
+        ),
+      }
+    })
+  }, [])
+
+  const handleTag = useCallback((sessionId: string, tag: string | null) => {
+    setSessions(prev => prev.map(s =>
+      s.sessionId === sessionId ? { ...s, tag } : s
+    ))
+    setSelectedProject(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        sessions: prev.sessions.map(s =>
+          s.sessionId === sessionId ? { ...s, tag } : s
+        ),
+      }
+    })
+  }, [])
+
+  // Navigate to a newly forked session
+  const handleFork = useCallback((newSessionId: string) => {
+    // The new session will appear in the next poll cycle; select it immediately
+    selectSession(newSessionId)
+  }, [])
+
   const selectedSession = sessions.find((s) => s.sessionId === selectedId) ?? null
 
   return (
@@ -128,12 +166,15 @@ export default function Home() {
         selectedProject={selectedProject?.key ?? null}
         onSelect={selectSession}
         onSelectProject={selectProject}
+        onRename={handleRename}
+        onTag={handleTag}
       />
       <MessageView
         messages={messages}
         loading={loadingMessages}
         session={selectedSession}
         projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length } : undefined}
+        onFork={handleFork}
       />
     </div>
     </CodeThemeProvider>

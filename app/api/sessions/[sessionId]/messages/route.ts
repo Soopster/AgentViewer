@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSessionMessages, unstable_v2_resumeSession } from '@anthropic-ai/claude-agent-sdk'
+import { getSessionMessages, query } from '@anthropic-ai/claude-agent-sdk'
 
 // Allow long-running Claude responses (up to 5 min)
 export const maxDuration = 300
@@ -36,20 +36,30 @@ export async function POST(
   }
 
   const encoder = new TextEncoder()
+  const abortController = new AbortController()
+  request.signal.addEventListener('abort', () => abortController.abort())
 
   const stream = new ReadableStream({
     async start(controller) {
-      const session = unstable_v2_resumeSession(sessionId, { model })
+      const q = query({ prompt: userMessage, options: { resume: sessionId, model, abortController } })
       try {
-        await session.send(userMessage)
-        for await (const msg of session.stream()) {
+        // Emit context usage snapshot before the response begins
+        try {
+          const usage = await q.getContextUsage()
+          controller.enqueue(encoder.encode(`event: context-usage\ndata: ${JSON.stringify(usage)}\n\n`))
+        } catch { /* not available yet — skip */ }
+
+        for await (const msg of q) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error'
-        controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`))
+        if (abortController.signal.aborted) {
+          // Client cancelled — clean exit, no error event
+        } else {
+          const message = err instanceof Error ? err.message : 'Unknown error'
+          controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`))
+        }
       } finally {
-        session.close()
         controller.close()
       }
     },

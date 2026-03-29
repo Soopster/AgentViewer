@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import type { Session } from '@/lib/types'
 import ThemeToggle from './ThemeToggle'
 
@@ -12,6 +12,8 @@ type Props = {
   selectedProject: string | null
   onSelect: (id: string) => void
   onSelectProject: (key: string, sessions: Session[]) => void
+  onRename: (sessionId: string, title: string) => void
+  onTag: (sessionId: string, tag: string | null) => void
 }
 
 function timeAgo(iso: string): string {
@@ -35,21 +37,78 @@ function groupByProject(sessions: Session[]): Map<string, Session[]> {
   return map
 }
 
+function getSessionTitle(session: Session): string {
+  return session.customTitle ?? session.summary ?? ''
+}
+
 function SessionRow({
   session,
   selected,
   onSelect,
+  onRename,
+  onTag,
 }: {
   session: Session
   selected: boolean
   onSelect: (id: string) => void
+  onRename: (sessionId: string, title: string) => void
+  onTag: (sessionId: string, tag: string | null) => void
 }) {
   const [hovered, setHovered] = useState(false)
+  const [editing, setEditing] = useState<'title' | 'tag' | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
   const shortId = session.sessionId.slice(-12)
+  const sessionTitle = getSessionTitle(session)
+
+  const startEdit = useCallback((kind: 'title' | 'tag', value: string) => (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setEditValue(value)
+    setEditing(kind)
+    // Focus after next render
+    setTimeout(() => inputRef.current?.select(), 0)
+  }, [])
+
+  const commitTitleEdit = useCallback(async () => {
+    setEditing(null)
+    const value = editValue.trim()
+    if (!value || value === sessionTitle) return
+    onRename(session.sessionId, value)
+    try {
+      await fetch(`/api/sessions/${session.sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: value }),
+      })
+    } catch { /* optimistic — ignore errors */ }
+  }, [editValue, onRename, session.sessionId, sessionTitle])
+
+  const commitTagEdit = useCallback(async () => {
+    setEditing(null)
+    const value = editValue.trim()
+    const nextTag = value || null
+    if (nextTag === (session.tag ?? null)) return
+    onTag(session.sessionId, nextTag)
+    try {
+      await fetch(`/api/sessions/${session.sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag: nextTag }),
+      })
+    } catch { /* optimistic — ignore errors */ }
+  }, [editValue, onTag, session.sessionId, session.tag])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      if (editing === 'title') commitTitleEdit()
+      if (editing === 'tag') commitTagEdit()
+    }
+    if (e.key === 'Escape') setEditing(null)
+  }, [commitTagEdit, commitTitleEdit, editing])
 
   return (
     <div
-      onClick={() => onSelect(session.sessionId)}
+      onClick={() => !editing && onSelect(session.sessionId)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -78,10 +137,96 @@ function SessionRow({
         {shortId}
       </div>
 
-      {/* Tag + time */}
-      <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
-        {session.tag && (
+      {/* Session title */}
+      <div style={{ marginTop: 5 }}>
+        {editing === 'title' ? (
+          <input
+            ref={inputRef}
+            value={editValue}
+            onChange={e => setEditValue(e.target.value)}
+            onBlur={commitTitleEdit}
+            onKeyDown={handleKeyDown}
+            onClick={e => e.stopPropagation()}
+            autoFocus
+            style={{
+              fontFamily: "'Oxanium', monospace",
+              fontSize: 12,
+              background: 'var(--surface-3)',
+              border: '1px solid var(--violet)',
+              borderRadius: 3,
+              color: 'var(--text)',
+              padding: '4px 7px',
+              outline: 'none',
+              width: '100%',
+              maxWidth: 210,
+            }}
+          />
+        ) : sessionTitle ? (
+          <div
+            onDoubleClick={startEdit('title', sessionTitle)}
+            title="Double-click to rename title"
+            style={{
+              fontFamily: "'Oxanium', monospace",
+              fontSize: 12,
+              fontWeight: 600,
+              letterSpacing: '0.04em',
+              color: selected ? 'var(--text)' : hovered ? 'var(--text)' : 'var(--text-2)',
+              cursor: 'text',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {sessionTitle}
+          </div>
+        ) : hovered ? (
           <span
+            onDoubleClick={startEdit('title', '')}
+            onClick={e => { e.stopPropagation(); startEdit('title', '')(e) }}
+            title="Click to add a title"
+            style={{
+              fontFamily: "'Oxanium', monospace",
+              fontSize: 12,
+              color: 'var(--text-3)',
+              padding: '2px 0',
+              cursor: 'text',
+            }}
+          >
+            + title
+          </span>
+        ) : (
+          <div style={{ height: 18 }} />
+        )}
+      </div>
+
+      {/* Tag + time */}
+      <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 6, minHeight: 18 }}>
+        {editing === 'tag' ? (
+          <input
+            ref={inputRef}
+            value={editValue}
+            onChange={e => setEditValue(e.target.value)}
+            onBlur={commitTagEdit}
+            onKeyDown={handleKeyDown}
+            onClick={e => e.stopPropagation()}
+            autoFocus
+            placeholder="tag"
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              background: 'var(--surface-3)',
+              border: '1px solid var(--violet)',
+              borderRadius: 3,
+              color: 'var(--text)',
+              padding: '1px 6px',
+              outline: 'none',
+              width: 110,
+            }}
+          />
+        ) : session.tag ? (
+          <span
+            onDoubleClick={startEdit('tag', session.tag)}
+            title="Double-click to edit tag"
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 11,
@@ -91,11 +236,30 @@ function SessionRow({
               borderRadius: 3,
               border: '1px solid rgba(139,128,240,0.22)',
               letterSpacing: '0.03em',
+              cursor: 'text',
             }}
           >
-            {session.tag}
+            #{session.tag}
           </span>
-        )}
+        ) : hovered ? (
+          <span
+            onDoubleClick={startEdit('tag', '')}
+            onClick={e => { e.stopPropagation(); startEdit('tag', '')(e) }}
+            title="Click to add a tag"
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              color: 'var(--text-3)',
+              padding: '1px 4px',
+              borderRadius: 3,
+              border: '1px dashed var(--border-2)',
+              letterSpacing: '0.03em',
+              cursor: 'text',
+            }}
+          >
+            + tag
+          </span>
+        ) : null}
         {session.createdAt && (
           <span
             style={{
@@ -104,7 +268,7 @@ function SessionRow({
               color: 'var(--text-3)',
             }}
           >
-            {timeAgo(session.createdAt)} ago
+            {timeAgo(session.createdAt)}
           </span>
         )}
       </div>
@@ -119,6 +283,8 @@ function ProjectGroup({
   selectedProject,
   onSelect,
   onSelectProject,
+  onRename,
+  onTag,
 }: {
   name: string
   sessions: Session[]
@@ -126,6 +292,8 @@ function ProjectGroup({
   selectedProject: string | null
   onSelect: (id: string) => void
   onSelectProject: (key: string, sessions: Session[]) => void
+  onRename: (sessionId: string, title: string) => void
+  onTag: (sessionId: string, tag: string | null) => void
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const [hovered, setHovered] = useState(false)
@@ -205,13 +373,15 @@ function ProjectGroup({
           session={session}
           selected={session.sessionId === selectedId}
           onSelect={onSelect}
+          onRename={onRename}
+          onTag={onTag}
         />
       ))}
     </div>
   )
 }
 
-export default function SessionList({ sessions, loading, error, selectedId, selectedProject, onSelect, onSelectProject }: Props) {
+export default function SessionList({ sessions, loading, error, selectedId, selectedProject, onSelect, onSelectProject, onRename, onTag }: Props) {
   const groups = groupByProject(sessions)
 
   return (
@@ -304,6 +474,8 @@ export default function SessionList({ sessions, loading, error, selectedId, sele
             selectedProject={selectedProject}
             onSelect={onSelect}
             onSelectProject={onSelectProject}
+            onRename={onRename}
+            onTag={onTag}
           />
         ))}
       </div>

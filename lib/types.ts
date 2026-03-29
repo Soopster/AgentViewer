@@ -56,6 +56,8 @@ export type SessionMessage = {
 
 export type Session = {
   sessionId: string
+  summary?: string
+  customTitle?: string
   cwd?: string
   tag?: string | null
   createdAt?: string
@@ -63,3 +65,23 @@ export type Session = {
 }
 
 export type SendState = 'idle' | 'sending' | 'error'
+
+export type ContextUsage = {
+  totalTokens: number
+  maxTokens: number
+  percentage: number
+  model: string
+  categories: { name: string; tokens: number; color: string }[]
+}
+
+export type SessionInfo = {
+  sessionId: string
+  summary: string
+  lastModified: number
+  customTitle?: string
+  firstPrompt?: string
+  gitBranch?: string
+  cwd?: string
+  tag?: string
+  createdAt?: number
+}
