@@ -4,11 +4,87 @@ import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { diffLines } from 'diff'
-import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
+import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
+import c from 'react-syntax-highlighter/dist/esm/languages/prism/c'
+import cpp from 'react-syntax-highlighter/dist/esm/languages/prism/cpp'
+import csharp from 'react-syntax-highlighter/dist/esm/languages/prism/csharp'
+import css from 'react-syntax-highlighter/dist/esm/languages/prism/css'
+import dart from 'react-syntax-highlighter/dist/esm/languages/prism/dart'
+import diff from 'react-syntax-highlighter/dist/esm/languages/prism/diff'
+import docker from 'react-syntax-highlighter/dist/esm/languages/prism/docker'
+import go from 'react-syntax-highlighter/dist/esm/languages/prism/go'
+import java from 'react-syntax-highlighter/dist/esm/languages/prism/java'
+import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript'
+import json from 'react-syntax-highlighter/dist/esm/languages/prism/json'
+import jsx from 'react-syntax-highlighter/dist/esm/languages/prism/jsx'
+import kotlin from 'react-syntax-highlighter/dist/esm/languages/prism/kotlin'
+import markdown from 'react-syntax-highlighter/dist/esm/languages/prism/markdown'
+import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup'
+import markupTemplating from 'react-syntax-highlighter/dist/esm/languages/prism/markup-templating'
+import php from 'react-syntax-highlighter/dist/esm/languages/prism/php'
+import powershell from 'react-syntax-highlighter/dist/esm/languages/prism/powershell'
+import python from 'react-syntax-highlighter/dist/esm/languages/prism/python'
+import ruby from 'react-syntax-highlighter/dist/esm/languages/prism/ruby'
+import rust from 'react-syntax-highlighter/dist/esm/languages/prism/rust'
+import scss from 'react-syntax-highlighter/dist/esm/languages/prism/scss'
+import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql'
+import swift from 'react-syntax-highlighter/dist/esm/languages/prism/swift'
+import toml from 'react-syntax-highlighter/dist/esm/languages/prism/toml'
+import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx'
+import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
+import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import type { Components } from 'react-markdown'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
+
+SyntaxHighlighter.registerLanguage('bash', bash)
+SyntaxHighlighter.registerLanguage('sh', bash)
+SyntaxHighlighter.registerLanguage('zsh', bash)
+SyntaxHighlighter.registerLanguage('shell', bash)
+SyntaxHighlighter.registerLanguage('c', c)
+SyntaxHighlighter.registerLanguage('cpp', cpp)
+SyntaxHighlighter.registerLanguage('csharp', csharp)
+SyntaxHighlighter.registerLanguage('cs', csharp)
+SyntaxHighlighter.registerLanguage('css', css)
+SyntaxHighlighter.registerLanguage('dart', dart)
+SyntaxHighlighter.registerLanguage('scss', scss)
+SyntaxHighlighter.registerLanguage('diff', diff)
+SyntaxHighlighter.registerLanguage('docker', docker)
+SyntaxHighlighter.registerLanguage('dockerfile', docker)
+SyntaxHighlighter.registerLanguage('go', go)
+SyntaxHighlighter.registerLanguage('java', java)
+SyntaxHighlighter.registerLanguage('javascript', javascript)
+SyntaxHighlighter.registerLanguage('js', javascript)
+SyntaxHighlighter.registerLanguage('json', json)
+SyntaxHighlighter.registerLanguage('jsx', jsx)
+SyntaxHighlighter.registerLanguage('kotlin', kotlin)
+SyntaxHighlighter.registerLanguage('kt', kotlin)
+SyntaxHighlighter.registerLanguage('markdown', markdown)
+SyntaxHighlighter.registerLanguage('md', markdown)
+SyntaxHighlighter.registerLanguage('markup', markup)
+SyntaxHighlighter.registerLanguage('html', markup)
+SyntaxHighlighter.registerLanguage('xml', markup)
+SyntaxHighlighter.registerLanguage('svg', markup)
+SyntaxHighlighter.registerLanguage('markup-templating', markupTemplating)
+SyntaxHighlighter.registerLanguage('php', php)
+SyntaxHighlighter.registerLanguage('powershell', powershell)
+SyntaxHighlighter.registerLanguage('ps1', powershell)
+SyntaxHighlighter.registerLanguage('python', python)
+SyntaxHighlighter.registerLanguage('py', python)
+SyntaxHighlighter.registerLanguage('ruby', ruby)
+SyntaxHighlighter.registerLanguage('rb', ruby)
+SyntaxHighlighter.registerLanguage('rust', rust)
+SyntaxHighlighter.registerLanguage('rs', rust)
+SyntaxHighlighter.registerLanguage('sql', sql)
+SyntaxHighlighter.registerLanguage('swift', swift)
+SyntaxHighlighter.registerLanguage('toml', toml)
+SyntaxHighlighter.registerLanguage('tsx', tsx)
+SyntaxHighlighter.registerLanguage('typescript', typescript)
+SyntaxHighlighter.registerLanguage('ts', typescript)
+SyntaxHighlighter.registerLanguage('yaml', yaml)
+SyntaxHighlighter.registerLanguage('yml', yaml)
 
 // ── Tool color palette ────────────────────────────────────────────────────────
 
@@ -105,8 +181,8 @@ const mdComponents: Components = {
             </div>
           )}
           <SyntaxHighlighter
-            language={language || 'text'}
-            style={atomOneDark}
+            language={language || undefined}
+            style={oneDark}
             customStyle={{
               margin: 0,
               padding: '12px 16px',
@@ -134,18 +210,144 @@ const mdComponents: Components = {
 
 function basename(p: string) { return p.split('/').pop() ?? p }
 
+const LANGUAGE_BY_BASENAME: Record<string, string> = {
+  Dockerfile: 'docker',
+  Makefile: 'bash',
+}
+
+const LANGUAGE_BY_EXTENSION: Record<string, string> = {
+  bash: 'bash',
+  c: 'c',
+  cjs: 'javascript',
+  cc: 'cpp',
+  cs: 'csharp',
+  csx: 'csharp',
+  css: 'css',
+  cpp: 'cpp',
+  cxx: 'cpp',
+  dart: 'dart',
+  diff: 'diff',
+  go: 'go',
+  h: 'c',
+  hpp: 'cpp',
+  htm: 'html',
+  html: 'html',
+  java: 'java',
+  js: 'javascript',
+  json: 'json',
+  jsx: 'jsx',
+  kt: 'kotlin',
+  kts: 'kotlin',
+  md: 'markdown',
+  markdown: 'markdown',
+  mjs: 'javascript',
+  php: 'php',
+  ps1: 'powershell',
+  py: 'python',
+  rb: 'ruby',
+  rs: 'rust',
+  scss: 'scss',
+  sh: 'bash',
+  sql: 'sql',
+  svg: 'svg',
+  swift: 'swift',
+  toml: 'toml',
+  ts: 'typescript',
+  tsx: 'tsx',
+  txt: '',
+  xml: 'xml',
+  yaml: 'yaml',
+  yml: 'yaml',
+  zsh: 'bash',
+}
+
+function detectLanguageFromPath(filePath?: string): string {
+  if (!filePath) return ''
+
+  const name = basename(filePath)
+  if (LANGUAGE_BY_BASENAME[name]) return LANGUAGE_BY_BASENAME[name]
+
+  const dot = name.lastIndexOf('.')
+  if (dot === -1) return ''
+
+  return LANGUAGE_BY_EXTENSION[name.slice(dot + 1).toLowerCase()] ?? ''
+}
+
+function normalizeCode(code: string): string {
+  return code.endsWith('\n') ? code.slice(0, -1) : code
+}
+
+function inferStartingLineNumber(lines: Array<{ num: string }>): number | undefined {
+  const first = lines.find(line => /^\d+$/.test(line.num))
+  return first ? Number(first.num) : undefined
+}
+
+function shouldShowLineNumbers(lines: Array<{ num: string }>): boolean {
+  const numbered = lines.filter(line => line.num !== '')
+  return numbered.length > 0 && numbered.every(line => /^\d+$/.test(line.num))
+}
+
+function CodeViewer({
+  code,
+  filePath,
+  language,
+  maxHeight,
+  showLineNumbers = false,
+  startingLineNumber,
+}: {
+  code: string
+  filePath?: string
+  language?: string
+  maxHeight?: number
+  showLineNumbers?: boolean
+  startingLineNumber?: number
+}) {
+  const resolvedLanguage = language ?? detectLanguageFromPath(filePath)
+
+  return (
+    <SyntaxHighlighter
+      language={resolvedLanguage || undefined}
+      style={oneDark}
+      showLineNumbers={showLineNumbers}
+      startingLineNumber={startingLineNumber}
+      wrapLongLines={false}
+      customStyle={{
+        margin: 0,
+        padding: '10px 14px',
+        fontSize: 13,
+        lineHeight: 1.6,
+        background: 'var(--surface)',
+        overflowX: 'auto',
+        overflowY: maxHeight ? 'auto' : undefined,
+        maxHeight,
+      }}
+      codeTagProps={{ style: { fontFamily: "'IBM Plex Mono', monospace" } }}
+      lineNumberStyle={{
+        minWidth: '2.6em',
+        paddingRight: '0.9em',
+        color: 'var(--text-3)',
+        userSelect: 'none',
+      }}
+    >
+      {normalizeCode(code)}
+    </SyntaxHighlighter>
+  )
+}
+
 function CardShell({
   color = 'var(--t-other)',
   header,
   body,
   result,
   toolName = '',
+  resultFilePath,
 }: {
   color?: string
   header: React.ReactNode
   body?: React.ReactNode
   result: ToolResultBlock | null
   toolName?: string
+  resultFilePath?: string
 }) {
   return (
     <div
@@ -160,7 +362,7 @@ function CardShell({
     >
       {header}
       {body}
-      {result && <ToolResultSection result={result} toolName={toolName} />}
+      {result && <ToolResultSection result={result} toolName={toolName} filePath={resultFilePath} />}
     </div>
   )
 }
@@ -312,14 +514,9 @@ function WriteToolCard({ thread }: { thread: ToolThread }) {
           <div style={{ padding: '2px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {filePath}
           </div>
-          <pre style={{
-            margin: 0, padding: '10px 14px', fontSize: 13,
-            fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)',
-            background: 'var(--surface)', overflowX: 'auto', maxHeight: 500, overflowY: 'auto',
-            whiteSpace: 'pre', lineHeight: 1.6, borderTop: '1px solid var(--border)',
-          }}>
-            {content}
-          </pre>
+          <div style={{ borderTop: '1px solid var(--border)' }}>
+            <CodeViewer code={content} filePath={filePath} maxHeight={500} />
+          </div>
         </>
       ) : undefined}
     />
@@ -706,7 +903,7 @@ function ReadCard({ thread }: { thread: ToolThread }) {
     input.limit  != null ? `+${input.limit}`  : null,
   ].filter(Boolean).join(' ')
   return (
-    <CardShell color={c} result={thread.result} toolName="Read"
+    <CardShell color={c} result={thread.result} toolName="Read" resultFilePath={filePath}
       header={
         <div
           onMouseEnter={() => setHovered(true)}
@@ -1355,22 +1552,14 @@ function NotebookEditCard({ thread }: { thread: ToolThread }) {
           }}>
             {notebookPath}
           </div>
-          <pre style={{
-            margin: 0,
-            padding: '10px 14px',
-            background: 'var(--surface)',
-            borderTop: '1px solid var(--border)',
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 13,
-            lineHeight: 1.6,
-            maxHeight: 300,
-            overflowY: 'auto',
-            overflowX: 'auto',
-            whiteSpace: 'pre',
-            color: 'var(--text-2)',
-          }}>
-            {newSource}
-          </pre>
+          <div style={{ borderTop: '1px solid var(--border)' }}>
+            <CodeViewer
+              code={newSource ?? ''}
+              filePath={notebookPath}
+              language={input.cell_type === 'markdown' ? 'markdown' : undefined}
+              maxHeight={300}
+            />
+          </div>
         </>
       ) : undefined}
     />
@@ -1781,7 +1970,7 @@ function parseFileLines(text: string) {
   return lines
 }
 
-function ReadResultSection({ raw }: { raw: string }) {
+function ReadResultSection({ raw, filePath }: { raw: string; filePath?: string }) {
   const [expanded, setExpanded] = useState(false)
   const LIMIT = 25
 
@@ -1802,10 +1991,6 @@ function ReadResultSection({ raw }: { raw: string }) {
     .reduce((n, p) => n + parseFileLines(p.text).length, 0)
   const hidden = expanded ? 0 : Math.max(0, totalLines - LIMIT)
 
-  const fileBlockStyle: React.CSSProperties = {
-    display: 'flex', fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, lineHeight: 1.6,
-  }
-
   return (
     <div style={{ borderTop: '1px solid var(--border)' }}>
       {processedParts.map((part, i) =>
@@ -1813,17 +1998,14 @@ function ReadResultSection({ raw }: { raw: string }) {
           ? <SystemReminderCard key={i} block={{ type: 'system_reminder', content: part.content }} />
           : part.visibleLines.length > 0
             ? (
-              <div key={i} style={fileBlockStyle}>
-                <div style={{ flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', textAlign: 'right', userSelect: 'none', padding: '8px 0', minWidth: 44 }}>
-                  {part.visibleLines.map((l, j) => (
-                    <div key={j} style={{ padding: '0 10px', color: 'var(--text-3)' }}>{l.num}</div>
-                  ))}
-                </div>
-                <div style={{ flex: 1, background: 'var(--bg)', padding: '8px 0', overflow: 'hidden' }}>
-                  {part.visibleLines.map((l, j) => (
-                    <div key={j} style={{ padding: '0 14px', color: 'var(--text-2)', whiteSpace: 'pre' }}>{l.code}</div>
-                  ))}
-                </div>
+              <div key={i}>
+                <CodeViewer
+                  code={part.visibleLines.map(line => line.code).join('\n')}
+                  filePath={filePath}
+                  showLineNumbers={shouldShowLineNumbers(part.visibleLines)}
+                  startingLineNumber={inferStartingLineNumber(part.visibleLines)}
+                  maxHeight={500}
+                />
               </div>
             )
             : null
@@ -1951,7 +2133,7 @@ function ImageResultSection({ block }: { block: ImageBlock }) {
   )
 }
 
-function ToolResultSection({ result, toolName }: { result: ToolResultBlock; toolName: string }) {
+function ToolResultSection({ result, toolName, filePath }: { result: ToolResultBlock; toolName: string; filePath?: string }) {
   // Detect image blocks before calling resultToString (which would base64-dump them)
   if (Array.isArray(result.content)) {
     const img = result.content.find((b): b is ImageBlock => (b as ImageBlock).type === 'image')
@@ -1978,7 +2160,7 @@ function ToolResultSection({ result, toolName }: { result: ToolResultBlock; tool
     )
   }
 
-  if (toolName === 'Read') return <ReadResultSection raw={raw} />
+  if (toolName === 'Read') return <ReadResultSection raw={raw} filePath={filePath} />
 
   const persistedMatch = raw.match(/<persisted-output>[\s\S]*?Preview[^\n]*:\n([\s\S]*)/)
   if (persistedMatch) return <GenericResultSection raw={persistedMatch[1].trim()} note="· preview" />
