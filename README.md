@@ -16,6 +16,7 @@ It provides a single UI for session browsing, project-level views, message inspe
 - View single-session timelines or consolidated project timelines
 - Rename sessions and manage tags
 - Stream live replies in the message view
+- Switch between five UI themes; choice persists across sessions
 - Fork sessions and provider-native continuation controls
 - Rewind or rollback where supported by the underlying provider
 - Inspect provider diagnostics and available models
@@ -88,6 +89,22 @@ Then open `http://localhost:3000`.
 2. Choose a session, or click a project group to view a consolidated project timeline.
 3. Use search and tag filters in the sidebar to narrow sessions.
 4. In the message view, use provider-specific controls such as fork, diagnostics, rewind, or rollback.
+
+## Theming
+
+The theme picker is in the top-left corner of the sidebar. Five themes are available:
+
+| Theme | Description |
+|-------|-------------|
+| ☾ Dark | Deep navy dark mode (default) |
+| ☀ Light | Clean light mode |
+| ⌨ Terminal | Green-on-black terminal aesthetic |
+| ✦ Paper | Soft off-white Material-inspired light theme |
+| 💬 iMessage | iOS-style blue/grey message bubbles |
+
+The selection is stored in `localStorage` and restored automatically on reload. The theme is applied via a `data-theme` attribute on `<html>`, so all CSS custom properties update instantly without a page reload.
+
+Code blocks in the message view have a separate syntax-highlighting theme picker accessible from the message view toolbar.
 
 ## Local Data
 
