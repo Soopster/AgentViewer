@@ -4,37 +4,35 @@ import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { diffLines } from 'diff'
-import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
-import c from 'react-syntax-highlighter/dist/esm/languages/prism/c'
-import cpp from 'react-syntax-highlighter/dist/esm/languages/prism/cpp'
-import csharp from 'react-syntax-highlighter/dist/esm/languages/prism/csharp'
-import css from 'react-syntax-highlighter/dist/esm/languages/prism/css'
-import dart from 'react-syntax-highlighter/dist/esm/languages/prism/dart'
-import diff from 'react-syntax-highlighter/dist/esm/languages/prism/diff'
-import docker from 'react-syntax-highlighter/dist/esm/languages/prism/docker'
-import go from 'react-syntax-highlighter/dist/esm/languages/prism/go'
-import java from 'react-syntax-highlighter/dist/esm/languages/prism/java'
-import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript'
-import json from 'react-syntax-highlighter/dist/esm/languages/prism/json'
-import jsx from 'react-syntax-highlighter/dist/esm/languages/prism/jsx'
-import kotlin from 'react-syntax-highlighter/dist/esm/languages/prism/kotlin'
-import markdown from 'react-syntax-highlighter/dist/esm/languages/prism/markdown'
-import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup'
-import markupTemplating from 'react-syntax-highlighter/dist/esm/languages/prism/markup-templating'
-import php from 'react-syntax-highlighter/dist/esm/languages/prism/php'
-import powershell from 'react-syntax-highlighter/dist/esm/languages/prism/powershell'
-import python from 'react-syntax-highlighter/dist/esm/languages/prism/python'
-import ruby from 'react-syntax-highlighter/dist/esm/languages/prism/ruby'
-import rust from 'react-syntax-highlighter/dist/esm/languages/prism/rust'
-import scss from 'react-syntax-highlighter/dist/esm/languages/prism/scss'
-import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql'
-import swift from 'react-syntax-highlighter/dist/esm/languages/prism/swift'
-import toml from 'react-syntax-highlighter/dist/esm/languages/prism/toml'
-import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx'
-import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
-import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
+import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
+import bash from 'react-syntax-highlighter/dist/esm/languages/hljs/bash'
+import c from 'react-syntax-highlighter/dist/esm/languages/hljs/c'
+import cpp from 'react-syntax-highlighter/dist/esm/languages/hljs/cpp'
+import csharp from 'react-syntax-highlighter/dist/esm/languages/hljs/csharp'
+import css from 'react-syntax-highlighter/dist/esm/languages/hljs/css'
+import dart from 'react-syntax-highlighter/dist/esm/languages/hljs/dart'
+import diff from 'react-syntax-highlighter/dist/esm/languages/hljs/diff'
+import dockerfile from 'react-syntax-highlighter/dist/esm/languages/hljs/dockerfile'
+import go from 'react-syntax-highlighter/dist/esm/languages/hljs/go'
+import ini from 'react-syntax-highlighter/dist/esm/languages/hljs/ini'
+import java from 'react-syntax-highlighter/dist/esm/languages/hljs/java'
+import javascript from 'react-syntax-highlighter/dist/esm/languages/hljs/javascript'
+import json from 'react-syntax-highlighter/dist/esm/languages/hljs/json'
+import kotlin from 'react-syntax-highlighter/dist/esm/languages/hljs/kotlin'
+import markdown from 'react-syntax-highlighter/dist/esm/languages/hljs/markdown'
+import php from 'react-syntax-highlighter/dist/esm/languages/hljs/php'
+import powershell from 'react-syntax-highlighter/dist/esm/languages/hljs/powershell'
+import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
+import ruby from 'react-syntax-highlighter/dist/esm/languages/hljs/ruby'
+import rust from 'react-syntax-highlighter/dist/esm/languages/hljs/rust'
+import scss from 'react-syntax-highlighter/dist/esm/languages/hljs/scss'
+import shell from 'react-syntax-highlighter/dist/esm/languages/hljs/shell'
+import sql from 'react-syntax-highlighter/dist/esm/languages/hljs/sql'
+import swift from 'react-syntax-highlighter/dist/esm/languages/hljs/swift'
+import typescript from 'react-syntax-highlighter/dist/esm/languages/hljs/typescript'
+import xml from 'react-syntax-highlighter/dist/esm/languages/hljs/xml'
+import yaml from 'react-syntax-highlighter/dist/esm/languages/hljs/yaml'
 import type { Components } from 'react-markdown'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
@@ -42,7 +40,7 @@ import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/li
 SyntaxHighlighter.registerLanguage('bash', bash)
 SyntaxHighlighter.registerLanguage('sh', bash)
 SyntaxHighlighter.registerLanguage('zsh', bash)
-SyntaxHighlighter.registerLanguage('shell', bash)
+SyntaxHighlighter.registerLanguage('shell', shell)
 SyntaxHighlighter.registerLanguage('c', c)
 SyntaxHighlighter.registerLanguage('cpp', cpp)
 SyntaxHighlighter.registerLanguage('csharp', csharp)
@@ -51,23 +49,23 @@ SyntaxHighlighter.registerLanguage('css', css)
 SyntaxHighlighter.registerLanguage('dart', dart)
 SyntaxHighlighter.registerLanguage('scss', scss)
 SyntaxHighlighter.registerLanguage('diff', diff)
-SyntaxHighlighter.registerLanguage('docker', docker)
-SyntaxHighlighter.registerLanguage('dockerfile', docker)
+SyntaxHighlighter.registerLanguage('dockerfile', dockerfile)
+SyntaxHighlighter.registerLanguage('docker', dockerfile)
 SyntaxHighlighter.registerLanguage('go', go)
 SyntaxHighlighter.registerLanguage('java', java)
+SyntaxHighlighter.registerLanguage('ini', ini)
+SyntaxHighlighter.registerLanguage('toml', ini)
 SyntaxHighlighter.registerLanguage('javascript', javascript)
 SyntaxHighlighter.registerLanguage('js', javascript)
 SyntaxHighlighter.registerLanguage('json', json)
-SyntaxHighlighter.registerLanguage('jsx', jsx)
+SyntaxHighlighter.registerLanguage('jsx', xml)
 SyntaxHighlighter.registerLanguage('kotlin', kotlin)
 SyntaxHighlighter.registerLanguage('kt', kotlin)
 SyntaxHighlighter.registerLanguage('markdown', markdown)
 SyntaxHighlighter.registerLanguage('md', markdown)
-SyntaxHighlighter.registerLanguage('markup', markup)
-SyntaxHighlighter.registerLanguage('html', markup)
-SyntaxHighlighter.registerLanguage('xml', markup)
-SyntaxHighlighter.registerLanguage('svg', markup)
-SyntaxHighlighter.registerLanguage('markup-templating', markupTemplating)
+SyntaxHighlighter.registerLanguage('html', xml)
+SyntaxHighlighter.registerLanguage('xml', xml)
+SyntaxHighlighter.registerLanguage('svg', xml)
 SyntaxHighlighter.registerLanguage('php', php)
 SyntaxHighlighter.registerLanguage('powershell', powershell)
 SyntaxHighlighter.registerLanguage('ps1', powershell)
@@ -79,8 +77,7 @@ SyntaxHighlighter.registerLanguage('rust', rust)
 SyntaxHighlighter.registerLanguage('rs', rust)
 SyntaxHighlighter.registerLanguage('sql', sql)
 SyntaxHighlighter.registerLanguage('swift', swift)
-SyntaxHighlighter.registerLanguage('toml', toml)
-SyntaxHighlighter.registerLanguage('tsx', tsx)
+SyntaxHighlighter.registerLanguage('tsx', xml)
 SyntaxHighlighter.registerLanguage('typescript', typescript)
 SyntaxHighlighter.registerLanguage('ts', typescript)
 SyntaxHighlighter.registerLanguage('yaml', yaml)
@@ -182,7 +179,7 @@ const mdComponents: Components = {
           )}
           <SyntaxHighlighter
             language={language || undefined}
-            style={oneDark}
+            style={atomOneDark}
             customStyle={{
               margin: 0,
               padding: '12px 16px',
@@ -307,7 +304,7 @@ function CodeViewer({
   return (
     <SyntaxHighlighter
       language={resolvedLanguage || undefined}
-      style={oneDark}
+      style={atomOneDark}
       showLineNumbers={showLineNumbers}
       startingLineNumber={startingLineNumber}
       wrapLongLines={false}
