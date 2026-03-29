@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import type { SessionMessage, Session, SendState, ContextUsage, SessionInfo } from '@/lib/types'
 import { buildThreadedMessages } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
+import { getPrimarySessionTag } from '@/lib/sessionTags'
 import MessageItem from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
 
@@ -133,7 +134,7 @@ export default function MessageView({ messages, loading, session, projectView, o
 
   const handleExport = useCallback(() => {
     if (!session) return
-    const dirName  = session.tag ?? session.cwd?.split('/').pop() ?? session.sessionId
+    const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? session.cwd?.split('/').pop() ?? session.sessionId
     const safeName = dirName.replace(/[^a-z0-9\-_]/gi, '-').toLowerCase()
     const html = exportSessionToHtml(session, messages)
     downloadHtml(html, `${safeName}_${session.sessionId.slice(0, 8)}.html`)

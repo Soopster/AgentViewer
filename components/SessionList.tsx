@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback } from 'react'
 import type { Session } from '@/lib/types'
+import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
 import ThemeToggle from './ThemeToggle'
 
 type Props = {
@@ -60,6 +61,7 @@ function SessionRow({
   const inputRef = useRef<HTMLInputElement>(null)
   const shortId = session.sessionId.slice(-12)
   const sessionTitle = getSessionTitle(session)
+  const sessionTags = parseStoredSessionTags(session.tag)
 
   const startEdit = useCallback((kind: 'title' | 'tag', value: string) => (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -85,9 +87,11 @@ function SessionRow({
 
   const commitTagEdit = useCallback(async () => {
     setEditing(null)
-    const value = editValue.trim()
-    const nextTag = value || null
-    if (nextTag === (session.tag ?? null)) return
+    const currentTags = parseStoredSessionTags(session.tag)
+    const nextTags = parseSessionTagInput(editValue)
+    if (JSON.stringify(nextTags) === JSON.stringify(currentTags)) return
+
+    const nextTag = serializeSessionTags(nextTags)
     onTag(session.sessionId, nextTag)
     try {
       await fetch(`/api/sessions/${session.sessionId}`, {
@@ -210,7 +214,7 @@ function SessionRow({
             onKeyDown={handleKeyDown}
             onClick={e => e.stopPropagation()}
             autoFocus
-            placeholder="tag"
+            placeholder="tag1, tag2"
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 11,
@@ -220,32 +224,44 @@ function SessionRow({
               color: 'var(--text)',
               padding: '1px 6px',
               outline: 'none',
-              width: 110,
+              width: 160,
             }}
           />
-        ) : session.tag ? (
-          <span
-            onDoubleClick={startEdit('tag', session.tag)}
-            title="Double-click to edit tag"
+        ) : sessionTags.length > 0 ? (
+          <div
+            onDoubleClick={startEdit('tag', sessionTags.join(', '))}
+            title="Double-click to edit tags"
             style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              background: selected ? 'rgba(139,128,240,0.16)' : 'rgba(139,128,240,0.08)',
-              color: 'var(--violet)',
-              padding: '1px 6px',
-              borderRadius: 3,
-              border: '1px solid rgba(139,128,240,0.22)',
-              letterSpacing: '0.03em',
-              cursor: 'text',
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 4,
+              minWidth: 0,
             }}
           >
-            #{session.tag}
-          </span>
+            {sessionTags.map((tag) => (
+              <span
+                key={tag}
+                style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  background: selected ? 'rgba(139,128,240,0.16)' : 'rgba(139,128,240,0.08)',
+                  color: 'var(--violet)',
+                  padding: '1px 6px',
+                  borderRadius: 3,
+                  border: '1px solid rgba(139,128,240,0.22)',
+                  letterSpacing: '0.03em',
+                  cursor: 'text',
+                }}
+              >
+                #{tag}
+              </span>
+            ))}
+          </div>
         ) : hovered ? (
           <span
             onDoubleClick={startEdit('tag', '')}
             onClick={e => { e.stopPropagation(); startEdit('tag', '')(e) }}
-            title="Click to add a tag"
+            title="Click to add tags"
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 11,
@@ -257,7 +273,7 @@ function SessionRow({
               cursor: 'text',
             }}
           >
-            + tag
+            + tags
           </span>
         ) : null}
         {session.createdAt && (

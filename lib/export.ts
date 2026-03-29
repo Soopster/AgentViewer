@@ -2,6 +2,7 @@ import { marked } from 'marked'
 import { diffLines } from 'diff'
 import type { Session, SessionMessage, ToolResultBlock, ImageBlock } from './types'
 import { buildThreadedMessages } from './threading'
+import { getPrimarySessionTag } from './sessionTags'
 import type {
   ThreadedBlock,
   ThreadedMessage,
@@ -631,7 +632,7 @@ body {
 
 export function exportSessionToHtml(session: Session, messages: SessionMessage[]): string {
   const threaded = buildThreadedMessages(messages)
-  const dirName  = session.tag ?? session.cwd?.split('/').pop() ?? session.sessionId
+  const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? session.cwd?.split('/').pop() ?? session.sessionId
   const messagesHtml = threaded.map(renderMessage).join('\n')
   return buildHtmlDocument(dirName, session, threaded.length, messages.length, messagesHtml)
 }
