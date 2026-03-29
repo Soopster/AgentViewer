@@ -12,6 +12,7 @@ import { clearRunningSession, getRunningSession, setRunningSession } from './ses
 import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
 import type {
+  AgentProvider,
   ContextUsage,
   Session,
   SessionDiagnosticSection,
@@ -91,6 +92,7 @@ type ListParams = {
   offset: number
   dir?: string
   includeWorktrees?: boolean
+  provider?: AgentProvider | 'all'
 }
 
 type MessageListParams = {
@@ -102,16 +104,19 @@ type SendMessageParams = {
   sessionId: string
   request: NextRequest
   body: Record<string, unknown>
+  provider?: AgentProvider
 }
 
 type ForkParams = {
   sessionId: string
   body: Record<string, unknown>
+  provider?: AgentProvider
 }
 
 type RewindParams = {
   sessionId: string
   body: Record<string, unknown>
+  provider?: AgentProvider
 }
 
 function codexContextUsageToEventData(contextUsage: ContextUsage): string {
@@ -172,6 +177,28 @@ async function listCodexSessions({ limit, offset, dir }: ListParams): Promise<Se
   return page.map((thread) => mapCodexThreadToSession(thread, tags[thread.id] ?? null))
 }
 
+async function listClaudeSessions({ limit, offset, dir, includeWorktrees }: ListParams): Promise<Session[]> {
+  const sessions = await listSessions({
+    limit,
+    offset,
+    dir,
+    includeWorktrees: dir ? includeWorktrees : undefined,
+  })
+  return sessions.map((session) => ({
+    ...session,
+    provider: 'claude',
+    capabilities: getProviderCapabilities('claude'),
+  }))
+}
+
+async function resolveProvider(provider?: AgentProvider): Promise<AgentProvider> {
+  const resolved = provider ?? await getConfiguredProvider()
+  if (resolved === 'all') {
+    throw new Error('provider is required when all providers are active')
+  }
+  return resolved
+}
+
 async function readCodexThread(sessionId: string, includeTurns: boolean) {
   const client = getCodexClient()
   const response = await client.request<CodexThreadReadResponse>('thread/read', {
@@ -224,7 +251,22 @@ function openCodeDirectoryQuery(session: OpenCodeSession): { directory?: string 
 }
 
 export async function listViewSessions(params: ListParams): Promise<Session[]> {
-  const provider = await getConfiguredProvider()
+  const provider = params.provider ?? await getConfiguredProvider()
+  if (provider === 'all') {
+    const combinedLimit = Math.max(params.limit + params.offset, 500)
+    const [claude, codex, opencode] = await Promise.all([
+      listClaudeSessions({ ...params, provider: 'claude', limit: combinedLimit, offset: 0 }),
+      listCodexSessions({ ...params, provider: 'codex', limit: combinedLimit, offset: 0 }),
+      listOpenCodeSessions({ ...params, provider: 'opencode', limit: combinedLimit, offset: 0 }),
+    ])
+    return [...claude, ...codex, ...opencode]
+      .sort((a, b) => {
+        const aTime = Number(a.lastModified ?? a.createdAt ?? 0)
+        const bTime = Number(b.lastModified ?? b.createdAt ?? 0)
+        return bTime - aTime
+      })
+      .slice(params.offset, params.offset + params.limit)
+  }
   if (provider === 'codex') {
     return listCodexSessions(params)
   }
@@ -232,22 +274,11 @@ export async function listViewSessions(params: ListParams): Promise<Session[]> {
     const sessions = await listOpenCodeSessions(params)
     return sessions.slice(params.offset, params.offset + params.limit)
   }
-
-  const sessions = await listSessions({
-    limit: params.limit,
-    offset: params.offset,
-    dir: params.dir,
-    includeWorktrees: params.dir ? params.includeWorktrees : undefined,
-  })
-  return sessions.map((session) => ({
-    ...session,
-    provider: 'claude',
-    capabilities: getProviderCapabilities('claude'),
-  }))
+  return listClaudeSessions(params)
 }
 
-export async function readViewSessionInfo(sessionId: string): Promise<SessionInfo | null> {
-  const provider = await getConfiguredProvider()
+export async function readViewSessionInfo(sessionId: string, providerOverride?: AgentProvider): Promise<SessionInfo | null> {
+  const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const [thread, resume, tag] = await Promise.all([
       readCodexThread(sessionId, false),
@@ -279,8 +310,8 @@ export async function readViewSessionInfo(sessionId: string): Promise<SessionInf
   }
 }
 
-export async function patchViewSession(sessionId: string, body: Record<string, unknown>): Promise<void> {
-  const provider = await getConfiguredProvider()
+export async function patchViewSession(sessionId: string, body: Record<string, unknown>, providerOverride?: AgentProvider): Promise<void> {
+  const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const client = getCodexClient()
     if ('title' in body) {
@@ -324,8 +355,8 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
   throw new Error('title or tag required')
 }
 
-export async function listViewSessionMessages(sessionId: string, params: MessageListParams): Promise<SessionMessage[]> {
-  const provider = await getConfiguredProvider()
+export async function listViewSessionMessages(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessage[]> {
+  const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const thread = await readCodexThread(sessionId, true)
     const messages = mapCodexThreadToMessages(thread)
@@ -649,7 +680,7 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
     return NextResponse.json({ error: 'message is required' }, { status: 400 })
   }
 
-  const provider = await getConfiguredProvider()
+  const provider = await resolveProvider(params.provider)
   if (provider === 'codex') {
     return createCodexStream(params.sessionId, params.request, params.body)
   }
@@ -660,9 +691,9 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
   return createClaudeStream(params.sessionId, params.request, params.body)
 }
 
-export async function forkViewSession({ sessionId, body }: ForkParams): Promise<{ sessionId: string }> {
-  const provider = await getConfiguredProvider()
-  if (provider === 'codex') {
+export async function forkViewSession({ sessionId, body, provider }: ForkParams): Promise<{ sessionId: string }> {
+  const resolvedProvider = await resolveProvider(provider)
+  if (resolvedProvider === 'codex') {
     const client = getCodexClient()
     const response = await client.request<CodexThreadForkResponse>('thread/fork', {
       threadId: sessionId,
@@ -676,7 +707,7 @@ export async function forkViewSession({ sessionId, body }: ForkParams): Promise<
     }
     return { sessionId: response.thread.id }
   }
-  if (provider === 'opencode') {
+  if (resolvedProvider === 'opencode') {
     const client = await getOpenCodeClient()
     const forkedResponse = await client.session.fork({
       ...OPENCODE_OPTIONS,
@@ -711,8 +742,8 @@ export async function interruptViewSession(sessionId: string): Promise<void> {
   await running.interrupt()
 }
 
-export async function readViewSessionModels(sessionId: string): Promise<{ models: SessionModelInfo[]; currentModel: string | null }> {
-  const provider = await getConfiguredProvider()
+export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null }> {
+  const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const client = getCodexClient()
     const [modelsResponse, resume] = await Promise.all([
@@ -756,8 +787,8 @@ export async function readViewSessionModels(sessionId: string): Promise<{ models
   }
 }
 
-export async function readViewSessionDiagnostics(sessionId: string): Promise<{ sections: SessionDiagnosticSection[]; currentModel: string | null }> {
-  const provider = await getConfiguredProvider()
+export async function readViewSessionDiagnostics(sessionId: string, providerOverride?: AgentProvider): Promise<{ sections: SessionDiagnosticSection[]; currentModel: string | null }> {
+  const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const client = getCodexClient()
     const [thread, resume, mcpServers, features, skills, apps] = await Promise.all([
@@ -854,9 +885,9 @@ export async function readViewSessionDiagnostics(sessionId: string): Promise<{ s
   }
 }
 
-export async function rewindOrRollbackViewSession({ sessionId, body }: RewindParams): Promise<Record<string, unknown>> {
-  const provider = await getConfiguredProvider()
-  if (provider === 'codex') {
+export async function rewindOrRollbackViewSession({ sessionId, body, provider }: RewindParams): Promise<Record<string, unknown>> {
+  const resolvedProvider = await resolveProvider(provider)
+  if (resolvedProvider === 'codex') {
     const numTurns = Number(body.numTurns ?? 1)
     if (!Number.isFinite(numTurns) || numTurns < 1) {
       throw new Error('numTurns is required')
@@ -899,7 +930,7 @@ export async function rewindOrRollbackViewSession({ sessionId, body }: RewindPar
       remainingTurns: result.thread.turns.length,
     }
   }
-  if (provider === 'opencode') {
+  if (resolvedProvider === 'opencode') {
     const userMessageId = typeof body.userMessageId === 'string' ? body.userMessageId : undefined
     if (!userMessageId) {
       throw new Error('userMessageId is required')

@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect } from 'react'
-import type { AgentProvider, Session } from '@/lib/types'
+import { pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
+import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
 import ThemeToggle from './ThemeToggle'
 
@@ -9,15 +10,15 @@ type Props = {
   sessions: Session[]
   loading: boolean
   error: string | null
-  provider: AgentProvider
+  provider: ProviderSelection
   switchingProvider: boolean
   selectedId: string | null
   selectedProject: string | null
-  onSelect: (id: string) => void
-  onSelectProject: (key: string, sessions: Session[]) => void
+  onSelect: (session: Session) => void
+  onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onRename: (sessionId: string, title: string) => void
   onTag: (sessionId: string, tag: string | null) => void
-  onChangeProvider: (provider: AgentProvider) => void
+  onChangeProvider: (provider: ProviderSelection) => void
   scopeMode: 'all' | 'project'
   scopeProjectName: string | null
   canScopeToProject: boolean
@@ -41,16 +42,31 @@ function formatTimestamp(value?: string | number): string {
   return new Date(value).toLocaleString()
 }
 
-/** Group sessions by the last path component of cwd, preserving first-seen order. */
-function groupByProject(sessions: Session[]): Map<string, Session[]> {
-  const map = new Map<string, Session[]>()
+type ProjectGroupEntry = {
+  projectDir: string
+  projectName: string
+  sessions: Session[]
+}
+
+/** Group sessions by full cwd, preserving first-seen order. */
+function groupByProject(sessions: Session[]): ProjectGroupEntry[] {
+  const groups: ProjectGroupEntry[] = []
   for (const s of sessions) {
-    const key = s.cwd?.split('/').pop() ?? '—'
-    const arr = map.get(key) ?? []
-    arr.push(s)
-    map.set(key, arr)
+    const projectDir = s.cwd ?? '—'
+    const existing = groups.find((group) => sameProjectPath(group.projectDir, projectDir))
+    if (existing) {
+      existing.projectDir = pickCanonicalProjectPath(existing.projectDir, projectDir) || existing.projectDir
+      existing.projectName = existing.projectDir.split('/').pop() ?? '—'
+      existing.sessions.push(s)
+      continue
+    }
+    groups.push({
+      projectDir,
+      projectName: s.cwd?.split('/').pop() ?? '—',
+      sessions: [s],
+    })
   }
-  return map
+  return groups
 }
 
 function getSessionTitle(session: Session): string {
@@ -84,6 +100,16 @@ function matchesSessionSearch(session: Session, search: string, activeTag: strin
   return haystack.includes(search)
 }
 
+function providerChipStyle(provider: AgentProvider): { color: string; background: string; border: string } {
+  if (provider === 'codex') {
+    return { color: 'var(--cyan)', background: 'rgba(56,217,245,0.08)', border: 'rgba(56,217,245,0.22)' }
+  }
+  if (provider === 'opencode') {
+    return { color: 'var(--green)', background: 'rgba(45,212,160,0.08)', border: 'rgba(45,212,160,0.22)' }
+  }
+  return { color: 'var(--violet)', background: 'rgba(139,128,240,0.08)', border: 'rgba(139,128,240,0.22)' }
+}
+
 function SessionRow({
   session,
   selected,
@@ -93,7 +119,7 @@ function SessionRow({
 }: {
   session: Session
   selected: boolean
-  onSelect: (id: string) => void
+  onSelect: (session: Session) => void
   onRename: (sessionId: string, title: string) => void
   onTag: (sessionId: string, tag: string | null) => void
 }) {
@@ -125,7 +151,7 @@ function SessionRow({
       await fetch(`/api/sessions/${session.sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: value }),
+        body: JSON.stringify({ title: value, provider: session.provider }),
       })
     } catch { /* optimistic — ignore errors */ }
   }, [editValue, onRename, session.sessionId, sessionTitle])
@@ -142,7 +168,7 @@ function SessionRow({
       await fetch(`/api/sessions/${session.sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tag: nextTag }),
+        body: JSON.stringify({ tag: nextTag, provider: session.provider }),
       })
     } catch { /* optimistic — ignore errors */ }
   }, [editValue, onTag, session.sessionId, session.tag])
@@ -157,7 +183,7 @@ function SessionRow({
 
   return (
     <div
-      onClick={() => !editing && onSelect(session.sessionId)}
+      onClick={() => !editing && onSelect(session)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -267,6 +293,22 @@ function SessionRow({
 
       {/* Tag + time */}
       <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 6, minHeight: 18 }}>
+        {session.provider && (
+          <span
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              padding: '1px 6px',
+              borderRadius: 999,
+              letterSpacing: '0.05em',
+              border: `1px solid ${providerChipStyle(session.provider).border}`,
+              background: providerChipStyle(session.provider).background,
+              color: providerChipStyle(session.provider).color,
+            }}
+          >
+            {session.provider.toUpperCase()}
+          </span>
+        )}
         {editing === 'tag' ? (
           <input
             ref={inputRef}
@@ -357,6 +399,7 @@ function SessionRow({
 
 function ProjectGroup({
   name,
+  projectKey,
   sessions,
   selectedId,
   selectedProject,
@@ -366,17 +409,18 @@ function ProjectGroup({
   onTag,
 }: {
   name: string
+  projectKey: string
   sessions: Session[]
   selectedId: string | null
   selectedProject: string | null
-  onSelect: (id: string) => void
-  onSelectProject: (key: string, sessions: Session[]) => void
+  onSelect: (session: Session) => void
+  onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onRename: (sessionId: string, title: string) => void
   onTag: (sessionId: string, tag: string | null) => void
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const [hovered, setHovered] = useState(false)
-  const isProjectSelected = selectedProject === name
+  const isProjectSelected = sameProjectPath(selectedProject, projectKey)
   const hasSelected = isProjectSelected || sessions.some(s => s.sessionId === selectedId)
 
   return (
@@ -411,7 +455,7 @@ function ProjectGroup({
         </span>
         {/* Name: loads project consolidated view */}
         <span
-          onClick={() => onSelectProject(name, sessions)}
+          onClick={() => onSelectProject(projectKey, name, sessions)}
           style={{
             fontFamily: "'Oxanium', monospace",
             fontSize: 12,
@@ -564,8 +608,8 @@ export default function SessionList({
             {loading
               ? 'syncing…'
               : filteredSessions.length === sessions.length
-              ? `${groups.size} project${groups.size !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
-              : `${filteredSessions.length}/${sessions.length} sessions · ${groups.size} projects`}
+              ? `${groups.length} project${groups.length !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
+              : `${filteredSessions.length}/${sessions.length} sessions · ${groups.length} projects`}
           </span>
         </div>
         <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
@@ -625,6 +669,25 @@ export default function SessionList({
             }}
           >
             OPENCODE
+          </button>
+          <button
+            onClick={() => onChangeProvider('all')}
+            disabled={switchingProvider}
+            style={{
+              flex: 1,
+              height: 28,
+              borderRadius: 5,
+              border: `1px solid ${provider === 'all' ? 'rgba(45,212,160,0.32)' : 'var(--border)'}`,
+              background: provider === 'all' ? 'rgba(45,212,160,0.12)' : 'var(--surface-2)',
+              color: provider === 'all' ? 'var(--green)' : 'var(--text-3)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.06em',
+              cursor: switchingProvider ? 'not-allowed' : 'pointer',
+              opacity: switchingProvider ? 0.6 : 1,
+            }}
+          >
+            ALL
           </button>
         </div>
         <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -786,10 +849,11 @@ export default function SessionList({
           </div>
         )}
 
-        {!loading && !error && [...groups.entries()].map(([name, groupSessions]) => (
+        {!loading && !error && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
           <ProjectGroup
-            key={name}
-            name={name}
+            key={projectDir}
+            name={projectName}
+            projectKey={projectDir}
             sessions={groupSessions}
             selectedId={selectedId}
             selectedProject={selectedProject}

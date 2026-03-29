@@ -2,12 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { readViewSessionModels } from '@/lib/sessionBackend'
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
   const { sessionId } = await params
+  const providerParam = new URL(request.url).searchParams.get('provider')
+  const provider = providerParam === 'claude' || providerParam === 'codex' || providerParam === 'opencode'
+    ? providerParam
+    : undefined
   try {
-    const { models, currentModel } = await readViewSessionModels(sessionId)
+    const { models, currentModel } = await readViewSessionModels(sessionId, provider)
     return NextResponse.json({
       models,
       currentModel,

@@ -34,6 +34,14 @@ function stringify(value: unknown): string {
   }
 }
 
+function uuidV7ToIsoTimestamp(value: string): string | undefined {
+  const compact = value.replace(/-/g, '')
+  if (!/^[0-9a-fA-F]{12,}$/.test(compact)) return undefined
+  const milliseconds = Number.parseInt(compact.slice(0, 12), 16)
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return undefined
+  return new Date(milliseconds).toISOString()
+}
+
 function codexUserInputToText(input: CodexUserInput[]): string {
   return input
     .map((entry) => {
@@ -62,6 +70,7 @@ function makeMessage(
   type: 'user' | 'assistant',
   content: ApiMessage['content'],
   turnId: string,
+  timestamp?: string,
 ): SessionMessage {
   return {
     type,
@@ -70,6 +79,7 @@ function makeMessage(
     parent_tool_use_id: null,
     provider: 'codex',
     turnId,
+    timestamp,
     message: {
       role: type,
       content,
@@ -98,24 +108,24 @@ function toolInput(value: unknown): Record<string, unknown> {
   return Object.keys(objectValue).length > 0 ? objectValue : { value }
 }
 
-function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadItem): SessionMessage[] {
+function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadItem, timestamp?: string): SessionMessage[] {
   const baseId = `${turnId}:${item.id}`
 
   switch (item.type) {
     case 'userMessage': {
       const text = codexUserInputToText(item.content)
       return text
-        ? [makeMessage(threadId, baseId, 'user', text, turnId)]
+        ? [makeMessage(threadId, baseId, 'user', text, turnId, timestamp)]
         : []
     }
     case 'agentMessage':
-      return item.text ? [makeMessage(threadId, baseId, 'assistant', item.text, turnId)] : []
+      return item.text ? [makeMessage(threadId, baseId, 'assistant', item.text, turnId, timestamp)] : []
     case 'plan':
-      return item.text ? [makeMessage(threadId, baseId, 'assistant', `## Plan\n\n${item.text}`, turnId)] : []
+      return item.text ? [makeMessage(threadId, baseId, 'assistant', `## Plan\n\n${item.text}`, turnId, timestamp)] : []
     case 'reasoning': {
       const thinking = [...item.summary, ...item.content].filter(Boolean).join('\n\n').trim()
       return thinking
-        ? [makeMessage(threadId, baseId, 'assistant', [{ type: 'thinking', thinking }], turnId)]
+        ? [makeMessage(threadId, baseId, 'assistant', [{ type: 'thinking', thinking }], turnId, timestamp)]
         : []
     }
     case 'commandExecution': {
@@ -131,7 +141,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
           source: item.source,
           processId: item.processId,
         },
-      }], turnId)
+      }], turnId, timestamp)
       const resultText = [
         item.aggregatedOutput ?? '',
         item.exitCode != null ? `exit_code: ${item.exitCode}` : '',
@@ -139,7 +149,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
       ].filter(Boolean).join('\n')
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, resultText || 'No output recorded.', item.status === 'failed'),
-      ], turnId)
+      ], turnId, timestamp)
       return [assistant, result]
     }
     case 'fileChange': {
@@ -152,10 +162,10 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
           status: item.status,
           changes: item.changes.map((change) => ({ path: change.path, kind: change.kind })),
         },
-      }], turnId)
+      }], turnId, timestamp)
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, summarizeFileChanges(item.changes), item.status === 'failed'),
-      ], turnId)
+      ], turnId, timestamp)
       return [assistant, result]
     }
     case 'mcpToolCall': {
@@ -169,7 +179,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
           status: item.status,
           ...toolInput(item.arguments),
         },
-      }], turnId)
+      }], turnId, timestamp)
       const resultText = item.error
         ? stringify(item.error)
         : item.result
@@ -177,7 +187,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
         : `${item.server}/${item.tool} completed with no structured result`
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, resultText, Boolean(item.error)),
-      ], turnId)
+      ], turnId, timestamp)
       return [assistant, result]
     }
     case 'dynamicToolCall': {
@@ -187,10 +197,10 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
         id: toolUseId,
         name: item.tool || 'DynamicTool',
         input: toolInput(item.arguments),
-      }], turnId)
+      }], turnId, timestamp)
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, stringify(item.contentItems ?? { success: item.success, status: item.status }), item.success === false),
-      ], turnId)
+      ], turnId, timestamp)
       return [assistant, result]
     }
     case 'collabAgentToolCall': {
@@ -208,10 +218,10 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
           model: item.model,
           reasoningEffort: item.reasoningEffort,
         },
-      }], turnId)
+      }], turnId, timestamp)
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, stringify(item.agentsStates)),
-      ], turnId)
+      ], turnId, timestamp)
       return [assistant, result]
     }
     case 'webSearch': {
@@ -224,24 +234,24 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
           query: item.query,
           action: item.action,
         },
-      }], turnId)
+      }], turnId, timestamp)
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, stringify(item.action ?? { query: item.query })),
-      ], turnId)
+      ], turnId, timestamp)
       return [assistant, result]
     }
     case 'imageView':
-      return [makeMessage(threadId, baseId, 'assistant', `[image view] ${item.path}`, turnId)]
+      return [makeMessage(threadId, baseId, 'assistant', `[image view] ${item.path}`, turnId, timestamp)]
     case 'imageGeneration':
-      return [makeMessage(threadId, baseId, 'assistant', `Image generation (${item.status})\n\n${item.result}`, turnId)]
+      return [makeMessage(threadId, baseId, 'assistant', `Image generation (${item.status})\n\n${item.result}`, turnId, timestamp)]
     case 'enteredReviewMode':
-      return [makeMessage(threadId, baseId, 'assistant', `Entered review mode\n\n${item.review}`, turnId)]
+      return [makeMessage(threadId, baseId, 'assistant', `Entered review mode\n\n${item.review}`, turnId, timestamp)]
     case 'exitedReviewMode':
-      return [makeMessage(threadId, baseId, 'assistant', `Exited review mode\n\n${item.review}`, turnId)]
+      return [makeMessage(threadId, baseId, 'assistant', `Exited review mode\n\n${item.review}`, turnId, timestamp)]
     case 'contextCompaction':
-      return [makeMessage(threadId, baseId, 'assistant', 'Context compaction completed.', turnId)]
+      return [makeMessage(threadId, baseId, 'assistant', 'Context compaction completed.', turnId, timestamp)]
     case 'hookPrompt':
-      return [makeMessage(threadId, baseId, 'assistant', `Hook prompt emitted (${item.fragments.length} fragment${item.fragments.length === 1 ? '' : 's'}).`, turnId)]
+      return [makeMessage(threadId, baseId, 'assistant', `Hook prompt emitted (${item.fragments.length} fragment${item.fragments.length === 1 ? '' : 's'}).`, turnId, timestamp)]
     default:
       return []
   }
@@ -283,12 +293,13 @@ export function mapCodexThreadToMessages(thread: CodexThread): SessionMessage[] 
   const messages: SessionMessage[] = []
 
   for (const turn of thread.turns) {
+    const timestamp = uuidV7ToIsoTimestamp(turn.id)
     for (const item of turn.items) {
-      messages.push(...mapItemToMessages(thread.id, turn.id, item))
+      messages.push(...mapItemToMessages(thread.id, turn.id, item, timestamp))
     }
 
     if (turn.error) {
-      messages.push(makeMessage(thread.id, `${turn.id}:error`, 'assistant', `Turn failed\n\n${turn.error}`, turn.id))
+      messages.push(makeMessage(thread.id, `${turn.id}:error`, 'assistant', `Turn failed\n\n${turn.error}`, turn.id, timestamp))
     }
   }
 

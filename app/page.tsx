@@ -4,47 +4,123 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
-import type { AgentProvider, Session, SessionMessage } from '@/lib/types'
+import { sameProjectPath } from '@/lib/projectPaths'
+import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
 
 type SessionScopeMode = 'all' | 'project'
+type ProjectSelection = {
+  key: string
+  dir: string
+  sessions: Session[]
+}
+
+const ALL_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode']
+
+function withProviderQuery(path: string, provider?: AgentProvider | 'all'): string {
+  if (!provider) return path
+  const separator = path.includes('?') ? '&' : '?'
+  return `${path}${separator}provider=${provider}`
+}
+
+function messageTimestampMs(message: SessionMessage): number {
+  if (message.timestamp) {
+    const parsed = Date.parse(message.timestamp)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return 0
+}
 
 export default function Home() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [selectedProject, setSelectedProject] = useState<{ key: string; sessions: Session[] } | null>(null)
+  const [selectedProject, setSelectedProject] = useState<ProjectSelection | null>(null)
   const [messages, setMessages] = useState<SessionMessage[]>([])
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
-  const [provider, setProvider] = useState<AgentProvider>('claude')
+  const [provider, setProvider] = useState<ProviderSelection>('claude')
   const [switchingProvider, setSwitchingProvider] = useState(false)
   const [sessionScope, setSessionScope] = useState<SessionScopeMode>('all')
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
   // Tracks how many messages we've already loaded so polling can fetch only new ones
   const msgCountRef = useRef(0)
   const selectedSession = sessions.find((s) => s.sessionId === selectedId) ?? null
-  const activeProjectDir = selectedProject?.sessions[0]?.cwd ?? selectedSession?.cwd ?? null
-  const activeProjectName = activeProjectDir?.split('/').pop() ?? null
+  const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
+  const activeProjectName = selectedProject?.key ?? activeProjectDir?.split('/').pop() ?? null
 
-  const fetchSessions = useCallback(async () => {
-    const params = new URLSearchParams()
-    if (sessionScope === 'project' && activeProjectDir) {
-      params.set('dir', activeProjectDir)
-      params.set('includeWorktrees', String(includeWorktrees))
+  const fetchAllProviderProjectSessions = useCallback(async (dir: string) => {
+    const results = await Promise.all(
+      ALL_PROVIDERS.map(async (providerName) => {
+        const params = new URLSearchParams()
+        params.set('provider', providerName)
+        params.set('limit', '500')
+        params.set('includeWorktrees', String(includeWorktrees))
+        const response = await fetch(`/api/sessions?${params.toString()}`)
+        const data = await response.json()
+        if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
+        const loaded = (data.sessions ?? []) as Session[]
+        return loaded.filter((session) => sameProjectPath(dir, session.cwd))
+      })
+    )
+
+    const deduped = new Map<string, Session>()
+    for (const session of results.flat()) {
+      deduped.set(`${session.provider}:${session.sessionId}`, session)
     }
 
+    return [...deduped.values()].sort((a, b) => {
+      const aTime = Number(a.lastModified ?? a.createdAt ?? 0)
+      const bTime = Number(b.lastModified ?? b.createdAt ?? 0)
+      return bTime - aTime
+    })
+  }, [includeWorktrees])
+
+  const fetchProjectSessions = useCallback(async (dir: string, selection: ProviderSelection) => {
+    if (selection === 'all') {
+      return fetchAllProviderProjectSessions(dir)
+    }
+
+    const params = new URLSearchParams()
+    params.set('dir', dir)
+    params.set('includeWorktrees', String(includeWorktrees))
+    params.set('limit', '500')
+    const response = await fetch(`/api/sessions?${params.toString()}`)
+    const data = await response.json()
+    if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
+    return (data.sessions ?? []) as Session[]
+  }, [fetchAllProviderProjectSessions, includeWorktrees])
+
+  const fetchSessionMessages = useCallback(async (session: Session) => {
+    const response = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?limit=2000`, session.provider))
+    const data = await response.json()
+    if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
+    return (data.messages ?? []) as SessionMessage[]
+  }, [])
+
+  const fetchSessions = useCallback(async () => {
+    if (sessionScope === 'project' && activeProjectDir) {
+      const loaded = await fetchProjectSessions(activeProjectDir, provider)
+      setSessions(loaded)
+      return
+    }
+
+    const params = new URLSearchParams()
+    if (provider === 'all') {
+      params.set('provider', 'all')
+      params.set('limit', '500')
+    }
     const suffix = params.toString() ? `?${params.toString()}` : ''
     const r = await fetch(`/api/sessions${suffix}`)
     const data = await r.json()
     if (data.error) throw new Error(data.error)
-    setSessions(data.sessions ?? [])
-  }, [activeProjectDir, includeWorktrees, sessionScope])
+    setSessions((data.sessions ?? []) as Session[])
+  }, [activeProjectDir, fetchProjectSessions, provider, sessionScope])
 
   const fetchProvider = useCallback(async () => {
     const r = await fetch('/api/provider')
     const data = await r.json()
     if (data.error) throw new Error(data.error)
-    setProvider(data.provider === 'codex' || data.provider === 'opencode' ? data.provider : 'claude')
+    setProvider(data.provider === 'all' || data.provider === 'codex' || data.provider === 'opencode' ? data.provider : 'claude')
   }, [])
 
   // Keep ref in sync with state (avoids stale closures inside setInterval)
@@ -69,11 +145,11 @@ export default function Home() {
   useEffect(() => {
     setSelectedProject((prev) => {
       if (!prev) return prev
-      const nextSessions = sessions.filter((s) => (s.cwd?.split('/').pop() ?? '—') === prev.key)
-      if (nextSessions.length === 0) return null
+      const nextSessions = sessions.filter((s) => sameProjectPath(prev.dir, s.cwd))
+      if (nextSessions.length === 0) return provider === 'all' && sessionScope !== 'project' ? prev : null
       return { ...prev, sessions: nextSessions }
     })
-  }, [sessions])
+  }, [provider, sessionScope, sessions])
 
   useEffect(() => {
     if (sessionScope === 'project' && !activeProjectDir) {
@@ -94,7 +170,7 @@ export default function Home() {
     const id = setInterval(async () => {
       const offset = msgCountRef.current
       try {
-        const r = await fetch(`/api/sessions/${selectedId}/messages?offset=${offset}&limit=200`)
+        const r = await fetch(withProviderQuery(`/api/sessions/${selectedId}/messages?offset=${offset}&limit=200`, selectedSession?.provider))
         const data = await r.json()
         if (!data.error && data.messages?.length > 0) {
           setMessages((prev) => [...prev, ...data.messages])
@@ -102,36 +178,37 @@ export default function Home() {
       } catch { /* ignore transient errors */ }
     }, 2000)
     return () => clearInterval(id)
-  }, [selectedId, loadingMessages])
+  }, [loadingMessages, selectedId, selectedSession?.provider])
 
   // Poll project view every 10 s (full refresh across all sessions)
   useEffect(() => {
     if (!selectedProject) return
     const id = setInterval(async () => {
       try {
+        const projectSessions = await fetchProjectSessions(selectedProject.dir, provider)
         const results = await Promise.all(
-          selectedProject.sessions.map((s) =>
-            fetch(`/api/sessions/${s.sessionId}/messages`).then((r) => r.json())
-          )
+          projectSessions.map((session) => fetchSessionMessages(session))
         )
-        const all = results.flatMap((d) => d.messages ?? []) as SessionMessage[]
-        all.sort((a, b) => (a.timestamp ?? '').localeCompare(b.timestamp ?? ''))
+        const all = results.flat() as SessionMessage[]
+        all.sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
         setMessages(all)
+        setSelectedProject((prev) => prev && prev.dir === selectedProject.dir
+          ? { ...prev, sessions: projectSessions }
+          : prev
+        )
       } catch { /* ignore transient errors */ }
     }, 10_000)
     return () => clearInterval(id)
-  }, [selectedProject])
+  }, [fetchProjectSessions, fetchSessionMessages, provider, selectedProject])
 
-  async function selectSession(sessionId: string) {
-    setSelectedId(sessionId)
+  async function selectSession(session: Session) {
+    setSelectedId(session.sessionId)
     setSelectedProject(null)
     setLoadingMessages(true)
     setMessages([])
     try {
-      const r = await fetch(`/api/sessions/${sessionId}/messages`)
-      const data = await r.json()
-      if (data.error) throw new Error(data.error)
-      setMessages(data.messages ?? [])
+      const loadedMessages = await fetchSessionMessages(session)
+      setMessages(loadedMessages)
     } catch (err) {
       console.error('Failed to load messages:', err)
     } finally {
@@ -139,20 +216,22 @@ export default function Home() {
     }
   }
 
-  async function selectProject(key: string, projectSessions: Session[]) {
-    setSelectedProject({ key, sessions: projectSessions })
+  async function selectProject(projectDir: string, projectName: string, projectSessions: Session[]) {
+    setSelectedProject({ key: projectName, dir: projectDir, sessions: projectSessions })
     setSelectedId(null)
     setLoadingMessages(true)
     setMessages([])
     try {
+      const sessionsForProject = provider === 'all'
+        ? await fetchProjectSessions(projectDir, 'all')
+        : projectSessions
       const results = await Promise.all(
-        projectSessions.map((s) =>
-          fetch(`/api/sessions/${s.sessionId}/messages`).then((r) => r.json())
-        )
+        sessionsForProject.map((session) => fetchSessionMessages(session))
       )
-      const all = results.flatMap((d) => d.messages ?? []) as SessionMessage[]
-      all.sort((a, b) => (a.timestamp ?? '').localeCompare(b.timestamp ?? ''))
+      const all = results.flat() as SessionMessage[]
+      all.sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
       setMessages(all)
+      setSelectedProject({ key: projectName, dir: projectDir, sessions: sessionsForProject })
     } catch (err) {
       console.error('Failed to load project messages:', err)
     } finally {
@@ -194,11 +273,11 @@ export default function Home() {
 
   // Navigate to a newly forked session
   const handleFork = useCallback((newSessionId: string) => {
-    // The new session will appear in the next poll cycle; select it immediately
-    selectSession(newSessionId)
-  }, [])
+    if (!selectedSession?.provider) return
+    void selectSession({ sessionId: newSessionId, provider: selectedSession.provider } as Session)
+  }, [selectedSession?.provider])
 
-  const handleChangeProvider = useCallback(async (nextProvider: AgentProvider) => {
+  const handleChangeProvider = useCallback(async (nextProvider: ProviderSelection) => {
     if (nextProvider === provider || switchingProvider) return
     setSwitchingProvider(true)
     setSessionsError(null)
@@ -214,21 +293,31 @@ export default function Home() {
       setProvider(nextProvider)
       setSelectedId(null)
       setSelectedProject(null)
-      setSessionScope('all')
       setMessages([])
       setLoadingMessages(false)
       setLoadingSessions(true)
-      const resessions = await fetch('/api/sessions')
+      if (sessionScope === 'project' && activeProjectDir) {
+        const loaded = await fetchProjectSessions(activeProjectDir, nextProvider)
+        setSessions(loaded)
+        return
+      }
+      const params = new URLSearchParams()
+      if (nextProvider === 'all') {
+        params.set('provider', 'all')
+        params.set('limit', '500')
+      }
+      const suffix = params.toString() ? `?${params.toString()}` : ''
+      const resessions = await fetch(`/api/sessions${suffix}`)
       const sessionData = await resessions.json()
       if (!resessions.ok || sessionData.error) throw new Error(sessionData.error ?? `HTTP ${resessions.status}`)
-      setSessions(sessionData.sessions ?? [])
+      setSessions((sessionData.sessions ?? []) as Session[])
     } catch (err) {
       setSessionsError(err instanceof Error ? err.message : 'Failed to switch provider')
     } finally {
       setLoadingSessions(false)
       setSwitchingProvider(false)
     }
-  }, [fetchSessions, provider, switchingProvider])
+  }, [activeProjectDir, fetchProjectSessions, provider, sessionScope, switchingProvider])
 
   return (
     <CodeThemeProvider>
@@ -240,7 +329,7 @@ export default function Home() {
         provider={provider}
         switchingProvider={switchingProvider}
         selectedId={selectedId}
-        selectedProject={selectedProject?.key ?? null}
+        selectedProject={selectedProject?.dir ?? null}
         onSelect={selectSession}
         onSelectProject={selectProject}
         onRename={handleRename}
@@ -257,7 +346,7 @@ export default function Home() {
         messages={messages}
         loading={loadingMessages}
         session={selectedSession}
-        projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length } : undefined}
+        projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
         onFork={handleFork}
       />
     </div>

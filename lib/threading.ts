@@ -187,7 +187,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
   // Deduplicate by UUID — the JSONL can contain the same UUID multiple times
   // (retries, updates). Keep the last occurrence since it's the most recent.
   const seen = new Map<string, SessionMessage>()
-  for (const msg of messages) seen.set(msg.uuid, msg)
+  for (const msg of messages) seen.set(`${msg.provider ?? 'claude'}:${msg.uuid}`, msg)
   const deduped = [...seen.values()]
 
   // Pass 1: collect all tool results and mark plumbing turns

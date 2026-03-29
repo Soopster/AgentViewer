@@ -20,7 +20,7 @@ type Props = {
   messages: SessionMessage[]
   loading: boolean
   session: Session | null
-  projectView?: { key: string; sessionCount: number }
+  projectView?: { key: string; sessionCount: number; providerMode: 'current' | 'all' }
   onFork?: (newSessionId: string) => void
 }
 
@@ -334,6 +334,12 @@ function assistantDisplayName(provider: Session['provider'] | SessionInfo['provi
   return 'Claude'
 }
 
+function withProviderQuery(path: string, provider?: Session['provider']): string {
+  if (!provider) return path
+  const separator = path.includes('?') ? '&' : '?'
+  return `${path}${separator}provider=${provider}`
+}
+
 export default function MessageView({ messages, loading, session, projectView, onFork }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
@@ -372,11 +378,11 @@ export default function MessageView({ messages, loading, session, projectView, o
   // Load session info (git branch, summary, etc.) when session changes
   useEffect(() => {
     if (!session) { setSessionInfo(null); return }
-    fetch(`/api/sessions/${session.sessionId}`)
+    fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider))
       .then(r => r.json())
       .then(data => { if (!data.error) setSessionInfo(data.info) })
       .catch(() => {})
-  }, [session?.sessionId])
+  }, [session?.provider, session?.sessionId])
 
   useEffect(() => {
     if (!session) {
@@ -385,7 +391,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       return
     }
 
-    fetch(`/api/sessions/${session.sessionId}/models`)
+    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/models`, session.provider))
       .then(r => r.json())
       .then(data => {
         if (data.error) return
@@ -393,7 +399,7 @@ export default function MessageView({ messages, loading, session, projectView, o
         setSelectedModel(data.currentModel ?? data.models?.[0]?.value ?? '')
       })
       .catch(() => {})
-  }, [session?.sessionId])
+  }, [session?.provider, session?.sessionId])
 
   // Reset context usage when switching sessions
   useEffect(() => {
@@ -470,7 +476,11 @@ export default function MessageView({ messages, loading, session, projectView, o
 
   const cancelSend = useCallback(() => {
     if (session) {
-      fetch(`/api/sessions/${session.sessionId}/interrupt`, { method: 'POST' }).catch(() => {})
+      fetch(`/api/sessions/${session.sessionId}/interrupt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: session.provider }),
+      }).catch(() => {})
     }
     if (optimisticUserText) {
       setInputText((prev) => prev || optimisticUserText)
@@ -523,6 +533,7 @@ export default function MessageView({ messages, loading, session, projectView, o
           model: selectedModel,
           resumeSessionAt: resumeFromMessageId ?? undefined,
           forkSession: Boolean(resumeFromMessageId),
+          provider: session.provider,
         }),
         signal: controller.signal,
       })
@@ -667,7 +678,11 @@ export default function MessageView({ messages, loading, session, projectView, o
     if (!session || forking) return
     setForking(true)
     try {
-      const res = await fetch(`/api/sessions/${session.sessionId}/fork`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+      const res = await fetch(`/api/sessions/${session.sessionId}/fork`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: session.provider }),
+      })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       onFork?.(data.sessionId)
@@ -687,7 +702,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/fork`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ upToMessageId: messageId }),
+        body: JSON.stringify({ upToMessageId: messageId, provider: session.provider }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -715,7 +730,7 @@ export default function MessageView({ messages, loading, session, projectView, o
 
     setDiagnosticsLoading(true)
     try {
-      const res = await fetch(`/api/sessions/${session.sessionId}/diagnostics`)
+      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider))
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
       setDiagnosticSections(data.sections ?? [])
@@ -801,7 +816,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userMessageId: selectedRewindTarget.uuid, model: selectedModel, dryRun: true }),
+        body: JSON.stringify({ userMessageId: selectedRewindTarget.uuid, model: selectedModel, dryRun: true, provider: session.provider }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -836,7 +851,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userMessageId: rewindPreview.userMessageId, model: selectedModel }),
+        body: JSON.stringify({ userMessageId: rewindPreview.userMessageId, model: selectedModel, provider: session.provider }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -862,7 +877,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ numTurns: rollbackTurns, dryRun: true }),
+        body: JSON.stringify({ numTurns: rollbackTurns, dryRun: true, provider: session.provider }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -893,7 +908,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ numTurns: rollbackPreview.numTurns }),
+        body: JSON.stringify({ numTurns: rollbackPreview.numTurns, provider: session.provider }),
       })
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
@@ -1022,22 +1037,40 @@ export default function MessageView({ messages, loading, session, projectView, o
 
         {/* Project view badge */}
         {isProject && (
-          <span
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
-              fontWeight: 600,
-              letterSpacing: '0.1em',
-              color: 'var(--violet)',
-              background: 'rgba(139,128,240,0.1)',
-              border: '1px solid rgba(139,128,240,0.25)',
-              borderRadius: 3,
-              padding: '2px 7px',
-              flexShrink: 0,
-            }}
-          >
-            ALL SESSIONS
-          </span>
+          <>
+            <span
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.1em',
+                color: 'var(--violet)',
+                background: 'rgba(139,128,240,0.1)',
+                border: '1px solid rgba(139,128,240,0.25)',
+                borderRadius: 3,
+                padding: '2px 7px',
+                flexShrink: 0,
+              }}
+            >
+              ALL SESSIONS
+            </span>
+            <span
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.1em',
+                color: projectView.providerMode === 'all' ? 'var(--green)' : 'var(--text-3)',
+                background: projectView.providerMode === 'all' ? 'rgba(45,212,160,0.1)' : 'var(--surface-2)',
+                border: `1px solid ${projectView.providerMode === 'all' ? 'rgba(45,212,160,0.25)' : 'var(--border)'}`,
+                borderRadius: 3,
+                padding: '2px 7px',
+                flexShrink: 0,
+              }}
+            >
+              {projectView.providerMode === 'all' ? 'ALL PROVIDERS' : 'CURRENT PROVIDER'}
+            </span>
+          </>
         )}
 
         {/* Single-session path + git branch */}

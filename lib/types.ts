@@ -40,6 +40,7 @@ export type ApiMessage = {
 }
 
 export type AgentProvider = 'claude' | 'codex' | 'opencode'
+export type ProviderSelection = AgentProvider | 'all'
 
 export type SessionCapabilities = {
   messageFork: boolean

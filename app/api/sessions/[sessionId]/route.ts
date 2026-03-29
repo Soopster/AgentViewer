@@ -2,12 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { patchViewSession, readViewSessionInfo } from '@/lib/sessionBackend'
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
   const { sessionId } = await params
+  const providerParam = new URL(request.url).searchParams.get('provider')
+  const provider = providerParam === 'claude' || providerParam === 'codex' || providerParam === 'opencode'
+    ? providerParam
+    : undefined
   try {
-    const info = await readViewSessionInfo(sessionId)
+    const info = await readViewSessionInfo(sessionId, provider)
     if (!info) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
     return NextResponse.json({ info })
   } catch (err) {
@@ -22,8 +26,11 @@ export async function PATCH(
 ) {
   const { sessionId } = await params
   const body = await request.json().catch(() => ({}))
+  const provider = body?.provider === 'claude' || body?.provider === 'codex' || body?.provider === 'opencode'
+    ? body.provider
+    : undefined
   try {
-    await patchViewSession(sessionId, body)
+    await patchViewSession(sessionId, body, provider)
     return NextResponse.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
