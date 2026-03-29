@@ -2567,6 +2567,14 @@ function renderBlock(block: ThreadedBlock, i: number): React.ReactNode {
   return null
 }
 
+// ── Token usage formatting ────────────────────────────────────────────────────
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
 // ── Timeline message item ─────────────────────────────────────────────────────
 
 const ROLE_STYLE = {
@@ -2617,6 +2625,26 @@ export default function MessageItem({ message }: { message: ThreadedMessage }) {
               }}
             >
               {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
+          )}
+          {message.usage && (
+            <span
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                color: 'var(--text-3)',
+                letterSpacing: '0.03em',
+              }}
+            >
+              {fmtTokens(message.usage.input_tokens)}↑ {fmtTokens(message.usage.output_tokens)}↓
+              {(message.usage.cache_read_input_tokens ?? 0) > 0 && (
+                <span
+                  title={`${fmtTokens(message.usage.cache_read_input_tokens!)} cache read`}
+                  style={{ color: 'var(--green)', marginLeft: 5 }}
+                >
+                  ⚡{fmtTokens(message.usage.cache_read_input_tokens!)}
+                </span>
+              )}
             </span>
           )}
           {message.origin?.kind && message.origin.kind !== 'task-notification' && (

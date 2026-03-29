@@ -6,6 +6,7 @@ import type {
   TextBlock,
   ThinkingBlock,
   ImageBlock,
+  ApiMessage,
 } from './types'
 
 // ── Output types ──────────────────────────────────────────────────────────────
@@ -52,6 +53,7 @@ export type ThreadedMessage = {
   uuid: string
   timestamp?: string
   origin?: { kind: string }
+  usage?: ApiMessage['usage']
   blocks: ThreadedBlock[]
 }
 
@@ -248,6 +250,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
         uuid: msg.uuid,
         timestamp: msg.timestamp,
         origin: msg.origin,
+        usage: msg.message.usage,
         blocks: threadedBlocks,
       })
     }
