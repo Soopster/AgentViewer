@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import type { Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
 import ThemeToggle from './ThemeToggle'
@@ -15,15 +15,27 @@ type Props = {
   onSelectProject: (key: string, sessions: Session[]) => void
   onRename: (sessionId: string, title: string) => void
   onTag: (sessionId: string, tag: string | null) => void
+  scopeMode: 'all' | 'project'
+  scopeProjectName: string | null
+  canScopeToProject: boolean
+  includeWorktrees: boolean
+  onChangeScope: (mode: 'all' | 'project') => void
+  onToggleWorktrees: (include: boolean) => void
 }
 
-function timeAgo(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime()
+function timeAgo(value?: string | number): string {
+  if (value == null) return ''
+  const ms = Date.now() - new Date(value).getTime()
   const m  = Math.floor(ms / 60_000)
   if (m < 60)  return `${m}m`
   const h = Math.floor(m / 60)
   if (h < 24)  return `${h}h`
   return `${Math.floor(h / 24)}d`
+}
+
+function formatTimestamp(value?: string | number): string {
+  if (value == null) return ''
+  return new Date(value).toLocaleString()
 }
 
 /** Group sessions by the last path component of cwd, preserving first-seen order. */
@@ -40,6 +52,33 @@ function groupByProject(sessions: Session[]): Map<string, Session[]> {
 
 function getSessionTitle(session: Session): string {
   return session.customTitle ?? session.summary ?? ''
+}
+
+function getSessionPreview(session: Session, sessionTitle: string): string | null {
+  const preview = session.firstPrompt?.trim()
+  if (!preview) return null
+  if (preview === sessionTitle) return null
+  return preview
+}
+
+function matchesSessionSearch(session: Session, search: string, activeTag: string | null): boolean {
+  const tags = parseStoredSessionTags(session.tag)
+
+  if (activeTag && !tags.some((tag) => tag.toLowerCase() === activeTag.toLowerCase())) {
+    return false
+  }
+
+  if (!search) return true
+
+  const title = getSessionTitle(session)
+  const haystack = [
+    title,
+    tags.join(' '),
+    session.cwd ?? '',
+    session.firstPrompt ?? '',
+  ].join('\n').toLowerCase()
+
+  return haystack.includes(search)
 }
 
 function SessionRow({
@@ -61,7 +100,10 @@ function SessionRow({
   const inputRef = useRef<HTMLInputElement>(null)
   const shortId = session.sessionId.slice(-12)
   const sessionTitle = getSessionTitle(session)
+  const sessionPreview = getSessionPreview(session, sessionTitle)
   const sessionTags = parseStoredSessionTags(session.tag)
+  const activityTime = session.lastModified ?? session.createdAt
+  const activityTitle = formatTimestamp(activityTime)
 
   const startEdit = useCallback((kind: 'title' | 'tag', value: string) => (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -203,6 +245,23 @@ function SessionRow({
         )}
       </div>
 
+      {sessionPreview && editing !== 'title' && (
+        <div
+          title={sessionPreview}
+          style={{
+            marginTop: 4,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            color: selected ? 'var(--text-2)' : 'var(--text-3)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {sessionPreview}
+        </div>
+      )}
+
       {/* Tag + time */}
       <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 6, minHeight: 18 }}>
         {editing === 'tag' ? (
@@ -276,15 +335,16 @@ function SessionRow({
             + tags
           </span>
         ) : null}
-        {session.createdAt && (
+        {activityTime != null && (
           <span
+            title={activityTitle}
             style={{
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 11,
               color: 'var(--text-3)',
             }}
           >
-            {timeAgo(session.createdAt)}
+            {timeAgo(activityTime)}
           </span>
         )}
       </div>
@@ -397,8 +457,45 @@ function ProjectGroup({
   )
 }
 
-export default function SessionList({ sessions, loading, error, selectedId, selectedProject, onSelect, onSelectProject, onRename, onTag }: Props) {
-  const groups = groupByProject(sessions)
+export default function SessionList({
+  sessions,
+  loading,
+  error,
+  selectedId,
+  selectedProject,
+  onSelect,
+  onSelectProject,
+  onRename,
+  onTag,
+  scopeMode,
+  scopeProjectName,
+  canScopeToProject,
+  includeWorktrees,
+  onChangeScope,
+  onToggleWorktrees,
+}: Props) {
+  const [searchText, setSearchText] = useState('')
+  const [activeTag, setActiveTag] = useState<string | null>(null)
+  const normalizedSearch = searchText.trim().toLowerCase()
+  const filteredSessions = sessions.filter((session) => matchesSessionSearch(session, normalizedSearch, activeTag))
+  const groups = groupByProject(filteredSessions)
+  const tagCounts = new Map<string, number>()
+
+  for (const session of sessions) {
+    for (const tag of parseStoredSessionTags(session.tag)) {
+      tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)
+    }
+  }
+
+  const popularTags = [...tagCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 8)
+
+  useEffect(() => {
+    if (!activeTag) return
+    if (tagCounts.has(activeTag)) return
+    setActiveTag(null)
+  }, [activeTag, sessions])
 
   return (
     <div
@@ -460,9 +557,152 @@ export default function SessionList({ sessions, loading, error, selectedId, sele
           >
             {loading
               ? 'syncing…'
-              : `${groups.size} project${groups.size !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`}
+              : filteredSessions.length === sessions.length
+              ? `${groups.size} project${groups.size !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
+              : `${filteredSessions.length}/${sessions.length} sessions · ${groups.size} projects`}
           </span>
         </div>
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Search title, tags, path, prompt…"
+            style={{
+              flex: 1,
+              height: 30,
+              borderRadius: 6,
+              border: '1px solid var(--border)',
+              background: 'var(--surface-2)',
+              color: 'var(--text)',
+              padding: '0 10px',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              outline: 'none',
+            }}
+          />
+          {(searchText || activeTag) && (
+            <button
+              onClick={() => {
+                setSearchText('')
+                setActiveTag(null)
+              }}
+              style={{
+                height: 30,
+                padding: '0 10px',
+                borderRadius: 6,
+                border: '1px solid var(--border)',
+                background: 'var(--surface-2)',
+                color: 'var(--text-3)',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                letterSpacing: '0.05em',
+                cursor: 'pointer',
+              }}
+            >
+              CLEAR
+            </button>
+          )}
+        </div>
+        {popularTags.length > 0 && (
+          <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {popularTags.map(([tag, count]) => {
+              const selected = activeTag?.toLowerCase() === tag.toLowerCase()
+              return (
+                <button
+                  key={tag}
+                  onClick={() => setActiveTag((prev) => prev?.toLowerCase() === tag.toLowerCase() ? null : tag)}
+                  style={{
+                    height: 24,
+                    padding: '0 8px',
+                    borderRadius: 999,
+                    border: `1px solid ${selected ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                    background: selected ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                    color: selected ? 'var(--violet)' : 'var(--text-3)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    letterSpacing: '0.04em',
+                    cursor: 'pointer',
+                  }}
+                  title={`${count} session${count === 1 ? '' : 's'}`}
+                >
+                  #{tag} · {count}
+                </button>
+              )
+            })}
+          </div>
+        )}
+        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => onChangeScope('all')}
+            style={{
+              flex: 1,
+              height: 28,
+              borderRadius: 5,
+              border: `1px solid ${scopeMode === 'all' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+              background: scopeMode === 'all' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+              color: scopeMode === 'all' ? 'var(--violet)' : 'var(--text-3)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.06em',
+              cursor: 'pointer',
+            }}
+          >
+            ALL PROJECTS
+          </button>
+          <button
+            onClick={() => canScopeToProject && onChangeScope('project')}
+            disabled={!canScopeToProject}
+            title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
+            style={{
+              flex: 1,
+              height: 28,
+              borderRadius: 5,
+              border: `1px solid ${scopeMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+              background: scopeMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+              color: scopeMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.06em',
+              cursor: canScopeToProject ? 'pointer' : 'not-allowed',
+              opacity: canScopeToProject ? 1 : 0.45,
+            }}
+          >
+            THIS PROJECT
+          </button>
+        </div>
+        {scopeMode === 'project' && scopeProjectName && (
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                color: 'var(--text-3)',
+                letterSpacing: '0.04em',
+              }}
+            >
+              {scopeProjectName}
+            </span>
+            <label
+              style={{
+                marginLeft: 'auto',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                color: 'var(--text-3)',
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={includeWorktrees}
+                onChange={(e) => onToggleWorktrees(e.target.checked)}
+              />
+              worktrees
+            </label>
+          </div>
+        )}
       </div>
 
       {/* ── Groups ─────────────────────────────────────── */}
@@ -494,6 +734,19 @@ export default function SessionList({ sessions, loading, error, selectedId, sele
             onTag={onTag}
           />
         ))}
+        {!loading && !error && filteredSessions.length === 0 && (
+          <div
+            style={{
+              padding: '18px',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              color: 'var(--text-3)',
+              lineHeight: 1.6,
+            }}
+          >
+            No sessions match the current search/filter.
+          </div>
+        )}
       </div>
     </div>
   )

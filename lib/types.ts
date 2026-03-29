@@ -58,9 +58,11 @@ export type Session = {
   sessionId: string
   summary?: string
   customTitle?: string
+  firstPrompt?: string
+  lastModified?: number
   cwd?: string
   tag?: string | null
-  createdAt?: string
+  createdAt?: string | number
   [key: string]: unknown
 }
 
@@ -72,6 +74,30 @@ export type ContextUsage = {
   percentage: number
   model: string
   categories: { name: string; tokens: number; color: string }[]
+}
+
+export type SessionModelInfo = {
+  value: string
+  displayName: string
+  description: string
+  supportsEffort?: boolean
+  supportedEffortLevels?: ('low' | 'medium' | 'high' | 'max')[]
+}
+
+export type SessionDiagnosticCommand = {
+  name: string
+  description?: string
+}
+
+export type SessionDiagnosticAgent = {
+  name: string
+  description?: string
+}
+
+export type SessionDiagnosticMcpServer = {
+  name: string
+  status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'
+  error?: string
 }
 
 export type SessionInfo = {

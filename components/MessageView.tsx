@@ -1,8 +1,18 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect } from 'react'
-import type { SessionMessage, Session, SendState, ContextUsage, SessionInfo } from '@/lib/types'
-import { buildThreadedMessages } from '@/lib/threading'
+import type {
+  SessionMessage,
+  Session,
+  SendState,
+  ContextUsage,
+  SessionInfo,
+  SessionModelInfo,
+  SessionDiagnosticCommand,
+  SessionDiagnosticAgent,
+  SessionDiagnosticMcpServer,
+} from '@/lib/types'
+import { buildThreadedMessages, type ThreadedMessage } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
 import MessageItem from './MessageItem'
@@ -16,15 +26,183 @@ type Props = {
   onFork?: (newSessionId: string) => void
 }
 
+type SseFrame = {
+  event: string
+  data: string
+}
+
+type LiveToolActivity = {
+  key: string
+  label: string
+  detail?: string
+  status: 'running' | 'done'
+}
+
+type RewindPreview = {
+  userMessageId: string
+  contentPreview: string
+  filesChanged: string[]
+}
+
+function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
+  const normalized = buffer.replace(/\r\n/g, '\n')
+  const frames: SseFrame[] = []
+  let cursor = 0
+
+  while (true) {
+    const boundary = normalized.indexOf('\n\n', cursor)
+    if (boundary === -1) break
+
+    const rawFrame = normalized.slice(cursor, boundary)
+    cursor = boundary + 2
+
+    let event = 'message'
+    const dataLines: string[] = []
+
+    for (const line of rawFrame.split('\n')) {
+      if (line.startsWith('event:')) {
+        event = line.slice(6).trim()
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trimStart())
+      }
+    }
+
+    if (dataLines.length > 0) {
+      frames.push({ event, data: dataLines.join('\n') })
+    }
+  }
+
+  return {
+    frames,
+    remaining: normalized.slice(cursor),
+  }
+}
+
+function extractTextContent(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+
+  return content
+    .flatMap((block) => {
+      if (!block || typeof block !== 'object') return []
+      const record = block as Record<string, unknown>
+      return record.type === 'text' && typeof record.text === 'string'
+        ? [record.text]
+        : []
+    })
+    .join('\n\n')
+    .trim()
+}
+
+function extractStreamingAssistantText(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+
+  if (record.type === 'stream_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'content_block_delta') return null
+
+    const delta = eventRecord.delta
+    if (!delta || typeof delta !== 'object') return null
+    const deltaRecord = delta as Record<string, unknown>
+    return deltaRecord.type === 'text_delta' && typeof deltaRecord.text === 'string'
+      ? deltaRecord.text
+      : null
+  }
+
+  if (record.type === 'assistant') {
+    const message = record.message
+    if (!message || typeof message !== 'object') return null
+    const text = extractTextContent((message as Record<string, unknown>).content)
+    return text || null
+  }
+
+  return null
+}
+
+function formatToolLabel(name: string): string {
+  return name
+    .split(/[_-]/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function extractLiveToolStart(payload: unknown): { index: number; key: string; label: string; detail?: string } | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  if (record.type !== 'stream_event') return null
+
+  const event = record.event
+  if (!event || typeof event !== 'object') return null
+  const eventRecord = event as Record<string, unknown>
+  if (eventRecord.type !== 'content_block_start' || typeof eventRecord.index !== 'number') return null
+
+  const block = eventRecord.content_block
+  if (!block || typeof block !== 'object') return null
+  const blockRecord = block as Record<string, unknown>
+  const blockType = typeof blockRecord.type === 'string' ? blockRecord.type : ''
+  if (!['tool_use', 'server_tool_use', 'mcp_tool_use'].includes(blockType)) return null
+
+  const name = typeof blockRecord.name === 'string' ? blockRecord.name : 'tool'
+  const serverName = typeof blockRecord.server_name === 'string' ? blockRecord.server_name : null
+
+  return {
+    index: eventRecord.index,
+    key: typeof blockRecord.id === 'string' ? blockRecord.id : `${blockType}-${eventRecord.index}`,
+    label: formatToolLabel(name),
+    detail: serverName ?? undefined,
+  }
+}
+
+function extractLiveToolStopIndex(payload: unknown): number | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  if (record.type !== 'stream_event') return null
+
+  const event = record.event
+  if (!event || typeof event !== 'object') return null
+  const eventRecord = event as Record<string, unknown>
+
+  return eventRecord.type === 'content_block_stop' && typeof eventRecord.index === 'number'
+    ? eventRecord.index
+    : null
+}
+
 export default function MessageView({ messages, loading, session, projectView, onFork }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
   const [sendError, setSendError] = useState<string | null>(null)
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
+  const [availableModels, setAvailableModels] = useState<SessionModelInfo[]>([])
+  const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-6')
+  const [rewindTargetId, setRewindTargetId] = useState('')
+  const [resumeFromMessageId, setResumeFromMessageId] = useState<string | null>(null)
+  const [previewingRewind, setPreviewingRewind] = useState(false)
+  const [applyingRewind, setApplyingRewind] = useState(false)
+  const [rewindPreview, setRewindPreview] = useState<RewindPreview | null>(null)
   const [forking, setForking] = useState(false)
+  const [forkingMessageId, setForkingMessageId] = useState<string | null>(null)
+  const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [diagnosticCommands, setDiagnosticCommands] = useState<SessionDiagnosticCommand[]>([])
+  const [diagnosticAgents, setDiagnosticAgents] = useState<SessionDiagnosticAgent[]>([])
+  const [diagnosticMcpServers, setDiagnosticMcpServers] = useState<SessionDiagnosticMcpServer[]>([])
+  const [sessionActionError, setSessionActionError] = useState<string | null>(null)
+  const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
+  const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
+  const [liveAssistantText, setLiveAssistantText] = useState('')
+  const [liveToolActivities, setLiveToolActivities] = useState<LiveToolActivity[]>([])
+  const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useState(false)
+  const [autoFollow, setAutoFollow] = useState(true)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const timelineRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; sessionId: string } | null>(null)
+  const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
 
   // Load session info (git branch, summary, etc.) when session changes
   useEffect(() => {
@@ -35,18 +213,116 @@ export default function MessageView({ messages, loading, session, projectView, o
       .catch(() => {})
   }, [session?.sessionId])
 
+  useEffect(() => {
+    if (!session) {
+      setAvailableModels([])
+      setSelectedModel('claude-sonnet-4-6')
+      return
+    }
+
+    fetch(`/api/sessions/${session.sessionId}/models`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) return
+        setAvailableModels(data.models ?? [])
+        setSelectedModel(data.currentModel ?? data.models?.[0]?.value ?? 'claude-sonnet-4-6')
+      })
+      .catch(() => {})
+  }, [session?.sessionId])
+
   // Reset context usage when switching sessions
   useEffect(() => {
     setContextUsage(null)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    setResumeFromMessageId(null)
+    setRewindPreview(null)
+    setShowDiagnostics(false)
+    setDiagnosticCommands([])
+    setDiagnosticAgents([])
+    setDiagnosticMcpServers([])
+    setOptimisticUserText(null)
+    setLiveAssistantText('')
+    setLiveToolActivities([])
+    setAwaitingPersistedTurn(false)
+    setAutoFollow(true)
+    pendingMessageBaselineRef.current = null
+    liveToolIndexesRef.current.clear()
   }, [session?.sessionId])
 
+  useEffect(() => {
+    if (!awaitingPersistedTurn || !session) return
+
+    const baseline = pendingMessageBaselineRef.current
+    if (!baseline || baseline.sessionId !== session.sessionId) return
+
+    const currentLastUuid = messages.at(-1)?.uuid ?? null
+    const persistedTurnArrived =
+      messages.length > baseline.count
+      || currentLastUuid !== baseline.lastUuid
+
+    if (persistedTurnArrived) {
+      setOptimisticUserText(null)
+      setLiveAssistantText('')
+      setLiveToolActivities([])
+      setAwaitingPersistedTurn(false)
+      pendingMessageBaselineRef.current = null
+      liveToolIndexesRef.current.clear()
+    }
+  }, [awaitingPersistedTurn, messages, session])
+
+  useEffect(() => {
+    if (!rewindPreview || rewindPreview.userMessageId === rewindTargetId) return
+    setRewindPreview(null)
+  }, [rewindPreview, rewindTargetId])
+
+  const scrollTimelineToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const node = timelineRef.current
+    if (!node) return
+    node.scrollTo({ top: node.scrollHeight, behavior })
+  }, [])
+
+  useEffect(() => {
+    if (!autoFollow) return
+    const frame = window.requestAnimationFrame(() => scrollTimelineToBottom())
+    return () => window.cancelAnimationFrame(frame)
+  }, [
+    autoFollow,
+    loading,
+    messages.length,
+    optimisticUserText,
+    liveAssistantText,
+    liveToolActivities,
+    awaitingPersistedTurn,
+    scrollTimelineToBottom,
+  ])
+
+  const handleTimelineScroll = useCallback(() => {
+    const node = timelineRef.current
+    if (!node) return
+    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
+    setAutoFollow(distanceFromBottom < 72)
+  }, [])
+
   const cancelSend = useCallback(() => {
+    if (session) {
+      fetch(`/api/sessions/${session.sessionId}/interrupt`, { method: 'POST' }).catch(() => {})
+    }
+    if (optimisticUserText) {
+      setInputText((prev) => prev || optimisticUserText)
+    }
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
     setSendState('idle')
     setSendError(null)
+    setOptimisticUserText(null)
+    setLiveAssistantText('')
+    setLiveToolActivities([])
+    setAwaitingPersistedTurn(false)
+    pendingMessageBaselineRef.current = null
+    liveToolIndexesRef.current.clear()
     textareaRef.current?.focus()
-  }, [])
+  }, [optimisticUserText, session])
 
   const sendMessage = useCallback(async () => {
     if (!session || !inputText.trim() || sendState === 'sending') return
@@ -55,6 +331,17 @@ export default function MessageView({ messages, loading, session, projectView, o
     setInputText('')
     setSendState('sending')
     setSendError(null)
+    setOptimisticUserText(text)
+    setLiveAssistantText('')
+    setLiveToolActivities([])
+    setAwaitingPersistedTurn(false)
+    setAutoFollow(true)
+    pendingMessageBaselineRef.current = {
+      count: messages.length,
+      lastUuid: messages.at(-1)?.uuid ?? null,
+      sessionId: session.sessionId,
+    }
+    liveToolIndexesRef.current.clear()
 
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
@@ -67,7 +354,12 @@ export default function MessageView({ messages, loading, session, projectView, o
       const res = await fetch(`/api/sessions/${session.sessionId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({
+          message: text,
+          model: selectedModel,
+          resumeSessionAt: resumeFromMessageId ?? undefined,
+          forkSession: Boolean(resumeFromMessageId),
+        }),
         signal: controller.signal,
       })
 
@@ -78,39 +370,89 @@ export default function MessageView({ messages, loading, session, projectView, o
 
       const reader = res.body!.getReader()
       const decoder = new TextDecoder()
-      let pendingEvent = ''
+      let sseBuffer = ''
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        const chunk = decoder.decode(value)
-        // Track event type across chunks
-        for (const line of chunk.split('\n')) {
-          if (line.startsWith('event: ')) {
-            pendingEvent = line.slice(7).trim()
-          } else if (line.startsWith('data:')) {
-            const dataStr = line.slice(5).trim()
-            if (pendingEvent === 'context-usage') {
-              try { setContextUsage(JSON.parse(dataStr)) } catch { /* ignore */ }
-            } else if (pendingEvent === 'error') {
-              try {
-                const parsed = JSON.parse(dataStr)
-                throw new Error(parsed.error ?? 'Unknown error from Claude')
-              } catch (e) { throw e }
-            }
-            pendingEvent = ''
+        sseBuffer += decoder.decode(value, { stream: true })
+        const { frames, remaining } = extractSseFrames(sseBuffer)
+        sseBuffer = remaining
+
+        for (const frame of frames) {
+          if (frame.event === 'context-usage') {
+            try { setContextUsage(JSON.parse(frame.data)) } catch { /* ignore */ }
+            continue
           }
-        }
-        // Also handle inline error events (legacy format)
-        if (chunk.includes('event: error') && !pendingEvent) {
-          const dataLine = chunk.split('\n').find(l => l.startsWith('data:'))
-          if (dataLine) {
-            const parsed = JSON.parse(dataLine.slice(5).trim())
-            throw new Error(parsed.error ?? 'Unknown error from Claude')
+
+          if (frame.event === 'session') {
+            try {
+              const parsed = JSON.parse(frame.data)
+              if (resumeFromMessageId && parsed.sessionId && parsed.sessionId !== session.sessionId) {
+                onFork?.(parsed.sessionId)
+                setSessionActionNotice('Forked a continuation from the selected point.')
+              }
+            } catch { /* ignore */ }
+            continue
+          }
+
+          if (frame.event === 'error') {
+            try {
+              const parsed = JSON.parse(frame.data)
+              throw new Error(parsed.error ?? 'Unknown error from Claude')
+            } catch (e) { throw e }
+          }
+
+          try {
+            const parsed = JSON.parse(frame.data)
+            const toolStart = extractLiveToolStart(parsed)
+            if (toolStart) {
+              liveToolIndexesRef.current.set(toolStart.index, toolStart.key)
+              setLiveToolActivities((prev) => {
+                const existing = prev.filter((activity) => activity.key !== toolStart.key)
+                return [...existing, { key: toolStart.key, label: toolStart.label, detail: toolStart.detail, status: 'running' }]
+              })
+            }
+
+            const toolStopIndex = extractLiveToolStopIndex(parsed)
+            if (toolStopIndex != null) {
+              const activityKey = liveToolIndexesRef.current.get(toolStopIndex)
+              if (activityKey) {
+                setLiveToolActivities((prev) => prev.map((activity) =>
+                  activity.key === activityKey
+                    ? { ...activity, status: 'done' }
+                    : activity
+                ))
+              }
+            }
+
+            const deltaText = extractStreamingAssistantText(parsed)
+            if (deltaText) {
+              setLiveAssistantText((prev) =>
+                parsed.type === 'assistant'
+                  ? deltaText
+                  : `${prev}${deltaText}`
+              )
+            }
+          } catch {
+            /* ignore malformed stream payloads */
           }
         }
       }
 
+      if (sseBuffer.trim()) {
+        const { frames } = extractSseFrames(`${sseBuffer}\n\n`)
+        for (const frame of frames) {
+          if (frame.event !== 'error') continue
+          try {
+            const parsed = JSON.parse(frame.data)
+            throw new Error(parsed.error ?? 'Unknown error from Claude')
+          } catch (e) { throw e }
+        }
+      }
+
       setSendState('idle')
+      setAwaitingPersistedTurn(true)
+      setResumeFromMessageId(null)
       textareaRef.current?.focus()
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
@@ -120,10 +462,16 @@ export default function MessageView({ messages, loading, session, projectView, o
       setSendState('error')
       setSendError(err instanceof Error ? err.message : 'Failed to send message')
       setInputText(text)
+      setOptimisticUserText(null)
+      setLiveAssistantText('')
+      setLiveToolActivities([])
+      setAwaitingPersistedTurn(false)
+      pendingMessageBaselineRef.current = null
+      liveToolIndexesRef.current.clear()
     } finally {
       abortControllerRef.current = null
     }
-  }, [session, inputText, sendState])
+  }, [inputText, messages, onFork, resumeFromMessageId, selectedModel, sendState, session])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -154,6 +502,165 @@ export default function MessageView({ messages, loading, session, projectView, o
       setForking(false)
     }
   }, [session, forking, onFork])
+
+  const handleForkFromMessage = useCallback(async (messageId: string) => {
+    if (!session || forkingMessageId) return
+    setForkingMessageId(messageId)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/fork`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ upToMessageId: messageId }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      onFork?.(data.sessionId)
+      setSessionActionNotice('Forked a new session from that point.')
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to fork from message')
+    } finally {
+      setForkingMessageId(null)
+    }
+  }, [forkingMessageId, onFork, session])
+
+  const toggleResumeFromMessage = useCallback((messageId: string) => {
+    setResumeFromMessageId((prev) => prev === messageId ? null : messageId)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+  }, [])
+
+  const toggleDiagnostics = useCallback(async () => {
+    if (!session) return
+    const nextOpen = !showDiagnostics
+    setShowDiagnostics(nextOpen)
+    if (!nextOpen || diagnosticCommands.length > 0 || diagnosticsLoading) return
+
+    setDiagnosticsLoading(true)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/diagnostics`)
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      setDiagnosticCommands(data.commands ?? [])
+      setDiagnosticAgents(data.agents ?? [])
+      setDiagnosticMcpServers(data.mcpServers ?? [])
+      if (data.currentModel && !selectedModel) setSelectedModel(data.currentModel)
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to load diagnostics')
+    } finally {
+      setDiagnosticsLoading(false)
+    }
+  }, [diagnosticCommands.length, diagnosticsLoading, selectedModel, session, showDiagnostics])
+
+  const threaded = buildThreadedMessages(messages)
+  const isProject = !!projectView
+  const dirName  = projectView?.key ?? session?.cwd?.split('/').pop() ?? session?.sessionId ?? ''
+  const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
+  const liveUserMessage: ThreadedMessage | null = !isProject && optimisticUserText
+    ? {
+        role: 'user',
+        uuid: 'live-user',
+        sessionId: session?.sessionId,
+        blocks: [{ type: 'text', text: optimisticUserText }],
+      }
+    : null
+  const liveAssistantMessage: ThreadedMessage | null = !isProject && (sendState === 'sending' || awaitingPersistedTurn)
+    ? {
+        role: 'assistant',
+        uuid: 'live-assistant',
+        sessionId: session?.sessionId,
+        blocks: [{
+          type: 'text',
+          text: liveAssistantText.trim()
+            || (activeToolCount > 0
+              ? `Using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
+              : sendState === 'sending'
+              ? 'Working…'
+              : 'Waiting for saved response…'),
+        }],
+      }
+    : null
+  const rewindCandidates = messages
+    .filter((msg) =>
+      msg.type === 'user'
+      && typeof msg.message.content === 'string'
+      && msg.message.content.trim() !== ''
+      && !msg.message.content.trimStart().startsWith('<task-notification>')
+    )
+    .map((msg) => ({
+      uuid: msg.uuid,
+      content: msg.message.content as string,
+      timestamp: msg.timestamp,
+    }))
+  const selectedRewindTarget = rewindCandidates.find((candidate) => candidate.uuid === rewindTargetId) ?? null
+  const hasLiveTimeline = threaded.length > 0 || !!liveUserMessage || !!liveAssistantMessage
+
+  useEffect(() => {
+    const fallbackId = rewindCandidates.at(-1)?.uuid ?? ''
+    setRewindTargetId((prev) => rewindCandidates.some((candidate) => candidate.uuid === prev) ? prev : fallbackId)
+  }, [messages, session?.sessionId])
+
+  const handleRewind = useCallback(async () => {
+    if (!session || !selectedRewindTarget || previewingRewind || applyingRewind) return
+
+    setPreviewingRewind(true)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userMessageId: selectedRewindTarget.uuid, model: selectedModel, dryRun: true }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      if (!data.canRewind) throw new Error(data.error ?? 'Rewind unavailable for this session state')
+
+      const filesChanged = Array.isArray(data.filesChanged)
+        ? data.filesChanged.filter((file: unknown): file is string => typeof file === 'string')
+        : []
+
+      setRewindPreview({
+        userMessageId: selectedRewindTarget.uuid,
+        contentPreview: selectedRewindTarget.content.replace(/\s+/g, ' ').trim().slice(0, 160),
+        filesChanged,
+      })
+      setSessionActionNotice(filesChanged.length > 0
+        ? `Previewed ${filesChanged.length} file change${filesChanged.length === 1 ? '' : 's'}.`
+        : 'No tracked file changes at that prompt.')
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to rewind files')
+    } finally {
+      setPreviewingRewind(false)
+    }
+  }, [applyingRewind, previewingRewind, selectedModel, selectedRewindTarget, session])
+
+  const handleApplyRewind = useCallback(async () => {
+    if (!session || !rewindPreview || applyingRewind) return
+
+    setApplyingRewind(true)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/rewind`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userMessageId: rewindPreview.userMessageId, model: selectedModel }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      if (!data.canRewind) throw new Error(data.error ?? 'Rewind unavailable for this session state')
+
+      const fileCount = Array.isArray(data.filesChanged) ? data.filesChanged.length : rewindPreview.filesChanged.length
+      setRewindPreview(null)
+      setSessionActionNotice(fileCount > 0 ? `Rewound ${fileCount} file${fileCount === 1 ? '' : 's'}.` : 'Rewind complete.')
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to rewind files')
+    } finally {
+      setApplyingRewind(false)
+    }
+  }, [applyingRewind, rewindPreview, selectedModel, session])
 
   if (!session && !projectView) {
     return (
@@ -231,10 +738,6 @@ export default function MessageView({ messages, loading, session, projectView, o
       </div>
     )
   }
-
-  const threaded = buildThreadedMessages(messages)
-  const isProject = !!projectView
-  const dirName  = projectView?.key ?? session?.cwd?.split('/').pop() ?? session?.sessionId ?? ''
 
   return (
     <div
@@ -449,6 +952,28 @@ export default function MessageView({ messages, loading, session, projectView, o
           </button>
         )}
 
+        {!isProject && (
+          <button
+            onClick={toggleDiagnostics}
+            title="Show session diagnostics"
+            style={{
+              flexShrink: 0,
+              height: 26,
+              padding: '0 10px',
+              background: showDiagnostics ? 'rgba(234,170,64,0.14)' : 'rgba(234,170,64,0.07)',
+              border: '1px solid rgba(234,170,64,0.18)',
+              borderRadius: 5,
+              cursor: 'pointer',
+              color: showDiagnostics ? 'var(--yellow, #fbbf24)' : 'var(--text-3)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.08em',
+            }}
+          >
+            DIAG
+          </button>
+        )}
+
         {/* Live pill */}
         <div
           style={{
@@ -487,12 +1012,67 @@ export default function MessageView({ messages, loading, session, projectView, o
 
       {/* ── Timeline feed ────────────────────────────── */}
       <div
+        ref={timelineRef}
+        onScroll={handleTimelineScroll}
         style={{
           flex: 1,
           overflow: 'auto',
           padding: '28px 32px 72px',
         }}
       >
+        {showDiagnostics && !isProject && (
+          <div
+            style={{
+              marginBottom: 18,
+              padding: '14px 16px',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              background: 'var(--surface-2)',
+            }}
+          >
+            <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 10 }}>
+              Session Diagnostics
+            </div>
+            {diagnosticsLoading ? (
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+                Loading diagnostics…
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
+                <div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', marginBottom: 6 }}>
+                    COMMANDS
+                  </div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>
+                    {diagnosticCommands.slice(0, 10).map((command) => command.name).join(', ') || 'None'}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', marginBottom: 6 }}>
+                    AGENTS
+                  </div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>
+                    {diagnosticAgents.slice(0, 10).map((agent) => agent.name).join(', ') || 'None'}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em', marginBottom: 6 }}>
+                    MCP
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {diagnosticMcpServers.length > 0 ? diagnosticMcpServers.map((server) => (
+                      <div key={server.name} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>
+                        {server.name} · {server.status}
+                      </div>
+                    )) : (
+                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>None</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {loading && (
           <div
             style={{
@@ -505,10 +1085,10 @@ export default function MessageView({ messages, loading, session, projectView, o
             Loading…
           </div>
         )}
-        {!loading && threaded.length === 0 && (
+        {!loading && !hasLiveTimeline && (
           <div style={{ fontSize: 13, color: 'var(--text-3)' }}>No messages.</div>
         )}
-        {!loading && threaded.length > 0 && (
+        {!loading && hasLiveTimeline && (
           <div style={{ position: 'relative' }}>
             {/* Continuous timeline track */}
             <div
@@ -531,9 +1111,132 @@ export default function MessageView({ messages, loading, session, projectView, o
                   animationDelay: `${Math.min(i * 16, 320)}ms`,
                 }}
               >
+                {!isProject && (
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, margin: '0 0 8px 0' }}>
+                    <button
+                      onClick={() => handleForkFromMessage(msg.uuid)}
+                      disabled={forkingMessageId === msg.uuid}
+                      style={{
+                        height: 22,
+                        padding: '0 8px',
+                        borderRadius: 4,
+                        border: '1px solid rgba(139,128,240,0.18)',
+                        background: 'rgba(139,128,240,0.07)',
+                        color: 'var(--text-3)',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 10,
+                        letterSpacing: '0.06em',
+                        cursor: forkingMessageId === msg.uuid ? 'not-allowed' : 'pointer',
+                        opacity: forkingMessageId === msg.uuid ? 0.5 : 1,
+                      }}
+                    >
+                      {forkingMessageId === msg.uuid ? 'FORKING…' : 'FORK HERE'}
+                    </button>
+                    {msg.role === 'assistant' && (
+                      <button
+                        onClick={() => toggleResumeFromMessage(msg.uuid)}
+                        style={{
+                          height: 22,
+                          padding: '0 8px',
+                          borderRadius: 4,
+                          border: `1px solid ${resumeFromMessageId === msg.uuid ? 'rgba(56,217,245,0.35)' : 'rgba(56,217,245,0.18)'}`,
+                          background: resumeFromMessageId === msg.uuid ? 'rgba(56,217,245,0.14)' : 'rgba(56,217,245,0.07)',
+                          color: resumeFromMessageId === msg.uuid ? 'var(--cyan)' : 'var(--text-3)',
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 10,
+                          letterSpacing: '0.06em',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {resumeFromMessageId === msg.uuid ? 'RESUME TARGET' : 'RESUME HERE'}
+                      </button>
+                    )}
+                  </div>
+                )}
                 <MessageItem message={msg} showSession={isProject} />
               </div>
             ))}
+            {liveUserMessage && (
+              <div style={{ opacity: 0.9 }}>
+                <MessageItem message={liveUserMessage} showSession={false} />
+              </div>
+            )}
+            {liveAssistantMessage && (
+              <div style={{ opacity: 0.92 }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '0 0 8px 0' }}>
+                  <span style={{
+                    height: 20,
+                    padding: '0 8px',
+                    borderRadius: 999,
+                    border: '1px solid rgba(45,212,160,0.22)',
+                    background: 'rgba(45,212,160,0.08)',
+                    color: 'var(--green)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    letterSpacing: '0.06em',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                  }}>
+                    {awaitingPersistedTurn ? 'SYNCING TO LOG' : 'LIVE PREVIEW'}
+                  </span>
+                </div>
+                {liveToolActivities.length > 0 && (
+                  <div style={{ margin: '0 0 10px 38px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {liveToolActivities.map((activity) => (
+                      <span
+                        key={activity.key}
+                        style={{
+                          height: 22,
+                          padding: '0 8px',
+                          borderRadius: 999,
+                          border: `1px solid ${activity.status === 'running' ? 'rgba(56,217,245,0.25)' : 'rgba(45,212,160,0.22)'}`,
+                          background: activity.status === 'running' ? 'rgba(56,217,245,0.08)' : 'rgba(45,212,160,0.08)',
+                          color: activity.status === 'running' ? 'var(--cyan)' : 'var(--green)',
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 10,
+                          letterSpacing: '0.05em',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                        }}
+                        title={activity.detail ?? activity.label}
+                      >
+                        <span>{activity.label}</span>
+                        <span style={{ color: activity.status === 'running' ? 'var(--cyan)' : 'var(--green)' }}>
+                          {activity.status === 'running' ? 'RUNNING' : 'DONE'}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <MessageItem message={liveAssistantMessage} showSession={false} />
+              </div>
+            )}
+          </div>
+        )}
+        {!autoFollow && hasLiveTimeline && (
+          <div style={{ position: 'sticky', bottom: 12, display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+            <button
+              onClick={() => {
+                setAutoFollow(true)
+                scrollTimelineToBottom('smooth')
+              }}
+              style={{
+                height: 28,
+                padding: '0 10px',
+                borderRadius: 999,
+                border: '1px solid rgba(56,217,245,0.24)',
+                background: 'rgba(9,14,22,0.88)',
+                color: 'var(--cyan)',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                letterSpacing: '0.05em',
+                cursor: 'pointer',
+                boxShadow: '0 10px 30px rgba(0,0,0,0.24)',
+              }}
+            >
+              JUMP TO LIVE
+            </button>
           </div>
         )}
       </div>
@@ -558,6 +1261,205 @@ export default function MessageView({ messages, loading, session, projectView, o
             {sendError}
           </div>
         )}
+        {(sessionActionError || sessionActionNotice) && (
+          <div style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            color: sessionActionError ? 'var(--red, #f87171)' : 'var(--green)',
+            marginBottom: 8,
+            letterSpacing: '0.03em',
+          }}>
+            {sessionActionError ?? sessionActionNotice}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              color: 'var(--text-3)',
+              letterSpacing: '0.05em',
+            }}>
+              MODEL
+            </span>
+            <select
+              value={selectedModel}
+              onChange={e => setSelectedModel(e.target.value)}
+              style={{
+                height: 28,
+                minWidth: 180,
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
+                borderRadius: 5,
+                color: 'var(--text)',
+                padding: '0 8px',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+              }}
+            >
+              {(availableModels.length > 0 ? availableModels : [{ value: selectedModel, displayName: selectedModel, description: '' }]).map((model) => (
+                <option key={model.value} value={model.value}>
+                  {model.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+          {rewindCandidates.length > 0 && (
+            <>
+              <select
+                value={rewindTargetId}
+                onChange={e => setRewindTargetId(e.target.value)}
+                style={{
+                  flex: 1,
+                  minWidth: 220,
+                  height: 28,
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 5,
+                  color: 'var(--text)',
+                  padding: '0 8px',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                }}
+              >
+                {rewindCandidates.slice().reverse().map((candidate) => (
+                  <option key={candidate.uuid} value={candidate.uuid}>
+                    {candidate.content.replace(/\s+/g, ' ').trim().slice(0, 72) || candidate.uuid}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleRewind}
+                disabled={previewingRewind || applyingRewind || !rewindTargetId}
+                style={{
+                  flexShrink: 0,
+                  height: 28,
+                  padding: '0 12px',
+                  background: 'rgba(251,191,36,0.08)',
+                  border: '1px solid rgba(251,191,36,0.22)',
+                  borderRadius: 5,
+                  color: 'var(--yellow, #fbbf24)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.06em',
+                  cursor: previewingRewind || applyingRewind || !rewindTargetId ? 'not-allowed' : 'pointer',
+                  opacity: previewingRewind || applyingRewind || !rewindTargetId ? 0.5 : 1,
+                }}
+              >
+                {previewingRewind ? 'PREVIEWING…' : 'PREVIEW REWIND'}
+              </button>
+            </>
+          )}
+        </div>
+        {rewindPreview && (
+          <div
+            style={{
+              marginBottom: 10,
+              padding: '12px 14px',
+              borderRadius: 8,
+              border: '1px solid rgba(251,191,36,0.22)',
+              background: 'rgba(251,191,36,0.06)',
+            }}
+          >
+            <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
+              Rewind Preview
+            </div>
+            <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
+              {rewindPreview.contentPreview || 'Selected prompt'}
+            </div>
+            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {rewindPreview.filesChanged.length > 0 ? rewindPreview.filesChanged.map((file) => (
+                <div
+                  key={file}
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    color: 'var(--text-2)',
+                    padding: '5px 8px',
+                    borderRadius: 5,
+                    background: 'rgba(9,14,22,0.24)',
+                    border: '1px solid var(--border)',
+                  }}
+                >
+                  {file}
+                </div>
+              )) : (
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+                  No tracked files would change.
+                </div>
+              )}
+            </div>
+            <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+              <button
+                onClick={handleApplyRewind}
+                disabled={applyingRewind}
+                style={{
+                  height: 28,
+                  padding: '0 12px',
+                  background: 'rgba(251,191,36,0.12)',
+                  border: '1px solid rgba(251,191,36,0.28)',
+                  borderRadius: 5,
+                  color: 'var(--yellow, #fbbf24)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.06em',
+                  cursor: applyingRewind ? 'not-allowed' : 'pointer',
+                  opacity: applyingRewind ? 0.5 : 1,
+                }}
+              >
+                {applyingRewind ? 'APPLYING…' : 'APPLY REWIND'}
+              </button>
+              <button
+                onClick={() => setRewindPreview(null)}
+                style={{
+                  height: 28,
+                  padding: '0 12px',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 5,
+                  color: 'var(--text-3)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.06em',
+                  cursor: 'pointer',
+                }}
+              >
+                CANCEL
+              </button>
+            </div>
+          </div>
+        )}
+        {resumeFromMessageId && (
+          <div style={{
+            marginBottom: 10,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            color: 'var(--cyan)',
+            letterSpacing: '0.03em',
+          }}>
+            <span>Next send will resume from the selected timeline point in a forked session.</span>
+            <button
+              onClick={() => setResumeFromMessageId(null)}
+              style={{
+                height: 22,
+                padding: '0 8px',
+                borderRadius: 4,
+                border: '1px solid rgba(56,217,245,0.22)',
+                background: 'rgba(56,217,245,0.08)',
+                color: 'var(--cyan)',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                letterSpacing: '0.06em',
+                cursor: 'pointer',
+              }}
+            >
+              CLEAR
+            </button>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
           <textarea
             ref={textareaRef}
@@ -571,7 +1473,7 @@ export default function MessageView({ messages, loading, session, projectView, o
             }}
             onKeyDown={handleKeyDown}
             disabled={sendState === 'sending'}
-            placeholder="Send a message… (⌘↩ to send)"
+            placeholder={activeToolCount > 0 ? `Claude is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…` : 'Send a message… (⌘↩ to send)'}
             rows={1}
             style={{
               flex: 1,

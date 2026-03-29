@@ -6,6 +6,8 @@ import MessageView from '@/components/MessageView'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
 import type { Session, SessionMessage } from '@/lib/types'
 
+type SessionScopeMode = 'all' | 'project'
+
 export default function Home() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -14,34 +16,68 @@ export default function Home() {
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
+  const [sessionScope, setSessionScope] = useState<SessionScopeMode>('all')
+  const [includeWorktrees, setIncludeWorktrees] = useState(true)
   // Tracks how many messages we've already loaded so polling can fetch only new ones
   const msgCountRef = useRef(0)
+  const selectedSession = sessions.find((s) => s.sessionId === selectedId) ?? null
+  const activeProjectDir = selectedProject?.sessions[0]?.cwd ?? selectedSession?.cwd ?? null
+  const activeProjectName = activeProjectDir?.split('/').pop() ?? null
+
+  const fetchSessions = useCallback(async () => {
+    const params = new URLSearchParams()
+    if (sessionScope === 'project' && activeProjectDir) {
+      params.set('dir', activeProjectDir)
+      params.set('includeWorktrees', String(includeWorktrees))
+    }
+
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    const r = await fetch(`/api/sessions${suffix}`)
+    const data = await r.json()
+    if (data.error) throw new Error(data.error)
+    setSessions(data.sessions ?? [])
+  }, [activeProjectDir, includeWorktrees, sessionScope])
 
   // Keep ref in sync with state (avoids stale closures inside setInterval)
   useEffect(() => { msgCountRef.current = messages.length }, [messages.length])
 
   // Initial session load
   useEffect(() => {
-    fetch('/api/sessions')
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.error) throw new Error(data.error)
-        setSessions(data.sessions ?? [])
-      })
+    fetchSessions()
       .catch((err) => setSessionsError(err.message))
       .finally(() => setLoadingSessions(false))
-  }, [])
+  }, [fetchSessions])
 
   // Poll sessions list silently every 5 s
   useEffect(() => {
     const id = setInterval(() => {
-      fetch('/api/sessions')
-        .then((r) => r.json())
-        .then((data) => { if (!data.error) setSessions(data.sessions ?? []) })
+      fetchSessions()
         .catch(() => {})
     }, 5000)
     return () => clearInterval(id)
-  }, [])
+  }, [fetchSessions])
+
+  useEffect(() => {
+    setSelectedProject((prev) => {
+      if (!prev) return prev
+      const nextSessions = sessions.filter((s) => (s.cwd?.split('/').pop() ?? '—') === prev.key)
+      if (nextSessions.length === 0) return null
+      return { ...prev, sessions: nextSessions }
+    })
+  }, [sessions])
+
+  useEffect(() => {
+    if (sessionScope === 'project' && !activeProjectDir) {
+      setSessionScope('all')
+    }
+  }, [activeProjectDir, sessionScope])
+
+  useEffect(() => {
+    if (!selectedId) return
+    if (sessions.some((s) => s.sessionId === selectedId)) return
+    setSelectedId(null)
+    setMessages([])
+  }, [selectedId, sessions])
 
   // Poll active single session for new messages every 2 s (incremental via offset)
   useEffect(() => {
@@ -153,8 +189,6 @@ export default function Home() {
     selectSession(newSessionId)
   }, [])
 
-  const selectedSession = sessions.find((s) => s.sessionId === selectedId) ?? null
-
   return (
     <CodeThemeProvider>
     <div style={{ display: 'flex', height: '100vh' }}>
@@ -168,6 +202,12 @@ export default function Home() {
         onSelectProject={selectProject}
         onRename={handleRename}
         onTag={handleTag}
+        scopeMode={sessionScope}
+        scopeProjectName={activeProjectName}
+        canScopeToProject={!!activeProjectDir}
+        includeWorktrees={includeWorktrees}
+        onChangeScope={setSessionScope}
+        onToggleWorktrees={setIncludeWorktrees}
       />
       <MessageView
         messages={messages}

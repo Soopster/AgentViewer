@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSessionMessages, query } from '@anthropic-ai/claude-agent-sdk'
+import { clearRunningQuery, setRunningQuery } from '@/lib/sessionRuntime'
 
 // Allow long-running Claude responses (up to 5 min)
 export const maxDuration = 300
@@ -30,6 +31,8 @@ export async function POST(
   const body = await request.json()
   const userMessage: string = body.message
   const model: string = body.model ?? 'claude-sonnet-4-6'
+  const resumeSessionAt: string | undefined = body.resumeSessionAt
+  const forkSession: boolean = Boolean(body.forkSession)
 
   if (!userMessage?.trim()) {
     return NextResponse.json({ error: 'message is required' }, { status: 400 })
@@ -41,7 +44,19 @@ export async function POST(
 
   const stream = new ReadableStream({
     async start(controller) {
-      const q = query({ prompt: userMessage, options: { resume: sessionId, model, abortController } })
+      const q = query({
+        prompt: userMessage,
+        options: {
+          resume: sessionId,
+          model,
+          abortController,
+          enableFileCheckpointing: true,
+          resumeSessionAt,
+          forkSession,
+        },
+      })
+      setRunningQuery(sessionId, q)
+      let emittedSessionEvent = false
       try {
         // Emit context usage snapshot before the response begins
         try {
@@ -50,6 +65,10 @@ export async function POST(
         } catch { /* not available yet — skip */ }
 
         for await (const msg of q) {
+          if (!emittedSessionEvent && msg.session_id) {
+            emittedSessionEvent = true
+            controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: msg.session_id })}\n\n`))
+          }
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
         }
       } catch (err) {
@@ -60,6 +79,8 @@ export async function POST(
           controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`))
         }
       } finally {
+        clearRunningQuery(sessionId, q)
+        q.close()
         controller.close()
       }
     },
