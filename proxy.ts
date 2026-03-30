@@ -15,7 +15,7 @@ function isLocalOrigin(origin: string): boolean {
   }
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   if (MUTATION_METHODS.has(request.method)) {
     const origin = request.headers.get('origin')
     if (origin && !isLocalOrigin(origin)) {

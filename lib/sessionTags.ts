@@ -41,7 +41,7 @@ export function parseStoredSessionTags(rawTag?: string | null): string[] {
 }
 
 export function parseSessionTagInput(input: string): string[] {
-  return normalizeSessionTags(input.split(/[\n,]/))
+  return normalizeSessionTags(input.split(/\r?\n|,/))
 }
 
 export function serializeSessionTags(tags: string[]): string | null {

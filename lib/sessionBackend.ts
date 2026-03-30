@@ -95,7 +95,7 @@ import type {
   Part as OpenCodePart,
   Session as OpenCodeSession,
 } from '@opencode-ai/sdk'
-import { sameProjectPath } from './projectPaths'
+import { normalizeProjectPath, sameProjectPath } from './projectPaths'
 
 export const maxDuration = 300
 
@@ -219,7 +219,7 @@ async function listCopilotSessions({ limit, offset, dir, includeWorktrees }: Lis
     ? response.filter((session) => {
         const cwd = session.context?.cwd
         if (!cwd) return false
-        return includeWorktrees ? sameProjectPath(dir, cwd) : cwd === dir
+        return includeWorktrees ? sameProjectPath(dir, cwd) : normalizeProjectPath(cwd) === normalizeProjectPath(dir)
       })
     : response
 

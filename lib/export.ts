@@ -3,6 +3,7 @@ import { diffLines } from 'diff'
 import type { Session, SessionMessage, ToolResultBlock, ImageBlock } from './types'
 import { buildThreadedMessages } from './threading'
 import { getAssistantLabel } from './provider'
+import { pathBasename } from './projectPaths'
 import { getPrimarySessionTag } from './sessionTags'
 import type {
   ThreadedBlock,
@@ -218,7 +219,7 @@ function cardHeader(color: string, label: string, preview: string, extra = ''): 
   )
 }
 
-function basename(p: string) { return p.replace(/\\/g, '/').split('/').pop() ?? p }
+const basename = pathBasename
 
 function renderEditCard(thread: ToolThread): string {
   const input = thread.toolUse.input as { file_path?: string; old_string?: string; new_string?: string }

@@ -5,7 +5,7 @@ import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
 import { isProviderSelection } from '@/lib/provider'
-import { sameProjectPath } from '@/lib/projectPaths'
+import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
 
 type SessionScopeMode = 'all' | 'project'
@@ -67,7 +67,7 @@ export default function Home() {
   const projectPollInFlightRef = useRef(false)
   const selectedSession = sessions.find((s) => s.sessionId === selectedId) ?? null
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
-  const activeProjectName = selectedProject?.key ?? activeProjectDir?.split('/').pop() ?? null
+  const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
 
   const fetchAllProviderProjectSessions = useCallback(async (dir: string) => {
     const results = await Promise.all(
@@ -240,7 +240,7 @@ export default function Home() {
         if (incoming.length > 0) {
           setMessages((prev) => mergeMessages(prev, incoming))
         }
-        setSelectedProject((prev) => prev && prev.dir === selectedProject.dir
+        setSelectedProject((prev) => prev && sameProjectPath(prev.dir, selectedProject.dir)
           ? { ...prev, sessions: projectSessions }
           : prev
         )

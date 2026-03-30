@@ -12,6 +12,7 @@ import type {
 } from '@/lib/types'
 import { buildThreadedMessages, type ThreadedMessage } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
+import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
 import MessageItem from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
@@ -753,7 +754,7 @@ export default function MessageView({ messages, loading, session, projectView, o
 
   const handleExport = useCallback(() => {
     if (!session) return
-    const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? session.cwd?.split('/').pop() ?? session.sessionId
+    const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? (pathBasename(session.cwd) || session.sessionId)
     const safeName = dirName.replace(/[^a-z0-9\-_]/gi, '-').toLowerCase()
     const html = exportSessionToHtml(session, messages)
     downloadHtml(html, `${safeName}_${session.sessionId.slice(0, 8)}.html`)
@@ -829,7 +830,7 @@ export default function MessageView({ messages, loading, session, projectView, o
 
   const threaded = useMemo(() => buildThreadedMessages(messages), [messages])
   const isProject = !!projectView
-  const dirName  = projectView?.key ?? session?.cwd?.split('/').pop() ?? session?.sessionId ?? ''
+  const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
   const liveUserMessage: ThreadedMessage | null = !isProject && optimisticUserText
     ? {
@@ -1212,7 +1213,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                 height: '100%',
                 width: `${Math.min(contextUsage.percentage, 100)}%`,
                 borderRadius: 2,
-                backgroundColor: contextUsage.percentage > 80
+                background: contextUsage.percentage > 80
                   ? 'var(--red, #f87171)'
                   : contextUsage.percentage > 60
                   ? 'var(--yellow, #fbbf24)'

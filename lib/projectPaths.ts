@@ -3,6 +3,11 @@ export function normalizeProjectPath(value: string | null | undefined): string {
   return value.replace(/\\/g, '/').replace(/\/+$/, '')
 }
 
+export function pathBasename(value: string | null | undefined): string {
+  if (!value) return ''
+  return value.replace(/\\/g, '/').split('/').pop() ?? value
+}
+
 export function sameProjectPath(left: string | null | undefined, right: string | null | undefined): boolean {
   const a = normalizeProjectPath(left)
   const b = normalizeProjectPath(right)

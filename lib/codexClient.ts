@@ -23,6 +23,7 @@ class CodexAppServerClient {
 
     const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
     })
 
     child.stdout.setEncoding('utf8')

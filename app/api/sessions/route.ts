@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { isProviderSelection } from '@/lib/provider'
+import { normalizeProjectPath } from '@/lib/projectPaths'
 import { listViewSessions } from '@/lib/sessionBackend'
 
 export async function GET(request: Request) {
@@ -8,7 +9,7 @@ export async function GET(request: Request) {
   const limit = Math.min(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100, 500)
   const rawOffset = parseInt(searchParams.get('offset') ?? '', 10)
   const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0
-  const dir = searchParams.get('dir')?.trim() || undefined
+  const dir = normalizeProjectPath(searchParams.get('dir')) || undefined
   const includeWorktrees = searchParams.get('includeWorktrees') !== 'false'
   const providerParam = searchParams.get('provider')
   const provider = isProviderSelection(providerParam) ? providerParam : undefined

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
+import { pathBasename, pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
 import ThemeToggle from './ThemeToggle'
@@ -56,13 +56,13 @@ function groupByProject(sessions: Session[]): ProjectGroupEntry[] {
     const existing = groups.find((group) => sameProjectPath(group.projectDir, projectDir))
     if (existing) {
       existing.projectDir = pickCanonicalProjectPath(existing.projectDir, projectDir) || existing.projectDir
-      existing.projectName = existing.projectDir.split('/').pop() ?? '—'
+      existing.projectName = pathBasename(existing.projectDir) || '—'
       existing.sessions.push(s)
       continue
     }
     groups.push({
       projectDir,
-      projectName: s.cwd?.split('/').pop() ?? '—',
+      projectName: pathBasename(s.cwd) || '—',
       sessions: [s],
     })
   }

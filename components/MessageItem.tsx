@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { pathBasename as basename } from '@/lib/projectPaths'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { diffLines } from 'diff'
@@ -209,11 +210,9 @@ const mdComponents: Components = {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-function basename(p: string) { return p.split('/').pop() ?? p }
-
 const LANGUAGE_BY_BASENAME: Record<string, string> = {
-  Dockerfile: 'docker',
-  Makefile: 'bash',
+  dockerfile: 'docker',
+  makefile: 'bash',
 }
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
@@ -266,7 +265,8 @@ function detectLanguageFromPath(filePath?: string): string {
   if (!filePath) return ''
 
   const name = basename(filePath)
-  if (LANGUAGE_BY_BASENAME[name]) return LANGUAGE_BY_BASENAME[name]
+  const lowerName = name.toLowerCase()
+  if (LANGUAGE_BY_BASENAME[lowerName]) return LANGUAGE_BY_BASENAME[lowerName]
 
   const dot = name.lastIndexOf('.')
   if (dot === -1) return ''
@@ -421,7 +421,7 @@ function DiffView({ oldStr, newStr, filePath }: { oldStr: string; newStr: string
                   margin: 0, padding: '0 10px',
                   // Transparent only for tinted chunks so bgTint shows through;
                   // context chunks let the Prism theme control its own background.
-                  ...(isAdd || isDel ? { backgroundColor: 'transparent' } : {}),
+                  ...(isAdd || isDel ? { background: 'transparent' } : {}),
                   fontSize: 13, lineHeight: 1.6,
                   overflowX: 'visible',
                 }}
