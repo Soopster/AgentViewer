@@ -15,7 +15,11 @@ function wrapCopilotError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : 'Unknown Copilot error'
   if (/ENOENT|spawn|not found|@github\/copilot/i.test(detail)) {
     return new Error(
-      `Failed to start GitHub Copilot. Install/configure the Copilot CLI or set COPILOT_CLI_URL/COPILOT_CLI_PATH. ${detail}`,
+      `Failed to start GitHub Copilot CLI. Options:\n` +
+      `  • Set COPILOT_CLI_URL to a running Copilot CLI server (e.g. COPILOT_CLI_URL=http://localhost:3000)\n` +
+      `  • Set COPILOT_CLI_PATH to the Copilot CLI binary location\n` +
+      `  • Install @github/copilot globally (npm i -g @github/copilot)\n` +
+      `Original error: ${detail}`,
     )
   }
   return new Error(`GitHub Copilot provider unavailable. ${detail}`)
@@ -45,7 +49,12 @@ function createClientOptions(): CopilotClientOptions {
 let clientPromise: Promise<CopilotClient> | null = null
 
 async function createClient(): Promise<CopilotClient> {
-  const client = new CopilotClient(createClientOptions())
+  let client: CopilotClient
+  try {
+    client = new CopilotClient(createClientOptions())
+  } catch (error) {
+    throw wrapCopilotError(error)
+  }
   try {
     await client.start()
     return client
