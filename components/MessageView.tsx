@@ -182,6 +182,28 @@ function upsertThreadedMessage(
   return messages.map((message, index) => index === existingIndex ? nextMessage : message)
 }
 
+function completeLiveToolThread(messages: ThreadedMessage[], key: string): ThreadedMessage[] {
+  const targetUuid = `live-tool:${key}`
+  return messages.map((message) => {
+    if (message.uuid !== targetUuid) return message
+    return {
+      ...message,
+      blocks: message.blocks.map((block) => {
+        if (block.type !== 'tool_thread') return block
+        if (block.result) return block
+        return {
+          ...block,
+          result: {
+            type: 'tool_result',
+            tool_use_id: block.toolUse.id,
+            content: 'Tool call emitted in live preview. Final output will appear when the transcript syncs.',
+          },
+        }
+      }),
+    }
+  })
+}
+
 function formatToolLabel(name: string): string {
   return name
     .split(/[_-]/)
@@ -717,6 +739,9 @@ export default function MessageView({ messages, loading, session, projectView, o
                   ? { ...activity, status: 'done' }
                   : activity
               ))
+              if (session.provider === 'claude') {
+                setLiveThreadedMessages((prev) => completeLiveToolThread(prev, completedToolKey))
+              }
             }
 
             const toolStopIndex = extractLiveToolStopIndex(parsed)
@@ -728,16 +753,35 @@ export default function MessageView({ messages, loading, session, projectView, o
                     ? { ...activity, status: 'done' }
                     : activity
                 ))
+                if (session.provider === 'claude') {
+                  setLiveThreadedMessages((prev) => completeLiveToolThread(prev, activityKey))
+                }
               }
             }
 
             const deltaText = extractStreamingAssistantText(parsed)
             if (deltaText) {
-              setLiveAssistantText((prev) =>
-                shouldReplaceLiveAssistantText(parsed)
-                  ? deltaText
-                  : `${prev}${deltaText}`
-              )
+              if (session.provider === 'claude') {
+                setLiveAssistantText((prev) => {
+                  const nextText = shouldReplaceLiveAssistantText(parsed)
+                    ? deltaText
+                    : `${prev}${deltaText}`
+                  setLiveThreadedMessages((prevMessages) => upsertThreadedMessage(prevMessages, {
+                    role: 'assistant',
+                    uuid: 'live-assistant',
+                    sessionId: session.sessionId,
+                    provider: session.provider,
+                    blocks: [{ type: 'text', text: nextText }],
+                  }))
+                  return nextText
+                })
+              } else {
+                setLiveAssistantText((prev) =>
+                  shouldReplaceLiveAssistantText(parsed)
+                    ? deltaText
+                    : `${prev}${deltaText}`
+                )
+              }
             }
 
             if (session.provider === 'claude') {
@@ -767,6 +811,17 @@ export default function MessageView({ messages, loading, session, projectView, o
       }
 
       setSendState('idle')
+      if (session.provider === 'claude') {
+        setLiveThreadedMessages((prev) => prev.length > 0
+          ? prev
+          : [{
+              role: 'assistant',
+              uuid: 'live-assistant',
+              sessionId: session.sessionId,
+              provider: session.provider,
+              blocks: [{ type: 'text', text: 'Waiting for saved response…' }],
+            }])
+      }
       setAwaitingPersistedTurn(true)
       setResumeFromMessageId(null)
       textareaRef.current?.focus()
@@ -886,7 +941,7 @@ export default function MessageView({ messages, loading, session, projectView, o
         blocks: [{ type: 'text', text: optimisticUserText }],
       }
     : null
-  const liveAssistantMessage: ThreadedMessage | null = !isProject && (sendState === 'sending' || awaitingPersistedTurn)
+  const liveAssistantMessage: ThreadedMessage | null = !isProject && session?.provider !== 'claude' && (sendState === 'sending' || awaitingPersistedTurn)
     ? {
         role: 'assistant',
         uuid: 'live-assistant',
@@ -1606,11 +1661,32 @@ export default function MessageView({ messages, loading, session, projectView, o
                 <MessageItem message={liveAssistantMessage} showSession={false} />
               </div>
             )}
-            {liveThreadedMessages.map((msg) => (
-              <div key={msg.uuid} style={{ opacity: 0.9 }}>
-                <MessageItem message={msg} showSession={false} />
+            {liveThreadedMessages.length > 0 && (
+              <div style={{ opacity: 0.92 }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '0 0 8px 0' }}>
+                  <span style={{
+                    height: 20,
+                    padding: '0 8px',
+                    borderRadius: 999,
+                    border: '1px solid rgba(45,212,160,0.22)',
+                    background: 'rgba(45,212,160,0.08)',
+                    color: 'var(--green)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    letterSpacing: '0.06em',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                  }}>
+                    {awaitingPersistedTurn ? 'SYNCING TO LOG' : 'LIVE PREVIEW'}
+                  </span>
+                </div>
+                {liveThreadedMessages.map((msg) => (
+                  <div key={msg.uuid} style={{ opacity: 0.9 }}>
+                    <MessageItem message={msg} showSession={false} />
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         )}
         {!autoFollow && hasLiveTimeline && (
