@@ -39,12 +39,61 @@ function projectSessionKey(session: Pick<Session, 'sessionId' | 'provider'>): st
   return `${session.provider ?? 'claude'}:${session.sessionId}`
 }
 
+function apiMessageSignature(message: SessionMessage): string {
+  const originKind = message.origin?.kind ?? ''
+  const turnId = message.turnId ?? ''
+  const timestamp = message.timestamp ?? ''
+  let payload = ''
+  try {
+    payload = JSON.stringify(message.message)
+  } catch {
+    payload = String(message.message)
+  }
+  return [message.type, timestamp, originKind, turnId, payload].join('|')
+}
+
+function mergeSortedMessages(existing: SessionMessage[], incoming: SessionMessage[]): SessionMessage[] {
+  const merged: SessionMessage[] = []
+  let existingIndex = 0
+  let incomingIndex = 0
+
+  while (existingIndex < existing.length && incomingIndex < incoming.length) {
+    if (messageTimestampMs(existing[existingIndex]) <= messageTimestampMs(incoming[incomingIndex])) {
+      merged.push(existing[existingIndex])
+      existingIndex += 1
+    } else {
+      merged.push(incoming[incomingIndex])
+      incomingIndex += 1
+    }
+  }
+
+  if (existingIndex < existing.length) merged.push(...existing.slice(existingIndex))
+  if (incomingIndex < incoming.length) merged.push(...incoming.slice(incomingIndex))
+  return merged
+}
+
 function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): SessionMessage[] {
   if (incoming.length === 0) return existing
-  const deduped = new Map<string, SessionMessage>()
-  for (const message of existing) deduped.set(sessionMessageKey(message), message)
-  for (const message of incoming) deduped.set(sessionMessageKey(message), message)
-  return [...deduped.values()].sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
+
+  const existingByKey = new Map(existing.map((message) => [sessionMessageKey(message), message] as const))
+  const latestIncomingByKey = new Map<string, SessionMessage>()
+  for (const message of incoming) latestIncomingByKey.set(sessionMessageKey(message), message)
+
+  let changed = false
+  const replacements = new Map<string, SessionMessage>()
+
+  for (const [key, message] of latestIncomingByKey) {
+    const previous = existingByKey.get(key)
+    if (previous && apiMessageSignature(previous) === apiMessageSignature(message)) continue
+    replacements.set(key, message)
+    changed = true
+  }
+
+  if (!changed) return existing
+
+  const retained = existing.filter((message) => !replacements.has(sessionMessageKey(message)))
+  const additions = [...replacements.values()].sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
+  return mergeSortedMessages(retained, additions)
 }
 
 export default function Home() {
@@ -201,7 +250,7 @@ export default function Home() {
         const r = await fetch(withProviderQuery(`/api/sessions/${selectedId}/messages?offset=${offset}&limit=200`, selectedSession?.provider))
         const data = await r.json()
         if (!data.error && data.messages?.length > 0) {
-          setMessages((prev) => [...prev, ...data.messages])
+          setMessages((prev) => mergeMessages(prev, data.messages as SessionMessage[]))
         }
       } catch { /* ignore transient errors */ } finally {
         pollInFlightRef.current = false

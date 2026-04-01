@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -374,7 +374,7 @@ function CardShell({
 function DiffView({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath?: string }) {
   const { style: codeStyle } = useCodeTheme()
   const language = detectLanguageFromPath(filePath)
-  const changes  = diffLines(oldStr, newStr)
+  const changes = useMemo(() => diffLines(oldStr, newStr), [oldStr, newStr])
 
   return (
     <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto', borderTop: '1px solid var(--border)' }}>
@@ -2101,21 +2101,25 @@ function ReadResultSection({ raw, filePath }: { raw: string; filePath?: string }
   const [expanded, setExpanded] = useState(false)
   const LIMIT = 25
 
-  const parts = splitResultParts(raw)
-
-  // Pre-compute visible lines per text part, consuming from a shared budget
-  let budget = expanded ? Infinity : LIMIT
-  const processedParts = parts.map(part => {
-    if (part.kind === 'system_reminder') return { ...part, visibleLines: [] as ReturnType<typeof parseFileLines> }
-    const lines = parseFileLines(part.text)
-    const visibleLines = budget > 0 ? lines.slice(0, budget) : []
-    budget = Math.max(0, budget - lines.length)
-    return { ...part, visibleLines }
-  })
-
-  const totalLines = parts
-    .filter((p): p is { kind: 'text'; text: string } => p.kind === 'text')
-    .reduce((n, p) => n + parseFileLines(p.text).length, 0)
+  const parts = useMemo(() => splitResultParts(raw), [raw])
+  const textPartLines = useMemo(
+    () => parts.map((part) => part.kind === 'text' ? parseFileLines(part.text) : null),
+    [parts],
+  )
+  const processedParts = useMemo(() => {
+    let budget = expanded ? Number.POSITIVE_INFINITY : LIMIT
+    return parts.map((part, index) => {
+      if (part.kind === 'system_reminder') return { ...part, visibleLines: [] as ReturnType<typeof parseFileLines> }
+      const lines = textPartLines[index] ?? []
+      const visibleLines = budget > 0 ? lines.slice(0, budget) : []
+      budget = Math.max(0, budget - lines.length)
+      return { ...part, visibleLines }
+    })
+  }, [expanded, parts, textPartLines])
+  const totalLines = useMemo(
+    () => textPartLines.reduce((count, lines) => count + (lines?.length ?? 0), 0),
+    [textPartLines],
+  )
   const hidden = expanded ? 0 : Math.max(0, totalLines - LIMIT)
 
   return (
@@ -2267,11 +2271,11 @@ function ToolResultSection({ result, toolName, filePath }: { result: ToolResultB
     if (img) return <ImageResultSection block={img} />
   }
 
-  const raw = resultToString(result.content)
+  const raw = useMemo(() => resultToString(result.content), [result.content])
 
   if (result.is_error) return <GenericResultSection raw={raw} isError />
 
-  const nonEmpty = raw.split('\n').filter(l => l.trim())
+  const nonEmpty = useMemo(() => raw.split('\n').filter(l => l.trim()), [raw])
   if (nonEmpty.length === 1 && raw.length < 140) {
     return (
       <div style={{
@@ -2346,7 +2350,7 @@ function InsightCard({ content }: { content: string }) {
 }
 
 function RenderText({ block }: { block: TextBlock }) {
-  const parts = splitInsights(block.text)
+  const parts = useMemo(() => splitInsights(block.text), [block.text])
   if (parts.length === 1 && parts[0].kind === 'text') {
     return (
       <div style={{ fontSize: 15, wordBreak: 'break-word', lineHeight: 1.75 }}>
@@ -2699,7 +2703,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
   const { subtype, payload } = block
   const content = typeof payload.content === 'string' ? payload.content : ''
   const headerLabel = subtype.replace(/_/g, ' ').toUpperCase()
-  const detailPreview = (() => {
+  const detailPreview = useMemo(() => {
     if (content.trim()) return content.replace(/\s+/g, ' ').trim()
     if (subtype === 'compact_boundary') return 'Conversation compacted'
     if (subtype === 'task_started' && typeof payload.description === 'string') return payload.description
@@ -2711,7 +2715,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     if (subtype === 'tool_use_summary' && typeof payload.summary === 'string') return payload.summary
     if (subtype === 'status' && typeof payload.status === 'string') return payload.status
     return 'Claude system event'
-  })()
+  }, [content, payload.description, payload.elapsed_time_seconds, payload.level, payload.status, payload.summary, payload.tool_name, subtype])
   const tone = payload.level === 'warning'
     ? 'var(--yellow)'
     : subtype === 'compact_boundary'
@@ -2723,27 +2727,33 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     : subtype === 'tool_progress' || subtype === 'tool_use_summary'
     ? 'var(--cyan)'
     : 'var(--text-3)'
-  const badges: string[] = []
+  const badges = useMemo(() => {
+    const nextBadges: string[] = []
+    if (typeof payload.status === 'string') nextBadges.push(payload.status)
+    if (typeof payload.task_id === 'string') nextBadges.push(payload.task_id.slice(0, 8))
+    if (typeof payload.tool_use_id === 'string') nextBadges.push(payload.tool_use_id.slice(0, 8))
+    if (typeof payload.tool_name === 'string') nextBadges.push(payload.tool_name)
+    if (typeof payload.hook_name === 'string') nextBadges.push(payload.hook_name)
+    if (typeof payload.mcp_server_name === 'string') nextBadges.push(payload.mcp_server_name)
+    if (subtype === 'compact_boundary' && payload.compact_metadata && typeof payload.compact_metadata === 'object') {
+      const compact = payload.compact_metadata as { trigger?: unknown; pre_tokens?: unknown }
+      if (typeof compact.trigger === 'string') nextBadges.push(compact.trigger)
+      if (typeof compact.pre_tokens === 'number') nextBadges.push(`${fmtTokens(compact.pre_tokens)} pre`)
+    }
+    return nextBadges
+  }, [payload.compact_metadata, payload.hook_name, payload.mcp_server_name, payload.status, payload.task_id, payload.tool_name, payload.tool_use_id, subtype])
 
-  if (typeof payload.status === 'string') badges.push(payload.status)
-  if (typeof payload.task_id === 'string') badges.push(payload.task_id.slice(0, 8))
-  if (typeof payload.tool_use_id === 'string') badges.push(payload.tool_use_id.slice(0, 8))
-  if (typeof payload.tool_name === 'string') badges.push(payload.tool_name)
-  if (typeof payload.hook_name === 'string') badges.push(payload.hook_name)
-  if (typeof payload.mcp_server_name === 'string') badges.push(payload.mcp_server_name)
-  if (subtype === 'compact_boundary' && payload.compact_metadata && typeof payload.compact_metadata === 'object') {
-    const compact = payload.compact_metadata as { trigger?: unknown; pre_tokens?: unknown }
-    if (typeof compact.trigger === 'string') badges.push(compact.trigger)
-    if (typeof compact.pre_tokens === 'number') badges.push(`${fmtTokens(compact.pre_tokens)} pre`)
-  }
-
-  const body = subtype === 'task_notification'
-    ? content || (typeof payload.result === 'string' ? payload.result : '')
-    : subtype === 'task_progress'
-    ? [content, typeof payload.last_tool_name === 'string' ? `Last tool: ${payload.last_tool_name}` : ''].filter(Boolean).join('\n')
-    : subtype === 'hook_response'
-    ? [content, typeof payload.stdout === 'string' ? payload.stdout : '', typeof payload.stderr === 'string' ? payload.stderr : ''].filter(Boolean).join('\n\n')
-    : content
+  const body = useMemo(() => {
+    if (subtype === 'task_notification') return content || (typeof payload.result === 'string' ? payload.result : '')
+    if (subtype === 'task_progress') {
+      return [content, typeof payload.last_tool_name === 'string' ? `Last tool: ${payload.last_tool_name}` : ''].filter(Boolean).join('\n')
+    }
+    if (subtype === 'hook_response') {
+      return [content, typeof payload.stdout === 'string' ? payload.stdout : '', typeof payload.stderr === 'string' ? payload.stderr : ''].filter(Boolean).join('\n\n')
+    }
+    return content
+  }, [content, payload.last_tool_name, payload.result, payload.stderr, payload.stdout, subtype])
+  const payloadJson = useMemo(() => safeJson(payload), [payload])
 
   return (
     <div style={{
@@ -2860,7 +2870,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
             maxHeight: 260,
             overflowY: 'auto',
           }}>
-            {safeJson(payload)}
+            {payloadJson}
           </pre>
         </div>
       )}
@@ -2897,7 +2907,7 @@ const ROLE_STYLE = {
   system:    { dot: 'var(--yellow)', glow: 'rgba(251,191,36,0.18)', label: 'SYSTEM', labelColor: 'var(--yellow)' },
 } as const
 
-export default function MessageItem({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {
+function MessageItemInner({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {
   const style = ROLE_STYLE[message.role]
   const roleLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
@@ -3043,3 +3053,10 @@ export default function MessageItem({ message, showSession }: { message: Threade
     </div>
   )
 }
+
+const MessageItem = memo(MessageItemInner, (prev, next) =>
+  prev.showSession === next.showSession
+  && prev.message === next.message
+)
+
+export default MessageItem

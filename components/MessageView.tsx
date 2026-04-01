@@ -51,6 +51,23 @@ type RollbackPreview = {
   turnsRemoved: Array<{ turnId: string; preview: string }>
 }
 
+type TimelineRow = {
+  key: string
+  message: ThreadedMessage
+  showSession: boolean
+  dimmed?: boolean
+  previewBadge?: string
+  liveToolActivities?: LiveToolActivity[]
+  showForkControls?: boolean
+  allowFork?: boolean
+  allowResume?: boolean
+  forkingMessageId?: string | null
+  resumeFromMessageId?: string | null
+}
+
+const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
+const TIMELINE_OVERSCAN_PX = 1200
+
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
   const normalized = buffer.replace(/\r\n/g, '\n')
   const frames: SseFrame[] = []
@@ -462,6 +479,237 @@ function withProviderQuery(path: string, provider?: Session['provider']): string
   return `${path}${separator}provider=${provider}`
 }
 
+function usageEqual(a: ThreadedMessage['usage'], b: ThreadedMessage['usage']): boolean {
+  return a?.input_tokens === b?.input_tokens
+    && a?.output_tokens === b?.output_tokens
+    && a?.cache_read_input_tokens === b?.cache_read_input_tokens
+    && a?.cache_creation_input_tokens === b?.cache_creation_input_tokens
+}
+
+function threadedBlockEqual(a: ThreadedMessage['blocks'][number], b: ThreadedMessage['blocks'][number]): boolean {
+  if (a.type !== b.type) return false
+
+  switch (a.type) {
+    case 'text':
+      return a.text === (b.type === 'text' ? b.text : '')
+    case 'thinking':
+      return a.thinking === (b.type === 'thinking' ? b.thinking : '')
+        && a.signature === (b.type === 'thinking' ? b.signature : undefined)
+    case 'image':
+      return a === b
+    case 'system_reminder':
+      return a.content === (b.type === 'system_reminder' ? b.content : '')
+    case 'slash_command':
+      return a.command === (b.type === 'slash_command' ? b.command : '')
+        && a.message === (b.type === 'slash_command' ? b.message : '')
+        && a.args === (b.type === 'slash_command' ? b.args : '')
+    case 'local_command_stdout':
+      return a.stdout === (b.type === 'local_command_stdout' ? b.stdout : '')
+    case 'task_notification':
+      return b.type === 'task_notification'
+        && a.taskId === b.taskId
+        && a.toolUseId === b.toolUseId
+        && a.outputFile === b.outputFile
+        && a.status === b.status
+        && a.summary === b.summary
+        && a.result === b.result
+        && a.usage.totalTokens === b.usage.totalTokens
+        && a.usage.toolUses === b.usage.toolUses
+        && a.usage.durationMs === b.usage.durationMs
+    case 'claude_system':
+      return b.type === 'claude_system'
+        && a.subtype === b.subtype
+        && a.payload === b.payload
+    case 'tool_thread':
+      return b.type === 'tool_thread'
+        && a.toolUse === b.toolUse
+        && a.result === b.result
+  }
+}
+
+function threadedMessageEqual(a: ThreadedMessage, b: ThreadedMessage): boolean {
+  if (a === b) return true
+  if (
+    a.uuid !== b.uuid
+    || a.role !== b.role
+    || a.sessionId !== b.sessionId
+    || a.timestamp !== b.timestamp
+    || a.provider !== b.provider
+    || a.origin?.kind !== b.origin?.kind
+    || !usageEqual(a.usage, b.usage)
+    || a.blocks.length !== b.blocks.length
+  ) {
+    return false
+  }
+
+  for (let index = 0; index < a.blocks.length; index += 1) {
+    if (!threadedBlockEqual(a.blocks[index], b.blocks[index])) return false
+  }
+  return true
+}
+
+function threadedMessageKey(message: ThreadedMessage): string {
+  return `${message.provider ?? 'claude'}:${message.uuid}`
+}
+
+function estimateTimelineRowHeight(row: TimelineRow): number {
+  const { message } = row
+  if (message.role === 'system') return 150
+  if (message.blocks.some((block) => block.type === 'tool_thread')) return 260
+  if (message.blocks.some((block) => block.type === 'thinking')) return 220
+  return row.previewBadge || row.liveToolActivities?.length ? 190 : 150
+}
+
+function TimelineMessageRow({
+  row,
+  onForkFromMessage,
+  onToggleResume,
+}: {
+  row: TimelineRow
+  onForkFromMessage: (messageId: string) => void
+  onToggleResume: (messageId: string) => void
+}) {
+  return (
+    <div style={{ opacity: row.dimmed ? 0.92 : 1 }}>
+      {row.previewBadge && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '0 0 8px 0' }}>
+          <span style={{
+            height: 20,
+            padding: '0 8px',
+            borderRadius: 999,
+            border: '1px solid rgba(45,212,160,0.22)',
+            background: 'rgba(45,212,160,0.08)',
+            color: 'var(--green)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10,
+            letterSpacing: '0.06em',
+            display: 'inline-flex',
+            alignItems: 'center',
+          }}>
+            {row.previewBadge}
+          </span>
+        </div>
+      )}
+      {row.liveToolActivities && row.liveToolActivities.length > 0 && (
+        <div style={{ margin: '0 0 10px 38px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {row.liveToolActivities.map((activity) => (
+            <span
+              key={activity.key}
+              style={{
+                height: 22,
+                padding: '0 8px',
+                borderRadius: 999,
+                border: `1px solid ${activity.status === 'running' ? 'rgba(56,217,245,0.25)' : 'rgba(45,212,160,0.22)'}`,
+                background: activity.status === 'running' ? 'rgba(56,217,245,0.08)' : 'rgba(45,212,160,0.08)',
+                color: activity.status === 'running' ? 'var(--cyan)' : 'var(--green)',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                letterSpacing: '0.05em',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+              title={activity.detail ?? activity.label}
+            >
+              <span>{activity.label}</span>
+              <span style={{ color: activity.status === 'running' ? 'var(--cyan)' : 'var(--green)' }}>
+                {activity.status === 'running' ? 'RUNNING' : 'DONE'}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+      {row.showForkControls && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, margin: '0 0 8px 0' }}>
+          {row.allowFork && (
+            <button
+              onClick={() => onForkFromMessage(row.message.uuid)}
+              disabled={row.forkingMessageId === row.message.uuid}
+              style={{
+                height: 22,
+                padding: '0 8px',
+                borderRadius: 4,
+                border: '1px solid rgba(139,128,240,0.18)',
+                background: 'rgba(139,128,240,0.07)',
+                color: 'var(--text-3)',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                letterSpacing: '0.06em',
+                cursor: row.forkingMessageId === row.message.uuid ? 'not-allowed' : 'pointer',
+                opacity: row.forkingMessageId === row.message.uuid ? 0.5 : 1,
+              }}
+            >
+              {row.forkingMessageId === row.message.uuid ? 'FORKING…' : 'FORK HERE'}
+            </button>
+          )}
+          {row.allowResume && (
+            <button
+              onClick={() => onToggleResume(row.message.uuid)}
+              style={{
+                height: 22,
+                padding: '0 8px',
+                borderRadius: 4,
+                border: `1px solid ${row.resumeFromMessageId === row.message.uuid ? 'rgba(56,217,245,0.35)' : 'rgba(56,217,245,0.18)'}`,
+                background: row.resumeFromMessageId === row.message.uuid ? 'rgba(56,217,245,0.14)' : 'rgba(56,217,245,0.07)',
+                color: row.resumeFromMessageId === row.message.uuid ? 'var(--cyan)' : 'var(--text-3)',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                letterSpacing: '0.06em',
+                cursor: 'pointer',
+              }}
+            >
+              {row.resumeFromMessageId === row.message.uuid ? 'RESUME TARGET' : 'RESUME HERE'}
+            </button>
+          )}
+        </div>
+      )}
+      <MessageItem message={row.message} showSession={row.showSession} />
+    </div>
+  )
+}
+
+function VirtualTimelineRow({
+  row,
+  top,
+  onMeasure,
+  onForkFromMessage,
+  onToggleResume,
+}: {
+  row: TimelineRow
+  top: number
+  onMeasure: (key: string, height: number) => void
+  onForkFromMessage: (messageId: string) => void
+  onToggleResume: (messageId: string) => void
+}) {
+  const rowRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const node = rowRef.current
+    if (!node) return
+
+    const measure = () => onMeasure(row.key, node.offsetHeight)
+    measure()
+
+    const observer = new ResizeObserver(() => measure())
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [onMeasure, row.key])
+
+  return (
+    <div
+      ref={rowRef}
+      style={{
+        position: 'absolute',
+        top,
+        left: 0,
+        right: 0,
+      }}
+    >
+      <TimelineMessageRow row={row} onForkFromMessage={onForkFromMessage} onToggleResume={onToggleResume} />
+    </div>
+  )
+}
+
 export default function MessageView({ messages, loading, session, projectView, onFork }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
@@ -490,11 +738,16 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [liveThreadedMessages, setLiveThreadedMessages] = useState<ThreadedMessage[]>([])
   const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useState(false)
   const [autoFollow, setAutoFollow] = useState(true)
+  const [timelineScrollTop, setTimelineScrollTop] = useState(0)
+  const [timelineViewportHeight, setTimelineViewportHeight] = useState(0)
+  const [rowMeasurementVersion, setRowMeasurementVersion] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; sessionId: string } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
+  const rowHeightsRef = useRef<Map<string, number>>(new Map())
+  const threadedCacheRef = useRef<Map<string, ThreadedMessage>>(new Map())
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
   const assistantName = assistantDisplayName(sessionInfo?.provider ?? session?.provider)
 
@@ -540,9 +793,29 @@ export default function MessageView({ messages, loading, session, projectView, o
     setLiveThreadedMessages([])
     setAwaitingPersistedTurn(false)
     setAutoFollow(true)
+    setTimelineScrollTop(0)
+    setTimelineViewportHeight(0)
+    rowHeightsRef.current.clear()
+    threadedCacheRef.current.clear()
+    setRowMeasurementVersion(0)
     pendingMessageBaselineRef.current = null
     liveToolIndexesRef.current.clear()
   }, [session?.sessionId])
+
+  useEffect(() => {
+    const node = timelineRef.current
+    if (!node) return
+
+    const updateMetrics = () => {
+      setTimelineViewportHeight(node.clientHeight)
+      setTimelineScrollTop(node.scrollTop)
+    }
+
+    updateMetrics()
+    const observer = new ResizeObserver(() => updateMetrics())
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [showDiagnostics, session?.sessionId])
 
   useEffect(() => {
     if (!awaitingPersistedTurn || !session) return
@@ -584,18 +857,14 @@ export default function MessageView({ messages, loading, session, projectView, o
   }, [
     autoFollow,
     loading,
-    messages.length,
-    optimisticUserText,
-    liveAssistantText,
-    liveToolActivities,
-    liveThreadedMessages,
-    awaitingPersistedTurn,
+    rowMeasurementVersion,
     scrollTimelineToBottom,
   ])
 
   const handleTimelineScroll = useCallback(() => {
     const node = timelineRef.current
     if (!node) return
+    setTimelineScrollTop(node.scrollTop)
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
     setAutoFollow(distanceFromBottom < 72)
   }, [])
@@ -928,7 +1197,16 @@ export default function MessageView({ messages, loading, session, projectView, o
     }
   }, [diagnosticSections.length, diagnosticsLoading, selectedModel, session, showDiagnostics])
 
-  const threaded = useMemo(() => buildThreadedMessages(messages), [messages])
+  const threaded = useMemo(() => {
+    const nextMessages = buildThreadedMessages(messages)
+    const previous = threadedCacheRef.current
+    const stabilized = nextMessages.map((message) => {
+      const cached = previous.get(threadedMessageKey(message))
+      return cached && threadedMessageEqual(cached, message) ? cached : message
+    })
+    threadedCacheRef.current = new Map(stabilized.map((message) => [threadedMessageKey(message), message]))
+    return stabilized
+  }, [messages])
   const isProject = !!projectView
   const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
@@ -985,7 +1263,111 @@ export default function MessageView({ messages, loading, session, projectView, o
         return Array.from(turns.values())
       })()
     : []
-  const hasLiveTimeline = threaded.length > 0 || !!liveUserMessage || !!liveAssistantMessage || liveThreadedMessages.length > 0
+  const timelineRows = useMemo<TimelineRow[]>(() => {
+    const rows: TimelineRow[] = threaded.map((msg) => ({
+      key: `persisted:${threadedMessageKey(msg)}`,
+      message: msg,
+      showSession: isProject,
+      showForkControls: !isProject && (sessionCapabilities?.messageFork || (msg.role === 'assistant' && sessionCapabilities?.resumeAtMessage)),
+      allowFork: !!sessionCapabilities?.messageFork,
+      allowResume: msg.role === 'assistant' && !!sessionCapabilities?.resumeAtMessage,
+      forkingMessageId,
+      resumeFromMessageId,
+    }))
+
+    if (liveUserMessage) {
+      rows.push({
+        key: 'live:user',
+        message: liveUserMessage,
+        showSession: false,
+        dimmed: true,
+      })
+    }
+
+    if (liveAssistantMessage) {
+      rows.push({
+        key: 'live:assistant',
+        message: liveAssistantMessage,
+        showSession: false,
+        dimmed: true,
+        previewBadge: awaitingPersistedTurn ? 'SYNCING TO LOG' : 'LIVE PREVIEW',
+        liveToolActivities: session?.provider !== 'claude' ? liveToolActivities : undefined,
+      })
+    }
+
+    liveThreadedMessages.forEach((msg, index) => {
+      rows.push({
+        key: `live:threaded:${msg.provider ?? 'claude'}:${msg.uuid}:${index}`,
+        message: msg,
+        showSession: false,
+        dimmed: true,
+        previewBadge: index === 0 ? (awaitingPersistedTurn ? 'SYNCING TO LOG' : 'LIVE PREVIEW') : undefined,
+      })
+    })
+
+    return rows
+  }, [
+    awaitingPersistedTurn,
+    forkingMessageId,
+    isProject,
+    liveAssistantMessage,
+    liveThreadedMessages,
+    liveToolActivities,
+    liveUserMessage,
+    resumeFromMessageId,
+    session?.provider,
+    sessionCapabilities?.messageFork,
+    sessionCapabilities?.resumeAtMessage,
+    threaded,
+  ])
+  const hasLiveTimeline = timelineRows.length > 0
+
+  useEffect(() => {
+    const activeKeys = new Set(timelineRows.map((row) => row.key))
+    let changed = false
+    for (const key of rowHeightsRef.current.keys()) {
+      if (activeKeys.has(key)) continue
+      rowHeightsRef.current.delete(key)
+      changed = true
+    }
+    if (changed) setRowMeasurementVersion((version) => version + 1)
+  }, [timelineRows])
+
+  const handleTimelineRowMeasure = useCallback((key: string, height: number) => {
+    const nextHeight = Math.max(1, Math.ceil(height))
+    if (rowHeightsRef.current.get(key) === nextHeight) return
+    rowHeightsRef.current.set(key, nextHeight)
+    setRowMeasurementVersion((version) => version + 1)
+  }, [])
+
+  const virtualTimeline = useMemo(() => {
+    let offset = 0
+    const measuredRows = timelineRows.map((row) => {
+      const height = rowHeightsRef.current.get(row.key) ?? estimateTimelineRowHeight(row)
+      const top = offset
+      offset += height
+      return { row, top, height }
+    })
+
+    const viewportHeight = timelineViewportHeight || 800
+    const rangeStart = Math.max(0, timelineScrollTop - TIMELINE_OVERSCAN_PX)
+    const rangeEnd = timelineScrollTop + viewportHeight + TIMELINE_OVERSCAN_PX
+
+    let startIndex = 0
+    while (startIndex < measuredRows.length && measuredRows[startIndex].top + measuredRows[startIndex].height < rangeStart) {
+      startIndex += 1
+    }
+
+    let endIndex = startIndex
+    while (endIndex < measuredRows.length && measuredRows[endIndex].top < rangeEnd) {
+      endIndex += 1
+    }
+
+    return {
+      totalHeight: offset,
+      visibleRows: measuredRows.slice(startIndex, Math.max(endIndex, startIndex + 1)),
+    }
+  }, [timelineRows, timelineScrollTop, timelineViewportHeight, rowMeasurementVersion])
 
   useEffect(() => {
     const fallbackId = rewindCandidates.at(-1)?.uuid ?? ''
@@ -1537,156 +1919,30 @@ export default function MessageView({ messages, loading, session, projectView, o
         )}
         {!loading && hasLiveTimeline && (
           <div style={{ position: 'relative' }}>
-            {/* Continuous timeline track */}
             <div
               className="timeline-line"
               style={{
                 position: 'absolute',
                 left: 9,
                 top: 10,
-                bottom: 0,
+                height: Math.max(virtualTimeline.totalHeight - 10, 0),
                 width: 1,
                 background: 'linear-gradient(to bottom, var(--border-2) 0%, var(--border) 60%, transparent 100%)',
                 pointerEvents: 'none',
               }}
             />
-            {threaded.map((msg, i) => (
-              <div
-                key={msg.uuid}
-                style={{
-                  animation: 'fade-up 0.28s ease both',
-                  animationDelay: `${Math.min(i * 16, 320)}ms`,
-                }}
-              >
-                {!isProject && (sessionCapabilities?.messageFork || (msg.role === 'assistant' && sessionCapabilities?.resumeAtMessage)) && (
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, margin: '0 0 8px 0' }}>
-                    {sessionCapabilities?.messageFork && (
-                      <button
-                        onClick={() => handleForkFromMessage(msg.uuid)}
-                        disabled={forkingMessageId === msg.uuid}
-                        style={{
-                          height: 22,
-                          padding: '0 8px',
-                          borderRadius: 4,
-                          border: '1px solid rgba(139,128,240,0.18)',
-                          background: 'rgba(139,128,240,0.07)',
-                          color: 'var(--text-3)',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 10,
-                          letterSpacing: '0.06em',
-                          cursor: forkingMessageId === msg.uuid ? 'not-allowed' : 'pointer',
-                          opacity: forkingMessageId === msg.uuid ? 0.5 : 1,
-                        }}
-                      >
-                        {forkingMessageId === msg.uuid ? 'FORKING…' : 'FORK HERE'}
-                      </button>
-                    )}
-                    {msg.role === 'assistant' && sessionCapabilities?.resumeAtMessage && (
-                      <button
-                        onClick={() => toggleResumeFromMessage(msg.uuid)}
-                        style={{
-                          height: 22,
-                          padding: '0 8px',
-                          borderRadius: 4,
-                          border: `1px solid ${resumeFromMessageId === msg.uuid ? 'rgba(56,217,245,0.35)' : 'rgba(56,217,245,0.18)'}`,
-                          background: resumeFromMessageId === msg.uuid ? 'rgba(56,217,245,0.14)' : 'rgba(56,217,245,0.07)',
-                          color: resumeFromMessageId === msg.uuid ? 'var(--cyan)' : 'var(--text-3)',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 10,
-                          letterSpacing: '0.06em',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {resumeFromMessageId === msg.uuid ? 'RESUME TARGET' : 'RESUME HERE'}
-                      </button>
-                    )}
-                  </div>
-                )}
-                <MessageItem message={msg} showSession={isProject} />
-              </div>
-            ))}
-            {liveUserMessage && (
-              <div style={{ opacity: 0.9 }}>
-                <MessageItem message={liveUserMessage} showSession={false} />
-              </div>
-            )}
-            {liveAssistantMessage && (
-              <div style={{ opacity: 0.92 }}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '0 0 8px 0' }}>
-                  <span style={{
-                    height: 20,
-                    padding: '0 8px',
-                    borderRadius: 999,
-                    border: '1px solid rgba(45,212,160,0.22)',
-                    background: 'rgba(45,212,160,0.08)',
-                    color: 'var(--green)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    letterSpacing: '0.06em',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                  }}>
-                    {awaitingPersistedTurn ? 'SYNCING TO LOG' : 'LIVE PREVIEW'}
-                  </span>
-                </div>
-                {liveToolActivities.length > 0 && session?.provider !== 'claude' && (
-                  <div style={{ margin: '0 0 10px 38px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {liveToolActivities.map((activity) => (
-                      <span
-                        key={activity.key}
-                        style={{
-                          height: 22,
-                          padding: '0 8px',
-                          borderRadius: 999,
-                          border: `1px solid ${activity.status === 'running' ? 'rgba(56,217,245,0.25)' : 'rgba(45,212,160,0.22)'}`,
-                          background: activity.status === 'running' ? 'rgba(56,217,245,0.08)' : 'rgba(45,212,160,0.08)',
-                          color: activity.status === 'running' ? 'var(--cyan)' : 'var(--green)',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 10,
-                          letterSpacing: '0.05em',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6,
-                        }}
-                        title={activity.detail ?? activity.label}
-                      >
-                        <span>{activity.label}</span>
-                        <span style={{ color: activity.status === 'running' ? 'var(--cyan)' : 'var(--green)' }}>
-                          {activity.status === 'running' ? 'RUNNING' : 'DONE'}
-                        </span>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <MessageItem message={liveAssistantMessage} showSession={false} />
-              </div>
-            )}
-            {liveThreadedMessages.length > 0 && (
-              <div style={{ opacity: 0.92 }}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '0 0 8px 0' }}>
-                  <span style={{
-                    height: 20,
-                    padding: '0 8px',
-                    borderRadius: 999,
-                    border: '1px solid rgba(45,212,160,0.22)',
-                    background: 'rgba(45,212,160,0.08)',
-                    color: 'var(--green)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    letterSpacing: '0.06em',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                  }}>
-                    {awaitingPersistedTurn ? 'SYNCING TO LOG' : 'LIVE PREVIEW'}
-                  </span>
-                </div>
-                {liveThreadedMessages.map((msg) => (
-                  <div key={msg.uuid} style={{ opacity: 0.9 }}>
-                    <MessageItem message={msg} showSession={false} />
-                  </div>
-                ))}
-              </div>
-            )}
+            <div style={{ position: 'relative', minHeight: virtualTimeline.totalHeight, height: virtualTimeline.totalHeight }}>
+              {virtualTimeline.visibleRows.map(({ row, top }) => (
+                <VirtualTimelineRow
+                  key={row.key}
+                  row={row}
+                  top={top}
+                  onMeasure={handleTimelineRowMeasure}
+                  onForkFromMessage={handleForkFromMessage}
+                  onToggleResume={toggleResumeFromMessage}
+                />
+              ))}
+            </div>
           </div>
         )}
         {!autoFollow && hasLiveTimeline && (
