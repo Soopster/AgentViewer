@@ -6,6 +6,7 @@ import type {
   ToolResultBlock,
   ToolUseBlock,
 } from './types'
+import type { ThreadedMessage } from './threading'
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -199,6 +200,26 @@ export function normalizeClaudeStreamMessage(value: unknown): SessionMessage | n
   }
 
   return null
+}
+
+export function normalizeClaudeStreamThreadedMessage(value: unknown): ThreadedMessage | null {
+  const normalized = normalizeClaudeStreamMessage(value)
+  if (!normalized || normalized.type !== 'system') return null
+  const payload = normalized.message as SystemMessagePayload
+
+  return {
+    role: 'system',
+    uuid: normalized.uuid,
+    sessionId: normalized.session_id,
+    timestamp: normalized.timestamp,
+    origin: normalized.origin,
+    provider: normalized.provider,
+    blocks: [{
+      type: 'claude_system',
+      subtype: payload.subtype,
+      payload,
+    }],
+  }
 }
 
 export function extractClaudeStreamToolUse(value: unknown): ToolUseBlock | null {

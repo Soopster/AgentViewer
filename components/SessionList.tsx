@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { pathBasename, pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
+import { memo, useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { normalizeProjectPath, pathBasename, pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
 import ThemeToggle from './ThemeToggle'
@@ -48,27 +48,6 @@ type ProjectGroupEntry = {
   sessions: Session[]
 }
 
-/** Group sessions by full cwd, preserving first-seen order. */
-function groupByProject(sessions: Session[]): ProjectGroupEntry[] {
-  const groups: ProjectGroupEntry[] = []
-  for (const s of sessions) {
-    const projectDir = s.cwd ?? '—'
-    const existing = groups.find((group) => sameProjectPath(group.projectDir, projectDir))
-    if (existing) {
-      existing.projectDir = pickCanonicalProjectPath(existing.projectDir, projectDir) || existing.projectDir
-      existing.projectName = pathBasename(existing.projectDir) || '—'
-      existing.sessions.push(s)
-      continue
-    }
-    groups.push({
-      projectDir,
-      projectName: pathBasename(s.cwd) || '—',
-      sessions: [s],
-    })
-  }
-  return groups
-}
-
 function getSessionTitle(session: Session): string {
   return session.customTitle ?? session.summary ?? ''
 }
@@ -80,24 +59,74 @@ function getSessionPreview(session: Session, sessionTitle: string): string | nul
   return preview
 }
 
-function matchesSessionSearch(session: Session, search: string, activeTag: string | null): boolean {
-  const tags = parseStoredSessionTags(session.tag)
+type IndexedSession = {
+  session: Session
+  tags: string[]
+  lowerTags: string[]
+  searchText: string
+  normalizedProjectDir: string
+  projectName: string
+}
 
-  if (activeTag && !tags.some((tag) => tag.toLowerCase() === activeTag.toLowerCase())) {
-    return false
+function indexSession(session: Session): IndexedSession {
+  const tags = parseStoredSessionTags(session.tag)
+  const title = getSessionTitle(session)
+  const normalizedDir = normalizeProjectPath(session.cwd) || '—'
+  return {
+    session,
+    tags,
+    lowerTags: tags.map((tag) => tag.toLowerCase()),
+    searchText: [
+      title,
+      tags.join(' '),
+      session.cwd ?? '',
+      session.firstPrompt ?? '',
+    ].join('\n').toLowerCase(),
+    normalizedProjectDir: normalizedDir,
+    projectName: pathBasename(normalizedDir) || '—',
+  }
+}
+
+function matchesIndexedSessionSearch(session: IndexedSession, search: string, activeTag: string | null): boolean {
+  if (activeTag && !session.lowerTags.includes(activeTag.toLowerCase())) return false
+  if (!search) return true
+  return session.searchText.includes(search)
+}
+
+function groupByProject(sessions: IndexedSession[]): ProjectGroupEntry[] {
+  const groups: ProjectGroupEntry[] = []
+  const groupsByPath = new Map<string, ProjectGroupEntry>()
+  const groupsByBaseName = new Map<string, ProjectGroupEntry>()
+
+  for (const indexed of sessions) {
+    const { session, normalizedProjectDir, projectName } = indexed
+    const byPath = groupsByPath.get(normalizedProjectDir)
+    if (byPath) {
+      byPath.sessions.push(session)
+      continue
+    }
+
+    const byBaseName = groupsByBaseName.get(projectName)
+    if (byBaseName) {
+      byBaseName.projectDir = pickCanonicalProjectPath(byBaseName.projectDir, normalizedProjectDir) || byBaseName.projectDir
+      byBaseName.projectName = pathBasename(byBaseName.projectDir) || '—'
+      byBaseName.sessions.push(session)
+      groupsByPath.set(normalizedProjectDir, byBaseName)
+      groupsByBaseName.set(byBaseName.projectName, byBaseName)
+      continue
+    }
+
+    const group = {
+      projectDir: normalizedProjectDir,
+      projectName,
+      sessions: [session],
+    }
+    groups.push(group)
+    groupsByPath.set(normalizedProjectDir, group)
+    groupsByBaseName.set(projectName, group)
   }
 
-  if (!search) return true
-
-  const title = getSessionTitle(session)
-  const haystack = [
-    title,
-    tags.join(' '),
-    session.cwd ?? '',
-    session.firstPrompt ?? '',
-  ].join('\n').toLowerCase()
-
-  return haystack.includes(search)
+  return groups
 }
 
 function providerChipStyle(provider: AgentProvider): { color: string; background: string; border: string } {
@@ -116,7 +145,7 @@ function providerChipStyle(provider: AgentProvider): { color: string; background
   return { color: 'var(--violet)', background: 'rgba(139,128,240,0.08)', border: 'rgba(139,128,240,0.22)' }
 }
 
-function SessionRow({
+const SessionRow = memo(function SessionRow({
   session,
   selected,
   onSelect,
@@ -401,9 +430,9 @@ function SessionRow({
       </div>
     </div>
   )
-}
+})
 
-function ProjectGroup({
+const ProjectGroup = memo(function ProjectGroup({
   name,
   projectKey,
   sessions,
@@ -508,7 +537,7 @@ function ProjectGroup({
       ))}
     </div>
   )
-}
+})
 
 export default function SessionList({
   sessions,
@@ -533,20 +562,21 @@ export default function SessionList({
   const [searchText, setSearchText] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
   const normalizedSearch = searchText.trim().toLowerCase()
+  const indexedSessions = useMemo(() => sessions.map(indexSession), [sessions])
   const filteredSessions = useMemo(
-    () => sessions.filter((session) => matchesSessionSearch(session, normalizedSearch, activeTag)),
-    [sessions, normalizedSearch, activeTag],
+    () => indexedSessions.filter((session) => matchesIndexedSessionSearch(session, normalizedSearch, activeTag)),
+    [indexedSessions, normalizedSearch, activeTag],
   )
   const groups = useMemo(() => groupByProject(filteredSessions), [filteredSessions])
   const tagCounts = useMemo(() => {
     const map = new Map<string, number>()
-    for (const session of sessions) {
-      for (const tag of parseStoredSessionTags(session.tag)) {
+    for (const session of indexedSessions) {
+      for (const tag of session.tags) {
         map.set(tag, (map.get(tag) ?? 0) + 1)
       }
     }
     return map
-  }, [sessions])
+  }, [indexedSessions])
   const popularTags = useMemo(
     () => [...tagCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8),
     [tagCounts],
@@ -556,7 +586,7 @@ export default function SessionList({
     if (!activeTag) return
     if (tagCounts.has(activeTag)) return
     setActiveTag(null)
-  }, [activeTag, sessions])
+  }, [activeTag, tagCounts])
 
   return (
     <div

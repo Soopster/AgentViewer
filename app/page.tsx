@@ -23,8 +23,6 @@ type ProjectMessageBatch = {
   messages: SessionMessage[]
 }
 
-const ALL_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
-
 function withProviderQuery(path: string, provider?: AgentProvider | 'all'): string {
   if (!provider) return path
   const separator = path.includes('?') ? '&' : '?'
@@ -126,47 +124,17 @@ export default function Home() {
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
 
-  const fetchAllProviderProjectSessions = useCallback(async (dir: string) => {
-    const results = await Promise.all(
-      ALL_PROVIDERS.map(async (providerName) => {
-        const params = new URLSearchParams()
-        params.set('provider', providerName)
-        params.set('limit', '500')
-        params.set('includeWorktrees', String(includeWorktrees))
-        const response = await fetch(`/api/sessions?${params.toString()}`)
-        const data = await response.json()
-        if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
-        const loaded = (data.sessions ?? []) as Session[]
-        return loaded.filter((session) => sameProjectPath(dir, session.cwd))
-      })
-    )
-
-    const deduped = new Map<string, Session>()
-    for (const session of results.flat()) {
-      deduped.set(`${session.provider}:${session.sessionId}`, session)
-    }
-
-    return [...deduped.values()].sort((a, b) => {
-      const aTime = Number(a.lastModified ?? a.createdAt ?? 0)
-      const bTime = Number(b.lastModified ?? b.createdAt ?? 0)
-      return bTime - aTime
-    })
-  }, [includeWorktrees])
-
   const fetchProjectSessions = useCallback(async (dir: string, selection: ProviderSelection) => {
-    if (selection === 'all') {
-      return fetchAllProviderProjectSessions(dir)
-    }
-
     const params = new URLSearchParams()
     params.set('dir', dir)
     params.set('includeWorktrees', String(includeWorktrees))
     params.set('limit', '500')
+    params.set('provider', selection)
     const response = await fetch(`/api/sessions?${params.toString()}`)
     const data = await response.json()
     if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
     return (data.sessions ?? []) as Session[]
-  }, [fetchAllProviderProjectSessions, includeWorktrees])
+  }, [includeWorktrees])
 
   const fetchSessionMessages = useCallback(async (session: Session) => {
     const response = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?limit=2000`, session.provider))

@@ -15,7 +15,7 @@ import { buildThreadedMessages, type ThreadedMessage } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
-import { extractClaudeStreamToolUse, normalizeClaudeStreamMessage } from '@/lib/claudeMapper'
+import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '@/lib/claudeMapper'
 import MessageItem from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
 
@@ -730,6 +730,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [showDiagnostics, setShowDiagnostics] = useState(false)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
+  const [exporting, setExporting] = useState(false)
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
   const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
@@ -1054,12 +1055,9 @@ export default function MessageView({ messages, loading, session, projectView, o
             }
 
             if (session.provider === 'claude') {
-              const normalized = normalizeClaudeStreamMessage(parsed)
-              if (normalized) {
-                const threaded = buildThreadedMessages([normalized])[0]
-                if (threaded) {
-                  setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
-                }
+              const threaded = normalizeClaudeStreamThreadedMessage(parsed)
+              if (threaded) {
+                setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
               }
             }
           } catch {
@@ -1125,8 +1123,32 @@ export default function MessageView({ messages, loading, session, projectView, o
     if (!session) return
     const dirName  = session.customTitle ?? session.summary ?? getPrimarySessionTag(session.tag) ?? (pathBasename(session.cwd) || session.sessionId)
     const safeName = dirName.replace(/[^a-z0-9\-_]/gi, '-').toLowerCase()
-    const html = exportSessionToHtml(session, messages)
-    downloadHtml(html, `${safeName}_${session.sessionId.slice(0, 8)}.html`)
+    const filename = `${safeName}_${session.sessionId.slice(0, 8)}.html`
+
+    if (typeof Worker === 'undefined') {
+      const html = exportSessionToHtml(session, messages)
+      downloadHtml(html, filename)
+      return
+    }
+
+    setExporting(true)
+    const worker = new Worker(new URL('../workers/exportWorker.ts', import.meta.url), { type: 'module' })
+    worker.onmessage = (event: MessageEvent<{ html?: string; error?: string }>) => {
+      const { html, error } = event.data ?? {}
+      if (html) {
+        downloadHtml(html, filename)
+      } else if (error) {
+        setSessionActionError(error)
+      }
+      setExporting(false)
+      worker.terminate()
+    }
+    worker.onerror = () => {
+      setExporting(false)
+      setSessionActionError('Failed to export session')
+      worker.terminate()
+    }
+    worker.postMessage({ session, messages })
   }, [session, messages])
 
   const handleFork = useCallback(async () => {
@@ -1767,6 +1789,7 @@ export default function MessageView({ messages, loading, session, projectView, o
         {!isProject && (
           <button
             onClick={handleExport}
+            disabled={exporting}
             title="Export session to HTML"
             style={{
               flexShrink: 0,
@@ -1775,17 +1798,20 @@ export default function MessageView({ messages, loading, session, projectView, o
               background: 'rgba(56,217,245,0.07)',
               border: '1px solid rgba(56,217,245,0.18)',
               borderRadius: 5,
-              cursor: 'pointer',
+              cursor: exporting ? 'not-allowed' : 'pointer',
               color: 'var(--text-3)',
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 11,
               letterSpacing: '0.08em',
               transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+              opacity: exporting ? 0.6 : 1,
             }}
             onMouseEnter={e => {
-              e.currentTarget.style.background    = 'rgba(56,217,245,0.13)'
-              e.currentTarget.style.color         = 'var(--cyan)'
-              e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.35)'
+              if (!exporting) {
+                e.currentTarget.style.background    = 'rgba(56,217,245,0.13)'
+                e.currentTarget.style.color         = 'var(--cyan)'
+                e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.35)'
+              }
             }}
             onMouseLeave={e => {
               e.currentTarget.style.background    = 'rgba(56,217,245,0.07)'
@@ -1793,7 +1819,7 @@ export default function MessageView({ messages, loading, session, projectView, o
               e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.18)'
             }}
           >
-            EXPORT
+            {exporting ? 'EXPORTING…' : 'EXPORT'}
           </button>
         )}
 
