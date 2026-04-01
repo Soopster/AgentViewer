@@ -18,6 +18,7 @@ import type {
   CodexUserInput,
 } from './codexProtocol'
 import { CODEX_CAPABILITIES } from './provider'
+import { buildThreadedMessages, type ThreadedMessage } from './threading'
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -259,6 +260,30 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
   }
 }
 
+export function normalizeCodexStreamThreadedMessage(payload: unknown, fallbackSessionId?: string): ThreadedMessage | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  if (record.type !== 'codex_item_completed') return null
+
+  const item = asObject(record.item)
+  const itemId = typeof item.id === 'string' ? item.id : null
+  const itemType = typeof item.type === 'string' ? item.type : null
+  const turnId = typeof record.turnId === 'string'
+    ? record.turnId
+    : typeof asObject(record.turn).id === 'string'
+    ? asObject(record.turn).id as string
+    : null
+  const threadId = typeof record.threadId === 'string' ? record.threadId : fallbackSessionId ?? null
+
+  if (!itemId || !itemType || !turnId || !threadId) return null
+
+  const timestamp = uuidV7ToIsoTimestamp(itemId) ?? uuidV7ToIsoTimestamp(turnId)
+  const messages = mapItemToMessages(threadId, turnId, item as CodexThreadItem, timestamp)
+  if (messages.length === 0) return null
+
+  return buildThreadedMessages(messages).find((message) => message.role === 'assistant') ?? null
+}
+
 export function mapCodexThreadToSession(thread: CodexThread, tag: string | null): Session {
   return {
     sessionId: thread.id,
@@ -331,16 +356,21 @@ export function mapCodexModelsToSessionModels(models: Array<{
   model: string
   displayName: string
   description: string
-  supportedReasoningEfforts?: string[] | null
+  supportedReasoningEfforts?: Array<string | { reasoningEffort?: string | null }> | null
 }>): SessionModelInfo[] {
+  const reasoningEfforts = (value: Array<string | { reasoningEffort?: string | null }> | null | undefined) =>
+    (value ?? [])
+      .map((entry) => typeof entry === 'string' ? entry : entry.reasoningEffort)
+      .filter((entry): entry is 'low' | 'medium' | 'high' | 'max' | 'xhigh' =>
+        entry === 'low' || entry === 'medium' || entry === 'high' || entry === 'max' || entry === 'xhigh'
+      )
+
   return models.map((model) => ({
     value: model.model,
     displayName: model.displayName || model.model,
     description: model.description || '',
-    supportsEffort: Array.isArray(model.supportedReasoningEfforts) && model.supportedReasoningEfforts.length > 0,
-    supportedEffortLevels: (model.supportedReasoningEfforts ?? []).filter((value): value is 'low' | 'medium' | 'high' | 'max' =>
-      value === 'low' || value === 'medium' || value === 'high' || value === 'max'
-    ),
+    supportsEffort: reasoningEfforts(model.supportedReasoningEfforts).length > 0,
+    supportedEffortLevels: reasoningEfforts(model.supportedReasoningEfforts),
   }))
 }
 

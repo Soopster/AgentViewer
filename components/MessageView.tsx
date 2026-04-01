@@ -16,6 +16,7 @@ import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
 import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '@/lib/claudeMapper'
+import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import MessageItem from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
 
@@ -849,18 +850,13 @@ export default function MessageView({ messages, loading, session, projectView, o
     const node = timelineRef.current
     if (!node) return
     node.scrollTo({ top: node.scrollHeight, behavior })
+    const syncScrollTop = () => setTimelineScrollTop(node.scrollTop)
+    if (behavior === 'smooth') {
+      window.requestAnimationFrame(syncScrollTop)
+    } else {
+      syncScrollTop()
+    }
   }, [])
-
-  useEffect(() => {
-    if (!autoFollow) return
-    const frame = window.requestAnimationFrame(() => scrollTimelineToBottom())
-    return () => window.cancelAnimationFrame(frame)
-  }, [
-    autoFollow,
-    loading,
-    rowMeasurementVersion,
-    scrollTimelineToBottom,
-  ])
 
   const handleTimelineScroll = useCallback(() => {
     const node = timelineRef.current
@@ -1056,6 +1052,11 @@ export default function MessageView({ messages, loading, session, projectView, o
 
             if (session.provider === 'claude') {
               const threaded = normalizeClaudeStreamThreadedMessage(parsed)
+              if (threaded) {
+                setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
+              }
+            } else if (session.provider === 'codex') {
+              const threaded = normalizeCodexStreamThreadedMessage(parsed, session.sessionId)
               if (threaded) {
                 setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
               }
@@ -1390,6 +1391,18 @@ export default function MessageView({ messages, loading, session, projectView, o
       visibleRows: measuredRows.slice(startIndex, Math.max(endIndex, startIndex + 1)),
     }
   }, [timelineRows, timelineScrollTop, timelineViewportHeight, rowMeasurementVersion])
+
+  useEffect(() => {
+    if (!autoFollow) return
+    const frame = window.requestAnimationFrame(() => scrollTimelineToBottom())
+    return () => window.cancelAnimationFrame(frame)
+  }, [
+    autoFollow,
+    loading,
+    virtualTimeline.totalHeight,
+    rowMeasurementVersion,
+    scrollTimelineToBottom,
+  ])
 
   useEffect(() => {
     const fallbackId = rewindCandidates.at(-1)?.uuid ?? ''

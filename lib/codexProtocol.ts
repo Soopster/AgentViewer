@@ -229,8 +229,8 @@ export type CodexThreadTokenUsage = {
 }
 
 export type CodexNotification =
-  | { method: 'turn/started'; params: { threadId: string; turnId: string } }
-  | { method: 'turn/completed'; params: { threadId: string; turnId: string } }
+  | { method: 'turn/started'; params: { threadId: string; turnId?: string; turn?: Pick<CodexTurn, 'id' | 'status' | 'error'> | null } }
+  | { method: 'turn/completed'; params: { threadId: string; turnId?: string; turn?: Pick<CodexTurn, 'id' | 'status' | 'error'> | null } }
   | { method: 'item/started'; params: { threadId: string; turnId: string; item: CodexThreadItem } }
   | { method: 'item/completed'; params: { threadId: string; turnId: string; item: CodexThreadItem } }
   | { method: 'item/agentMessage/delta'; params: { threadId: string; turnId: string; itemId: string; delta: string } }

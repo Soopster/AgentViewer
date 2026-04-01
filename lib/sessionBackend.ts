@@ -306,7 +306,6 @@ async function resumeCodexThread(sessionId: string): Promise<CodexThreadResumeRe
   const client = getCodexClient()
   return client.request<CodexThreadResumeResponse>('thread/resume', {
     threadId: sessionId,
-    persistExtendedHistory: true,
   })
 }
 
@@ -665,6 +664,13 @@ function formatCodexNotification(notification: CodexNotification): string | null
   }
 }
 
+function getCodexNotificationTurnId(notification: CodexNotification): string | null {
+  const params = notification.params as { turnId?: unknown; turn?: { id?: unknown } | null }
+  if (typeof params.turnId === 'string' && params.turnId) return params.turnId
+  if (typeof params.turn?.id === 'string' && params.turn.id) return params.turn.id
+  return null
+}
+
 async function createCodexStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const model = typeof body.model === 'string' ? body.model : null
@@ -686,9 +692,10 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       const unsubscribe = client.subscribe((notification) => {
         const params = notification.params as { threadId?: string; turnId?: string }
         if (params.threadId !== sessionId) return
+        const notificationTurnId = getCodexNotificationTurnId(notification)
 
         if (notification.method === 'thread/tokenUsage/updated') {
-          if (!targetTurnId || params.turnId !== targetTurnId) return
+          if (!targetTurnId || notificationTurnId !== targetTurnId) return
           const usage = mapCodexTokenUsageToContextUsage(
             (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
             currentModel,
@@ -702,7 +709,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
           return
         }
 
-        if (params.turnId !== targetTurnId) return
+        if (notificationTurnId !== targetTurnId) return
 
         if (notification.method === 'turn/completed') {
           controller.close()
@@ -722,8 +729,8 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       })
 
       try {
-        const resume = await resumeCodexThread(sessionId)
-        currentModel = model ?? resume.model
+        const resume = await resumeCodexThread(sessionId).catch(() => null)
+        currentModel = model ?? resume?.model ?? currentModel
         controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`))
 
         const started = await client.request<CodexTurnStartResponse>('turn/start', {
@@ -740,8 +747,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
         })
 
         for (const notification of bufferedNotifications) {
-          const params = notification.params as { turnId?: string }
-          if (params.turnId !== targetTurnId) continue
+          if (getCodexNotificationTurnId(notification) !== targetTurnId) continue
           if (notification.method === 'thread/tokenUsage/updated') {
             const usage = mapCodexTokenUsageToContextUsage(
               (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
@@ -1126,13 +1132,11 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const client = getCodexClient()
-    const [modelsResponse, resume] = await Promise.all([
-      client.request<CodexModelListResponse>('model/list', {}),
-      resumeCodexThread(sessionId),
-    ])
+    const modelsResponse = await client.request<CodexModelListResponse>('model/list', {})
+    const resume = await resumeCodexThread(sessionId).catch(() => null)
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
-      currentModel: resume.model,
+      currentModel: resume?.model ?? null,
     }
   }
   if (provider === 'opencode') {
