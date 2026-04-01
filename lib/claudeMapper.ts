@@ -109,6 +109,7 @@ export function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | 
   const type = record.type
   if (type !== 'user' && type !== 'assistant' && type !== 'system') return null
   if (typeof record.uuid !== 'string' || typeof record.session_id !== 'string') return null
+  const payload = asObject(record.message)
 
   return {
     type,
@@ -118,7 +119,7 @@ export function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | 
     provider: 'claude',
     timestamp: normalizeTimestamp(record.timestamp),
     message: type === 'system'
-      ? normalizeSystemMessage(record.message, typeof record.subtype === 'string' ? record.subtype : 'system')
+      ? normalizeSystemMessage(record.message, typeof payload.subtype === 'string' ? payload.subtype : 'system')
       : normalizeApiMessage(type, record.message, record.tool_use_result),
   }
 }
