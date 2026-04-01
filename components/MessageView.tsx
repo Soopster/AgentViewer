@@ -206,7 +206,9 @@ function extractStreamingAssistantText(payload: unknown): string | null {
           ? updateRecord.message
           : updateRecord.error
         if (!finalMessage || typeof finalMessage !== 'object') return null
-        return extractTextContent((finalMessage as Record<string, unknown>).content) || null
+        const finalRecord = finalMessage as Record<string, unknown>
+        return extractTextContent(finalRecord.content)
+          || (typeof finalRecord.errorMessage === 'string' ? finalRecord.errorMessage : null)
       }
     }
 
@@ -215,7 +217,8 @@ function extractStreamingAssistantText(payload: unknown): string | null {
       if (!message || typeof message !== 'object') return null
       const messageRecord = message as Record<string, unknown>
       return messageRecord.role === 'assistant'
-        ? extractTextContent(messageRecord.content) || null
+        ? extractTextContent(messageRecord.content)
+          || (typeof messageRecord.errorMessage === 'string' ? messageRecord.errorMessage : null)
         : null
     }
 

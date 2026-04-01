@@ -660,6 +660,28 @@ function createClaudeStream(sessionId: string, request: NextRequest, body: Recor
   })
 }
 
+async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
+  const q = query({
+    prompt: 'ping',
+    options: {
+      model: 'claude-sonnet-4-6',
+      persistSession: false,
+      maxTurns: 1,
+      enableFileCheckpointing: true,
+    },
+  })
+
+  try {
+    const initialization = await q.initializationResult()
+    const supportedModels = await q.supportedModels().catch(() => [] as SessionModelInfo[])
+    return supportedModels.length > 0
+      ? supportedModels
+      : (initialization.models ?? [])
+  } finally {
+    q.close()
+  }
+}
+
 function formatCodexNotification(notification: CodexNotification): string | null {
   switch (notification.method) {
     case 'item/agentMessage/delta':
@@ -1220,16 +1242,18 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     }
   }
 
+  const models = await readClaudeSupportedModels().catch(() => [] as SessionModelInfo[])
   const q = createSessionControlQuery(sessionId)
   try {
-    await q.initializationResult()
-    const [models, contextUsage] = await Promise.all([
-      q.supportedModels(),
-      q.getContextUsage().catch(() => null),
-    ])
+    const contextUsage = await q.getContextUsage().catch(() => null)
     return {
       models,
       currentModel: contextUsage?.model ?? null,
+    }
+  } catch {
+    return {
+      models,
+      currentModel: null,
     }
   } finally {
     q.close()

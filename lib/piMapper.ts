@@ -102,6 +102,7 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
         content: AnyContent[]
         usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
         model?: string
+        errorMessage?: string
       }
       const content = assistantContentToBlocks(am.content)
       return [{
@@ -113,7 +114,11 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
         timestamp: ts,
         message: {
           role: 'assistant',
-          content: content.length > 0 ? content : '',
+          content: content.length > 0
+            ? content
+            : am.errorMessage
+            ? `Error: ${am.errorMessage}`
+            : '',
           usage: am.usage ? {
             input_tokens: am.usage.input,
             output_tokens: am.usage.output,
