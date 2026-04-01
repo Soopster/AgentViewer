@@ -682,6 +682,15 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       let targetTurnId: string | null = null
       const bufferedNotifications: CodexNotification[] = []
       let currentModel = model ?? 'codex'
+      let closed = false
+
+      const closeStream = (unsubscribe: () => void) => {
+        if (closed) return
+        closed = true
+        controller.close()
+        clearRunningSession(sessionId)
+        unsubscribe()
+      }
 
       const flushNotification = (notification: CodexNotification) => {
         const payload = formatCodexNotification(notification)
@@ -712,9 +721,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
         if (notificationTurnId !== targetTurnId) return
 
         if (notification.method === 'turn/completed') {
-          controller.close()
-          clearRunningSession(sessionId)
-          unsubscribe()
+          closeStream(unsubscribe)
           return
         }
 
@@ -748,6 +755,10 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
 
         for (const notification of bufferedNotifications) {
           if (getCodexNotificationTurnId(notification) !== targetTurnId) continue
+          if (notification.method === 'turn/completed') {
+            closeStream(unsubscribe)
+            return
+          }
           if (notification.method === 'thread/tokenUsage/updated') {
             const usage = mapCodexTokenUsageToContextUsage(
               (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
@@ -761,6 +772,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       } catch (err) {
         unsubscribe()
         clearRunningSession(sessionId)
+        closed = true
         controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
         controller.close()
       }
