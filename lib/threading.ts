@@ -8,6 +8,7 @@ import type {
   ThinkingBlock,
   ImageBlock,
   ApiMessage,
+  SystemMessagePayload,
 } from './types'
 
 // ── Output types ──────────────────────────────────────────────────────────────
@@ -35,6 +36,12 @@ export type SystemReminderBlock = {
   content: string
 }
 
+export type ClaudeSystemBlock = {
+  type: 'claude_system'
+  subtype: string
+  payload: SystemMessagePayload
+}
+
 export type SlashCommandBlock = {
   type: 'slash_command'
   command: string
@@ -47,10 +54,10 @@ export type LocalCommandStdoutBlock = {
   stdout: string
 }
 
-export type ThreadedBlock = TextBlock | ThinkingBlock | ImageBlock | ToolThread | TaskNotificationBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock
+export type ThreadedBlock = TextBlock | ThinkingBlock | ImageBlock | ToolThread | TaskNotificationBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | ClaudeSystemBlock
 
 export type ThreadedMessage = {
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'system'
   uuid: string
   sessionId?: string
   timestamp?: string
@@ -165,9 +172,20 @@ function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlo
 }
 
 function toBlocks(msg: SessionMessage): ContentBlock[] {
+  if (msg.type === 'system') return []
   const c = msg.message.content
   if (typeof c === 'string') return c ? [{ type: 'text', text: c }] : []
   return (c ?? []) as ContentBlock[]
+}
+
+function toSystemPayload(msg: SessionMessage): SystemMessagePayload | null {
+  if (msg.type !== 'system') return null
+  return msg.message as SystemMessagePayload
+}
+
+function messageUsage(msg: SessionMessage): ApiMessage['usage'] | undefined {
+  if (msg.type === 'system') return undefined
+  return (msg.message as ApiMessage).usage
 }
 
 function isPlumbingTurn(msg: SessionMessage): boolean {
@@ -208,6 +226,24 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
 
   for (const msg of deduped) {
     if (plumbingUuids.has(msg.uuid)) continue
+
+    const systemPayload = toSystemPayload(msg)
+    if (systemPayload) {
+      out.push({
+        role: 'system',
+        uuid: msg.uuid,
+        sessionId: msg.session_id,
+        timestamp: msg.timestamp,
+        origin: msg.origin,
+        provider: msg.provider,
+        blocks: [{
+          type: 'claude_system',
+          subtype: systemPayload.subtype,
+          payload: systemPayload,
+        }],
+      })
+      continue
+    }
 
     // Task notification: string content from the agent orchestrator
     if (msg.type === 'user' && typeof msg.message.content === 'string') {
@@ -254,7 +290,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
         sessionId: msg.session_id,
         timestamp: msg.timestamp,
         origin: msg.origin,
-        usage: msg.message.usage,
+        usage: messageUsage(msg),
         provider: msg.provider,
         blocks: threadedBlocks,
       })

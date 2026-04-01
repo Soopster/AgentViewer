@@ -117,6 +117,7 @@ import {
   setPiStoredTag,
   setPiStoredTitle,
 } from './piMetadata'
+import { normalizeClaudeHistoryMessages } from './claudeMapper'
 
 export const maxDuration = 300
 
@@ -529,11 +530,11 @@ export async function listViewSessionMessages(sessionId: string, params: Message
     return mapPiMessagesToSessionMessages(sessionId, messages).slice(params.offset, params.offset + params.limit)
   }
 
-  const messages = await getSessionMessages(sessionId, params)
-  return (messages as SessionMessage[]).map((message) => ({
-    ...message,
-    provider: 'claude',
-  }))
+  const messages = await getSessionMessages(sessionId, {
+    ...params,
+    includeSystemMessages: true,
+  })
+  return normalizeClaudeHistoryMessages(messages as unknown[])
 }
 
 function createClaudeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Response {

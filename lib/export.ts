@@ -13,8 +13,9 @@ import type {
   SystemReminderBlock,
   SlashCommandBlock,
   LocalCommandStdoutBlock,
+  ClaudeSystemBlock,
 } from './threading'
-import type { TextBlock, ThinkingBlock } from './types'
+import type { TextBlock, ThinkingBlock, SystemMessagePayload } from './types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -393,6 +394,50 @@ function renderLocalCommandStdout(block: LocalCommandStdoutBlock): string {
   )
 }
 
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function renderClaudeSystem(block: ClaudeSystemBlock): string {
+  const payload = block.payload as SystemMessagePayload
+  const subtype = block.subtype
+  const content = typeof payload.content === 'string' ? payload.content : ''
+  const tone = payload.level === 'warning'
+    ? '#fbbf24'
+    : subtype === 'compact_boundary'
+    ? '#8b80f0'
+    : subtype === 'tool_progress' || subtype === 'tool_use_summary'
+    ? '#38d9f5'
+    : '#7b8db0'
+  const badges = [
+    typeof payload.status === 'string' ? payload.status : null,
+    typeof payload.task_id === 'string' ? payload.task_id.slice(0, 8) : null,
+    typeof payload.tool_use_id === 'string' ? payload.tool_use_id.slice(0, 8) : null,
+    typeof payload.tool_name === 'string' ? payload.tool_name : null,
+  ].filter((badge): badge is string => Boolean(badge))
+
+  return (
+    `<details class="claude-system">` +
+    `<summary style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;list-style:none;background:linear-gradient(to right,${tone}18,#0c1028)">` +
+    `<span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:${tone};font-weight:600;letter-spacing:0.08em;flex-shrink:0">SYSTEM</span>` +
+    `<span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:${tone};font-weight:500;letter-spacing:0.04em;flex-shrink:0">${escapeHtml(subtype.replace(/_/g, ' ').toUpperCase())}</span>` +
+    `<span style="font-family:'IBM Plex Sans',sans-serif;font-size:13px;color:#dde3f5;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(content || 'Claude system event')}</span>` +
+    `${badges.map((badge) => `<span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:${tone};background:#151c38;border:1px solid ${tone}33;border-radius:999px;padding:1px 7px;flex-shrink:0">${escapeHtml(badge)}</span>`).join('')}` +
+    `</summary>` +
+    `<div style="display:grid;gap:10px;padding:10px 12px;border-top:1px solid #1e2a44;background:#0c1028">` +
+    (content
+      ? `<pre style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.6;color:#7b8db0;white-space:pre-wrap;word-break:break-word;max-height:240px;overflow-y:auto">${escapeHtml(content)}</pre>`
+      : '') +
+    `<pre style="margin:0;padding:10px 12px;background:#151c38;border:1px solid #1e2a44;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.55;color:#3a4c6a;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow-y:auto">${escapeHtml(safeJson(payload))}</pre>` +
+    `</div>` +
+    `</details>`
+  )
+}
+
 function renderBlock(block: ThreadedBlock): string {
   switch (block.type) {
     case 'tool_thread':           return renderToolThread(block as ToolThread)
@@ -401,6 +446,7 @@ function renderBlock(block: ThreadedBlock): string {
     case 'image':                 return renderImageBlock(block as ImageBlock)
     case 'task_notification':     return renderTaskNotification(block as TaskNotificationBlock)
     case 'system_reminder':       return renderSystemReminder(block as SystemReminderBlock)
+    case 'claude_system':         return renderClaudeSystem(block as ClaudeSystemBlock)
     case 'slash_command':         return renderSlashCommand(block as SlashCommandBlock)
     case 'local_command_stdout':  return renderLocalCommandStdout(block as LocalCommandStdoutBlock)
     default:                      return ''
@@ -408,10 +454,21 @@ function renderBlock(block: ThreadedBlock): string {
 }
 
 function renderMessage(msg: ThreadedMessage): string {
-  const isAssistant = msg.role === 'assistant'
-  const dotCls  = isAssistant ? 'message-dot-claude' : 'message-dot-user'
-  const labelCls = isAssistant ? 'label-claude' : 'label-user'
-  const label    = isAssistant ? getAssistantLabel(msg.provider) : 'USER'
+  const dotCls = msg.role === 'assistant'
+    ? 'message-dot-claude'
+    : msg.role === 'system'
+    ? 'message-dot-system'
+    : 'message-dot-user'
+  const labelCls = msg.role === 'assistant'
+    ? 'label-claude'
+    : msg.role === 'system'
+    ? 'label-system'
+    : 'label-user'
+  const label = msg.role === 'assistant'
+    ? getAssistantLabel(msg.provider)
+    : msg.role === 'system'
+    ? 'SYSTEM'
+    : 'USER'
 
   const ts = msg.timestamp ? formatTimestamp(msg.timestamp) : ''
 
@@ -532,10 +589,12 @@ body {
 .message-dot { width: 20px; flex-shrink: 0; padding-top: 3px; }
 .message-dot-inner { width: 13px; height: 13px; border-radius: 50%; margin: 0 auto; }
 .message-dot-claude { background: #8b80f0; box-shadow: 0 0 0 2px #07091c, 0 0 10px 3px rgba(139,128,240,0.18); }
+.message-dot-system { background: #fbbf24; box-shadow: 0 0 0 2px #07091c, 0 0 10px 3px rgba(251,191,36,0.16); }
 .message-dot-user   { background: #38d9f5; box-shadow: 0 0 0 2px #07091c, 0 0 10px 3px rgba(56,217,245,0.12); }
 .message-body { flex: 1; min-width: 0; }
 .message-label { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
 .label-claude { font-family: 'Oxanium', monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; color: #8b80f0; }
+.label-system { font-family: 'Oxanium', monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; color: #fbbf24; }
 .label-user   { font-family: 'Oxanium', monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; color: #38d9f5; }
 .label-time   { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #3a4c6a; }
 .message-blocks { display: flex; flex-direction: column; gap: 8px; }
@@ -610,6 +669,8 @@ body {
 .text-block pre code { display: block; padding: 12px 16px; background: #0c1028; color: #dde3f5; font-size: 13px; line-height: 1.65; overflow-x: auto; border-radius: 0; }
 
 .task-notification { border: 1px solid #1e2a44; border-left: 2px solid #8b80f0; border-radius: 6px; overflow: hidden; font-size: 13px; margin-top: 4px; }
+.claude-system { border: 1px solid #1e2a44; border-left: 2px solid #7b8db0; border-radius: 6px; overflow: hidden; font-size: 13px; margin-top: 4px; }
+.claude-system summary::-webkit-details-marker { display: none; }
 .system-reminder { border: 1px solid #1e2a44; border-left: 2px solid #3a4c6a; border-radius: 6px; overflow: hidden; font-size: 13px; margin-top: 4px; opacity: 0.7; }
 .system-reminder summary::-webkit-details-marker { display: none; }
 .slash-command { border: 1px solid #1e2a44; border-left: 2px solid #38d9f5; border-radius: 6px; overflow: hidden; font-size: 13px; margin-top: 4px; }

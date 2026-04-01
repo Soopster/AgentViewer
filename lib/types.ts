@@ -39,6 +39,14 @@ export type ApiMessage = {
   }
 }
 
+export type SystemMessagePayload = {
+  type: 'system'
+  subtype: string
+  content?: string
+  level?: string
+  [key: string]: unknown
+}
+
 export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot' | 'pi'
 export type ProviderSelection = AgentProvider | 'all'
 
@@ -51,14 +59,14 @@ export type SessionCapabilities = {
 
 /**
  * A single entry returned by getSessionMessages().
- * The actual message (role + content) is nested under the `message` field —
- * not at the top level. Only 'user' and 'assistant' types are stored here.
+ * The actual provider payload is nested under the `message` field rather than
+ * living at the top level. Claude history can also include `system` entries.
  */
 export type SessionMessage = {
-  type: 'user' | 'assistant'
+  type: 'user' | 'assistant' | 'system'
   uuid: string
   session_id: string
-  message: ApiMessage
+  message: ApiMessage | SystemMessagePayload
   parent_tool_use_id: null
   timestamp?: string
   origin?: { kind: string }

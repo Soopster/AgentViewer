@@ -35,7 +35,7 @@ import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
 import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import type { Components } from 'react-markdown'
-import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock } from '@/lib/threading'
+import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, ClaudeSystemBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
 import { getAssistantLabel } from '@/lib/provider'
 import { useCodeTheme } from './CodeThemeContext'
@@ -2574,6 +2574,189 @@ function LocalCommandStdoutCard({ block }: { block: LocalCommandStdoutBlock }) {
   )
 }
 
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const { subtype, payload } = block
+  const content = typeof payload.content === 'string' ? payload.content : ''
+  const headerLabel = subtype.replace(/_/g, ' ').toUpperCase()
+  const detailPreview = (() => {
+    if (content.trim()) return content.replace(/\s+/g, ' ').trim()
+    if (subtype === 'compact_boundary') return 'Conversation compacted'
+    if (subtype === 'task_started' && typeof payload.description === 'string') return payload.description
+    if (subtype === 'task_progress' && typeof payload.summary === 'string') return payload.summary
+    if (subtype === 'task_notification' && typeof payload.summary === 'string') return payload.summary
+    if (subtype === 'tool_progress' && typeof payload.tool_name === 'string') {
+      return `${payload.tool_name} · ${typeof payload.elapsed_time_seconds === 'number' ? `${payload.elapsed_time_seconds}s` : 'running'}`
+    }
+    if (subtype === 'tool_use_summary' && typeof payload.summary === 'string') return payload.summary
+    if (subtype === 'status' && typeof payload.status === 'string') return payload.status
+    return 'Claude system event'
+  })()
+  const tone = payload.level === 'warning'
+    ? 'var(--yellow)'
+    : subtype === 'compact_boundary'
+    ? 'var(--violet)'
+    : subtype.startsWith('task_')
+    ? 'var(--violet)'
+    : subtype.startsWith('hook_')
+    ? 'var(--cyan)'
+    : subtype === 'tool_progress' || subtype === 'tool_use_summary'
+    ? 'var(--cyan)'
+    : 'var(--text-3)'
+  const badges: string[] = []
+
+  if (typeof payload.status === 'string') badges.push(payload.status)
+  if (typeof payload.task_id === 'string') badges.push(payload.task_id.slice(0, 8))
+  if (typeof payload.tool_use_id === 'string') badges.push(payload.tool_use_id.slice(0, 8))
+  if (typeof payload.tool_name === 'string') badges.push(payload.tool_name)
+  if (typeof payload.hook_name === 'string') badges.push(payload.hook_name)
+  if (typeof payload.mcp_server_name === 'string') badges.push(payload.mcp_server_name)
+  if (subtype === 'compact_boundary' && payload.compact_metadata && typeof payload.compact_metadata === 'object') {
+    const compact = payload.compact_metadata as { trigger?: unknown; pre_tokens?: unknown }
+    if (typeof compact.trigger === 'string') badges.push(compact.trigger)
+    if (typeof compact.pre_tokens === 'number') badges.push(`${fmtTokens(compact.pre_tokens)} pre`)
+  }
+
+  const body = subtype === 'task_notification'
+    ? content || (typeof payload.result === 'string' ? payload.result : '')
+    : subtype === 'task_progress'
+    ? [content, typeof payload.last_tool_name === 'string' ? `Last tool: ${payload.last_tool_name}` : ''].filter(Boolean).join('\n')
+    : subtype === 'hook_response'
+    ? [content, typeof payload.stdout === 'string' ? payload.stdout : '', typeof payload.stderr === 'string' ? payload.stderr : ''].filter(Boolean).join('\n\n')
+    : content
+
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderLeft: `2px solid ${tone}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 13,
+      marginTop: 4,
+      opacity: 0.92,
+    }}>
+      <div
+        onClick={() => setOpen((v) => !v)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 12px',
+          background: hovered
+            ? `linear-gradient(to right, ${tone}22, var(--surface))`
+            : `linear-gradient(to right, ${tone}14, var(--surface))`,
+          cursor: 'pointer',
+          userSelect: 'none',
+          transition: 'background 0.12s ease',
+        }}
+      >
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          color: tone,
+          fontWeight: 600,
+          letterSpacing: '0.08em',
+          flexShrink: 0,
+        }}>
+          SYSTEM
+        </span>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          color: tone,
+          fontWeight: 500,
+          letterSpacing: '0.04em',
+          flexShrink: 0,
+        }}>
+          {headerLabel}
+        </span>
+        <span style={{
+          fontFamily: "'IBM Plex Sans', sans-serif",
+          fontSize: 13,
+          color: 'var(--text)',
+          flex: 1,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {detailPreview}
+        </span>
+        {badges.map((badge) => (
+          <span
+            key={badge}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              color: tone,
+              background: 'var(--surface-2)',
+              border: `1px solid ${tone}33`,
+              borderRadius: 999,
+              padding: '1px 7px',
+              flexShrink: 0,
+            }}
+          >
+            {badge}
+          </span>
+        ))}
+        <span style={{ color: 'var(--text-3)', fontSize: 11, flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
+      </div>
+      {open && (
+        <div style={{
+          borderTop: '1px solid var(--border)',
+          background: 'var(--surface)',
+          padding: '10px 12px',
+          display: 'grid',
+          gap: 10,
+        }}>
+          {body && (
+            <pre style={{
+              margin: 0,
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              lineHeight: 1.6,
+              color: 'var(--text-2)',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              maxHeight: 260,
+              overflowY: 'auto',
+            }}>
+              {body}
+            </pre>
+          )}
+          <pre style={{
+            margin: 0,
+            padding: '10px 12px',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            lineHeight: 1.55,
+            color: 'var(--text-3)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            maxHeight: 260,
+            overflowY: 'auto',
+          }}>
+            {safeJson(payload)}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function renderBlock(block: ThreadedBlock, i: number): React.ReactNode {
   if (block.type === 'tool_thread')           return <ToolThreadCard          key={i} thread={block} />
   if (block.type === 'text')                  return <RenderText              key={i} block={block} />
@@ -2581,6 +2764,7 @@ function renderBlock(block: ThreadedBlock, i: number): React.ReactNode {
   if (block.type === 'image')                 return <ImageResultSection      key={i} block={block as ImageBlock} />
   if (block.type === 'task_notification')     return <TaskNotificationCard    key={i} block={block as TaskNotificationBlock} />
   if (block.type === 'system_reminder')       return <SystemReminderCard      key={i} block={block as SystemReminderBlock} />
+  if (block.type === 'claude_system')         return <ClaudeSystemCard        key={i} block={block as ClaudeSystemBlock} />
   if (block.type === 'slash_command')         return <SlashCommandCard        key={i} block={block as SlashCommandBlock} />
   if (block.type === 'local_command_stdout')  return <LocalCommandStdoutCard  key={i} block={block as LocalCommandStdoutBlock} />
   return null
@@ -2599,13 +2783,14 @@ function fmtTokens(n: number): string {
 const ROLE_STYLE = {
   assistant: { dot: 'var(--violet)', glow: 'var(--violet-glow)', labelColor: 'var(--violet)' },
   user:      { dot: 'var(--cyan)',   glow: 'var(--cyan-glow)',   label: 'USER',   labelColor: 'var(--cyan)'   },
+  system:    { dot: 'var(--yellow)', glow: 'rgba(251,191,36,0.18)', label: 'SYSTEM', labelColor: 'var(--yellow)' },
 } as const
 
 export default function MessageItem({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {
   const style = ROLE_STYLE[message.role]
   const roleLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
-    : ROLE_STYLE.user.label
+    : ROLE_STYLE[message.role].label
 
   return (
     <div className={`msg msg--${message.role}`} style={{ display: 'flex', gap: 18, marginBottom: 36 }}>

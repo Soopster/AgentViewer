@@ -9,11 +9,13 @@ import type {
   SessionInfo,
   SessionModelInfo,
   SessionDiagnosticSection,
+  ToolUseBlock,
 } from '@/lib/types'
 import { buildThreadedMessages, type ThreadedMessage } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
+import { extractClaudeStreamToolUse, normalizeClaudeStreamMessage } from '@/lib/claudeMapper'
 import MessageItem from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
 
@@ -35,6 +37,7 @@ type LiveToolActivity = {
   label: string
   detail?: string
   status: 'running' | 'done'
+  toolUse?: ToolUseBlock
 }
 
 type RewindPreview = {
@@ -170,6 +173,15 @@ function extractStreamingAssistantText(payload: unknown): string | null {
   return null
 }
 
+function upsertThreadedMessage(
+  messages: ThreadedMessage[],
+  nextMessage: ThreadedMessage,
+): ThreadedMessage[] {
+  const existingIndex = messages.findIndex((message) => message.uuid === nextMessage.uuid)
+  if (existingIndex === -1) return [...messages, nextMessage]
+  return messages.map((message, index) => index === existingIndex ? nextMessage : message)
+}
+
 function formatToolLabel(name: string): string {
   return name
     .split(/[_-]/)
@@ -234,7 +246,7 @@ function copilotToolLabel(event: Record<string, unknown>): { label: string; deta
   }
 }
 
-function extractLiveToolStart(payload: unknown): { index: number; key: string; label: string; detail?: string } | null {
+function extractLiveToolStart(payload: unknown): { index: number; key: string; label: string; detail?: string; toolUse?: ToolUseBlock } | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
 
@@ -319,12 +331,14 @@ function extractLiveToolStart(payload: unknown): { index: number; key: string; l
 
   const name = typeof blockRecord.name === 'string' ? blockRecord.name : 'tool'
   const serverName = typeof blockRecord.server_name === 'string' ? blockRecord.server_name : null
+  const toolUse = extractClaudeStreamToolUse(payload)
 
   return {
     index: eventRecord.index,
     key: typeof blockRecord.id === 'string' ? blockRecord.id : `${blockType}-${eventRecord.index}`,
     label: formatToolLabel(name),
     detail: serverName ?? undefined,
+    ...(toolUse ? { toolUse } : {}),
   }
 }
 
@@ -451,6 +465,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
   const [liveAssistantText, setLiveAssistantText] = useState('')
   const [liveToolActivities, setLiveToolActivities] = useState<LiveToolActivity[]>([])
+  const [liveThreadedMessages, setLiveThreadedMessages] = useState<ThreadedMessage[]>([])
   const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useState(false)
   const [autoFollow, setAutoFollow] = useState(true)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -500,6 +515,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     setOptimisticUserText(null)
     setLiveAssistantText('')
     setLiveToolActivities([])
+    setLiveThreadedMessages([])
     setAwaitingPersistedTurn(false)
     setAutoFollow(true)
     pendingMessageBaselineRef.current = null
@@ -521,6 +537,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       setOptimisticUserText(null)
       setLiveAssistantText('')
       setLiveToolActivities([])
+      setLiveThreadedMessages([])
       setAwaitingPersistedTurn(false)
       pendingMessageBaselineRef.current = null
       liveToolIndexesRef.current.clear()
@@ -549,6 +566,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     optimisticUserText,
     liveAssistantText,
     liveToolActivities,
+    liveThreadedMessages,
     awaitingPersistedTurn,
     scrollTimelineToBottom,
   ])
@@ -578,6 +596,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     setOptimisticUserText(null)
     setLiveAssistantText('')
     setLiveToolActivities([])
+    setLiveThreadedMessages([])
     setAwaitingPersistedTurn(false)
     pendingMessageBaselineRef.current = null
     liveToolIndexesRef.current.clear()
@@ -594,6 +613,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     setOptimisticUserText(text)
     setLiveAssistantText('')
     setLiveToolActivities([])
+    setLiveThreadedMessages([])
     setAwaitingPersistedTurn(false)
     setAutoFollow(true)
     pendingMessageBaselineRef.current = {
@@ -672,8 +692,22 @@ export default function MessageView({ messages, loading, session, projectView, o
               }
               setLiveToolActivities((prev) => {
                 const existing = prev.filter((activity) => activity.key !== toolStart.key)
-                return [...existing, { key: toolStart.key, label: toolStart.label, detail: toolStart.detail, status: 'running' }]
+                return [...existing, { key: toolStart.key, label: toolStart.label, detail: toolStart.detail, status: 'running', toolUse: 'toolUse' in toolStart ? toolStart.toolUse : undefined }]
               })
+              const liveToolUse = 'toolUse' in toolStart ? toolStart.toolUse : undefined
+              if (liveToolUse && session.provider === 'claude') {
+                setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, {
+                  role: 'assistant',
+                  uuid: `live-tool:${toolStart.key}`,
+                  sessionId: session.sessionId,
+                  provider: session.provider,
+                  blocks: [{
+                    type: 'tool_thread',
+                    toolUse: liveToolUse,
+                    result: null,
+                  }],
+                }))
+              }
             }
 
             const completedToolKey = extractCompletedToolKey(parsed)
@@ -704,6 +738,16 @@ export default function MessageView({ messages, loading, session, projectView, o
                   ? deltaText
                   : `${prev}${deltaText}`
               )
+            }
+
+            if (session.provider === 'claude') {
+              const normalized = normalizeClaudeStreamMessage(parsed)
+              if (normalized) {
+                const threaded = buildThreadedMessages([normalized])[0]
+                if (threaded) {
+                  setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
+                }
+              }
             }
           } catch {
             /* ignore malformed stream payloads */
@@ -737,6 +781,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       setOptimisticUserText(null)
       setLiveAssistantText('')
       setLiveToolActivities([])
+      setLiveThreadedMessages([])
       setAwaitingPersistedTurn(false)
       pendingMessageBaselineRef.current = null
       liveToolIndexesRef.current.clear()
@@ -885,7 +930,7 @@ export default function MessageView({ messages, loading, session, projectView, o
         return Array.from(turns.values())
       })()
     : []
-  const hasLiveTimeline = threaded.length > 0 || !!liveUserMessage || !!liveAssistantMessage
+  const hasLiveTimeline = threaded.length > 0 || !!liveUserMessage || !!liveAssistantMessage || liveThreadedMessages.length > 0
 
   useEffect(() => {
     const fallbackId = rewindCandidates.at(-1)?.uuid ?? ''
@@ -1529,7 +1574,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                     {awaitingPersistedTurn ? 'SYNCING TO LOG' : 'LIVE PREVIEW'}
                   </span>
                 </div>
-                {liveToolActivities.length > 0 && (
+                {liveToolActivities.length > 0 && session?.provider !== 'claude' && (
                   <div style={{ margin: '0 0 10px 38px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {liveToolActivities.map((activity) => (
                       <span
@@ -1561,6 +1606,11 @@ export default function MessageView({ messages, loading, session, projectView, o
                 <MessageItem message={liveAssistantMessage} showSession={false} />
               </div>
             )}
+            {liveThreadedMessages.map((msg) => (
+              <div key={msg.uuid} style={{ opacity: 0.9 }}>
+                <MessageItem message={msg} showSession={false} />
+              </div>
+            ))}
           </div>
         )}
         {!autoFollow && hasLiveTimeline && (
