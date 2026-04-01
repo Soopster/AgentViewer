@@ -10,8 +10,9 @@ import type {
   SessionModelInfo,
   SessionDiagnosticSection,
   ToolUseBlock,
+  ContentBlock,
 } from '@/lib/types'
-import { buildThreadedMessages, type ThreadedMessage } from '@/lib/threading'
+import { buildThreadedMessages, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
@@ -68,6 +69,7 @@ type TimelineRow = {
 
 const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
 const TIMELINE_OVERSCAN_PX = 1200
+const ESTIMATED_CHARS_PER_LINE = 92
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
   const normalized = buffer.replace(/\r\n/g, '\n')
@@ -125,6 +127,38 @@ function extractStreamingAssistantText(payload: unknown): string | null {
 
   if (record.type === 'codex_agent_message_delta' && typeof record.delta === 'string') {
     return record.delta
+  }
+
+  if ((record.type === 'codex_plan_delta' || record.type === 'codex_reasoning_delta' || record.type === 'codex_reasoning_summary_delta')
+    && typeof record.delta === 'string') {
+    return record.delta
+  }
+
+  if (record.type === 'codex_realtime_transcript') {
+    return record.role === 'assistant' && typeof record.text === 'string'
+      ? record.text
+      : null
+  }
+
+  if (record.type === 'codex_realtime_item_added') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return null
+    const itemRecord = item as Record<string, unknown>
+    if ((itemRecord.type === 'agentMessage' || itemRecord.type === 'plan') && typeof itemRecord.text === 'string') {
+      return itemRecord.text
+    }
+    return null
+  }
+
+  if (record.type === 'codex_item_completed') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return null
+    const itemRecord = item as Record<string, unknown>
+    return itemRecord.type === 'agentMessage' && typeof itemRecord.text === 'string'
+      ? itemRecord.text
+      : itemRecord.type === 'plan' && typeof itemRecord.text === 'string'
+      ? itemRecord.text
+      : null
   }
 
   if (record.type === 'stream_event') {
@@ -538,6 +572,15 @@ function shouldReplaceLiveAssistantText(payload: unknown): boolean {
   if (!payload || typeof payload !== 'object') return false
   const record = payload as Record<string, unknown>
   if (record.type === 'assistant') return true
+  if (record.type === 'codex_realtime_transcript') return true
+  if (record.type === 'codex_realtime_item_added') return true
+  if (record.type === 'codex_item_completed') {
+    const item = record.item
+    return !!item && typeof item === 'object' && (
+      (item as Record<string, unknown>).type === 'agentMessage'
+      || (item as Record<string, unknown>).type === 'plan'
+    )
+  }
   if (record.type === 'opencode_event') {
     const event = record.event
     if (!event || typeof event !== 'object') return false
@@ -666,12 +709,128 @@ function sessionMessageFingerprint(message: SessionMessage | undefined): string 
   ].join('|')
 }
 
+function estimateWrappedLines(text: string, charsPerLine = ESTIMATED_CHARS_PER_LINE): number {
+  if (!text) return 1
+
+  let lines = 0
+  for (const rawLine of text.replace(/\t/g, '    ').split('\n')) {
+    if (!rawLine) {
+      lines += 1
+      continue
+    }
+    lines += Math.max(1, Math.ceil(rawLine.length / charsPerLine))
+  }
+  return Math.max(lines, 1)
+}
+
+function estimateTextSectionHeight(
+  text: string,
+  { lineHeight = 24, padding = 26, min = 56, max }: { lineHeight?: number; padding?: number; min?: number; max?: number } = {},
+): number {
+  const estimated = padding + estimateWrappedLines(text) * lineHeight
+  const bounded = max != null ? Math.min(estimated, max) : estimated
+  return Math.max(min, bounded)
+}
+
+function estimateContentBlockHeight(block: ContentBlock): number {
+  if (block.type === 'text') return estimateTextSectionHeight(typeof block.text === 'string' ? block.text : '')
+  if (block.type === 'thinking') return 70
+  if (block.type === 'image') return 220
+  if (block.type === 'tool_result') {
+    if (typeof block.content === 'string') {
+      return estimateTextSectionHeight(block.content, { lineHeight: 18, padding: 18, min: 60, max: 260 })
+    }
+    if (Array.isArray(block.content)) {
+      return 60 + block.content.reduce((total: number, child: ContentBlock) => total + estimateContentBlockHeight(child), 0)
+    }
+    return 60
+  }
+  return 68
+}
+
+function estimateToolThreadHeight(block: Extract<ThreadedBlock, { type: 'tool_thread' }>): number {
+  const { toolUse, result } = block
+  const input = toolUse.input as Record<string, unknown>
+
+  if (toolUse.name === 'FileChange') {
+    const changes = Array.isArray(input.changes) ? input.changes : []
+    const bodyHeight = changes.length === 0
+      ? 56
+      : changes.reduce((total, change) => {
+          const record = change && typeof change === 'object' ? change as Record<string, unknown> : {}
+          const diff = typeof record.diff === 'string' ? record.diff : ''
+          return total + 84 + estimateTextSectionHeight(diff, { lineHeight: 17, padding: 20, min: 96, max: 420 })
+        }, 0)
+    return 72 + bodyHeight
+  }
+
+  if (toolUse.name === 'MultiEdit') {
+    const edits = Array.isArray(input.edits) ? input.edits : []
+    const bodyHeight = edits.reduce((total, edit) => {
+      const record = edit && typeof edit === 'object' ? edit as Record<string, unknown> : {}
+      const oldString = typeof record.old_string === 'string' ? record.old_string : ''
+      const newString = typeof record.new_string === 'string' ? record.new_string : ''
+      const diffText = `${oldString}\n${newString}`.trim()
+      return total + 54 + estimateTextSectionHeight(diffText, { lineHeight: 17, padding: 20, min: 88, max: 260 })
+    }, 28)
+    return 78 + bodyHeight
+  }
+
+  if (toolUse.name === 'TodoWrite') {
+    const todos = Array.isArray(input.todos) ? input.todos : []
+    return 88 + Math.max(42, todos.length * 28)
+  }
+
+  if (toolUse.name === 'AskUserQuestion') {
+    const questions = Array.isArray(input.questions) ? input.questions : []
+    return 92 + questions.length * 92
+  }
+
+  if (toolUse.name === 'Read' || toolUse.name === 'Glob' || toolUse.name === 'Grep' || toolUse.name === 'Bash') {
+    return 84
+  }
+
+  if (toolUse.name === 'Agent') {
+    const description = typeof input.description === 'string' ? input.description : ''
+    return 86 + (result ? estimateTextSectionHeight(description, { lineHeight: 16, padding: 10, min: 0, max: 80 }) : 0)
+  }
+
+  if (result?.content) {
+    if (typeof result.content === 'string') {
+      return 86 + estimateTextSectionHeight(result.content, { lineHeight: 18, padding: 16, min: 40, max: 220 })
+    }
+    return 92 + result.content.reduce((total, child) => total + estimateContentBlockHeight(child), 0)
+  }
+
+  return 84
+}
+
+function estimateThreadedBlockHeight(block: ThreadedBlock): number {
+  if (block.type === 'text') return estimateTextSectionHeight(block.text)
+  if (block.type === 'thinking') return 72
+  if (block.type === 'image') return 220
+  if (block.type === 'tool_thread') return estimateToolThreadHeight(block)
+  if (block.type === 'task_notification') return 96
+  if (block.type === 'system_reminder') return 72
+  if (block.type === 'slash_command') return 64
+  if (block.type === 'local_command_stdout') {
+    return 60 + estimateTextSectionHeight(block.stdout, { lineHeight: 17, padding: 8, min: 20, max: 80 })
+  }
+  if (block.type === 'claude_system') return 72
+  return 68
+}
+
 function estimateTimelineRowHeight(row: TimelineRow): number {
   const { message } = row
-  if (message.role === 'system') return 150
-  if (message.blocks.some((block) => block.type === 'tool_thread')) return 260
-  if (message.blocks.some((block) => block.type === 'thinking')) return 220
-  return row.previewBadge || row.liveToolActivities?.length ? 190 : 150
+  const headerHeight = 82
+  const previewHeight = row.previewBadge ? 28 : 0
+  const liveToolsHeight = row.liveToolActivities && row.liveToolActivities.length > 0
+    ? 34 * Math.ceil(row.liveToolActivities.length / 3) + 10
+    : 0
+  const blockGap = Math.max(message.blocks.length - 1, 0) * 8
+  const blockHeight = message.blocks.reduce((total: number, block: ThreadedBlock) => total + estimateThreadedBlockHeight(block), 0)
+  const estimated = headerHeight + previewHeight + liveToolsHeight + blockGap + blockHeight
+  return Math.max(estimated, message.role === 'system' ? 120 : ESTIMATED_TIMELINE_ROW_HEIGHT)
 }
 
 function TimelineMessageRow({
@@ -863,6 +1022,8 @@ export default function MessageView({ messages, loading, session, projectView, o
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const rowHeightsRef = useRef<Map<string, number>>(new Map())
   const threadedCacheRef = useRef<Map<string, ThreadedMessage>>(new Map())
+  const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
+  const measurementFrameRef = useRef<number | null>(null)
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
   const assistantName = assistantDisplayName(sessionInfo?.provider ?? session?.provider)
 
@@ -912,10 +1073,21 @@ export default function MessageView({ messages, loading, session, projectView, o
     setTimelineViewportHeight(0)
     rowHeightsRef.current.clear()
     threadedCacheRef.current.clear()
+    pendingRowMeasurementsRef.current.clear()
+    if (measurementFrameRef.current != null) {
+      window.cancelAnimationFrame(measurementFrameRef.current)
+      measurementFrameRef.current = null
+    }
     setRowMeasurementVersion(0)
     pendingMessageBaselineRef.current = null
     liveToolIndexesRef.current.clear()
   }, [session?.sessionId])
+
+  useEffect(() => () => {
+    if (measurementFrameRef.current != null) {
+      window.cancelAnimationFrame(measurementFrameRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     const node = timelineRef.current
@@ -940,13 +1112,9 @@ export default function MessageView({ messages, loading, session, projectView, o
   const scrollTimelineToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const node = timelineRef.current
     if (!node) return
-    node.scrollTo({ top: node.scrollHeight, behavior })
-    const syncScrollTop = () => setTimelineScrollTop(node.scrollTop)
-    if (behavior === 'smooth') {
-      window.requestAnimationFrame(syncScrollTop)
-    } else {
-      syncScrollTop()
-    }
+    const targetTop = Math.max(node.scrollHeight - node.clientHeight, 0)
+    setTimelineScrollTop(targetTop)
+    node.scrollTo({ top: targetTop, behavior })
   }, [])
 
   const handleTimelineScroll = useCallback(() => {
@@ -1478,10 +1646,47 @@ export default function MessageView({ messages, loading, session, projectView, o
 
   const handleTimelineRowMeasure = useCallback((key: string, height: number) => {
     const nextHeight = Math.max(1, Math.ceil(height))
-    if (rowHeightsRef.current.get(key) === nextHeight) return
-    rowHeightsRef.current.set(key, nextHeight)
-    setRowMeasurementVersion((version) => version + 1)
-  }, [])
+    pendingRowMeasurementsRef.current.set(key, nextHeight)
+    if (measurementFrameRef.current != null) return
+
+    measurementFrameRef.current = window.requestAnimationFrame(() => {
+      measurementFrameRef.current = null
+      const pending = pendingRowMeasurementsRef.current
+      if (pending.size === 0) return
+
+      const node = timelineRef.current
+      let offset = 0
+      let scrollDelta = 0
+      let changed = false
+
+      for (const row of timelineRows) {
+        const previousHeight = rowHeightsRef.current.get(row.key) ?? estimateTimelineRowHeight(row)
+        const nextMeasuredHeight = pending.get(row.key)
+        const nextHeightForLayout = nextMeasuredHeight ?? previousHeight
+
+        if (nextMeasuredHeight != null && nextMeasuredHeight !== previousHeight) {
+          rowHeightsRef.current.set(row.key, nextMeasuredHeight)
+          changed = true
+          if (node && offset < node.scrollTop) {
+            scrollDelta += nextMeasuredHeight - previousHeight
+          }
+        }
+
+        offset += nextHeightForLayout
+      }
+
+      pending.clear()
+
+      if (node && scrollDelta !== 0) {
+        node.scrollTop += scrollDelta
+        setTimelineScrollTop(node.scrollTop)
+      }
+
+      if (changed) {
+        setRowMeasurementVersion((version) => version + 1)
+      }
+    })
+  }, [timelineRows])
 
   const virtualTimeline = useMemo(() => {
     let offset = 0
@@ -2021,6 +2226,7 @@ export default function MessageView({ messages, loading, session, projectView, o
         style={{
           flex: 1,
           overflow: 'auto',
+          overflowAnchor: 'none',
           padding: '28px 32px 72px',
         }}
       >

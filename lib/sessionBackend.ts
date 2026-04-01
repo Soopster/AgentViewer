@@ -686,6 +686,16 @@ function formatCodexNotification(notification: CodexNotification): string | null
   switch (notification.method) {
     case 'item/agentMessage/delta':
       return JSON.stringify({ type: 'codex_agent_message_delta', ...notification.params })
+    case 'item/plan/delta':
+      return JSON.stringify({ type: 'codex_plan_delta', ...notification.params })
+    case 'item/reasoning/summaryTextDelta':
+      return JSON.stringify({ type: 'codex_reasoning_summary_delta', ...notification.params })
+    case 'item/reasoning/textDelta':
+      return JSON.stringify({ type: 'codex_reasoning_delta', ...notification.params })
+    case 'thread/realtime/transcriptUpdated':
+      return JSON.stringify({ type: 'codex_realtime_transcript', ...notification.params })
+    case 'thread/realtime/itemAdded':
+      return JSON.stringify({ type: 'codex_realtime_item_added', ...notification.params })
     case 'item/started':
       return JSON.stringify({ type: 'codex_item_started', ...notification.params })
     case 'item/completed':
@@ -714,13 +724,26 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       const bufferedNotifications: CodexNotification[] = []
       let currentModel = model ?? 'codex'
       let closed = false
+      let completionSeen = false
+      let completionCloseTimer: ReturnType<typeof setTimeout> | null = null
 
       const closeStream = (unsubscribe: () => void) => {
         if (closed) return
         closed = true
+        if (completionCloseTimer) {
+          clearTimeout(completionCloseTimer)
+          completionCloseTimer = null
+        }
         controller.close()
         clearRunningSession(sessionId)
         unsubscribe()
+      }
+
+      const scheduleCompletionClose = (unsubscribe: () => void) => {
+        if (closed) return
+        completionSeen = true
+        if (completionCloseTimer) clearTimeout(completionCloseTimer)
+        completionCloseTimer = setTimeout(() => closeStream(unsubscribe), 400)
       }
 
       const flushNotification = (notification: CodexNotification) => {
@@ -749,13 +772,14 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
           return
         }
 
-        if (notificationTurnId !== targetTurnId) return
+        if (notificationTurnId && notificationTurnId !== targetTurnId) return
 
         if (notification.method === 'turn/completed') {
-          closeStream(unsubscribe)
+          scheduleCompletionClose(unsubscribe)
           return
         }
 
+        if (completionSeen) scheduleCompletionClose(unsubscribe)
         flushNotification(notification)
       })
 
@@ -786,7 +810,8 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
 
         let bufferedTurnCompleted = false
         for (const notification of bufferedNotifications) {
-          if (getCodexNotificationTurnId(notification) !== targetTurnId) continue
+          const bufferedTurnId = getCodexNotificationTurnId(notification)
+          if (bufferedTurnId && bufferedTurnId !== targetTurnId) continue
           if (notification.method === 'turn/completed') {
             bufferedTurnCompleted = true
             continue
@@ -799,12 +824,12 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
             controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
             continue
           }
+          if (completionSeen) scheduleCompletionClose(unsubscribe)
           flushNotification(notification)
         }
 
         if (bufferedTurnCompleted) {
-          closeStream(unsubscribe)
-          return
+          scheduleCompletionClose(unsubscribe)
         }
       } catch (err) {
         unsubscribe()

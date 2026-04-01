@@ -234,5 +234,10 @@ export type CodexNotification =
   | { method: 'item/started'; params: { threadId: string; turnId: string; item: CodexThreadItem } }
   | { method: 'item/completed'; params: { threadId: string; turnId: string; item: CodexThreadItem } }
   | { method: 'item/agentMessage/delta'; params: { threadId: string; turnId: string; itemId: string; delta: string } }
+  | { method: 'item/plan/delta'; params: { threadId: string; turnId: string; itemId: string; delta: string } }
+  | { method: 'item/reasoning/summaryTextDelta'; params: { threadId: string; turnId: string; itemId: string; delta: string; summaryIndex: number } }
+  | { method: 'item/reasoning/textDelta'; params: { threadId: string; turnId: string; itemId: string; delta: string; contentIndex: number } }
+  | { method: 'thread/realtime/transcriptUpdated'; params: { threadId: string; role: string; text: string } }
+  | { method: 'thread/realtime/itemAdded'; params: { threadId: string; item: Record<string, unknown> } }
   | { method: 'thread/tokenUsage/updated'; params: { threadId: string; turnId: string; tokenUsage: CodexThreadTokenUsage } }
   | { method: string; params: Record<string, unknown> }
