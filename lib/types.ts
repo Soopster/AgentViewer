@@ -39,7 +39,7 @@ export type ApiMessage = {
   }
 }
 
-export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot'
+export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot' | 'pi'
 export type ProviderSelection = AgentProvider | 'all'
 
 export type SessionCapabilities = {

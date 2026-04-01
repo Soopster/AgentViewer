@@ -96,6 +96,27 @@ import type {
   Session as OpenCodeSession,
 } from '@opencode-ai/sdk'
 import { normalizeProjectPath, sameProjectPath } from './projectPaths'
+import {
+  forkPiSession,
+  getPiSessionMessages,
+  listPiSessions,
+  openPiAgentSession,
+  openPiSessionManager,
+  refreshPiSessionCache,
+} from './piClient'
+import {
+  mapPiDiagnosticsToSections,
+  mapPiMessagesToSessionMessages,
+  mapPiModelsToSessionModels,
+  mapPiSessionToInfo,
+  mapPiSessionToSession,
+} from './piMapper'
+import {
+  getPiStoredMetadata,
+  getPiStoredMetadataForSessions,
+  setPiStoredTag,
+  setPiStoredTitle,
+} from './piMetadata'
 
 export const maxDuration = 300
 
@@ -313,17 +334,26 @@ function openCodeDirectoryQuery(session: OpenCodeSession): { directory?: string 
   return session.directory ? { directory: session.directory } : undefined
 }
 
+async function listPiSessionsForView({ limit, offset, dir }: ListParams): Promise<Session[]> {
+  const sessions = await listPiSessions(dir || undefined)
+  const sorted = [...sessions].sort((a, b) => b.modified.getTime() - a.modified.getTime())
+  const page = sorted.slice(offset, offset + limit)
+  const stored = await getPiStoredMetadataForSessions(page.map((s) => s.id))
+  return page.map((s) => mapPiSessionToSession(s, stored[s.id] ?? { title: null, tag: null }))
+}
+
 export async function listViewSessions(params: ListParams): Promise<Session[]> {
   const provider = params.provider ?? await getConfiguredProvider()
   if (provider === 'all') {
     const combinedLimit = Math.max(params.limit + params.offset, 500)
-    const [claude, codex, opencode, copilot] = await Promise.all([
+    const [claude, codex, opencode, copilot, pi] = await Promise.all([
       listClaudeSessions({ ...params, provider: 'claude', limit: combinedLimit, offset: 0 }),
       listCodexSessions({ ...params, provider: 'codex', limit: combinedLimit, offset: 0 }),
       listOpenCodeSessions({ ...params, provider: 'opencode', limit: combinedLimit, offset: 0 }),
       listCopilotSessions({ ...params, provider: 'copilot', limit: combinedLimit, offset: 0 }),
+      listPiSessionsForView({ ...params, provider: 'pi', limit: combinedLimit, offset: 0 }),
     ])
-    return [...claude, ...codex, ...opencode, ...copilot]
+    return [...claude, ...codex, ...opencode, ...copilot, ...pi]
       .sort((a, b) => {
         const aTime = Number(a.lastModified ?? a.createdAt ?? 0)
         const bTime = Number(b.lastModified ?? b.createdAt ?? 0)
@@ -340,6 +370,9 @@ export async function listViewSessions(params: ListParams): Promise<Session[]> {
   }
   if (provider === 'copilot') {
     return listCopilotSessions(params)
+  }
+  if (provider === 'pi') {
+    return listPiSessionsForView(params)
   }
   return listClaudeSessions(params)
 }
@@ -384,6 +417,16 @@ export async function readViewSessionInfo(sessionId: string, providerOverride?: 
     } finally {
       await session.disconnect().catch(() => {})
     }
+  }
+  if (provider === 'pi') {
+    const [sessions, stored] = await Promise.all([
+      listPiSessions(),
+      getPiStoredMetadata(sessionId),
+    ])
+    const info = sessions.find((s) => s.id === sessionId)
+    if (!info) return null
+    const messages = getPiSessionMessages(sessionId)
+    return mapPiSessionToInfo(info, stored, messages)
   }
 
   const info = await getSessionInfo(sessionId)
@@ -439,6 +482,17 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
     }
     throw new Error('title or tag required')
   }
+  if (provider === 'pi') {
+    if ('title' in body) {
+      await setPiStoredTitle(sessionId, typeof body.title === 'string' ? body.title : null)
+      return
+    }
+    if ('tag' in body) {
+      await setPiStoredTag(sessionId, typeof body.tag === 'string' ? body.tag : null)
+      return
+    }
+    throw new Error('title or tag required')
+  }
 
   if ('title' in body) {
     if (typeof body.title !== 'string') throw new Error('title must be a string')
@@ -469,6 +523,10 @@ export async function listViewSessionMessages(sessionId: string, params: Message
   if (provider === 'copilot') {
     const events = await readCopilotSessionEvents(sessionId)
     return mapCopilotEventsToSessionMessages(sessionId, events).slice(params.offset, params.offset + params.limit)
+  }
+  if (provider === 'pi') {
+    const messages = getPiSessionMessages(sessionId)
+    return mapPiMessagesToSessionMessages(sessionId, messages).slice(params.offset, params.offset + params.limit)
   }
 
   const messages = await getSessionMessages(sessionId, params)
@@ -864,6 +922,66 @@ async function createCopilotStream(sessionId: string, request: NextRequest, body
   })
 }
 
+async function createPiStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
+  const userMessage = String(body.message ?? '').trim()
+  const encoder = new TextEncoder()
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let closed = false
+      const close = () => {
+        if (closed) return
+        closed = true
+        controller.close()
+      }
+
+      try {
+        const agentSession = await openPiAgentSession(sessionId)
+        const targetSessionId = agentSession.sessionId
+
+        controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: targetSessionId })}\n\n`))
+
+        setRunningSession(sessionId, {
+          provider: 'pi',
+          interrupt: () => agentSession.abort(),
+        })
+
+        request.signal.addEventListener('abort', () => {
+          const running = getRunningSession(sessionId)
+          if (running?.provider === 'pi') {
+            void running.interrupt().catch(() => {})
+          }
+        })
+
+        const unsubscribe = agentSession.agent.subscribe((event) => {
+          const payload = JSON.stringify({ type: 'pi_event', event })
+          controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
+
+          if (event.type === 'agent_end') {
+            clearRunningSession(sessionId)
+            unsubscribe()
+            close()
+          }
+        })
+
+        await agentSession.prompt(userMessage)
+      } catch (err) {
+        controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
+        clearRunningSession(sessionId)
+        close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'X-Accel-Buffering': 'no',
+    },
+  })
+}
+
 export async function streamViewSessionTurn(params: SendMessageParams): Promise<Response> {
   const userMessage = String(params.body.message ?? '').trim()
   if (!userMessage) {
@@ -879,6 +997,9 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
   }
   if (provider === 'copilot') {
     return createCopilotStream(params.sessionId, params.request, params.body)
+  }
+  if (provider === 'pi') {
+    return createPiStream(params.sessionId, params.request, params.body)
   }
 
   return createClaudeStream(params.sessionId, params.request, params.body)
@@ -923,6 +1044,17 @@ export async function forkViewSession({ sessionId, body, provider }: ForkParams)
     void sessionId
     void body
     throw new Error('Fork is not supported for GitHub Copilot sessions')
+  }
+  if (resolvedProvider === 'pi') {
+    const entryId = typeof body.upToMessageId === 'string' ? body.upToMessageId : undefined
+    if (!entryId) {
+      throw new Error('upToMessageId is required for Pi fork')
+    }
+    const newId = forkPiSession(sessionId, entryId)
+    if (!newId) {
+      throw new Error('Failed to fork Pi session')
+    }
+    return { sessionId: newId }
   }
 
   const result = await forkSession(sessionId, {
@@ -982,6 +1114,21 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
       }
     } finally {
       await session.disconnect().catch(() => {})
+    }
+  }
+  if (provider === 'pi') {
+    const messages = getPiSessionMessages(sessionId)
+    let currentModel: string | undefined
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i] as { role: string; model?: string }
+      if (msg.role === 'assistant' && msg.model) {
+        currentModel = msg.model
+        break
+      }
+    }
+    return {
+      models: mapPiModelsToSessionModels(currentModel),
+      currentModel: currentModel ?? null,
     }
   }
 
@@ -1123,6 +1270,37 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
       await session.disconnect().catch(() => {})
     }
   }
+  if (provider === 'pi') {
+    const messages = getPiSessionMessages(sessionId)
+    let currentModel: string | undefined
+    let thinkingLevel: string | undefined
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i] as { role: string; model?: string; thinking?: boolean }
+      if (msg.role === 'assistant') {
+        currentModel ??= msg.model
+        if (thinkingLevel === undefined && msg.thinking !== undefined) {
+          thinkingLevel = msg.thinking ? 'enabled' : 'off'
+        }
+        if (currentModel && thinkingLevel !== undefined) break
+      }
+    }
+
+    const sm = openPiSessionManager(sessionId)
+    const sessionFile = sm.getSessionFile()
+    const cwd = sm.getCwd()
+
+    return {
+      currentModel: currentModel ?? null,
+      sections: mapPiDiagnosticsToSections({
+        sessionId,
+        cwd,
+        currentModel,
+        thinkingLevel,
+        toolNames: [],
+        sessionFile,
+      }),
+    }
+  }
 
   const q = createSessionControlQuery(sessionId)
   try {
@@ -1235,6 +1413,11 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
     void sessionId
     void body
     throw new Error('Rewind is not supported for GitHub Copilot sessions')
+  }
+  if (resolvedProvider === 'pi') {
+    void sessionId
+    void body
+    throw new Error('Rewind is not supported for Pi sessions')
   }
 
   const userMessageId = typeof body.userMessageId === 'string' ? body.userMessageId : undefined

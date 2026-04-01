@@ -16,7 +16,7 @@ export async function PATCH(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
   const provider = body?.provider
   if (!isProviderSelection(provider)) {
-    return NextResponse.json({ error: 'provider must be all, claude, codex, opencode, or copilot' }, { status: 400 })
+    return NextResponse.json({ error: 'provider must be all, claude, codex, opencode, copilot, or pi' }, { status: 400 })
   }
 
   try {

@@ -110,6 +110,9 @@ function providerChipStyle(provider: AgentProvider): { color: string; background
   if (provider === 'copilot') {
     return { color: 'var(--amber)', background: 'rgba(234,170,64,0.08)', border: 'rgba(234,170,64,0.22)' }
   }
+  if (provider === 'pi') {
+    return { color: 'var(--red)', background: 'rgba(240,80,80,0.08)', border: 'rgba(240,80,80,0.22)' }
+  }
   return { color: 'var(--violet)', background: 'rgba(139,128,240,0.08)', border: 'rgba(139,128,240,0.22)' }
 }
 
@@ -656,6 +659,7 @@ export default function SessionList({
             <option value="codex">CODEX</option>
             <option value="opencode">OPENCODE</option>
             <option value="copilot">COPILOT</option>
+            <option value="pi">PI</option>
             <option value="all">ALL</option>
           </select>
         </div>

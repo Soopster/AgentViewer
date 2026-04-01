@@ -28,10 +28,18 @@ export const COPILOT_CAPABILITIES: SessionCapabilities = {
   rollback: false,
 }
 
+export const PI_CAPABILITIES: SessionCapabilities = {
+  messageFork: true,
+  resumeAtMessage: false,
+  fileRewind: false,
+  rollback: false,
+}
+
 export function getProviderCapabilities(provider: AgentProvider): SessionCapabilities {
   if (provider === 'codex') return CODEX_CAPABILITIES
   if (provider === 'opencode') return OPENCODE_CAPABILITIES
   if (provider === 'copilot') return COPILOT_CAPABILITIES
+  if (provider === 'pi') return PI_CAPABILITIES
   return CLAUDE_CAPABILITIES
 }
 
@@ -39,11 +47,12 @@ export function getAssistantLabel(provider: AgentProvider | undefined): string {
   if (provider === 'codex') return 'CODEX'
   if (provider === 'opencode') return 'OPENCODE'
   if (provider === 'copilot') return 'COPILOT'
+  if (provider === 'pi') return 'PI'
   return 'CLAUDE'
 }
 
 export function isAgentProvider(value: unknown): value is AgentProvider {
-  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'copilot'
+  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'copilot' || value === 'pi'
 }
 
 export function isProviderSelection(value: unknown): value is ProviderSelection {

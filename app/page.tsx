@@ -15,7 +15,7 @@ type ProjectSelection = {
   sessions: Session[]
 }
 
-const ALL_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot']
+const ALL_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 
 function withProviderQuery(path: string, provider?: AgentProvider | 'all'): string {
   if (!provider) return path
