@@ -15,6 +15,14 @@ type ProjectSelection = {
   sessions: Session[]
 }
 
+type ProjectMessageBatch = {
+  key: string
+  sessionId: string
+  provider?: AgentProvider
+  offset: number
+  messages: SessionMessage[]
+}
+
 const ALL_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 
 function withProviderQuery(path: string, provider?: AgentProvider | 'all'): string {
@@ -167,6 +175,31 @@ export default function Home() {
     return (data.messages ?? []) as SessionMessage[]
   }, [])
 
+  const fetchProjectMessageBatches = useCallback(async (
+    dir: string,
+    selection: ProviderSelection,
+    offsets: Record<string, number>,
+  ): Promise<{ sessions: Session[]; batches: ProjectMessageBatch[] }> => {
+    const response = await fetch('/api/sessions/project/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dir,
+        includeWorktrees,
+        provider: selection,
+        offsets,
+        initialLimit: 2000,
+        incrementalLimit: 200,
+      }),
+    })
+    const data = await response.json()
+    if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
+    return {
+      sessions: (data.sessions ?? []) as Session[],
+      batches: (data.batches ?? []) as ProjectMessageBatch[],
+    }
+  }, [includeWorktrees])
+
   const fetchSessions = useCallback(async () => {
     if (sessionScope === 'project' && activeProjectDir) {
       const loaded = await fetchProjectSessions(activeProjectDir, provider)
@@ -266,26 +299,12 @@ export default function Home() {
       if (projectPollInFlightRef.current) return
       projectPollInFlightRef.current = true
       try {
-        const projectSessions = await fetchProjectSessions(selectedProject.dir, provider)
-        const results = await Promise.all(
-          projectSessions.map(async (session) => {
-            const key = projectSessionKey(session)
-            const offset = projectMessageCountsRef.current.get(key) ?? 0
-            const limit = offset === 0 ? 2000 : 200
-            const response = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?offset=${offset}&limit=${limit}`, session.provider))
-            const data = await response.json()
-            if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
-            return {
-              key,
-              offset,
-              messages: (data.messages ?? []) as SessionMessage[],
-            }
-          })
-        )
-        for (const result of results) {
-          projectMessageCountsRef.current.set(result.key, result.offset + result.messages.length)
+        const offsets = Object.fromEntries(projectMessageCountsRef.current.entries())
+        const { sessions: projectSessions, batches } = await fetchProjectMessageBatches(selectedProject.dir, provider, offsets)
+        for (const batch of batches) {
+          projectMessageCountsRef.current.set(batch.key, batch.offset + batch.messages.length)
         }
-        const incoming = results.flatMap((result) => result.messages)
+        const incoming = batches.flatMap((batch) => batch.messages)
         if (incoming.length > 0) {
           setMessages((prev) => mergeMessages(prev, incoming))
         }
@@ -298,7 +317,7 @@ export default function Home() {
       }
     }, 2000)
     return () => clearInterval(id)
-  }, [fetchProjectSessions, provider, selectedProject])
+  }, [fetchProjectMessageBatches, provider, selectedProject])
 
   async function selectSession(session: Session) {
     setSelectedId(session.sessionId)
@@ -322,16 +341,15 @@ export default function Home() {
     setLoadingMessages(true)
     setMessages([])
     try {
-      const sessionsForProject = provider === 'all'
-        ? await fetchProjectSessions(projectDir, 'all')
-        : projectSessions
-      const results = await Promise.all(
-        sessionsForProject.map((session) => fetchSessionMessages(session))
+      const { sessions: sessionsForProject, batches } = await fetchProjectMessageBatches(
+        projectDir,
+        provider === 'all' ? 'all' : provider,
+        {},
       )
-      const all = results.flat() as SessionMessage[]
+      const all = batches.flatMap((batch) => batch.messages) as SessionMessage[]
       all.sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
       projectMessageCountsRef.current = new Map(
-        sessionsForProject.map((session, index) => [projectSessionKey(session), results[index]?.length ?? 0])
+        batches.map((batch) => [batch.key, batch.offset + batch.messages.length])
       )
       setMessages(all)
       setSelectedProject({ key: projectName, dir: projectDir, sessions: sessionsForProject })

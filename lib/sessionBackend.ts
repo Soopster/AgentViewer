@@ -146,6 +146,15 @@ type MessageListParams = {
   offset: number
 }
 
+type ProjectMessageBatchParams = {
+  dir: string
+  includeWorktrees: boolean
+  provider?: AgentProvider | 'all'
+  offsets: Record<string, number>
+  initialLimit: number
+  incrementalLimit: number
+}
+
 type SendMessageParams = {
   sessionId: string
   request: NextRequest
@@ -535,6 +544,46 @@ export async function listViewSessionMessages(sessionId: string, params: Message
     includeSystemMessages: true,
   })
   return normalizeClaudeHistoryMessages(messages as unknown[])
+}
+
+export async function listProjectSessionMessageBatches(params: ProjectMessageBatchParams): Promise<{
+  sessions: Session[]
+  batches: Array<{
+    key: string
+    sessionId: string
+    provider?: AgentProvider
+    offset: number
+    messages: SessionMessage[]
+  }>
+}> {
+  const sessions = await listViewSessions({
+    limit: 500,
+    offset: 0,
+    dir: params.dir,
+    includeWorktrees: params.includeWorktrees,
+    provider: params.provider,
+  })
+
+  const batches = await Promise.all(
+    sessions.map(async (session) => {
+      const key = `${session.provider ?? 'claude'}:${session.sessionId}`
+      const offset = Math.max(0, params.offsets[key] ?? 0)
+      const limit = offset === 0 ? params.initialLimit : params.incrementalLimit
+      const messages = limit > 0
+        ? await listViewSessionMessages(session.sessionId, { offset, limit }, session.provider)
+        : []
+
+      return {
+        key,
+        sessionId: session.sessionId,
+        provider: session.provider,
+        offset,
+        messages,
+      }
+    }),
+  )
+
+  return { sessions, batches }
 }
 
 function createClaudeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Response {
