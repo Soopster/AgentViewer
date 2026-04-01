@@ -23,6 +23,8 @@ type ProjectMessageBatch = {
   messages: SessionMessage[]
 }
 
+const MESSAGE_POLL_BACKFILL = 20
+
 function withProviderQuery(path: string, provider?: AgentProvider | 'all'): string {
   if (!provider) return path
   const separator = path.includes('?') ? '&' : '?'
@@ -86,20 +88,27 @@ function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): 
   for (const message of incoming) latestIncomingByKey.set(sessionMessageKey(message), message)
 
   let changed = false
-  const replacements = new Map<string, SessionMessage>()
+  const appended: SessionMessage[] = []
+  const mergedExisting = existing.map((message) => {
+    const key = sessionMessageKey(message)
+    const replacement = latestIncomingByKey.get(key)
+    if (!replacement) return message
+    if (apiMessageSignature(message) === apiMessageSignature(replacement)) return message
+    changed = true
+    return replacement
+  })
 
   for (const [key, message] of latestIncomingByKey) {
-    const previous = existingByKey.get(key)
-    if (previous && apiMessageSignature(previous) === apiMessageSignature(message)) continue
-    replacements.set(key, message)
+    if (existingByKey.has(key)) continue
+    appended.push(message)
     changed = true
   }
 
   if (!changed) return existing
+  if (appended.length === 0) return mergedExisting
 
-  const retained = existing.filter((message) => !replacements.has(sessionMessageKey(message)))
-  const additions = [...replacements.values()].sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
-  return mergeSortedMessages(retained, additions)
+  const additions = appended.sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
+  return mergeSortedMessages(mergedExisting, additions)
 }
 
 export default function Home() {
@@ -246,9 +255,9 @@ export default function Home() {
     const id = setInterval(async () => {
       if (pollInFlightRef.current) return
       pollInFlightRef.current = true
-      const offset = msgCountRef.current
+      const offset = Math.max(0, msgCountRef.current - MESSAGE_POLL_BACKFILL)
       try {
-        const r = await fetch(withProviderQuery(`/api/sessions/${selectedId}/messages?offset=${offset}&limit=200`, selectedSession?.provider))
+        const r = await fetch(withProviderQuery(`/api/sessions/${selectedId}/messages?offset=${offset}&limit=${200 + MESSAGE_POLL_BACKFILL}`, selectedSession?.provider))
         const data = await r.json()
         if (!data.error && data.messages?.length > 0) {
           setMessages((prev) => mergeMessages(prev, data.messages as SessionMessage[]))
@@ -267,10 +276,19 @@ export default function Home() {
       if (projectPollInFlightRef.current) return
       projectPollInFlightRef.current = true
       try {
-        const offsets = Object.fromEntries(projectMessageCountsRef.current.entries())
+        const offsets = Object.fromEntries(
+          Array.from(projectMessageCountsRef.current.entries(), ([key, count]) => [
+            key,
+            Math.max(0, count - MESSAGE_POLL_BACKFILL),
+          ])
+        )
         const { sessions: projectSessions, batches } = await fetchProjectMessageBatches(selectedProject.dir, provider, offsets)
         for (const batch of batches) {
-          projectMessageCountsRef.current.set(batch.key, batch.offset + batch.messages.length)
+          const previousCount = projectMessageCountsRef.current.get(batch.key) ?? 0
+          projectMessageCountsRef.current.set(
+            batch.key,
+            Math.max(previousCount, batch.offset + batch.messages.length)
+          )
         }
         const incoming = batches.flatMap((batch) => batch.messages)
         if (incoming.length > 0) {

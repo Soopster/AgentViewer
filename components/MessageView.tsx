@@ -145,17 +145,23 @@ function extractStreamingAssistantText(payload: unknown): string | null {
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
-    if (eventRecord.type !== 'message.part.updated') return null
-
     const properties = eventRecord.properties
     if (!properties || typeof properties !== 'object') return null
     const propertiesRecord = properties as Record<string, unknown>
+    if (eventRecord.type === 'message.part.delta') {
+      const field = typeof propertiesRecord.field === 'string' ? propertiesRecord.field : ''
+      return field === 'text' && typeof propertiesRecord.delta === 'string'
+        ? propertiesRecord.delta
+        : null
+    }
+
+    if (eventRecord.type !== 'message.part.updated') return null
     const part = propertiesRecord.part
     if (!part || typeof part !== 'object') return null
     const partRecord = part as Record<string, unknown>
 
-    return partRecord.type === 'text' && typeof propertiesRecord.delta === 'string'
-      ? propertiesRecord.delta
+    return partRecord.type === 'text' && typeof partRecord.text === 'string'
+      ? partRecord.text
       : null
   }
 
@@ -468,6 +474,17 @@ function shouldReplaceLiveAssistantText(payload: unknown): boolean {
   if (!payload || typeof payload !== 'object') return false
   const record = payload as Record<string, unknown>
   if (record.type === 'assistant') return true
+  if (record.type === 'opencode_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return false
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message.part.updated') return false
+    const properties = eventRecord.properties
+    if (!properties || typeof properties !== 'object') return false
+    const part = (properties as Record<string, unknown>).part
+    if (!part || typeof part !== 'object') return false
+    return (part as Record<string, unknown>).type === 'text'
+  }
   if (record.type !== 'copilot_event') return false
   const event = record.event
   if (!event || typeof event !== 'object') return false
@@ -551,6 +568,24 @@ function threadedMessageEqual(a: ThreadedMessage, b: ThreadedMessage): boolean {
 
 function threadedMessageKey(message: ThreadedMessage): string {
   return `${message.provider ?? 'claude'}:${message.uuid}`
+}
+
+function sessionMessageFingerprint(message: SessionMessage | undefined): string | null {
+  if (!message) return null
+  let payload = ''
+  try {
+    payload = JSON.stringify(message.message)
+  } catch {
+    payload = String(message.message)
+  }
+  return [
+    message.type,
+    message.uuid,
+    message.timestamp ?? '',
+    message.turnId ?? '',
+    message.origin?.kind ?? '',
+    payload,
+  ].join('|')
 }
 
 function estimateTimelineRowHeight(row: TimelineRow): number {
@@ -746,7 +781,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
-  const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; sessionId: string } | null>(null)
+  const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; lastFingerprint: string | null; sessionId: string } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const rowHeightsRef = useRef<Map<string, number>>(new Map())
   const threadedCacheRef = useRef<Map<string, ThreadedMessage>>(new Map())
@@ -820,28 +855,6 @@ export default function MessageView({ messages, loading, session, projectView, o
   }, [showDiagnostics, session?.sessionId])
 
   useEffect(() => {
-    if (!awaitingPersistedTurn || !session) return
-
-    const baseline = pendingMessageBaselineRef.current
-    if (!baseline || baseline.sessionId !== session.sessionId) return
-
-    const currentLastUuid = messages.at(-1)?.uuid ?? null
-    const persistedTurnArrived =
-      messages.length > baseline.count
-      || currentLastUuid !== baseline.lastUuid
-
-    if (persistedTurnArrived) {
-      setOptimisticUserText(null)
-      setLiveAssistantText('')
-      setLiveToolActivities([])
-      setLiveThreadedMessages([])
-      setAwaitingPersistedTurn(false)
-      pendingMessageBaselineRef.current = null
-      liveToolIndexesRef.current.clear()
-    }
-  }, [awaitingPersistedTurn, messages, session])
-
-  useEffect(() => {
     if (!rewindPreview || rewindPreview.userMessageId === rewindTargetId) return
     setRewindPreview(null)
   }, [rewindPreview, rewindTargetId])
@@ -865,6 +878,34 @@ export default function MessageView({ messages, loading, session, projectView, o
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
     setAutoFollow(distanceFromBottom < 72)
   }, [])
+
+  useEffect(() => {
+    if (!awaitingPersistedTurn || !session) return
+
+    const baseline = pendingMessageBaselineRef.current
+    if (!baseline || baseline.sessionId !== session.sessionId) return
+
+    const currentLastMessage = messages.at(-1)
+    const currentLastUuid = currentLastMessage?.uuid ?? null
+    const currentLastFingerprint = sessionMessageFingerprint(currentLastMessage)
+    const persistedTurnArrived =
+      messages.length > baseline.count
+      || currentLastUuid !== baseline.lastUuid
+      || currentLastFingerprint !== baseline.lastFingerprint
+
+    if (persistedTurnArrived) {
+      setOptimisticUserText(null)
+      setLiveAssistantText('')
+      setLiveToolActivities([])
+      setLiveThreadedMessages([])
+      setAwaitingPersistedTurn(false)
+      pendingMessageBaselineRef.current = null
+      liveToolIndexesRef.current.clear()
+      if (autoFollow) {
+        window.requestAnimationFrame(() => scrollTimelineToBottom())
+      }
+    }
+  }, [autoFollow, awaitingPersistedTurn, messages, scrollTimelineToBottom, session])
 
   const cancelSend = useCallback(() => {
     if (session) {
@@ -907,6 +948,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     pendingMessageBaselineRef.current = {
       count: messages.length,
       lastUuid: messages.at(-1)?.uuid ?? null,
+      lastFingerprint: sessionMessageFingerprint(messages.at(-1)),
       sessionId: session.sessionId,
     }
     liveToolIndexesRef.current.clear()

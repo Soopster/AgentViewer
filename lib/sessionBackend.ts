@@ -179,6 +179,15 @@ function codexContextUsageToEventData(contextUsage: ContextUsage): string {
 }
 
 function openCodeEventSessionId(event: OpenCodeEvent): string | undefined {
+  const eventRecord = event as Record<string, unknown>
+  if (eventRecord.type === 'message.part.delta') {
+    const properties = eventRecord.properties
+    if (properties && typeof properties === 'object') {
+      const sessionID = (properties as Record<string, unknown>).sessionID
+      return typeof sessionID === 'string' ? sessionID : undefined
+    }
+  }
+
   switch (event.type) {
     case 'message.updated':
       return event.properties.info.sessionID
@@ -808,6 +817,7 @@ async function createOpenCodeStream(sessionId: string, request: NextRequest, bod
     async start(controller) {
       let targetSessionId = sessionId
       let closed = false
+      let consumeEvents: Promise<void> | null = null
       const close = () => {
         if (closed) return
         closed = true
@@ -848,6 +858,34 @@ async function createOpenCodeStream(sessionId: string, request: NextRequest, bod
           })
         }
 
+        consumeEvents = (async () => {
+          for await (const event of events.stream as AsyncGenerator<OpenCodeEvent>) {
+            const eventSessionId = openCodeEventSessionId(event)
+            if (eventSessionId && eventSessionId !== targetSessionId) continue
+
+            if (event.type === 'message.updated' && event.properties.info.role === 'assistant') {
+              const usage = mapOpenCodeContextUsage(event.properties.info)
+              if (usage) {
+                controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+              }
+            }
+
+            if (event.type === 'session.error') {
+              const message = event.properties.error?.data && 'message' in event.properties.error.data
+                ? String(event.properties.error.data.message)
+                : 'Unknown OpenCode session error'
+              controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`))
+              break
+            }
+
+            controller.enqueue(encoder.encode(`data: ${formatOpenCodeEvent(event)}\n\n`))
+
+            if (event.type === 'session.idle' && event.properties.sessionID === targetSessionId) {
+              break
+            }
+          }
+        })()
+
         await client.session.promptAsync({
           ...OPENCODE_OPTIONS,
           path: { id: targetSessionId },
@@ -857,36 +895,14 @@ async function createOpenCodeStream(sessionId: string, request: NextRequest, bod
           },
         })
 
-        for await (const event of events.stream as AsyncGenerator<OpenCodeEvent>) {
-          const eventSessionId = openCodeEventSessionId(event)
-          if (eventSessionId && eventSessionId !== targetSessionId) continue
-
-          if (event.type === 'message.updated' && event.properties.info.role === 'assistant') {
-            const usage = mapOpenCodeContextUsage(event.properties.info)
-            if (usage) {
-              controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
-            }
-          }
-
-          if (event.type === 'session.error') {
-            const message = event.properties.error?.data && 'message' in event.properties.error.data
-              ? String(event.properties.error.data.message)
-              : 'Unknown OpenCode session error'
-            controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`))
-            break
-          }
-
-          controller.enqueue(encoder.encode(`data: ${formatOpenCodeEvent(event)}\n\n`))
-
-          if (event.type === 'session.idle' && event.properties.sessionID === targetSessionId) {
-            break
-          }
-        }
+        await consumeEvents
       } catch (err) {
         if (!abortController.signal.aborted) {
           controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
         }
       } finally {
+        abortController.abort()
+        await consumeEvents?.catch(() => {})
         clearRunningSession(sessionId)
         if (targetSessionId !== sessionId) {
           clearRunningSession(targetSessionId)
