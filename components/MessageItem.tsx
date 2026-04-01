@@ -92,6 +92,7 @@ const TOOL_COLORS: Record<string, string> = {
   Bash:      'var(--t-bash)',
   Edit:      'var(--t-edit)',
   MultiEdit: 'var(--t-edit)',
+  FileChange: 'var(--t-edit)',
   Write:     'var(--t-write)',
   Read:      'var(--t-read)',
   Grep:      'var(--t-grep)',
@@ -534,6 +535,115 @@ function WriteToolCard({ thread }: { thread: ToolThread }) {
             <CodeViewer code={content} filePath={filePath} maxHeight={500} />
           </div>
         </>
+      ) : undefined}
+    />
+  )
+}
+
+function FileChangeCard({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(true)
+  const [hovered, setHovered] = useState(false)
+  const { toolUse, result } = thread
+  const input = toolUse.input as {
+    status?: string
+    changes?: Array<{ path?: string; kind?: unknown; diff?: string }>
+  }
+  const changes = input.changes ?? []
+  const c = toolColor('FileChange')
+  const preview = changes.length === 1
+    ? basename(changes[0]?.path ?? '')
+    : `${changes.length} files`
+
+  return (
+    <CardShell
+      color={c}
+      result={result}
+      toolName={toolUse.name}
+      header={
+        <div
+          onClick={() => setOpen(v => !v)}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '8px 14px',
+            background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+            cursor: 'pointer', userSelect: 'none',
+            transition: 'background 0.15s ease',
+          }}
+        >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+            FILE CHANGE
+          </span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
+            {preview}
+          </span>
+          {typeof input.status === 'string' && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
+              {input.status}
+            </span>
+          )}
+          <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
+        </div>
+      }
+      body={open ? (
+        <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
+          {changes.length === 0 ? (
+            <div style={{
+              padding: '10px 14px',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 13,
+              color: 'var(--text-3)',
+            }}>
+              No file changes recorded.
+            </div>
+          ) : (
+            changes.map((change, index) => {
+              const filePath = change.path ?? ''
+              const kind = typeof change.kind === 'string'
+                ? change.kind
+                : change.kind != null
+                ? safeJson(change.kind)
+                : ''
+              const diffText = change.diff ?? ''
+              return (
+                <div key={`${filePath}:${index}`} style={{ borderTop: index > 0 ? '1px solid var(--border)' : undefined }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '6px 12px',
+                    background: 'var(--surface-2)',
+                    borderBottom: '1px solid var(--border)',
+                  }}>
+                    <span style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      color: c,
+                      fontWeight: 500,
+                      letterSpacing: '0.06em',
+                      flexShrink: 0,
+                    }}>
+                      {kind || 'change'}
+                    </span>
+                    <span style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 12,
+                      color: 'var(--text)',
+                      flex: 1,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {filePath}
+                    </span>
+                  </div>
+                  <CodeViewer code={diffText} language="diff" maxHeight={420} />
+                </div>
+              )
+            })
+          )}
+        </div>
       ) : undefined}
     />
   )
@@ -1932,6 +2042,7 @@ function ToolThreadCard({ thread }: { thread: ToolThread }) {
   const name = thread.toolUse.name
   if (name === 'Edit')                         return <EditToolCard thread={thread} />
   if (name === 'MultiEdit')                    return <MultiEditCard thread={thread} />
+  if (name === 'FileChange')                   return <FileChangeCard thread={thread} />
   if (name === 'Write')                        return <WriteToolCard thread={thread} />
   if (name === 'Bash')                         return <BashCard thread={thread} />
   if (name === 'Read')                         return <ReadCard thread={thread} />

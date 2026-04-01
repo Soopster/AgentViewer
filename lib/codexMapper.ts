@@ -96,11 +96,13 @@ function makeToolResult(toolUseId: string, content: string, isError = false) {
   }
 }
 
-function summarizeFileChanges(changes: CodexFileUpdateChange[]): string {
+function summarizeFileChanges(status: string, changes: CodexFileUpdateChange[]): string {
   if (changes.length === 0) return 'No file changes recorded.'
-  return changes
-    .map((change) => `${change.kind}: ${change.path}\n${change.diff}`.trim())
-    .join('\n\n')
+
+  const noun = `${changes.length} file change${changes.length === 1 ? '' : 's'}`
+  if (status === 'failed' || status === 'declined') return `${status} ${noun}`
+  if (status === 'inProgress') return `Applying ${noun}`
+  return `Applied ${noun}`
 }
 
 function toolInput(value: unknown): Record<string, unknown> {
@@ -160,11 +162,11 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
         name: 'FileChange',
         input: {
           status: item.status,
-          changes: item.changes.map((change) => ({ path: change.path, kind: change.kind })),
+          changes: item.changes.map((change) => ({ path: change.path, kind: change.kind, diff: change.diff })),
         },
       }], turnId, timestamp)
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
-        makeToolResult(toolUseId, summarizeFileChanges(item.changes), item.status === 'failed'),
+        makeToolResult(toolUseId, summarizeFileChanges(item.status, item.changes), item.status === 'failed'),
       ], turnId, timestamp)
       return [assistant, result]
     }

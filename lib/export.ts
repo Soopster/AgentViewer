@@ -43,6 +43,7 @@ const TOOL_COLORS_HEX: Record<string, string> = {
   Bash:         '#eaaa40',
   Edit:         '#2dd4a0',
   MultiEdit:    '#2dd4a0',
+  FileChange:   '#2dd4a0',
   Write:        '#38d9f5',
   Read:         '#60a8ff',
   Grep:         '#ff9048',
@@ -253,6 +254,41 @@ function renderWriteCard(thread: ToolThread): string {
   return cardShell(c, header, escapeHtml(preview), thread.result, thread.toolUse.name)
 }
 
+function renderFileChangeCard(thread: ToolThread): string {
+  const input = thread.toolUse.input as {
+    status?: string
+    changes?: Array<{ path?: string; kind?: unknown; diff?: string }>
+  }
+  const c = toolColorHex('FileChange')
+  const changes = input.changes ?? []
+  const preview = changes.length === 1
+    ? basename(changes[0]?.path ?? '')
+    : `${changes.length} files`
+  const header = cardHeader(c, 'File Change', preview, typeof input.status === 'string' ? input.status : '')
+  const body = changes.length === 0
+    ? `<pre class="result-pre">No file changes recorded.</pre>`
+    : changes
+      .map((change) => {
+        const filePath = change.path ?? ''
+        const kind = typeof change.kind === 'string'
+          ? change.kind
+          : change.kind != null
+          ? safeJson(change.kind)
+          : 'change'
+        return (
+          `<div style="border-top:1px solid #1e2a44">` +
+          `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:#151c38;border-bottom:1px solid #1e2a44">` +
+          `<span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:${c};font-weight:500;letter-spacing:0.06em;flex-shrink:0">${escapeHtml(kind)}</span>` +
+          `<span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#dde3f5;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(filePath)}</span>` +
+          `</div>` +
+          `<pre class="result-pre" style="border-top:none;max-height:420px">${escapeHtml(change.diff ?? '')}</pre>` +
+          `</div>`
+        )
+      })
+      .join('')
+  return cardShell(c, header, body, thread.result, thread.toolUse.name)
+}
+
 function renderBashCard(thread: ToolThread): string {
   const input = thread.toolUse.input as { command?: string; description?: string }
   const c = toolColorHex('Bash')
@@ -324,6 +360,7 @@ function renderToolThread(thread: ToolThread): string {
   switch (thread.toolUse.name) {
     case 'Edit':
     case 'MultiEdit':  return renderEditCard(thread)
+    case 'FileChange': return renderFileChangeCard(thread)
     case 'Write':      return renderWriteCard(thread)
     case 'Bash':       return renderBashCard(thread)
     case 'Read':       return renderReadCard(thread)
