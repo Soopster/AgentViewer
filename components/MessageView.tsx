@@ -187,6 +187,41 @@ function extractStreamingAssistantText(payload: unknown): string | null {
     return null
   }
 
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+
+    if (eventRecord.type === 'message_update') {
+      const assistantMessageEvent = eventRecord.assistantMessageEvent
+      if (!assistantMessageEvent || typeof assistantMessageEvent !== 'object') return null
+      const updateRecord = assistantMessageEvent as Record<string, unknown>
+
+      if (updateRecord.type === 'text_delta' && typeof updateRecord.delta === 'string') {
+        return updateRecord.delta
+      }
+
+      if ((updateRecord.type === 'done' || updateRecord.type === 'error')) {
+        const finalMessage = updateRecord.type === 'done'
+          ? updateRecord.message
+          : updateRecord.error
+        if (!finalMessage || typeof finalMessage !== 'object') return null
+        return extractTextContent((finalMessage as Record<string, unknown>).content) || null
+      }
+    }
+
+    if (eventRecord.type === 'message_end') {
+      const message = eventRecord.message
+      if (!message || typeof message !== 'object') return null
+      const messageRecord = message as Record<string, unknown>
+      return messageRecord.role === 'assistant'
+        ? extractTextContent(messageRecord.content) || null
+        : null
+    }
+
+    return null
+  }
+
   if (record.type === 'assistant') {
     const message = record.message
     if (!message || typeof message !== 'object') return null
@@ -362,6 +397,23 @@ function extractLiveToolStart(payload: unknown): { index: number; key: string; l
     }
   }
 
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'tool_execution_start') return null
+
+    const toolCallId = typeof eventRecord.toolCallId === 'string' ? eventRecord.toolCallId : null
+    const toolName = typeof eventRecord.toolName === 'string' ? eventRecord.toolName : null
+    if (!toolCallId || !toolName) return null
+
+    return {
+      index: -1,
+      key: toolCallId,
+      label: formatToolLabel(toolName),
+    }
+  }
+
   if (record.type !== 'stream_event') return null
 
   const event = record.event
@@ -460,6 +512,14 @@ function extractCompletedToolKey(payload: unknown): string | null {
     return typeof dataRecord.toolCallId === 'string' ? dataRecord.toolCallId : null
   }
 
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'tool_execution_end') return null
+    return typeof eventRecord.toolCallId === 'string' ? eventRecord.toolCallId : null
+  }
+
   return null
 }
 
@@ -467,6 +527,7 @@ function assistantDisplayName(provider: Session['provider'] | SessionInfo['provi
   if (provider === 'codex') return 'Codex'
   if (provider === 'opencode') return 'OpenCode'
   if (provider === 'copilot') return 'Copilot'
+  if (provider === 'pi') return 'Pi'
   return 'Claude'
 }
 
@@ -484,6 +545,20 @@ function shouldReplaceLiveAssistantText(payload: unknown): boolean {
     const part = (properties as Record<string, unknown>).part
     if (!part || typeof part !== 'object') return false
     return (part as Record<string, unknown>).type === 'text'
+  }
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return false
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type === 'message_end') {
+      const message = eventRecord.message
+      return !!message && typeof message === 'object' && (message as Record<string, unknown>).role === 'assistant'
+    }
+    if (eventRecord.type !== 'message_update') return false
+    const assistantMessageEvent = eventRecord.assistantMessageEvent
+    if (!assistantMessageEvent || typeof assistantMessageEvent !== 'object') return false
+    const updateRecord = assistantMessageEvent as Record<string, unknown>
+    return updateRecord.type === 'done' || updateRecord.type === 'error'
   }
   if (record.type !== 'copilot_event') return false
   const event = record.event

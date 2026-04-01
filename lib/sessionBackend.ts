@@ -762,11 +762,12 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
           interrupt: () => client.request('turn/interrupt', { threadId: sessionId, turnId: targetTurnId }),
         })
 
+        let bufferedTurnCompleted = false
         for (const notification of bufferedNotifications) {
           if (getCodexNotificationTurnId(notification) !== targetTurnId) continue
           if (notification.method === 'turn/completed') {
-            closeStream(unsubscribe)
-            return
+            bufferedTurnCompleted = true
+            continue
           }
           if (notification.method === 'thread/tokenUsage/updated') {
             const usage = mapCodexTokenUsageToContextUsage(
@@ -777,6 +778,11 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
             continue
           }
           flushNotification(notification)
+        }
+
+        if (bufferedTurnCompleted) {
+          closeStream(unsubscribe)
+          return
         }
       } catch (err) {
         unsubscribe()
