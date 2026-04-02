@@ -4,6 +4,12 @@ import { memo, useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { normalizeProjectPath, pathBasename, pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import ThemeToggle from './ThemeToggle'
 
 type Props = {
@@ -40,6 +46,20 @@ function timeAgo(value?: string | number): string {
 function formatTimestamp(value?: string | number): string {
   if (value == null) return ''
   return new Date(value).toLocaleString()
+}
+
+function formatStableTimestamp(value?: string | number): string {
+  if (value == null) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
+}
+
+function formatStableTimeLabel(value?: string | number): string {
+  if (value == null) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toISOString().slice(11, 16) + ' UTC'
 }
 
 type ProjectGroupEntry = {
@@ -161,13 +181,18 @@ const SessionRow = memo(function SessionRow({
   const [hovered, setHovered] = useState(false)
   const [editing, setEditing] = useState<'title' | 'tag' | null>(null)
   const [editValue, setEditValue] = useState('')
+  const [hydrated, setHydrated] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const shortId = session.sessionId.slice(-12)
   const sessionTitle = getSessionTitle(session)
   const sessionPreview = getSessionPreview(session, sessionTitle)
   const sessionTags = parseStoredSessionTags(session.tag)
   const activityTime = session.lastModified ?? session.createdAt
-  const activityTitle = formatTimestamp(activityTime)
+  const activityTitle = hydrated ? formatTimestamp(activityTime) : formatStableTimestamp(activityTime)
+
+  useEffect(() => {
+    setHydrated(true)
+  }, [])
 
   const startEdit = useCallback((kind: 'title' | 'tag', value: string) => (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -228,7 +253,7 @@ const SessionRow = memo(function SessionRow({
         background: selected
           ? 'linear-gradient(to right, rgba(139,128,240,0.13) 0%, transparent 65%)'
           : hovered
-          ? 'rgba(255,255,255,0.028)'
+          ? 'var(--surface-2)'
           : 'transparent',
         cursor: 'pointer',
         transition: 'background 0.14s ease, border-left-color 0.14s ease',
@@ -250,7 +275,7 @@ const SessionRow = memo(function SessionRow({
       {/* Session title */}
       <div style={{ marginTop: 5 }}>
         {editing === 'title' ? (
-          <input
+          <Input
             ref={inputRef}
             value={editValue}
             onChange={e => setEditValue(e.target.value)}
@@ -345,7 +370,7 @@ const SessionRow = memo(function SessionRow({
           </span>
         )}
         {editing === 'tag' ? (
-          <input
+          <Input
             ref={inputRef}
             value={editValue}
             onChange={e => setEditValue(e.target.value)}
@@ -424,7 +449,7 @@ const SessionRow = memo(function SessionRow({
               color: 'var(--text-3)',
             }}
           >
-            {timeAgo(activityTime)}
+            {hydrated ? timeAgo(activityTime) : formatStableTimeLabel(activityTime)}
           </span>
         )}
       </div>
@@ -653,187 +678,226 @@ export default function SessionList({
               : `${filteredSessions.length}/${sessions.length} sessions · ${groups.length} projects`}
           </span>
         </div>
-        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
-              color: 'var(--text-3)',
-              letterSpacing: '0.08em',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            PROVIDER
-          </span>
-          <select
-            value={provider}
-            onChange={(e) => onChangeProvider(e.target.value as ProviderSelection)}
-            disabled={switchingProvider}
-            style={{
-              flex: 1,
-              height: 30,
-              borderRadius: 6,
-              border: '1px solid var(--border)',
-              background: 'var(--surface-2)',
-              color: 'var(--text)',
-              padding: '0 10px',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.06em',
-              outline: 'none',
-              cursor: switchingProvider ? 'not-allowed' : 'pointer',
-              opacity: switchingProvider ? 0.6 : 1,
-            }}
-          >
-            <option value="claude">CLAUDE</option>
-            <option value="codex">CODEX</option>
-            <option value="opencode">OPENCODE</option>
-            <option value="copilot">COPILOT</option>
-            <option value="pi">PI</option>
-            <option value="all">ALL</option>
-          </select>
-        </div>
-        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            placeholder="Search title, tags, path, prompt…"
-            style={{
-              flex: 1,
-              height: 30,
-              borderRadius: 6,
-              border: '1px solid var(--border)',
-              background: 'var(--surface-2)',
-              color: 'var(--text)',
-              padding: '0 10px',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              outline: 'none',
-            }}
-          />
-          {(searchText || activeTag) && (
-            <button
-              onClick={() => {
-                setSearchText('')
-                setActiveTag(null)
-              }}
-              style={{
-                height: 30,
-                padding: '0 10px',
-                borderRadius: 6,
-                border: '1px solid var(--border)',
-                background: 'var(--surface-2)',
-                color: 'var(--text-3)',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11,
-                letterSpacing: '0.05em',
-                cursor: 'pointer',
-              }}
-            >
-              CLEAR
-            </button>
-          )}
-        </div>
-        {popularTags.length > 0 && (
-          <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {popularTags.map(([tag, count]) => {
-              const selected = activeTag?.toLowerCase() === tag.toLowerCase()
-              return (
-                <button
-                  key={tag}
-                  onClick={() => setActiveTag((prev) => prev?.toLowerCase() === tag.toLowerCase() ? null : tag)}
+        <Card
+          style={{
+            marginTop: 14,
+            borderRadius: 12,
+            border: '1px solid var(--border)',
+            background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
+            boxShadow: '0 10px 24px var(--violet-glow)',
+          }}
+        >
+          <CardContent style={{ padding: 14 }}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <Label
+                style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 9,
+                  color: 'var(--text-3)',
+                  letterSpacing: '0.12em',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                PROVIDER
+              </Label>
+              <Select value={provider} onValueChange={(value) => onChangeProvider(value as ProviderSelection)} disabled={switchingProvider}>
+                <SelectTrigger
                   style={{
-                    height: 24,
-                    padding: '0 8px',
-                    borderRadius: 999,
-                    border: `1px solid ${selected ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                    background: selected ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                    color: selected ? 'var(--violet)' : 'var(--text-3)',
+                    width: '100%',
+                    height: 34,
+                    borderRadius: 9,
+                    border: '1px solid var(--border)',
+                    background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
+                    color: 'var(--text)',
+                    padding: '0 10px',
                     fontFamily: "'IBM Plex Mono', monospace",
                     fontSize: 10,
+                    fontWeight: 500,
                     letterSpacing: '0.04em',
+                    cursor: switchingProvider ? 'not-allowed' : 'pointer',
+                    opacity: switchingProvider ? 0.6 : 1,
+                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
+                  }}
+                >
+                  <SelectValue placeholder="Provider" />
+                </SelectTrigger>
+                <SelectContent
+                  style={{
+                    borderRadius: 10,
+                    border: '1px solid var(--border-2)',
+                    background: 'var(--surface)',
+                    boxShadow: '0 14px 32px rgba(0,0,0,0.14)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    fontWeight: 500,
+                    letterSpacing: '0.04em',
+                    padding: '4px',
+                  }}
+                >
+                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="claude">CLAUDE</SelectItem>
+                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="codex">CODEX</SelectItem>
+                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="opencode">OPENCODE</SelectItem>
+                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="copilot">COPILOT</SelectItem>
+                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="pi">PI</SelectItem>
+                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="all">ALL</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Input
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder="Search title, tags, path, prompt…"
+                style={{
+                  flex: 1,
+                  height: 30,
+                  borderRadius: 6,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface-2)',
+                  color: 'var(--text)',
+                  padding: '0 10px',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  outline: 'none',
+                }}
+              />
+              {(searchText || activeTag) && (
+                <Button
+                  onClick={() => {
+                    setSearchText('')
+                    setActiveTag(null)
+                  }}
+                  variant="outline"
+                  size="sm"
+                  style={{
+                    height: 30,
+                    padding: '0 10px',
+                    borderRadius: 6,
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface-2)',
+                    color: 'var(--text-3)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    letterSpacing: '0.05em',
                     cursor: 'pointer',
                   }}
-                  title={`${count} session${count === 1 ? '' : 's'}`}
                 >
-                  #{tag} · {count}
-                </button>
-              )
-            })}
-          </div>
-        )}
-        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-          <button
-            onClick={() => onChangeScope('all')}
-            style={{
-              flex: 1,
-              height: 28,
-              borderRadius: 5,
-              border: `1px solid ${scopeMode === 'all' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-              background: scopeMode === 'all' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-              color: scopeMode === 'all' ? 'var(--violet)' : 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.06em',
-              cursor: 'pointer',
-            }}
-          >
-            ALL PROJECTS
-          </button>
-          <button
-            onClick={() => canScopeToProject && onChangeScope('project')}
-            disabled={!canScopeToProject}
-            title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
-            style={{
-              flex: 1,
-              height: 28,
-              borderRadius: 5,
-              border: `1px solid ${scopeMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-              background: scopeMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-              color: scopeMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.06em',
-              cursor: canScopeToProject ? 'pointer' : 'not-allowed',
-              opacity: canScopeToProject ? 1 : 0.45,
-            }}
-          >
-            THIS PROJECT
-          </button>
-        </div>
-        {scopeMode === 'project' && scopeProjectName && (
-          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span
-              style={{
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11,
-                color: 'var(--text-3)',
-                letterSpacing: '0.04em',
-              }}
-            >
-              {scopeProjectName}
-            </span>
-            <label
-              style={{
-                marginLeft: 'auto',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11,
-                color: 'var(--text-3)',
-                cursor: 'pointer',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={includeWorktrees}
-                onChange={(e) => onToggleWorktrees(e.target.checked)}
-              />
-              worktrees
-            </label>
-          </div>
-        )}
+                  CLEAR
+                </Button>
+              )}
+            </div>
+            {popularTags.length > 0 && (
+              <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {popularTags.map(([tag, count]) => {
+                  const selected = activeTag?.toLowerCase() === tag.toLowerCase()
+                  return (
+                    <Button
+                      key={tag}
+                      onClick={() => setActiveTag((prev) => prev?.toLowerCase() === tag.toLowerCase() ? null : tag)}
+                      variant="outline"
+                      size="sm"
+                      style={{
+                        height: 24,
+                        padding: '0 8px',
+                        borderRadius: 999,
+                        border: `1px solid ${selected ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                        background: selected ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                        color: selected ? 'var(--violet)' : 'var(--text-3)',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 10,
+                        letterSpacing: '0.04em',
+                        cursor: 'pointer',
+                      }}
+                      title={`${count} session${count === 1 ? '' : 's'}`}
+                    >
+                      #{tag} · {count}
+                    </Button>
+                  )
+                })}
+              </div>
+            )}
+            <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+              <Button
+                onClick={() => onChangeScope('all')}
+                variant="outline"
+                size="sm"
+                style={{
+                  flex: 1,
+                  height: 28,
+                  borderRadius: 5,
+                  border: `1px solid ${scopeMode === 'all' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                  background: scopeMode === 'all' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                  color: scopeMode === 'all' ? 'var(--violet)' : 'var(--text-3)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.06em',
+                  cursor: 'pointer',
+                }}
+              >
+                ALL PROJECTS
+              </Button>
+              <Button
+                onClick={() => canScopeToProject && onChangeScope('project')}
+                disabled={!canScopeToProject}
+                title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
+                variant="outline"
+                size="sm"
+                style={{
+                  flex: 1,
+                  height: 28,
+                  borderRadius: 5,
+                  border: `1px solid ${scopeMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                  background: scopeMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                  color: scopeMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.06em',
+                  cursor: canScopeToProject ? 'pointer' : 'not-allowed',
+                  opacity: canScopeToProject ? 1 : 0.45,
+                }}
+              >
+                THIS PROJECT
+              </Button>
+            </div>
+            {scopeMode === 'project' && scopeProjectName && (
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    color: 'var(--text-3)',
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  {scopeProjectName}
+                </span>
+                <Label
+                  style={{
+                    marginLeft: 'auto',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    color: 'var(--text-3)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Checkbox
+                    checked={includeWorktrees}
+                    onCheckedChange={(checked) => onToggleWorktrees(checked === true)}
+                    style={{
+                      borderColor: 'var(--border)',
+                      background: includeWorktrees ? 'var(--violet)' : 'var(--surface-2)',
+                      color: includeWorktrees ? 'var(--bg)' : 'var(--text)',
+                    }}
+                  />
+                  worktrees
+                </Label>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {/* ── Groups ─────────────────────────────────────── */}

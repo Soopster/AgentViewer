@@ -112,6 +112,7 @@ function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): 
 }
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedProject, setSelectedProject] = useState<ProjectSelection | null>(null)
@@ -132,6 +133,10 @@ export default function Home() {
   const selectedSession = sessions.find((s) => s.sessionId === selectedId) ?? null
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   const fetchProjectSessions = useCallback(async (dir: string, selection: ProviderSelection) => {
     const params = new URLSearchParams()
@@ -425,6 +430,18 @@ export default function Home() {
       setSwitchingProvider(false)
     }
   }, [activeProjectDir, fetchProjectSessions, provider, sessionScope, switchingProvider])
+
+  if (!mounted) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          height: '100vh',
+          background: 'var(--bg)',
+        }}
+      />
+    )
+  }
 
   return (
     <CodeThemeProvider>

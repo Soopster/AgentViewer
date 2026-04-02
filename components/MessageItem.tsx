@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -105,6 +105,22 @@ const TOOL_COLORS: Record<string, string> = {
 
 function toolColor(name: string) {
   return TOOL_COLORS[name] ?? 'var(--t-other)'
+}
+
+function formatStableMessageTime(value?: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toISOString().slice(11, 19) + ' UTC'
+}
+
+function formatLocalMessageTime(value?: string): string {
+  if (!value) return ''
+  return new Date(value).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
 }
 
 // ── Markdown components ───────────────────────────────────────────────────────
@@ -2908,10 +2924,15 @@ const ROLE_STYLE = {
 } as const
 
 function MessageItemInner({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {
+  const [hydrated, setHydrated] = useState(false)
   const style = ROLE_STYLE[message.role]
   const roleLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
     : ROLE_STYLE[message.role].label
+
+  useEffect(() => {
+    setHydrated(true)
+  }, [])
 
   return (
     <div className={`msg msg--${message.role}`} style={{ display: 'flex', gap: 18, marginBottom: 36 }}>
@@ -2952,7 +2973,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
                 color: 'var(--text-3)',
               }}
             >
-              {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              {hydrated ? formatLocalMessageTime(message.timestamp) : formatStableMessageTime(message.timestamp)}
             </span>
           )}
           {message.usage && (

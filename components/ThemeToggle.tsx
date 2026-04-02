@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { Button } from '@/components/ui/button'
 
 type Theme = 'dark' | 'light' | 'terminal' | 'paper' | 'imessage'
 
@@ -52,8 +53,10 @@ export default function ThemeToggle() {
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       {/* Trigger button */}
-      <button
+      <Button
         onClick={() => setOpen(v => !v)}
+        variant="outline"
+        size="sm"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -76,7 +79,7 @@ export default function ThemeToggle() {
         <span style={{ fontSize: 12, lineHeight: 1 }}>{meta.icon}</span>
         <span>{meta.label}</span>
         <span style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
-      </button>
+      </Button>
 
       {/* Dropdown */}
       {open && (

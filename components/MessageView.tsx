@@ -18,6 +18,11 @@ import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
 import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '@/lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import MessageItem from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
 
@@ -71,6 +76,11 @@ const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
 const TIMELINE_OVERSCAN_PX = 1200
 const ESTIMATED_CHARS_PER_LINE = 92
 const TIMELINE_BOTTOM_GUTTER_PX = 72
+
+function normalizeSelectValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
   const normalized = buffer.replace(/\r\n/g, '\n')
@@ -896,9 +906,11 @@ function TimelineMessageRow({
       {row.showForkControls && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, margin: '0 0 8px 0' }}>
           {row.allowFork && (
-            <button
+            <Button
               onClick={() => onForkFromMessage(row.message.uuid)}
               disabled={row.forkingMessageId === row.message.uuid}
+              variant="outline"
+              size="sm"
               style={{
                 height: 22,
                 padding: '0 8px',
@@ -914,11 +926,13 @@ function TimelineMessageRow({
               }}
             >
               {row.forkingMessageId === row.message.uuid ? 'FORKING…' : 'FORK HERE'}
-            </button>
+            </Button>
           )}
           {row.allowResume && (
-            <button
+            <Button
               onClick={() => onToggleResume(row.message.uuid)}
+              variant="outline"
+              size="sm"
               style={{
                 height: 22,
                 padding: '0 8px',
@@ -933,7 +947,7 @@ function TimelineMessageRow({
               }}
             >
               {row.resumeFromMessageId === row.message.uuid ? 'RESUME TARGET' : 'RESUME HERE'}
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -1037,6 +1051,14 @@ export default function MessageView({ messages, loading, session, projectView, o
   const initialScrollDoneRef = useRef(false)
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
   const assistantName = assistantDisplayName(sessionInfo?.provider ?? session?.provider)
+  const modelOptions = useMemo(() => {
+    const filtered = availableModels.filter((model) => normalizeSelectValue(model.value))
+    if (filtered.length > 0) return filtered
+
+    const fallbackValue = normalizeSelectValue(selectedModel)
+    return fallbackValue ? [{ value: fallbackValue, displayName: fallbackValue, description: '' }] : []
+  }, [availableModels, selectedModel])
+  const selectedModelValue = normalizeSelectValue(selectedModel)
 
   // Load session info (git branch, summary, etc.) when session changes
   useEffect(() => {
@@ -1058,8 +1080,13 @@ export default function MessageView({ messages, loading, session, projectView, o
       .then(r => r.json())
       .then(data => {
         if (data.error) return
-        setAvailableModels(data.models ?? [])
-        setSelectedModel(data.currentModel ?? data.models?.[0]?.value ?? '')
+        const nextModels = Array.isArray(data.models) ? data.models.filter((model: SessionModelInfo) => normalizeSelectValue(model.value)) : []
+        setAvailableModels(nextModels)
+        setSelectedModel(
+          normalizeSelectValue(data.currentModel)
+          ?? normalizeSelectValue(nextModels[0]?.value)
+          ?? ''
+        )
       })
       .catch(() => {})
   }, [session?.provider, session?.sessionId])
@@ -1523,13 +1550,14 @@ export default function MessageView({ messages, loading, session, projectView, o
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
       setDiagnosticSections(data.sections ?? [])
-      if (data.currentModel && !selectedModel) setSelectedModel(data.currentModel)
+      const diagnosticsModel = normalizeSelectValue(data.currentModel)
+      if (diagnosticsModel && !selectedModelValue) setSelectedModel(diagnosticsModel)
     } catch (err) {
       setSessionActionError(err instanceof Error ? err.message : 'Failed to load diagnostics')
     } finally {
       setDiagnosticsLoading(false)
     }
-  }, [diagnosticSections.length, diagnosticsLoading, selectedModel, session, showDiagnostics])
+  }, [diagnosticSections.length, diagnosticsLoading, selectedModelValue, session, showDiagnostics])
 
   const threaded = useMemo(() => {
     const nextMessages = buildThreadedMessages(messages)
@@ -2156,10 +2184,12 @@ export default function MessageView({ messages, loading, session, projectView, o
 
         {/* Fork button (single session only) */}
         {!isProject && session?.provider !== 'copilot' && (
-          <button
+          <Button
             onClick={handleFork}
             disabled={forking}
             title="Fork this session into a new branch"
+            variant="outline"
+            size="sm"
             style={{
               flexShrink: 0,
               height: 26,
@@ -2189,15 +2219,17 @@ export default function MessageView({ messages, loading, session, projectView, o
             }}
           >
             {forking ? 'FORKING…' : 'FORK'}
-          </button>
+          </Button>
         )}
 
         {/* Export button (single session only) */}
         {!isProject && (
-          <button
+          <Button
             onClick={handleExport}
             disabled={exporting}
             title="Export session to HTML"
+            variant="outline"
+            size="sm"
             style={{
               flexShrink: 0,
               height: 26,
@@ -2227,13 +2259,15 @@ export default function MessageView({ messages, loading, session, projectView, o
             }}
           >
             {exporting ? 'EXPORTING…' : 'EXPORT'}
-          </button>
+          </Button>
         )}
 
         {!isProject && (
-          <button
+          <Button
             onClick={toggleDiagnostics}
             title="Show session diagnostics"
+            variant="outline"
+            size="sm"
             style={{
               flexShrink: 0,
               height: 26,
@@ -2249,7 +2283,7 @@ export default function MessageView({ messages, loading, session, projectView, o
             }}
           >
             DIAG
-          </button>
+          </Button>
         )}
 
         {/* Live pill */}
@@ -2382,27 +2416,28 @@ export default function MessageView({ messages, loading, session, projectView, o
         )}
         {!autoFollow && hasLiveTimeline && (
           <div style={{ position: 'sticky', bottom: 12, display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-            <button
+            <Button
               onClick={() => {
                 setAutoFollow(true)
                 scrollTimelineToBottom('smooth')
               }}
+              size="sm"
               style={{
                 height: 28,
                 padding: '0 10px',
                 borderRadius: 999,
                 border: '1px solid rgba(56,217,245,0.24)',
-                background: 'rgba(9,14,22,0.88)',
+                background: 'var(--surface)',
                 color: 'var(--cyan)',
                 fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 11,
                 letterSpacing: '0.05em',
                 cursor: 'pointer',
-                boxShadow: '0 10px 30px rgba(0,0,0,0.24)',
+                boxShadow: '0 10px 30px var(--cyan-glow)',
               }}
             >
               JUMP TO LIVE
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -2410,7 +2445,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       {/* ── Message input (single session only) ──────── */}
       {!isProject && <div
         style={{
-          padding: '12px 20px 16px',
+          padding: '8px 16px 10px',
           borderTop: '1px solid var(--border)',
           background: 'var(--surface)',
           flexShrink: 0,
@@ -2438,392 +2473,447 @@ export default function MessageView({ messages, loading, session, projectView, o
             {sessionActionError ?? sessionActionNotice}
           </div>
         )}
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              color: 'var(--text-3)',
-              letterSpacing: '0.05em',
-            }}>
-              MODEL
-            </span>
-            <select
-              value={selectedModel}
-              onChange={e => setSelectedModel(e.target.value)}
-              style={{
-                height: 28,
-                minWidth: 180,
-                background: 'var(--surface-2)',
-                border: '1px solid var(--border)',
-                borderRadius: 5,
-                color: 'var(--text)',
-                padding: '0 8px',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11,
-              }}
-            >
-              {(availableModels.length > 0 ? availableModels : [{ value: selectedModel, displayName: selectedModel, description: '' }]).map((model) => (
-                <option key={model.value} value={model.value}>
-                  {model.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
-          {sessionCapabilities?.fileRewind && rewindCandidates.length > 0 && (
-            <>
-              <select
-                value={rewindTargetId}
-                onChange={e => setRewindTargetId(e.target.value)}
-                style={{
-                  flex: 1,
-                  minWidth: 220,
-                  height: 28,
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 5,
-                  color: 'var(--text)',
-                  padding: '0 8px',
+        <Card
+          style={{
+            borderRadius: 10,
+            border: '1px solid var(--border)',
+            background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
+            boxShadow: '0 10px 24px var(--violet-glow)',
+          }}
+        >
+          <CardContent style={{ padding: '10px 12px' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 176px', minWidth: 0 }}>
+                <Label style={{
                   fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                }}
-              >
-                {rewindCandidates.slice().reverse().map((candidate) => (
-                  <option key={candidate.uuid} value={candidate.uuid}>
-                    {candidate.content.replace(/\s+/g, ' ').trim().slice(0, 72) || candidate.uuid}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={handleRewind}
-                disabled={previewingRewind || applyingRewind || !rewindTargetId}
-                style={{
-                  flexShrink: 0,
-                  height: 28,
-                  padding: '0 12px',
-                  background: 'rgba(251,191,36,0.08)',
-                  border: '1px solid rgba(251,191,36,0.22)',
-                  borderRadius: 5,
-                  color: 'var(--yellow, #fbbf24)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: previewingRewind || applyingRewind || !rewindTargetId ? 'not-allowed' : 'pointer',
-                  opacity: previewingRewind || applyingRewind || !rewindTargetId ? 0.5 : 1,
-                }}
-              >
-                {previewingRewind ? 'PREVIEWING…' : 'PREVIEW REWIND'}
-              </button>
-            </>
-          )}
-          {sessionCapabilities?.rollback && rollbackCandidates.length > 0 && (
-            <>
-              <select
-                value={rollbackTurns}
-                onChange={e => setRollbackTurns(Number(e.target.value))}
-                style={{
-                  height: 28,
-                  minWidth: 180,
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 5,
-                  color: 'var(--text)',
-                  padding: '0 8px',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                }}
-              >
-                {Array.from({ length: Math.min(10, rollbackCandidates.length) }, (_, index) => index + 1).map((value) => (
-                  <option key={value} value={value}>
-                    Roll back {value} turn{value === 1 ? '' : 's'}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={handleRollbackPreview}
-                disabled={previewingRewind || applyingRewind}
-                style={{
-                  flexShrink: 0,
-                  height: 28,
-                  padding: '0 12px',
-                  background: 'rgba(251,191,36,0.08)',
-                  border: '1px solid rgba(251,191,36,0.22)',
-                  borderRadius: 5,
-                  color: 'var(--yellow, #fbbf24)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: previewingRewind || applyingRewind ? 'not-allowed' : 'pointer',
-                  opacity: previewingRewind || applyingRewind ? 0.5 : 1,
-                }}
-              >
-                {previewingRewind ? 'PREVIEWING…' : 'PREVIEW ROLLBACK'}
-              </button>
-            </>
-          )}
-        </div>
-        {rewindPreview && (
-          <div
-            style={{
-              marginBottom: 10,
-              padding: '12px 14px',
-              borderRadius: 8,
-              border: '1px solid rgba(251,191,36,0.22)',
-              background: 'rgba(251,191,36,0.06)',
-            }}
-          >
-            <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
-              Rewind Preview
-            </div>
-            <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
-              {rewindPreview.contentPreview || 'Selected prompt'}
-            </div>
-            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {rewindPreview.filesChanged.length > 0 ? rewindPreview.filesChanged.map((file) => (
-                <div
-                  key={file}
-                  style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                    color: 'var(--text-2)',
-                    padding: '5px 8px',
-                    borderRadius: 5,
-                    background: 'rgba(9,14,22,0.24)',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  {file}
+                  fontSize: 10,
+                  color: 'var(--text-3)',
+                  letterSpacing: '0.05em',
+                }}>
+                  MODEL
+                </Label>
+                <Select value={selectedModelValue ?? undefined} onValueChange={setSelectedModel}>
+                  <SelectTrigger
+                    style={{
+                      height: 26,
+                      minWidth: 0,
+                      flex: 1,
+                      background: 'var(--surface-2)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 5,
+                      color: 'var(--text)',
+                      padding: '0 6px',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 10,
+                    }}
+                  >
+                    <SelectValue placeholder="Model" />
+                  </SelectTrigger>
+                  <SelectContent
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                    }}
+                  >
+                    {modelOptions.map((model) => (
+                      <SelectItem key={model.value} value={model.value}>
+                        {model.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              {sessionCapabilities?.fileRewind && rewindCandidates.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 300px', minWidth: 220 }}>
+                  <Select value={rewindTargetId} onValueChange={setRewindTargetId}>
+                    <SelectTrigger
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        height: 26,
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 5,
+                        color: 'var(--text)',
+                        padding: '0 8px',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 10,
+                      }}
+                    >
+                      <SelectValue placeholder="Rewind target" />
+                    </SelectTrigger>
+                    <SelectContent
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                      }}
+                    >
+                      {rewindCandidates.slice().reverse().map((candidate) => (
+                        <SelectItem key={candidate.uuid} value={candidate.uuid}>
+                          {candidate.content.replace(/\s+/g, ' ').trim().slice(0, 72) || candidate.uuid}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    onClick={handleRewind}
+                    disabled={previewingRewind || applyingRewind || !rewindTargetId}
+                    variant="outline"
+                    size="sm"
+                    style={{
+                      flexShrink: 0,
+                      height: 26,
+                      padding: '0 10px',
+                      background: 'rgba(251,191,36,0.08)',
+                      border: '1px solid rgba(251,191,36,0.22)',
+                      borderRadius: 5,
+                      color: 'var(--yellow, #fbbf24)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 10,
+                      letterSpacing: '0.06em',
+                      cursor: previewingRewind || applyingRewind || !rewindTargetId ? 'not-allowed' : 'pointer',
+                      opacity: previewingRewind || applyingRewind || !rewindTargetId ? 0.5 : 1,
+                    }}
+                  >
+                    {previewingRewind ? 'PREVIEWING…' : 'REWIND'}
+                  </Button>
                 </div>
-              )) : (
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
-                  No tracked files would change.
+              )}
+              {sessionCapabilities?.rollback && rollbackCandidates.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 170px', minWidth: 146 }}>
+                  <Select value={String(rollbackTurns)} onValueChange={(value) => setRollbackTurns(Number(value))}>
+                    <SelectTrigger
+                      style={{
+                        height: 26,
+                        minWidth: 0,
+                        flex: 1,
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 5,
+                        color: 'var(--text)',
+                        padding: '0 6px',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 10,
+                      }}
+                    >
+                      <SelectValue placeholder="Turns" />
+                    </SelectTrigger>
+                    <SelectContent
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                      }}
+                    >
+                      {Array.from({ length: Math.min(10, rollbackCandidates.length) }, (_, index) => index + 1).map((value) => (
+                        <SelectItem key={value} value={String(value)}>
+                          {value} turn{value === 1 ? '' : 's'}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    onClick={handleRollbackPreview}
+                    disabled={previewingRewind || applyingRewind}
+                    variant="outline"
+                    size="sm"
+                    style={{
+                      flexShrink: 0,
+                      height: 26,
+                      padding: '0 8px',
+                      background: 'rgba(251,191,36,0.08)',
+                      border: '1px solid rgba(251,191,36,0.22)',
+                      borderRadius: 5,
+                      color: 'var(--yellow, #fbbf24)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 10,
+                      letterSpacing: '0.06em',
+                      cursor: previewingRewind || applyingRewind ? 'not-allowed' : 'pointer',
+                      opacity: previewingRewind || applyingRewind ? 0.5 : 1,
+                    }}
+                  >
+                    {previewingRewind ? 'PREVIEWING…' : 'ROLLBACK'}
+                  </Button>
                 </div>
               )}
             </div>
-            <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-              <button
-                onClick={handleApplyRewind}
-                disabled={applyingRewind}
-                style={{
-                  height: 28,
-                  padding: '0 12px',
-                  background: 'rgba(251,191,36,0.12)',
-                  border: '1px solid rgba(251,191,36,0.28)',
-                  borderRadius: 5,
-                  color: 'var(--yellow, #fbbf24)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: applyingRewind ? 'not-allowed' : 'pointer',
-                  opacity: applyingRewind ? 0.5 : 1,
+            {sessionCapabilities?.resumeAtMessage && resumeFromMessageId && (
+              <div style={{
+                marginBottom: 8,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                color: 'var(--cyan)',
+                letterSpacing: '0.03em',
+              }}>
+                <span>Next send will resume from the selected timeline point in a forked session.</span>
+                <Button
+                  onClick={() => setResumeFromMessageId(null)}
+                  variant="outline"
+                  size="sm"
+                  style={{
+                    height: 22,
+                    padding: '0 8px',
+                    borderRadius: 4,
+                    border: '1px solid rgba(56,217,245,0.22)',
+                    background: 'rgba(56,217,245,0.08)',
+                    color: 'var(--cyan)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 9,
+                    letterSpacing: '0.06em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  CLEAR
+                </Button>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+              <Textarea
+                ref={textareaRef}
+                value={inputText}
+                onChange={e => {
+                  setInputText(e.target.value)
+                  if (sendError) setSendError(null)
+                  // Auto-resize
+                  e.target.style.height = 'auto'
+                  e.target.style.height = `${Math.min(e.target.scrollHeight, 80)}px`
                 }}
-              >
-                {applyingRewind ? 'APPLYING…' : 'APPLY REWIND'}
-              </button>
-              <button
-                onClick={() => setRewindPreview(null)}
+                onKeyDown={handleKeyDown}
+                disabled={sendState === 'sending'}
+                placeholder={activeToolCount > 0 ? `${assistantName} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…` : 'Send a message… (⌘↩ to send)'}
+                rows={1}
                 style={{
-                  height: 28,
-                  padding: '0 12px',
+                  flex: 1,
+                  resize: 'none',
                   background: 'var(--surface-2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 5,
-                  color: 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: 'pointer',
+                  border: `1px solid ${sendState === 'error' ? 'rgba(248,113,113,0.4)' : 'var(--border-2)'}`,
+                  borderRadius: 6,
+                  padding: '6px 10px',
+                  fontFamily: "'IBM Plex Sans', sans-serif",
+                  fontSize: 12,
+                  color: 'var(--text)',
+                  lineHeight: 1.4,
+                  outline: 'none',
+                  overflow: 'hidden',
+                  opacity: sendState === 'sending' ? 0.5 : 1,
+                  transition: 'border-color 0.15s, opacity 0.15s',
                 }}
-              >
-                CANCEL
-              </button>
+              />
+              {sendState === 'sending' ? (
+                <Button
+                  onClick={cancelSend}
+                  variant="outline"
+                  style={{
+                    flexShrink: 0,
+                    height: 32,
+                    padding: '0 12px',
+                    background: 'rgba(248,113,113,0.1)',
+                    border: '1px solid rgba(248,113,113,0.3)',
+                    borderRadius: 6,
+                    color: 'var(--red, #f87171)',
+                    fontFamily: "'Oxanium', monospace",
+                    fontSize: 10,
+                    fontWeight: 600,
+                    letterSpacing: '0.1em',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  CANCEL
+                </Button>
+              ) : (
+                <Button
+                  onClick={sendMessage}
+                  disabled={!inputText.trim()}
+                  style={{
+                    flexShrink: 0,
+                    height: 32,
+                    padding: '0 12px',
+                    background: 'rgba(139,128,240,0.18)',
+                    border: '1px solid rgba(139,128,240,0.3)',
+                    borderRadius: 6,
+                    color: 'var(--violet)',
+                    fontFamily: "'Oxanium', monospace",
+                    fontSize: 10,
+                    fontWeight: 600,
+                    letterSpacing: '0.1em',
+                    cursor: !inputText.trim() ? 'not-allowed' : 'pointer',
+                    transition: 'background 0.15s, color 0.15s',
+                    whiteSpace: 'nowrap',
+                    opacity: !inputText.trim() ? 0.55 : 1,
+                  }}
+                >
+                  SEND
+                </Button>
+              )}
             </div>
-          </div>
-        )}
-        {rollbackPreview && (
-          <div
+          </CardContent>
+        </Card>
+        {rewindPreview && (
+          <Card
             style={{
-              marginBottom: 10,
-              padding: '12px 14px',
+              marginTop: 10,
               borderRadius: 8,
               border: '1px solid rgba(251,191,36,0.22)',
               background: 'rgba(251,191,36,0.06)',
             }}
           >
-            <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
-              Rollback Preview
-            </div>
-            <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
-              This removes the last {rollbackPreview.numTurns} turn{rollbackPreview.numTurns === 1 ? '' : 's'} from the Codex thread history. It does not revert files in the workspace.
-            </div>
-            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {rollbackPreview.turnsRemoved.map((turn) => (
-                <div
-                  key={turn.turnId}
+            <CardContent style={{ padding: '12px 14px' }}>
+              <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
+                Rewind Preview
+              </div>
+              <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
+                {rewindPreview.contentPreview || 'Selected prompt'}
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {rewindPreview.filesChanged.length > 0 ? rewindPreview.filesChanged.map((file) => (
+                  <div
+                    key={file}
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      color: 'var(--text-2)',
+                      padding: '5px 8px',
+                      borderRadius: 5,
+                      background: 'var(--surface-2)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    {file}
+                  </div>
+                )) : (
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+                    No tracked files would change.
+                  </div>
+                )}
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                <Button
+                  onClick={handleApplyRewind}
+                  disabled={applyingRewind}
+                  variant="outline"
+                  size="sm"
                   style={{
+                    height: 28,
+                    padding: '0 12px',
+                    background: 'rgba(251,191,36,0.12)',
+                    border: '1px solid rgba(251,191,36,0.28)',
+                    borderRadius: 5,
+                    color: 'var(--yellow, #fbbf24)',
                     fontFamily: "'IBM Plex Mono', monospace",
                     fontSize: 11,
-                    color: 'var(--text-2)',
-                    padding: '5px 8px',
-                    borderRadius: 5,
-                    background: 'rgba(9,14,22,0.24)',
-                    border: '1px solid var(--border)',
+                    letterSpacing: '0.06em',
+                    cursor: applyingRewind ? 'not-allowed' : 'pointer',
+                    opacity: applyingRewind ? 0.5 : 1,
                   }}
                 >
-                  {turn.preview || turn.turnId}
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-              <button
-                onClick={handleApplyRollback}
-                disabled={applyingRewind}
-                style={{
-                  height: 28,
-                  padding: '0 12px',
-                  background: 'rgba(251,191,36,0.12)',
-                  border: '1px solid rgba(251,191,36,0.28)',
-                  borderRadius: 5,
-                  color: 'var(--yellow, #fbbf24)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: applyingRewind ? 'not-allowed' : 'pointer',
-                  opacity: applyingRewind ? 0.5 : 1,
-                }}
-              >
-                {applyingRewind ? 'APPLYING…' : 'APPLY ROLLBACK'}
-              </button>
-              <button
-                onClick={() => setRollbackPreview(null)}
-                style={{
-                  height: 28,
-                  padding: '0 12px',
-                  background: 'var(--surface-2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 5,
-                  color: 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: 'pointer',
-                }}
-              >
-                CANCEL
-              </button>
-            </div>
-          </div>
+                  {applyingRewind ? 'APPLYING…' : 'APPLY REWIND'}
+                </Button>
+                <Button
+                  onClick={() => setRewindPreview(null)}
+                  variant="outline"
+                  size="sm"
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 5,
+                    color: 'var(--text-3)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    letterSpacing: '0.06em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  CANCEL
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         )}
-        {sessionCapabilities?.resumeAtMessage && resumeFromMessageId && (
-          <div style={{
-            marginBottom: 10,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            color: 'var(--cyan)',
-            letterSpacing: '0.03em',
-          }}>
-            <span>Next send will resume from the selected timeline point in a forked session.</span>
-            <button
-              onClick={() => setResumeFromMessageId(null)}
-              style={{
-                height: 22,
-                padding: '0 8px',
-                borderRadius: 4,
-                border: '1px solid rgba(56,217,245,0.22)',
-                background: 'rgba(56,217,245,0.08)',
-                color: 'var(--cyan)',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 10,
-                letterSpacing: '0.06em',
-                cursor: 'pointer',
-              }}
-            >
-              CLEAR
-            </button>
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-          <textarea
-            ref={textareaRef}
-            value={inputText}
-            onChange={e => {
-              setInputText(e.target.value)
-              if (sendError) setSendError(null)
-              // Auto-resize
-              e.target.style.height = 'auto'
-              e.target.style.height = `${Math.min(e.target.scrollHeight, 96)}px`
-            }}
-            onKeyDown={handleKeyDown}
-            disabled={sendState === 'sending'}
-            placeholder={activeToolCount > 0 ? `${assistantName} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…` : 'Send a message… (⌘↩ to send)'}
-            rows={1}
+        {rollbackPreview && (
+          <Card
             style={{
-              flex: 1,
-              resize: 'none',
-              background: 'var(--surface-2)',
-              border: `1px solid ${sendState === 'error' ? 'rgba(248,113,113,0.4)' : 'var(--border-2)'}`,
-              borderRadius: 6,
-              padding: '8px 12px',
-              fontFamily: "'IBM Plex Sans', sans-serif",
-              fontSize: 13,
-              color: 'var(--text)',
-              lineHeight: 1.5,
-              outline: 'none',
-              overflow: 'hidden',
-              opacity: sendState === 'sending' ? 0.5 : 1,
-              transition: 'border-color 0.15s, opacity 0.15s',
+              marginTop: 10,
+              borderRadius: 8,
+              border: '1px solid rgba(251,191,36,0.22)',
+              background: 'rgba(251,191,36,0.06)',
             }}
-          />
-          {sendState === 'sending' ? (
-            <button
-              onClick={cancelSend}
-              style={{
-                flexShrink: 0,
-                height: 36,
-                padding: '0 14px',
-                background: 'rgba(248,113,113,0.1)',
-                border: '1px solid rgba(248,113,113,0.3)',
-                borderRadius: 6,
-                color: 'var(--red, #f87171)',
-                fontFamily: "'Oxanium', monospace",
-                fontSize: 11,
-                fontWeight: 600,
-                letterSpacing: '0.1em',
-                cursor: 'pointer',
-                transition: 'background 0.15s',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              CANCEL
-            </button>
-          ) : (
-            <button
-              onClick={sendMessage}
-              disabled={!inputText.trim()}
-              style={{
-                flexShrink: 0,
-                height: 36,
-                padding: '0 14px',
-                background: 'rgba(139,128,240,0.18)',
-                border: '1px solid rgba(139,128,240,0.3)',
-                borderRadius: 6,
-                color: 'var(--violet)',
-                fontFamily: "'Oxanium', monospace",
-                fontSize: 11,
-                fontWeight: 600,
-                letterSpacing: '0.1em',
-                cursor: !inputText.trim() ? 'not-allowed' : 'pointer',
-                transition: 'background 0.15s, color 0.15s',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              SEND
-            </button>
-          )}
-        </div>
+          >
+            <CardContent style={{ padding: '12px 14px' }}>
+              <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
+                Rollback Preview
+              </div>
+              <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
+                This removes the last {rollbackPreview.numTurns} turn{rollbackPreview.numTurns === 1 ? '' : 's'} from the Codex thread history. It does not revert files in the workspace.
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {rollbackPreview.turnsRemoved.map((turn) => (
+                  <div
+                    key={turn.turnId}
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      color: 'var(--text-2)',
+                      padding: '5px 8px',
+                      borderRadius: 5,
+                      background: 'var(--surface-2)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    {turn.preview || turn.turnId}
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                <Button
+                  onClick={handleApplyRollback}
+                  disabled={applyingRewind}
+                  variant="outline"
+                  size="sm"
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    background: 'rgba(251,191,36,0.12)',
+                    border: '1px solid rgba(251,191,36,0.28)',
+                    borderRadius: 5,
+                    color: 'var(--yellow, #fbbf24)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    letterSpacing: '0.06em',
+                    cursor: applyingRewind ? 'not-allowed' : 'pointer',
+                    opacity: applyingRewind ? 0.5 : 1,
+                  }}
+                >
+                  {applyingRewind ? 'APPLYING…' : 'APPLY ROLLBACK'}
+                </Button>
+                <Button
+                  onClick={() => setRollbackPreview(null)}
+                  variant="outline"
+                  size="sm"
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 5,
+                    color: 'var(--text-3)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    letterSpacing: '0.06em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  CANCEL
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>}
     </div>
   )
