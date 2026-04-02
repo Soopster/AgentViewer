@@ -14,11 +14,12 @@ export async function GET(
   const limit = Math.min(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 500, 2000)
   const rawOffset = parseInt(searchParams.get('offset') ?? '', 10)
   const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0
+  const tail = searchParams.get('tail') === '1'
   const providerParam = searchParams.get('provider')
   const provider = isAgentProvider(providerParam) ? providerParam : undefined
 
   try {
-    const messages = await listViewSessionMessages(sessionId, { limit, offset }, provider)
+    const messages = await listViewSessionMessages(sessionId, { limit, offset, tail }, provider)
     return NextResponse.json({ messages })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

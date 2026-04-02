@@ -146,7 +146,7 @@ export default function Home() {
   }, [includeWorktrees])
 
   const fetchSessionMessages = useCallback(async (session: Session) => {
-    const response = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?limit=2000`, session.provider))
+    const response = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?limit=2000&tail=1`, session.provider))
     const data = await response.json()
     if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
     return (data.messages ?? []) as SessionMessage[]

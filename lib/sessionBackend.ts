@@ -144,6 +144,7 @@ type ListParams = {
 type MessageListParams = {
   limit: number
   offset: number
+  tail?: boolean
 }
 
 type ProjectMessageBatchParams = {
@@ -528,30 +529,49 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
 }
 
 export async function listViewSessionMessages(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessage[]> {
+  const sortMessagesChronologically = (messages: SessionMessage[]): SessionMessage[] => (
+    messages
+      .map((message, index) => ({ message, index }))
+      .sort((a, b) => {
+        const aTimestamp = a.message.timestamp ? Date.parse(a.message.timestamp) : Number.NaN
+        const bTimestamp = b.message.timestamp ? Date.parse(b.message.timestamp) : Number.NaN
+        if (!Number.isNaN(aTimestamp) && !Number.isNaN(bTimestamp) && aTimestamp !== bTimestamp) {
+          return aTimestamp - bTimestamp
+        }
+        return a.index - b.index
+      })
+      .map(({ message }) => message)
+  )
+  const sliceMessages = (messages: SessionMessage[]): SessionMessage[] => {
+    if (!params.tail) return messages.slice(params.offset, params.offset + params.limit)
+    const start = Math.max(messages.length - params.limit, 0)
+    return messages.slice(start)
+  }
+
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const thread = await readCodexThread(sessionId, true)
-    const messages = mapCodexThreadToMessages(thread)
-    return messages.slice(params.offset, params.offset + params.limit)
+    const messages = sortMessagesChronologically(mapCodexThreadToMessages(thread))
+    return sliceMessages(messages)
   }
   if (provider === 'opencode') {
     const messages = await getOpenCodeSessionMessages(sessionId)
-    return mapOpenCodeMessagesToSessionMessages(messages).slice(params.offset, params.offset + params.limit)
+    return sliceMessages(sortMessagesChronologically(mapOpenCodeMessagesToSessionMessages(messages)))
   }
   if (provider === 'copilot') {
     const events = await readCopilotSessionEvents(sessionId)
-    return mapCopilotEventsToSessionMessages(sessionId, events).slice(params.offset, params.offset + params.limit)
+    return sliceMessages(sortMessagesChronologically(mapCopilotEventsToSessionMessages(sessionId, events)))
   }
   if (provider === 'pi') {
     const messages = getPiSessionMessages(sessionId)
-    return mapPiMessagesToSessionMessages(sessionId, messages).slice(params.offset, params.offset + params.limit)
+    return sliceMessages(sortMessagesChronologically(mapPiMessagesToSessionMessages(sessionId, messages)))
   }
 
   const messages = await getSessionMessages(sessionId, {
     ...params,
     includeSystemMessages: true,
   })
-  return normalizeClaudeHistoryMessages(messages as unknown[])
+  return sliceMessages(sortMessagesChronologically(normalizeClaudeHistoryMessages(messages as unknown[])))
 }
 
 export async function listProjectSessionMessageBatches(params: ProjectMessageBatchParams): Promise<{

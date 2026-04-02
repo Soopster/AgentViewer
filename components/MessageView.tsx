@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
 import type {
   SessionMessage,
   Session,
@@ -70,6 +70,7 @@ type TimelineRow = {
 const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
 const TIMELINE_OVERSCAN_PX = 1200
 const ESTIMATED_CHARS_PER_LINE = 92
+const TIMELINE_BOTTOM_GUTTER_PX = 72
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
   const normalized = buffer.replace(/\r\n/g, '\n')
@@ -945,12 +946,14 @@ function VirtualTimelineRow({
   row,
   top,
   onMeasure,
+  onRowRef,
   onForkFromMessage,
   onToggleResume,
 }: {
   row: TimelineRow
   top: number
   onMeasure: (key: string, height: number) => void
+  onRowRef?: (node: HTMLDivElement | null) => void
   onForkFromMessage: (messageId: string) => void
   onToggleResume: (messageId: string) => void
 }) {
@@ -967,6 +970,11 @@ function VirtualTimelineRow({
     observer.observe(node)
     return () => observer.disconnect()
   }, [onMeasure, row.key])
+
+  useEffect(() => {
+    onRowRef?.(rowRef.current)
+    return () => onRowRef?.(null)
+  }, [onRowRef, row.key])
 
   return (
     <div
@@ -1017,6 +1025,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [rowMeasurementVersion, setRowMeasurementVersion] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
+  const lastTimelineRowRef = useRef<HTMLDivElement | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; lastFingerprint: string | null; sessionId: string } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
@@ -1024,6 +1033,8 @@ export default function MessageView({ messages, loading, session, projectView, o
   const threadedCacheRef = useRef<Map<string, ThreadedMessage>>(new Map())
   const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
   const measurementFrameRef = useRef<number | null>(null)
+  const timelineRowsRef = useRef<TimelineRow[]>([])
+  const initialScrollDoneRef = useRef(false)
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
   const assistantName = assistantDisplayName(sessionInfo?.provider ?? session?.provider)
 
@@ -1081,6 +1092,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     setRowMeasurementVersion(0)
     pendingMessageBaselineRef.current = null
     liveToolIndexesRef.current.clear()
+    initialScrollDoneRef.current = false
   }, [session?.sessionId])
 
   useEffect(() => () => {
@@ -1112,9 +1124,20 @@ export default function MessageView({ messages, loading, session, projectView, o
   const scrollTimelineToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const node = timelineRef.current
     if (!node) return
-    const targetTop = Math.max(node.scrollHeight - node.clientHeight, 0)
+    const targetTop = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
     setTimelineScrollTop(targetTop)
     node.scrollTo({ top: targetTop, behavior })
+  }, [])
+
+  const alignLastTimelineRowToViewportBottom = useCallback(() => {
+    const node = timelineRef.current
+    const lastRow = lastTimelineRowRef.current
+    if (!node || !lastRow) return
+    const nodeRect = node.getBoundingClientRect()
+    const rowRect = lastRow.getBoundingClientRect()
+    const targetTop = Math.max(node.scrollTop + (rowRect.bottom - nodeRect.bottom), 0)
+    node.scrollTop = targetTop
+    setTimelineScrollTop(targetTop)
   }, [])
 
   const handleTimelineScroll = useCallback(() => {
@@ -1608,7 +1631,7 @@ export default function MessageView({ messages, loading, session, projectView, o
 
     liveThreadedMessages.forEach((msg, index) => {
       rows.push({
-        key: `live:threaded:${msg.provider ?? 'claude'}:${msg.uuid}:${index}`,
+        key: `live:threaded:${msg.provider ?? 'claude'}:${msg.uuid}`,
         message: msg,
         showSession: false,
         dimmed: true,
@@ -1632,6 +1655,53 @@ export default function MessageView({ messages, loading, session, projectView, o
     threaded,
   ])
   const hasLiveTimeline = timelineRows.length > 0
+
+  // On the first completed load for a session, wait for rows to exist and then force the
+  // viewport to the live edge so initial virtualization and measurement do not leave us at the top.
+  useLayoutEffect(() => {
+    if (loading || !session) return
+    if (initialScrollDoneRef.current) return
+
+    if (!hasLiveTimeline) {
+      if (messages.length === 0) {
+        initialScrollDoneRef.current = true
+        setAutoFollow(true)
+      }
+      return
+    }
+
+    initialScrollDoneRef.current = true
+    setAutoFollow(true)
+
+    const node = timelineRef.current
+    if (node) {
+      const targetTop = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
+      node.scrollTop = targetTop
+      setTimelineScrollTop(targetTop)
+    }
+    alignLastTimelineRowToViewportBottom()
+
+    let cancelled = false
+    let frameId: number | null = null
+    const runInitialScrollPass = (pass: number) => {
+      if (cancelled) return
+      scrollTimelineToBottom()
+      alignLastTimelineRowToViewportBottom()
+      if (pass >= 6) return
+      frameId = window.requestAnimationFrame(() => runInitialScrollPass(pass + 1))
+    }
+
+    frameId = window.requestAnimationFrame(() => runInitialScrollPass(1))
+
+    return () => {
+      cancelled = true
+      if (frameId != null) window.cancelAnimationFrame(frameId)
+    }
+  }, [alignLastTimelineRowToViewportBottom, hasLiveTimeline, loading, messages.length, scrollTimelineToBottom, session?.sessionId])
+
+  useEffect(() => {
+    timelineRowsRef.current = timelineRows
+  }, [timelineRows])
 
   useEffect(() => {
     const activeKeys = new Set(timelineRows.map((row) => row.key))
@@ -1659,7 +1729,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       let scrollDelta = 0
       let changed = false
 
-      for (const row of timelineRows) {
+      for (const row of timelineRowsRef.current) {
         const previousHeight = rowHeightsRef.current.get(row.key) ?? estimateTimelineRowHeight(row)
         const nextMeasuredHeight = pending.get(row.key)
         const nextHeightForLayout = nextMeasuredHeight ?? previousHeight
@@ -1686,7 +1756,7 @@ export default function MessageView({ messages, loading, session, projectView, o
         setRowMeasurementVersion((version) => version + 1)
       }
     })
-  }, [timelineRows])
+  }, [])
 
   const virtualTimeline = useMemo(() => {
     let offset = 0
@@ -1725,7 +1795,6 @@ export default function MessageView({ messages, loading, session, projectView, o
     autoFollow,
     loading,
     virtualTimeline.totalHeight,
-    rowMeasurementVersion,
     scrollTimelineToBottom,
   ])
 
@@ -2303,6 +2372,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                   row={row}
                   top={top}
                   onMeasure={handleTimelineRowMeasure}
+                  onRowRef={row.key === timelineRows.at(-1)?.key ? (node) => { lastTimelineRowRef.current = node } : undefined}
                   onForkFromMessage={handleForkFromMessage}
                   onToggleResume={toggleResumeFromMessage}
                 />
