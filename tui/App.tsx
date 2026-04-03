@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
 import {
-  formatMessageExpanded,
   formatProviderLabel,
   formatSessionMeta,
   formatSessionProject,
   formatSessionTitle,
   formatTranscriptCards,
+  type TuiTranscriptCard,
   type TuiTranscriptCardLine,
 } from './format'
 import {
@@ -34,7 +34,10 @@ const SIDEBAR_GUTTER_WIDTH = 2
 const SESSION_ENTRY_HEIGHT = 2
 const PROJECT_HEADER_HEIGHT = 1
 const MESSAGE_HEADER_HEIGHT = 6
-const MESSAGE_ENTRY_HEIGHT = 6
+const MESSAGE_CARD_GAP = 1
+const SESSION_REFRESH_MS = 5000
+const DETAIL_REFRESH_MS = 2000
+const SEARCH_MAX_CHARS = 80
 
 type PaneFocus = 'sessions' | 'messages'
 
@@ -103,7 +106,7 @@ function buildSidebarEntries(sessions: Session[]): SidebarEntry[] {
       currentProject = projectName
       entries.push({
         type: 'project',
-        key: `project:${projectName}`,
+        key: `project:${projectName}:${absoluteIndex}`,
         projectName,
         count: counts.get(projectName) ?? 0,
       })
@@ -120,38 +123,23 @@ function buildSidebarEntries(sessions: Session[]): SidebarEntry[] {
   return entries
 }
 
-function selectSidebarWindow(entries: SidebarEntry[], selectedIndex: number, rowBudget: number): SidebarEntry[] {
+function findSidebarEntryIndex(entries: SidebarEntry[], selectedIndex: number): number {
+  return entries.findIndex((entry) => entry.type === 'session' && entry.absoluteIndex === selectedIndex)
+}
+
+function selectSidebarWindow(entries: SidebarEntry[], startIndex: number, rowBudget: number): SidebarEntry[] {
   if (entries.length === 0) return []
-
-  const targetEntryIndex = entries.findIndex((entry) => entry.type === 'session' && entry.absoluteIndex === selectedIndex)
-  const target = targetEntryIndex >= 0 ? targetEntryIndex : 0
-  let start = target
-  let end = target
-  let usedRows = sidebarEntryHeight(entries[target])
-
-  while (true) {
-    const nextUp = start > 0 ? entries[start - 1] : null
-    const nextDown = end < entries.length - 1 ? entries[end + 1] : null
-    const upHeight = nextUp ? sidebarEntryHeight(nextUp) : Number.POSITIVE_INFINITY
-    const downHeight = nextDown ? sidebarEntryHeight(nextDown) : Number.POSITIVE_INFINITY
-    const canGrowUp = nextUp != null && usedRows + upHeight <= rowBudget
-    const canGrowDown = nextDown != null && usedRows + downHeight <= rowBudget
-
-    if (!canGrowUp && !canGrowDown) break
-
-    if (canGrowUp && (!canGrowDown || target - start <= end - target)) {
-      start -= 1
-      usedRows += upHeight
-      continue
-    }
-
-    if (canGrowDown) {
-      end += 1
-      usedRows += downHeight
-    }
+  let usedRows = 0
+  const visible: SidebarEntry[] = []
+  for (let index = clamp(startIndex, 0, entries.length - 1); index < entries.length; index++) {
+    const next = entries[index]
+    const height = sidebarEntryHeight(next)
+    if (visible.length > 0 && usedRows + height > rowBudget) break
+    visible.push(next)
+    usedRows += height
   }
 
-  return entries.slice(start, end + 1)
+  return visible
 }
 
 function transcriptColor(line: TuiTranscriptCardLine): string {
@@ -227,6 +215,103 @@ function groupBodyLines(lines: TuiTranscriptCardLine[]): LineGroup[] {
   return groups
 }
 
+function findCardIndex(cards: TuiTranscriptCard[], key: string | null): number {
+  if (!key) return -1
+  return cards.findIndex((card) => card.key === key)
+}
+
+function previewBodyLines(card: TuiTranscriptCard): TuiTranscriptCardLine[] {
+  return card.lines.filter((line) => line.text.length > 0)
+}
+
+function collapsedBodyRows(card: TuiTranscriptCard): number {
+  const lines = previewBodyLines(card)
+  const groups = groupBodyLines(lines)
+  let rows = 0
+
+  for (const group of groups) {
+    if (group.type === 'text') {
+      rows += group.lines.length
+      continue
+    }
+
+    const toolMatch = group.toolLine.text.match(/^tool (\S+)(?:: (.*))?$/)
+    const toolName = toolMatch?.[1]?.toUpperCase() ?? 'TOOL'
+    const resultLine = group.bodyLines.find(
+      (line) => line.tone === 'result_ok' || line.tone === 'result_error',
+    )
+    const contentLines = group.bodyLines.filter(
+      (line) => line.tone !== 'result_ok' && line.tone !== 'result_error',
+    )
+
+    if (toolName === 'FILECHANGE') {
+      const pathLine = group.bodyLines[0]?.tone === 'diff_meta' ? group.bodyLines[0] : null
+      const afterPath = pathLine ? group.bodyLines.slice(1) : group.bodyLines
+      const diffContent = afterPath.filter((line) => line.tone !== 'dim')
+      rows += 1 + (pathLine ? 1 : 0) + diffContent.length + 1
+      continue
+    }
+
+    rows += 1 + (resultLine ? 1 : 0) + contentLines.length
+  }
+
+  const hiddenLines = Math.max(card.expandedLines.length - lines.length, 0)
+  if (hiddenLines > 0) rows += 1
+
+  return Math.max(rows, 1)
+}
+
+function cardHeight(card: TuiTranscriptCard, expandedKeys: Set<string>): number {
+  const bodyRows = expandedKeys.has(card.key)
+    ? Math.max(card.expandedLines.length, 1)
+    : collapsedBodyRows(card)
+  return 1 + bodyRows + MESSAGE_CARD_GAP
+}
+
+function selectTranscriptWindow(
+  cards: TuiTranscriptCard[],
+  startIndex: number,
+  rowBudget: number,
+  expandedKeys: Set<string>,
+): { cards: TuiTranscriptCard[]; endIndex: number } {
+  if (cards.length === 0) return { cards: [], endIndex: -1 }
+
+  const visible: TuiTranscriptCard[] = []
+  let usedRows = 0
+  let endIndex = clamp(startIndex, 0, cards.length - 1)
+
+  for (let index = clamp(startIndex, 0, cards.length - 1); index < cards.length; index++) {
+    const next = cards[index]
+    const nextHeight = cardHeight(next, expandedKeys)
+    if (visible.length > 0 && usedRows + nextHeight > rowBudget) break
+    visible.push(next)
+    usedRows += nextHeight
+    endIndex = index
+  }
+
+  return { cards: visible, endIndex }
+}
+
+function windowStartForCursor(
+  cards: TuiTranscriptCard[],
+  cursorIndex: number,
+  rowBudget: number,
+  expandedKeys: Set<string>,
+): number {
+  if (cards.length === 0) return 0
+  let start = clamp(cursorIndex, 0, cards.length - 1)
+  let usedRows = cardHeight(cards[start], expandedKeys)
+
+  while (start > 0) {
+    const nextHeight = cardHeight(cards[start - 1], expandedKeys)
+    if (usedRows + nextHeight > rowBudget) break
+    start -= 1
+    usedRows += nextHeight
+  }
+
+  return start
+}
+
 function Scrollbar({
   total,
   visible,
@@ -280,9 +365,15 @@ export default function App() {
   const [providerMenuOpen, setProviderMenuOpen] = useState(false)
   const [providerMenuIndex, setProviderMenuIndex] = useState(0)
   const [focusedPane, setFocusedPane] = useState<PaneFocus>('sessions')
-  const [transcriptOffset, setTranscriptOffset] = useState(0)
-  const [transcriptCursor, setTranscriptCursor] = useState(0)
-  const [expandedCardKey, setExpandedCardKey] = useState<string | null>(null)
+  const [sidebarTopKey, setSidebarTopKey] = useState<string | null>(null)
+  const [transcriptTopKey, setTranscriptTopKey] = useState<string | null>(null)
+  const [transcriptCursorKey, setTranscriptCursorKey] = useState<string | null>(null)
+  const [expandedCardKeys, setExpandedCardKeys] = useState<Set<string>>(() => new Set())
+  const [followTail, setFollowTail] = useState(true)
+  const [pendingNewCount, setPendingNewCount] = useState(0)
+  const [searchMode, setSearchMode] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMatchIndex, setSearchMatchIndex] = useState(0)
   const [terminalRows, setTerminalRows] = useState(stdout.rows ?? process.stdout.rows ?? 40)
   const [terminalColumns, setTerminalColumns] = useState(stdout.columns ?? process.stdout.columns ?? 120)
 
@@ -290,6 +381,10 @@ export default function App() {
   const detailRequestRef = useRef(0)
   const providerSwitchRef = useRef(false)
   const quittingRef = useRef(false)
+  const previousTranscriptRef = useRef<{ sessionKey: string | null; keys: string[] }>({
+    sessionKey: null,
+    keys: [],
+  })
 
   const selectedIndex = useMemo(() => {
     if (sessions.length === 0) return -1
@@ -298,6 +393,15 @@ export default function App() {
   }, [selectedSessionKey, sessions])
 
   const selectedSession = selectedIndex >= 0 ? sessions[selectedIndex] ?? null : sessions[0] ?? null
+  const selectedSessionIdentity = selectedSession ? sessionKey(selectedSession) : null
+  const selectedSessionTarget = useMemo<Session | null>(() => (
+    selectedSession
+      ? {
+          sessionId: selectedSession.sessionId,
+          provider: selectedSession.provider,
+        }
+      : null
+  ), [selectedSessionIdentity])
   const theme = getThemePalette(themeMode)
   const providerAccent = getProviderAccent(provider)
   const sidebarAccent = focusedPane === 'sessions' ? theme.violet : theme.muted
@@ -317,17 +421,73 @@ export default function App() {
   const sessionTitleWidth = Math.max(sidebarInnerWidth - 2, 18)
   const sessionMetaWidth = Math.max(sidebarInnerWidth - 2, 18)
   const transcriptLineWidth = Math.max(messageInnerWidth - 2, 24)
+  const transcriptViewportRows = Math.max(
+    contentHeight - MESSAGE_HEADER_HEIGHT - 1 - (error ? 1 : 0),
+    4,
+  )
 
   const transcriptCards = useMemo(() => (
     sessionDetail ? formatTranscriptCards(sessionDetail.threadedMessages) : []
   ), [sessionDetail])
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase()
+  const searchMatches = useMemo(() => {
+    if (!normalizedSearchQuery) return []
+    return transcriptCards.flatMap((card, index) => {
+      const haystack = `${card.label}\n${card.searchText}`.toLowerCase()
+      return haystack.includes(normalizedSearchQuery) ? [index] : []
+    })
+  }, [normalizedSearchQuery, transcriptCards])
+  const cursorIndex = useMemo(() => {
+    if (transcriptCards.length === 0) return -1
+    const index = findCardIndex(transcriptCards, transcriptCursorKey)
+    if (index >= 0) return index
+    return followTail ? transcriptCards.length - 1 : 0
+  }, [followTail, transcriptCards, transcriptCursorKey])
+  const topIndex = useMemo(() => {
+    if (transcriptCards.length === 0) return 0
+    const index = findCardIndex(transcriptCards, transcriptTopKey)
+    if (index >= 0) return index
+    return windowStartForCursor(transcriptCards, Math.max(cursorIndex, 0), transcriptViewportRows, expandedCardKeys)
+  }, [cursorIndex, expandedCardKeys, transcriptCards, transcriptTopKey, transcriptViewportRows])
+  const visibleTranscriptWindow = useMemo(() => (
+    selectTranscriptWindow(transcriptCards, topIndex, transcriptViewportRows, expandedCardKeys)
+  ), [expandedCardKeys, topIndex, transcriptCards, transcriptViewportRows])
+  const visibleTranscriptCards = visibleTranscriptWindow.cards
+  const visibleTranscriptEndIndex = visibleTranscriptWindow.endIndex
+  const transcriptWindowEnd = visibleTranscriptEndIndex >= 0 ? visibleTranscriptEndIndex + 1 : 0
 
-  const transcriptCardBudget = Math.max(
-    Math.floor((contentHeight - MESSAGE_HEADER_HEIGHT - 1) / MESSAGE_ENTRY_HEIGHT),
-    1,
+  const sidebarEntries = useMemo(() => buildSidebarEntries(sessions), [sessions])
+  const selectedSidebarEntryIndex = useMemo(
+    () => findSidebarEntryIndex(sidebarEntries, selectedIndex),
+    [selectedIndex, sidebarEntries],
   )
-  const transcriptMaxOffset = Math.max(transcriptCards.length - transcriptCardBudget, 0)
-  const transcriptWindowEnd = Math.min(transcriptOffset + transcriptCardBudget, transcriptCards.length)
+  const sidebarTopIndex = useMemo(() => {
+    if (sidebarEntries.length === 0) return 0
+    const index = sidebarEntries.findIndex((entry) => entry.key === sidebarTopKey)
+    if (index >= 0) return index
+    return Math.max(selectedSidebarEntryIndex, 0)
+  }, [selectedSidebarEntryIndex, sidebarEntries, sidebarTopKey])
+  const visibleSidebarEntries = useMemo(() => (
+    selectSidebarWindow(sidebarEntries, sidebarTopIndex, sidebarRowBudget)
+  ), [sidebarEntries, sidebarRowBudget, sidebarTopIndex])
+
+  const jumpToTranscriptIndex = useCallback((index: number) => {
+    if (transcriptCards.length === 0) return
+    const nextIndex = clamp(index, 0, transcriptCards.length - 1)
+    const nextStart = windowStartForCursor(transcriptCards, nextIndex, transcriptViewportRows, expandedCardKeys)
+    setTranscriptCursorKey(transcriptCards[nextIndex].key)
+    setTranscriptTopKey(transcriptCards[nextStart].key)
+    const atTail = nextIndex === transcriptCards.length - 1
+    setFollowTail(atTail)
+    if (atTail) setPendingNewCount(0)
+  }, [expandedCardKeys, transcriptCards, transcriptViewportRows])
+
+  const jumpToTranscriptTail = useCallback(() => {
+    if (transcriptCards.length === 0) return
+    jumpToTranscriptIndex(transcriptCards.length - 1)
+    setFollowTail(true)
+    setPendingNewCount(0)
+  }, [jumpToTranscriptIndex, transcriptCards.length])
 
   const moveSelection = useCallback((delta: number) => {
     if (sessions.length === 0) return
@@ -339,20 +499,34 @@ export default function App() {
 
   const moveCursor = useCallback((delta: number) => {
     if (transcriptCards.length === 0) return
-    const next = clamp(transcriptCursor + delta, 0, transcriptCards.length - 1)
-    setTranscriptCursor(next)
-    setTranscriptOffset((prev) => {
-      if (next < prev) return next
-      if (next >= prev + transcriptCardBudget) return Math.max(next - transcriptCardBudget + 1, 0)
-      return prev
-    })
-  }, [transcriptCardBudget, transcriptCards.length, transcriptCursor])
+    const nextIndex = clamp((cursorIndex >= 0 ? cursorIndex : 0) + delta, 0, transcriptCards.length - 1)
+    setTranscriptCursorKey(transcriptCards[nextIndex].key)
+    if (nextIndex < topIndex || nextIndex > visibleTranscriptEndIndex) {
+      const nextStart = windowStartForCursor(transcriptCards, nextIndex, transcriptViewportRows, expandedCardKeys)
+      setTranscriptTopKey(transcriptCards[nextStart].key)
+    }
+    const atTail = nextIndex === transcriptCards.length - 1
+    setFollowTail(atTail)
+    if (atTail) setPendingNewCount(0)
+  }, [
+    cursorIndex,
+    expandedCardKeys,
+    topIndex,
+    transcriptCards,
+    transcriptViewportRows,
+    visibleTranscriptEndIndex,
+  ])
 
   const toggleExpansion = useCallback(() => {
-    const card = transcriptCards[transcriptCursor]
+    const card = cursorIndex >= 0 ? transcriptCards[cursorIndex] : null
     if (!card) return
-    setExpandedCardKey((current) => current === card.key ? null : card.key)
-  }, [transcriptCards, transcriptCursor])
+    setExpandedCardKeys((current) => {
+      const next = new Set(current)
+      if (next.has(card.key)) next.delete(card.key)
+      else next.add(card.key)
+      return next
+    })
+  }, [cursorIndex, transcriptCards])
 
   const refreshSessions = useCallback(async (
     nextProvider: ProviderSelection,
@@ -393,6 +567,28 @@ export default function App() {
       if (requestId === sessionRequestRef.current) {
         setLoadingSessions(false)
         setRefreshingSessions(false)
+      }
+    }
+  }, [])
+
+  const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
+    const requestId = ++detailRequestRef.current
+    if (foreground) {
+      setLoadingDetail(true)
+    }
+    setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
+
+    try {
+      const detail = await readTuiSessionDetail(session)
+      if (requestId !== detailRequestRef.current) return
+      setSessionDetail(detail)
+    } catch (err) {
+      if (requestId !== detailRequestRef.current) return
+      setSessionDetail(null)
+      setError(err instanceof Error ? `Failed to load session detail: ${err.message}` : 'Failed to load session detail')
+    } finally {
+      if (requestId === detailRequestRef.current && foreground) {
+        setLoadingDetail(false)
       }
     }
   }, [])
@@ -450,32 +646,15 @@ export default function App() {
   }, [themeMode])
 
   useEffect(() => {
-    if (!selectedSession) {
+    if (!selectedSessionTarget) {
       setSessionDetail(null)
       setLoadingDetail(false)
       return
     }
 
-    const requestId = ++detailRequestRef.current
-    setLoadingDetail(true)
-    setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
-
-    void (async () => {
-      try {
-        const detail = await readTuiSessionDetail(selectedSession)
-        if (requestId !== detailRequestRef.current) return
-        setSessionDetail(detail)
-      } catch (err) {
-        if (requestId !== detailRequestRef.current) return
-        setSessionDetail(null)
-        setError(err instanceof Error ? `Failed to load session detail: ${err.message}` : 'Failed to load session detail')
-      } finally {
-        if (requestId === detailRequestRef.current) {
-          setLoadingDetail(false)
-        }
-      }
-    })()
-  }, [selectedSession])
+    setSessionDetail(null)
+    void refreshSelectedSessionDetail(selectedSessionTarget, true)
+  }, [refreshSelectedSessionDetail, selectedSessionIdentity, selectedSessionTarget])
 
   useEffect(() => {
     if (selectedSession || sessions.length === 0) return
@@ -483,9 +662,14 @@ export default function App() {
   }, [selectedSession, sessions])
 
   useEffect(() => {
-    setTranscriptOffset(0)
-    setTranscriptCursor(0)
-    setExpandedCardKey(null)
+    setTranscriptTopKey(null)
+    setTranscriptCursorKey(null)
+    setExpandedCardKeys(new Set())
+    setFollowTail(true)
+    setPendingNewCount(0)
+    setSearchMode(false)
+    setSearchQuery('')
+    setSearchMatchIndex(0)
   }, [selectedSessionKey])
 
   useEffect(() => {
@@ -493,13 +677,27 @@ export default function App() {
     const interval = setInterval(() => {
       if (!active || loadingSessions || providerSwitchRef.current) return
       void refreshSessions(provider, true, false)
-    }, 5000)
+    }, SESSION_REFRESH_MS)
 
     return () => {
       active = false
       clearInterval(interval)
     }
   }, [loadingSessions, provider, refreshSessions])
+
+  useEffect(() => {
+    if (!selectedSessionTarget) return undefined
+    let active = true
+    const interval = setInterval(() => {
+      if (!active || providerSwitchRef.current) return
+      void refreshSelectedSessionDetail(selectedSessionTarget, false)
+    }, DETAIL_REFRESH_MS)
+
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [refreshSelectedSessionDetail, selectedSessionIdentity, selectedSessionTarget])
 
   const openProviderMenu = useCallback(() => {
     setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
@@ -522,6 +720,12 @@ export default function App() {
     setProvider(nextProvider)
     setSessionDetail(null)
     setSelectedSessionKey(null)
+    setSidebarTopKey(null)
+    setTranscriptTopKey(null)
+    setTranscriptCursorKey(null)
+    setExpandedCardKeys(new Set())
+    setFollowTail(true)
+    setPendingNewCount(0)
     setError(null)
 
     try {
@@ -544,7 +748,166 @@ export default function App() {
     }, 25)
   }, [exit])
 
+  useEffect(() => {
+    setExpandedCardKeys((current) => {
+      const allowed = new Set(transcriptCards.map((card) => card.key))
+      let changed = false
+      const next = new Set<string>()
+      for (const key of current) {
+        if (allowed.has(key)) next.add(key)
+        else changed = true
+      }
+      return changed ? next : current
+    })
+  }, [transcriptCards])
+
+  useEffect(() => {
+    if (sidebarEntries.length === 0) {
+      setSidebarTopKey(null)
+      return
+    }
+
+    const selectedEntryIndex = Math.max(selectedSidebarEntryIndex, 0)
+    const visibleKeys = new Set(visibleSidebarEntries.map((entry) => entry.key))
+    const selectedEntryKey = sidebarEntries[selectedEntryIndex]?.key
+    if (!selectedEntryKey) return
+
+    if (!sidebarTopKey || !sidebarEntries.some((entry) => entry.key === sidebarTopKey)) {
+      setSidebarTopKey(sidebarEntries[selectedEntryIndex].key)
+      return
+    }
+
+    if (!visibleKeys.has(selectedEntryKey)) {
+      setSidebarTopKey(sidebarEntries[selectedEntryIndex].key)
+    }
+  }, [selectedSidebarEntryIndex, sidebarEntries, sidebarTopKey, visibleSidebarEntries])
+
+  useEffect(() => {
+    const currentKeys = transcriptCards.map((card) => card.key)
+    const previous = previousTranscriptRef.current
+    const sameSession = previous.sessionKey === selectedSessionKey
+
+    if (currentKeys.length === 0) {
+      setTranscriptCursorKey(null)
+      setTranscriptTopKey(null)
+      setPendingNewCount(0)
+      previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
+      return
+    }
+
+    if (!sameSession) {
+      const lastIndex = transcriptCards.length - 1
+      const nextStart = windowStartForCursor(transcriptCards, lastIndex, transcriptViewportRows, expandedCardKeys)
+      setTranscriptCursorKey(transcriptCards[lastIndex].key)
+      setTranscriptTopKey(transcriptCards[nextStart].key)
+      setFollowTail(true)
+      setPendingNewCount(0)
+      previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
+      return
+    }
+
+    if (followTail) {
+      const lastIndex = transcriptCards.length - 1
+      const nextStart = windowStartForCursor(transcriptCards, lastIndex, transcriptViewportRows, expandedCardKeys)
+      setTranscriptCursorKey(transcriptCards[lastIndex].key)
+      setTranscriptTopKey(transcriptCards[nextStart].key)
+      setPendingNewCount(0)
+      previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
+      return
+    }
+
+    const previousLastKey = previous.keys.at(-1) ?? null
+    const previousLastIndex = previousLastKey ? currentKeys.indexOf(previousLastKey) : -1
+    const appendedCount = previousLastIndex >= 0
+      ? currentKeys.length - previousLastIndex - 1
+      : 0
+
+    if (appendedCount > 0) {
+      setPendingNewCount(appendedCount)
+    }
+
+    setTranscriptCursorKey((current) => {
+      if (current && currentKeys.includes(current)) return current
+      return transcriptCards[Math.max(cursorIndex, 0)]?.key ?? transcriptCards[0].key
+    })
+    setTranscriptTopKey((current) => {
+      if (current && currentKeys.includes(current)) return current
+      const nextStart = windowStartForCursor(transcriptCards, Math.max(cursorIndex, 0), transcriptViewportRows, expandedCardKeys)
+      return transcriptCards[nextStart]?.key ?? transcriptCards[0].key
+    })
+    previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
+  }, [
+    cursorIndex,
+    expandedCardKeys,
+    followTail,
+    selectedSessionKey,
+    transcriptCards,
+    transcriptViewportRows,
+  ])
+
+  useEffect(() => {
+    if (transcriptCards.length === 0 || cursorIndex < 0) return
+    if (followTail) {
+      const lastIndex = transcriptCards.length - 1
+      const nextStart = windowStartForCursor(transcriptCards, lastIndex, transcriptViewportRows, expandedCardKeys)
+      setTranscriptCursorKey(transcriptCards[lastIndex].key)
+      setTranscriptTopKey(transcriptCards[nextStart].key)
+      return
+    }
+
+    if (cursorIndex < topIndex || cursorIndex > visibleTranscriptEndIndex) {
+      const nextStart = windowStartForCursor(transcriptCards, cursorIndex, transcriptViewportRows, expandedCardKeys)
+      setTranscriptTopKey(transcriptCards[nextStart].key)
+    }
+  }, [
+    cursorIndex,
+    expandedCardKeys,
+    followTail,
+    topIndex,
+    transcriptCards,
+    transcriptViewportRows,
+    visibleTranscriptEndIndex,
+  ])
+
+  useEffect(() => {
+    if (searchMatches.length === 0) {
+      setSearchMatchIndex(0)
+      return
+    }
+    setSearchMatchIndex((current) => clamp(current, 0, searchMatches.length - 1))
+  }, [searchMatches.length])
+
+  const jumpToSearchMatch = useCallback((matchOffset: number) => {
+    if (searchMatches.length === 0) return
+    const nextMatchIndex = (searchMatchIndex + matchOffset + searchMatches.length) % searchMatches.length
+    setSearchMatchIndex(nextMatchIndex)
+    jumpToTranscriptIndex(searchMatches[nextMatchIndex])
+  }, [jumpToTranscriptIndex, searchMatchIndex, searchMatches])
+
   useInput((input, key) => {
+    if (searchMode) {
+      if (key.escape) {
+        setSearchMode(false)
+        return
+      }
+
+      if (key.return) {
+        if (searchMatches.length > 0) jumpToTranscriptIndex(searchMatches[searchMatchIndex] ?? 0)
+        setSearchMode(false)
+        return
+      }
+
+      if (key.backspace || key.delete) {
+        setSearchQuery((current) => current.slice(0, -1))
+        return
+      }
+
+      if (input && !key.ctrl && !key.meta && !key.tab && input >= ' ') {
+        setSearchQuery((current) => current.length >= SEARCH_MAX_CHARS ? current : `${current}${input}`)
+      }
+      return
+    }
+
     if (providerMenuOpen) {
       if (input === 'q' || (key.ctrl && input === 'c')) {
         quit()
@@ -624,30 +987,47 @@ export default function App() {
     }
 
     if (focusedPane === 'messages' && input === 'g') {
-      setTranscriptCursor(0)
-      setTranscriptOffset(0)
+      jumpToTranscriptIndex(0)
       return
     }
 
     if (focusedPane === 'messages' && input === 'G') {
-      const last = Math.max(transcriptCards.length - 1, 0)
-      setTranscriptCursor(last)
-      setTranscriptOffset(transcriptMaxOffset)
+      jumpToTranscriptTail()
       return
     }
 
     if (focusedPane === 'messages' && key.pageDown) {
-      moveCursor(transcriptCardBudget)
+      moveCursor(Math.max(visibleTranscriptCards.length - 1, 1))
       return
     }
 
     if (focusedPane === 'messages' && key.pageUp) {
-      moveCursor(-transcriptCardBudget)
+      moveCursor(-Math.max(visibleTranscriptCards.length - 1, 1))
       return
     }
 
     if (focusedPane === 'messages' && (input === 'e' || key.return)) {
       toggleExpansion()
+      return
+    }
+
+    if (focusedPane === 'messages' && input === 'f') {
+      jumpToTranscriptTail()
+      return
+    }
+
+    if (focusedPane === 'messages' && input === '/') {
+      setSearchMode(true)
+      return
+    }
+
+    if (focusedPane === 'messages' && input === 'n' && searchMatches.length > 0) {
+      jumpToSearchMatch(1)
+      return
+    }
+
+    if (focusedPane === 'messages' && input === 'N' && searchMatches.length > 0) {
+      jumpToSearchMatch(-1)
       return
     }
 
@@ -663,38 +1043,9 @@ export default function App() {
 
     if (input === 'r') {
       void refreshSessions(provider)
+      if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
     }
   }, { isActive: true })
-
-  const sidebarEntries = useMemo(() => buildSidebarEntries(sessions), [sessions])
-
-  const visibleSidebarEntries = useMemo(() => (
-    selectSidebarWindow(sidebarEntries, selectedIndex, sidebarRowBudget)
-  ), [selectedIndex, sidebarEntries, sidebarRowBudget])
-
-  const visibleSessionCount = visibleSidebarEntries.filter((e) => e.type === 'session').length
-
-  useEffect(() => {
-    setTranscriptOffset((current) => clamp(current, 0, transcriptMaxOffset))
-  }, [transcriptMaxOffset])
-
-  useEffect(() => {
-    setTranscriptCursor((current) => clamp(current, 0, Math.max(transcriptCards.length - 1, 0)))
-  }, [transcriptCards.length])
-
-  const visibleTranscriptCards = useMemo(() => (
-    transcriptCards.slice(transcriptOffset, transcriptOffset + transcriptCardBudget)
-  ), [transcriptCardBudget, transcriptCards, transcriptOffset])
-
-  const expandedLineCounts = useMemo<Map<string, number>>(() => {
-    if (!sessionDetail) return new Map()
-    return new Map(
-      visibleTranscriptCards.map((card) => [
-        card.key as string,
-        formatMessageExpanded(sessionDetail.threadedMessages, card.key as string).length,
-      ] as [string, number]),
-    )
-  }, [sessionDetail, visibleTranscriptCards])
 
   return (
     <Box flexDirection="column" paddingX={1} height={terminalRows} overflow="hidden" backgroundColor={theme.bg}>
@@ -793,9 +1144,9 @@ export default function App() {
             )}
             </Box>
             <Scrollbar
-              total={sessions.length}
-              visible={visibleSessionCount}
-              offset={selectedIndex >= 0 ? selectedIndex : 0}
+              total={sidebarEntries.length}
+              visible={visibleSidebarEntries.length}
+              offset={sidebarTopIndex}
               height={Math.max(sidebarRowBudget, 1)}
               trackColor={theme.surface3}
               thumbColor={sidebarAccent}
@@ -818,16 +1169,30 @@ export default function App() {
             {selectedSession ? (
               <>
                 {formatSessionMeta(selectedSession, sessionDetail?.info ?? null).map((line, index) => (
-                  <Text key={line} color={index === 0 ? theme.text : theme.muted}>
+                  <Text key={`${index}:${line}`} color={index === 0 ? theme.text : theme.muted}>
                     {fitText(line, messageInnerWidth - 2)}
                   </Text>
                 ))}
                 <Text color={theme.dim}>
                   window{' '}
                   <Text color={theme.cyan}>
-                    {transcriptCards.length === 0 ? 0 : transcriptOffset + 1}-{transcriptWindowEnd}
+                    {transcriptCards.length === 0 ? 0 : topIndex + 1}-{transcriptWindowEnd}
                   </Text>
                   /{transcriptCards.length}
+                  <Text color={followTail ? theme.green : theme.amber}>
+                    {followTail ? '  live' : '  reading'}
+                  </Text>
+                  {pendingNewCount > 0 ? (
+                    <Text color={theme.amber}>  +{pendingNewCount} new</Text>
+                  ) : null}
+                  {normalizedSearchQuery ? (
+                    <Text color={theme.pink}>
+                      {'  '}
+                      /{fitText(searchQuery, 18).trim()}
+                      {' '}
+                      {searchMatches.length === 0 ? '0' : `${searchMatchIndex + 1}/${searchMatches.length}`}
+                    </Text>
+                  ) : null}
                 </Text>
               </>
             ) : (
@@ -847,21 +1212,19 @@ export default function App() {
               <Text color={theme.dim}>No messages.</Text>
             ) : (
               visibleTranscriptCards.map((card, windowIndex) => {
-                const absoluteIndex = transcriptOffset + windowIndex
-                const hasCursor = absoluteIndex === transcriptCursor && focusedPane === 'messages'
-                const isExpanded = card.key === expandedCardKey
-                const expandedLines = isExpanded && sessionDetail
-                  ? formatMessageExpanded(sessionDetail.threadedMessages, card.key)
-                  : null
+                const absoluteIndex = topIndex + windowIndex
+                const hasCursor = card.key === transcriptCursorKey && focusedPane === 'messages'
+                const isExpanded = expandedCardKeys.has(card.key)
+                const expandedLines = isExpanded ? card.expandedLines : null
                 const accent = transcriptAccent(card.role, card.provider ?? provider)
                 const timestamp = card.timestamp ?? ''
-                const rawBodyLines = card.lines
-                  .slice(0, MESSAGE_ENTRY_HEIGHT - 1)
-                  .filter((ln) => ln.text.length > 0)
+                const rawBodyLines = previewBodyLines(card)
                 const groups = groupBodyLines(rawBodyLines)
                 const bodyLineWidth = Math.max(transcriptLineWidth - 2, 20)
-                const expandedCount = expandedLineCounts.get(card.key) ?? 0
-                const hiddenLines = Math.max(expandedCount - rawBodyLines.length, 0)
+                const hiddenLines = Math.max(card.expandedLines.length - rawBodyLines.length, 0)
+                const isSearchHit = normalizedSearchQuery.length > 0
+                  && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
+                const isLatest = absoluteIndex === transcriptCards.length - 1
 
                 return (
                   <Box key={card.key} flexDirection="column" marginBottom={1} overflow="hidden">
@@ -869,7 +1232,9 @@ export default function App() {
                       <Text color={accent}>{hasCursor ? '▶ ' : '● '}</Text>
                       <Text bold color={accent}>{card.label}</Text>
                       {timestamp ? <Text color={theme.dim}>  {timestamp}</Text> : null}
-                      {isExpanded ? <Text color={theme.dim}>  — e collapse</Text> : null}
+                      {isLatest ? <Text color={theme.green}>  latest</Text> : null}
+                      {isSearchHit ? <Text color={theme.pink}>  match</Text> : null}
+                      {isExpanded ? <Text color={theme.dim}>  e collapse</Text> : null}
                     </Box>
                     <Box flexDirection="column" marginLeft={2}>
                       {isExpanded && expandedLines && expandedLines.length > 0 ? (
@@ -1022,9 +1387,9 @@ export default function App() {
             </Box>
             <Scrollbar
               total={transcriptCards.length}
-              visible={transcriptCardBudget}
-              offset={transcriptOffset}
-              height={Math.max(contentHeight - MESSAGE_HEADER_HEIGHT - 1, 1)}
+              visible={visibleTranscriptCards.length}
+              offset={topIndex}
+              height={Math.max(transcriptViewportRows, 1)}
               trackColor={theme.surface3}
               thumbColor={focusedPane === 'messages' ? theme.cyan : theme.dim}
             />
@@ -1033,24 +1398,38 @@ export default function App() {
       </Box>
 
       <Box marginTop={1}>
-        <Text color={theme.dim}>
-          TAB
-          <Text color={theme.muted}> focus  </Text>
-          J/K
-          <Text color={theme.muted}> move  </Text>
-          P
-          <Text color={theme.muted}> provider  </Text>
-          T
-          <Text color={theme.muted}> theme  </Text>
-          G
-          <Text color={theme.muted}> end  </Text>
-          E
-          <Text color={theme.muted}> expand  </Text>
-          R
-          <Text color={theme.muted}> refresh  </Text>
-          Q
-          <Text color={theme.muted}> quit</Text>
-        </Text>
+        {searchMode ? (
+          <Text color={theme.dim}>
+            SEARCH
+            <Text color={theme.pink}> /{searchQuery || ''}</Text>
+            <Text color={theme.muted}>
+              {'  '}
+              {searchMatches.length === 0 ? 'no matches' : `${searchMatchIndex + 1}/${searchMatches.length} matches`}
+              {'  enter jump  esc close'}
+            </Text>
+          </Text>
+        ) : (
+          <Text color={theme.dim}>
+            TAB
+            <Text color={theme.muted}> focus  </Text>
+            J/K
+            <Text color={theme.muted}> move  </Text>
+            /
+            <Text color={theme.muted}> search  </Text>
+            N
+            <Text color={theme.muted}> next  </Text>
+            F
+            <Text color={theme.muted}> live  </Text>
+            E
+            <Text color={theme.muted}> expand  </Text>
+            P
+            <Text color={theme.muted}> provider  </Text>
+            R
+            <Text color={theme.muted}> refresh  </Text>
+            Q
+            <Text color={theme.muted}> quit</Text>
+          </Text>
+        )}
       </Box>
     </Box>
   )

@@ -241,6 +241,8 @@ export type TuiTranscriptCard = {
   label: string
   timestamp?: string
   lines: TuiTranscriptCardLine[]
+  expandedLines: TuiTranscriptCardLine[]
+  searchText: string
 }
 
 function compactCardLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCardLine[] {
@@ -264,6 +266,9 @@ export function formatTranscriptCards(messages: ThreadedMessage[]): TuiTranscrip
     const label = message.role === 'assistant'
       ? getAssistantLabel(message.provider)
       : message.role.toUpperCase()
+    const expandedLines = message.blocks
+      .flatMap(formatBlockExpanded)
+      .filter((entry) => entry.text.trim().length > 0)
 
     return {
       key: message.uuid,
@@ -272,6 +277,8 @@ export function formatTranscriptCards(messages: ThreadedMessage[]): TuiTranscrip
       label,
       timestamp: message.timestamp ? formatTimestamp(message.timestamp) : undefined,
       lines: compactCardLines(message.blocks.flatMap(formatBlock)),
+      expandedLines,
+      searchText: expandedLines.map((entry) => entry.text).join('\n'),
     }
   })
 }

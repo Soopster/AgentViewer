@@ -2,6 +2,7 @@ import { buildThreadedMessages, type ThreadedMessage } from '../threading'
 import { getConfiguredProvider, setConfiguredProvider } from '../providerState'
 import { getConfiguredTuiTheme, setConfiguredTuiTheme } from '../tuiState'
 import {
+  type SessionMessage,
   listViewSessionMessages,
   listViewSessions,
   readViewSessionInfo,
@@ -14,6 +15,7 @@ const DEFAULT_MESSAGE_LIMIT = 400
 
 export type TuiSessionDetail = {
   info: SessionInfo | null
+  rawMessages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
 }
 
@@ -54,6 +56,7 @@ export async function readTuiSessionDetail(session: Session): Promise<TuiSession
 
   return {
     info,
+    rawMessages: messages,
     threadedMessages: buildThreadedMessages(messages),
   }
 }
