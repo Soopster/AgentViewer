@@ -299,3 +299,63 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
 
   return out
 }
+
+// ── Incremental threading ─────────────────────────────────────────────────────
+
+export type IncrementalThreadingCache = {
+  messages: SessionMessage[]
+  threaded: ThreadedMessage[]
+}
+
+/**
+ * Incremental variant of buildThreadedMessages for the common append-only case.
+ *
+ * During live polling, the existing prefix of `messages` never changes — only
+ * new messages are appended. When the prefix is provably stable (same object
+ * references), this function reuses the already-computed threaded output for
+ * that prefix and only re-threads the suffix starting from the last non-plumbing
+ * message. That lookback is necessary because a freshly-arrived plumbing turn
+ * (tool_result) can complete a tool_use in the most recent assistant message.
+ *
+ * Returns null when the incremental path is unsafe, signalling the caller to
+ * fall back to a full buildThreadedMessages() call.
+ */
+export function buildThreadedMessagesIncremental(
+  messages: SessionMessage[],
+  cache: IncrementalThreadingCache,
+): ThreadedMessage[] | null {
+  const { messages: prevMessages, threaded: prevThreaded } = cache
+
+  // Only useful when messages grew
+  if (messages.length <= prevMessages.length || prevMessages.length === 0) return null
+
+  // Verify that the existing prefix is identical (same object references)
+  for (let i = 0; i < prevMessages.length; i++) {
+    if (messages[i] !== prevMessages[i]) return null
+  }
+
+  // Find the last non-plumbing message in the previous set — this is our
+  // reprocess boundary. Everything before it is stable.
+  let reprocessFromIndex = -1
+  for (let i = prevMessages.length - 1; i >= 0; i--) {
+    if (!isPlumbingTurn(prevMessages[i])) {
+      reprocessFromIndex = i
+      break
+    }
+  }
+
+  // Need at least one stable message before the boundary to benefit
+  if (reprocessFromIndex <= 0) return null
+
+  // Re-thread from the boundary message through the new tail
+  const partialThreaded = buildThreadedMessages(messages.slice(reprocessFromIndex))
+
+  // Drop the boundary message from the cached threaded output and splice in
+  // the freshly-built partial result (which now includes any new tool results)
+  const boundaryMsg = prevMessages[reprocessFromIndex]
+  const stablePrefix = prevThreaded.filter(
+    t => !(t.uuid === boundaryMsg.uuid && (t.provider ?? null) === (boundaryMsg.provider ?? null)),
+  )
+
+  return [...stablePrefix, ...partialThreaded]
+}

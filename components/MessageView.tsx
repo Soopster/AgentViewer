@@ -12,7 +12,7 @@ import type {
   ToolUseBlock,
   ContentBlock,
 } from '@/lib/types'
-import { buildThreadedMessages, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
+import { buildThreadedMessages, buildThreadedMessagesIncremental, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
@@ -1045,8 +1045,10 @@ export default function MessageView({ messages, loading, session, projectView, o
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const rowHeightsRef = useRef<Map<string, number>>(new Map())
   const threadedCacheRef = useRef<Map<string, ThreadedMessage>>(new Map())
+  const prevThreadingRef = useRef<IncrementalThreadingCache | null>(null)
   const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
   const measurementFrameRef = useRef<number | null>(null)
+  const scrollRafRef = useRef<number | null>(null)
   const timelineRowsRef = useRef<TimelineRow[]>([])
   const initialScrollDoneRef = useRef(false)
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
@@ -1111,6 +1113,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     setTimelineViewportHeight(0)
     rowHeightsRef.current.clear()
     threadedCacheRef.current.clear()
+    prevThreadingRef.current = null
     pendingRowMeasurementsRef.current.clear()
     if (measurementFrameRef.current != null) {
       window.cancelAnimationFrame(measurementFrameRef.current)
@@ -1125,6 +1128,9 @@ export default function MessageView({ messages, loading, session, projectView, o
   useEffect(() => () => {
     if (measurementFrameRef.current != null) {
       window.cancelAnimationFrame(measurementFrameRef.current)
+    }
+    if (scrollRafRef.current != null) {
+      window.cancelAnimationFrame(scrollRafRef.current)
     }
   }, [])
 
@@ -1168,11 +1174,15 @@ export default function MessageView({ messages, loading, session, projectView, o
   }, [])
 
   const handleTimelineScroll = useCallback(() => {
-    const node = timelineRef.current
-    if (!node) return
-    setTimelineScrollTop(node.scrollTop)
-    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
-    setAutoFollow(distanceFromBottom < 72)
+    if (scrollRafRef.current != null) return
+    scrollRafRef.current = window.requestAnimationFrame(() => {
+      scrollRafRef.current = null
+      const node = timelineRef.current
+      if (!node) return
+      setTimelineScrollTop(node.scrollTop)
+      const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
+      setAutoFollow(distanceFromBottom < 72)
+    })
   }, [])
 
   useEffect(() => {
@@ -1560,13 +1570,16 @@ export default function MessageView({ messages, loading, session, projectView, o
   }, [diagnosticSections.length, diagnosticsLoading, selectedModelValue, session, showDiagnostics])
 
   const threaded = useMemo(() => {
-    const nextMessages = buildThreadedMessages(messages)
+    const prev = prevThreadingRef.current
+    const nextMessages = (prev ? buildThreadedMessagesIncremental(messages, prev) : null)
+      ?? buildThreadedMessages(messages)
     const previous = threadedCacheRef.current
     const stabilized = nextMessages.map((message) => {
       const cached = previous.get(threadedMessageKey(message))
       return cached && threadedMessageEqual(cached, message) ? cached : message
     })
     threadedCacheRef.current = new Map(stabilized.map((message) => [threadedMessageKey(message), message]))
+    prevThreadingRef.current = { messages, threaded: stabilized }
     return stabilized
   }, [messages])
   const isProject = !!projectView
@@ -1598,33 +1611,34 @@ export default function MessageView({ messages, loading, session, projectView, o
         }],
       }
     : null
-  const rewindCandidates = (sessionCapabilities?.fileRewind ? messages : [])
-    .filter((msg) =>
-      msg.type === 'user'
-      && extractTextContent(msg.message.content).trim() !== ''
-      && !extractTextContent(msg.message.content).trimStart().startsWith('<task-notification>')
-    )
-    .map((msg) => ({
-      uuid: msg.uuid,
-      content: extractTextContent(msg.message.content),
-      timestamp: msg.timestamp,
-    }))
+  const rewindCandidates = useMemo(() =>
+    (sessionCapabilities?.fileRewind ? messages : [])
+      .filter((msg) =>
+        msg.type === 'user'
+        && extractTextContent(msg.message.content).trim() !== ''
+        && !extractTextContent(msg.message.content).trimStart().startsWith('<task-notification>')
+      )
+      .map((msg) => ({
+        uuid: msg.uuid,
+        content: extractTextContent(msg.message.content),
+        timestamp: msg.timestamp,
+      }))
+  , [messages, sessionCapabilities?.fileRewind])
   const selectedRewindTarget = rewindCandidates.find((candidate) => candidate.uuid === rewindTargetId) ?? null
-  const rollbackCandidates = sessionCapabilities?.rollback
-    ? (() => {
-        const turns = new Map<string, { turnId: string; preview: string }>()
-        for (const msg of messages) {
-          if (!msg.turnId || turns.has(msg.turnId)) continue
-          const preview = typeof msg.message.content === 'string'
-            ? msg.message.content.replace(/\s+/g, ' ').trim().slice(0, 120)
-            : msg.type === 'assistant'
-            ? 'Assistant output'
-            : 'Turn'
-          turns.set(msg.turnId, { turnId: msg.turnId, preview: preview || msg.turnId })
-        }
-        return Array.from(turns.values())
-      })()
-    : []
+  const rollbackCandidates = useMemo(() => {
+    if (!sessionCapabilities?.rollback) return []
+    const turns = new Map<string, { turnId: string; preview: string }>()
+    for (const msg of messages) {
+      if (!msg.turnId || turns.has(msg.turnId)) continue
+      const preview = typeof msg.message.content === 'string'
+        ? msg.message.content.replace(/\s+/g, ' ').trim().slice(0, 120)
+        : msg.type === 'assistant'
+        ? 'Assistant output'
+        : 'Turn'
+      turns.set(msg.turnId, { turnId: msg.turnId, preview: preview || msg.turnId })
+    }
+    return Array.from(turns.values())
+  }, [messages, sessionCapabilities?.rollback])
   const timelineRows = useMemo<TimelineRow[]>(() => {
     const rows: TimelineRow[] = threaded.map((msg) => ({
       key: `persisted:${threadedMessageKey(msg)}`,
