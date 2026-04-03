@@ -1213,7 +1213,8 @@ export default function App() {
             ) : (
               visibleTranscriptCards.map((card, windowIndex) => {
                 const absoluteIndex = topIndex + windowIndex
-                const hasCursor = card.key === transcriptCursorKey && focusedPane === 'messages'
+                const isSelected = card.key === transcriptCursorKey
+                const hasCursor = isSelected && focusedPane === 'messages'
                 const isExpanded = expandedCardKeys.has(card.key)
                 const expandedLines = isExpanded ? card.expandedLines : null
                 const accent = transcriptAccent(card.role, card.provider ?? provider)
@@ -1225,160 +1226,194 @@ export default function App() {
                 const isSearchHit = normalizedSearchQuery.length > 0
                   && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
                 const isLatest = absoluteIndex === transcriptCards.length - 1
+                const cardShellBg = hasCursor
+                  ? theme.surface2
+                  : isSelected
+                  ? theme.surface2
+                  : undefined
+                const headerBg = hasCursor
+                  ? theme.surface3
+                  : isSelected
+                  ? theme.surface3
+                  : undefined
+                const bodyBg = isSelected ? cardShellBg : undefined
+                const railColor = hasCursor
+                  ? accent
+                  : isSelected
+                  ? theme.border2
+                  : theme.surface2
+                const marker = hasCursor ? '▶ ' : isSelected ? '▸ ' : '● '
+                const timestampColor = hasCursor
+                  ? theme.muted
+                  : isSelected
+                  ? theme.text
+                  : theme.dim
 
                 return (
-                  <Box key={card.key} flexDirection="column" marginBottom={1} overflow="hidden">
-                    <Box>
-                      <Text color={accent}>{hasCursor ? '▶ ' : '● '}</Text>
-                      <Text bold color={accent}>{card.label}</Text>
-                      {timestamp ? <Text color={theme.dim}>  {timestamp}</Text> : null}
-                      {isLatest ? <Text color={theme.green}>  latest</Text> : null}
-                      {isSearchHit ? <Text color={theme.pink}>  match</Text> : null}
-                      {isExpanded ? <Text color={theme.dim}>  e collapse</Text> : null}
+                  <Box
+                    key={card.key}
+                    flexDirection="row"
+                    marginBottom={1}
+                    overflow="hidden"
+                    backgroundColor={cardShellBg}
+                    paddingX={isSelected ? 1 : 0}
+                  >
+                    <Box width={2} justifyContent="flexStart">
+                      <Text color={railColor}>{isSelected ? '▍' : ' '}</Text>
                     </Box>
-                    <Box flexDirection="column" marginLeft={2}>
-                      {isExpanded && expandedLines && expandedLines.length > 0 ? (
-                        expandedLines.map((ln, lnIndex) => {
-                          if (ln.tone === 'tool') {
-                            const tm = ln.text.match(/^tool (\S+)(?:: (.*))?$/)
-                            const tn = (tm?.[1] ?? 'TOOL').toUpperCase()
-                            const tt = tm?.[2] ?? ''
+                    <Box flexGrow={1} flexDirection="column">
+                      <Box backgroundColor={headerBg}>
+                        <Text color={isSelected ? accent : theme.muted}>{marker}</Text>
+                        <Text bold color={accent}>{card.label}</Text>
+                        {timestamp ? <Text color={timestampColor}>  {timestamp}</Text> : null}
+                        {isLatest ? <Text color={theme.green}>  latest</Text> : null}
+                        {isSearchHit ? <Text color={theme.pink}>  match</Text> : null}
+                        {isExpanded ? <Text color={theme.dim}>  e collapse</Text> : null}
+                      </Box>
+                      <Box flexDirection="column" marginLeft={2} backgroundColor={bodyBg}>
+                        {isExpanded && expandedLines && expandedLines.length > 0 ? (
+                          expandedLines.map((ln, lnIndex) => {
+                            if (ln.tone === 'tool') {
+                              const tm = ln.text.match(/^tool (\S+)(?:: (.*))?$/)
+                              const tn = (tm?.[1] ?? 'TOOL').toUpperCase()
+                              const tt = tm?.[2] ?? ''
+                              return (
+                                <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={theme.surface3} paddingX={1}>
+                                  <Text bold color={theme.cyan}>{tn}</Text>
+                                  {tt ? <Text color={theme.muted}> {fitText(tt, Math.max(bodyLineWidth - tn.length - 2, 8))}</Text> : null}
+                                </Box>
+                              )
+                            }
                             return (
-                              <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={theme.surface3} paddingX={1}>
-                                <Text bold color={theme.cyan}>{tn}</Text>
-                                {tt ? <Text color={theme.muted}> {fitText(tt, Math.max(bodyLineWidth - tn.length - 2, 8))}</Text> : null}
+                              <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={1}>
+                                <Text color={transcriptColor(ln)}>
+                                  {fitText(ln.text, bodyLineWidth - 2)}
+                                </Text>
                               </Box>
                             )
-                          }
-                          return (
-                            <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={1}>
-                              <Text color={transcriptColor(ln)}>
-                                {fitText(ln.text, bodyLineWidth - 2)}
-                              </Text>
-                            </Box>
-                          )
-                        })
-                      ) : (
-                        <>
-                        {groups.map((group, groupIndex) => {
-                          if (group.type === 'text') {
-                            return (
-                              <React.Fragment key={`${card.key}:t${groupIndex}`}>
-                                {group.lines.map((ln, lnIndex) => (
-                                  <Box key={`${card.key}:t${groupIndex}:${lnIndex}`}>
-                                    <Text color={transcriptColor(ln)}>
-                                      {fitText(ln.text, bodyLineWidth)}
-                                    </Text>
-                                  </Box>
-                                ))}
-                              </React.Fragment>
+                          })
+                        ) : (
+                          <>
+                          {groups.map((group, groupIndex) => {
+                            if (group.type === 'text') {
+                              return (
+                                <React.Fragment key={`${card.key}:t${groupIndex}`}>
+                                  {group.lines.map((ln, lnIndex) => (
+                                    <Box key={`${card.key}:t${groupIndex}:${lnIndex}`}>
+                                      <Text color={transcriptColor(ln)}>
+                                        {fitText(ln.text, bodyLineWidth)}
+                                      </Text>
+                                    </Box>
+                                  ))}
+                                </React.Fragment>
+                              )
+                            }
+
+                            const toolMatch = group.toolLine.text.match(/^tool (\S+)(?:: (.*))?$/)
+                            const toolName = toolMatch?.[1]?.toUpperCase() ?? 'TOOL'
+                            const toolTarget = toolMatch?.[2] ?? ''
+                            const resultLine = group.bodyLines.find(
+                              (ln) => ln.tone === 'result_ok' || ln.tone === 'result_error',
                             )
-                          }
+                            const contentLines = group.bodyLines.filter(
+                              (ln) => ln.tone !== 'result_ok' && ln.tone !== 'result_error',
+                            )
+                            const isError = resultLine?.tone === 'result_error'
+                            const statusColor = isError ? theme.red : theme.green
+                            const statusIcon = isError ? '✗' : '✓'
+                            const statusLabel = isError ? 'ERROR' : 'OK'
+                            const targetWidth = Math.max(bodyLineWidth - toolName.length - 2, 8)
 
-                          const toolMatch = group.toolLine.text.match(/^tool (\S+)(?:: (.*))?$/)
-                          const toolName = toolMatch?.[1]?.toUpperCase() ?? 'TOOL'
-                          const toolTarget = toolMatch?.[2] ?? ''
-                          const resultLine = group.bodyLines.find(
-                            (ln) => ln.tone === 'result_ok' || ln.tone === 'result_error',
-                          )
-                          const contentLines = group.bodyLines.filter(
-                            (ln) => ln.tone !== 'result_ok' && ln.tone !== 'result_error',
-                          )
-                          const isError = resultLine?.tone === 'result_error'
-                          const statusColor = isError ? theme.red : theme.green
-                          const statusIcon = isError ? '✗' : '✓'
-                          const statusLabel = isError ? 'ERROR' : 'OK'
-                          const targetWidth = Math.max(bodyLineWidth - toolName.length - 2, 8)
+                            if (toolName === 'FILECHANGE') {
+                              const pathLine = group.bodyLines[0]?.tone === 'diff_meta' ? group.bodyLines[0] : null
+                              const afterPath = pathLine ? group.bodyLines.slice(1) : group.bodyLines
+                              const diffContent = afterPath.filter((ln) => ln.tone !== 'dim')
+                              const pathText = pathLine?.text ?? ''
+                              const slashIdx = pathText.indexOf('/')
+                              const kind = slashIdx > 0 ? pathText.slice(0, slashIdx).trim() : 'change'
+                              const filePath = slashIdx >= 0 ? pathText.slice(slashIdx) : pathText
+                              const fileName = filePath.split('/').at(-1) ?? filePath
+                              const kindColor = kind === 'delete' ? theme.red : theme.green
+                              const fileNameWidth = Math.max(bodyLineWidth - kind.length - 16, 8)
+                              return (
+                                <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
+                                  <Box backgroundColor={theme.surface3} paddingX={1} justifyContent="space-between">
+                                    <Box>
+                                      <Text bold color={theme.cyan}>FILE CHANGE</Text>
+                                      {fileName ? (
+                                        <Text color={theme.text}>  {fitText(fileName, fileNameWidth)}</Text>
+                                      ) : null}
+                                    </Box>
+                                    <Text color={kindColor}>{kind || 'completed'} ▲</Text>
+                                  </Box>
+                                  {filePath ? (
+                                    <Box paddingX={1} backgroundColor={theme.diffMetaBg}>
+                                      <Text color={theme.dim}>{fitText(filePath, bodyLineWidth - 2)}</Text>
+                                    </Box>
+                                  ) : null}
+                                  {diffContent.map((ln, lnIndex) => (
+                                    <Box
+                                      key={`${card.key}:g${groupIndex}:d${lnIndex}`}
+                                      backgroundColor={transcriptBackground(ln, theme)}
+                                      paddingX={1}
+                                    >
+                                      <Text color={transcriptColor(ln)}>
+                                        {fitText(ln.text, bodyLineWidth - 2)}
+                                      </Text>
+                                    </Box>
+                                  ))}
+                                  <Box paddingX={1} backgroundColor={theme.diffAddBg}>
+                                    <Text color={theme.green}>✓ Applied {toolTarget}</Text>
+                                  </Box>
+                                </Box>
+                              )
+                            }
 
-                          if (toolName === 'FILECHANGE') {
-                            const pathLine = group.bodyLines[0]?.tone === 'diff_meta' ? group.bodyLines[0] : null
-                            const afterPath = pathLine ? group.bodyLines.slice(1) : group.bodyLines
-                            const diffContent = afterPath.filter((ln) => ln.tone !== 'dim')
-                            const pathText = pathLine?.text ?? ''
-                            const slashIdx = pathText.indexOf('/')
-                            const kind = slashIdx > 0 ? pathText.slice(0, slashIdx).trim() : 'change'
-                            const filePath = slashIdx >= 0 ? pathText.slice(slashIdx) : pathText
-                            const fileName = filePath.split('/').at(-1) ?? filePath
-                            const kindColor = kind === 'delete' ? theme.red : theme.green
-                            const fileNameWidth = Math.max(bodyLineWidth - kind.length - 16, 8)
                             return (
                               <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
-                                <Box backgroundColor={theme.surface3} paddingX={1} justifyContent="space-between">
-                                  <Box>
-                                    <Text bold color={theme.cyan}>FILE CHANGE</Text>
-                                    {fileName ? (
-                                      <Text color={theme.text}>  {fitText(fileName, fileNameWidth)}</Text>
-                                    ) : null}
-                                  </Box>
-                                  <Text color={kindColor}>{kind || 'completed'} ▲</Text>
+                                <Box backgroundColor={theme.surface3} paddingX={1}>
+                                  <Text bold color={theme.cyan}>{toolName}</Text>
+                                  {toolTarget ? (
+                                    <Text color={theme.muted}> {fitText(toolTarget, targetWidth)}</Text>
+                                  ) : null}
                                 </Box>
-                                {filePath ? (
-                                  <Box paddingX={1} backgroundColor={theme.diffMetaBg}>
-                                    <Text color={theme.dim}>{fitText(filePath, bodyLineWidth - 2)}</Text>
+                                {resultLine ? (
+                                  <Box
+                                    paddingX={1}
+                                    backgroundColor={isError ? theme.diffRemoveBg : theme.diffAddBg}
+                                  >
+                                    <Text bold color={statusColor}>{statusIcon} {statusLabel}</Text>
+                                    <Text color={theme.dim}>
+                                      {'  '}
+                                      {fitText(
+                                        resultLine.text.replace(/^result (?:ok|error): /, ''),
+                                        Math.max(bodyLineWidth - statusLabel.length - 6, 8),
+                                      )}
+                                    </Text>
                                   </Box>
                                 ) : null}
-                                {diffContent.map((ln, lnIndex) => (
+                                {contentLines.map((ln, lnIndex) => (
                                   <Box
-                                    key={`${card.key}:g${groupIndex}:d${lnIndex}`}
+                                    key={`${card.key}:g${groupIndex}:c${lnIndex}`}
                                     backgroundColor={transcriptBackground(ln, theme)}
                                     paddingX={1}
                                   >
                                     <Text color={transcriptColor(ln)}>
-                                      {fitText(ln.text, bodyLineWidth - 2)}
+                                      {fitText(ln.text, Math.max(bodyLineWidth - 2, 16))}
                                     </Text>
                                   </Box>
                                 ))}
-                                <Box paddingX={1} backgroundColor={theme.diffAddBg}>
-                                  <Text color={theme.green}>✓ Applied {toolTarget}</Text>
-                                </Box>
                               </Box>
                             )
-                          }
-
-                          return (
-                            <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
-                              <Box backgroundColor={theme.surface3} paddingX={1}>
-                                <Text bold color={theme.cyan}>{toolName}</Text>
-                                {toolTarget ? (
-                                  <Text color={theme.muted}> {fitText(toolTarget, targetWidth)}</Text>
-                                ) : null}
-                              </Box>
-                              {resultLine ? (
-                                <Box
-                                  paddingX={1}
-                                  backgroundColor={isError ? theme.diffRemoveBg : theme.diffAddBg}
-                                >
-                                  <Text bold color={statusColor}>{statusIcon} {statusLabel}</Text>
-                                  <Text color={theme.dim}>
-                                    {'  '}
-                                    {fitText(
-                                      resultLine.text.replace(/^result (?:ok|error): /, ''),
-                                      Math.max(bodyLineWidth - statusLabel.length - 6, 8),
-                                    )}
-                                  </Text>
-                                </Box>
-                              ) : null}
-                              {contentLines.map((ln, lnIndex) => (
-                                <Box
-                                  key={`${card.key}:g${groupIndex}:c${lnIndex}`}
-                                  backgroundColor={transcriptBackground(ln, theme)}
-                                  paddingX={1}
-                                >
-                                  <Text color={transcriptColor(ln)}>
-                                    {fitText(ln.text, Math.max(bodyLineWidth - 2, 16))}
-                                  </Text>
-                                </Box>
-                              ))}
+                          })}
+                          {hiddenLines > 0 && !isExpanded ? (
+                            <Box paddingX={1}>
+                              <Text color={theme.dim}>▼ {hiddenLines} more lines</Text>
                             </Box>
-                          )
-                        })}
-                        {hiddenLines > 0 && !isExpanded ? (
-                          <Box paddingX={1}>
-                            <Text color={theme.dim}>▼ {hiddenLines} more lines</Text>
-                          </Box>
-                        ) : null}
-                        </>
-                      )}
+                          ) : null}
+                          </>
+                        )}
+                      </Box>
                     </Box>
                   </Box>
                 )
