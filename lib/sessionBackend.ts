@@ -568,7 +568,6 @@ export async function listViewSessionMessages(sessionId: string, params: Message
   }
 
   const messages = await getSessionMessages(sessionId, {
-    ...params,
     includeSystemMessages: true,
   })
   return sliceMessages(sortMessagesChronologically(normalizeClaudeHistoryMessages(messages as unknown[])))
