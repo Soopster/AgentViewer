@@ -28,7 +28,7 @@ async function writeTuiState(update: Partial<TuiState>): Promise<void> {
 
 export async function getConfiguredTuiTheme(): Promise<TuiThemeMode> {
   const parsed = await readTuiState()
-  if (parsed.theme === 'lazygit') return 'lazygit'
+  if (parsed.theme === 'cyber' || parsed.theme === 'lazygit') return 'cyber'
   return parsed.theme === 'dark' ? 'dark' : 'light'
 }
 

@@ -79,6 +79,30 @@ function fitText(value: string, width: number): string {
   return value.padEnd(width, ' ')
 }
 
+function repeatChar(char: string, count: number): string {
+  return char.repeat(Math.max(count, 0))
+}
+
+function VerticalDivider({
+  height,
+  color,
+  backgroundColor,
+}: {
+  height: number
+  color: string
+  backgroundColor: string
+}): React.JSX.Element {
+  const ruleHeight = Math.max(Math.floor(height), 1)
+
+  return (
+    <Box width={1} height={ruleHeight} flexDirection="column" backgroundColor={backgroundColor} overflow="hidden">
+      {Array.from({ length: ruleHeight }, (_, index) => (
+        <Text key={`divider:${index}`} color={color}>|</Text>
+      ))}
+    </Box>
+  )
+}
+
 function timeAgo(value?: string | number): string {
   if (value == null) return ''
   const ms = Date.now() - new Date(value).getTime()
@@ -555,6 +579,14 @@ export default function App() {
   const theme = getThemePalette(themeMode)
   const densityState = densityConfig(density)
   const providerAccent = getProviderAccent(provider)
+  const showPaneBorders = themeMode !== 'light'
+  const paneBorderCols = showPaneBorders ? 2 : 0
+  const paneBorderRows = showPaneBorders ? 2 : 0
+  const paneBorderStyle = 'single'
+  const inactivePaneBorderColor = themeMode === 'light' ? theme.border : theme.border
+  const activePaneBorderColor = themeMode === 'light' ? theme.border2 : theme.border2
+  const railPaneBg = theme.bg
+  const messagePaneBg = theme.bg
   const showRail = (!focusMode && railVisible) || providerMenuOpen
   const effectiveFocus = !showRail ? 'messages' : focusedPane
   const sidebarAccent = effectiveFocus === 'sessions' ? theme.violet : theme.muted
@@ -568,17 +600,17 @@ export default function App() {
 
   const contentHeight = Math.max(terminalRows - globalHeaderHeight - FOOTER_HEIGHT, 12)
   const sidebarWidth = showRail ? clamp(Math.floor((terminalColumns - 2) * 0.24), RAIL_MIN_WIDTH, RAIL_MAX_WIDTH) : 0
-  const gutterWidth = showRail ? SIDEBAR_GUTTER_WIDTH : 0
+  const gutterWidth = showRail ? (themeMode === 'light' ? 1 : SIDEBAR_GUTTER_WIDTH) : 0
   const messagePaneWidth = Math.max(terminalColumns - 2 - sidebarWidth - gutterWidth, 48)
-  const sidebarInnerWidth = Math.max(sidebarWidth - 2, 28)
-  const messageInnerWidth = Math.max(messagePaneWidth - 2, 44)
+  const sidebarInnerWidth = Math.max(sidebarWidth - 2 - paneBorderCols, 28)
+  const messageInnerWidth = Math.max(messagePaneWidth - 2 - paneBorderCols, 44)
   const providerPanelHeight = providerMenuOpen ? PROVIDERS.length + 3 : 4
-  const sidebarRowBudget = Math.max(contentHeight - providerPanelHeight - 3, 6)
+  const sidebarRowBudget = Math.max(contentHeight - providerPanelHeight - 3 - paneBorderRows, 6)
   const sessionTitleWidth = Math.max(sidebarInnerWidth - 2, 18)
   const sessionMetaWidth = Math.max(sidebarInnerWidth - 2, 18)
   const transcriptLineWidth = Math.max(messageInnerWidth - 2, 24)
   const transcriptViewportRows = Math.max(
-    contentHeight - transcriptHeaderHeight - densityState.transcriptMarginTop - (error ? 1 : 0),
+    contentHeight - transcriptHeaderHeight - densityState.transcriptMarginTop - (error ? 1 : 0) - paneBorderRows,
     4,
   )
 
@@ -862,7 +894,7 @@ export default function App() {
     const nextTheme: TuiThemeMode = themeMode === 'light'
       ? 'dark'
       : themeMode === 'dark'
-      ? 'lazygit'
+      ? 'cyber'
       : 'light'
     setThemeMode(nextTheme)
     setActiveTheme(nextTheme)
@@ -1458,116 +1490,506 @@ export default function App() {
       <Box flexGrow={1} height={contentHeight} overflow="hidden" marginTop={densityState.mainMarginTop}>
         {showRail ? (
           <>
-            <Box width={sidebarWidth} flexDirection="column" overflow="hidden">
-              <Box flexDirection="column" backgroundColor={theme.surface} paddingX={1} paddingY={1} height={providerPanelHeight} overflow="hidden">
-                <Text bold color={theme.violet}>READER RAIL</Text>
-                {providerMenuOpen ? (
-                  PROVIDERS.map((item, index) => (
-                    <Text key={item} color={index === providerMenuIndex ? getProviderAccent(item) : theme.muted}>
-                      {index === providerMenuIndex ? '>' : ' '}
-                      {' '}
-                      {item.toUpperCase()}
-                    </Text>
-                  ))
-                ) : (
-                  <>
-                    <Text color={theme.muted}>provider <Text color={providerAccent}>{provider.toUpperCase()}</Text></Text>
-                    <Text color={theme.dim}>{projectCount} projects  {sessions.length} sessions</Text>
-                    <Text color={effectiveFocus === 'sessions' ? theme.violet : theme.cyan}>tab focus  h hide rail</Text>
-                  </>
-                )}
-              </Box>
-
-              <Box marginTop={1} backgroundColor={theme.surface} paddingX={1}>
-                <Text bold color={theme.text}>SESSIONS <Text color={theme.dim}>{sessions.length}</Text></Text>
-              </Box>
-
-              <Box flexGrow={1} flexDirection="row" marginTop={1} backgroundColor={theme.surface2} overflow="hidden">
-                <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
-                  {visibleSidebarEntries.length === 0 ? (
-                    <Text color={theme.dim}>{loadingSessions ? 'Loading sessions…' : 'No sessions found'}</Text>
+            {themeMode === 'light' ? (
+              <Box
+                width={sidebarWidth}
+                height={contentHeight}
+                flexDirection="column"
+                overflow="hidden"
+                backgroundColor={theme.surface}
+              >
+                <Box flexDirection="column" backgroundColor={theme.surface} paddingX={1} paddingY={1} height={providerPanelHeight} overflow="hidden">
+                  <Text bold color={theme.violet}>READER RAIL</Text>
+                  {providerMenuOpen ? (
+                    PROVIDERS.map((item, index) => (
+                      <Text key={item} color={index === providerMenuIndex ? getProviderAccent(item) : theme.muted}>
+                        {index === providerMenuIndex ? '>' : ' '}
+                        {' '}
+                        {item.toUpperCase()}
+                      </Text>
+                    ))
                   ) : (
-                    visibleSidebarEntries.map((entry) => {
-                      if (entry.type === 'project') {
-                        return (
-                          <Text key={entry.key} bold color={theme.dim}>
-                            {fitText(`${entry.projectName} ${entry.count}`, sidebarInnerWidth - 2)}
-                          </Text>
-                        )
-                      }
-
-                      const selected = entry.absoluteIndex === selectedIndex
-                      const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
-                      const activityTime = entry.session.lastModified ?? entry.session.createdAt
-                      const title = fitText(formatSessionTitle(entry.session), sessionTitleWidth)
-                      const meta = fitText(
-                        `${formatProviderLabel(entry.session.provider)} ${timeAgo(activityTime)} ${entry.session.sessionId.slice(-8)}`,
-                        sessionMetaWidth,
-                      )
-
-                      return (
-                        <Box
-                          key={entry.key}
-                          flexDirection="column"
-                          backgroundColor={selected ? theme.surface : theme.surface2}
-                          paddingX={1}
-                          overflow="hidden"
-                        >
-                          <Text color={selected ? theme.text : theme.muted}>{title}</Text>
-                          <Text color={selected ? sessionAccent : theme.dim}>{meta}</Text>
-                        </Box>
-                      )
-                    })
+                    <>
+                      <Text color={theme.muted}>provider <Text color={providerAccent}>{provider.toUpperCase()}</Text></Text>
+                      <Text color={theme.dim}>{projectCount} projects  {sessions.length} sessions</Text>
+                      <Text color={effectiveFocus === 'sessions' ? theme.violet : theme.cyan}>tab focus  h hide rail</Text>
+                    </>
                   )}
                 </Box>
-                <Scrollbar
-                  total={sidebarEntries.length}
-                  visible={visibleSidebarEntries.length}
-                  offset={sidebarTopIndex}
-                  height={Math.max(sidebarRowBudget, 1)}
-                  trackColor={theme.surface3}
-                  thumbColor={sidebarAccent}
-                />
+
+                <Box marginTop={1} backgroundColor={theme.surface} paddingX={1}>
+                  <Text bold color={theme.text}>SESSIONS <Text color={theme.dim}>{sessions.length}</Text></Text>
+                </Box>
+
+                <Box flexGrow={1} flexDirection="row" marginTop={1} backgroundColor={theme.surface2} overflow="hidden">
+                  <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
+                    {visibleSidebarEntries.length === 0 ? (
+                      <Text color={theme.dim}>{loadingSessions ? 'Loading sessions…' : 'No sessions found'}</Text>
+                    ) : (
+                      visibleSidebarEntries.map((entry) => {
+                        if (entry.type === 'project') {
+                          return (
+                            <Text key={entry.key} bold color={theme.dim}>
+                              {fitText(`${entry.projectName} ${entry.count}`, sidebarInnerWidth - 2)}
+                            </Text>
+                          )
+                        }
+
+                        const selected = entry.absoluteIndex === selectedIndex
+                        const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
+                        const activityTime = entry.session.lastModified ?? entry.session.createdAt
+                        const title = fitText(formatSessionTitle(entry.session), sessionTitleWidth)
+                        const meta = fitText(
+                          `${formatProviderLabel(entry.session.provider)} ${timeAgo(activityTime)} ${entry.session.sessionId.slice(-8)}`,
+                          sessionMetaWidth,
+                        )
+
+                        return (
+                          <Box
+                            key={entry.key}
+                            flexDirection="column"
+                            backgroundColor={selected ? theme.surface : theme.surface2}
+                            paddingX={1}
+                            overflow="hidden"
+                          >
+                            <Text color={selected ? theme.text : theme.muted}>{title}</Text>
+                            <Text color={selected ? sessionAccent : theme.dim}>{meta}</Text>
+                          </Box>
+                        )
+                      })
+                    )}
+                  </Box>
+                  <Scrollbar
+                    total={sidebarEntries.length}
+                    visible={visibleSidebarEntries.length}
+                    offset={sidebarTopIndex}
+                    height={Math.max(sidebarRowBudget, 1)}
+                    trackColor={theme.surface3}
+                    thumbColor={sidebarAccent}
+                  />
+                </Box>
               </Box>
-            </Box>
-            <Box width={gutterWidth} />
+            ) : (
+              <Box
+                width={sidebarWidth}
+                flexDirection="column"
+                overflow="hidden"
+                borderStyle={showPaneBorders ? paneBorderStyle : undefined}
+                borderColor={effectiveFocus === 'sessions' ? activePaneBorderColor : inactivePaneBorderColor}
+                backgroundColor={railPaneBg}
+              >
+                <Box flexDirection="column" backgroundColor={theme.surface} paddingX={1} paddingY={1} height={providerPanelHeight} overflow="hidden">
+                  <Text bold color={theme.violet}>READER RAIL</Text>
+                  {providerMenuOpen ? (
+                    PROVIDERS.map((item, index) => (
+                      <Text key={item} color={index === providerMenuIndex ? getProviderAccent(item) : theme.muted}>
+                        {index === providerMenuIndex ? '>' : ' '}
+                        {' '}
+                        {item.toUpperCase()}
+                      </Text>
+                    ))
+                  ) : (
+                    <>
+                      <Text color={theme.muted}>provider <Text color={providerAccent}>{provider.toUpperCase()}</Text></Text>
+                      <Text color={theme.dim}>{projectCount} projects  {sessions.length} sessions</Text>
+                      <Text color={effectiveFocus === 'sessions' ? theme.violet : theme.cyan}>tab focus  h hide rail</Text>
+                    </>
+                  )}
+                </Box>
+
+                <Box marginTop={1} backgroundColor={theme.surface} paddingX={1}>
+                  <Text bold color={theme.text}>SESSIONS <Text color={theme.dim}>{sessions.length}</Text></Text>
+                </Box>
+
+                <Box flexGrow={1} flexDirection="row" marginTop={1} backgroundColor={theme.surface2} overflow="hidden">
+                  <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
+                    {visibleSidebarEntries.length === 0 ? (
+                      <Text color={theme.dim}>{loadingSessions ? 'Loading sessions…' : 'No sessions found'}</Text>
+                    ) : (
+                      visibleSidebarEntries.map((entry) => {
+                        if (entry.type === 'project') {
+                          return (
+                            <Text key={entry.key} bold color={theme.dim}>
+                              {fitText(`${entry.projectName} ${entry.count}`, sidebarInnerWidth - 2)}
+                            </Text>
+                          )
+                        }
+
+                        const selected = entry.absoluteIndex === selectedIndex
+                        const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
+                        const activityTime = entry.session.lastModified ?? entry.session.createdAt
+                        const title = fitText(formatSessionTitle(entry.session), sessionTitleWidth)
+                        const meta = fitText(
+                          `${formatProviderLabel(entry.session.provider)} ${timeAgo(activityTime)} ${entry.session.sessionId.slice(-8)}`,
+                          sessionMetaWidth,
+                        )
+
+                        return (
+                          <Box
+                            key={entry.key}
+                            flexDirection="column"
+                            backgroundColor={selected ? theme.surface : theme.surface2}
+                            paddingX={1}
+                            overflow="hidden"
+                          >
+                            <Text color={selected ? theme.text : theme.muted}>{title}</Text>
+                            <Text color={selected ? sessionAccent : theme.dim}>{meta}</Text>
+                          </Box>
+                        )
+                      })
+                    )}
+                  </Box>
+                  <Scrollbar
+                    total={sidebarEntries.length}
+                    visible={visibleSidebarEntries.length}
+                    offset={sidebarTopIndex}
+                    height={Math.max(sidebarRowBudget, 1)}
+                    trackColor={theme.surface3}
+                    thumbColor={sidebarAccent}
+                  />
+                </Box>
+              </Box>
+            )}
+            {themeMode === 'light' ? (
+              <VerticalDivider
+                height={contentHeight}
+                color={inactivePaneBorderColor}
+                backgroundColor={theme.bg}
+              />
+            ) : (
+              <Box width={gutterWidth} />
+            )}
           </>
         ) : null}
 
-        <Box flexGrow={1} flexDirection="column" overflow="hidden">
-          {!focusMode ? (
-            <Box justifyContent="space-between" backgroundColor={theme.surface} paddingX={1} height={densityState.messageHeaderHeight} overflow="hidden">
-              {selectedSession ? (
-                <Text color={theme.text}>{fitText(readerTitle, Math.max(messageInnerWidth - 20, 16))}</Text>
-              ) : (
-                <Text color={theme.dim}>No session selected</Text>
-              )}
-              <Text>
-                <Text color={providerAccent}>{provider.toUpperCase()}</Text>
-                <Text color={theme.dim}>  </Text>
-                <Text color={theme.muted}>{transcriptCards.length} messages</Text>
-              </Text>
-            </Box>
-          ) : null}
+        {themeMode === 'light' ? (
+          <Box
+            width={messagePaneWidth}
+            height={contentHeight}
+            flexDirection="column"
+            overflow="hidden"
+            backgroundColor={theme.surface}
+          >
+            {!focusMode ? (
+              <Box justifyContent="space-between" backgroundColor={theme.surface} paddingX={1} height={densityState.messageHeaderHeight} overflow="hidden">
+                {selectedSession ? (
+                  <Text color={theme.text}>{fitText(readerTitle, Math.max(messageInnerWidth - 20, 16))}</Text>
+                ) : (
+                  <Text color={theme.dim}>No session selected</Text>
+                )}
+                <Text>
+                  <Text color={providerAccent}>{provider.toUpperCase()}</Text>
+                  <Text color={theme.dim}>  </Text>
+                  <Text color={theme.muted}>{transcriptCards.length} messages</Text>
+                </Text>
+              </Box>
+            ) : null}
 
+            <Box
+              flexGrow={1}
+              flexDirection="row"
+              marginTop={focusMode ? 0 : densityState.transcriptMarginTop}
+              backgroundColor={theme.surface2}
+              overflow="hidden"
+            >
+              <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
+                {error ? (
+                  <Text color={theme.red}>{fitText(error, messageInnerWidth - 2)}</Text>
+                ) : null}
+
+                {loadingDetail ? (
+                  <Text color={theme.dim}>Loading transcript…</Text>
+                ) : visibleTranscriptCards.length === 0 ? (
+                  <Text color={theme.dim}>No messages.</Text>
+                ) : (
+                  visibleTranscriptCards.map((card, windowIndex) => {
+                    const absoluteIndex = topIndex + windowIndex
+                    const isSelected = card.key === transcriptCursorKey
+                    const hasCursor = isSelected && effectiveFocus === 'messages'
+                    const isExpanded = expandedCardKeys.has(card.key)
+                    const expandedLines = isExpanded ? card.expandedLines : null
+                    const accent = transcriptAccent(card.role, card.provider ?? provider)
+                    const timestamp = card.timestamp ?? ''
+                    const rawBodyLines = previewBodyLines(card)
+                    const groups = groupBodyLines(rawBodyLines)
+                    const bodyLineWidth = Math.max(
+                      transcriptLineWidth - densityState.bodyIndent - 1,
+                      20,
+                    )
+                    const hiddenLines = Math.max(card.expandedLines.length - rawBodyLines.length, 0)
+                    const isSearchHit = normalizedSearchQuery.length > 0
+                      && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
+                    const isLatest = absoluteIndex === transcriptCards.length - 1
+                    const landmarks = transcriptLandmarks(
+                      transcriptCards,
+                      absoluteIndex,
+                      unreadBoundaryIndex,
+                      pendingNewCount,
+                    )
+                    const cardShellBg = hasCursor
+                      ? theme.surface2
+                      : isSelected
+                      ? theme.surface2
+                      : undefined
+                    const headerBg = hasCursor
+                      ? theme.surface3
+                      : isSelected
+                      ? theme.surface3
+                      : undefined
+                    const bodyBg = isSelected
+                      ? hasCursor
+                        ? theme.surface2
+                        : theme.surface2
+                      : undefined
+                    const railColor = hasCursor
+                      ? accent
+                      : isSelected
+                      ? theme.border2
+                      : theme.surface2
+                    const marker = hasCursor ? '>' : isSelected ? ':' : '*'
+                    const timestampColor = hasCursor
+                      ? theme.muted
+                      : isSelected
+                      ? theme.text
+                      : theme.dim
+
+                    return (
+                      <React.Fragment key={card.key}>
+                        {landmarks.map((landmark, landmarkIndex) => {
+                          const color = landmark.kind === 'unread'
+                            ? theme.amber
+                            : landmark.kind === 'day'
+                            ? theme.violet
+                            : landmark.kind === 'section'
+                            ? accent
+                            : theme.dim
+                          return (
+                            <Box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
+                              <Text color={color}>{landmark.text}</Text>
+                            </Box>
+                          )
+                        })}
+                        <Box
+                          flexDirection="row"
+                          marginBottom={densityState.cardGap}
+                          overflow="hidden"
+                          backgroundColor={cardShellBg}
+                        >
+                          <Box width={2} justifyContent="flexStart">
+                            <Text color={railColor}>{isSelected ? '|' : ' '}</Text>
+                          </Box>
+                          <Box flexGrow={1} flexDirection="column">
+                            <Box backgroundColor={headerBg}>
+                              <Text color={isSelected ? accent : theme.muted}>{fitText(marker, 2)}</Text>
+                              <Text bold color={accent}>{card.label}</Text>
+                              {timestamp ? <Text color={timestampColor}>  {timestamp}</Text> : null}
+                              {isLatest ? <Text color={theme.green}>  latest</Text> : null}
+                              {isSearchHit ? <Text color={theme.pink}>  match</Text> : null}
+                              {isExpanded ? <Text color={theme.dim}>  e collapse</Text> : null}
+                            </Box>
+                            <Box flexDirection="column" marginLeft={densityState.bodyIndent} backgroundColor={bodyBg}>
+                            {isExpanded && expandedLines && expandedLines.length > 0 ? (
+                              expandedLines.map((ln, lnIndex) => {
+                                if (ln.tone === 'tool') {
+                                  const tm = ln.text.match(/^tool (\S+)(?:: (.*))?$/)
+                                  const tn = formatToolLabel(tm?.[1] ?? 'TOOL')
+                                  const tt = tm?.[2] ?? ''
+                                  return (
+                                    <Box key={`${card.key}:exp:${lnIndex}`} flexDirection="column" backgroundColor={theme.surface3} paddingX={1}>
+                                      <Text bold color={theme.cyan}>{fitText(tn, bodyLineWidth - 2)}</Text>
+                                      {tt ? <Text color={theme.muted}>{fitText(tt, bodyLineWidth - 2)}</Text> : null}
+                                    </Box>
+                                  )
+                                }
+                                return (
+                                  <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={1}>
+                                    <Text color={transcriptColor(ln)}>
+                                      {fitText(ln.text, bodyLineWidth - 2)}
+                                    </Text>
+                                  </Box>
+                                )
+                              })
+                            ) : (
+                              <>
+                                {groups.map((group, groupIndex) => {
+                                  if (group.type === 'text') {
+                                    return (
+                                      <React.Fragment key={`${card.key}:t${groupIndex}`}>
+                                        {group.lines.map((ln, lnIndex) => (
+                                          <Box key={`${card.key}:t${groupIndex}:${lnIndex}`}>
+                                            <Text color={transcriptColor(ln)}>
+                                              {fitText(ln.text, bodyLineWidth)}
+                                            </Text>
+                                          </Box>
+                                        ))}
+                                      </React.Fragment>
+                                    )
+                                  }
+
+                                  const toolMatch = group.toolLine.text.match(/^tool (\S+)(?:: (.*))?$/)
+                                  const rawToolName = toolMatch?.[1] ?? 'TOOL'
+                                  const toolName = formatToolLabel(rawToolName)
+                                  const toolTarget = toolMatch?.[2] ?? ''
+                                  const resultLine = group.bodyLines.find(
+                                    (ln) => ln.tone === 'result_ok' || ln.tone === 'result_error',
+                                  )
+                                  const contentLines = group.bodyLines.filter(
+                                    (ln) => ln.tone !== 'result_ok' && ln.tone !== 'result_error',
+                                  )
+                                  const isError = resultLine?.tone === 'result_error'
+                                  const resultColor = isError ? theme.red : theme.green
+                                  const statusIcon = isError ? '✗' : '✓'
+                                  const statusText = isError ? 'ERROR' : 'OK'
+
+                                  if (rawToolName.toUpperCase() === 'FILECHANGE') {
+                                    const pathLine = group.bodyLines[0]?.tone === 'diff_meta' ? group.bodyLines[0] : null
+                                    const afterPath = pathLine ? group.bodyLines.slice(1) : group.bodyLines
+                                    const diffContent = afterPath.filter((ln) => ln.tone !== 'dim')
+                                    const pathText = pathLine?.text ?? ''
+                                    const slashIdx = pathText.indexOf('/')
+                                    const kind = slashIdx > 0 ? pathText.slice(0, slashIdx).trim() : 'change'
+                                    const filePath = slashIdx >= 0 ? pathText.slice(slashIdx) : pathText
+                                    const fileName = filePath.split('/').at(-1) ?? filePath
+                                    const kindColor = kind === 'delete' ? theme.red : theme.green
+                                    const kindLabel = `${kind || 'completed'} ▲`
+                                    const fileHeaderWidth = Math.max(bodyLineWidth - kindLabel.length - 2, 12)
+                                    return (
+                                      <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
+                                        <Box backgroundColor={theme.surface3} paddingX={1}>
+                                          <Text bold color={theme.cyan}>
+                                            {fitText(`FILE CHANGE${fileName ? `  ${fileName}` : ''}`, fileHeaderWidth)}
+                                          </Text>
+                                          <Text color={kindColor}>  {kindLabel}</Text>
+                                        </Box>
+                                        {filePath ? (
+                                          <Box paddingX={1} backgroundColor={theme.diffMetaBg}>
+                                            <Text color={theme.dim}>{fitText(filePath, bodyLineWidth - 2)}</Text>
+                                          </Box>
+                                        ) : null}
+                                        {diffContent.map((ln, lnIndex) => (
+                                          <Box
+                                            key={`${card.key}:g${groupIndex}:d${lnIndex}`}
+                                            backgroundColor={transcriptBackground(ln, theme)}
+                                            paddingX={1}
+                                          >
+                                            <Text color={transcriptColor(ln)}>
+                                              {fitText(ln.text, bodyLineWidth - 2)}
+                                            </Text>
+                                          </Box>
+                                        ))}
+                                        <Box paddingX={1} backgroundColor={theme.diffAddBg}>
+                                          <Text color={theme.green}>✓ Applied {toolTarget}</Text>
+                                        </Box>
+                                      </Box>
+                                    )
+                                  }
+
+                                  return (
+                                    <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
+                                      <Box backgroundColor={theme.surface3} paddingX={1}>
+                                        <Text bold color={theme.cyan}>{toolName}</Text>
+                                      </Box>
+                                      {toolTarget ? (
+                                        <Box backgroundColor={theme.surface3} paddingX={1}>
+                                          <Text color={theme.muted}>{fitText(toolTarget, bodyLineWidth - 2)}</Text>
+                                        </Box>
+                                      ) : null}
+                                      {resultLine ? (
+                                        <Box
+                                          paddingX={1}
+                                          backgroundColor={isError ? theme.diffRemoveBg : theme.diffAddBg}
+                                        >
+                                          <Text bold color={resultColor}>{statusIcon} {statusText}</Text>
+                                          <Text color={theme.dim}>
+                                            {'  '}
+                                            {fitText(
+                                              resultLine.text.replace(/^result (?:ok|error): /, ''),
+                                              Math.max(bodyLineWidth - statusText.length - 6, 8),
+                                            )}
+                                          </Text>
+                                        </Box>
+                                      ) : null}
+                                      {contentLines.map((ln, lnIndex) => (
+                                        <Box
+                                          key={`${card.key}:g${groupIndex}:c${lnIndex}`}
+                                          backgroundColor={transcriptBackground(ln, theme)}
+                                          paddingX={1}
+                                        >
+                                          <Text color={transcriptColor(ln)}>
+                                            {fitText(ln.text, Math.max(bodyLineWidth - 2, 16))}
+                                          </Text>
+                                        </Box>
+                                      ))}
+                                    </Box>
+                                  )
+                                })}
+                                {hiddenLines > 0 && !isExpanded ? (
+                                  <Box paddingX={1}>
+                                    <Text color={theme.dim}>{fitText(`▼ ${hiddenLines} more lines`, bodyLineWidth - 2)}</Text>
+                                  </Box>
+                                ) : null}
+                              </>
+                            )}
+                          </Box>
+                        </Box>
+                        </Box>
+                      </React.Fragment>
+                    )
+                  })
+                )}
+              </Box>
+              <Scrollbar
+                total={transcriptCards.length}
+                visible={visibleTranscriptCards.length}
+                offset={topIndex}
+                height={Math.max(transcriptViewportRows, 1)}
+                trackColor={theme.surface3}
+                thumbColor={effectiveFocus === 'messages' ? theme.cyan : theme.dim}
+              />
+            </Box>
+          </Box>
+        ) : (
           <Box
             flexGrow={1}
-            flexDirection="row"
-            marginTop={focusMode ? 0 : densityState.transcriptMarginTop}
-            backgroundColor={theme.surface2}
+            flexDirection="column"
             overflow="hidden"
+            borderStyle={showPaneBorders ? paneBorderStyle : undefined}
+            borderColor={effectiveFocus === 'messages' ? activePaneBorderColor : inactivePaneBorderColor}
+            backgroundColor={messagePaneBg}
           >
-            <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
-              {error ? (
-                <Text color={theme.red}>{fitText(error, messageInnerWidth - 2)}</Text>
-              ) : null}
+            {!focusMode ? (
+              <Box justifyContent="space-between" backgroundColor={theme.surface} paddingX={1} height={densityState.messageHeaderHeight} overflow="hidden">
+                {selectedSession ? (
+                  <Text color={theme.text}>{fitText(readerTitle, Math.max(messageInnerWidth - 20, 16))}</Text>
+                ) : (
+                  <Text color={theme.dim}>No session selected</Text>
+                )}
+                <Text>
+                  <Text color={providerAccent}>{provider.toUpperCase()}</Text>
+                  <Text color={theme.dim}>  </Text>
+                  <Text color={theme.muted}>{transcriptCards.length} messages</Text>
+                </Text>
+              </Box>
+            ) : null}
 
-              {loadingDetail ? (
-                <Text color={theme.dim}>Loading transcript…</Text>
-              ) : visibleTranscriptCards.length === 0 ? (
-                <Text color={theme.dim}>No messages.</Text>
-              ) : (
-                visibleTranscriptCards.map((card, windowIndex) => {
+            <Box
+              flexGrow={1}
+              flexDirection="row"
+              marginTop={focusMode ? 0 : densityState.transcriptMarginTop}
+              backgroundColor={theme.surface2}
+              overflow="hidden"
+            >
+              <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
+                {error ? (
+                  <Text color={theme.red}>{fitText(error, messageInnerWidth - 2)}</Text>
+                ) : null}
+
+                {loadingDetail ? (
+                  <Text color={theme.dim}>Loading transcript…</Text>
+                ) : visibleTranscriptCards.length === 0 ? (
+                  <Text color={theme.dim}>No messages.</Text>
+                ) : (
+                  visibleTranscriptCards.map((card, windowIndex) => {
                   const absoluteIndex = topIndex + windowIndex
                   const isSelected = card.key === transcriptCursorKey
                   const hasCursor = isSelected && effectiveFocus === 'messages'
@@ -1813,6 +2235,7 @@ export default function App() {
             />
           </Box>
         </Box>
+        )}
       </Box>
 
       <Box marginTop={1}>

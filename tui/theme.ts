@@ -1,6 +1,6 @@
 import type { ProviderSelection } from '../lib/types'
 
-export type TuiThemeMode = 'light' | 'dark' | 'lazygit'
+export type TuiThemeMode = 'light' | 'dark' | 'cyber'
 export type TuiDensity = 'comfortable' | 'balanced' | 'dense'
 
 export type TuiThemePalette = {
@@ -25,15 +25,15 @@ export type TuiThemePalette = {
 }
 
 export const LIGHT_THEME: TuiThemePalette = {
-  bg: '#f0f2fa',
+  bg: '#ffffff',
   surface: '#ffffff',
-  surface2: '#eaeef8',
-  surface3: '#e2e8f4',
+  surface2: '#f7f8fb',
+  surface3: '#eef2f7',
   diffAddBg: '#e7f7ef',
   diffRemoveBg: '#fdecec',
   diffMetaBg: '#edf2ff',
-  border: '#cdd6ea',
-  border2: '#aab8d4',
+  border: '#000000',
+  border2: '#000000',
   text: '#111827',
   muted: '#4b5a78',
   dim: '#8e9ab8',
@@ -66,7 +66,7 @@ export const DARK_THEME: TuiThemePalette = {
   pink: '#f472b6',
 } as const
 
-export const LAZYGIT_THEME: TuiThemePalette = {
+export const CYBER_THEME: TuiThemePalette = {
   bg: '#191532',
   surface: '#211c43',
   surface2: '#2a2550',
@@ -91,7 +91,7 @@ export let THEME: TuiThemePalette = LIGHT_THEME
 
 export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
   if (mode === 'dark') return DARK_THEME
-  if (mode === 'lazygit') return LAZYGIT_THEME
+  if (mode === 'cyber') return CYBER_THEME
   return LIGHT_THEME
 }
 
