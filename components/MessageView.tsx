@@ -2506,7 +2506,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                 }}>
                   MODEL
                 </Label>
-                <Select value={selectedModelValue ?? undefined} onValueChange={setSelectedModel}>
+                <Select value={selectedModelValue ?? ''} onValueChange={setSelectedModel}>
                   <SelectTrigger
                     style={{
                       height: 26,

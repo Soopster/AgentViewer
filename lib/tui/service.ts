@@ -11,12 +11,11 @@ import {
   setConfiguredTuiTheme,
 } from '../tuiState'
 import {
-  type SessionMessage,
   listViewSessionMessages,
   listViewSessions,
   readViewSessionInfo,
 } from '../sessionBackend'
-import type { ProviderSelection, Session, SessionInfo } from '../types'
+import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../types'
 import type { TuiDensity, TuiThemeMode } from '../../tui/theme'
 
 const DEFAULT_SESSION_LIMIT = 200

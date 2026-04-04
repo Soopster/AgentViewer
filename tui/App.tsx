@@ -1788,7 +1788,7 @@ export default function App() {
                       : isSelected
                       ? theme.border2
                       : theme.surface2
-                    const marker = hasCursor ? '>' : isSelected ? ':' : '*'
+                    const marker = hasCursor ? '>' : isSelected ? ':' : '•'
                     const timestampColor = hasCursor
                       ? theme.muted
                       : isSelected
@@ -1817,7 +1817,7 @@ export default function App() {
                           overflow="hidden"
                           backgroundColor={cardShellBg}
                         >
-                          <Box width={2} justifyContent="flexStart">
+                          <Box width={2} justifyContent="flex-start">
                             <Text color={railColor}>{isSelected ? '|' : ' '}</Text>
                           </Box>
                           <Box flexGrow={1} flexDirection="column">
@@ -2085,7 +2085,7 @@ export default function App() {
                     : isSelected
                     ? theme.border2
                     : theme.surface2
-                  const marker = hasCursor ? '>' : isSelected ? ':' : '*'
+                  const marker = hasCursor ? '>' : isSelected ? ':' : '•'
                   const timestampColor = hasCursor
                     ? theme.muted
                     : isSelected
@@ -2114,7 +2114,7 @@ export default function App() {
                         overflow="hidden"
                         backgroundColor={cardShellBg}
                         >
-                          <Box width={2} justifyContent="flexStart">
+                        <Box width={2} justifyContent="flex-start">
                             <Text color={railColor}>{isSelected ? '|' : ' '}</Text>
                           </Box>
                           <Box
