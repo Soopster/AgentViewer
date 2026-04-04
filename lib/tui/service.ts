@@ -1,6 +1,15 @@
 import { buildThreadedMessages, type ThreadedMessage } from '../threading'
 import { getConfiguredProvider, setConfiguredProvider } from '../providerState'
-import { getConfiguredTuiTheme, setConfiguredTuiTheme } from '../tuiState'
+import {
+  getConfiguredTuiDensity,
+  getConfiguredTuiFocusMode,
+  getConfiguredTuiRailVisible,
+  getConfiguredTuiTheme,
+  setConfiguredTuiDensity,
+  setConfiguredTuiFocusMode,
+  setConfiguredTuiRailVisible,
+  setConfiguredTuiTheme,
+} from '../tuiState'
 import {
   type SessionMessage,
   listViewSessionMessages,
@@ -8,7 +17,7 @@ import {
   readViewSessionInfo,
 } from '../sessionBackend'
 import type { ProviderSelection, Session, SessionInfo } from '../types'
-import type { TuiThemeMode } from '../../tui/theme'
+import type { TuiDensity, TuiThemeMode } from '../../tui/theme'
 
 const DEFAULT_SESSION_LIMIT = 200
 const DEFAULT_MESSAGE_LIMIT = 400
@@ -33,6 +42,30 @@ export async function readTuiTheme(): Promise<TuiThemeMode> {
 
 export async function writeTuiTheme(theme: TuiThemeMode): Promise<void> {
   await setConfiguredTuiTheme(theme)
+}
+
+export async function readTuiRailVisible(): Promise<boolean> {
+  return getConfiguredTuiRailVisible()
+}
+
+export async function writeTuiRailVisible(railVisible: boolean): Promise<void> {
+  await setConfiguredTuiRailVisible(railVisible)
+}
+
+export async function readTuiFocusMode(): Promise<boolean> {
+  return getConfiguredTuiFocusMode()
+}
+
+export async function writeTuiFocusMode(focusMode: boolean): Promise<void> {
+  await setConfiguredTuiFocusMode(focusMode)
+}
+
+export async function readTuiDensity(): Promise<TuiDensity> {
+  return getConfiguredTuiDensity()
+}
+
+export async function writeTuiDensity(density: TuiDensity): Promise<void> {
+  await setConfiguredTuiDensity(density)
 }
 
 export async function readTuiSessions(provider: ProviderSelection): Promise<Session[]> {

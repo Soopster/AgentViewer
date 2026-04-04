@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
 import {
   formatProviderLabel,
-  formatSessionMeta,
   formatSessionProject,
   formatSessionTitle,
   formatTranscriptCards,
@@ -14,15 +13,22 @@ import {
   getThemePalette,
   setActiveTheme,
   getProviderAccent,
+  type TuiDensity,
   type TuiThemeMode,
   type TuiThemePalette,
 } from './theme'
 import {
+  readTuiDensity,
+  readTuiFocusMode,
   readTuiProvider,
+  readTuiRailVisible,
   readTuiSessionDetail,
   readTuiSessions,
   readTuiTheme,
+  writeTuiDensity,
+  writeTuiFocusMode,
   writeTuiProvider,
+  writeTuiRailVisible,
   writeTuiTheme,
 } from '../lib/tui/service'
 import type { ProviderSelection, Session } from '../lib/types'
@@ -33,11 +39,11 @@ const FOOTER_HEIGHT = 1
 const SIDEBAR_GUTTER_WIDTH = 2
 const SESSION_ENTRY_HEIGHT = 2
 const PROJECT_HEADER_HEIGHT = 1
-const MESSAGE_HEADER_HEIGHT = 6
-const MESSAGE_CARD_GAP = 1
 const SESSION_REFRESH_MS = 5000
 const DETAIL_REFRESH_MS = 2000
 const SEARCH_MAX_CHARS = 80
+const RAIL_MIN_WIDTH = 26
+const RAIL_MAX_WIDTH = 34
 
 type PaneFocus = 'sessions' | 'messages'
 
@@ -81,6 +87,75 @@ function timeAgo(value?: string | number): string {
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return `${hours}h`
   return `${Math.floor(hours / 24)}d`
+}
+
+function joinMeta(parts: Array<string | null | undefined>): string {
+  return parts.filter((part): part is string => Boolean(part && part.trim())).join('  ·  ')
+}
+
+function formatTimeGap(deltaMs: number): string | null {
+  if (!Number.isFinite(deltaMs) || deltaMs < 30 * 60 * 1000) return null
+  const minutes = Math.round(deltaMs / 60_000)
+  if (minutes < 90) return `${minutes}m later`
+  const hours = Math.round(minutes / 60)
+  if (hours < 36) return `${hours}h later`
+  return `${Math.round(hours / 24)}d later`
+}
+
+function roleSectionLabel(card: TuiTranscriptCard): string | null {
+  if (card.role === 'user') return null
+  if (card.role === 'system') return 'SYSTEM'
+  return `${card.label} RESPONSE`
+}
+
+function formatToolLabel(name: string): string {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .toUpperCase()
+}
+
+function densityConfig(density: TuiDensity): {
+  cardGap: number
+  bodyIndent: number
+  innerPadX: number
+  mainMarginTop: number
+  transcriptMarginTop: number
+  messageHeaderHeight: number
+  headerHeight: number
+} {
+  switch (density) {
+    case 'comfortable':
+      return {
+        cardGap: 2,
+        bodyIndent: 3,
+        innerPadX: 1,
+        mainMarginTop: 1,
+        transcriptMarginTop: 1,
+        messageHeaderHeight: 1,
+        headerHeight: 2,
+      }
+    case 'dense':
+      return {
+        cardGap: 0,
+        bodyIndent: 1,
+        innerPadX: 0,
+        mainMarginTop: 0,
+        transcriptMarginTop: 0,
+        messageHeaderHeight: 1,
+        headerHeight: 2,
+      }
+    default:
+      return {
+        cardGap: 1,
+        bodyIndent: 2,
+        innerPadX: 1,
+        mainMarginTop: 1,
+        transcriptMarginTop: 1,
+        messageHeaderHeight: 1,
+        headerHeight: 2,
+      }
+  }
 }
 
 function uniqueProjectCount(sessions: Session[]): number {
@@ -237,6 +312,7 @@ function collapsedBodyRows(card: TuiTranscriptCard): number {
 
     const toolMatch = group.toolLine.text.match(/^tool (\S+)(?:: (.*))?$/)
     const toolName = toolMatch?.[1]?.toUpperCase() ?? 'TOOL'
+    const toolTarget = toolMatch?.[2] ?? ''
     const resultLine = group.bodyLines.find(
       (line) => line.tone === 'result_ok' || line.tone === 'result_error',
     )
@@ -252,7 +328,7 @@ function collapsedBodyRows(card: TuiTranscriptCard): number {
       continue
     }
 
-    rows += 1 + (resultLine ? 1 : 0) + contentLines.length
+    rows += 1 + (toolTarget ? 1 : 0) + (resultLine ? 1 : 0) + contentLines.length
   }
 
   const hiddenLines = Math.max(card.expandedLines.length - lines.length, 0)
@@ -261,11 +337,75 @@ function collapsedBodyRows(card: TuiTranscriptCard): number {
   return Math.max(rows, 1)
 }
 
-function cardHeight(card: TuiTranscriptCard, expandedKeys: Set<string>): number {
+function expandedBodyRows(card: TuiTranscriptCard): number {
+  let rows = 0
+
+  for (const line of card.expandedLines) {
+    if (line.tone !== 'tool') {
+      rows += 1
+      continue
+    }
+
+    const toolMatch = line.text.match(/^tool (\S+)(?:: (.*))?$/)
+    const toolTarget = toolMatch?.[2] ?? ''
+    rows += toolTarget ? 2 : 1
+  }
+
+  return Math.max(rows, 1)
+}
+
+type CardLandmark = {
+  kind: 'unread' | 'day' | 'gap' | 'section'
+  text: string
+}
+
+function transcriptLandmarks(
+  cards: TuiTranscriptCard[],
+  index: number,
+  unreadBoundaryIndex: number,
+  pendingNewCount: number,
+): CardLandmark[] {
+  const card = cards[index]
+  if (!card) return []
+  const previous = index > 0 ? cards[index - 1] : null
+  const landmarks: CardLandmark[] = []
+
+  if (index === unreadBoundaryIndex && pendingNewCount > 0) {
+    landmarks.push({
+      kind: 'unread',
+      text: `NEW SINCE LAST READ  ${pendingNewCount} message${pendingNewCount === 1 ? '' : 's'}`,
+    })
+  }
+
+  if (!previous || previous.dayKey !== card.dayKey) {
+    if (card.dayLabel) landmarks.push({ kind: 'day', text: card.dayLabel.toUpperCase() })
+  } else if (card.timestampMs != null && previous.timestampMs != null) {
+    const gap = formatTimeGap(card.timestampMs - previous.timestampMs)
+    if (gap) landmarks.push({ kind: 'gap', text: gap.toUpperCase() })
+  }
+
+  if (!previous || previous.role !== card.role) {
+    const sectionLabel = roleSectionLabel(card)
+    if (sectionLabel) landmarks.push({ kind: 'section', text: sectionLabel })
+  }
+
+  return landmarks
+}
+
+function cardHeight(
+  cards: TuiTranscriptCard[],
+  index: number,
+  expandedKeys: Set<string>,
+  cardGap: number,
+  unreadBoundaryIndex: number,
+  pendingNewCount: number,
+): number {
+  const card = cards[index]
   const bodyRows = expandedKeys.has(card.key)
-    ? Math.max(card.expandedLines.length, 1)
+    ? expandedBodyRows(card)
     : collapsedBodyRows(card)
-  return 1 + bodyRows + MESSAGE_CARD_GAP
+  const landmarkRows = transcriptLandmarks(cards, index, unreadBoundaryIndex, pendingNewCount).length
+  return landmarkRows + 1 + bodyRows + cardGap
 }
 
 function selectTranscriptWindow(
@@ -273,6 +413,9 @@ function selectTranscriptWindow(
   startIndex: number,
   rowBudget: number,
   expandedKeys: Set<string>,
+  cardGap: number,
+  unreadBoundaryIndex: number,
+  pendingNewCount: number,
 ): { cards: TuiTranscriptCard[]; endIndex: number } {
   if (cards.length === 0) return { cards: [], endIndex: -1 }
 
@@ -282,7 +425,7 @@ function selectTranscriptWindow(
 
   for (let index = clamp(startIndex, 0, cards.length - 1); index < cards.length; index++) {
     const next = cards[index]
-    const nextHeight = cardHeight(next, expandedKeys)
+    const nextHeight = cardHeight(cards, index, expandedKeys, cardGap, unreadBoundaryIndex, pendingNewCount)
     if (visible.length > 0 && usedRows + nextHeight > rowBudget) break
     visible.push(next)
     usedRows += nextHeight
@@ -297,13 +440,16 @@ function windowStartForCursor(
   cursorIndex: number,
   rowBudget: number,
   expandedKeys: Set<string>,
+  cardGap: number,
+  unreadBoundaryIndex: number,
+  pendingNewCount: number,
 ): number {
   if (cards.length === 0) return 0
   let start = clamp(cursorIndex, 0, cards.length - 1)
-  let usedRows = cardHeight(cards[start], expandedKeys)
+  let usedRows = cardHeight(cards, start, expandedKeys, cardGap, unreadBoundaryIndex, pendingNewCount)
 
   while (start > 0) {
-    const nextHeight = cardHeight(cards[start - 1], expandedKeys)
+    const nextHeight = cardHeight(cards, start - 1, expandedKeys, cardGap, unreadBoundaryIndex, pendingNewCount)
     if (usedRows + nextHeight > rowBudget) break
     start -= 1
     usedRows += nextHeight
@@ -365,12 +511,16 @@ export default function App() {
   const [providerMenuOpen, setProviderMenuOpen] = useState(false)
   const [providerMenuIndex, setProviderMenuIndex] = useState(0)
   const [focusedPane, setFocusedPane] = useState<PaneFocus>('sessions')
+  const [focusMode, setFocusMode] = useState(false)
+  const [density, setDensity] = useState<TuiDensity>('balanced')
+  const [railVisible, setRailVisible] = useState(true)
   const [sidebarTopKey, setSidebarTopKey] = useState<string | null>(null)
   const [transcriptTopKey, setTranscriptTopKey] = useState<string | null>(null)
   const [transcriptCursorKey, setTranscriptCursorKey] = useState<string | null>(null)
   const [expandedCardKeys, setExpandedCardKeys] = useState<Set<string>>(() => new Set())
   const [followTail, setFollowTail] = useState(true)
   const [pendingNewCount, setPendingNewCount] = useState(0)
+  const [unreadBoundaryKey, setUnreadBoundaryKey] = useState<string | null>(null)
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIndex, setSearchMatchIndex] = useState(0)
@@ -403,32 +553,38 @@ export default function App() {
       : null
   ), [selectedSessionIdentity])
   const theme = getThemePalette(themeMode)
+  const densityState = densityConfig(density)
   const providerAccent = getProviderAccent(provider)
-  const sidebarAccent = focusedPane === 'sessions' ? theme.violet : theme.muted
+  const showRail = (!focusMode && railVisible) || providerMenuOpen
+  const effectiveFocus = !showRail ? 'messages' : focusedPane
+  const sidebarAccent = effectiveFocus === 'sessions' ? theme.violet : theme.muted
   const projectCount = useMemo(() => uniqueProjectCount(sessions), [sessions])
   const currentProjectName = selectedSession ? formatSessionProject(selectedSession) : 'THIS PROJECT'
   const selectedSessionShortId = selectedSession?.sessionId.slice(-12) ?? 'NONE'
   const statusLabel = loadingSessions ? 'SYNCING' : refreshingSessions ? 'REFRESHING' : 'LIVE'
   const statusColor = loadingSessions ? theme.amber : refreshingSessions ? theme.cyan : theme.green
+  const globalHeaderHeight = focusMode ? 1 : densityState.headerHeight
+  const transcriptHeaderHeight = focusMode ? 0 : densityState.messageHeaderHeight
 
-  const contentHeight = Math.max(terminalRows - HEADER_HEIGHT - FOOTER_HEIGHT, 12)
-  const sidebarWidth = clamp(Math.floor((terminalColumns - 2) * 0.31), 32, 42)
-  const messagePaneWidth = Math.max(terminalColumns - 2 - sidebarWidth - SIDEBAR_GUTTER_WIDTH, 48)
+  const contentHeight = Math.max(terminalRows - globalHeaderHeight - FOOTER_HEIGHT, 12)
+  const sidebarWidth = showRail ? clamp(Math.floor((terminalColumns - 2) * 0.24), RAIL_MIN_WIDTH, RAIL_MAX_WIDTH) : 0
+  const gutterWidth = showRail ? SIDEBAR_GUTTER_WIDTH : 0
+  const messagePaneWidth = Math.max(terminalColumns - 2 - sidebarWidth - gutterWidth, 48)
   const sidebarInnerWidth = Math.max(sidebarWidth - 2, 28)
   const messageInnerWidth = Math.max(messagePaneWidth - 2, 44)
-  const providerPanelHeight = providerMenuOpen ? PROVIDERS.length + 3 : 5
+  const providerPanelHeight = providerMenuOpen ? PROVIDERS.length + 3 : 4
   const sidebarRowBudget = Math.max(contentHeight - providerPanelHeight - 3, 6)
   const sessionTitleWidth = Math.max(sidebarInnerWidth - 2, 18)
   const sessionMetaWidth = Math.max(sidebarInnerWidth - 2, 18)
   const transcriptLineWidth = Math.max(messageInnerWidth - 2, 24)
   const transcriptViewportRows = Math.max(
-    contentHeight - MESSAGE_HEADER_HEIGHT - 1 - (error ? 1 : 0),
+    contentHeight - transcriptHeaderHeight - densityState.transcriptMarginTop - (error ? 1 : 0),
     4,
   )
 
   const transcriptCards = useMemo(() => (
-    sessionDetail ? formatTranscriptCards(sessionDetail.threadedMessages) : []
-  ), [sessionDetail])
+    sessionDetail ? formatTranscriptCards(sessionDetail.threadedMessages, density) : []
+  ), [density, sessionDetail])
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
   const searchMatches = useMemo(() => {
     if (!normalizedSearchQuery) return []
@@ -443,15 +599,35 @@ export default function App() {
     if (index >= 0) return index
     return followTail ? transcriptCards.length - 1 : 0
   }, [followTail, transcriptCards, transcriptCursorKey])
+  const unreadBoundaryIndex = useMemo(
+    () => findCardIndex(transcriptCards, unreadBoundaryKey),
+    [transcriptCards, unreadBoundaryKey],
+  )
   const topIndex = useMemo(() => {
     if (transcriptCards.length === 0) return 0
     const index = findCardIndex(transcriptCards, transcriptTopKey)
     if (index >= 0) return index
-    return windowStartForCursor(transcriptCards, Math.max(cursorIndex, 0), transcriptViewportRows, expandedCardKeys)
-  }, [cursorIndex, expandedCardKeys, transcriptCards, transcriptTopKey, transcriptViewportRows])
+    return windowStartForCursor(
+      transcriptCards,
+      Math.max(cursorIndex, 0),
+      transcriptViewportRows,
+      expandedCardKeys,
+      densityState.cardGap,
+      unreadBoundaryIndex,
+      pendingNewCount,
+    )
+  }, [cursorIndex, densityState.cardGap, expandedCardKeys, pendingNewCount, transcriptCards, transcriptTopKey, transcriptViewportRows, unreadBoundaryIndex])
   const visibleTranscriptWindow = useMemo(() => (
-    selectTranscriptWindow(transcriptCards, topIndex, transcriptViewportRows, expandedCardKeys)
-  ), [expandedCardKeys, topIndex, transcriptCards, transcriptViewportRows])
+    selectTranscriptWindow(
+      transcriptCards,
+      topIndex,
+      transcriptViewportRows,
+      expandedCardKeys,
+      densityState.cardGap,
+      unreadBoundaryIndex,
+      pendingNewCount,
+    )
+  ), [densityState.cardGap, expandedCardKeys, pendingNewCount, topIndex, transcriptCards, transcriptViewportRows, unreadBoundaryIndex])
   const visibleTranscriptCards = visibleTranscriptWindow.cards
   const visibleTranscriptEndIndex = visibleTranscriptWindow.endIndex
   const transcriptWindowEnd = visibleTranscriptEndIndex >= 0 ? visibleTranscriptEndIndex + 1 : 0
@@ -474,20 +650,37 @@ export default function App() {
   const jumpToTranscriptIndex = useCallback((index: number) => {
     if (transcriptCards.length === 0) return
     const nextIndex = clamp(index, 0, transcriptCards.length - 1)
-    const nextStart = windowStartForCursor(transcriptCards, nextIndex, transcriptViewportRows, expandedCardKeys)
+    const nextStart = windowStartForCursor(
+      transcriptCards,
+      nextIndex,
+      transcriptViewportRows,
+      expandedCardKeys,
+      densityState.cardGap,
+      unreadBoundaryIndex,
+      pendingNewCount,
+    )
     setTranscriptCursorKey(transcriptCards[nextIndex].key)
     setTranscriptTopKey(transcriptCards[nextStart].key)
     const atTail = nextIndex === transcriptCards.length - 1
     setFollowTail(atTail)
     if (atTail) setPendingNewCount(0)
-  }, [expandedCardKeys, transcriptCards, transcriptViewportRows])
+  }, [densityState.cardGap, expandedCardKeys, pendingNewCount, transcriptCards, transcriptViewportRows, unreadBoundaryIndex])
 
   const jumpToTranscriptTail = useCallback(() => {
     if (transcriptCards.length === 0) return
     jumpToTranscriptIndex(transcriptCards.length - 1)
     setFollowTail(true)
     setPendingNewCount(0)
+    setUnreadBoundaryKey(null)
   }, [jumpToTranscriptIndex, transcriptCards.length])
+
+  const jumpToUnreadBoundary = useCallback(() => {
+    if (unreadBoundaryIndex >= 0) {
+      jumpToTranscriptIndex(unreadBoundaryIndex)
+      return
+    }
+    jumpToTranscriptTail()
+  }, [jumpToTranscriptIndex, jumpToTranscriptTail, unreadBoundaryIndex])
 
   const moveSelection = useCallback((delta: number) => {
     if (sessions.length === 0) return
@@ -502,7 +695,15 @@ export default function App() {
     const nextIndex = clamp((cursorIndex >= 0 ? cursorIndex : 0) + delta, 0, transcriptCards.length - 1)
     setTranscriptCursorKey(transcriptCards[nextIndex].key)
     if (nextIndex < topIndex || nextIndex > visibleTranscriptEndIndex) {
-      const nextStart = windowStartForCursor(transcriptCards, nextIndex, transcriptViewportRows, expandedCardKeys)
+      const nextStart = windowStartForCursor(
+        transcriptCards,
+        nextIndex,
+        transcriptViewportRows,
+        expandedCardKeys,
+        densityState.cardGap,
+        unreadBoundaryIndex,
+        pendingNewCount,
+      )
       setTranscriptTopKey(transcriptCards[nextStart].key)
     }
     const atTail = nextIndex === transcriptCards.length - 1
@@ -510,10 +711,13 @@ export default function App() {
     if (atTail) setPendingNewCount(0)
   }, [
     cursorIndex,
+    densityState.cardGap,
     expandedCardKeys,
+    pendingNewCount,
     topIndex,
     transcriptCards,
     transcriptViewportRows,
+    unreadBoundaryIndex,
     visibleTranscriptEndIndex,
   ])
 
@@ -527,6 +731,20 @@ export default function App() {
       return next
     })
   }, [cursorIndex, transcriptCards])
+
+  const toggleRail = useCallback(async () => {
+    const nextVisible = !railVisible
+    setRailVisible(nextVisible)
+    if (!nextVisible && focusedPane === 'sessions') {
+      setFocusedPane('messages')
+    }
+
+    try {
+      await writeTuiRailVisible(nextVisible)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to store reader layout')
+    }
+  }, [focusedPane, railVisible])
 
   const refreshSessions = useCallback(async (
     nextProvider: ProviderSelection,
@@ -611,14 +829,21 @@ export default function App() {
 
     void (async () => {
       try {
-        const configuredTheme = await readTuiTheme()
+        const [configuredTheme, configuredProvider, configuredRailVisible, configuredFocusMode, configuredDensity] = await Promise.all([
+          readTuiTheme(),
+          readTuiProvider(),
+          readTuiRailVisible(),
+          readTuiFocusMode(),
+          readTuiDensity(),
+        ])
         if (cancelled) return
         setThemeMode(configuredTheme)
         setActiveTheme(configuredTheme)
-
-        const configuredProvider = await readTuiProvider()
-        if (cancelled) return
         setProvider(configuredProvider)
+        setRailVisible(configuredRailVisible)
+        setFocusMode(configuredFocusMode)
+        setDensity(configuredDensity)
+        if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
 
         await refreshSessions(configuredProvider, false, true)
       } catch (err) {
@@ -634,7 +859,11 @@ export default function App() {
   }, [refreshSessions])
 
   const toggleTheme = useCallback(async () => {
-    const nextTheme = themeMode === 'light' ? 'dark' : 'light'
+    const nextTheme: TuiThemeMode = themeMode === 'light'
+      ? 'dark'
+      : themeMode === 'dark'
+      ? 'lazygit'
+      : 'light'
     setThemeMode(nextTheme)
     setActiveTheme(nextTheme)
 
@@ -644,6 +873,33 @@ export default function App() {
       setError(err instanceof Error ? err.message : 'Failed to store theme')
     }
   }, [themeMode])
+
+  const toggleFocusMode = useCallback(async () => {
+    const next = !focusMode
+    setFocusMode(next)
+    if (next) setFocusedPane('messages')
+
+    try {
+      await writeTuiFocusMode(next)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to store focus mode')
+    }
+  }, [focusMode])
+
+  const cycleDensity = useCallback(async () => {
+    const next: TuiDensity = density === 'comfortable'
+      ? 'balanced'
+      : density === 'balanced'
+      ? 'dense'
+      : 'comfortable'
+    setDensity(next)
+
+    try {
+      await writeTuiDensity(next)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to store density')
+    }
+  }, [density])
 
   useEffect(() => {
     if (!selectedSessionTarget) {
@@ -667,6 +923,7 @@ export default function App() {
     setExpandedCardKeys(new Set())
     setFollowTail(true)
     setPendingNewCount(0)
+    setUnreadBoundaryKey(null)
     setSearchMode(false)
     setSearchQuery('')
     setSearchMatchIndex(0)
@@ -791,27 +1048,46 @@ export default function App() {
       setTranscriptCursorKey(null)
       setTranscriptTopKey(null)
       setPendingNewCount(0)
+      setUnreadBoundaryKey(null)
       previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
       return
     }
 
     if (!sameSession) {
       const lastIndex = transcriptCards.length - 1
-      const nextStart = windowStartForCursor(transcriptCards, lastIndex, transcriptViewportRows, expandedCardKeys)
+      const nextStart = windowStartForCursor(
+        transcriptCards,
+        lastIndex,
+        transcriptViewportRows,
+        expandedCardKeys,
+        densityState.cardGap,
+        unreadBoundaryIndex,
+        pendingNewCount,
+      )
       setTranscriptCursorKey(transcriptCards[lastIndex].key)
       setTranscriptTopKey(transcriptCards[nextStart].key)
       setFollowTail(true)
       setPendingNewCount(0)
+      setUnreadBoundaryKey(null)
       previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
       return
     }
 
     if (followTail) {
       const lastIndex = transcriptCards.length - 1
-      const nextStart = windowStartForCursor(transcriptCards, lastIndex, transcriptViewportRows, expandedCardKeys)
+      const nextStart = windowStartForCursor(
+        transcriptCards,
+        lastIndex,
+        transcriptViewportRows,
+        expandedCardKeys,
+        densityState.cardGap,
+        unreadBoundaryIndex,
+        pendingNewCount,
+      )
       setTranscriptCursorKey(transcriptCards[lastIndex].key)
       setTranscriptTopKey(transcriptCards[nextStart].key)
       setPendingNewCount(0)
+      setUnreadBoundaryKey(null)
       previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
       return
     }
@@ -824,6 +1100,11 @@ export default function App() {
 
     if (appendedCount > 0) {
       setPendingNewCount(appendedCount)
+      setUnreadBoundaryKey((current) => {
+        if (current && currentKeys.includes(current)) return current
+        const firstNewKey = currentKeys[previousLastIndex + 1] ?? null
+        return firstNewKey
+      })
     }
 
     setTranscriptCursorKey((current) => {
@@ -832,40 +1113,70 @@ export default function App() {
     })
     setTranscriptTopKey((current) => {
       if (current && currentKeys.includes(current)) return current
-      const nextStart = windowStartForCursor(transcriptCards, Math.max(cursorIndex, 0), transcriptViewportRows, expandedCardKeys)
+      const nextStart = windowStartForCursor(
+        transcriptCards,
+        Math.max(cursorIndex, 0),
+        transcriptViewportRows,
+        expandedCardKeys,
+        densityState.cardGap,
+        unreadBoundaryIndex,
+        pendingNewCount,
+      )
       return transcriptCards[nextStart]?.key ?? transcriptCards[0].key
     })
     previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
   }, [
     cursorIndex,
+    densityState.cardGap,
     expandedCardKeys,
     followTail,
+    pendingNewCount,
     selectedSessionKey,
     transcriptCards,
     transcriptViewportRows,
+    unreadBoundaryIndex,
   ])
 
   useEffect(() => {
     if (transcriptCards.length === 0 || cursorIndex < 0) return
     if (followTail) {
       const lastIndex = transcriptCards.length - 1
-      const nextStart = windowStartForCursor(transcriptCards, lastIndex, transcriptViewportRows, expandedCardKeys)
+      const nextStart = windowStartForCursor(
+        transcriptCards,
+        lastIndex,
+        transcriptViewportRows,
+        expandedCardKeys,
+        densityState.cardGap,
+        unreadBoundaryIndex,
+        pendingNewCount,
+      )
       setTranscriptCursorKey(transcriptCards[lastIndex].key)
       setTranscriptTopKey(transcriptCards[nextStart].key)
       return
     }
 
     if (cursorIndex < topIndex || cursorIndex > visibleTranscriptEndIndex) {
-      const nextStart = windowStartForCursor(transcriptCards, cursorIndex, transcriptViewportRows, expandedCardKeys)
+      const nextStart = windowStartForCursor(
+        transcriptCards,
+        cursorIndex,
+        transcriptViewportRows,
+        expandedCardKeys,
+        densityState.cardGap,
+        unreadBoundaryIndex,
+        pendingNewCount,
+      )
       setTranscriptTopKey(transcriptCards[nextStart].key)
     }
   }, [
     cursorIndex,
+    densityState.cardGap,
     expandedCardKeys,
     followTail,
+    pendingNewCount,
     topIndex,
     transcriptCards,
     transcriptViewportRows,
+    unreadBoundaryIndex,
     visibleTranscriptEndIndex,
   ])
 
@@ -950,83 +1261,101 @@ export default function App() {
       return
     }
 
-    if (key.tab || input === '\t') {
+    if ((key.tab || input === '\t') && showRail) {
       setFocusedPane((current) => current === 'sessions' ? 'messages' : 'sessions')
       return
     }
 
-    if (focusedPane === 'sessions' && (input === 'j' || key.downArrow)) {
+    if (effectiveFocus === 'sessions' && (input === 'j' || key.downArrow)) {
       moveSelection(1)
       return
     }
 
-    if (focusedPane === 'sessions' && (input === 'k' || key.upArrow)) {
+    if (effectiveFocus === 'sessions' && (input === 'k' || key.upArrow)) {
       moveSelection(-1)
       return
     }
 
-    if (focusedPane === 'messages' && (input === 'j' || key.downArrow)) {
+    if (effectiveFocus === 'messages' && (input === 'j' || key.downArrow)) {
       moveCursor(1)
       return
     }
 
-    if (focusedPane === 'messages' && (input === 'k' || key.upArrow)) {
+    if (effectiveFocus === 'messages' && (input === 'k' || key.upArrow)) {
       moveCursor(-1)
       return
     }
 
-    if (focusedPane === 'sessions' && input === 'g') {
+    if (effectiveFocus === 'sessions' && input === 'g') {
       if (sessions[0]) setSelectedSessionKey(sessionKey(sessions[0]))
       return
     }
 
-    if (focusedPane === 'sessions' && input === 'G') {
+    if (effectiveFocus === 'sessions' && input === 'G') {
       const last = sessions.at(-1)
       if (last) setSelectedSessionKey(sessionKey(last))
       return
     }
 
-    if (focusedPane === 'messages' && input === 'g') {
+    if (effectiveFocus === 'messages' && input === 'g') {
       jumpToTranscriptIndex(0)
       return
     }
 
-    if (focusedPane === 'messages' && input === 'G') {
+    if (effectiveFocus === 'messages' && input === 'G') {
       jumpToTranscriptTail()
       return
     }
 
-    if (focusedPane === 'messages' && key.pageDown) {
+    if (effectiveFocus === 'messages' && key.pageDown) {
       moveCursor(Math.max(visibleTranscriptCards.length - 1, 1))
       return
     }
 
-    if (focusedPane === 'messages' && key.pageUp) {
+    if (effectiveFocus === 'messages' && key.pageUp) {
       moveCursor(-Math.max(visibleTranscriptCards.length - 1, 1))
       return
     }
 
-    if (focusedPane === 'messages' && (input === 'e' || key.return)) {
+    if (effectiveFocus === 'messages' && (input === 'e' || key.return)) {
       toggleExpansion()
       return
     }
 
-    if (focusedPane === 'messages' && input === 'f') {
+    if (effectiveFocus === 'messages' && input === 'f') {
       jumpToTranscriptTail()
       return
     }
 
-    if (focusedPane === 'messages' && input === '/') {
+    if (effectiveFocus === 'messages' && input === 'u') {
+      jumpToUnreadBoundary()
+      return
+    }
+
+    if (effectiveFocus === 'messages' && input === '/') {
       setSearchMode(true)
       return
     }
 
-    if (focusedPane === 'messages' && input === 'n' && searchMatches.length > 0) {
+    if (effectiveFocus === 'messages' && input === '[' && searchMatches.length > 0) {
+      setSearchMatchIndex(0)
+      jumpToTranscriptIndex(searchMatches[0])
+      return
+    }
+
+    if (effectiveFocus === 'messages' && input === ']' && searchMatches.length > 0) {
+      const lastMatchIndex = searchMatches.length - 1
+      setSearchMatchIndex(lastMatchIndex)
+      jumpToTranscriptIndex(searchMatches[lastMatchIndex])
+      return
+    }
+
+    if (effectiveFocus === 'messages' && input === 'n' && searchMatches.length > 0) {
       jumpToSearchMatch(1)
       return
     }
 
-    if (focusedPane === 'messages' && input === 'N' && searchMatches.length > 0) {
+    if (effectiveFocus === 'messages' && input === 'N' && searchMatches.length > 0) {
       jumpToSearchMatch(-1)
       return
     }
@@ -1041,384 +1370,438 @@ export default function App() {
       return
     }
 
+    if (input === 'h') {
+      void toggleRail()
+      return
+    }
+
+    if (input === 'z') {
+      void toggleFocusMode()
+      return
+    }
+
+    if (input === 'd') {
+      void cycleDensity()
+      return
+    }
+
     if (input === 'r') {
       void refreshSessions(provider)
       if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
     }
   }, { isActive: true })
 
+  const readerTitle = useMemo(() => (
+    sessionDetail?.info?.customTitle
+    ?? sessionDetail?.info?.summary
+    ?? selectedSession?.customTitle
+    ?? selectedSession?.summary
+    ?? '(untitled session)'
+  ), [selectedSession, sessionDetail?.info])
+  const readerModel = sessionDetail?.info?.currentModel ?? 'unknown'
+  const readerTag = sessionDetail?.info?.tag ?? selectedSession?.tag ?? 'none'
+  const readerMeta = joinMeta([
+    `project ${currentProjectName}`,
+    `model ${readerModel}`,
+    readerTag !== 'none' ? `tag ${readerTag}` : null,
+  ])
+  const readerState = joinMeta([
+    `window ${transcriptCards.length === 0 ? '0-0' : `${topIndex + 1}-${transcriptWindowEnd}`}/${transcriptCards.length}`,
+    followTail ? 'live following' : 'reading history',
+    pendingNewCount > 0 ? `+${pendingNewCount} new` : null,
+    unreadBoundaryIndex >= 0 ? 'u unread' : null,
+    normalizedSearchQuery ? `/${searchQuery} ${searchMatches.length === 0 ? '0' : `${searchMatchIndex + 1}/${searchMatches.length}`}` : null,
+  ])
+  const readerDensity = density.toUpperCase()
+  const slimBarTitle = fitText(
+    focusMode ? readerTitle : 'AGENT VIEWER',
+    Math.max(terminalColumns - 54, 20),
+  )
+  const topBarStatus = joinMeta([
+    themeMode.toUpperCase(),
+    focusMode ? 'FOCUS' : effectiveFocus.toUpperCase(),
+    provider.toUpperCase(),
+    readerDensity,
+    followTail ? 'LIVE' : pendingNewCount > 0 ? `+${pendingNewCount}` : 'READ',
+  ])
+  const searchFooterText = fitText(
+    `SEARCH /${searchQuery || ''}  ${searchMatches.length === 0 ? 'no matches' : `${searchMatchIndex + 1}/${searchMatches.length} matches`}  enter jump  esc close  [ first  ] last  n next  N prev`,
+    Math.max(terminalColumns - 2, 16),
+  )
+  const footerText = fitText(
+    `tab focus  j/k move  u unread  / search  [ first  ] last  n next  f live  h rail  z focus  d ${density}  e expand  p provider  r refresh  q quit`,
+    Math.max(terminalColumns - 2, 16),
+  )
+  const headerLeftText = fitText(
+    joinMeta([`${projectCount} projects`, `${sessions.length} sessions`, readerMeta]),
+    Math.max(Math.floor((terminalColumns - 2) * 0.52), 28),
+  )
+  const headerRightText = fitText(
+    joinMeta([statusLabel.toLowerCase(), selectedSessionShortId, readerState]),
+    Math.max(terminalColumns - 4 - headerLeftText.length, 20),
+  )
+
   return (
     <Box flexDirection="column" paddingX={1} height={terminalRows} overflow="hidden" backgroundColor={theme.bg}>
       <Box justifyContent="space-between" backgroundColor={theme.surface} paddingX={1}>
-        <Text bold color={theme.text}>AGENT VIEWER</Text>
-        <Text>
-          <Text backgroundColor={theme.surface2} color={theme.muted}> {themeMode.toUpperCase()} </Text>
-          <Text color={theme.dim}> </Text>
-          <Text backgroundColor={theme.surface2} color={focusedPane === 'sessions' ? theme.violet : theme.cyan}>
-            {' '}
-            {focusedPane.toUpperCase()}
-            {' '}
-          </Text>
-          <Text color={theme.dim}> </Text>
-          <Text backgroundColor={providerAccent} color={theme.surface}> {provider.toUpperCase()} </Text>
-        </Text>
+        <Text bold color={theme.text}>{slimBarTitle}</Text>
+        <Text color={theme.muted}>{topBarStatus}</Text>
       </Box>
 
-      <Box justifyContent="space-between" backgroundColor={theme.surface2} paddingX={1}>
-        <Text>
-          <Text color={theme.muted}>{projectCount} projects</Text>
-          <Text color={theme.dim}>  </Text>
-          <Text color={theme.muted}>{sessions.length} sessions</Text>
-          <Text color={theme.dim}>  </Text>
-          <Text color={sidebarAccent}>{currentProjectName.toUpperCase()}</Text>
-        </Text>
-        <Text>
-          <Text color={statusColor}>{statusLabel.toLowerCase()}</Text>
-          <Text color={theme.dim}>  </Text>
-          <Text color={theme.muted}>{selectedSessionShortId}</Text>
-        </Text>
-      </Box>
-
-      <Box flexGrow={1} height={contentHeight} overflow="hidden" marginTop={1}>
-        <Box width={sidebarWidth} flexDirection="column" overflow="hidden">
-          <Box flexDirection="column" backgroundColor={theme.surface} paddingX={1} paddingY={1} height={providerPanelHeight} overflow="hidden">
-            <Text bold color={theme.violet}>PROVIDER</Text>
-            {providerMenuOpen ? (
-              PROVIDERS.map((item, index) => (
-                <Text key={item} color={index === providerMenuIndex ? getProviderAccent(item) : theme.muted}>
-                  {index === providerMenuIndex ? '>' : ' '}
-                  {' '}
-                  {item.toUpperCase()}
-                </Text>
-              ))
-            ) : (
-              <>
-                <Text color={theme.muted}>current <Text color={providerAccent}>{provider.toUpperCase()}</Text></Text>
-                <Text color={theme.dim}>all projects</Text>
-                <Text color={focusedPane === 'sessions' ? theme.violet : theme.cyan}>focus {focusedPane}</Text>
-                <Text color={theme.dim}>press p to switch provider</Text>
-              </>
-            )}
-          </Box>
-
-          <Box marginTop={1} backgroundColor={theme.surface} paddingX={1}>
-            <Text bold color={theme.text}>SESSIONS <Text color={theme.dim}>{sessions.length}</Text></Text>
-          </Box>
-
-          <Box flexGrow={1} flexDirection="row" marginTop={1} backgroundColor={theme.surface2} overflow="hidden">
-            <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
-            {visibleSidebarEntries.length === 0 ? (
-              <Text color={theme.dim}>{loadingSessions ? 'Loading sessions…' : 'No sessions found'}</Text>
-            ) : (
-              visibleSidebarEntries.map((entry) => {
-                if (entry.type === 'project') {
-                  return (
-                    <Text key={entry.key} bold color={theme.dim}>
-                      {fitText(`${entry.projectName} ${entry.count}`, sidebarInnerWidth - 2)}
-                    </Text>
-                  )
-                }
-
-                const selected = entry.absoluteIndex === selectedIndex
-                const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
-                const activityTime = entry.session.lastModified ?? entry.session.createdAt
-                const title = fitText(formatSessionTitle(entry.session), sessionTitleWidth)
-                const meta = fitText(
-                  `${formatProviderLabel(entry.session.provider)} ${timeAgo(activityTime)} ${entry.session.sessionId.slice(-8)}`,
-                  sessionMetaWidth,
-                )
-
-                return (
-                  <Box
-                    key={entry.key}
-                    flexDirection="column"
-                    backgroundColor={selected ? theme.surface : theme.surface2}
-                    paddingX={1}
-                    overflow="hidden"
-                  >
-                    <Text color={selected ? theme.text : theme.muted}>{title}</Text>
-                    <Text color={selected ? sessionAccent : theme.dim}>{meta}</Text>
-                  </Box>
-                )
-              })
-            )}
-            </Box>
-            <Scrollbar
-              total={sidebarEntries.length}
-              visible={visibleSidebarEntries.length}
-              offset={sidebarTopIndex}
-              height={Math.max(sidebarRowBudget, 1)}
-              trackColor={theme.surface3}
-              thumbColor={sidebarAccent}
-            />
-          </Box>
+      {!focusMode ? (
+        <Box justifyContent="space-between" backgroundColor={theme.surface2} paddingX={1}>
+          <Text color={theme.muted}>{headerLeftText}</Text>
+          <Text color={theme.dim}>{headerRightText}</Text>
         </Box>
+      ) : null}
 
-        <Box width={SIDEBAR_GUTTER_WIDTH} />
+      <Box flexGrow={1} height={contentHeight} overflow="hidden" marginTop={densityState.mainMarginTop}>
+        {showRail ? (
+          <>
+            <Box width={sidebarWidth} flexDirection="column" overflow="hidden">
+              <Box flexDirection="column" backgroundColor={theme.surface} paddingX={1} paddingY={1} height={providerPanelHeight} overflow="hidden">
+                <Text bold color={theme.violet}>READER RAIL</Text>
+                {providerMenuOpen ? (
+                  PROVIDERS.map((item, index) => (
+                    <Text key={item} color={index === providerMenuIndex ? getProviderAccent(item) : theme.muted}>
+                      {index === providerMenuIndex ? '>' : ' '}
+                      {' '}
+                      {item.toUpperCase()}
+                    </Text>
+                  ))
+                ) : (
+                  <>
+                    <Text color={theme.muted}>provider <Text color={providerAccent}>{provider.toUpperCase()}</Text></Text>
+                    <Text color={theme.dim}>{projectCount} projects  {sessions.length} sessions</Text>
+                    <Text color={effectiveFocus === 'sessions' ? theme.violet : theme.cyan}>tab focus  h hide rail</Text>
+                  </>
+                )}
+              </Box>
+
+              <Box marginTop={1} backgroundColor={theme.surface} paddingX={1}>
+                <Text bold color={theme.text}>SESSIONS <Text color={theme.dim}>{sessions.length}</Text></Text>
+              </Box>
+
+              <Box flexGrow={1} flexDirection="row" marginTop={1} backgroundColor={theme.surface2} overflow="hidden">
+                <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
+                  {visibleSidebarEntries.length === 0 ? (
+                    <Text color={theme.dim}>{loadingSessions ? 'Loading sessions…' : 'No sessions found'}</Text>
+                  ) : (
+                    visibleSidebarEntries.map((entry) => {
+                      if (entry.type === 'project') {
+                        return (
+                          <Text key={entry.key} bold color={theme.dim}>
+                            {fitText(`${entry.projectName} ${entry.count}`, sidebarInnerWidth - 2)}
+                          </Text>
+                        )
+                      }
+
+                      const selected = entry.absoluteIndex === selectedIndex
+                      const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
+                      const activityTime = entry.session.lastModified ?? entry.session.createdAt
+                      const title = fitText(formatSessionTitle(entry.session), sessionTitleWidth)
+                      const meta = fitText(
+                        `${formatProviderLabel(entry.session.provider)} ${timeAgo(activityTime)} ${entry.session.sessionId.slice(-8)}`,
+                        sessionMetaWidth,
+                      )
+
+                      return (
+                        <Box
+                          key={entry.key}
+                          flexDirection="column"
+                          backgroundColor={selected ? theme.surface : theme.surface2}
+                          paddingX={1}
+                          overflow="hidden"
+                        >
+                          <Text color={selected ? theme.text : theme.muted}>{title}</Text>
+                          <Text color={selected ? sessionAccent : theme.dim}>{meta}</Text>
+                        </Box>
+                      )
+                    })
+                  )}
+                </Box>
+                <Scrollbar
+                  total={sidebarEntries.length}
+                  visible={visibleSidebarEntries.length}
+                  offset={sidebarTopIndex}
+                  height={Math.max(sidebarRowBudget, 1)}
+                  trackColor={theme.surface3}
+                  thumbColor={sidebarAccent}
+                />
+              </Box>
+            </Box>
+            <Box width={gutterWidth} />
+          </>
+        ) : null}
 
         <Box flexGrow={1} flexDirection="column" overflow="hidden">
-          <Box flexDirection="column" backgroundColor={theme.surface} paddingX={1} paddingY={1} height={MESSAGE_HEADER_HEIGHT} overflow="hidden">
-            <Box justifyContent="space-between">
-              <Text bold color={theme.text}>SESSION</Text>
+          {!focusMode ? (
+            <Box justifyContent="space-between" backgroundColor={theme.surface} paddingX={1} height={densityState.messageHeaderHeight} overflow="hidden">
+              {selectedSession ? (
+                <Text color={theme.text}>{fitText(readerTitle, Math.max(messageInnerWidth - 20, 16))}</Text>
+              ) : (
+                <Text color={theme.dim}>No session selected</Text>
+              )}
               <Text>
                 <Text color={providerAccent}>{provider.toUpperCase()}</Text>
                 <Text color={theme.dim}>  </Text>
                 <Text color={theme.muted}>{transcriptCards.length} messages</Text>
               </Text>
             </Box>
-            {selectedSession ? (
-              <>
-                {formatSessionMeta(selectedSession, sessionDetail?.info ?? null).map((line, index) => (
-                  <Text key={`${index}:${line}`} color={index === 0 ? theme.text : theme.muted}>
-                    {fitText(line, messageInnerWidth - 2)}
-                  </Text>
-                ))}
-                <Text color={theme.dim}>
-                  window{' '}
-                  <Text color={theme.cyan}>
-                    {transcriptCards.length === 0 ? 0 : topIndex + 1}-{transcriptWindowEnd}
-                  </Text>
-                  /{transcriptCards.length}
-                  <Text color={followTail ? theme.green : theme.amber}>
-                    {followTail ? '  live' : '  reading'}
-                  </Text>
-                  {pendingNewCount > 0 ? (
-                    <Text color={theme.amber}>  +{pendingNewCount} new</Text>
-                  ) : null}
-                  {normalizedSearchQuery ? (
-                    <Text color={theme.pink}>
-                      {'  '}
-                      /{fitText(searchQuery, 18).trim()}
-                      {' '}
-                      {searchMatches.length === 0 ? '0' : `${searchMatchIndex + 1}/${searchMatches.length}`}
-                    </Text>
-                  ) : null}
-                </Text>
-              </>
-            ) : (
-              <Text color={theme.dim}>No session selected</Text>
-            )}
-          </Box>
+          ) : null}
 
-          <Box flexGrow={1} flexDirection="row" marginTop={1} backgroundColor={theme.surface2} overflow="hidden">
+          <Box
+            flexGrow={1}
+            flexDirection="row"
+            marginTop={focusMode ? 0 : densityState.transcriptMarginTop}
+            backgroundColor={theme.surface2}
+            overflow="hidden"
+          >
             <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
-            {error ? (
-              <Text color={theme.red}>{fitText(error, messageInnerWidth - 2)}</Text>
-            ) : null}
+              {error ? (
+                <Text color={theme.red}>{fitText(error, messageInnerWidth - 2)}</Text>
+              ) : null}
 
-            {loadingDetail ? (
-              <Text color={theme.dim}>Loading transcript…</Text>
-            ) : visibleTranscriptCards.length === 0 ? (
-              <Text color={theme.dim}>No messages.</Text>
-            ) : (
-              visibleTranscriptCards.map((card, windowIndex) => {
-                const absoluteIndex = topIndex + windowIndex
-                const isSelected = card.key === transcriptCursorKey
-                const hasCursor = isSelected && focusedPane === 'messages'
-                const isExpanded = expandedCardKeys.has(card.key)
-                const expandedLines = isExpanded ? card.expandedLines : null
-                const accent = transcriptAccent(card.role, card.provider ?? provider)
-                const timestamp = card.timestamp ?? ''
-                const rawBodyLines = previewBodyLines(card)
-                const groups = groupBodyLines(rawBodyLines)
-                const bodyLineWidth = Math.max(transcriptLineWidth - 2, 20)
-                const hiddenLines = Math.max(card.expandedLines.length - rawBodyLines.length, 0)
-                const isSearchHit = normalizedSearchQuery.length > 0
-                  && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
-                const isLatest = absoluteIndex === transcriptCards.length - 1
-                const cardShellBg = hasCursor
-                  ? theme.surface2
-                  : isSelected
-                  ? theme.surface2
-                  : undefined
-                const headerBg = hasCursor
-                  ? theme.surface3
-                  : isSelected
-                  ? theme.surface3
-                  : undefined
-                const bodyBg = isSelected ? cardShellBg : undefined
-                const railColor = hasCursor
-                  ? accent
-                  : isSelected
-                  ? theme.border2
-                  : theme.surface2
-                const marker = hasCursor ? '▶ ' : isSelected ? '▸ ' : '● '
-                const timestampColor = hasCursor
-                  ? theme.muted
-                  : isSelected
-                  ? theme.text
-                  : theme.dim
+              {loadingDetail ? (
+                <Text color={theme.dim}>Loading transcript…</Text>
+              ) : visibleTranscriptCards.length === 0 ? (
+                <Text color={theme.dim}>No messages.</Text>
+              ) : (
+                visibleTranscriptCards.map((card, windowIndex) => {
+                  const absoluteIndex = topIndex + windowIndex
+                  const isSelected = card.key === transcriptCursorKey
+                  const hasCursor = isSelected && effectiveFocus === 'messages'
+                  const isExpanded = expandedCardKeys.has(card.key)
+                  const expandedLines = isExpanded ? card.expandedLines : null
+                  const accent = transcriptAccent(card.role, card.provider ?? provider)
+                  const timestamp = card.timestamp ?? ''
+                  const rawBodyLines = previewBodyLines(card)
+                  const groups = groupBodyLines(rawBodyLines)
+                  const bodyLineWidth = Math.max(
+                    transcriptLineWidth - densityState.bodyIndent - 1,
+                    20,
+                  )
+                  const hiddenLines = Math.max(card.expandedLines.length - rawBodyLines.length, 0)
+                  const isSearchHit = normalizedSearchQuery.length > 0
+                    && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
+                  const isLatest = absoluteIndex === transcriptCards.length - 1
+                  const landmarks = transcriptLandmarks(
+                    transcriptCards,
+                    absoluteIndex,
+                    unreadBoundaryIndex,
+                    pendingNewCount,
+                  )
+                  const cardShellBg = hasCursor
+                    ? theme.surface2
+                    : isSelected
+                    ? theme.surface2
+                    : undefined
+                  const headerBg = hasCursor
+                    ? theme.surface3
+                    : isSelected
+                    ? theme.surface3
+                    : undefined
+                  const bodyBg = isSelected
+                    ? hasCursor
+                      ? theme.surface2
+                      : theme.surface2
+                    : undefined
+                  const railColor = hasCursor
+                    ? accent
+                    : isSelected
+                    ? theme.border2
+                    : theme.surface2
+                  const marker = hasCursor ? '>' : isSelected ? ':' : '*'
+                  const timestampColor = hasCursor
+                    ? theme.muted
+                    : isSelected
+                    ? theme.text
+                    : theme.dim
 
-                return (
-                  <Box
-                    key={card.key}
-                    flexDirection="row"
-                    marginBottom={1}
-                    overflow="hidden"
-                    backgroundColor={cardShellBg}
-                    paddingX={isSelected ? 1 : 0}
-                  >
-                    <Box width={2} justifyContent="flexStart">
-                      <Text color={railColor}>{isSelected ? '▍' : ' '}</Text>
-                    </Box>
-                    <Box flexGrow={1} flexDirection="column">
-                      <Box backgroundColor={headerBg}>
-                        <Text color={isSelected ? accent : theme.muted}>{marker}</Text>
-                        <Text bold color={accent}>{card.label}</Text>
-                        {timestamp ? <Text color={timestampColor}>  {timestamp}</Text> : null}
-                        {isLatest ? <Text color={theme.green}>  latest</Text> : null}
-                        {isSearchHit ? <Text color={theme.pink}>  match</Text> : null}
-                        {isExpanded ? <Text color={theme.dim}>  e collapse</Text> : null}
-                      </Box>
-                      <Box flexDirection="column" marginLeft={2} backgroundColor={bodyBg}>
-                        {isExpanded && expandedLines && expandedLines.length > 0 ? (
-                          expandedLines.map((ln, lnIndex) => {
-                            if (ln.tone === 'tool') {
-                              const tm = ln.text.match(/^tool (\S+)(?:: (.*))?$/)
-                              const tn = (tm?.[1] ?? 'TOOL').toUpperCase()
-                              const tt = tm?.[2] ?? ''
+                  return (
+                    <React.Fragment key={card.key}>
+                      {landmarks.map((landmark, landmarkIndex) => {
+                        const color = landmark.kind === 'unread'
+                          ? theme.amber
+                          : landmark.kind === 'day'
+                          ? theme.violet
+                          : landmark.kind === 'section'
+                          ? accent
+                          : theme.dim
+                        return (
+                          <Box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
+                            <Text color={color}>{landmark.text}</Text>
+                          </Box>
+                        )
+                      })}
+                      <Box
+                        flexDirection="row"
+                        marginBottom={densityState.cardGap}
+                        overflow="hidden"
+                        backgroundColor={cardShellBg}
+                      >
+                        <Box width={2} justifyContent="flexStart">
+                          <Text color={railColor}>{isSelected ? '|' : ' '}</Text>
+                        </Box>
+                        <Box flexGrow={1} flexDirection="column">
+                          <Box backgroundColor={headerBg}>
+                            <Text color={isSelected ? accent : theme.muted}>{fitText(marker, 2)}</Text>
+                            <Text bold color={accent}>{card.label}</Text>
+                            {timestamp ? <Text color={timestampColor}>  {timestamp}</Text> : null}
+                            {isLatest ? <Text color={theme.green}>  latest</Text> : null}
+                            {isSearchHit ? <Text color={theme.pink}>  match</Text> : null}
+                            {isExpanded ? <Text color={theme.dim}>  e collapse</Text> : null}
+                          </Box>
+                          <Box flexDirection="column" marginLeft={densityState.bodyIndent} backgroundColor={bodyBg}>
+                          {isExpanded && expandedLines && expandedLines.length > 0 ? (
+                            expandedLines.map((ln, lnIndex) => {
+                              if (ln.tone === 'tool') {
+                                const tm = ln.text.match(/^tool (\S+)(?:: (.*))?$/)
+                                const tn = formatToolLabel(tm?.[1] ?? 'TOOL')
+                                const tt = tm?.[2] ?? ''
+                                return (
+                                  <Box key={`${card.key}:exp:${lnIndex}`} flexDirection="column" backgroundColor={theme.surface3} paddingX={1}>
+                                    <Text bold color={theme.cyan}>{fitText(tn, bodyLineWidth - 2)}</Text>
+                                    {tt ? <Text color={theme.muted}>{fitText(tt, bodyLineWidth - 2)}</Text> : null}
+                                  </Box>
+                                )
+                              }
                               return (
-                                <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={theme.surface3} paddingX={1}>
-                                  <Text bold color={theme.cyan}>{tn}</Text>
-                                  {tt ? <Text color={theme.muted}> {fitText(tt, Math.max(bodyLineWidth - tn.length - 2, 8))}</Text> : null}
+                                <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={1}>
+                                  <Text color={transcriptColor(ln)}>
+                                    {fitText(ln.text, bodyLineWidth - 2)}
+                                  </Text>
                                 </Box>
                               )
-                            }
-                            return (
-                              <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={1}>
-                                <Text color={transcriptColor(ln)}>
-                                  {fitText(ln.text, bodyLineWidth - 2)}
-                                </Text>
-                              </Box>
-                            )
-                          })
-                        ) : (
-                          <>
-                          {groups.map((group, groupIndex) => {
-                            if (group.type === 'text') {
-                              return (
-                                <React.Fragment key={`${card.key}:t${groupIndex}`}>
-                                  {group.lines.map((ln, lnIndex) => (
-                                    <Box key={`${card.key}:t${groupIndex}:${lnIndex}`}>
-                                      <Text color={transcriptColor(ln)}>
-                                        {fitText(ln.text, bodyLineWidth)}
-                                      </Text>
-                                    </Box>
-                                  ))}
-                                </React.Fragment>
-                              )
-                            }
+                            })
+                          ) : (
+                            <>
+                              {groups.map((group, groupIndex) => {
+                                if (group.type === 'text') {
+                                  return (
+                                    <React.Fragment key={`${card.key}:t${groupIndex}`}>
+                                      {group.lines.map((ln, lnIndex) => (
+                                        <Box key={`${card.key}:t${groupIndex}:${lnIndex}`}>
+                                          <Text color={transcriptColor(ln)}>
+                                            {fitText(ln.text, bodyLineWidth)}
+                                          </Text>
+                                        </Box>
+                                      ))}
+                                    </React.Fragment>
+                                  )
+                                }
 
-                            const toolMatch = group.toolLine.text.match(/^tool (\S+)(?:: (.*))?$/)
-                            const toolName = toolMatch?.[1]?.toUpperCase() ?? 'TOOL'
-                            const toolTarget = toolMatch?.[2] ?? ''
-                            const resultLine = group.bodyLines.find(
-                              (ln) => ln.tone === 'result_ok' || ln.tone === 'result_error',
-                            )
-                            const contentLines = group.bodyLines.filter(
-                              (ln) => ln.tone !== 'result_ok' && ln.tone !== 'result_error',
-                            )
-                            const isError = resultLine?.tone === 'result_error'
-                            const statusColor = isError ? theme.red : theme.green
-                            const statusIcon = isError ? '✗' : '✓'
-                            const statusLabel = isError ? 'ERROR' : 'OK'
-                            const targetWidth = Math.max(bodyLineWidth - toolName.length - 2, 8)
+                                const toolMatch = group.toolLine.text.match(/^tool (\S+)(?:: (.*))?$/)
+                                const rawToolName = toolMatch?.[1] ?? 'TOOL'
+                                const toolName = formatToolLabel(rawToolName)
+                                const toolTarget = toolMatch?.[2] ?? ''
+                                const resultLine = group.bodyLines.find(
+                                  (ln) => ln.tone === 'result_ok' || ln.tone === 'result_error',
+                                )
+                                const contentLines = group.bodyLines.filter(
+                                  (ln) => ln.tone !== 'result_ok' && ln.tone !== 'result_error',
+                                )
+                                const isError = resultLine?.tone === 'result_error'
+                                const resultColor = isError ? theme.red : theme.green
+                                const statusIcon = isError ? '✗' : '✓'
+                                const statusText = isError ? 'ERROR' : 'OK'
 
-                            if (toolName === 'FILECHANGE') {
-                              const pathLine = group.bodyLines[0]?.tone === 'diff_meta' ? group.bodyLines[0] : null
-                              const afterPath = pathLine ? group.bodyLines.slice(1) : group.bodyLines
-                              const diffContent = afterPath.filter((ln) => ln.tone !== 'dim')
-                              const pathText = pathLine?.text ?? ''
-                              const slashIdx = pathText.indexOf('/')
-                              const kind = slashIdx > 0 ? pathText.slice(0, slashIdx).trim() : 'change'
-                              const filePath = slashIdx >= 0 ? pathText.slice(slashIdx) : pathText
-                              const fileName = filePath.split('/').at(-1) ?? filePath
-                              const kindColor = kind === 'delete' ? theme.red : theme.green
-                              const fileNameWidth = Math.max(bodyLineWidth - kind.length - 16, 8)
-                              return (
-                                <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
-                                  <Box backgroundColor={theme.surface3} paddingX={1} justifyContent="space-between">
-                                    <Box>
-                                      <Text bold color={theme.cyan}>FILE CHANGE</Text>
-                                      {fileName ? (
-                                        <Text color={theme.text}>  {fitText(fileName, fileNameWidth)}</Text>
+                                if (rawToolName.toUpperCase() === 'FILECHANGE') {
+                                  const pathLine = group.bodyLines[0]?.tone === 'diff_meta' ? group.bodyLines[0] : null
+                                  const afterPath = pathLine ? group.bodyLines.slice(1) : group.bodyLines
+                                  const diffContent = afterPath.filter((ln) => ln.tone !== 'dim')
+                                  const pathText = pathLine?.text ?? ''
+                                  const slashIdx = pathText.indexOf('/')
+                                  const kind = slashIdx > 0 ? pathText.slice(0, slashIdx).trim() : 'change'
+                                  const filePath = slashIdx >= 0 ? pathText.slice(slashIdx) : pathText
+                                  const fileName = filePath.split('/').at(-1) ?? filePath
+                                  const kindColor = kind === 'delete' ? theme.red : theme.green
+                                  const kindLabel = `${kind || 'completed'} ▲`
+                                  const fileHeaderWidth = Math.max(bodyLineWidth - kindLabel.length - 2, 12)
+                                  return (
+                                    <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
+                                      <Box backgroundColor={theme.surface3} paddingX={1}>
+                                        <Text bold color={theme.cyan}>
+                                          {fitText(`FILE CHANGE${fileName ? `  ${fileName}` : ''}`, fileHeaderWidth)}
+                                        </Text>
+                                        <Text color={kindColor}>  {kindLabel}</Text>
+                                      </Box>
+                                      {filePath ? (
+                                        <Box paddingX={1} backgroundColor={theme.diffMetaBg}>
+                                          <Text color={theme.dim}>{fitText(filePath, bodyLineWidth - 2)}</Text>
+                                        </Box>
                                       ) : null}
+                                      {diffContent.map((ln, lnIndex) => (
+                                        <Box
+                                          key={`${card.key}:g${groupIndex}:d${lnIndex}`}
+                                          backgroundColor={transcriptBackground(ln, theme)}
+                                          paddingX={1}
+                                        >
+                                          <Text color={transcriptColor(ln)}>
+                                            {fitText(ln.text, bodyLineWidth - 2)}
+                                          </Text>
+                                        </Box>
+                                      ))}
+                                      <Box paddingX={1} backgroundColor={theme.diffAddBg}>
+                                        <Text color={theme.green}>✓ Applied {toolTarget}</Text>
+                                      </Box>
                                     </Box>
-                                    <Text color={kindColor}>{kind || 'completed'} ▲</Text>
-                                  </Box>
-                                  {filePath ? (
-                                    <Box paddingX={1} backgroundColor={theme.diffMetaBg}>
-                                      <Text color={theme.dim}>{fitText(filePath, bodyLineWidth - 2)}</Text>
-                                    </Box>
-                                  ) : null}
-                                  {diffContent.map((ln, lnIndex) => (
-                                    <Box
-                                      key={`${card.key}:g${groupIndex}:d${lnIndex}`}
-                                      backgroundColor={transcriptBackground(ln, theme)}
-                                      paddingX={1}
-                                    >
-                                      <Text color={transcriptColor(ln)}>
-                                        {fitText(ln.text, bodyLineWidth - 2)}
-                                      </Text>
-                                    </Box>
-                                  ))}
-                                  <Box paddingX={1} backgroundColor={theme.diffAddBg}>
-                                    <Text color={theme.green}>✓ Applied {toolTarget}</Text>
-                                  </Box>
-                                </Box>
-                              )
-                            }
+                                  )
+                                }
 
-                            return (
-                              <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
-                                <Box backgroundColor={theme.surface3} paddingX={1}>
-                                  <Text bold color={theme.cyan}>{toolName}</Text>
-                                  {toolTarget ? (
-                                    <Text color={theme.muted}> {fitText(toolTarget, targetWidth)}</Text>
-                                  ) : null}
+                                return (
+                                  <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
+                                    <Box backgroundColor={theme.surface3} paddingX={1}>
+                                      <Text bold color={theme.cyan}>{toolName}</Text>
+                                    </Box>
+                                    {toolTarget ? (
+                                      <Box backgroundColor={theme.surface3} paddingX={1}>
+                                        <Text color={theme.muted}>{fitText(toolTarget, bodyLineWidth - 2)}</Text>
+                                      </Box>
+                                    ) : null}
+                                    {resultLine ? (
+                                      <Box
+                                        paddingX={1}
+                                        backgroundColor={isError ? theme.diffRemoveBg : theme.diffAddBg}
+                                      >
+                                        <Text bold color={resultColor}>{statusIcon} {statusText}</Text>
+                                        <Text color={theme.dim}>
+                                          {'  '}
+                                          {fitText(
+                                            resultLine.text.replace(/^result (?:ok|error): /, ''),
+                                            Math.max(bodyLineWidth - statusText.length - 6, 8),
+                                          )}
+                                        </Text>
+                                      </Box>
+                                    ) : null}
+                                    {contentLines.map((ln, lnIndex) => (
+                                      <Box
+                                        key={`${card.key}:g${groupIndex}:c${lnIndex}`}
+                                        backgroundColor={transcriptBackground(ln, theme)}
+                                        paddingX={1}
+                                      >
+                                        <Text color={transcriptColor(ln)}>
+                                          {fitText(ln.text, Math.max(bodyLineWidth - 2, 16))}
+                                        </Text>
+                                      </Box>
+                                    ))}
+                                  </Box>
+                                )
+                              })}
+                              {hiddenLines > 0 && !isExpanded ? (
+                                <Box paddingX={1}>
+                                  <Text color={theme.dim}>{fitText(`▼ ${hiddenLines} more lines`, bodyLineWidth - 2)}</Text>
                                 </Box>
-                                {resultLine ? (
-                                  <Box
-                                    paddingX={1}
-                                    backgroundColor={isError ? theme.diffRemoveBg : theme.diffAddBg}
-                                  >
-                                    <Text bold color={statusColor}>{statusIcon} {statusLabel}</Text>
-                                    <Text color={theme.dim}>
-                                      {'  '}
-                                      {fitText(
-                                        resultLine.text.replace(/^result (?:ok|error): /, ''),
-                                        Math.max(bodyLineWidth - statusLabel.length - 6, 8),
-                                      )}
-                                    </Text>
-                                  </Box>
-                                ) : null}
-                                {contentLines.map((ln, lnIndex) => (
-                                  <Box
-                                    key={`${card.key}:g${groupIndex}:c${lnIndex}`}
-                                    backgroundColor={transcriptBackground(ln, theme)}
-                                    paddingX={1}
-                                  >
-                                    <Text color={transcriptColor(ln)}>
-                                      {fitText(ln.text, Math.max(bodyLineWidth - 2, 16))}
-                                    </Text>
-                                  </Box>
-                                ))}
-                              </Box>
-                            )
-                          })}
-                          {hiddenLines > 0 && !isExpanded ? (
-                            <Box paddingX={1}>
-                              <Text color={theme.dim}>▼ {hiddenLines} more lines</Text>
-                            </Box>
-                          ) : null}
-                          </>
-                        )}
+                              ) : null}
+                            </>
+                          )}
+                        </Box>
                       </Box>
-                    </Box>
-                  </Box>
-                )
-              })
-            )}
+                      </Box>
+                    </React.Fragment>
+                  )
+                })
+              )}
             </Box>
             <Scrollbar
               total={transcriptCards.length}
@@ -1426,7 +1809,7 @@ export default function App() {
               offset={topIndex}
               height={Math.max(transcriptViewportRows, 1)}
               trackColor={theme.surface3}
-              thumbColor={focusedPane === 'messages' ? theme.cyan : theme.dim}
+              thumbColor={effectiveFocus === 'messages' ? theme.cyan : theme.dim}
             />
           </Box>
         </Box>
@@ -1434,36 +1817,9 @@ export default function App() {
 
       <Box marginTop={1}>
         {searchMode ? (
-          <Text color={theme.dim}>
-            SEARCH
-            <Text color={theme.pink}> /{searchQuery || ''}</Text>
-            <Text color={theme.muted}>
-              {'  '}
-              {searchMatches.length === 0 ? 'no matches' : `${searchMatchIndex + 1}/${searchMatches.length} matches`}
-              {'  enter jump  esc close'}
-            </Text>
-          </Text>
+          <Text color={theme.dim}>{searchFooterText}</Text>
         ) : (
-          <Text color={theme.dim}>
-            TAB
-            <Text color={theme.muted}> focus  </Text>
-            J/K
-            <Text color={theme.muted}> move  </Text>
-            /
-            <Text color={theme.muted}> search  </Text>
-            N
-            <Text color={theme.muted}> next  </Text>
-            F
-            <Text color={theme.muted}> live  </Text>
-            E
-            <Text color={theme.muted}> expand  </Text>
-            P
-            <Text color={theme.muted}> provider  </Text>
-            R
-            <Text color={theme.muted}> refresh  </Text>
-            Q
-            <Text color={theme.muted}> quit</Text>
-          </Text>
+          <Text color={theme.dim}>{footerText}</Text>
         )}
       </Box>
     </Box>

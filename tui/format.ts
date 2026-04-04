@@ -2,6 +2,7 @@ import { getAssistantLabel } from '../lib/provider'
 import { pathBasename } from '../lib/projectPaths'
 import type { ThreadedBlock, ThreadedMessage, ToolThread } from '../lib/threading'
 import type { Session, SessionInfo } from '../lib/types'
+import type { TuiDensity } from './theme'
 
 const MAX_PREVIEW_CHARS = 160
 const MAX_BLOCK_LINES = 6
@@ -240,12 +241,37 @@ export type TuiTranscriptCard = {
   provider?: ThreadedMessage['provider']
   label: string
   timestamp?: string
+  timestampMs?: number
+  dayKey?: string
+  dayLabel?: string
   lines: TuiTranscriptCardLine[]
   expandedLines: TuiTranscriptCardLine[]
   searchText: string
 }
 
-function compactCardLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCardLine[] {
+function cardLineLimit(density: TuiDensity): number {
+  switch (density) {
+    case 'comfortable':
+      return 3
+    case 'dense':
+      return 6
+    default:
+      return MAX_CARD_LINES
+  }
+}
+
+function formatDayLabel(value?: string): string | undefined {
+  if (!value) return undefined
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return undefined
+  return new Intl.DateTimeFormat('en-AU', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  }).format(parsed)
+}
+
+function compactCardLines(lines: TuiTranscriptCardLine[], density: TuiDensity): TuiTranscriptCardLine[] {
   const normalized = lines
     .map((entry) => ({
       text: truncateLine(entry.text.trim()),
@@ -253,15 +279,16 @@ function compactCardLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCardLine
     }))
     .filter((entry) => entry.text.length > 0)
 
+  const maxCardLines = cardLineLimit(density)
   if (normalized.length === 0) return [line('No visible content', 'dim')]
-  if (normalized.length <= MAX_CARD_LINES) return normalized
+  if (normalized.length <= maxCardLines) return normalized
   return [
-    ...normalized.slice(0, MAX_CARD_LINES - 1),
-    line(`… ${normalized.length - (MAX_CARD_LINES - 1)} more`, 'dim'),
+    ...normalized.slice(0, maxCardLines - 1),
+    line(`… ${normalized.length - (maxCardLines - 1)} more`, 'dim'),
   ]
 }
 
-export function formatTranscriptCards(messages: ThreadedMessage[]): TuiTranscriptCard[] {
+export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiDensity = 'balanced'): TuiTranscriptCard[] {
   return messages.map((message) => {
     const label = message.role === 'assistant'
       ? getAssistantLabel(message.provider)
@@ -269,6 +296,7 @@ export function formatTranscriptCards(messages: ThreadedMessage[]): TuiTranscrip
     const expandedLines = message.blocks
       .flatMap(formatBlockExpanded)
       .filter((entry) => entry.text.trim().length > 0)
+    const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
 
     return {
       key: message.uuid,
@@ -276,7 +304,10 @@ export function formatTranscriptCards(messages: ThreadedMessage[]): TuiTranscrip
       provider: message.provider,
       label,
       timestamp: message.timestamp ? formatTimestamp(message.timestamp) : undefined,
-      lines: compactCardLines(message.blocks.flatMap(formatBlock)),
+      timestampMs: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.getTime() : undefined,
+      dayKey: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.toISOString().slice(0, 10) : undefined,
+      dayLabel: formatDayLabel(message.timestamp),
+      lines: compactCardLines(message.blocks.flatMap(formatBlock), density),
       expandedLines,
       searchText: expandedLines.map((entry) => entry.text).join('\n'),
     }
