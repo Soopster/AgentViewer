@@ -423,13 +423,15 @@ function cardHeight(
   cardGap: number,
   unreadBoundaryIndex: number,
   pendingNewCount: number,
+  expandedBorderRows: number,
 ): number {
   const card = cards[index]
   const bodyRows = expandedKeys.has(card.key)
     ? expandedBodyRows(card)
     : collapsedBodyRows(card)
   const landmarkRows = transcriptLandmarks(cards, index, unreadBoundaryIndex, pendingNewCount).length
-  return landmarkRows + 1 + bodyRows + cardGap
+  const borderRows = expandedKeys.has(card.key) ? expandedBorderRows : 0
+  return landmarkRows + 1 + bodyRows + borderRows + cardGap
 }
 
 function selectTranscriptWindow(
@@ -440,6 +442,7 @@ function selectTranscriptWindow(
   cardGap: number,
   unreadBoundaryIndex: number,
   pendingNewCount: number,
+  expandedBorderRows: number,
 ): { cards: TuiTranscriptCard[]; endIndex: number } {
   if (cards.length === 0) return { cards: [], endIndex: -1 }
 
@@ -449,7 +452,15 @@ function selectTranscriptWindow(
 
   for (let index = clamp(startIndex, 0, cards.length - 1); index < cards.length; index++) {
     const next = cards[index]
-    const nextHeight = cardHeight(cards, index, expandedKeys, cardGap, unreadBoundaryIndex, pendingNewCount)
+    const nextHeight = cardHeight(
+      cards,
+      index,
+      expandedKeys,
+      cardGap,
+      unreadBoundaryIndex,
+      pendingNewCount,
+      expandedBorderRows,
+    )
     if (visible.length > 0 && usedRows + nextHeight > rowBudget) break
     visible.push(next)
     usedRows += nextHeight
@@ -467,13 +478,30 @@ function windowStartForCursor(
   cardGap: number,
   unreadBoundaryIndex: number,
   pendingNewCount: number,
+  expandedBorderRows: number,
 ): number {
   if (cards.length === 0) return 0
   let start = clamp(cursorIndex, 0, cards.length - 1)
-  let usedRows = cardHeight(cards, start, expandedKeys, cardGap, unreadBoundaryIndex, pendingNewCount)
+  let usedRows = cardHeight(
+    cards,
+    start,
+    expandedKeys,
+    cardGap,
+    unreadBoundaryIndex,
+    pendingNewCount,
+    expandedBorderRows,
+  )
 
   while (start > 0) {
-    const nextHeight = cardHeight(cards, start - 1, expandedKeys, cardGap, unreadBoundaryIndex, pendingNewCount)
+    const nextHeight = cardHeight(
+      cards,
+      start - 1,
+      expandedKeys,
+      cardGap,
+      unreadBoundaryIndex,
+      pendingNewCount,
+      expandedBorderRows,
+    )
     if (usedRows + nextHeight > rowBudget) break
     start -= 1
     usedRows += nextHeight
@@ -580,8 +608,10 @@ export default function App() {
   const densityState = densityConfig(density)
   const providerAccent = getProviderAccent(provider)
   const showPaneBorders = themeMode !== 'light'
+  const showExpandedCardBorders = themeMode !== 'light'
   const paneBorderCols = showPaneBorders ? 2 : 0
   const paneBorderRows = showPaneBorders ? 2 : 0
+  const expandedCardBorderRows = showExpandedCardBorders ? 2 : 0
   const paneBorderStyle = 'single'
   const inactivePaneBorderColor = themeMode === 'light' ? theme.border : theme.border
   const activePaneBorderColor = themeMode === 'light' ? theme.border2 : theme.border2
@@ -647,8 +677,9 @@ export default function App() {
       densityState.cardGap,
       unreadBoundaryIndex,
       pendingNewCount,
+      expandedCardBorderRows,
     )
-  }, [cursorIndex, densityState.cardGap, expandedCardKeys, pendingNewCount, transcriptCards, transcriptTopKey, transcriptViewportRows, unreadBoundaryIndex])
+  }, [cursorIndex, densityState.cardGap, expandedCardBorderRows, expandedCardKeys, pendingNewCount, transcriptCards, transcriptTopKey, transcriptViewportRows, unreadBoundaryIndex])
   const visibleTranscriptWindow = useMemo(() => (
     selectTranscriptWindow(
       transcriptCards,
@@ -658,8 +689,9 @@ export default function App() {
       densityState.cardGap,
       unreadBoundaryIndex,
       pendingNewCount,
+      expandedCardBorderRows,
     )
-  ), [densityState.cardGap, expandedCardKeys, pendingNewCount, topIndex, transcriptCards, transcriptViewportRows, unreadBoundaryIndex])
+  ), [densityState.cardGap, expandedCardBorderRows, expandedCardKeys, pendingNewCount, topIndex, transcriptCards, transcriptViewportRows, unreadBoundaryIndex])
   const visibleTranscriptCards = visibleTranscriptWindow.cards
   const visibleTranscriptEndIndex = visibleTranscriptWindow.endIndex
   const transcriptWindowEnd = visibleTranscriptEndIndex >= 0 ? visibleTranscriptEndIndex + 1 : 0
@@ -690,13 +722,14 @@ export default function App() {
       densityState.cardGap,
       unreadBoundaryIndex,
       pendingNewCount,
+      expandedCardBorderRows,
     )
     setTranscriptCursorKey(transcriptCards[nextIndex].key)
     setTranscriptTopKey(transcriptCards[nextStart].key)
     const atTail = nextIndex === transcriptCards.length - 1
     setFollowTail(atTail)
     if (atTail) setPendingNewCount(0)
-  }, [densityState.cardGap, expandedCardKeys, pendingNewCount, transcriptCards, transcriptViewportRows, unreadBoundaryIndex])
+  }, [densityState.cardGap, expandedCardBorderRows, expandedCardKeys, pendingNewCount, transcriptCards, transcriptViewportRows, unreadBoundaryIndex])
 
   const jumpToTranscriptTail = useCallback(() => {
     if (transcriptCards.length === 0) return
@@ -735,6 +768,7 @@ export default function App() {
         densityState.cardGap,
         unreadBoundaryIndex,
         pendingNewCount,
+        expandedCardBorderRows,
       )
       setTranscriptTopKey(transcriptCards[nextStart].key)
     }
@@ -744,6 +778,7 @@ export default function App() {
   }, [
     cursorIndex,
     densityState.cardGap,
+    expandedCardBorderRows,
     expandedCardKeys,
     pendingNewCount,
     topIndex,
@@ -1095,6 +1130,7 @@ export default function App() {
         densityState.cardGap,
         unreadBoundaryIndex,
         pendingNewCount,
+        expandedCardBorderRows,
       )
       setTranscriptCursorKey(transcriptCards[lastIndex].key)
       setTranscriptTopKey(transcriptCards[nextStart].key)
@@ -1115,6 +1151,7 @@ export default function App() {
         densityState.cardGap,
         unreadBoundaryIndex,
         pendingNewCount,
+        expandedCardBorderRows,
       )
       setTranscriptCursorKey(transcriptCards[lastIndex].key)
       setTranscriptTopKey(transcriptCards[nextStart].key)
@@ -1153,6 +1190,7 @@ export default function App() {
         densityState.cardGap,
         unreadBoundaryIndex,
         pendingNewCount,
+        expandedCardBorderRows,
       )
       return transcriptCards[nextStart]?.key ?? transcriptCards[0].key
     })
@@ -1160,6 +1198,7 @@ export default function App() {
   }, [
     cursorIndex,
     densityState.cardGap,
+    expandedCardBorderRows,
     expandedCardKeys,
     followTail,
     pendingNewCount,
@@ -1181,6 +1220,7 @@ export default function App() {
         densityState.cardGap,
         unreadBoundaryIndex,
         pendingNewCount,
+        expandedCardBorderRows,
       )
       setTranscriptCursorKey(transcriptCards[lastIndex].key)
       setTranscriptTopKey(transcriptCards[nextStart].key)
@@ -1196,12 +1236,14 @@ export default function App() {
         densityState.cardGap,
         unreadBoundaryIndex,
         pendingNewCount,
+        expandedCardBorderRows,
       )
       setTranscriptTopKey(transcriptCards[nextStart].key)
     }
   }, [
     cursorIndex,
     densityState.cardGap,
+    expandedCardBorderRows,
     expandedCardKeys,
     followTail,
     pendingNewCount,
@@ -2028,6 +2070,16 @@ export default function App() {
                       ? theme.surface2
                       : theme.surface2
                     : undefined
+                  const showExpandedCardBorder = showExpandedCardBorders && isExpanded
+                  const expandedCardBorderColor = hasCursor
+                    ? accent
+                    : isSelected
+                    ? theme.border2
+                    : theme.border
+                  const expandedBodyLineWidth = Math.max(
+                    bodyLineWidth - (showExpandedCardBorder ? 2 : 0),
+                    16,
+                  )
                   const railColor = hasCursor
                     ? accent
                     : isSelected
@@ -2061,41 +2113,46 @@ export default function App() {
                         marginBottom={densityState.cardGap}
                         overflow="hidden"
                         backgroundColor={cardShellBg}
-                      >
-                        <Box width={2} justifyContent="flexStart">
-                          <Text color={railColor}>{isSelected ? '|' : ' '}</Text>
-                        </Box>
-                        <Box flexGrow={1} flexDirection="column">
-                          <Box backgroundColor={headerBg}>
-                            <Text color={isSelected ? accent : theme.muted}>{fitText(marker, 2)}</Text>
-                            <Text bold color={accent}>{card.label}</Text>
-                            {timestamp ? <Text color={timestampColor}>  {timestamp}</Text> : null}
-                            {isLatest ? <Text color={theme.green}>  latest</Text> : null}
+                        >
+                          <Box width={2} justifyContent="flexStart">
+                            <Text color={railColor}>{isSelected ? '|' : ' '}</Text>
+                          </Box>
+                          <Box
+                            flexGrow={1}
+                            flexDirection="column"
+                            borderStyle={showExpandedCardBorder ? 'single' : undefined}
+                            borderColor={showExpandedCardBorder ? expandedCardBorderColor : undefined}
+                          >
+                            <Box backgroundColor={headerBg}>
+                              <Text color={isSelected ? accent : theme.muted}>{fitText(marker, 2)}</Text>
+                              <Text bold color={accent}>{card.label}</Text>
+                              {timestamp ? <Text color={timestampColor}>  {timestamp}</Text> : null}
+                              {isLatest ? <Text color={theme.green}>  latest</Text> : null}
                             {isSearchHit ? <Text color={theme.pink}>  match</Text> : null}
                             {isExpanded ? <Text color={theme.dim}>  e collapse</Text> : null}
                           </Box>
                           <Box flexDirection="column" marginLeft={densityState.bodyIndent} backgroundColor={bodyBg}>
                           {isExpanded && expandedLines && expandedLines.length > 0 ? (
                             expandedLines.map((ln, lnIndex) => {
-                              if (ln.tone === 'tool') {
-                                const tm = ln.text.match(/^tool (\S+)(?:: (.*))?$/)
-                                const tn = formatToolLabel(tm?.[1] ?? 'TOOL')
-                                const tt = tm?.[2] ?? ''
+                                if (ln.tone === 'tool') {
+                                  const tm = ln.text.match(/^tool (\S+)(?:: (.*))?$/)
+                                  const tn = formatToolLabel(tm?.[1] ?? 'TOOL')
+                                  const tt = tm?.[2] ?? ''
+                                  return (
+                                    <Box key={`${card.key}:exp:${lnIndex}`} flexDirection="column" backgroundColor={theme.surface3} paddingX={1}>
+                                      <Text bold color={theme.cyan}>{fitText(tn, expandedBodyLineWidth - 2)}</Text>
+                                      {tt ? <Text color={theme.muted}>{fitText(tt, expandedBodyLineWidth - 2)}</Text> : null}
+                                    </Box>
+                                  )
+                                }
                                 return (
-                                  <Box key={`${card.key}:exp:${lnIndex}`} flexDirection="column" backgroundColor={theme.surface3} paddingX={1}>
-                                    <Text bold color={theme.cyan}>{fitText(tn, bodyLineWidth - 2)}</Text>
-                                    {tt ? <Text color={theme.muted}>{fitText(tt, bodyLineWidth - 2)}</Text> : null}
+                                  <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={1}>
+                                    <Text color={transcriptColor(ln)}>
+                                      {fitText(ln.text, expandedBodyLineWidth - 2)}
+                                    </Text>
                                   </Box>
                                 )
-                              }
-                              return (
-                                <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={1}>
-                                  <Text color={transcriptColor(ln)}>
-                                    {fitText(ln.text, bodyLineWidth - 2)}
-                                  </Text>
-                                </Box>
-                              )
-                            })
+                              })
                           ) : (
                             <>
                               {groups.map((group, groupIndex) => {
