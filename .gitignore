@@ -2,7 +2,7 @@
 node_modules/
 .agent-viewer-data/
 memory/
-tsconfig.tsbuildinfo
+*.tsbuildinfo
 .DS_Store
 .env
 .env.local
