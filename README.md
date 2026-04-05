@@ -25,6 +25,7 @@ It provides a single UI for session browsing, project-level views, message inspe
 
 - Node.js 20+
 - npm
+- Bun for the OpenTUI terminal UI on the `opentui-migration` branch
 - At least one supported provider installed and usable locally
 
 ## Providers
@@ -130,12 +131,27 @@ npm run tui
 
 ## TUI Preview
 
-An Ink-based terminal UI is now scaffolded as an early read-only preview.
+The terminal UI is being migrated from Ink to OpenTUI on the `opentui-migration` branch.
+
+Primary runtime on this branch:
+
+```bash
+bun run tui
+```
+
+Legacy Ink runtime during migration:
+
+```bash
+npm run tui:ink
+```
+
+The OpenTUI reader on this branch is the primary terminal UI and ports the Ink reader onto the existing TUI service layer.
 
 - Browse providers
 - Navigate sessions
-- Inspect recent transcript output
+- Read full long-form transcripts with keyboard navigation, search, folding, and live-follow controls
 - Refresh from the terminal without going through the browser
+- Keep the previous Ink implementation available while the remaining non-reader TUI surfaces are migrated
 
 Current limitations:
 

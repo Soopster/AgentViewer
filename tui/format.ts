@@ -27,7 +27,7 @@ export type TuiTranscriptCardLine = {
   tone: TuiTranscriptLineTone
 }
 
-export type TuiTranscriptCardCategory = 'conversation' | 'technical' | 'diff' | 'system'
+export type TuiTranscriptCardCategory = 'conversation' | 'technical' | 'diff' | 'system' | 'insight'
 
 function sanitizeLine(value: string): string {
   return value
@@ -175,6 +175,39 @@ function previewTool(thread: ToolThread): TuiTranscriptCardLine[] {
   }
 
   const input = thread.toolUse.input as Record<string, unknown>
+  const toolName = thread.toolUse.name
+
+  if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write') {
+    const filePath = typeof input.file_path === 'string' ? pathBasename(input.file_path) : ''
+    const isError = thread.result?.is_error === true
+
+    let removedLines = 0
+    let addedLines = 0
+
+    if (toolName === 'MultiEdit') {
+      const edits = Array.isArray(input.edits) ? (input.edits as Array<Record<string, unknown>>) : []
+      for (const edit of edits) {
+        removedLines += typeof edit.old_string === 'string' ? edit.old_string.split('\n').filter((l: string) => l.trim()).length : 0
+        addedLines += typeof edit.new_string === 'string' ? edit.new_string.split('\n').filter((l: string) => l.trim()).length : 0
+      }
+    } else if (toolName === 'Write') {
+      const content = typeof input.content === 'string' ? input.content : ''
+      addedLines = content.split('\n').filter((l) => l.trim()).length
+    } else {
+      removedLines = typeof input.old_string === 'string' ? input.old_string.split('\n').filter((l: string) => l.trim()).length : 0
+      addedLines = typeof input.new_string === 'string' ? input.new_string.split('\n').filter((l: string) => l.trim()).length : 0
+    }
+
+    const summary = toolName === 'Write'
+      ? `+${addedLines} lines`
+      : `-${removedLines} +${addedLines} lines`
+
+    return [
+      line(`tool ${toolName}${filePath ? `: ${filePath}` : ''}`, 'tool'),
+      line(isError ? '✗ ERROR' : `✓ ${summary}`, isError ? 'result_error' : 'result_ok'),
+    ]
+  }
+
   const target = typeof input.file_path === 'string'
     ? pathBasename(input.file_path)
     : typeof input.path === 'string'
@@ -256,6 +289,8 @@ export type TuiTranscriptCard = {
   lines: TuiTranscriptCardLine[]
   expandedLines: TuiTranscriptCardLine[]
   searchText: string
+  codeBlocks?: Array<{ key: string; lang: string; content: string }>
+  editDiff?: string
 }
 
 function cardLineLimit(density: TuiDensity): number {
@@ -313,11 +348,19 @@ function compactAutoFoldLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCard
   ]
 }
 
+const INSIGHT_RE = /`★\s*Insight\s*─+`/
+
 function classifyCardCategory(message: ThreadedMessage): TuiTranscriptCardCategory {
   if (message.role === 'system') return 'system'
-  if (message.blocks.some((block) => block.type === 'tool_thread' && block.toolUse.name === 'FileChange')) {
+  const DIFF_TOOLS = new Set(['FileChange', 'Edit', 'MultiEdit', 'Write'])
+  if (message.blocks.some((block) => block.type === 'tool_thread' && DIFF_TOOLS.has(block.toolUse.name))) {
     return 'diff'
   }
+
+  const hasInsight = message.blocks.some(
+    (block) => block.type === 'text' && INSIGHT_RE.test(block.text),
+  )
+  if (hasInsight) return 'insight'
 
   const hasOperationalBlock = message.blocks.some((block) => (
     block.type === 'tool_thread'
@@ -331,18 +374,57 @@ function classifyCardCategory(message: ThreadedMessage): TuiTranscriptCardCatego
   return hasOperationalBlock ? 'technical' : 'conversation'
 }
 
+function makeUnifiedDiffHunk(filePath: string, oldStr: string, newStr: string): string {
+  const oldLines = oldStr ? oldStr.split('\n') : []
+  const newLines = newStr ? newStr.split('\n') : []
+  return [
+    `--- a/${filePath}`,
+    `+++ b/${filePath}`,
+    `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
+    ...oldLines.map((l) => `-${l}`),
+    ...newLines.map((l) => `+${l}`),
+  ].join('\n')
+}
+
+function synthesizeEditDiff(message: ThreadedMessage): string | undefined {
+  const hunks: string[] = []
+  for (const block of message.blocks) {
+    if (block.type !== 'tool_thread') continue
+    const { name, input } = block.toolUse
+    const inp = input as Record<string, unknown>
+
+    if (name === 'Edit') {
+      const filePath = typeof inp.file_path === 'string' ? inp.file_path : 'unknown'
+      const oldStr = typeof inp.old_string === 'string' ? inp.old_string : ''
+      const newStr = typeof inp.new_string === 'string' ? inp.new_string : ''
+      if (oldStr || newStr) hunks.push(makeUnifiedDiffHunk(filePath, oldStr, newStr))
+    } else if (name === 'MultiEdit') {
+      const edits = Array.isArray(inp.edits) ? (inp.edits as Array<Record<string, unknown>>) : []
+      for (const edit of edits) {
+        const filePath = typeof edit.file_path === 'string' ? edit.file_path : 'unknown'
+        const oldStr = typeof edit.old_string === 'string' ? edit.old_string : ''
+        const newStr = typeof edit.new_string === 'string' ? edit.new_string : ''
+        if (oldStr || newStr) hunks.push(makeUnifiedDiffHunk(filePath, oldStr, newStr))
+      }
+    } else if (name === 'Write') {
+      const filePath = typeof inp.file_path === 'string' ? inp.file_path : 'unknown'
+      const content = typeof inp.content === 'string' ? inp.content : ''
+      if (content) hunks.push(makeUnifiedDiffHunk(filePath, '', content))
+    }
+  }
+  return hunks.length > 0 ? hunks.join('\n') : undefined
+}
+
 export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiDensity = 'balanced'): TuiTranscriptCard[] {
   return messages.map((message) => {
     const label = message.role === 'assistant'
       ? getAssistantLabel(message.provider)
       : message.role.toUpperCase()
     const previewLines = message.blocks.flatMap(formatBlock)
-    const expandedLines = message.blocks
-      .flatMap(formatBlockExpanded)
-      .filter((entry) => entry.text.trim().length > 0)
+    const { processedLines: expandedLines, codeBlocks } = extractCodeBlocksFromBlocks(message.blocks)
     const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
     const category = classifyCardCategory(message)
-    const autoFold = category !== 'conversation'
+    const autoFold = category !== 'conversation' && category !== 'insight'
     const collapsedLines = autoFold
       ? compactAutoFoldLines(previewLines)
       : compactCardLines(previewLines, density)
@@ -363,6 +445,8 @@ export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiD
       lines: collapsedLines,
       expandedLines,
       searchText: expandedLines.map((entry) => entry.text).join('\n'),
+      codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
+      editDiff: synthesizeEditDiff(message),
     }
   })
 }
@@ -384,6 +468,38 @@ export function formatSessionProject(session: Session): string {
 
 export function formatProviderLabel(provider?: Session['provider']): string {
   return (provider ?? 'claude').toUpperCase()
+}
+
+const CODE_FENCE_RE = /^```(\w*)\s*\n([\s\S]*?)^```[ \t]*$/gm
+
+function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[]): {
+  processedLines: TuiTranscriptCardLine[]
+  codeBlocks: Array<{ key: string; lang: string; content: string }>
+} {
+  const all: Array<{ key: string; lang: string; content: string }> = []
+  let n = 0
+  const lines: TuiTranscriptCardLine[] = []
+
+  for (const block of blocks) {
+    if (block.type !== 'text' || !block.text.trim()) {
+      lines.push(...formatBlockExpanded(block).filter((l) => l.text.trim()))
+      continue
+    }
+    const matches = Array.from(block.text.matchAll(CODE_FENCE_RE))
+    let replaced = block.text
+    for (const match of matches) {
+      const lang = (match[1] ?? '').trim() || 'text'
+      const content = (match[2] ?? '').trimEnd()
+      all.push({ key: `cb${n++}`, lang, content })
+      replaced = replaced.replace(match[0], `[code: ${lang}]`)
+    }
+    const processed = sanitizeLine(replaced).trim().split('\n')
+      .map((l) => line(l.trimEnd()))
+      .filter((l) => l.text.trim().length > 0)
+    lines.push(...processed)
+  }
+
+  return { processedLines: lines, codeBlocks: all }
 }
 
 function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
@@ -418,6 +534,16 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
           if (change.diff) result.push(...previewDiff(change.diff, 60))
         }
         return result
+      }
+
+      if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write') {
+        const filePath = typeof input.file_path === 'string' ? input.file_path : ''
+        const isError = block.result?.is_error === true
+        // Diff content is handled via card.editDiff → <diff> component; only emit header + status here
+        return [
+          line(`tool ${toolName}${filePath ? `: ${filePath}` : ''}`, 'tool'),
+          line(isError ? '✗ ERROR' : '✓ OK', isError ? 'result_error' : 'result_ok'),
+        ]
       }
 
       const target = typeof input.file_path === 'string'
