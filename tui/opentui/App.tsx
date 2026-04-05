@@ -1859,10 +1859,11 @@ export default function OpenTuiApp() {
         provider.toUpperCase(),
         density.toUpperCase(),
         pendingNewCount > 0 ? `+${pendingNewCount} new` : null,
+        !railVisible ? 'h show rail' : null,
       ]),
       Math.max(Math.floor(width * 0.55), 20),
     ),
-    [statusLabel, transcriptCards.length, cursorIndex, readerMode, themeMode, provider, density, pendingNewCount, width],
+    [statusLabel, transcriptCards.length, cursorIndex, readerMode, themeMode, provider, density, pendingNewCount, railVisible, width],
   )
   const headerContextLeft = useMemo(
     () => fitText(
@@ -1987,11 +1988,6 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
-          {showRail ? null : (
-            <box paddingX={1}>
-              <text fg={theme.dim}>{fitText('rail hidden  ·  press h to show sessions', rightPaneWidth - 4)}</text>
-            </box>
-          )}
 
           {error ? (
             <box paddingX={1} marginTop={1}>
