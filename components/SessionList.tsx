@@ -584,6 +584,7 @@ export default function SessionList({
   onChangeScope,
   onToggleWorktrees,
 }: Props) {
+  const [collapsed, setCollapsed] = useState(false)
   const [searchText, setSearchText] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
   const normalizedSearch = searchText.trim().toLowerCase()
@@ -616,16 +617,49 @@ export default function SessionList({
   return (
     <div
       style={{
-        width: 290,
-        minWidth: 290,
+        width: collapsed ? 32 : 290,
+        minWidth: collapsed ? 32 : 290,
         height: '100vh',
         display: 'flex',
         flexDirection: 'column',
         borderRight: '1px solid var(--border)',
         background: 'var(--surface)',
+        overflow: 'hidden',
+        transition: 'width 0.2s ease, min-width 0.2s ease',
+        flexShrink: 0,
       }}
     >
-      {/* ── Header ─────────────────────────────────────── */}
+      {/* ── Collapse toggle (always visible) ───────────── */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: collapsed ? 'center' : 'flex-end',
+          padding: collapsed ? '10px 0' : '6px 10px 0',
+          flexShrink: 0,
+        }}
+      >
+        <button
+          onClick={() => setCollapsed((c) => !c)}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: 'var(--text-3)',
+            padding: '4px 6px',
+            borderRadius: 6,
+            lineHeight: 1,
+            fontSize: 14,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {collapsed ? '›' : '‹'}
+        </button>
+      </div>
+      {/* ── Header + Groups (hidden when collapsed) ────── */}
+      {!collapsed && <>
       <div
         style={{
           padding: '18px 18px 15px',
@@ -899,8 +933,6 @@ export default function SessionList({
           </CardContent>
         </Card>
       </div>
-
-      {/* ── Groups ─────────────────────────────────────── */}
       <div style={{ overflow: 'auto', flex: 1 }}>
         {error && (
           <div
@@ -944,6 +976,7 @@ export default function SessionList({
           </div>
         )}
       </div>
+      </>}
     </div>
   )
 }

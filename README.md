@@ -125,7 +125,23 @@ This directory is intentionally ignored from git. It is used for state such as:
 npm run dev
 npm run build
 npm run start
+npm run tui
 ```
+
+## TUI Preview
+
+An Ink-based terminal UI is now scaffolded as an early read-only preview.
+
+- Browse providers
+- Navigate sessions
+- Inspect recent transcript output
+- Refresh from the terminal without going through the browser
+
+Current limitations:
+
+- send/streaming is not wired yet
+- project timeline mode is not in the TUI yet
+- diagnostics, models, rename, tag, fork, and rewind/rollback controls are still web-only
 
 ## Notes
 
