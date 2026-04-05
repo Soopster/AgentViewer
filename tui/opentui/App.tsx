@@ -450,6 +450,22 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
   value: provider,
 }))
 
+type PaletteCommand = { id: string; label: string; key: string }
+const COMMANDS: PaletteCommand[] = [
+  { id: 'search',   label: 'Search messages',       key: '/'  },
+  { id: 'live',     label: 'Jump to live tail',      key: 'f'  },
+  { id: 'unread',   label: 'Jump to first unread',   key: 'u'  },
+  { id: 'mark',     label: 'Mark position',          key: 'm'  },
+  { id: 'provider', label: 'Switch provider',        key: 'p'  },
+  { id: 'theme',    label: 'Switch theme',           key: 't'  },
+  { id: 'density',  label: 'Toggle density',         key: 'd'  },
+  { id: 'view',     label: 'Toggle transcript view', key: 'v'  },
+  { id: 'rail',     label: 'Toggle session rail',    key: 'h'  },
+  { id: 'focus',    label: 'Toggle focus mode',      key: 'z'  },
+  { id: 'refresh',  label: 'Refresh sessions',       key: 'r'  },
+  { id: 'quit',     label: 'Quit',                   key: 'q'  },
+]
+
 function extractDiffText(lines: TuiTranscriptCardLine[]): string | null {
   const diffLines = lines
     .filter((line) => line.tone === 'diff_add' || line.tone === 'diff_remove' || line.tone === 'diff_meta')
@@ -481,6 +497,9 @@ export default function OpenTuiApp() {
   const [focusedPane, setFocusedPane] = useState<PaneFocus>('sessions')
   const [providerMenuOpen, setProviderMenuOpen] = useState(false)
   const [providerMenuIndex, setProviderMenuIndex] = useState(0)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const [commandPaletteQuery, setCommandPaletteQuery] = useState('')
+  const [commandPaletteIndex, setCommandPaletteIndex] = useState(0)
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIndex, setSearchMatchIndex] = useState(0)
@@ -605,7 +624,7 @@ export default function OpenTuiApp() {
     const idx = sidebarEntries.findIndex((e) => e.type === 'session' && e.absoluteIndex === selectedIndex)
     return idx >= 0 ? idx : 0
   }, [sidebarEntries, selectedIndex])
-  const mainContentHeight = Math.max(height - 4 - (searchMode ? 3 : 1), 8)
+  const mainContentHeight = Math.max(height - 3 - (searchMode ? 3 : 1), 8)
   const sidebarWidth = showRail ? clamp(Math.floor((width - 4) * 0.27), 28, 40) : 0
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
   const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7), 8)
@@ -932,6 +951,89 @@ export default function OpenTuiApp() {
     setProviderMenuOpen(false)
     setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
   }, [provider])
+
+  const closeCommandPalette = useCallback(() => {
+    setCommandPaletteOpen(false)
+    setCommandPaletteQuery('')
+    setCommandPaletteIndex(0)
+  }, [])
+
+  const filteredCommands = useMemo(() => {
+    const q = commandPaletteQuery.toLowerCase()
+    if (!q) return COMMANDS
+    return COMMANDS.filter((cmd) => cmd.label.toLowerCase().includes(q))
+  }, [commandPaletteQuery])
+
+  const executeCommandPalette = useCallback((id: string) => {
+    closeCommandPalette()
+    switch (id) {
+      case 'provider':
+        setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
+        setProviderMenuOpen(true)
+        break
+      case 'theme': {
+        const nextTheme = cycleTheme(themeMode)
+        setThemeMode(nextTheme)
+        setActiveTheme(nextTheme)
+        void writeTuiTheme(nextTheme).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store theme'))
+        break
+      }
+      case 'density': {
+        const next = cycleDensityValue(density)
+        setDensity(next)
+        void writeTuiDensity(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store density'))
+        break
+      }
+      case 'rail': {
+        const nextVisible = !railVisible
+        setRailVisible(nextVisible)
+        if (!nextVisible && focusedPane === 'sessions') setFocusedPane('messages')
+        void writeTuiRailVisible(nextVisible).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store rail'))
+        break
+      }
+      case 'focus': {
+        const next = !focusMode
+        setFocusMode(next)
+        if (next) setFocusedPane('messages')
+        void writeTuiFocusMode(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store focus mode'))
+        break
+      }
+      case 'view': {
+        const next = cycleTranscriptViewValue(transcriptView)
+        setTranscriptView(next)
+        void writeTuiTranscriptView(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store transcript view'))
+        break
+      }
+      case 'live':
+        setFocusedPane('messages')
+        jumpToTranscriptTail()
+        break
+      case 'unread':
+        setFocusedPane('messages')
+        jumpToUnreadBoundary()
+        break
+      case 'mark':
+        setFocusedPane('messages')
+        jumpToResumeMarker()
+        break
+      case 'search':
+        setFocusedPane('messages')
+        setSearchMode(true)
+        break
+      case 'refresh':
+        void refreshSessions(provider)
+        if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
+        break
+      case 'quit':
+        renderer.destroy()
+        process.exit(0)
+    }
+  }, [
+    closeCommandPalette, density, focusMode, focusedPane, jumpToResumeMarker,
+    jumpToTranscriptTail, jumpToUnreadBoundary, provider, railVisible,
+    refreshSessions, refreshSelectedSessionDetail, renderer, selectedSessionTarget,
+    themeMode, transcriptView,
+  ])
 
   const chooseProvider = useCallback(async (nextProvider: ProviderSelection) => {
     if (nextProvider === provider) {
@@ -1390,7 +1492,7 @@ export default function OpenTuiApp() {
 
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  r refresh  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
     [width, transcriptView, density],
@@ -1427,6 +1529,43 @@ export default function OpenTuiApp() {
           renderer.destroy()
           process.exit(0)
         })
+      }
+      return
+    }
+
+    if (commandPaletteOpen) {
+      if (key.name === 'escape' || sequence === '?') {
+        handled(closeCommandPalette)
+        return
+      }
+      if (key.name === 'j' || key.name === 'down') {
+        handled(() => setCommandPaletteIndex((i) => Math.min(i + 1, filteredCommands.length - 1)))
+        return
+      }
+      if (key.name === 'k' || key.name === 'up') {
+        handled(() => setCommandPaletteIndex((i) => Math.max(i - 1, 0)))
+        return
+      }
+      if (key.name === 'return') {
+        handled(() => {
+          const cmd = filteredCommands[commandPaletteIndex]
+          if (cmd) executeCommandPalette(cmd.id)
+        })
+        return
+      }
+      if (key.name === 'backspace' || key.name === 'delete') {
+        handled(() => {
+          setCommandPaletteQuery((q) => q.slice(0, -1))
+          setCommandPaletteIndex(0)
+        })
+        return
+      }
+      if (!key.ctrl && !key.meta && sequence.length === 1 && sequence >= ' ') {
+        handled(() => {
+          setCommandPaletteQuery((q) => q + sequence)
+          setCommandPaletteIndex(0)
+        })
+        return
       }
       return
     }
@@ -1625,6 +1764,15 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (sequence === '?') {
+      handled(() => {
+        setCommandPaletteIndex(0)
+        setCommandPaletteQuery('')
+        setCommandPaletteOpen(true)
+      })
+      return
+    }
+
     if (key.name === 'p') {
       handled(() => {
         setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
@@ -1733,24 +1881,6 @@ export default function OpenTuiApp() {
 
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
-      {!focusMode ? (
-        <box backgroundColor={theme.surface} paddingX={1}>
-          <box width={14} overflow="hidden">
-            <text fg={theme.text}>AGENT VIEWER</text>
-          </box>
-          <box flexGrow={1} overflow="hidden">
-            <text fg={theme.muted}>{headerContextLeft}</text>
-          </box>
-          <box width={Math.max(Math.floor(width * 0.55), 20)} overflow="hidden">
-            <text fg={theme.dim}>{headerStatusRight}</text>
-          </box>
-        </box>
-      ) : (
-        <box backgroundColor={theme.surface} paddingX={1}>
-          <text fg={theme.text}>{fitText(readerTitle, Math.max(width - 4, 20))}</text>
-        </box>
-      )}
-
       <box flexGrow={1} padding={1} gap={1} height={mainContentHeight} flexDirection="row" backgroundColor={theme.bg}>
         {showRail ? (
           <box
@@ -1844,6 +1974,7 @@ export default function OpenTuiApp() {
           borderColor={effectiveFocus === 'messages' ? theme.border2 : theme.border}
           backgroundColor={theme.surface}
           flexDirection="column"
+          title={headerStatusRight}
         >
           {!focusMode ? (
             <box paddingX={1} paddingTop={1}>
@@ -2062,6 +2193,44 @@ export default function OpenTuiApp() {
                 }}
               />
             </box>
+          </box>
+        ) : null}
+
+        {commandPaletteOpen ? (
+          <box
+            position="absolute"
+            top={focusMode ? 2 : 4}
+            left={Math.max(Math.floor(width / 2) - 22, 2)}
+            width={44}
+            border
+            borderStyle="single"
+            borderColor={theme.border2}
+            backgroundColor={theme.surface}
+            zIndex={30}
+            flexDirection="column"
+          >
+            <box paddingX={1} paddingTop={1} paddingBottom={1}>
+              <text fg={theme.dim}>{fitText(`> ${commandPaletteQuery}█  j/k navigate  enter run  esc close`, 42)}</text>
+            </box>
+            {filteredCommands.map((cmd, i) => {
+              const isSelected = i === commandPaletteIndex
+              const bg = isSelected ? theme.surface3 : theme.surface
+              return (
+                <box key={cmd.id} paddingX={1} backgroundColor={bg} flexDirection="row">
+                  <box flexGrow={1}>
+                    <text fg={isSelected ? theme.text : theme.muted} wrapMode="none">
+                      {fitText(cmd.label, 32)}
+                    </text>
+                  </box>
+                  <text fg={isSelected ? theme.cyan : theme.dim}>{cmd.key}</text>
+                </box>
+              )
+            })}
+            {filteredCommands.length === 0 ? (
+              <box paddingX={1} paddingBottom={1}>
+                <text fg={theme.dim}>no matches</text>
+              </box>
+            ) : null}
           </box>
         ) : null}
       </box>
