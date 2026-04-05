@@ -1967,6 +1967,12 @@ export default function OpenTuiApp() {
                     </box>
                   )
                 })}
+
+                {followTail ? (
+                  <box paddingX={1} paddingTop={1}>
+                    <Spinner label="waiting for new messages" fg={theme.dim} />
+                  </box>
+                ) : null}
               </scrollbox>
             )}
           </box>
