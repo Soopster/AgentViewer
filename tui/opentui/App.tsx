@@ -1380,8 +1380,10 @@ export default function OpenTuiApp() {
   useEffect(() => {
     const entry = sidebarEntries[selectedSidebarEntryIndex]
     if (!entry) return
+    const prev = sidebarEntries[selectedSidebarEntryIndex - 1]
+    const scrollKey = prev?.type === 'project' ? prev.key : entry.key
     const timer = setTimeout(() => {
-      sidebarScrollRef.current?.scrollChildIntoView(`sidebar:${entry.key}`)
+      sidebarScrollRef.current?.scrollChildIntoView(`sidebar:${scrollKey}`)
     }, 0)
     return () => clearTimeout(timer)
   }, [selectedSidebarEntryIndex, sidebarEntries])
