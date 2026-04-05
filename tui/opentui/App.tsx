@@ -67,6 +67,15 @@ type CardLandmark = {
   text: string
 }
 
+type CardDisplayData = {
+  landmarks: CardLandmark[]
+  bodyLines: TuiTranscriptCardLine[]
+  diffText: string | null
+  diffLineCount: number
+  codeBlockLineCounts: number[]
+  headerMeta: string
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(value, max))
 }
@@ -434,13 +443,11 @@ function cycleTranscriptViewValue(current: TuiTranscriptView): TuiTranscriptView
   return current === 'conversation' ? 'full' : 'conversation'
 }
 
-function providerSelectOptions(): SelectOption[] {
-  return PROVIDERS.map((provider) => ({
-    name: provider.toUpperCase(),
-    description: provider === 'all' ? 'All providers' : `${provider} sessions`,
-    value: provider,
-  }))
-}
+const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
+  name: provider.toUpperCase(),
+  description: provider === 'all' ? 'All providers' : `${provider} sessions`,
+  value: provider,
+}))
 
 function extractDiffText(lines: TuiTranscriptCardLine[]): string | null {
   const diffLines = lines
@@ -655,6 +662,40 @@ export default function OpenTuiApp() {
   ])
   const visibleTranscriptEndIndex = visibleTranscriptWindow.endIndex
 
+  const cardDisplayData = useMemo((): CardDisplayData[] => (
+    transcriptCards.map((card, index) => {
+      const isExpanded = resolvedExpandedKeys.has(card.key)
+      const isLatest = index === transcriptCards.length - 1
+      const isSearchHit = normalizedSearchQuery.length > 0
+        && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
+      const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
+      const landmarks = transcriptLandmarks(transcriptCards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount)
+      const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines)
+      const diffText = cardDiffText(card, isExpanded)
+      const diffLineCount = diffText ? diffText.split('\n').length : 0
+      const codeBlockLineCounts = (isExpanded && card.codeBlocks)
+        ? card.codeBlocks.map((cb) => cb.content.split('\n').length)
+        : []
+      const headerMeta = joinMeta([
+        card.timestamp ?? null,
+        isLatest ? 'latest' : null,
+        isSearchHit ? 'match' : null,
+        isAutoFoldedTechnical ? 'folded' : null,
+        `e ${isExpanded ? 'collapse' : 'expand'}`,
+      ])
+      return { landmarks, bodyLines, diffText, diffLineCount, codeBlockLineCounts, headerMeta }
+    })
+  ), [
+    transcriptCards,
+    resolvedExpandedKeys,
+    normalizedSearchQuery,
+    transcriptView,
+    resumeMarkerIndex,
+    unreadBoundaryIndex,
+    pendingNewCount,
+    densityState.bodyLines,
+  ])
+
   const refreshSessions = useCallback(async (
     nextProvider: ProviderSelection,
     preserveSelection = true,
@@ -702,7 +743,18 @@ export default function OpenTuiApp() {
     try {
       const detail = await readTuiSessionDetail(session)
       if (requestId !== detailRequestRef.current) return
-      setSessionDetail(detail)
+      setSessionDetail((prev) => {
+        if (
+          prev !== null &&
+          prev.rawMessages.length === detail.rawMessages.length &&
+          prev.rawMessages.at(-1)?.uuid === detail.rawMessages.at(-1)?.uuid &&
+          prev.info?.currentModel === detail.info?.currentModel &&
+          prev.info?.customTitle === detail.info?.customTitle
+        ) {
+          return prev
+        }
+        return detail
+      })
     } catch (err) {
       if (requestId !== detailRequestRef.current) return
       setSessionDetail(null)
@@ -1333,9 +1385,12 @@ export default function OpenTuiApp() {
     return () => clearTimeout(timer)
   }, [selectedSidebarEntryIndex, sidebarEntries])
 
-  const footerText = fitText(
-    `tab focus  j/k move  ctrl-u/d page  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  r refresh  q quit`,
-    Math.max(width - 4, 20),
+  const footerText = useMemo(
+    () => fitText(
+      `tab focus  j/k move  ctrl-u/d page  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  r refresh  q quit`,
+      Math.max(width - 4, 20),
+    ),
+    [width, transcriptView, density],
   )
 
   useKeyboard((key) => {
@@ -1643,27 +1698,33 @@ export default function OpenTuiApp() {
 
   const statusLabel = loadingSessions ? 'syncing' : refreshingSessions ? 'refreshing' : 'live'
   const readerMode = followTail ? 'live mode' : pendingNewCount > 0 ? 'new content waiting' : 'reading mode'
-  const headerStatusRight = fitText(
-    joinMeta([
-      statusLabel,
-      `position ${transcriptCards.length === 0 ? '0' : `${Math.max(cursorIndex, 0) + 1}`}/${transcriptCards.length}`,
-      readerMode,
-      themeMode.toUpperCase(),
-      provider.toUpperCase(),
-      density.toUpperCase(),
-      pendingNewCount > 0 ? `+${pendingNewCount} new` : null,
-    ]),
-    Math.max(Math.floor(width * 0.55), 20),
+  const headerStatusRight = useMemo(
+    () => fitText(
+      joinMeta([
+        statusLabel,
+        `position ${transcriptCards.length === 0 ? '0' : `${Math.max(cursorIndex, 0) + 1}`}/${transcriptCards.length}`,
+        readerMode,
+        themeMode.toUpperCase(),
+        provider.toUpperCase(),
+        density.toUpperCase(),
+        pendingNewCount > 0 ? `+${pendingNewCount} new` : null,
+      ]),
+      Math.max(Math.floor(width * 0.55), 20),
+    ),
+    [statusLabel, transcriptCards.length, cursorIndex, readerMode, themeMode, provider, density, pendingNewCount, width],
   )
-  const headerContextLeft = fitText(
-    joinMeta([
-      `project ${currentProjectName(selectedSession)}`,
-      `model ${readerModel}`,
-    ]),
-    Math.max(Math.floor(width * 0.45) - 16, 12),
+  const headerContextLeft = useMemo(
+    () => fitText(
+      joinMeta([
+        `project ${currentProjectName(selectedSession)}`,
+        `model ${readerModel}`,
+      ]),
+      Math.max(Math.floor(width * 0.45) - 16, 12),
+    ),
+    [selectedSession, readerModel, width],
   )
 
-  const providerOptions = providerSelectOptions()
+  const providerOptions = PROVIDER_SELECT_OPTIONS
   const providerAccent = getProviderAccent(provider)
   const providerSummary = provider.toUpperCase()
 
@@ -1856,31 +1917,13 @@ export default function OpenTuiApp() {
               >
                 {transcriptCards.slice(topIndex, visibleTranscriptEndIndex + 1).map((card, sliceIndex) => {
                   const index = topIndex + sliceIndex
+                  const display = cardDisplayData[index]
                   const isSelected = card.key === transcriptCursorKey
                   const hasCursor = isSelected && effectiveFocus === 'messages'
                   const isExpanded = resolvedExpandedKeys.has(card.key)
                   const accent = transcriptAccent(card.role, card.provider ?? provider)
-                  const landmarks = transcriptLandmarks(
-                    transcriptCards,
-                    index,
-                    resumeMarkerIndex,
-                    unreadBoundaryIndex,
-                    pendingNewCount,
-                  )
+                  const { landmarks, bodyLines, diffText, diffLineCount, codeBlockLineCounts, headerMeta } = display
                   const marker = hasCursor ? '>' : isSelected ? ':' : '⏺'
-                  const isLatest = index === transcriptCards.length - 1
-                  const isSearchHit = normalizedSearchQuery.length > 0
-                    && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
-                  const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
-                  const headerMeta = joinMeta([
-                    card.timestamp ?? null,
-                    isLatest ? 'latest' : null,
-                    isSearchHit ? 'match' : null,
-                    isAutoFoldedTechnical ? 'folded' : null,
-                    `e ${isExpanded ? 'collapse' : 'expand'}`,
-                  ])
-                  const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines)
-                  const diffText = cardDiffText(card, isExpanded)
                   const isInsight = card.category === 'insight'
                   const cardBg = hasCursor ? theme.surface3 : isSelected ? theme.surface2 : card.role === 'user' ? theme.userBg : isInsight ? theme.surface2 : theme.surface
                   const borderColor = hasCursor ? accent : isInsight ? theme.violet : isSelected ? theme.border2 : card.role === 'user' ? theme.border2 : theme.border
@@ -1930,7 +1973,7 @@ export default function OpenTuiApp() {
                           ))}
 
                           {isExpanded && card.codeBlocks && card.codeBlocks.length > 0 ? (
-                            card.codeBlocks.map((cb) => (
+                            card.codeBlocks.map((cb, cbIndex) => (
                               <box key={cb.key} paddingX={1} marginTop={1}>
                                 <text fg={theme.dim}>{cb.lang}</text>
                                 <code
@@ -1938,7 +1981,7 @@ export default function OpenTuiApp() {
                                   filetype={cb.lang}
                                   syntaxStyle={syntaxStyle}
                                   drawUnstyledText={true}
-                                  style={{ height: Math.min(cb.content.split('\n').length + 1, 20) }}
+                                  style={{ height: Math.min((codeBlockLineCounts[cbIndex] ?? 0) + 1, 20) }}
                                   width={Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20)}
                                 />
                               </box>
@@ -1958,7 +2001,7 @@ export default function OpenTuiApp() {
                                 lineNumberBg={theme.surface}
                                 lineNumberFg={theme.dim}
                                 fg={theme.text}
-                                style={{ height: Math.min(isExpanded ? 12 : densityState.bodyLines, Math.max(diffText.split('\n').length + 2, 4)) }}
+                                style={{ height: Math.min(isExpanded ? 12 : densityState.bodyLines, Math.max(diffLineCount + 2, 4)) }}
                               />
                             </box>
                           ) : null}
