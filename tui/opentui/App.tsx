@@ -74,6 +74,7 @@ type CardDisplayData = {
   diffLineCount: number
   codeBlockLineCounts: number[]
   headerMeta: string
+  isSearchHit: boolean
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -703,7 +704,7 @@ export default function OpenTuiApp() {
         isAutoFoldedTechnical ? 'folded' : null,
         `e ${isExpanded ? 'collapse' : 'expand'}`,
       ])
-      return { landmarks, bodyLines, diffText, diffLineCount, codeBlockLineCounts, headerMeta }
+      return { landmarks, bodyLines, diffText, diffLineCount, codeBlockLineCounts, headerMeta, isSearchHit }
     })
   ), [
     transcriptCards,
@@ -2051,11 +2052,12 @@ export default function OpenTuiApp() {
                   const hasCursor = isSelected && effectiveFocus === 'messages'
                   const isExpanded = resolvedExpandedKeys.has(card.key)
                   const accent = transcriptAccent(card.role, card.provider ?? provider)
-                  const { landmarks, bodyLines, diffText, diffLineCount, codeBlockLineCounts, headerMeta } = display
+                  const { landmarks, bodyLines, diffText, diffLineCount, codeBlockLineCounts, headerMeta, isSearchHit } = display
+                  const isActiveMatch = isSearchHit && searchMatches[searchMatchIndex] === index
                   const marker = hasCursor ? '>' : isSelected ? ':' : '⏺'
                   const isInsight = card.category === 'insight'
                   const cardBg = hasCursor ? theme.surface3 : isSelected ? theme.surface2 : card.role === 'user' ? theme.userBg : isInsight ? theme.surface2 : theme.surface
-                  const borderColor = hasCursor ? accent : isInsight ? theme.violet : isSelected ? theme.border2 : card.role === 'user' ? theme.border2 : theme.border
+                  const borderColor = hasCursor ? accent : isActiveMatch ? theme.amber : isSearchHit ? theme.cyan : isInsight ? theme.violet : isSelected ? theme.border2 : card.role === 'user' ? theme.border2 : theme.border
                   const maxTitleWidth = Math.max(rightPaneWidth - 6, 20)
                   const cardTitleFull = `${marker} ${card.label}  ${headerMeta}`
                   const cardTitle = cardTitleFull.length > maxTitleWidth
