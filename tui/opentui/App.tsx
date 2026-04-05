@@ -1882,8 +1882,8 @@ export default function OpenTuiApp() {
                   const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines)
                   const diffText = cardDiffText(card, isExpanded)
                   const isInsight = card.category === 'insight'
-                  const cardBg = hasCursor ? theme.surface3 : isSelected ? theme.surface2 : isInsight ? theme.surface2 : theme.surface
-                  const borderColor = hasCursor ? accent : isInsight ? theme.violet : isSelected ? theme.border2 : theme.border
+                  const cardBg = hasCursor ? theme.surface3 : isSelected ? theme.surface2 : card.role === 'user' ? theme.userBg : isInsight ? theme.surface2 : theme.surface
+                  const borderColor = hasCursor ? accent : isInsight ? theme.violet : isSelected ? theme.border2 : card.role === 'user' ? theme.border2 : theme.border
                   const maxTitleWidth = Math.max(rightPaneWidth - 6, 20)
                   const cardTitleFull = `${marker} ${card.label}  ${headerMeta}`
                   const cardTitle = cardTitleFull.length > maxTitleWidth

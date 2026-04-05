@@ -23,6 +23,7 @@ export type TuiThemePalette = {
   red: string
   amber: string
   pink: string
+  userBg: string
 }
 
 export const LIGHT_THEME: TuiThemePalette = {
@@ -44,6 +45,7 @@ export const LIGHT_THEME: TuiThemePalette = {
   red: '#dc2626',
   amber: '#b45309',
   pink: '#be185d',
+  userBg: '#dbeafe',
 } as const
 
 export const DARK_THEME: TuiThemePalette = {
@@ -65,6 +67,7 @@ export const DARK_THEME: TuiThemePalette = {
   red: '#f05050',
   amber: '#eaaf40',
   pink: '#f472b6',
+  userBg: '#1e3a5f',
 } as const
 
 export const CYBER_THEME: TuiThemePalette = {
@@ -86,6 +89,7 @@ export const CYBER_THEME: TuiThemePalette = {
   red: '#ff6b81',
   amber: '#ffb454',
   pink: '#ff8ad6',
+  userBg: '#1a2f60',
 } as const
 
 export let THEME: TuiThemePalette = LIGHT_THEME
