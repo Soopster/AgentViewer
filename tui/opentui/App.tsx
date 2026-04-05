@@ -1968,14 +1968,15 @@ export default function OpenTuiApp() {
                   )
                 })}
 
-                {followTail ? (
-                  <box paddingX={1} paddingTop={1}>
-                    <Spinner label="waiting for new messages" fg={theme.dim} />
-                  </box>
-                ) : null}
               </scrollbox>
             )}
           </box>
+
+          {followTail && transcriptCards.length > 0 ? (
+            <box paddingX={2} paddingBottom={1}>
+              <Spinner label="waiting for new messages" fg={theme.dim} />
+            </box>
+          ) : null}
         </box>
 
         {providerMenuOpen ? (
