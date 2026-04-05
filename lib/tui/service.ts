@@ -4,11 +4,16 @@ import {
   getConfiguredTuiDensity,
   getConfiguredTuiFocusMode,
   getConfiguredTuiRailVisible,
+  getConfiguredTuiSessionReaderState,
   getConfiguredTuiTheme,
+  getConfiguredTuiTranscriptView,
   setConfiguredTuiDensity,
   setConfiguredTuiFocusMode,
   setConfiguredTuiRailVisible,
+  setConfiguredTuiSessionReaderState,
   setConfiguredTuiTheme,
+  setConfiguredTuiTranscriptView,
+  type TuiSessionReaderState,
 } from '../tuiState'
 import {
   listViewSessionMessages,
@@ -16,7 +21,7 @@ import {
   readViewSessionInfo,
 } from '../sessionBackend'
 import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../types'
-import type { TuiDensity, TuiThemeMode } from '../../tui/theme'
+import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 
 const DEFAULT_SESSION_LIMIT = 200
 const DEFAULT_MESSAGE_LIMIT = 400
@@ -65,6 +70,25 @@ export async function readTuiDensity(): Promise<TuiDensity> {
 
 export async function writeTuiDensity(density: TuiDensity): Promise<void> {
   await setConfiguredTuiDensity(density)
+}
+
+export async function readTuiTranscriptView(): Promise<TuiTranscriptView> {
+  return getConfiguredTuiTranscriptView()
+}
+
+export async function writeTuiTranscriptView(transcriptView: TuiTranscriptView): Promise<void> {
+  await setConfiguredTuiTranscriptView(transcriptView)
+}
+
+export async function readTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {
+  return getConfiguredTuiSessionReaderState(sessionKey)
+}
+
+export async function writeTuiSessionReaderState(
+  sessionKey: string,
+  sessionReaderState: TuiSessionReaderState,
+): Promise<void> {
+  await setConfiguredTuiSessionReaderState(sessionKey, sessionReaderState)
 }
 
 export async function readTuiSessions(provider: ProviderSelection): Promise<Session[]> {

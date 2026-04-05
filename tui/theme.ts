@@ -2,6 +2,7 @@ import type { ProviderSelection } from '../lib/types'
 
 export type TuiThemeMode = 'light' | 'dark' | 'cyber'
 export type TuiDensity = 'comfortable' | 'balanced' | 'dense'
+export type TuiTranscriptView = 'conversation' | 'full'
 
 export type TuiThemePalette = {
   bg: string

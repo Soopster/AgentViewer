@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
 import {
+  Spinner,
+  StatusMessage,
+} from '@inkjs/ui'
+import {
   formatProviderLabel,
   formatSessionProject,
   formatSessionTitle,
@@ -23,19 +27,26 @@ import {
   readTuiProvider,
   readTuiRailVisible,
   readTuiSessionDetail,
+  readTuiSessionReaderState,
   readTuiSessions,
   readTuiTheme,
+  readTuiTranscriptView,
   writeTuiDensity,
   writeTuiFocusMode,
   writeTuiProvider,
   writeTuiRailVisible,
+  writeTuiSessionReaderState,
   writeTuiTheme,
+  writeTuiTranscriptView,
 } from '../lib/tui/service'
+import type { TuiSessionReaderState } from '../lib/tuiState'
 import type { ProviderSelection, Session } from '../lib/types'
+import type { TuiTranscriptView } from './theme'
 
 const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'all']
 const HEADER_HEIGHT = 2
 const FOOTER_HEIGHT = 1
+const FOOTER_MARGIN_TOP = 1
 const SIDEBAR_GUTTER_WIDTH = 2
 const SESSION_ENTRY_HEIGHT = 2
 const PROJECT_HEADER_HEIGHT = 1
@@ -44,6 +55,8 @@ const DETAIL_REFRESH_MS = 2000
 const SEARCH_MAX_CHARS = 80
 const RAIL_MIN_WIDTH = 26
 const RAIL_MAX_WIDTH = 34
+const TRANSCRIPT_BODY_PADDING_TOP = 1
+const TRANSCRIPT_BODY_PADDING_BOTTOM = 2
 
 type PaneFocus = 'sessions' | 'messages'
 
@@ -124,12 +137,6 @@ function formatTimeGap(deltaMs: number): string | null {
   const hours = Math.round(minutes / 60)
   if (hours < 36) return `${hours}h later`
   return `${Math.round(hours / 24)}d later`
-}
-
-function roleSectionLabel(card: TuiTranscriptCard): string | null {
-  if (card.role === 'user') return null
-  if (card.role === 'system') return 'SYSTEM'
-  return `${card.label} RESPONSE`
 }
 
 function formatToolLabel(name: string): string {
@@ -324,41 +331,7 @@ function previewBodyLines(card: TuiTranscriptCard): TuiTranscriptCardLine[] {
 }
 
 function collapsedBodyRows(card: TuiTranscriptCard): number {
-  const lines = previewBodyLines(card)
-  const groups = groupBodyLines(lines)
-  let rows = 0
-
-  for (const group of groups) {
-    if (group.type === 'text') {
-      rows += group.lines.length
-      continue
-    }
-
-    const toolMatch = group.toolLine.text.match(/^tool (\S+)(?:: (.*))?$/)
-    const toolName = toolMatch?.[1]?.toUpperCase() ?? 'TOOL'
-    const toolTarget = toolMatch?.[2] ?? ''
-    const resultLine = group.bodyLines.find(
-      (line) => line.tone === 'result_ok' || line.tone === 'result_error',
-    )
-    const contentLines = group.bodyLines.filter(
-      (line) => line.tone !== 'result_ok' && line.tone !== 'result_error',
-    )
-
-    if (toolName === 'FILECHANGE') {
-      const pathLine = group.bodyLines[0]?.tone === 'diff_meta' ? group.bodyLines[0] : null
-      const afterPath = pathLine ? group.bodyLines.slice(1) : group.bodyLines
-      const diffContent = afterPath.filter((line) => line.tone !== 'dim')
-      rows += 1 + (pathLine ? 1 : 0) + diffContent.length + 1
-      continue
-    }
-
-    rows += 1 + (toolTarget ? 1 : 0) + (resultLine ? 1 : 0) + contentLines.length
-  }
-
-  const hiddenLines = Math.max(card.expandedLines.length - lines.length, 0)
-  if (hiddenLines > 0) rows += 1
-
-  return Math.max(rows, 1)
+  return Math.max(card.lines.filter((line) => line.text.length > 0).length, 1)
 }
 
 function expandedBodyRows(card: TuiTranscriptCard): number {
@@ -379,13 +352,14 @@ function expandedBodyRows(card: TuiTranscriptCard): number {
 }
 
 type CardLandmark = {
-  kind: 'unread' | 'day' | 'gap' | 'section'
+  kind: 'resume' | 'unread' | 'day' | 'gap'
   text: string
 }
 
 function transcriptLandmarks(
   cards: TuiTranscriptCard[],
   index: number,
+  resumeMarkerIndex: number,
   unreadBoundaryIndex: number,
   pendingNewCount: number,
 ): CardLandmark[] {
@@ -393,6 +367,13 @@ function transcriptLandmarks(
   if (!card) return []
   const previous = index > 0 ? cards[index - 1] : null
   const landmarks: CardLandmark[] = []
+
+  if (index === resumeMarkerIndex) {
+    landmarks.push({
+      kind: 'resume',
+      text: 'LAST READ POSITION',
+    })
+  }
 
   if (index === unreadBoundaryIndex && pendingNewCount > 0) {
     landmarks.push({
@@ -408,11 +389,6 @@ function transcriptLandmarks(
     if (gap) landmarks.push({ kind: 'gap', text: gap.toUpperCase() })
   }
 
-  if (!previous || previous.role !== card.role) {
-    const sectionLabel = roleSectionLabel(card)
-    if (sectionLabel) landmarks.push({ kind: 'section', text: sectionLabel })
-  }
-
   return landmarks
 }
 
@@ -421,6 +397,7 @@ function cardHeight(
   index: number,
   expandedKeys: Set<string>,
   cardGap: number,
+  resumeMarkerIndex: number,
   unreadBoundaryIndex: number,
   pendingNewCount: number,
   expandedBorderRows: number,
@@ -429,7 +406,7 @@ function cardHeight(
   const bodyRows = expandedKeys.has(card.key)
     ? expandedBodyRows(card)
     : collapsedBodyRows(card)
-  const landmarkRows = transcriptLandmarks(cards, index, unreadBoundaryIndex, pendingNewCount).length
+  const landmarkRows = transcriptLandmarks(cards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount).length
   const borderRows = expandedKeys.has(card.key) ? expandedBorderRows : 0
   return landmarkRows + 1 + bodyRows + borderRows + cardGap
 }
@@ -440,6 +417,7 @@ function selectTranscriptWindow(
   rowBudget: number,
   expandedKeys: Set<string>,
   cardGap: number,
+  resumeMarkerIndex: number,
   unreadBoundaryIndex: number,
   pendingNewCount: number,
   expandedBorderRows: number,
@@ -457,6 +435,7 @@ function selectTranscriptWindow(
       index,
       expandedKeys,
       cardGap,
+      resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
       expandedBorderRows,
@@ -476,6 +455,7 @@ function windowStartForCursor(
   rowBudget: number,
   expandedKeys: Set<string>,
   cardGap: number,
+  resumeMarkerIndex: number,
   unreadBoundaryIndex: number,
   pendingNewCount: number,
   expandedBorderRows: number,
@@ -487,6 +467,7 @@ function windowStartForCursor(
     start,
     expandedKeys,
     cardGap,
+    resumeMarkerIndex,
     unreadBoundaryIndex,
     pendingNewCount,
     expandedBorderRows,
@@ -498,6 +479,7 @@ function windowStartForCursor(
       start - 1,
       expandedKeys,
       cardGap,
+      resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
       expandedBorderRows,
@@ -565,24 +547,37 @@ export default function App() {
   const [focusedPane, setFocusedPane] = useState<PaneFocus>('sessions')
   const [focusMode, setFocusMode] = useState(false)
   const [density, setDensity] = useState<TuiDensity>('balanced')
+  const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
   const [railVisible, setRailVisible] = useState(true)
   const [sidebarTopKey, setSidebarTopKey] = useState<string | null>(null)
   const [transcriptTopKey, setTranscriptTopKey] = useState<string | null>(null)
   const [transcriptCursorKey, setTranscriptCursorKey] = useState<string | null>(null)
   const [expandedCardKeys, setExpandedCardKeys] = useState<Set<string>>(() => new Set())
+  const [collapsedCardKeys, setCollapsedCardKeys] = useState<Set<string>>(() => new Set())
   const [followTail, setFollowTail] = useState(true)
   const [pendingNewCount, setPendingNewCount] = useState(0)
   const [unreadBoundaryKey, setUnreadBoundaryKey] = useState<string | null>(null)
+  const [resumeMarkerKey, setResumeMarkerKey] = useState<string | null>(null)
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIndex, setSearchMatchIndex] = useState(0)
   const [terminalRows, setTerminalRows] = useState(stdout.rows ?? process.stdout.rows ?? 40)
   const [terminalColumns, setTerminalColumns] = useState(stdout.columns ?? process.stdout.columns ?? 120)
+  const [restoredReaderState, setRestoredReaderState] = useState<{
+    sessionKey: string | null
+    loaded: boolean
+    state: TuiSessionReaderState | null
+  }>({
+    sessionKey: null,
+    loaded: false,
+    state: null,
+  })
 
   const sessionRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
   const providerSwitchRef = useRef(false)
   const quittingRef = useRef(false)
+  const readerStateWriteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previousTranscriptRef = useRef<{ sessionKey: string | null; keys: string[] }>({
     sessionKey: null,
     keys: [],
@@ -628,7 +623,10 @@ export default function App() {
   const globalHeaderHeight = focusMode ? 1 : densityState.headerHeight
   const transcriptHeaderHeight = focusMode ? 0 : densityState.messageHeaderHeight
 
-  const contentHeight = Math.max(terminalRows - globalHeaderHeight - FOOTER_HEIGHT, 12)
+  const contentHeight = Math.max(
+    terminalRows - globalHeaderHeight - densityState.mainMarginTop - FOOTER_MARGIN_TOP - FOOTER_HEIGHT,
+    12,
+  )
   const sidebarWidth = showRail ? clamp(Math.floor((terminalColumns - 2) * 0.24), RAIL_MIN_WIDTH, RAIL_MAX_WIDTH) : 0
   const gutterWidth = showRail ? (themeMode === 'light' ? 1 : SIDEBAR_GUTTER_WIDTH) : 0
   const messagePaneWidth = Math.max(terminalColumns - 2 - sidebarWidth - gutterWidth, 48)
@@ -640,13 +638,31 @@ export default function App() {
   const sessionMetaWidth = Math.max(sidebarInnerWidth - 2, 18)
   const transcriptLineWidth = Math.max(messageInnerWidth - 2, 24)
   const transcriptViewportRows = Math.max(
-    contentHeight - transcriptHeaderHeight - densityState.transcriptMarginTop - (error ? 1 : 0) - paneBorderRows,
+    contentHeight
+      - transcriptHeaderHeight
+      - densityState.transcriptMarginTop
+      - (error ? 1 : 0)
+      - (!followTail && pendingNewCount > 0 ? 1 : 0)
+      - paneBorderRows
+      - TRANSCRIPT_BODY_PADDING_TOP
+      - TRANSCRIPT_BODY_PADDING_BOTTOM,
     4,
   )
 
   const transcriptCards = useMemo(() => (
     sessionDetail ? formatTranscriptCards(sessionDetail.threadedMessages, density) : []
   ), [density, sessionDetail])
+  const resolvedExpandedKeys = useMemo(() => {
+    const next = new Set<string>()
+    for (const card of transcriptCards) {
+      const shouldAutoFold = transcriptView === 'conversation' && card.autoFold
+      const isExpanded = shouldAutoFold
+        ? expandedCardKeys.has(card.key)
+        : !collapsedCardKeys.has(card.key)
+      if (isExpanded) next.add(card.key)
+    }
+    return next
+  }, [collapsedCardKeys, expandedCardKeys, transcriptCards, transcriptView])
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
   const searchMatches = useMemo(() => {
     if (!normalizedSearchQuery) return []
@@ -665,6 +681,10 @@ export default function App() {
     () => findCardIndex(transcriptCards, unreadBoundaryKey),
     [transcriptCards, unreadBoundaryKey],
   )
+  const resumeMarkerIndex = useMemo(
+    () => findCardIndex(transcriptCards, resumeMarkerKey),
+    [resumeMarkerKey, transcriptCards],
+  )
   const topIndex = useMemo(() => {
     if (transcriptCards.length === 0) return 0
     const index = findCardIndex(transcriptCards, transcriptTopKey)
@@ -673,28 +693,38 @@ export default function App() {
       transcriptCards,
       Math.max(cursorIndex, 0),
       transcriptViewportRows,
-      expandedCardKeys,
+      resolvedExpandedKeys,
       densityState.cardGap,
+      resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
       expandedCardBorderRows,
     )
-  }, [cursorIndex, densityState.cardGap, expandedCardBorderRows, expandedCardKeys, pendingNewCount, transcriptCards, transcriptTopKey, transcriptViewportRows, unreadBoundaryIndex])
+  }, [cursorIndex, densityState.cardGap, expandedCardBorderRows, pendingNewCount, resolvedExpandedKeys, resumeMarkerIndex, transcriptCards, transcriptTopKey, transcriptViewportRows, unreadBoundaryIndex])
   const visibleTranscriptWindow = useMemo(() => (
     selectTranscriptWindow(
       transcriptCards,
       topIndex,
       transcriptViewportRows,
-      expandedCardKeys,
+      resolvedExpandedKeys,
       densityState.cardGap,
+      resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
       expandedCardBorderRows,
     )
-  ), [densityState.cardGap, expandedCardBorderRows, expandedCardKeys, pendingNewCount, topIndex, transcriptCards, transcriptViewportRows, unreadBoundaryIndex])
+  ), [densityState.cardGap, expandedCardBorderRows, pendingNewCount, resolvedExpandedKeys, resumeMarkerIndex, topIndex, transcriptCards, transcriptViewportRows, unreadBoundaryIndex])
   const visibleTranscriptCards = visibleTranscriptWindow.cards
   const visibleTranscriptEndIndex = visibleTranscriptWindow.endIndex
   const transcriptWindowEnd = visibleTranscriptEndIndex >= 0 ? visibleTranscriptEndIndex + 1 : 0
+  const foldedTechnicalCount = useMemo(
+    () => transcriptCards.filter((card) => card.autoFold && !resolvedExpandedKeys.has(card.key)).length,
+    [resolvedExpandedKeys, transcriptCards],
+  )
+  const visibleFoldedTechnicalCount = useMemo(
+    () => visibleTranscriptCards.filter((card) => card.autoFold && !resolvedExpandedKeys.has(card.key)).length,
+    [resolvedExpandedKeys, visibleTranscriptCards],
+  )
 
   const sidebarEntries = useMemo(() => buildSidebarEntries(sessions), [sessions])
   const selectedSidebarEntryIndex = useMemo(
@@ -710,7 +740,6 @@ export default function App() {
   const visibleSidebarEntries = useMemo(() => (
     selectSidebarWindow(sidebarEntries, sidebarTopIndex, sidebarRowBudget)
   ), [sidebarEntries, sidebarRowBudget, sidebarTopIndex])
-
   const jumpToTranscriptIndex = useCallback((index: number) => {
     if (transcriptCards.length === 0) return
     const nextIndex = clamp(index, 0, transcriptCards.length - 1)
@@ -718,8 +747,9 @@ export default function App() {
       transcriptCards,
       nextIndex,
       transcriptViewportRows,
-      expandedCardKeys,
+      resolvedExpandedKeys,
       densityState.cardGap,
+      resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
       expandedCardBorderRows,
@@ -729,7 +759,13 @@ export default function App() {
     const atTail = nextIndex === transcriptCards.length - 1
     setFollowTail(atTail)
     if (atTail) setPendingNewCount(0)
-  }, [densityState.cardGap, expandedCardBorderRows, expandedCardKeys, pendingNewCount, transcriptCards, transcriptViewportRows, unreadBoundaryIndex])
+  }, [densityState.cardGap, expandedCardBorderRows, pendingNewCount, resolvedExpandedKeys, resumeMarkerIndex, transcriptCards, transcriptViewportRows, unreadBoundaryIndex])
+
+  const jumpToTranscriptKey = useCallback((key: string | null) => {
+    if (!key) return
+    const index = findCardIndex(transcriptCards, key)
+    if (index >= 0) jumpToTranscriptIndex(index)
+  }, [jumpToTranscriptIndex, transcriptCards])
 
   const jumpToTranscriptTail = useCallback(() => {
     if (transcriptCards.length === 0) return
@@ -746,6 +782,10 @@ export default function App() {
     }
     jumpToTranscriptTail()
   }, [jumpToTranscriptIndex, jumpToTranscriptTail, unreadBoundaryIndex])
+
+  const jumpToResumeMarker = useCallback(() => {
+    jumpToTranscriptKey(resumeMarkerKey)
+  }, [jumpToTranscriptKey, resumeMarkerKey])
 
   const moveSelection = useCallback((delta: number) => {
     if (sessions.length === 0) return
@@ -764,8 +804,9 @@ export default function App() {
         transcriptCards,
         nextIndex,
         transcriptViewportRows,
-        expandedCardKeys,
+        resolvedExpandedKeys,
         densityState.cardGap,
+        resumeMarkerIndex,
         unreadBoundaryIndex,
         pendingNewCount,
         expandedCardBorderRows,
@@ -779,8 +820,9 @@ export default function App() {
     cursorIndex,
     densityState.cardGap,
     expandedCardBorderRows,
-    expandedCardKeys,
     pendingNewCount,
+    resolvedExpandedKeys,
+    resumeMarkerIndex,
     topIndex,
     transcriptCards,
     transcriptViewportRows,
@@ -788,16 +830,58 @@ export default function App() {
     visibleTranscriptEndIndex,
   ])
 
+  const moveViewport = useCallback((direction: -1 | 1) => {
+    const step = Math.max(Math.floor(visibleTranscriptCards.length / 2), 1)
+    moveCursor(direction * step)
+  }, [moveCursor, visibleTranscriptCards.length])
+
   const toggleExpansion = useCallback(() => {
     const card = cursorIndex >= 0 ? transcriptCards[cursorIndex] : null
     if (!card) return
+    const shouldAutoFold = transcriptView === 'conversation' && card.autoFold
+    const isExpanded = resolvedExpandedKeys.has(card.key)
+
+    if (shouldAutoFold) {
+      setCollapsedCardKeys((current) => {
+        if (!current.has(card.key)) return current
+        const next = new Set(current)
+        next.delete(card.key)
+        return next
+      })
+      setExpandedCardKeys((current) => {
+        const next = new Set(current)
+        if (isExpanded) next.delete(card.key)
+        else next.add(card.key)
+        return next
+      })
+      return
+    }
+
     setExpandedCardKeys((current) => {
+      if (!current.has(card.key)) return current
       const next = new Set(current)
-      if (next.has(card.key)) next.delete(card.key)
-      else next.add(card.key)
+      next.delete(card.key)
       return next
     })
-  }, [cursorIndex, transcriptCards])
+    setCollapsedCardKeys((current) => {
+      const next = new Set(current)
+      if (isExpanded) next.add(card.key)
+      else next.delete(card.key)
+      return next
+    })
+  }, [cursorIndex, resolvedExpandedKeys, transcriptCards, transcriptView])
+
+  const jumpToMatchingCard = useCallback((direction: -1 | 1, predicate: (card: TuiTranscriptCard) => boolean) => {
+    if (transcriptCards.length === 0) return
+    let index = cursorIndex >= 0 ? cursorIndex + direction : direction > 0 ? 0 : transcriptCards.length - 1
+    while (index >= 0 && index < transcriptCards.length) {
+      if (predicate(transcriptCards[index])) {
+        jumpToTranscriptIndex(index)
+        return
+      }
+      index += direction
+    }
+  }, [cursorIndex, jumpToTranscriptIndex, transcriptCards])
 
   const toggleRail = useCallback(async () => {
     const nextVisible = !railVisible
@@ -896,12 +980,13 @@ export default function App() {
 
     void (async () => {
       try {
-        const [configuredTheme, configuredProvider, configuredRailVisible, configuredFocusMode, configuredDensity] = await Promise.all([
+        const [configuredTheme, configuredProvider, configuredRailVisible, configuredFocusMode, configuredDensity, configuredTranscriptView] = await Promise.all([
           readTuiTheme(),
           readTuiProvider(),
           readTuiRailVisible(),
           readTuiFocusMode(),
           readTuiDensity(),
+          readTuiTranscriptView(),
         ])
         if (cancelled) return
         setThemeMode(configuredTheme)
@@ -910,6 +995,7 @@ export default function App() {
         setRailVisible(configuredRailVisible)
         setFocusMode(configuredFocusMode)
         setDensity(configuredDensity)
+        setTranscriptView(configuredTranscriptView)
         if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
 
         await refreshSessions(configuredProvider, false, true)
@@ -968,6 +1054,17 @@ export default function App() {
     }
   }, [density])
 
+  const cycleTranscriptView = useCallback(async () => {
+    const next: TuiTranscriptView = transcriptView === 'conversation' ? 'full' : 'conversation'
+    setTranscriptView(next)
+
+    try {
+      await writeTuiTranscriptView(next)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to store transcript view')
+    }
+  }, [transcriptView])
+
   useEffect(() => {
     if (!selectedSessionTarget) {
       setSessionDetail(null)
@@ -985,15 +1082,63 @@ export default function App() {
   }, [selectedSession, sessions])
 
   useEffect(() => {
+    let cancelled = false
+
     setTranscriptTopKey(null)
     setTranscriptCursorKey(null)
     setExpandedCardKeys(new Set())
+    setCollapsedCardKeys(new Set())
     setFollowTail(true)
     setPendingNewCount(0)
     setUnreadBoundaryKey(null)
+    setResumeMarkerKey(null)
     setSearchMode(false)
     setSearchQuery('')
     setSearchMatchIndex(0)
+    setRestoredReaderState({
+      sessionKey: selectedSessionKey,
+      loaded: selectedSessionKey == null,
+      state: null,
+    })
+
+    if (!selectedSessionKey) {
+      return () => {
+        cancelled = true
+      }
+    }
+
+    void (async () => {
+      try {
+        const state = await readTuiSessionReaderState(selectedSessionKey)
+        if (cancelled) return
+        setRestoredReaderState({
+          sessionKey: selectedSessionKey,
+          loaded: true,
+          state,
+        })
+        if (state) {
+          setExpandedCardKeys(new Set(state.expandedKeys))
+          setCollapsedCardKeys(new Set(state.collapsedKeys))
+          if (state.followTail === false) {
+            setTranscriptTopKey(state.topKey ?? state.cursorKey)
+            setTranscriptCursorKey(state.cursorKey)
+            setFollowTail(false)
+            setResumeMarkerKey(state.cursorKey)
+          }
+        }
+      } catch {
+        if (cancelled) return
+        setRestoredReaderState({
+          sessionKey: selectedSessionKey,
+          loaded: true,
+          state: null,
+        })
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
   }, [selectedSessionKey])
 
   useEffect(() => {
@@ -1048,8 +1193,11 @@ export default function App() {
     setTranscriptTopKey(null)
     setTranscriptCursorKey(null)
     setExpandedCardKeys(new Set())
+    setCollapsedCardKeys(new Set())
     setFollowTail(true)
     setPendingNewCount(0)
+    setResumeMarkerKey(null)
+    setRestoredReaderState({ sessionKey: null, loaded: false, state: null })
     setError(null)
 
     try {
@@ -1074,6 +1222,16 @@ export default function App() {
 
   useEffect(() => {
     setExpandedCardKeys((current) => {
+      const allowed = new Set(transcriptCards.map((card) => card.key))
+      let changed = false
+      const next = new Set<string>()
+      for (const key of current) {
+        if (allowed.has(key)) next.add(key)
+        else changed = true
+      }
+      return changed ? next : current
+    })
+    setCollapsedCardKeys((current) => {
       const allowed = new Set(transcriptCards.map((card) => card.key))
       let changed = false
       const next = new Set<string>()
@@ -1121,13 +1279,46 @@ export default function App() {
     }
 
     if (!sameSession) {
+      if (restoredReaderState.sessionKey !== selectedSessionKey || !restoredReaderState.loaded) {
+        return
+      }
+
+      const restoredState = restoredReaderState.state
+      if (restoredState?.followTail === false) {
+        const fallbackIndex = findCardIndex(transcriptCards, restoredState.cursorKey)
+        const targetIndex = fallbackIndex >= 0 ? fallbackIndex : Math.max(cursorIndex, 0)
+        const nextStart = windowStartForCursor(
+          transcriptCards,
+          targetIndex,
+          transcriptViewportRows,
+          resolvedExpandedKeys,
+          densityState.cardGap,
+          resumeMarkerIndex,
+          unreadBoundaryIndex,
+          pendingNewCount,
+          expandedCardBorderRows,
+        )
+        setTranscriptCursorKey(transcriptCards[targetIndex]?.key ?? transcriptCards[0].key)
+        setTranscriptTopKey(
+          transcriptCards[findCardIndex(transcriptCards, restoredState.topKey) >= 0 ? findCardIndex(transcriptCards, restoredState.topKey) : nextStart]?.key
+            ?? transcriptCards[nextStart].key,
+        )
+        setFollowTail(false)
+        setPendingNewCount(0)
+        setUnreadBoundaryKey(null)
+        setResumeMarkerKey(restoredState.cursorKey)
+        previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
+        return
+      }
+
       const lastIndex = transcriptCards.length - 1
       const nextStart = windowStartForCursor(
         transcriptCards,
         lastIndex,
         transcriptViewportRows,
-        expandedCardKeys,
+        resolvedExpandedKeys,
         densityState.cardGap,
+        resumeMarkerIndex,
         unreadBoundaryIndex,
         pendingNewCount,
         expandedCardBorderRows,
@@ -1137,6 +1328,7 @@ export default function App() {
       setFollowTail(true)
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
+      setResumeMarkerKey(null)
       previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
       return
     }
@@ -1147,8 +1339,9 @@ export default function App() {
         transcriptCards,
         lastIndex,
         transcriptViewportRows,
-        expandedCardKeys,
+        resolvedExpandedKeys,
         densityState.cardGap,
+        resumeMarkerIndex,
         unreadBoundaryIndex,
         pendingNewCount,
         expandedCardBorderRows,
@@ -1186,8 +1379,9 @@ export default function App() {
         transcriptCards,
         Math.max(cursorIndex, 0),
         transcriptViewportRows,
-        expandedCardKeys,
+        resolvedExpandedKeys,
         densityState.cardGap,
+        resumeMarkerIndex,
         unreadBoundaryIndex,
         pendingNewCount,
         expandedCardBorderRows,
@@ -1199,9 +1393,11 @@ export default function App() {
     cursorIndex,
     densityState.cardGap,
     expandedCardBorderRows,
-    expandedCardKeys,
     followTail,
     pendingNewCount,
+    resolvedExpandedKeys,
+    resumeMarkerIndex,
+    restoredReaderState,
     selectedSessionKey,
     transcriptCards,
     transcriptViewportRows,
@@ -1216,8 +1412,9 @@ export default function App() {
         transcriptCards,
         lastIndex,
         transcriptViewportRows,
-        expandedCardKeys,
+        resolvedExpandedKeys,
         densityState.cardGap,
+        resumeMarkerIndex,
         unreadBoundaryIndex,
         pendingNewCount,
         expandedCardBorderRows,
@@ -1232,8 +1429,9 @@ export default function App() {
         transcriptCards,
         cursorIndex,
         transcriptViewportRows,
-        expandedCardKeys,
+        resolvedExpandedKeys,
         densityState.cardGap,
+        resumeMarkerIndex,
         unreadBoundaryIndex,
         pendingNewCount,
         expandedCardBorderRows,
@@ -1244,14 +1442,56 @@ export default function App() {
     cursorIndex,
     densityState.cardGap,
     expandedCardBorderRows,
-    expandedCardKeys,
     followTail,
     pendingNewCount,
+    resolvedExpandedKeys,
+    resumeMarkerIndex,
     topIndex,
     transcriptCards,
     transcriptViewportRows,
     unreadBoundaryIndex,
     visibleTranscriptEndIndex,
+  ])
+
+  useEffect(() => {
+    if (!selectedSessionKey || !restoredReaderState.loaded || restoredReaderState.sessionKey !== selectedSessionKey) {
+      return
+    }
+
+    const validKeys = new Set(transcriptCards.map((card) => card.key))
+    const persistState: TuiSessionReaderState = {
+      followTail,
+      cursorKey: followTail ? null : (transcriptCursorKey && validKeys.has(transcriptCursorKey) ? transcriptCursorKey : null),
+      topKey: followTail ? null : (transcriptTopKey && validKeys.has(transcriptTopKey) ? transcriptTopKey : null),
+      expandedKeys: [...expandedCardKeys].filter((key) => validKeys.has(key)),
+      collapsedKeys: [...collapsedCardKeys].filter((key) => validKeys.has(key)),
+    }
+
+    if (readerStateWriteTimeoutRef.current) {
+      clearTimeout(readerStateWriteTimeoutRef.current)
+    }
+
+    readerStateWriteTimeoutRef.current = setTimeout(() => {
+      void writeTuiSessionReaderState(selectedSessionKey, persistState).catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to store reader position')
+      })
+    }, 150)
+
+    return () => {
+      if (readerStateWriteTimeoutRef.current) {
+        clearTimeout(readerStateWriteTimeoutRef.current)
+        readerStateWriteTimeoutRef.current = null
+      }
+    }
+  }, [
+    collapsedCardKeys,
+    expandedCardKeys,
+    followTail,
+    restoredReaderState,
+    selectedSessionKey,
+    transcriptCards,
+    transcriptCursorKey,
+    transcriptTopKey,
   ])
 
   useEffect(() => {
@@ -1391,6 +1631,16 @@ export default function App() {
       return
     }
 
+    if (effectiveFocus === 'messages' && key.ctrl && input === 'd') {
+      moveViewport(1)
+      return
+    }
+
+    if (effectiveFocus === 'messages' && key.ctrl && input === 'u') {
+      moveViewport(-1)
+      return
+    }
+
     if (effectiveFocus === 'messages' && (input === 'e' || key.return)) {
       toggleExpansion()
       return
@@ -1403,6 +1653,11 @@ export default function App() {
 
     if (effectiveFocus === 'messages' && input === 'u') {
       jumpToUnreadBoundary()
+      return
+    }
+
+    if (effectiveFocus === 'messages' && input === 'm') {
+      jumpToResumeMarker()
       return
     }
 
@@ -1434,6 +1689,26 @@ export default function App() {
       return
     }
 
+    if (effectiveFocus === 'messages' && input === '(') {
+      jumpToMatchingCard(-1, (card) => card.category === 'conversation')
+      return
+    }
+
+    if (effectiveFocus === 'messages' && input === ')') {
+      jumpToMatchingCard(1, (card) => card.category === 'conversation')
+      return
+    }
+
+    if (effectiveFocus === 'messages' && input === '{') {
+      jumpToMatchingCard(-1, (card) => card.category !== 'conversation')
+      return
+    }
+
+    if (effectiveFocus === 'messages' && input === '}') {
+      jumpToMatchingCard(1, (card) => card.category !== 'conversation')
+      return
+    }
+
     if (input === 'p') {
       openProviderMenu()
       return
@@ -1459,6 +1734,11 @@ export default function App() {
       return
     }
 
+    if (input === 'v') {
+      void cycleTranscriptView()
+      return
+    }
+
     if (input === 'r') {
       void refreshSessions(provider)
       if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
@@ -1479,11 +1759,15 @@ export default function App() {
     `model ${readerModel}`,
     readerTag !== 'none' ? `tag ${readerTag}` : null,
   ])
+  const readerMode = followTail ? 'live mode' : pendingNewCount > 0 ? 'new content waiting' : 'reading mode'
   const readerState = joinMeta([
-    `window ${transcriptCards.length === 0 ? '0-0' : `${topIndex + 1}-${transcriptWindowEnd}`}/${transcriptCards.length}`,
-    followTail ? 'live following' : 'reading history',
+    `position ${transcriptCards.length === 0 ? '0' : `${Math.max(cursorIndex, 0) + 1}`}/${transcriptCards.length}`,
+    readerMode,
+    transcriptView === 'conversation' ? 'conversation-first' : 'full transcript',
     pendingNewCount > 0 ? `+${pendingNewCount} new` : null,
     unreadBoundaryIndex >= 0 ? 'u unread' : null,
+    resumeMarkerIndex >= 0 ? 'm last read' : null,
+    foldedTechnicalCount > 0 ? `${visibleFoldedTechnicalCount}/${foldedTechnicalCount} folded` : null,
     normalizedSearchQuery ? `/${searchQuery} ${searchMatches.length === 0 ? '0' : `${searchMatchIndex + 1}/${searchMatches.length}`}` : null,
   ])
   const readerDensity = density.toUpperCase()
@@ -1496,14 +1780,12 @@ export default function App() {
     focusMode ? 'FOCUS' : effectiveFocus.toUpperCase(),
     provider.toUpperCase(),
     readerDensity,
-    followTail ? 'LIVE' : pendingNewCount > 0 ? `+${pendingNewCount}` : 'READ',
+    transcriptView === 'conversation' ? 'READER' : 'FULL',
   ])
-  const searchFooterText = fitText(
-    `SEARCH /${searchQuery || ''}  ${searchMatches.length === 0 ? 'no matches' : `${searchMatchIndex + 1}/${searchMatches.length} matches`}  enter jump  esc close  [ first  ] last  n next  N prev`,
-    Math.max(terminalColumns - 2, 16),
-  )
+  const topBarStatusText = fitText(topBarStatus, Math.max(terminalColumns - slimBarTitle.length - 8, 16))
+  const showReaderNotice = !followTail && pendingNewCount > 0
   const footerText = fitText(
-    `tab focus  j/k move  u unread  / search  [ first  ] last  n next  f live  h rail  z focus  d ${density}  e expand  p provider  r refresh  q quit`,
+    `tab focus  j/k move  ctrl-u/d page  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  r refresh  q quit`,
     Math.max(terminalColumns - 2, 16),
   )
   const headerLeftText = fitText(
@@ -1516,10 +1798,10 @@ export default function App() {
   )
 
   return (
-    <Box flexDirection="column" paddingX={1} height={terminalRows} overflow="hidden" backgroundColor={theme.bg}>
+      <Box flexDirection="column" paddingX={1} height={terminalRows} overflow="hidden" backgroundColor={theme.bg}>
       <Box justifyContent="space-between" backgroundColor={theme.surface} paddingX={1}>
         <Text bold color={theme.text}>{slimBarTitle}</Text>
-        <Text color={theme.muted}>{topBarStatus}</Text>
+        <Text color={theme.muted}>{topBarStatusText}</Text>
       </Box>
 
       {!focusMode ? (
@@ -1566,7 +1848,11 @@ export default function App() {
                 <Box flexGrow={1} flexDirection="row" marginTop={1} backgroundColor={theme.surface2} overflow="hidden">
                   <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
                     {visibleSidebarEntries.length === 0 ? (
-                      <Text color={theme.dim}>{loadingSessions ? 'Loading sessions…' : 'No sessions found'}</Text>
+                      loadingSessions ? (
+                        <Spinner label="Loading sessions" />
+                      ) : (
+                        <Text color={theme.dim}>No sessions found</Text>
+                      )
                     ) : (
                       visibleSidebarEntries.map((entry) => {
                         if (entry.type === 'project') {
@@ -1646,7 +1932,11 @@ export default function App() {
                 <Box flexGrow={1} flexDirection="row" marginTop={1} backgroundColor={theme.surface2} overflow="hidden">
                   <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
                     {visibleSidebarEntries.length === 0 ? (
-                      <Text color={theme.dim}>{loadingSessions ? 'Loading sessions…' : 'No sessions found'}</Text>
+                      loadingSessions ? (
+                        <Spinner label="Loading sessions" />
+                      ) : (
+                        <Text color={theme.dim}>No sessions found</Text>
+                      )
                     ) : (
                       visibleSidebarEntries.map((entry) => {
                         if (entry.type === 'project') {
@@ -1734,13 +2024,28 @@ export default function App() {
               backgroundColor={theme.surface2}
               overflow="hidden"
             >
-              <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
+              <Box
+                flexGrow={1}
+                flexDirection="column"
+                paddingX={1}
+                paddingTop={TRANSCRIPT_BODY_PADDING_TOP}
+                paddingBottom={TRANSCRIPT_BODY_PADDING_BOTTOM}
+                overflow="hidden"
+              >
                 {error ? (
-                  <Text color={theme.red}>{fitText(error, messageInnerWidth - 2)}</Text>
+                  <StatusMessage variant="error">
+                    {fitText(error, Math.max(messageInnerWidth - 8, 16))}
+                  </StatusMessage>
+                ) : null}
+
+                {showReaderNotice ? (
+                  <StatusMessage variant="info">
+                    {fitText(`+${pendingNewCount} new messages waiting. Press u for first unread or f for live tail.`, Math.max(messageInnerWidth - 8, 16))}
+                  </StatusMessage>
                 ) : null}
 
                 {loadingDetail ? (
-                  <Text color={theme.dim}>Loading transcript…</Text>
+                  <Spinner label="Loading transcript" />
                 ) : visibleTranscriptCards.length === 0 ? (
                   <Text color={theme.dim}>No messages.</Text>
                 ) : (
@@ -1748,23 +2053,22 @@ export default function App() {
                     const absoluteIndex = topIndex + windowIndex
                     const isSelected = card.key === transcriptCursorKey
                     const hasCursor = isSelected && effectiveFocus === 'messages'
-                    const isExpanded = expandedCardKeys.has(card.key)
+                    const isExpanded = resolvedExpandedKeys.has(card.key)
                     const expandedLines = isExpanded ? card.expandedLines : null
                     const accent = transcriptAccent(card.role, card.provider ?? provider)
                     const timestamp = card.timestamp ?? ''
-                    const rawBodyLines = previewBodyLines(card)
-                    const groups = groupBodyLines(rawBodyLines)
                     const bodyLineWidth = Math.max(
                       transcriptLineWidth - densityState.bodyIndent - 1,
                       20,
                     )
-                    const hiddenLines = Math.max(card.expandedLines.length - rawBodyLines.length, 0)
+                    const collapsedLines = card.lines
                     const isSearchHit = normalizedSearchQuery.length > 0
                       && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
                     const isLatest = absoluteIndex === transcriptCards.length - 1
                     const landmarks = transcriptLandmarks(
                       transcriptCards,
                       absoluteIndex,
+                      resumeMarkerIndex,
                       unreadBoundaryIndex,
                       pendingNewCount,
                     )
@@ -1788,22 +2092,35 @@ export default function App() {
                       : isSelected
                       ? theme.border2
                       : theme.surface2
-                    const marker = hasCursor ? '>' : isSelected ? ':' : '•'
+                    const marker = hasCursor ? '>' : isSelected ? ':' : '.'
                     const timestampColor = hasCursor
                       ? theme.muted
                       : isSelected
                       ? theme.text
                       : theme.dim
+                    const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
+                    const headerMeta = joinMeta([
+                      timestamp || null,
+                      isLatest ? 'latest' : null,
+                      isSearchHit ? 'match' : null,
+                      isAutoFoldedTechnical ? 'folded' : null,
+                      `e ${isExpanded ? 'collapse' : 'expand'}`,
+                    ])
+                    const headerMetaWidth = Math.max(
+                      Math.min(headerMeta.length, Math.max(Math.floor(transcriptLineWidth * 0.5), 18)),
+                      18,
+                    )
+                    const headerLabelWidth = Math.max(transcriptLineWidth - 2 - headerMetaWidth, 8)
 
                     return (
                       <React.Fragment key={card.key}>
                         {landmarks.map((landmark, landmarkIndex) => {
-                          const color = landmark.kind === 'unread'
+                          const color = landmark.kind === 'resume'
+                            ? theme.cyan
+                            : landmark.kind === 'unread'
                             ? theme.amber
                             : landmark.kind === 'day'
                             ? theme.violet
-                            : landmark.kind === 'section'
-                            ? accent
                             : theme.dim
                           return (
                             <Box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
@@ -1821,13 +2138,16 @@ export default function App() {
                             <Text color={railColor}>{isSelected ? '|' : ' '}</Text>
                           </Box>
                           <Box flexGrow={1} flexDirection="column">
-                            <Box backgroundColor={headerBg}>
-                              <Text color={isSelected ? accent : theme.muted}>{fitText(marker, 2)}</Text>
-                              <Text bold color={accent}>{card.label}</Text>
-                              {timestamp ? <Text color={timestampColor}>  {timestamp}</Text> : null}
-                              {isLatest ? <Text color={theme.green}>  latest</Text> : null}
-                              {isSearchHit ? <Text color={theme.pink}>  match</Text> : null}
-                              {isExpanded ? <Text color={theme.dim}>  e collapse</Text> : null}
+                            <Box backgroundColor={headerBg} overflow="hidden">
+                              <Box width={2}>
+                                <Text color={isSelected ? accent : theme.muted}>{marker}</Text>
+                              </Box>
+                              <Box width={headerLabelWidth} overflow="hidden">
+                                <Text bold color={accent}>{fitText(card.label, headerLabelWidth)}</Text>
+                              </Box>
+                              <Box flexGrow={1} overflow="hidden">
+                                <Text color={timestampColor}>{fitText(headerMeta, headerMetaWidth)}</Text>
+                              </Box>
                             </Box>
                             <Box flexDirection="column" marginLeft={densityState.bodyIndent} backgroundColor={bodyBg}>
                             {isExpanded && expandedLines && expandedLines.length > 0 ? (
@@ -1853,123 +2173,17 @@ export default function App() {
                               })
                             ) : (
                               <>
-                                {groups.map((group, groupIndex) => {
-                                  if (group.type === 'text') {
-                                    return (
-                                      <React.Fragment key={`${card.key}:t${groupIndex}`}>
-                                        {group.lines.map((ln, lnIndex) => (
-                                          <Box key={`${card.key}:t${groupIndex}:${lnIndex}`}>
-                                            <Text color={transcriptColor(ln)}>
-                                              {fitText(ln.text, bodyLineWidth)}
-                                            </Text>
-                                          </Box>
-                                        ))}
-                                      </React.Fragment>
-                                    )
-                                  }
-
-                                  const toolMatch = group.toolLine.text.match(/^tool (\S+)(?:: (.*))?$/)
-                                  const rawToolName = toolMatch?.[1] ?? 'TOOL'
-                                  const toolName = formatToolLabel(rawToolName)
-                                  const toolTarget = toolMatch?.[2] ?? ''
-                                  const resultLine = group.bodyLines.find(
-                                    (ln) => ln.tone === 'result_ok' || ln.tone === 'result_error',
-                                  )
-                                  const contentLines = group.bodyLines.filter(
-                                    (ln) => ln.tone !== 'result_ok' && ln.tone !== 'result_error',
-                                  )
-                                  const isError = resultLine?.tone === 'result_error'
-                                  const resultColor = isError ? theme.red : theme.green
-                                  const statusIcon = isError ? '✗' : '✓'
-                                  const statusText = isError ? 'ERROR' : 'OK'
-
-                                  if (rawToolName.toUpperCase() === 'FILECHANGE') {
-                                    const pathLine = group.bodyLines[0]?.tone === 'diff_meta' ? group.bodyLines[0] : null
-                                    const afterPath = pathLine ? group.bodyLines.slice(1) : group.bodyLines
-                                    const diffContent = afterPath.filter((ln) => ln.tone !== 'dim')
-                                    const pathText = pathLine?.text ?? ''
-                                    const slashIdx = pathText.indexOf('/')
-                                    const kind = slashIdx > 0 ? pathText.slice(0, slashIdx).trim() : 'change'
-                                    const filePath = slashIdx >= 0 ? pathText.slice(slashIdx) : pathText
-                                    const fileName = filePath.split('/').at(-1) ?? filePath
-                                    const kindColor = kind === 'delete' ? theme.red : theme.green
-                                    const kindLabel = `${kind || 'completed'} ▲`
-                                    const fileHeaderWidth = Math.max(bodyLineWidth - kindLabel.length - 2, 12)
-                                    return (
-                                      <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
-                                        <Box backgroundColor={theme.surface3} paddingX={1}>
-                                          <Text bold color={theme.cyan}>
-                                            {fitText(`FILE CHANGE${fileName ? `  ${fileName}` : ''}`, fileHeaderWidth)}
-                                          </Text>
-                                          <Text color={kindColor}>  {kindLabel}</Text>
-                                        </Box>
-                                        {filePath ? (
-                                          <Box paddingX={1} backgroundColor={theme.diffMetaBg}>
-                                            <Text color={theme.dim}>{fitText(filePath, bodyLineWidth - 2)}</Text>
-                                          </Box>
-                                        ) : null}
-                                        {diffContent.map((ln, lnIndex) => (
-                                          <Box
-                                            key={`${card.key}:g${groupIndex}:d${lnIndex}`}
-                                            backgroundColor={transcriptBackground(ln, theme)}
-                                            paddingX={1}
-                                          >
-                                            <Text color={transcriptColor(ln)}>
-                                              {fitText(ln.text, bodyLineWidth - 2)}
-                                            </Text>
-                                          </Box>
-                                        ))}
-                                        <Box paddingX={1} backgroundColor={theme.diffAddBg}>
-                                          <Text color={theme.green}>✓ Applied {toolTarget}</Text>
-                                        </Box>
-                                      </Box>
-                                    )
-                                  }
-
-                                  return (
-                                    <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
-                                      <Box backgroundColor={theme.surface3} paddingX={1}>
-                                        <Text bold color={theme.cyan}>{toolName}</Text>
-                                      </Box>
-                                      {toolTarget ? (
-                                        <Box backgroundColor={theme.surface3} paddingX={1}>
-                                          <Text color={theme.muted}>{fitText(toolTarget, bodyLineWidth - 2)}</Text>
-                                        </Box>
-                                      ) : null}
-                                      {resultLine ? (
-                                        <Box
-                                          paddingX={1}
-                                          backgroundColor={isError ? theme.diffRemoveBg : theme.diffAddBg}
-                                        >
-                                          <Text bold color={resultColor}>{statusIcon} {statusText}</Text>
-                                          <Text color={theme.dim}>
-                                            {'  '}
-                                            {fitText(
-                                              resultLine.text.replace(/^result (?:ok|error): /, ''),
-                                              Math.max(bodyLineWidth - statusText.length - 6, 8),
-                                            )}
-                                          </Text>
-                                        </Box>
-                                      ) : null}
-                                      {contentLines.map((ln, lnIndex) => (
-                                        <Box
-                                          key={`${card.key}:g${groupIndex}:c${lnIndex}`}
-                                          backgroundColor={transcriptBackground(ln, theme)}
-                                          paddingX={1}
-                                        >
-                                          <Text color={transcriptColor(ln)}>
-                                            {fitText(ln.text, Math.max(bodyLineWidth - 2, 16))}
-                                          </Text>
-                                        </Box>
-                                      ))}
-                                    </Box>
-                                  )
-                                })}
-                                {hiddenLines > 0 && !isExpanded ? (
-                                  <Box paddingX={1}>
-                                    <Text color={theme.dim}>{fitText(`▼ ${hiddenLines} more lines`, bodyLineWidth - 2)}</Text>
+                                {collapsedLines.map((ln, lnIndex) => (
+                                  <Box
+                                    key={`${card.key}:c${lnIndex}`}
+                                    backgroundColor={transcriptBackground(ln, theme)}
+                                    paddingX={1}
+                                  >
+                                    <Text color={transcriptColor(ln)}>
+                                      {fitText(ln.text, Math.max(bodyLineWidth - 2, 16))}
+                                    </Text>
                                   </Box>
-                                ) : null}
+                                ))}
                               </>
                             )}
                           </Box>
@@ -2021,13 +2235,28 @@ export default function App() {
               backgroundColor={theme.surface2}
               overflow="hidden"
             >
-              <Box flexGrow={1} flexDirection="column" paddingX={1} paddingY={1} overflow="hidden">
+              <Box
+                flexGrow={1}
+                flexDirection="column"
+                paddingX={1}
+                paddingTop={TRANSCRIPT_BODY_PADDING_TOP}
+                paddingBottom={TRANSCRIPT_BODY_PADDING_BOTTOM}
+                overflow="hidden"
+              >
                 {error ? (
-                  <Text color={theme.red}>{fitText(error, messageInnerWidth - 2)}</Text>
+                  <StatusMessage variant="error">
+                    {fitText(error, Math.max(messageInnerWidth - 8, 16))}
+                  </StatusMessage>
+                ) : null}
+
+                {showReaderNotice ? (
+                  <StatusMessage variant="info">
+                    {fitText(`+${pendingNewCount} new messages waiting. Press u for first unread or f for live tail.`, Math.max(messageInnerWidth - 8, 16))}
+                  </StatusMessage>
                 ) : null}
 
                 {loadingDetail ? (
-                  <Text color={theme.dim}>Loading transcript…</Text>
+                  <Spinner label="Loading transcript" />
                 ) : visibleTranscriptCards.length === 0 ? (
                   <Text color={theme.dim}>No messages.</Text>
                 ) : (
@@ -2035,23 +2264,22 @@ export default function App() {
                   const absoluteIndex = topIndex + windowIndex
                   const isSelected = card.key === transcriptCursorKey
                   const hasCursor = isSelected && effectiveFocus === 'messages'
-                  const isExpanded = expandedCardKeys.has(card.key)
+                  const isExpanded = resolvedExpandedKeys.has(card.key)
                   const expandedLines = isExpanded ? card.expandedLines : null
                   const accent = transcriptAccent(card.role, card.provider ?? provider)
                   const timestamp = card.timestamp ?? ''
-                  const rawBodyLines = previewBodyLines(card)
-                  const groups = groupBodyLines(rawBodyLines)
                   const bodyLineWidth = Math.max(
                     transcriptLineWidth - densityState.bodyIndent - 1,
                     20,
                   )
-                  const hiddenLines = Math.max(card.expandedLines.length - rawBodyLines.length, 0)
+                  const collapsedLines = card.lines
                   const isSearchHit = normalizedSearchQuery.length > 0
                     && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
                   const isLatest = absoluteIndex === transcriptCards.length - 1
                   const landmarks = transcriptLandmarks(
                     transcriptCards,
                     absoluteIndex,
+                    resumeMarkerIndex,
                     unreadBoundaryIndex,
                     pendingNewCount,
                   )
@@ -2085,22 +2313,35 @@ export default function App() {
                     : isSelected
                     ? theme.border2
                     : theme.surface2
-                  const marker = hasCursor ? '>' : isSelected ? ':' : '•'
+                  const marker = hasCursor ? '>' : isSelected ? ':' : '.'
                   const timestampColor = hasCursor
                     ? theme.muted
                     : isSelected
                     ? theme.text
                     : theme.dim
+                  const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
+                  const headerMeta = joinMeta([
+                    timestamp || null,
+                    isLatest ? 'latest' : null,
+                    isSearchHit ? 'match' : null,
+                    isAutoFoldedTechnical ? 'folded' : null,
+                    `e ${isExpanded ? 'collapse' : 'expand'}`,
+                  ])
+                  const headerMetaWidth = Math.max(
+                    Math.min(headerMeta.length, Math.max(Math.floor(transcriptLineWidth * 0.5), 18)),
+                    18,
+                  )
+                  const headerLabelWidth = Math.max(transcriptLineWidth - 2 - headerMetaWidth, 8)
 
                   return (
                     <React.Fragment key={card.key}>
                       {landmarks.map((landmark, landmarkIndex) => {
-                        const color = landmark.kind === 'unread'
+                        const color = landmark.kind === 'resume'
+                          ? theme.cyan
+                          : landmark.kind === 'unread'
                           ? theme.amber
                           : landmark.kind === 'day'
                           ? theme.violet
-                          : landmark.kind === 'section'
-                          ? accent
                           : theme.dim
                         return (
                           <Box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
@@ -2123,14 +2364,17 @@ export default function App() {
                             borderStyle={showExpandedCardBorder ? 'single' : undefined}
                             borderColor={showExpandedCardBorder ? expandedCardBorderColor : undefined}
                           >
-                            <Box backgroundColor={headerBg}>
-                              <Text color={isSelected ? accent : theme.muted}>{fitText(marker, 2)}</Text>
-                              <Text bold color={accent}>{card.label}</Text>
-                              {timestamp ? <Text color={timestampColor}>  {timestamp}</Text> : null}
-                              {isLatest ? <Text color={theme.green}>  latest</Text> : null}
-                            {isSearchHit ? <Text color={theme.pink}>  match</Text> : null}
-                            {isExpanded ? <Text color={theme.dim}>  e collapse</Text> : null}
-                          </Box>
+                            <Box backgroundColor={headerBg} overflow="hidden">
+                              <Box width={2}>
+                                <Text color={isSelected ? accent : theme.muted}>{marker}</Text>
+                              </Box>
+                              <Box width={headerLabelWidth} overflow="hidden">
+                                <Text bold color={accent}>{fitText(card.label, headerLabelWidth)}</Text>
+                              </Box>
+                              <Box flexGrow={1} overflow="hidden">
+                                <Text color={timestampColor}>{fitText(headerMeta, headerMetaWidth)}</Text>
+                              </Box>
+                            </Box>
                           <Box flexDirection="column" marginLeft={densityState.bodyIndent} backgroundColor={bodyBg}>
                           {isExpanded && expandedLines && expandedLines.length > 0 ? (
                             expandedLines.map((ln, lnIndex) => {
@@ -2155,123 +2399,17 @@ export default function App() {
                               })
                           ) : (
                             <>
-                              {groups.map((group, groupIndex) => {
-                                if (group.type === 'text') {
-                                  return (
-                                    <React.Fragment key={`${card.key}:t${groupIndex}`}>
-                                      {group.lines.map((ln, lnIndex) => (
-                                        <Box key={`${card.key}:t${groupIndex}:${lnIndex}`}>
-                                          <Text color={transcriptColor(ln)}>
-                                            {fitText(ln.text, bodyLineWidth)}
-                                          </Text>
-                                        </Box>
-                                      ))}
-                                    </React.Fragment>
-                                  )
-                                }
-
-                                const toolMatch = group.toolLine.text.match(/^tool (\S+)(?:: (.*))?$/)
-                                const rawToolName = toolMatch?.[1] ?? 'TOOL'
-                                const toolName = formatToolLabel(rawToolName)
-                                const toolTarget = toolMatch?.[2] ?? ''
-                                const resultLine = group.bodyLines.find(
-                                  (ln) => ln.tone === 'result_ok' || ln.tone === 'result_error',
-                                )
-                                const contentLines = group.bodyLines.filter(
-                                  (ln) => ln.tone !== 'result_ok' && ln.tone !== 'result_error',
-                                )
-                                const isError = resultLine?.tone === 'result_error'
-                                const resultColor = isError ? theme.red : theme.green
-                                const statusIcon = isError ? '✗' : '✓'
-                                const statusText = isError ? 'ERROR' : 'OK'
-
-                                if (rawToolName.toUpperCase() === 'FILECHANGE') {
-                                  const pathLine = group.bodyLines[0]?.tone === 'diff_meta' ? group.bodyLines[0] : null
-                                  const afterPath = pathLine ? group.bodyLines.slice(1) : group.bodyLines
-                                  const diffContent = afterPath.filter((ln) => ln.tone !== 'dim')
-                                  const pathText = pathLine?.text ?? ''
-                                  const slashIdx = pathText.indexOf('/')
-                                  const kind = slashIdx > 0 ? pathText.slice(0, slashIdx).trim() : 'change'
-                                  const filePath = slashIdx >= 0 ? pathText.slice(slashIdx) : pathText
-                                  const fileName = filePath.split('/').at(-1) ?? filePath
-                                  const kindColor = kind === 'delete' ? theme.red : theme.green
-                                  const kindLabel = `${kind || 'completed'} ▲`
-                                  const fileHeaderWidth = Math.max(bodyLineWidth - kindLabel.length - 2, 12)
-                                  return (
-                                    <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
-                                      <Box backgroundColor={theme.surface3} paddingX={1}>
-                                        <Text bold color={theme.cyan}>
-                                          {fitText(`FILE CHANGE${fileName ? `  ${fileName}` : ''}`, fileHeaderWidth)}
-                                        </Text>
-                                        <Text color={kindColor}>  {kindLabel}</Text>
-                                      </Box>
-                                      {filePath ? (
-                                        <Box paddingX={1} backgroundColor={theme.diffMetaBg}>
-                                          <Text color={theme.dim}>{fitText(filePath, bodyLineWidth - 2)}</Text>
-                                        </Box>
-                                      ) : null}
-                                      {diffContent.map((ln, lnIndex) => (
-                                        <Box
-                                          key={`${card.key}:g${groupIndex}:d${lnIndex}`}
-                                          backgroundColor={transcriptBackground(ln, theme)}
-                                          paddingX={1}
-                                        >
-                                          <Text color={transcriptColor(ln)}>
-                                            {fitText(ln.text, bodyLineWidth - 2)}
-                                          </Text>
-                                        </Box>
-                                      ))}
-                                      <Box paddingX={1} backgroundColor={theme.diffAddBg}>
-                                        <Text color={theme.green}>✓ Applied {toolTarget}</Text>
-                                      </Box>
-                                    </Box>
-                                  )
-                                }
-
-                                return (
-                                  <Box key={`${card.key}:g${groupIndex}`} flexDirection="column">
-                                    <Box backgroundColor={theme.surface3} paddingX={1}>
-                                      <Text bold color={theme.cyan}>{toolName}</Text>
-                                    </Box>
-                                    {toolTarget ? (
-                                      <Box backgroundColor={theme.surface3} paddingX={1}>
-                                        <Text color={theme.muted}>{fitText(toolTarget, bodyLineWidth - 2)}</Text>
-                                      </Box>
-                                    ) : null}
-                                    {resultLine ? (
-                                      <Box
-                                        paddingX={1}
-                                        backgroundColor={isError ? theme.diffRemoveBg : theme.diffAddBg}
-                                      >
-                                        <Text bold color={resultColor}>{statusIcon} {statusText}</Text>
-                                        <Text color={theme.dim}>
-                                          {'  '}
-                                          {fitText(
-                                            resultLine.text.replace(/^result (?:ok|error): /, ''),
-                                            Math.max(bodyLineWidth - statusText.length - 6, 8),
-                                          )}
-                                        </Text>
-                                      </Box>
-                                    ) : null}
-                                    {contentLines.map((ln, lnIndex) => (
-                                      <Box
-                                        key={`${card.key}:g${groupIndex}:c${lnIndex}`}
-                                        backgroundColor={transcriptBackground(ln, theme)}
-                                        paddingX={1}
-                                      >
-                                        <Text color={transcriptColor(ln)}>
-                                          {fitText(ln.text, Math.max(bodyLineWidth - 2, 16))}
-                                        </Text>
-                                      </Box>
-                                    ))}
-                                  </Box>
-                                )
-                              })}
-                              {hiddenLines > 0 && !isExpanded ? (
-                                <Box paddingX={1}>
-                                  <Text color={theme.dim}>{fitText(`▼ ${hiddenLines} more lines`, bodyLineWidth - 2)}</Text>
+                              {collapsedLines.map((ln, lnIndex) => (
+                                <Box
+                                  key={`${card.key}:c${lnIndex}`}
+                                  backgroundColor={transcriptBackground(ln, theme)}
+                                  paddingX={1}
+                                >
+                                  <Text color={transcriptColor(ln)}>
+                                    {fitText(ln.text, Math.max(bodyLineWidth - 2, 16))}
+                                  </Text>
                                 </Box>
-                              ) : null}
+                              ))}
                             </>
                           )}
                         </Box>
@@ -2295,13 +2433,18 @@ export default function App() {
         )}
       </Box>
 
-      <Box marginTop={1}>
+      <Box marginTop={FOOTER_MARGIN_TOP}>
         {searchMode ? (
-          <Text color={theme.dim}>{searchFooterText}</Text>
+          <Text color={theme.dim}>
+            {fitText(
+              `SEARCH /${searchQuery || ''}  ${searchMatches.length === 0 ? 'no matches' : `${searchMatchIndex + 1}/${searchMatches.length} matches`}  enter jump  esc close  [ first  ] last  n next  N prev`,
+              Math.max(terminalColumns - 2, 16),
+            )}
+          </Text>
         ) : (
           <Text color={theme.dim}>{footerText}</Text>
         )}
       </Box>
-    </Box>
+      </Box>
   )
 }

@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { TuiDensity, TuiThemeMode } from '../tui/theme'
+import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../tui/theme'
 
 const TUI_STATE_FILE = path.join(process.cwd(), '.agent-viewer-data', 'tui.json')
 
@@ -9,6 +9,37 @@ type TuiState = {
   railVisible?: unknown
   focusMode?: unknown
   density?: unknown
+  transcriptView?: unknown
+  sessionReaderState?: unknown
+}
+
+export type TuiSessionReaderState = {
+  followTail: boolean
+  cursorKey: string | null
+  topKey: string | null
+  expandedKeys: string[]
+  collapsedKeys: string[]
+}
+
+function normalizeSessionReaderState(value: unknown): TuiSessionReaderState | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const normalizeKey = (entry: unknown): string | null => (
+    typeof entry === 'string' && entry.trim().length > 0 ? entry : null
+  )
+  const normalizeKeyList = (entry: unknown): string[] => (
+    Array.isArray(entry)
+      ? entry.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : []
+  )
+
+  return {
+    followTail: record.followTail === true,
+    cursorKey: normalizeKey(record.cursorKey),
+    topKey: normalizeKey(record.topKey),
+    expandedKeys: normalizeKeyList(record.expandedKeys),
+    collapsedKeys: normalizeKeyList(record.collapsedKeys),
+  }
 }
 
 async function readTuiState(): Promise<TuiState> {
@@ -62,4 +93,37 @@ export async function getConfiguredTuiDensity(): Promise<TuiDensity> {
 
 export async function setConfiguredTuiDensity(density: TuiDensity): Promise<void> {
   await writeTuiState({ density })
+}
+
+export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptView> {
+  const parsed = await readTuiState()
+  return parsed.transcriptView === 'full' ? 'full' : 'conversation'
+}
+
+export async function setConfiguredTuiTranscriptView(transcriptView: TuiTranscriptView): Promise<void> {
+  await writeTuiState({ transcriptView })
+}
+
+export async function getConfiguredTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {
+  const parsed = await readTuiState()
+  if (!parsed.sessionReaderState || typeof parsed.sessionReaderState !== 'object') return null
+  const record = parsed.sessionReaderState as Record<string, unknown>
+  return normalizeSessionReaderState(record[sessionKey])
+}
+
+export async function setConfiguredTuiSessionReaderState(
+  sessionKey: string,
+  sessionReaderState: TuiSessionReaderState,
+): Promise<void> {
+  const parsed = await readTuiState()
+  const current = parsed.sessionReaderState && typeof parsed.sessionReaderState === 'object'
+    ? parsed.sessionReaderState as Record<string, unknown>
+    : {}
+
+  await writeTuiState({
+    sessionReaderState: {
+      ...current,
+      [sessionKey]: sessionReaderState,
+    },
+  })
 }

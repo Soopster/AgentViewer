@@ -27,6 +27,8 @@ export type TuiTranscriptCardLine = {
   tone: TuiTranscriptLineTone
 }
 
+export type TuiTranscriptCardCategory = 'conversation' | 'technical' | 'diff' | 'system'
+
 function sanitizeLine(value: string): string {
   return value
     .replace(ANSI_ESCAPE_PATTERN, '')
@@ -149,9 +151,13 @@ function previewFileChange(thread: ToolThread): TuiTranscriptCardLine[] {
 
   const first = changes[0]
   const filePath = typeof first.path === 'string' && first.path.trim() ? first.path : 'unknown file'
+  const fileName = pathBasename(filePath) || filePath
   const kind = summarizeKind(first.kind)
+  const toolSummary = changes.length > 1
+    ? `tool FileChange: ${fileName} +${changes.length - 1} more`
+    : `tool FileChange: ${fileName}`
   const lines: TuiTranscriptCardLine[] = [
-    line(`tool FileChange: ${changes.length} file change${changes.length === 1 ? '' : 's'}`, 'tool'),
+    line(toolSummary, 'tool'),
     line(`${kind} ${filePath}`, 'diff_meta'),
     ...previewDiff(first.diff ?? '', Math.max(MAX_CARD_LINES - 2 - (changes.length > 1 ? 1 : 0), 1)),
   ]
@@ -240,6 +246,9 @@ export type TuiTranscriptCard = {
   role: ThreadedMessage['role']
   provider?: ThreadedMessage['provider']
   label: string
+  category: TuiTranscriptCardCategory
+  autoFold: boolean
+  compactSummary: string
   timestamp?: string
   timestampMs?: number
   dayKey?: string
@@ -288,26 +297,70 @@ function compactCardLines(lines: TuiTranscriptCardLine[], density: TuiDensity): 
   ]
 }
 
+function compactAutoFoldLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCardLine[] {
+  const normalized = lines
+    .map((entry) => ({
+      text: truncateLine(entry.text.trim()),
+      tone: entry.tone,
+    }))
+    .filter((entry) => entry.text.length > 0)
+
+  if (normalized.length === 0) return [line('Technical activity', 'muted')]
+  if (normalized.length <= 2) return normalized
+  return [
+    normalized[0],
+    line(`… ${normalized.length - 1} more`, 'dim'),
+  ]
+}
+
+function classifyCardCategory(message: ThreadedMessage): TuiTranscriptCardCategory {
+  if (message.role === 'system') return 'system'
+  if (message.blocks.some((block) => block.type === 'tool_thread' && block.toolUse.name === 'FileChange')) {
+    return 'diff'
+  }
+
+  const hasOperationalBlock = message.blocks.some((block) => (
+    block.type === 'tool_thread'
+    || block.type === 'task_notification'
+    || block.type === 'system_reminder'
+    || block.type === 'slash_command'
+    || block.type === 'local_command_stdout'
+    || block.type === 'claude_system'
+  ))
+
+  return hasOperationalBlock ? 'technical' : 'conversation'
+}
+
 export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiDensity = 'balanced'): TuiTranscriptCard[] {
   return messages.map((message) => {
     const label = message.role === 'assistant'
       ? getAssistantLabel(message.provider)
       : message.role.toUpperCase()
+    const previewLines = message.blocks.flatMap(formatBlock)
     const expandedLines = message.blocks
       .flatMap(formatBlockExpanded)
       .filter((entry) => entry.text.trim().length > 0)
     const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
+    const category = classifyCardCategory(message)
+    const autoFold = category !== 'conversation'
+    const collapsedLines = autoFold
+      ? compactAutoFoldLines(previewLines)
+      : compactCardLines(previewLines, density)
+    const compactSummary = collapsedLines.map((entry) => entry.text).join(' · ')
 
     return {
       key: message.uuid,
       role: message.role,
       provider: message.provider,
       label,
+      category,
+      autoFold,
+      compactSummary,
       timestamp: message.timestamp ? formatTimestamp(message.timestamp) : undefined,
       timestampMs: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.getTime() : undefined,
       dayKey: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.toISOString().slice(0, 10) : undefined,
       dayLabel: formatDayLabel(message.timestamp),
-      lines: compactCardLines(message.blocks.flatMap(formatBlock), density),
+      lines: collapsedLines,
       expandedLines,
       searchText: expandedLines.map((entry) => entry.text).join('\n'),
     }
