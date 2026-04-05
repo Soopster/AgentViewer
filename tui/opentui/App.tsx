@@ -122,31 +122,32 @@ type SidebarEntry =
   | { type: 'session'; key: string; session: Session; absoluteIndex: number }
 
 function buildSidebarEntries(sessions: Session[]): SidebarEntry[] {
-  const counts = new Map<string, number>()
-  for (const session of sessions) {
-    const projectName = formatSessionProject(session).toUpperCase()
-    counts.set(projectName, (counts.get(projectName) ?? 0) + 1)
-  }
-  const entries: SidebarEntry[] = []
-  let currentProject: string | null = null
+  // Group sessions by project, preserving time-sort order within each group.
+  // Groups are ordered by the earliest (most recent) session they contain.
+  const groupOrder: string[] = []
+  const groups = new Map<string, Array<{ session: Session; absoluteIndex: number }>>()
   sessions.forEach((session, absoluteIndex) => {
     const projectName = formatSessionProject(session).toUpperCase()
-    if (projectName !== currentProject) {
-      currentProject = projectName
+    if (!groups.has(projectName)) {
+      groups.set(projectName, [])
+      groupOrder.push(projectName)
+    }
+    groups.get(projectName)!.push({ session, absoluteIndex })
+  })
+
+  const entries: SidebarEntry[] = []
+  for (const projectName of groupOrder) {
+    const members = groups.get(projectName)!
+    entries.push({ type: 'project', key: `project:${projectName}`, projectName, count: members.length })
+    for (const { session, absoluteIndex } of members) {
       entries.push({
-        type: 'project',
-        key: `project:${projectName}:${absoluteIndex}`,
-        projectName,
-        count: counts.get(projectName) ?? 0,
+        type: 'session',
+        key: `session:${session.provider ?? 'claude'}:${session.sessionId}`,
+        session,
+        absoluteIndex,
       })
     }
-    entries.push({
-      type: 'session',
-      key: `session:${session.provider ?? 'claude'}:${session.sessionId}`,
-      session,
-      absoluteIndex,
-    })
-  })
+  }
   return entries
 }
 
@@ -1772,7 +1773,7 @@ export default function OpenTuiApp() {
                   ref={sidebarScrollRef}
                   style={{ height: sidebarRowBudget }}
                   backgroundColor={theme.surface}
-                  scrollY={false}
+                  scrollY
                   viewportCulling
                   scrollbarOptions={{
                     trackOptions: {
@@ -1805,8 +1806,7 @@ export default function OpenTuiApp() {
                     const activityTime = entry.session.lastModified ?? entry.session.createdAt
                     const ago = timeAgo(activityTime)
 
-                    const project = formatSessionProject(entry.session)
-                    const metaLine = joinMeta([formatProviderLabel(entry.session.provider), ago, project])
+                    const metaLine = joinMeta([formatProviderLabel(entry.session.provider), ago])
 
                     return (
                       <box
@@ -1907,7 +1907,7 @@ export default function OpenTuiApp() {
                 backgroundColor={theme.surface2}
                 stickyScroll={followTail}
                 stickyStart="bottom"
-                scrollY={effectiveFocus === 'messages'}
+                scrollY
                 scrollbarOptions={{
                   trackOptions: {
                     foregroundColor: theme.muted,
