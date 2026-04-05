@@ -1722,10 +1722,18 @@ export default function OpenTuiApp() {
                 >
                   {sidebarEntries.map((entry) => {
                     if (entry.type === 'project') {
+                      const countLabel = `${entry.count}`
+                      const dashes = '─'.repeat(Math.max(sidebarInnerWidth - 2 - entry.projectName.length - countLabel.length - 3, 1))
                       return (
-                        <box key={entry.key} id={`sidebar:${entry.key}`} marginTop={1}>
-                          <text fg={theme.cyan}>
-                            {fitText(`${entry.projectName}  ${entry.count}`, sidebarInnerWidth)}
+                        <box
+                          key={entry.key}
+                          id={`sidebar:${entry.key}`}
+                          paddingX={1}
+                          marginTop={1}
+                          backgroundColor={theme.surface2}
+                        >
+                          <text fg={theme.cyan} wrapMode="none">
+                            {fitText(`${entry.projectName} ${dashes} ${countLabel}`, sidebarInnerWidth - 2)}
                           </text>
                         </box>
                       )
@@ -1736,6 +1744,9 @@ export default function OpenTuiApp() {
                     const activityTime = entry.session.lastModified ?? entry.session.createdAt
                     const ago = timeAgo(activityTime)
 
+                    const project = formatSessionProject(entry.session)
+                    const metaLine = joinMeta([formatProviderLabel(entry.session.provider), ago, project])
+
                     return (
                       <box
                         key={entry.key}
@@ -1744,15 +1755,16 @@ export default function OpenTuiApp() {
                         backgroundColor={selected ? theme.surface3 : theme.surface}
                         marginBottom={density === 'comfortable' ? 1 : 0}
                       >
-                        <text fg={selected ? theme.text : theme.muted}>
-                          {fitText(formatSessionTitle(entry.session), sidebarInnerWidth)}
-                        </text>
-                        <text fg={selected ? sessionAccent : theme.dim}>
-                          {fitText(
-                            `${formatProviderLabel(entry.session.provider)} ${ago} ${entry.session.sessionId.slice(-8)}`,
-                            sidebarInnerWidth,
-                          )}
-                        </text>
+                        <box paddingX={1} backgroundColor={selected ? theme.surface3 : theme.surface}>
+                          <text fg={selected ? theme.text : theme.muted} wrapMode="none">
+                            {fitText(formatSessionTitle(entry.session), sidebarInnerWidth - 2)}
+                          </text>
+                        </box>
+                        <box paddingX={1} backgroundColor={selected ? theme.surface3 : theme.surface}>
+                          <text fg={selected ? sessionAccent : theme.dim} wrapMode="none">
+                            {fitText(metaLine, sidebarInnerWidth - 2)}
+                          </text>
+                        </box>
                       </box>
                     )
                   })}
@@ -1855,7 +1867,7 @@ export default function OpenTuiApp() {
                     unreadBoundaryIndex,
                     pendingNewCount,
                   )
-                  const marker = hasCursor ? '>' : isSelected ? ':' : '.'
+                  const marker = hasCursor ? '>' : isSelected ? ':' : '⏺'
                   const isLatest = index === transcriptCards.length - 1
                   const isSearchHit = normalizedSearchQuery.length > 0
                     && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
