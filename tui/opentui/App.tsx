@@ -736,6 +736,9 @@ export default function OpenTuiApp() {
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
   const [composerError, setComposerError] = useState<string | null>(null)
   const [composerLiveText, setComposerLiveText] = useState('')
+  const [sentHistory, setSentHistory] = useState<string[]>([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const [draftBeforeHistory, setDraftBeforeHistory] = useState('')
   const [thinkingMode, setThinkingMode] = useState(false)
 
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
@@ -1350,6 +1353,9 @@ export default function OpenTuiApp() {
         }
       }
 
+      setSentHistory((prev) => [...prev, trimmed])
+      setHistoryIndex(-1)
+      setDraftBeforeHistory('')
       setComposerDraft('')
       setComposerSendState('idle')
       setComposerError(null)
@@ -1800,6 +1806,31 @@ export default function OpenTuiApp() {
             cancelComposerSend()
           } else {
             setComposerActive(false)
+          }
+        })
+        return
+      }
+      if (key.name === 'up') {
+        handled(() => {
+          if (sentHistory.length === 0) return
+          const nextIndex = historyIndex === -1
+            ? sentHistory.length - 1
+            : Math.max(historyIndex - 1, 0)
+          if (historyIndex === -1) setDraftBeforeHistory(composerDraft)
+          setHistoryIndex(nextIndex)
+          setComposerDraft(sentHistory[nextIndex] ?? '')
+        })
+        return
+      }
+      if (key.name === 'down' && historyIndex !== -1) {
+        handled(() => {
+          const nextIndex = historyIndex + 1
+          if (nextIndex >= sentHistory.length) {
+            setHistoryIndex(-1)
+            setComposerDraft(draftBeforeHistory)
+          } else {
+            setHistoryIndex(nextIndex)
+            setComposerDraft(sentHistory[nextIndex] ?? '')
           }
         })
         return
@@ -2578,6 +2609,7 @@ export default function OpenTuiApp() {
             placeholder={composerTargetSession ? 'Send a message… (enter to send)' : 'Select a session to send a message'}
             onInput={(value) => {
               setComposerDraft(value)
+              if (historyIndex !== -1) setHistoryIndex(-1)
               if (composerError) setComposerError(null)
               if (composerSendState === 'error') setComposerSendState('idle')
             }}
