@@ -547,7 +547,8 @@ function renderedBodyLines(
 
 function cardDiffText(card: TuiTranscriptCard, isExpanded: boolean): string | null {
   if (card.category !== 'diff' && !isExpanded) return null
-  return card.editDiff ?? extractDiffText(card.expandedLines)
+  const raw = card.editDiff ?? extractDiffText(card.expandedLines)
+  return raw ? rewriteHunkCounts(raw) : null
 }
 
 function cardDiffRows(card: TuiTranscriptCard, isExpanded: boolean, previewLimit: number): number {
@@ -740,9 +741,52 @@ const COMMANDS: PaletteCommand[] = [
 
 function extractDiffText(lines: TuiTranscriptCardLine[]): string | null {
   const diffLines = lines
-    .filter((line) => line.tone === 'diff_add' || line.tone === 'diff_remove' || line.tone === 'diff_meta')
+    .filter((line) => {
+      if (line.tone === 'diff_add' || line.tone === 'diff_remove') return true
+      if (line.tone === 'diff_meta') {
+        const t = line.text
+        return t.startsWith('@@') || t.startsWith('--- ') || t.startsWith('+++ ')
+          || t.startsWith('diff --git') || t.startsWith('index ')
+      }
+      return false
+    })
     .map((line) => line.text)
   return diffLines.length > 0 ? diffLines.join('\n') : null
+}
+
+/**
+ * Rewrite @@ hunk headers with counts that match the actual body content.
+ * Necessary because previewDiff strips context lines, leaving the original
+ * (context-aware) counts larger than the lines that remain.
+ */
+function rewriteHunkCounts(diff: string): string {
+  const raw = diff.split('\n')
+  const out: string[] = []
+  let i = 0
+  while (i < raw.length) {
+    const l = raw[i]
+    if (!l.startsWith('@@')) {
+      out.push(l)
+      i++
+      continue
+    }
+    let j = i + 1
+    while (j < raw.length && !raw[j].startsWith('@@')) j++
+    const body = raw.slice(i + 1, j)
+    let oldCount = 0
+    let newCount = 0
+    for (const bl of body) {
+      if (!bl || bl === '\\ No newline at end of file') continue
+      if (bl.startsWith('-')) oldCount++
+      else if (bl.startsWith('+')) newCount++
+      else { oldCount++; newCount++ }
+    }
+    const m = l.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/)
+    out.push(m ? `@@ -${m[1]},${oldCount} +${m[2]},${newCount} @@${m[3] ?? ''}` : l)
+    out.push(...body)
+    i = j
+  }
+  return out.join('\n')
 }
 
 function currentProjectName(session: Session | null): string {

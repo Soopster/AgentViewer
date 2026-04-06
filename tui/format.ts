@@ -86,6 +86,59 @@ function summarizeKind(kind: unknown): string {
   return 'change'
 }
 
+/**
+ * Normalise a unified diff that may have Codex-specific quirks:
+ * - strips non-standard leading lines before the first @@ or --- header
+ * - rewrites @@ hunk headers with the actual line counts from the hunk body
+ */
+function normalizeUnifiedDiff(diff: string): string {
+  const raw = diff.split('\n')
+  const out: string[] = []
+  let i = 0
+
+  // Skip any non-standard prefix lines (e.g. "update /path/to/file")
+  while (i < raw.length) {
+    const l = raw[i]
+    if (l.startsWith('@@') || l.startsWith('---') || l.startsWith('+++')
+        || l.startsWith('diff ') || l.startsWith('index ')) break
+    i++
+  }
+
+  while (i < raw.length) {
+    const l = raw[i]
+    if (!l.startsWith('@@')) {
+      out.push(l)
+      i++
+      continue
+    }
+
+    // Collect hunk body up to the next @@ or end
+    const bodyStart = i + 1
+    let j = bodyStart
+    while (j < raw.length && !raw[j].startsWith('@@')) j++
+    const body = raw.slice(bodyStart, j)
+
+    // Recount: context lines count for both old and new
+    let oldCount = 0
+    let newCount = 0
+    for (const bl of body) {
+      if (bl === '\\ No newline at end of file') continue
+      if (bl.startsWith('-')) oldCount++
+      else if (bl.startsWith('+')) newCount++
+      else { oldCount++; newCount++ }
+    }
+
+    const m = l.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/)
+    out.push(m
+      ? `@@ -${m[1]},${oldCount} +${m[2]},${newCount} @@${m[3] ?? ''}`
+      : l)
+    out.push(...body)
+    i = j
+  }
+
+  return out.join('\n')
+}
+
 function previewDiff(diffText: string, limit: number): TuiTranscriptCardLine[] {
   if (!diffText.trim()) return [line('No diff body recorded.', 'muted')]
 
@@ -160,7 +213,7 @@ function previewFileChange(thread: ToolThread): TuiTranscriptCardLine[] {
   const lines: TuiTranscriptCardLine[] = [
     line(toolSummary, 'tool'),
     line(`${kind} ${filePath}`, 'diff_meta'),
-    ...previewDiff(first.diff ?? '', Math.max(MAX_CARD_LINES - 2 - (changes.length > 1 ? 1 : 0), 1)),
+    ...previewDiff(normalizeUnifiedDiff(first.diff ?? ''), Math.max(MAX_CARD_LINES - 2 - (changes.length > 1 ? 1 : 0), 1)),
   ]
 
   if (changes.length > 1) {
@@ -574,7 +627,7 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
           const kind = summarizeKind(change.kind)
           if (idx > 0) result.push(line('', 'dim'))
           result.push(line(`${kind} ${filePath}`, 'diff_meta'))
-          if (change.diff) result.push(...previewDiff(change.diff, 60))
+          if (change.diff) result.push(...previewDiff(normalizeUnifiedDiff(change.diff), 60))
         }
         return result
       }
