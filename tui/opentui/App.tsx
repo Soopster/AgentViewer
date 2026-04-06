@@ -41,7 +41,7 @@ import {
   type TuiSessionDetail,
 } from '../../lib/tui/service'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import type { ProviderSelection, Session } from '../../lib/types'
+import type { ProviderSelection, SendState, Session } from '../../lib/types'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 
@@ -103,6 +103,258 @@ function timeAgo(value?: string | number): string {
   if (hours < 48) return `${hours}h`
   const days = Math.round(hours / 24)
   return `${days}d`
+}
+
+const COMPOSER_HEIGHT = 4
+const API_BASE_URL = process.env.AGENT_VIEWER_BASE_URL ?? 'http://localhost:3000'
+
+function buildApiUrl(path: string): string {
+  return new URL(path, API_BASE_URL).toString()
+}
+
+type SseFrame = {
+  event: string
+  data: string
+}
+
+function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
+  const normalized = buffer.replace(/\r\n/g, '\n')
+  const frames: SseFrame[] = []
+  let cursor = 0
+
+  while (true) {
+    const boundary = normalized.indexOf('\n\n', cursor)
+    if (boundary === -1) break
+
+    const rawFrame = normalized.slice(cursor, boundary)
+    cursor = boundary + 2
+
+    let event = 'message'
+    const dataLines: string[] = []
+
+    for (const line of rawFrame.split('\n')) {
+      if (line.startsWith('event:')) {
+        event = line.slice(6).trim()
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trimStart())
+      }
+    }
+
+    if (dataLines.length > 0) {
+      frames.push({ event, data: dataLines.join('\n') })
+    }
+  }
+
+  return {
+    frames,
+    remaining: normalized.slice(cursor),
+  }
+}
+
+function extractTextContent(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+
+  return content
+    .flatMap((block) => {
+      if (!block || typeof block !== 'object') return []
+      const record = block as Record<string, unknown>
+      return record.type === 'text' && typeof record.text === 'string'
+        ? [record.text]
+        : []
+    })
+    .join('\n\n')
+    .trim()
+}
+
+function extractStreamingAssistantText(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+
+  if (record.type === 'codex_agent_message_delta' && typeof record.delta === 'string') {
+    return record.delta
+  }
+
+  if ((record.type === 'codex_plan_delta' || record.type === 'codex_reasoning_delta' || record.type === 'codex_reasoning_summary_delta')
+    && typeof record.delta === 'string') {
+    return record.delta
+  }
+
+  if (record.type === 'codex_realtime_transcript') {
+    return record.role === 'assistant' && typeof record.text === 'string'
+      ? record.text
+      : null
+  }
+
+  if (record.type === 'codex_realtime_item_added') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return null
+    const itemRecord = item as Record<string, unknown>
+    if ((itemRecord.type === 'agentMessage' || itemRecord.type === 'plan') && typeof itemRecord.text === 'string') {
+      return itemRecord.text
+    }
+    return null
+  }
+
+  if (record.type === 'codex_item_completed') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return null
+    const itemRecord = item as Record<string, unknown>
+    return itemRecord.type === 'agentMessage' && typeof itemRecord.text === 'string'
+      ? itemRecord.text
+      : itemRecord.type === 'plan' && typeof itemRecord.text === 'string'
+      ? itemRecord.text
+      : null
+  }
+
+  if (record.type === 'stream_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'content_block_delta') return null
+
+    const delta = eventRecord.delta
+    if (!delta || typeof delta !== 'object') return null
+    const deltaRecord = delta as Record<string, unknown>
+    return deltaRecord.type === 'text_delta' && typeof deltaRecord.text === 'string'
+      ? deltaRecord.text
+      : null
+  }
+
+  if (record.type === 'opencode_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    const properties = eventRecord.properties
+    if (!properties || typeof properties !== 'object') return null
+    const propertiesRecord = properties as Record<string, unknown>
+    if (eventRecord.type === 'message.part.delta') {
+      const field = typeof propertiesRecord.field === 'string' ? propertiesRecord.field : ''
+      return field === 'text' && typeof propertiesRecord.delta === 'string'
+        ? propertiesRecord.delta
+        : null
+    }
+
+    if (eventRecord.type !== 'message.part.updated') return null
+    const part = propertiesRecord.part
+    if (!part || typeof part !== 'object') return null
+    const partRecord = part as Record<string, unknown>
+
+    return partRecord.type === 'text' && typeof partRecord.text === 'string'
+      ? partRecord.text
+      : null
+  }
+
+  if (record.type === 'copilot_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+
+    if (eventRecord.type === 'assistant.message_delta') {
+      const data = eventRecord.data
+      if (!data || typeof data !== 'object') return null
+      const dataRecord = data as Record<string, unknown>
+      return typeof dataRecord.deltaContent === 'string' ? dataRecord.deltaContent : null
+    }
+
+    if (eventRecord.type === 'assistant.message') {
+      const data = eventRecord.data
+      if (!data || typeof data !== 'object') return null
+      const dataRecord = data as Record<string, unknown>
+      return typeof dataRecord.content === 'string' ? dataRecord.content : null
+    }
+
+    return null
+  }
+
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+
+    if (eventRecord.type === 'message_update') {
+      const assistantMessageEvent = eventRecord.assistantMessageEvent
+      if (!assistantMessageEvent || typeof assistantMessageEvent !== 'object') return null
+      const updateRecord = assistantMessageEvent as Record<string, unknown>
+
+      if (updateRecord.type === 'text_delta' && typeof updateRecord.delta === 'string') {
+        return updateRecord.delta
+      }
+
+      if ((updateRecord.type === 'done' || updateRecord.type === 'error')) {
+        const finalMessage = updateRecord.type === 'done'
+          ? updateRecord.message
+          : updateRecord.error
+        if (!finalMessage || typeof finalMessage !== 'object') return null
+        const finalRecord = finalMessage as Record<string, unknown>
+        return extractTextContent(finalRecord.content)
+          || (typeof finalRecord.errorMessage === 'string' ? finalRecord.errorMessage : null)
+      }
+    }
+
+    if (eventRecord.type === 'message_end') {
+      const message = eventRecord.message
+      if (!message || typeof message !== 'object') return null
+      const messageRecord = message as Record<string, unknown>
+      return messageRecord.role === 'assistant'
+        ? extractTextContent(messageRecord.content)
+          || (typeof messageRecord.errorMessage === 'string' ? messageRecord.errorMessage : null)
+        : null
+    }
+
+    return null
+  }
+
+  if (record.type === 'assistant') {
+    const message = record.message
+    if (!message || typeof message !== 'object') return null
+    const text = extractTextContent((message as Record<string, unknown>).content)
+    return text || null
+  }
+
+  return null
+}
+
+function shouldReplaceLiveAssistantText(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false
+  const record = payload as Record<string, unknown>
+  if (record.type === 'assistant') return true
+  if (record.type === 'codex_realtime_transcript') return true
+  if (record.type === 'codex_realtime_item_added') return true
+  if (record.type === 'codex_item_completed') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return false
+    return !!((item as Record<string, unknown>).type === 'agentMessage' || (item as Record<string, unknown>).type === 'plan')
+  }
+  if (record.type === 'opencode_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return false
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message.part.updated') return false
+    const properties = eventRecord.properties
+    if (!properties || typeof properties !== 'object') return false
+    const part = (properties as Record<string, unknown>).part
+    if (!part || typeof part !== 'object') return false
+    return (part as Record<string, unknown>).type === 'text'
+  }
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return false
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type === 'message_end') {
+      const message = eventRecord.message
+      return !!message && typeof message === 'object' && (message as Record<string, unknown>).role === 'assistant'
+    }
+    if (eventRecord.type !== 'message_update') return false
+    const assistantMessageEvent = eventRecord.assistantMessageEvent
+    if (!assistantMessageEvent || typeof assistantMessageEvent !== 'object') return false
+    const updateRecord = assistantMessageEvent as Record<string, unknown>
+    return updateRecord.type === 'done' || updateRecord.type === 'error'
+  }
+  if (record.type !== 'copilot_event') return false
+  const event = record.event
+  if (!event || typeof event !== 'object') return false
+  return (event as Record<string, unknown>).type === 'assistant.message'
 }
 
 function formatTimeGap(deltaMs: number): string | null {
@@ -271,10 +523,16 @@ function transcriptLandmarks(
   return landmarks
 }
 
-function renderedBodyLines(card: TuiTranscriptCard, isExpanded: boolean, previewLimit: number): TuiTranscriptCardLine[] {
-  const source = isExpanded ? card.expandedLines : card.lines
+function renderedBodyLines(
+  card: TuiTranscriptCard,
+  isExpanded: boolean,
+  previewLimit: number,
+  thinkingFull: boolean = false,
+): TuiTranscriptCardLine[] {
+  const pretendExpanded = isExpanded || thinkingFull
+  const source = pretendExpanded ? card.expandedLines : card.lines
   let base: TuiTranscriptCardLine[]
-  if (isExpanded) {
+  if (pretendExpanded) {
     base = source.filter((line) => !['diff_add', 'diff_remove', 'diff_meta'].includes(line.tone))
   } else if (card.category === 'diff') {
     // Keep diff_meta (file path header) but strip raw diff lines — <diff> renders those
@@ -312,11 +570,13 @@ function cardHeight(
   resumeMarkerIndex: number,
   unreadBoundaryIndex: number,
   pendingNewCount: number,
+  thinkingFullKeys: Set<string>,
 ): number {
   const card = cards[index]
   const isExpanded = expandedKeys.has(card.key)
+  const thinkingFull = thinkingFullKeys.has(card.key)
   const landmarkRows = transcriptLandmarks(cards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount).length
-  const bodyRows = renderedBodyLines(card, isExpanded, previewLimit).length
+  const bodyRows = renderedBodyLines(card, isExpanded, previewLimit, thinkingFull).length
   const diffRows = cardDiffRows(card, isExpanded, previewLimit)
   const codeRows = codeBlockRows(card, isExpanded)
   const borderRows = 2
@@ -334,6 +594,7 @@ function selectTranscriptWindow(
   resumeMarkerIndex: number,
   unreadBoundaryIndex: number,
   pendingNewCount: number,
+  thinkingFullKeys: Set<string>,
 ): { endIndex: number } {
   if (cards.length === 0) return { endIndex: -1 }
 
@@ -350,6 +611,7 @@ function selectTranscriptWindow(
       resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
+      thinkingFullKeys,
     )
     if (index > startIndex && usedRows + nextHeight > rowBudget) break
     usedRows += nextHeight
@@ -369,6 +631,7 @@ function windowStartForCursor(
   resumeMarkerIndex: number,
   unreadBoundaryIndex: number,
   pendingNewCount: number,
+  thinkingFullKeys: Set<string>,
 ): number {
   if (cards.length === 0) return 0
 
@@ -382,6 +645,7 @@ function windowStartForCursor(
     resumeMarkerIndex,
     unreadBoundaryIndex,
     pendingNewCount,
+    thinkingFullKeys,
   )
 
   while (start > 0) {
@@ -394,6 +658,7 @@ function windowStartForCursor(
       resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
+      thinkingFullKeys,
     )
     if (usedRows + nextHeight > rowBudget) break
     start -= 1
@@ -412,6 +677,7 @@ function rowOffsetForIndex(
   resumeMarkerIndex: number,
   unreadBoundaryIndex: number,
   pendingNewCount: number,
+  thinkingFullKeys: Set<string>,
 ): number {
   let rows = 0
   for (let i = 0; i < index; i++) {
@@ -424,6 +690,7 @@ function rowOffsetForIndex(
       resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
+      thinkingFullKeys,
     )
   }
   return rows
@@ -522,6 +789,12 @@ export default function OpenTuiApp() {
     loaded: false,
     state: null,
   })
+  const [composerActive, setComposerActive] = useState(false)
+  const [composerDraft, setComposerDraft] = useState('')
+  const [composerSendState, setComposerSendState] = useState<SendState>('idle')
+  const [composerError, setComposerError] = useState<string | null>(null)
+  const [composerLiveText, setComposerLiveText] = useState('')
+  const [thinkingMode, setThinkingMode] = useState(false)
 
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const sidebarScrollRef = useRef<ScrollBoxRenderable>(null)
@@ -533,10 +806,14 @@ export default function OpenTuiApp() {
     sessionKey: null,
     keys: [],
   })
-
+  const composerAbortRef = useRef<AbortController | null>(null)
   useEffect(() => {
     setActiveTheme(themeMode)
   }, [themeMode])
+
+  useEffect(() => {
+    if (composerActive) setFocusedPane('messages')
+  }, [composerActive])
 
   const theme = getThemePalette(themeMode)
   const syntaxStyle = useMemo(() => buildSyntaxStyle(theme), [themeMode])
@@ -562,6 +839,16 @@ export default function OpenTuiApp() {
   const transcriptCards = useMemo(() => (
     sessionDetail ? formatTranscriptCards(sessionDetail.threadedMessages, density) : []
   ), [density, sessionDetail])
+  const thinkingFullKeys = useMemo(() => {
+    if (!thinkingMode) return new Set<string>()
+    const next = new Set<string>()
+    for (const card of transcriptCards) {
+      if (card.lines.some((line) => line.tone === 'thinking')) {
+        next.add(card.key)
+      }
+    }
+    return next
+  }, [thinkingMode, transcriptCards])
 
   const resolvedExpandedKeys = useMemo(() => {
     const next = new Set<string>()
@@ -625,7 +912,7 @@ export default function OpenTuiApp() {
     const idx = sidebarEntries.findIndex((e) => e.type === 'session' && e.absoluteIndex === selectedIndex)
     return idx >= 0 ? idx : 0
   }, [sidebarEntries, selectedIndex])
-  const mainContentHeight = Math.max(height - 3 - (searchMode ? 3 : 1), 8)
+  const mainContentHeight = Math.max(height - 3 - (searchMode ? 3 : 1) - COMPOSER_HEIGHT, 8)
   const sidebarWidth = showRail ? clamp(Math.floor((width - 4) * 0.27), 28, 40) : 0
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
   const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7), 8)
@@ -645,6 +932,7 @@ export default function OpenTuiApp() {
       resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
+      thinkingFullKeys,
     )
   }, [
     cursorIndex,
@@ -657,6 +945,7 @@ export default function OpenTuiApp() {
     transcriptTopKey,
     transcriptViewportRows,
     unreadBoundaryIndex,
+    thinkingFullKeys,
   ])
   const visibleTranscriptWindow = useMemo(() => (
     selectTranscriptWindow(
@@ -669,6 +958,7 @@ export default function OpenTuiApp() {
       resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
+      thinkingFullKeys,
     )
   ), [
     densityState.bodyLines,
@@ -691,7 +981,7 @@ export default function OpenTuiApp() {
         && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
       const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
       const landmarks = transcriptLandmarks(transcriptCards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount)
-      const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines)
+      const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, thinkingFullKeys.has(card.key))
       const diffText = cardDiffText(card, isExpanded)
       const diffLineCount = diffText ? diffText.split('\n').length : 0
       const codeBlockLineCounts = (isExpanded && card.codeBlocks)
@@ -800,6 +1090,7 @@ export default function OpenTuiApp() {
       resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
+      thinkingFullKeys,
     )
     setTranscriptCursorKey(nextCard.key)
     setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
@@ -818,6 +1109,7 @@ export default function OpenTuiApp() {
     transcriptCards,
     transcriptViewportRows,
     unreadBoundaryIndex,
+    thinkingFullKeys,
   ])
 
   const jumpToTranscriptTail = useCallback(() => {
@@ -865,6 +1157,7 @@ export default function OpenTuiApp() {
         resumeMarkerIndex,
         unreadBoundaryIndex,
         pendingNewCount,
+        thinkingFullKeys,
       )
       setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
     }
@@ -886,6 +1179,7 @@ export default function OpenTuiApp() {
     transcriptViewportRows,
     unreadBoundaryIndex,
     visibleTranscriptEndIndex,
+    thinkingFullKeys,
   ])
 
   const moveViewport = useCallback((direction: -1 | 1) => {
@@ -1070,6 +1364,115 @@ export default function OpenTuiApp() {
       providerSwitchRef.current = false
     }
   }, [closeProviderMenu, provider, refreshSessions])
+
+  const cancelComposerSend = useCallback(() => {
+    if (composerAbortRef.current) {
+      composerAbortRef.current.abort()
+    }
+    composerAbortRef.current = null
+    setComposerSendState('idle')
+    setComposerLiveText('')
+  }, [])
+
+  const sendComposerMessage = useCallback(async () => {
+    if (composerSendState === 'sending') return
+    const trimmed = composerDraft.trim()
+    if (!trimmed || !selectedSession) return
+
+    const targetSession = selectedSession
+    const controller = new AbortController()
+    composerAbortRef.current = controller
+    setComposerSendState('sending')
+    setComposerError(null)
+    // no longer track awaiting state separately
+    setComposerLiveText('')
+
+    try {
+      const res = await fetch(buildApiUrl(`/api/sessions/${targetSession.sessionId}/messages`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: trimmed,
+          provider: targetSession.provider,
+        }),
+        signal: controller.signal,
+      })
+
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}))
+        throw new Error(json.error ?? `HTTP ${res.status}`)
+      }
+
+      const reader = res.body?.getReader()
+      if (!reader) throw new Error('No response body')
+      const decoder = new TextDecoder()
+      let sseBuffer = ''
+
+      const handleFrame = (frame: SseFrame) => {
+        let parsed: unknown = null
+        try {
+          parsed = JSON.parse(frame.data)
+        } catch {
+          parsed = null
+        }
+        if (frame.event === 'error') {
+          const message = (
+            parsed && typeof parsed === 'object'
+              ? (parsed as Record<string, unknown>).error
+              : undefined
+          )
+          throw new Error(typeof message === 'string' ? message : 'Unknown agent error')
+        }
+        if (!parsed) return
+        const delta = extractStreamingAssistantText(parsed)
+        if (!delta) return
+        setComposerLiveText((prev) => shouldReplaceLiveAssistantText(parsed) ? delta : `${prev}${delta}`)
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        sseBuffer += decoder.decode(value, { stream: true })
+        const { frames, remaining } = extractSseFrames(sseBuffer)
+        sseBuffer = remaining
+        for (const frame of frames) {
+          handleFrame(frame)
+        }
+      }
+
+      if (sseBuffer.trim()) {
+        const { frames } = extractSseFrames(`${sseBuffer}\n\n`)
+        for (const frame of frames) {
+          handleFrame(frame)
+        }
+      }
+
+      setComposerDraft('')
+      setComposerSendState('idle')
+      setComposerError(null)
+      setFollowTail(true)
+      setPendingNewCount(0)
+      setUnreadBoundaryKey(null)
+      if (targetSession) {
+        void refreshSelectedSessionDetail(targetSession, false)
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        return
+      }
+      setComposerSendState('error')
+      setComposerError(err instanceof Error ? err.message : 'Failed to send message')
+      setComposerLiveText('')
+    } finally {
+      composerAbortRef.current = null
+      setComposerLiveText('')
+    }
+  }, [
+    composerDraft,
+    composerSendState,
+    refreshSelectedSessionDetail,
+    selectedSession,
+  ])
 
   useEffect(() => {
     let cancelled = false
@@ -1274,6 +1677,7 @@ export default function OpenTuiApp() {
               resumeMarkerIndex,
               unreadBoundaryIndex,
               pendingNewCount,
+              thinkingFullKeys,
             )
         setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
         setTranscriptCursorKey(transcriptCards[targetIndex]?.key ?? transcriptCards[0].key)
@@ -1293,6 +1697,7 @@ export default function OpenTuiApp() {
           resumeMarkerIndex,
           unreadBoundaryIndex,
           pendingNewCount,
+          thinkingFullKeys,
         )
         setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
         setTranscriptCursorKey(transcriptCards[lastIndex].key)
@@ -1317,6 +1722,7 @@ export default function OpenTuiApp() {
         resumeMarkerIndex,
         unreadBoundaryIndex,
         pendingNewCount,
+        thinkingFullKeys,
       )
       setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
       setTranscriptCursorKey(transcriptCards[lastIndex].key)
@@ -1356,6 +1762,7 @@ export default function OpenTuiApp() {
         resumeMarkerIndex,
         unreadBoundaryIndex,
         pendingNewCount,
+        thinkingFullKeys,
       )
       return transcriptCards[nextStart]?.key ?? transcriptCards[0].key
     })
@@ -1390,6 +1797,7 @@ export default function OpenTuiApp() {
         resumeMarkerIndex,
         unreadBoundaryIndex,
         pendingNewCount,
+        thinkingFullKeys,
       )
       setTranscriptCursorKey(transcriptCards[lastIndex].key)
       setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
@@ -1407,6 +1815,7 @@ export default function OpenTuiApp() {
         resumeMarkerIndex,
         unreadBoundaryIndex,
         pendingNewCount,
+        thinkingFullKeys,
       )
       setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
     }
@@ -1423,6 +1832,7 @@ export default function OpenTuiApp() {
     transcriptViewportRows,
     unreadBoundaryIndex,
     visibleTranscriptEndIndex,
+    thinkingFullKeys,
   ])
 
   useEffect(() => {
@@ -1493,11 +1903,17 @@ export default function OpenTuiApp() {
 
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  r refresh  ? commands  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  T thinking  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
     [width, transcriptView, density],
   )
+
+  const composerStatusMessage = composerError
+    ? composerError
+    : composerSendState === 'sending'
+      ? composerLiveText || 'Waiting for saved response…'
+      : null
 
   useKeyboard((key) => {
     if (key.eventType === 'release') return
@@ -1565,6 +1981,20 @@ export default function OpenTuiApp() {
         handled(() => {
           setCommandPaletteQuery((q) => q + sequence)
           setCommandPaletteIndex(0)
+        })
+        return
+      }
+      return
+    }
+
+    if (composerActive) {
+      if (key.name === 'escape') {
+        handled(() => {
+          if (composerSendState === 'sending') {
+            cancelComposerSend()
+          } else {
+            setComposerActive(false)
+          }
         })
         return
       }
@@ -1761,6 +2191,20 @@ export default function OpenTuiApp() {
     if (effectiveFocus === 'messages' && sequence === '}') {
       handled(() => {
         jumpToMatchingCard(1, (card) => card.category !== 'conversation')
+      })
+      return
+    }
+
+    if (sequence === 'c' && !composerActive) {
+      handled(() => {
+        setComposerActive(true)
+      })
+      return
+    }
+
+    if (sequence === 'T') {
+      handled(() => {
+        setThinkingMode((current) => !current)
       })
       return
     }
@@ -2052,6 +2496,7 @@ export default function OpenTuiApp() {
                   const hasCursor = isSelected && effectiveFocus === 'messages'
                   const isExpanded = resolvedExpandedKeys.has(card.key)
                   const accent = transcriptAccent(card.role, card.provider ?? provider)
+                  const isThinkingCard = card.lines.some((line) => line.tone === 'thinking')
                   const { landmarks, bodyLines, diffText, diffLineCount, codeBlockLineCounts, headerMeta, isSearchHit } = display
                   const isActiveMatch = isSearchHit && searchMatches[searchMatchIndex] === index
                   const marker = hasCursor ? '>' : isSelected ? ':' : '⏺'
@@ -2134,6 +2579,13 @@ export default function OpenTuiApp() {
                                 fg={theme.text}
                                 style={{ height: Math.min(isExpanded ? 12 : densityState.bodyLines, Math.max(diffLineCount + 2, 4)) }}
                               />
+                            </box>
+                          ) : null}
+                          {isThinkingCard ? (
+                            <box paddingX={1} marginTop={1}>
+                              <text fg={thinkingMode ? theme.cyan : theme.dim}>
+                                {thinkingMode ? 'Thinking mode on (T to disable)' : 'T toggles thinking mode for all thinking cards'}
+                              </text>
                             </box>
                           ) : null}
                         </box>
@@ -2267,11 +2719,54 @@ export default function OpenTuiApp() {
             </box>
           </box>
         </box>
-      ) : (
+      ) : null}
+
+      <box
+        paddingX={1}
+        paddingTop={1}
+        paddingBottom={1}
+        backgroundColor={theme.surface}
+        border
+        borderStyle="single"
+        borderColor={theme.border}
+        height={COMPOSER_HEIGHT}
+        flexDirection="column"
+        gap={1}
+      >
+        {composerStatusMessage ? (
+          <text fg={composerError ? theme.red : theme.dim} wrapMode="none">
+            {fitText(
+              composerStatusMessage,
+              Math.max(rightPaneWidth - 4, 16),
+            )}
+          </text>
+        ) : null}
+        <box flexDirection="row" alignItems="center" gap={1}>
+          <input
+            focused={composerActive}
+            value={composerDraft}
+            placeholder={selectedSession ? 'Send a message… (enter to send)' : 'Select a session to send a message'}
+            onInput={(value) => {
+              setComposerDraft(value)
+              if (composerError) setComposerError(null)
+              if (composerSendState === 'error') setComposerSendState('idle')
+            }}
+            onSubmit={() => {
+              void sendComposerMessage()
+            }}
+            style={{ flexGrow: 1 }}
+          />
+          <text fg={composerSendState === 'sending' ? theme.dim : theme.cyan}>
+            {composerSendState === 'sending' ? 'Esc = cancel' : 'Enter = send'}
+          </text>
+        </box>
+      </box>
+
+      {!searchMode ? (
         <box backgroundColor={theme.surface} paddingX={1}>
           <text fg={theme.dim}>{footerText}</text>
         </box>
-      )}
+      ) : null}
     </box>
   )
 }

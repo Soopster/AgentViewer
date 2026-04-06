@@ -509,10 +509,14 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
         ? sanitizeLine(block.text).trim().split('\n').map((l) => line(l.trimEnd()))
         : []
 
-    case 'thinking':
-      return block.thinking.trim()
-        ? [line(`thinking: ${truncateLine(block.thinking.trim().split('\n')[0])}`, 'thinking')]
-        : []
+    case 'thinking': {
+      const content = block.thinking.trim()
+      if (!content) return []
+      return content
+        .split('\n')
+        .map((ln) => line(ln.trim(), 'thinking'))
+        .filter((entry) => entry.text.length > 0)
+    }
 
     case 'tool_thread': {
       const input = block.toolUse.input as Record<string, unknown>
