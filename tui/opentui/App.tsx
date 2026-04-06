@@ -105,7 +105,7 @@ function timeAgo(value?: string | number): string {
   return `${days}d`
 }
 
-const COMPOSER_HEIGHT = 4
+const COMPOSER_HEIGHT = 3
 const API_BASE_URL = process.env.AGENT_VIEWER_BASE_URL ?? 'http://localhost:3000'
 
 function buildApiUrl(path: string): string {
@@ -2787,26 +2787,27 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
+      {composerStatusMessage ? (
+        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+          <text fg={composerError ? theme.red : theme.dim} wrapMode="none">
+            {fitText(
+              composerStatusMessage,
+              Math.max(width - 4, 20),
+            )}
+          </text>
+        </box>
+      ) : null}
+
       <box
         paddingX={1}
         paddingTop={1}
-        paddingBottom={1}
         backgroundColor={theme.surface}
         border
         borderStyle="single"
         borderColor={theme.border}
         height={COMPOSER_HEIGHT}
         flexDirection="column"
-        gap={1}
       >
-        {composerStatusMessage ? (
-          <text fg={composerError ? theme.red : theme.dim} wrapMode="none">
-            {fitText(
-              composerStatusMessage,
-              Math.max(rightPaneWidth - 4, 16),
-            )}
-          </text>
-        ) : null}
         <box flexDirection="row" alignItems="center" gap={1}>
           <input
             focused={composerActive}
