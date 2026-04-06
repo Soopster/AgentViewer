@@ -746,16 +746,34 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       let completionSeen = false
       let completionCloseTimer: ReturnType<typeof setTimeout> | null = null
 
-      const closeStream = (unsubscribe: () => void) => {
+      const safeEnqueue = (chunk: string) => {
+        if (closed) return
+        try {
+          controller.enqueue(encoder.encode(chunk))
+        } catch {
+          closed = true
+        }
+      }
+
+      const safeClose = () => {
         if (closed) return
         closed = true
+        try {
+          controller.close()
+        } catch {
+          /* stream already closed by consumer/runtime */
+        }
+      }
+
+      const closeStream = (unsubscribe: () => void) => {
+        if (closed) return
         if (completionCloseTimer) {
           clearTimeout(completionCloseTimer)
           completionCloseTimer = null
         }
-        controller.close()
         clearRunningSession(sessionId)
         unsubscribe()
+        safeClose()
       }
 
       const scheduleCompletionClose = (unsubscribe: () => void) => {
@@ -768,7 +786,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       const flushNotification = (notification: CodexNotification) => {
         const payload = formatCodexNotification(notification)
         if (!payload) return
-        controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
+        safeEnqueue(`data: ${payload}\n\n`)
       }
 
       const unsubscribe = client.subscribe((notification) => {
@@ -782,7 +800,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
             (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
             currentModel,
           )
-          controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+          safeEnqueue(codexContextUsageToEventData(usage))
           return
         }
 
@@ -812,7 +830,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       try {
         const resume = await resumeCodexThread(sessionId).catch(() => null)
         currentModel = model ?? resume?.model ?? currentModel
-        controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`))
+        safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`)
 
         const started = await client.request<CodexTurnStartResponse>('turn/start', {
           threadId: sessionId,
@@ -840,7 +858,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
               (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
               currentModel,
             )
-            controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+            safeEnqueue(codexContextUsageToEventData(usage))
             continue
           }
           if (completionSeen) scheduleCompletionClose(unsubscribe)
@@ -853,9 +871,8 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       } catch (err) {
         unsubscribe()
         clearRunningSession(sessionId)
-        closed = true
-        controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
-        controller.close()
+        safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
+        safeClose()
       }
     },
   })
