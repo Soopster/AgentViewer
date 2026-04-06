@@ -556,8 +556,9 @@ function cardDiffText(card: TuiTranscriptCard, isExpanded: boolean): string | nu
 function cardDiffRows(card: TuiTranscriptCard, isExpanded: boolean, previewLimit: number): number {
   const diffText = cardDiffText(card, isExpanded)
   if (!diffText) return 0
-  const maxHeight = isExpanded ? 12 : previewLimit
-  return Math.min(maxHeight, Math.max(diffText.split('\n').length + 2, 4)) + 1
+  const lineCount = diffText.split('\n').length
+  const maxHeight = isExpanded ? Math.max(lineCount + 2, 4) : previewLimit
+  return Math.min(maxHeight, Math.max(lineCount + 2, 4)) + 1
 }
 
 function codeBlockRows(card: TuiTranscriptCard, isExpanded: boolean): number {
@@ -2430,7 +2431,7 @@ export default function OpenTuiApp() {
                                 lineNumberBg={theme.surface}
                                 lineNumberFg={theme.dim}
                                 fg={theme.text}
-                                style={{ height: Math.min(isExpanded ? 12 : densityState.bodyLines, Math.max(diffLineCount + 2, 4)) }}
+                                style={{ height: isExpanded ? Math.max(diffLineCount + 2, 4) : Math.min(densityState.bodyLines, Math.max(diffLineCount + 2, 4)) }}
                               />
                             </box>
                           ) : null}
