@@ -42,7 +42,7 @@ function formatTimestamp(value?: string): string {
   if (!value) return ''
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return ''
-  return parsed.toISOString().slice(11, 19)
+  return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 }
 
 function truncateLine(value: string, maxChars = MAX_PREVIEW_CHARS): string {

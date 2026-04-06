@@ -41,7 +41,7 @@ import {
   type TuiSessionDetail,
 } from '../../lib/tui/service'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import type { ProviderSelection, SendState, Session } from '../../lib/types'
+import type { ProviderSelection, RunningSessionRef, SendState, Session } from '../../lib/types'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 
@@ -59,6 +59,7 @@ const THEMES: TuiThemeMode[] = ['light', 'dark', 'cyber']
 const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
 const DETAIL_REFRESH_MS = 2000
+const RUNNING_SESSION_REFRESH_MS = 1500
 
 type PaneFocus = 'sessions' | 'messages'
 
@@ -106,6 +107,7 @@ function timeAgo(value?: string | number): string {
 }
 
 const COMPOSER_HEIGHT = 3
+const TRANSCRIPT_TOP_MARGIN = 2
 const API_BASE_URL = process.env.AGENT_VIEWER_BASE_URL ?? 'http://localhost:3000'
 
 function buildApiUrl(path: string): string {
@@ -589,118 +591,6 @@ function cardHeight(
   return landmarkRows + borderRows + bodyPaddingBottom + bodyRows + diffRows + codeRows + mdRows + cardGap
 }
 
-function selectTranscriptWindow(
-  cards: TuiTranscriptCard[],
-  startIndex: number,
-  rowBudget: number,
-  expandedKeys: Set<string>,
-  previewLimit: number,
-  cardGap: number,
-  resumeMarkerIndex: number,
-  unreadBoundaryIndex: number,
-  pendingNewCount: number,
-  thinkingFullKeys: Set<string>,
-): { endIndex: number } {
-  if (cards.length === 0) return { endIndex: -1 }
-
-  let usedRows = 0
-  let endIndex = clamp(startIndex, 0, cards.length - 1)
-
-  for (let index = clamp(startIndex, 0, cards.length - 1); index < cards.length; index++) {
-    const nextHeight = cardHeight(
-      cards,
-      index,
-      expandedKeys,
-      previewLimit,
-      cardGap,
-      resumeMarkerIndex,
-      unreadBoundaryIndex,
-      pendingNewCount,
-      thinkingFullKeys,
-    )
-    if (index > startIndex && usedRows + nextHeight > rowBudget) break
-    usedRows += nextHeight
-    endIndex = index
-  }
-
-  return { endIndex }
-}
-
-function windowStartForCursor(
-  cards: TuiTranscriptCard[],
-  cursorIndex: number,
-  rowBudget: number,
-  expandedKeys: Set<string>,
-  previewLimit: number,
-  cardGap: number,
-  resumeMarkerIndex: number,
-  unreadBoundaryIndex: number,
-  pendingNewCount: number,
-  thinkingFullKeys: Set<string>,
-): number {
-  if (cards.length === 0) return 0
-
-  let start = clamp(cursorIndex, 0, cards.length - 1)
-  let usedRows = cardHeight(
-    cards,
-    start,
-    expandedKeys,
-    previewLimit,
-    cardGap,
-    resumeMarkerIndex,
-    unreadBoundaryIndex,
-    pendingNewCount,
-    thinkingFullKeys,
-  )
-
-  while (start > 0) {
-    const nextHeight = cardHeight(
-      cards,
-      start - 1,
-      expandedKeys,
-      previewLimit,
-      cardGap,
-      resumeMarkerIndex,
-      unreadBoundaryIndex,
-      pendingNewCount,
-      thinkingFullKeys,
-    )
-    if (usedRows + nextHeight > rowBudget) break
-    start -= 1
-    usedRows += nextHeight
-  }
-
-  return start
-}
-
-function rowOffsetForIndex(
-  cards: TuiTranscriptCard[],
-  index: number,
-  expandedKeys: Set<string>,
-  previewLimit: number,
-  cardGap: number,
-  resumeMarkerIndex: number,
-  unreadBoundaryIndex: number,
-  pendingNewCount: number,
-  thinkingFullKeys: Set<string>,
-): number {
-  let rows = 0
-  for (let i = 0; i < index; i++) {
-    rows += cardHeight(
-      cards,
-      i,
-      expandedKeys,
-      previewLimit,
-      cardGap,
-      resumeMarkerIndex,
-      unreadBoundaryIndex,
-      pendingNewCount,
-      thinkingFullKeys,
-    )
-  }
-  return rows
-}
-
 function cycleTheme(current: TuiThemeMode): TuiThemeMode {
   return current === 'light' ? 'dark' : current === 'dark' ? 'cyber' : 'light'
 }
@@ -729,8 +619,11 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'live',     label: 'Jump to live tail',      key: 'f'  },
   { id: 'unread',   label: 'Jump to first unread',   key: 'u'  },
   { id: 'mark',     label: 'Mark position',          key: 'm'  },
+  { id: 'fold',     label: 'Fold/expand card',       key: 'e'  },
+  { id: 'composer', label: 'Open composer',          key: 'c'  },
   { id: 'provider', label: 'Switch provider',        key: 'p'  },
   { id: 'theme',    label: 'Switch theme',           key: 't'  },
+  { id: 'thinking', label: 'Toggle thinking mode',   key: 'T'  },
   { id: 'density',  label: 'Toggle density',         key: 'd'  },
   { id: 'view',     label: 'Toggle transcript view', key: 'v'  },
   { id: 'rail',     label: 'Toggle session rail',    key: 'h'  },
@@ -804,6 +697,7 @@ export default function OpenTuiApp() {
   const [focusMode, setFocusMode] = useState(false)
   const [railVisible, setRailVisible] = useState(true)
   const [sessions, setSessions] = useState<Session[]>([])
+  const [runningSessions, setRunningSessions] = useState<RunningSessionRef[]>([])
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null)
   const [sessionDetail, setSessionDetail] = useState<TuiSessionDetail | null>(null)
   const [loadingSessions, setLoadingSessions] = useState(true)
@@ -819,7 +713,7 @@ export default function OpenTuiApp() {
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIndex, setSearchMatchIndex] = useState(0)
-  const [transcriptTopKey, setTranscriptTopKey] = useState<string | null>(null)
+
   const [transcriptCursorKey, setTranscriptCursorKey] = useState<string | null>(null)
   const [expandedCardKeys, setExpandedCardKeys] = useState<Set<string>>(() => new Set())
   const [collapsedCardKeys, setCollapsedCardKeys] = useState<Set<string>>(() => new Set())
@@ -883,6 +777,38 @@ export default function OpenTuiApp() {
         }
       : null
   ), [selectedSessionIdentity])
+  const providerRunningSessions = useMemo(() => (
+    runningSessions.filter((running) => provider === 'all' || running.provider === provider)
+  ), [provider, runningSessions])
+  const composerTargetSession = useMemo<Session | null>(() => {
+    if (selectedSession) {
+      const selectedIsRunning = providerRunningSessions.some((running) =>
+        running.sessionId === selectedSession.sessionId && running.provider === selectedSession.provider,
+      )
+      if (selectedIsRunning) return selectedSession
+    }
+
+    if (providerRunningSessions.length === 1) {
+      const onlyRunning = providerRunningSessions[0]
+      const matchedSession = sessions.find((session) =>
+        session.sessionId === onlyRunning.sessionId && session.provider === onlyRunning.provider,
+      )
+      return matchedSession ?? {
+        sessionId: onlyRunning.sessionId,
+        provider: onlyRunning.provider,
+      }
+    }
+
+    return selectedSession
+  }, [providerRunningSessions, selectedSession, sessions])
+  const composerAutoTargetingRunning = Boolean(
+    composerTargetSession
+    && selectedSession
+    && (
+      composerTargetSession.sessionId !== selectedSession.sessionId
+      || composerTargetSession.provider !== selectedSession.provider
+    ),
+  )
 
   const transcriptCards = useMemo(() => (
     sessionDetail ? formatTranscriptCards(sessionDetail.threadedMessages, density) : []
@@ -966,60 +892,6 @@ export default function OpenTuiApp() {
   const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7), 8)
   const sidebarRowBudget = Math.max(mainContentHeight - 7, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
-  const topIndex = useMemo(() => {
-    if (transcriptCards.length === 0) return 0
-    const storedTop = findCardIndex(transcriptCards, transcriptTopKey)
-    if (storedTop >= 0) return storedTop
-    return windowStartForCursor(
-      transcriptCards,
-      Math.max(cursorIndex, 0),
-      transcriptViewportRows,
-      resolvedExpandedKeys,
-      densityState.bodyLines,
-      densityState.cardGap,
-      resumeMarkerIndex,
-      unreadBoundaryIndex,
-      pendingNewCount,
-      thinkingFullKeys,
-    )
-  }, [
-    cursorIndex,
-    densityState.bodyLines,
-    densityState.cardGap,
-    pendingNewCount,
-    resolvedExpandedKeys,
-    resumeMarkerIndex,
-    transcriptCards,
-    transcriptTopKey,
-    transcriptViewportRows,
-    unreadBoundaryIndex,
-    thinkingFullKeys,
-  ])
-  const visibleTranscriptWindow = useMemo(() => (
-    selectTranscriptWindow(
-      transcriptCards,
-      topIndex,
-      transcriptViewportRows,
-      resolvedExpandedKeys,
-      densityState.bodyLines,
-      densityState.cardGap,
-      resumeMarkerIndex,
-      unreadBoundaryIndex,
-      pendingNewCount,
-      thinkingFullKeys,
-    )
-  ), [
-    densityState.bodyLines,
-    densityState.cardGap,
-    pendingNewCount,
-    resolvedExpandedKeys,
-    resumeMarkerIndex,
-    topIndex,
-    transcriptCards,
-    transcriptViewportRows,
-    unreadBoundaryIndex,
-  ])
-  const visibleTranscriptEndIndex = visibleTranscriptWindow.endIndex
 
   const cardDisplayData = useMemo((): CardDisplayData[] => (
     transcriptCards.map((card, index) => {
@@ -1094,6 +966,29 @@ export default function OpenTuiApp() {
     }
   }, [])
 
+  const refreshRunningSessions = useCallback(async () => {
+    try {
+      const res = await fetch(buildApiUrl('/api/runtime/running'))
+      if (!res.ok) return
+      const json = await res.json().catch(() => ({}))
+      const nextRunning = Array.isArray(json.sessions)
+        ? json.sessions
+          .filter((session: unknown): session is RunningSessionRef => {
+            if (!session || typeof session !== 'object') return false
+            const record = session as Record<string, unknown>
+            return typeof record.sessionId === 'string' && typeof record.provider === 'string'
+          })
+          .map((session: RunningSessionRef) => ({
+            sessionId: session.sessionId,
+            provider: session.provider,
+          }))
+        : []
+      setRunningSessions(nextRunning)
+    } catch {
+      // Ignore runtime discovery errors; composer falls back to selected session.
+    }
+  }, [])
+
   const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
     const requestId = ++detailRequestRef.current
     if (foreground) setLoadingDetail(true)
@@ -1128,37 +1023,14 @@ export default function OpenTuiApp() {
     const nextIndex = clamp(index, 0, transcriptCards.length - 1)
     const nextCard = transcriptCards[nextIndex]
     if (!nextCard) return
-    const nextStart = windowStartForCursor(
-      transcriptCards,
-      nextIndex,
-      transcriptViewportRows,
-      resolvedExpandedKeys,
-      densityState.bodyLines,
-      densityState.cardGap,
-      resumeMarkerIndex,
-      unreadBoundaryIndex,
-      pendingNewCount,
-      thinkingFullKeys,
-    )
     setTranscriptCursorKey(nextCard.key)
-    setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
     const atTail = nextIndex === transcriptCards.length - 1
     setFollowTail(atTail)
     if (atTail) {
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
     }
-  }, [
-    densityState.bodyLines,
-    densityState.cardGap,
-    pendingNewCount,
-    resolvedExpandedKeys,
-    resumeMarkerIndex,
-    transcriptCards,
-    transcriptViewportRows,
-    unreadBoundaryIndex,
-    thinkingFullKeys,
-  ])
+  }, [transcriptCards])
 
   const jumpToTranscriptTail = useCallback(() => {
     if (transcriptCards.length === 0) return
@@ -1194,41 +1066,13 @@ export default function OpenTuiApp() {
     if (transcriptCards.length === 0) return
     const nextIndex = clamp((cursorIndex >= 0 ? cursorIndex : 0) + delta, 0, transcriptCards.length - 1)
     setTranscriptCursorKey(transcriptCards[nextIndex].key)
-    if (nextIndex < topIndex || nextIndex > visibleTranscriptEndIndex) {
-      const nextStart = windowStartForCursor(
-        transcriptCards,
-        nextIndex,
-        transcriptViewportRows,
-        resolvedExpandedKeys,
-        densityState.bodyLines,
-        densityState.cardGap,
-        resumeMarkerIndex,
-        unreadBoundaryIndex,
-        pendingNewCount,
-        thinkingFullKeys,
-      )
-      setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
-    }
     const atTail = nextIndex === transcriptCards.length - 1
     setFollowTail(atTail)
     if (atTail) {
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
     }
-  }, [
-    cursorIndex,
-    densityState.bodyLines,
-    densityState.cardGap,
-    pendingNewCount,
-    resolvedExpandedKeys,
-    resumeMarkerIndex,
-    topIndex,
-    transcriptCards,
-    transcriptViewportRows,
-    unreadBoundaryIndex,
-    visibleTranscriptEndIndex,
-    thinkingFullKeys,
-  ])
+  }, [cursorIndex, transcriptCards])
 
   const moveViewport = useCallback((direction: -1 | 1) => {
     const step = Math.max(Math.floor((height - (focusMode ? 5 : 7)) / 3), 1)
@@ -1363,6 +1207,16 @@ export default function OpenTuiApp() {
         setFocusedPane('messages')
         setSearchMode(true)
         break
+      case 'fold':
+        setFocusedPane('messages')
+        toggleExpansion()
+        break
+      case 'composer':
+        setComposerActive(true)
+        break
+      case 'thinking':
+        setThinkingMode((current) => !current)
+        break
       case 'refresh':
         void refreshSessions(provider)
         if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
@@ -1375,7 +1229,7 @@ export default function OpenTuiApp() {
     closeCommandPalette, density, focusMode, focusedPane, jumpToResumeMarker,
     jumpToTranscriptTail, jumpToUnreadBoundary, provider, railVisible,
     refreshSessions, refreshSelectedSessionDetail, renderer, selectedSessionTarget,
-    themeMode, transcriptView,
+    themeMode, toggleExpansion, transcriptView,
   ])
 
   const chooseProvider = useCallback(async (nextProvider: ProviderSelection) => {
@@ -1389,7 +1243,6 @@ export default function OpenTuiApp() {
     setProvider(nextProvider)
     setSessionDetail(null)
     setSelectedSessionKey(null)
-    setTranscriptTopKey(null)
     setTranscriptCursorKey(null)
     setExpandedCardKeys(new Set())
     setCollapsedCardKeys(new Set())
@@ -1425,9 +1278,9 @@ export default function OpenTuiApp() {
   const sendComposerMessage = useCallback(async () => {
     if (composerSendState === 'sending') return
     const trimmed = composerDraft.trim()
-    if (!trimmed || !selectedSession) return
+    if (!trimmed || !composerTargetSession) return
 
-    const targetSession = selectedSession
+    const targetSession = composerTargetSession
     const controller = new AbortController()
     composerAbortRef.current = controller
     setComposerSendState('sending')
@@ -1503,9 +1356,9 @@ export default function OpenTuiApp() {
       setFollowTail(true)
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
-      if (targetSession) {
-        void refreshSelectedSessionDetail(targetSession, false)
-      }
+      setSelectedSessionKey(sessionKey(targetSession))
+      void refreshSessions(provider, true, false)
+      void refreshSelectedSessionDetail(targetSession, false)
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         return
@@ -1519,10 +1372,12 @@ export default function OpenTuiApp() {
       setComposerLiveText('')
     }
   }, [
+    composerTargetSession,
     composerDraft,
     composerSendState,
+    provider,
+    refreshSessions,
     refreshSelectedSessionDetail,
-    selectedSession,
   ])
 
   useEffect(() => {
@@ -1554,7 +1409,10 @@ export default function OpenTuiApp() {
         setDensity(configuredDensity)
         setTranscriptView(configuredTranscriptView)
         if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
-        await refreshSessions(configuredProvider, false, true)
+        await Promise.all([
+          refreshSessions(configuredProvider, false, true),
+          refreshRunningSessions(),
+        ])
       } catch (err) {
         if (cancelled) return
         setError(err instanceof Error ? err.message : 'Failed to initialize OpenTUI')
@@ -1567,7 +1425,7 @@ export default function OpenTuiApp() {
     return () => {
       cancelled = true
     }
-  }, [refreshSessions])
+  }, [refreshRunningSessions, refreshSessions])
 
   useEffect(() => {
     if (!bootstrapped) return
@@ -1613,9 +1471,21 @@ export default function OpenTuiApp() {
   }, [bootstrapped, refreshSelectedSessionDetail, selectedSessionIdentity, selectedSessionTarget])
 
   useEffect(() => {
+    if (!bootstrapped) return undefined
+    let active = true
+    const interval = setInterval(() => {
+      if (!active) return
+      void refreshRunningSessions()
+    }, RUNNING_SESSION_REFRESH_MS)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [bootstrapped, refreshRunningSessions])
+
+  useEffect(() => {
     let cancelled = false
 
-    setTranscriptTopKey(null)
     setTranscriptCursorKey(null)
     setExpandedCardKeys(new Set())
     setCollapsedCardKeys(new Set())
@@ -1651,7 +1521,6 @@ export default function OpenTuiApp() {
           setExpandedCardKeys(new Set(state.expandedKeys))
           setCollapsedCardKeys(new Set(state.collapsedKeys))
           if (state.followTail === false) {
-            setTranscriptTopKey(state.topKey ?? state.cursorKey)
             setTranscriptCursorKey(state.cursorKey)
             setFollowTail(false)
             setResumeMarkerKey(state.cursorKey)
@@ -1701,7 +1570,6 @@ export default function OpenTuiApp() {
     const sameSession = previous.sessionKey === selectedSessionKey
 
     if (currentKeys.length === 0) {
-      setTranscriptTopKey(null)
       setTranscriptCursorKey(null)
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
@@ -1715,43 +1583,13 @@ export default function OpenTuiApp() {
       if (restoredState?.followTail === false) {
         const restoredIndex = findCardIndex(transcriptCards, restoredState.cursorKey)
         const targetIndex = restoredIndex >= 0 ? restoredIndex : 0
-        const restoredTopIndex = findCardIndex(transcriptCards, restoredState.topKey)
-        const nextStart = restoredTopIndex >= 0
-          ? restoredTopIndex
-          : windowStartForCursor(
-              transcriptCards,
-              targetIndex,
-              transcriptViewportRows,
-              resolvedExpandedKeys,
-              densityState.bodyLines,
-              densityState.cardGap,
-              resumeMarkerIndex,
-              unreadBoundaryIndex,
-              pendingNewCount,
-              thinkingFullKeys,
-            )
-        setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
         setTranscriptCursorKey(transcriptCards[targetIndex]?.key ?? transcriptCards[0].key)
         setFollowTail(false)
         setPendingNewCount(0)
         setUnreadBoundaryKey(null)
         setResumeMarkerKey(restoredState.cursorKey)
       } else {
-        const lastIndex = transcriptCards.length - 1
-        const nextStart = windowStartForCursor(
-          transcriptCards,
-          lastIndex,
-          transcriptViewportRows,
-          resolvedExpandedKeys,
-          densityState.bodyLines,
-          densityState.cardGap,
-          resumeMarkerIndex,
-          unreadBoundaryIndex,
-          pendingNewCount,
-          thinkingFullKeys,
-        )
-        setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
-        setTranscriptCursorKey(transcriptCards[lastIndex].key)
+        setTranscriptCursorKey(transcriptCards[transcriptCards.length - 1].key)
         setFollowTail(true)
         setPendingNewCount(0)
         setUnreadBoundaryKey(null)
@@ -1762,21 +1600,7 @@ export default function OpenTuiApp() {
     }
 
     if (followTail) {
-      const lastIndex = transcriptCards.length - 1
-      const nextStart = windowStartForCursor(
-        transcriptCards,
-        lastIndex,
-        transcriptViewportRows,
-        resolvedExpandedKeys,
-        densityState.bodyLines,
-        densityState.cardGap,
-        resumeMarkerIndex,
-        unreadBoundaryIndex,
-        pendingNewCount,
-        thinkingFullKeys,
-      )
-      setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
-      setTranscriptCursorKey(transcriptCards[lastIndex].key)
+      setTranscriptCursorKey(transcriptCards[transcriptCards.length - 1].key)
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
       previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
@@ -1801,90 +1625,15 @@ export default function OpenTuiApp() {
       if (current && currentKeys.includes(current)) return current
       return transcriptCards[Math.max(cursorIndex, 0)]?.key ?? transcriptCards[0].key
     })
-    setTranscriptTopKey((current) => {
-      if (current && currentKeys.includes(current)) return current
-      const nextStart = windowStartForCursor(
-        transcriptCards,
-        Math.max(cursorIndex, 0),
-        transcriptViewportRows,
-        resolvedExpandedKeys,
-        densityState.bodyLines,
-        densityState.cardGap,
-        resumeMarkerIndex,
-        unreadBoundaryIndex,
-        pendingNewCount,
-        thinkingFullKeys,
-      )
-      return transcriptCards[nextStart]?.key ?? transcriptCards[0].key
-    })
     previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
   }, [
     cursorIndex,
-    densityState.bodyLines,
-    densityState.cardGap,
     followTail,
-    pendingNewCount,
-    resolvedExpandedKeys,
     restoredReaderState,
-    resumeMarkerIndex,
     selectedSessionKey,
     transcriptCards,
-    transcriptViewportRows,
-    unreadBoundaryIndex,
   ])
 
-  useEffect(() => {
-    if (transcriptCards.length === 0 || cursorIndex < 0) return
-
-    if (followTail) {
-      const lastIndex = transcriptCards.length - 1
-      const nextStart = windowStartForCursor(
-        transcriptCards,
-        lastIndex,
-        transcriptViewportRows,
-        resolvedExpandedKeys,
-        densityState.bodyLines,
-        densityState.cardGap,
-        resumeMarkerIndex,
-        unreadBoundaryIndex,
-        pendingNewCount,
-        thinkingFullKeys,
-      )
-      setTranscriptCursorKey(transcriptCards[lastIndex].key)
-      setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
-      return
-    }
-
-    if (cursorIndex < topIndex || cursorIndex > visibleTranscriptEndIndex) {
-      const nextStart = windowStartForCursor(
-        transcriptCards,
-        cursorIndex,
-        transcriptViewportRows,
-        resolvedExpandedKeys,
-        densityState.bodyLines,
-        densityState.cardGap,
-        resumeMarkerIndex,
-        unreadBoundaryIndex,
-        pendingNewCount,
-        thinkingFullKeys,
-      )
-      setTranscriptTopKey(transcriptCards[nextStart]?.key ?? transcriptCards[0].key)
-    }
-  }, [
-    cursorIndex,
-    densityState.bodyLines,
-    densityState.cardGap,
-    followTail,
-    pendingNewCount,
-    resolvedExpandedKeys,
-    resumeMarkerIndex,
-    topIndex,
-    transcriptCards,
-    transcriptViewportRows,
-    unreadBoundaryIndex,
-    visibleTranscriptEndIndex,
-    thinkingFullKeys,
-  ])
 
   useEffect(() => {
     if (!selectedSessionKey || !restoredReaderState.loaded || restoredReaderState.sessionKey !== selectedSessionKey) {
@@ -1895,7 +1644,7 @@ export default function OpenTuiApp() {
     const persistState: TuiSessionReaderState = {
       followTail,
       cursorKey: followTail ? null : (transcriptCursorKey && validKeys.has(transcriptCursorKey) ? transcriptCursorKey : null),
-      topKey: followTail ? null : (transcriptTopKey && validKeys.has(transcriptTopKey) ? transcriptTopKey : null),
+      topKey: null,
       expandedKeys: [...expandedCardKeys].filter((key) => validKeys.has(key)),
       collapsedKeys: [...collapsedCardKeys].filter((key) => validKeys.has(key)),
     }
@@ -1922,7 +1671,6 @@ export default function OpenTuiApp() {
     selectedSessionKey,
     transcriptCards,
     transcriptCursorKey,
-    transcriptTopKey,
   ])
 
   useEffect(() => {
@@ -1934,9 +1682,13 @@ export default function OpenTuiApp() {
   }, [searchMatches.length])
 
   useEffect(() => {
-    if (followTail || !transcriptCursorKey) return
+    if (!transcriptCursorKey) return
     const timer = setTimeout(() => {
-      transcriptScrollRef.current?.scrollChildIntoView(`card:${transcriptCursorKey}`)
+      if (followTail) {
+        transcriptScrollRef.current?.scrollTo(Number.MAX_SAFE_INTEGER)
+      } else {
+        transcriptScrollRef.current?.scrollChildIntoView(`card:${transcriptCursorKey}`)
+      }
     }, 0)
     return () => clearTimeout(timer)
   }, [followTail, transcriptCursorKey])
@@ -1965,6 +1717,9 @@ export default function OpenTuiApp() {
     : composerSendState === 'sending'
       ? composerLiveText || 'Waiting for saved response…'
       : null
+  const composerTargetMessage = composerAutoTargetingRunning && composerTargetSession
+    ? `Auto-targeting running ${String(composerTargetSession.provider ?? 'claude').toUpperCase()} session ${composerTargetSession.sessionId.slice(-8)}`
+    : null
 
   useKeyboard((key) => {
     if (key.eventType === 'release') return
@@ -2533,6 +2288,7 @@ export default function OpenTuiApp() {
                 stickyScroll={followTail}
                 stickyStart="bottom"
                 scrollY
+                viewportCulling
                 scrollbarOptions={{
                   trackOptions: {
                     foregroundColor: theme.muted,
@@ -2540,8 +2296,8 @@ export default function OpenTuiApp() {
                   },
                 }}
               >
-                {transcriptCards.slice(topIndex, visibleTranscriptEndIndex + 1).map((card, sliceIndex) => {
-                  const index = topIndex + sliceIndex
+                <box height={TRANSCRIPT_TOP_MARGIN} />
+                {transcriptCards.map((card, index) => {
                   const display = cardDisplayData[index]
                   const isSelected = card.key === transcriptCursorKey
                   const hasCursor = isSelected && effectiveFocus === 'messages'
@@ -2798,9 +2554,16 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
+      {composerTargetMessage ? (
+        <box backgroundColor={theme.surface} paddingX={1}>
+          <text fg={theme.cyan} wrapMode="none">
+            {fitText(composerTargetMessage, Math.max(width - 4, 20))}
+          </text>
+        </box>
+      ) : null}
+
       <box
         paddingX={1}
-        paddingTop={1}
         backgroundColor={theme.surface}
         border
         borderStyle="single"
@@ -2812,7 +2575,7 @@ export default function OpenTuiApp() {
           <input
             focused={composerActive}
             value={composerDraft}
-            placeholder={selectedSession ? 'Send a message… (enter to send)' : 'Select a session to send a message'}
+            placeholder={composerTargetSession ? 'Send a message… (enter to send)' : 'Select a session to send a message'}
             onInput={(value) => {
               setComposerDraft(value)
               if (composerError) setComposerError(null)

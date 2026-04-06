@@ -126,3 +126,8 @@ export type SessionInfo = {
   capabilities: SessionCapabilities
   currentModel?: string
 }
+
+export type RunningSessionRef = {
+  sessionId: string
+  provider: AgentProvider
+}
