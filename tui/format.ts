@@ -325,11 +325,11 @@ function formatBlock(block: ThreadedBlock): TuiTranscriptCardLine[] {
     case 'system_reminder':
       return [line(`system reminder: ${truncateLine(block.content)}`, 'system')]
     case 'slash_command':
-      return [line(truncateLine(`slash command: /${block.command} ${block.args}`.trim()), 'tool')]
+      return [line(truncateLine(`/${block.command} ${block.args}`.trim()), 'tool')]
     case 'local_command_stdout':
       return block.stdout.trim()
-        ? [line(`stdout: ${truncateLine(block.stdout.trim().split('\n')[0])}`, 'muted')]
-        : [line('stdout', 'muted')]
+        ? [line(`❯ ${truncateLine(block.stdout.trim().split('\n')[0])}`, 'dim')]
+        : [line('❯', 'dim')]
     case 'claude_system':
       return [line(`system ${block.subtype}`, 'system')]
     case 'image':
@@ -700,7 +700,7 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
       return [line(truncateLine(`/${block.command} ${block.args}`.trim()), 'tool')]
     case 'local_command_stdout':
       return block.stdout.trim()
-        ? sanitizeLine(block.stdout).trim().split('\n').map((l) => line(l.trimEnd(), 'muted'))
+        ? sanitizeLine(block.stdout).trim().split('\n').map((l) => line(l.trimEnd(), 'dim'))
         : []
     case 'claude_system':
       return [line(`system ${block.subtype}`, 'system')]
