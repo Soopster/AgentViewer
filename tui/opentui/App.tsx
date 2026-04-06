@@ -450,6 +450,8 @@ function transcriptColor(line: TuiTranscriptCardLine, theme: TuiThemePalette): s
   switch (line.tone) {
     case 'tool':
       return theme.cyan
+    case 'agent':
+      return theme.violet
     case 'result_ok':
       return theme.green
     case 'result_error':
@@ -575,13 +577,15 @@ function cardHeight(
   const card = cards[index]
   const isExpanded = expandedKeys.has(card.key)
   const thinkingFull = thinkingFullKeys.has(card.key)
+  const useMarkdown = isExpanded && !!card.markdownContent
   const landmarkRows = transcriptLandmarks(cards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount).length
-  const bodyRows = renderedBodyLines(card, isExpanded, previewLimit, thinkingFull).length
+  const bodyRows = useMarkdown ? 0 : renderedBodyLines(card, isExpanded, previewLimit, thinkingFull).length
   const diffRows = cardDiffRows(card, isExpanded, previewLimit)
-  const codeRows = codeBlockRows(card, isExpanded)
+  const codeRows = useMarkdown ? 0 : codeBlockRows(card, isExpanded)
+  const mdRows = useMarkdown ? card.markdownContent!.split('\n').length : 0
   const borderRows = 2
   const bodyPaddingBottom = 1
-  return landmarkRows + borderRows + bodyPaddingBottom + bodyRows + diffRows + codeRows + cardGap
+  return landmarkRows + borderRows + bodyPaddingBottom + bodyRows + diffRows + codeRows + mdRows + cardGap
 }
 
 function selectTranscriptWindow(
@@ -1387,6 +1391,8 @@ export default function OpenTuiApp() {
     // no longer track awaiting state separately
     setComposerLiveText('')
 
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+
     try {
       const res = await fetch(buildApiUrl(`/api/sessions/${targetSession.sessionId}/messages`), {
         method: 'POST',
@@ -1403,7 +1409,7 @@ export default function OpenTuiApp() {
         throw new Error(json.error ?? `HTTP ${res.status}`)
       }
 
-      const reader = res.body?.getReader()
+      reader = res.body?.getReader()
       if (!reader) throw new Error('No response body')
       const decoder = new TextDecoder()
       let sseBuffer = ''
@@ -1464,6 +1470,7 @@ export default function OpenTuiApp() {
       setComposerError(err instanceof Error ? err.message : 'Failed to send message')
       setComposerLiveText('')
     } finally {
+      void reader?.cancel()
       composerAbortRef.current = null
       setComposerLiveText('')
     }
@@ -2536,33 +2543,48 @@ export default function OpenTuiApp() {
                         title={cardTitle}
                       >
                         <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={1}>
-                          {bodyLines.map((line, lineIndex) => (
-                            <box
-                              key={`${card.key}:line:${lineIndex}`}
-                              paddingX={1}
-                              backgroundColor={transcriptBackground(line, theme) ?? cardBg}
-                            >
-                              <text fg={transcriptColor(line, theme)} wrapMode="none">
-                                {fitText(line.text, Math.max(rightPaneWidth - densityState.bodyIndent - 8, 16))}
-                              </text>
+                          {(isExpanded && card.markdownContent) ? (
+                            <box paddingX={1}>
+                              <markdown
+                                content={card.markdownContent}
+                                syntaxStyle={syntaxStyle}
+                                fg={theme.text}
+                                streaming={false}
+                                width={Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20)}
+                                tableOptions={{ widthMode: 'content', borders: true, borderColor: theme.border }}
+                              />
                             </box>
-                          ))}
+                          ) : (
+                            <>
+                              {bodyLines.map((line, lineIndex) => (
+                                <box
+                                  key={`${card.key}:line:${lineIndex}`}
+                                  paddingX={1}
+                                  backgroundColor={transcriptBackground(line, theme) ?? cardBg}
+                                >
+                                  <text fg={transcriptColor(line, theme)} wrapMode="none">
+                                    {fitText(line.text, Math.max(rightPaneWidth - densityState.bodyIndent - 8, 16))}
+                                  </text>
+                                </box>
+                              ))}
 
-                          {isExpanded && card.codeBlocks && card.codeBlocks.length > 0 ? (
-                            card.codeBlocks.map((cb, cbIndex) => (
-                              <box key={cb.key} paddingX={1} marginTop={1}>
-                                <text fg={theme.dim}>{cb.lang}</text>
-                                <code
-                                  content={cb.content}
-                                  filetype={cb.lang}
-                                  syntaxStyle={syntaxStyle}
-                                  drawUnstyledText={true}
-                                  style={{ height: Math.min((codeBlockLineCounts[cbIndex] ?? 0) + 1, 20) }}
-                                  width={Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20)}
-                                />
-                              </box>
-                            ))
-                          ) : null}
+                              {isExpanded && card.codeBlocks && card.codeBlocks.length > 0 ? (
+                                card.codeBlocks.map((cb, cbIndex) => (
+                                  <box key={cb.key} paddingX={1} marginTop={1}>
+                                    <text fg={theme.dim}>{cb.lang}</text>
+                                    <code
+                                      content={cb.content}
+                                      filetype={cb.lang}
+                                      syntaxStyle={syntaxStyle}
+                                      drawUnstyledText={true}
+                                      style={{ height: Math.min((codeBlockLineCounts[cbIndex] ?? 0) + 1, 20) }}
+                                      width={Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20)}
+                                    />
+                                  </box>
+                                ))
+                              ) : null}
+                            </>
+                          )}
 
                           {diffText ? (
                             <box paddingX={1} marginTop={1}>

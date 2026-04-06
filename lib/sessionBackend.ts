@@ -614,7 +614,7 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
 }
 
 function createClaudeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Response {
-  const userMessage = String(body.message ?? '')
+  const userMessage = String(body.message ?? '').trim()
   const model = typeof body.model === 'string' ? body.model : 'claude-sonnet-4-6'
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
   const forkSessionOnSend = Boolean(body.forkSession)
@@ -816,7 +816,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
 
         const started = await client.request<CodexTurnStartResponse>('turn/start', {
           threadId: sessionId,
-          model,
+          model: model ?? undefined,
           input: [{ type: 'text', text: userMessage, text_elements: [] }],
         })
 
@@ -1016,6 +1016,7 @@ async function createCopilotStream(sessionId: string, request: NextRequest, body
         const modelsById = new Map(models.map((model) => [model.id, model]))
 
         const handleEvent = (event: CopilotSessionEvent) => {
+          if (closed) return
           if (event.type === 'assistant.usage') {
             const usage = mapCopilotUsageToContextUsage(event, modelsById)
             controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
@@ -1024,6 +1025,7 @@ async function createCopilotStream(sessionId: string, request: NextRequest, body
           if (event.type === 'session.error') {
             emittedError = true
             controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: event.data.message })}\n\n`))
+            return
           }
 
           controller.enqueue(encoder.encode(`data: ${formatCopilotEvent(event)}\n\n`))
@@ -1085,6 +1087,7 @@ async function createPiStream(sessionId: string, request: NextRequest, body: Rec
   const stream = new ReadableStream({
     async start(controller) {
       let closed = false
+      let unsubscribePi: (() => void) | undefined
       const close = () => {
         if (closed) return
         closed = true
@@ -1109,19 +1112,21 @@ async function createPiStream(sessionId: string, request: NextRequest, body: Rec
           }
         })
 
-        const unsubscribe = agentSession.agent.subscribe((event) => {
+        unsubscribePi = agentSession.agent.subscribe((event) => {
+          if (closed) return
           const payload = JSON.stringify({ type: 'pi_event', event })
           controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
 
           if (event.type === 'agent_end') {
             clearRunningSession(sessionId)
-            unsubscribe()
+            unsubscribePi?.()
             close()
           }
         })
 
         await agentSession.prompt(userMessage)
       } catch (err) {
+        unsubscribePi?.()
         controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
         clearRunningSession(sessionId)
         close()

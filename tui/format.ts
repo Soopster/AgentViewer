@@ -1,7 +1,7 @@
 import { getAssistantLabel } from '../lib/provider'
 import { pathBasename } from '../lib/projectPaths'
 import type { ThreadedBlock, ThreadedMessage, ToolThread } from '../lib/threading'
-import type { Session, SessionInfo } from '../lib/types'
+import type { ContentBlock, Session, SessionInfo } from '../lib/types'
 import type { TuiDensity } from './theme'
 
 const MAX_PREVIEW_CHARS = 160
@@ -14,6 +14,7 @@ export type TuiTranscriptLineTone =
   | 'muted'
   | 'dim'
   | 'tool'
+  | 'agent'
   | 'result_ok'
   | 'result_error'
   | 'thinking'
@@ -169,6 +170,16 @@ function previewFileChange(thread: ToolThread): TuiTranscriptCardLine[] {
   return lines
 }
 
+function extractAgentResultText(content: string | ContentBlock[] | null | undefined): string | null {
+  if (!content) return null
+  if (typeof content === 'string') return content.trim() || null
+  const parts = content
+    .filter((b) => b.type === 'text' && typeof (b as { text?: unknown }).text === 'string')
+    .map((b) => ((b as { text: string }).text).trim())
+    .filter((t) => t.length > 0)
+  return parts.length > 0 ? parts.join('\n\n') : null
+}
+
 function previewTool(thread: ToolThread): TuiTranscriptCardLine[] {
   if (thread.toolUse.name === 'FileChange') {
     return previewFileChange(thread)
@@ -176,6 +187,20 @@ function previewTool(thread: ToolThread): TuiTranscriptCardLine[] {
 
   const input = thread.toolUse.input as Record<string, unknown>
   const toolName = thread.toolUse.name
+
+  if (toolName === 'Agent') {
+    const description = typeof input.description === 'string' ? input.description : 'agent'
+    const subagentType = typeof input.subagent_type === 'string' ? input.subagent_type : ''
+    const isError = thread.result?.is_error === true
+    const resultText = extractAgentResultText(thread.result?.content)
+    const previewText = resultText
+      ? truncateLine(resultText.split('\n').find((l) => l.trim()) ?? resultText)
+      : thread.result ? 'done' : 'running…'
+    return [
+      line(`agent ${description}${subagentType ? ` [${subagentType}]` : ''}`, 'tool'),
+      line(`${isError ? '✗' : '✓'} ${previewText}`, isError ? 'result_error' : 'result_ok'),
+    ]
+  }
 
   if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write') {
     const filePath = typeof input.file_path === 'string' ? pathBasename(input.file_path) : ''
@@ -291,6 +316,7 @@ export type TuiTranscriptCard = {
   searchText: string
   codeBlocks?: Array<{ key: string; lang: string; content: string }>
   editDiff?: string
+  markdownContent?: string
 }
 
 function cardLineLimit(density: TuiDensity): number {
@@ -447,6 +473,9 @@ export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiD
       searchText: expandedLines.map((entry) => entry.text).join('\n'),
       codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
       editDiff: synthesizeEditDiff(message),
+      markdownContent: (category === 'conversation' || category === 'insight')
+        ? extractMarkdownContent(message.blocks)
+        : undefined,
     }
   })
 }
@@ -468,6 +497,16 @@ export function formatSessionProject(session: Session): string {
 
 export function formatProviderLabel(provider?: Session['provider']): string {
   return (provider ?? 'claude').toUpperCase()
+}
+
+function extractMarkdownContent(blocks: ThreadedBlock[]): string | undefined {
+  const chunks: string[] = []
+  for (const block of blocks) {
+    if (block.type === 'text' && block.text.trim()) {
+      chunks.push(block.text.trim())
+    }
+  }
+  return chunks.length > 0 ? chunks.join('\n\n') : undefined
 }
 
 const CODE_FENCE_RE = /^```(\w*)\s*\n([\s\S]*?)^```[ \t]*$/gm
@@ -538,6 +577,23 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
           if (change.diff) result.push(...previewDiff(change.diff, 60))
         }
         return result
+      }
+
+      if (toolName === 'Agent') {
+        const description = typeof input.description === 'string' ? input.description : 'agent'
+        const subagentType = typeof input.subagent_type === 'string' ? input.subagent_type : ''
+        const isError = block.result?.is_error === true
+        const resultText = extractAgentResultText(block.result?.content)
+        const header = line(`agent ${description}${subagentType ? ` [${subagentType}]` : ''}`, 'tool')
+        if (!block.result) return [header, line('running…', 'dim')]
+        if (!resultText) return [header, line(isError ? '✗ ERROR' : '✓ done', isError ? 'result_error' : 'result_ok')]
+        return [
+          header,
+          ...sanitizeLine(resultText).split('\n')
+            .map((l) => l.trimEnd())
+            .filter((l) => l.length > 0)
+            .map((l) => line(l, 'agent')),
+        ]
       }
 
       if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write') {
