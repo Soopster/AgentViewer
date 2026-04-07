@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RGBA, SyntaxStyle } from '@opentui/core'
-import type { ScrollBoxRenderable, SelectOption } from '@opentui/core'
+import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable } from '@opentui/core'
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react'
 import {
   formatProviderLabel,
@@ -616,21 +616,24 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
 
 type PaletteCommand = { id: string; label: string; key: string }
 const COMMANDS: PaletteCommand[] = [
-  { id: 'search',   label: 'Search messages',       key: '/'  },
-  { id: 'live',     label: 'Jump to live tail',      key: 'f'  },
-  { id: 'unread',   label: 'Jump to first unread',   key: 'u'  },
-  { id: 'mark',     label: 'Mark position',          key: 'm'  },
-  { id: 'fold',     label: 'Fold/expand card',       key: 'e'  },
-  { id: 'composer', label: 'Open composer',          key: 'c'  },
-  { id: 'provider', label: 'Switch provider',        key: 'p'  },
-  { id: 'theme',    label: 'Switch theme',           key: 't'  },
-  { id: 'thinking', label: 'Toggle thinking mode',   key: 'T'  },
-  { id: 'density',  label: 'Toggle density',         key: 'd'  },
-  { id: 'view',     label: 'Toggle transcript view', key: 'v'  },
-  { id: 'rail',     label: 'Toggle session rail',    key: 'h'  },
-  { id: 'focus',    label: 'Toggle focus mode',      key: 'z'  },
-  { id: 'refresh',  label: 'Refresh sessions',       key: 'r'  },
-  { id: 'quit',     label: 'Quit',                   key: 'q'  },
+  { id: 'search',    label: 'Search messages',       key: '/'  },
+  { id: 'live',      label: 'Jump to live tail',      key: 'f'  },
+  { id: 'unread',    label: 'Jump to first unread',   key: 'u'  },
+  { id: 'mark',      label: 'Mark position',          key: 'm'  },
+  { id: 'fold',      label: 'Fold/expand card',       key: 'e'  },
+  { id: 'tab-prev',  label: 'Previous tab',           key: '←'  },
+  { id: 'tab-next',  label: 'Next tab',               key: '→'  },
+  { id: 'tab-close', label: 'Close current tab',      key: 'w'  },
+  { id: 'composer',  label: 'Open composer',          key: 'c'  },
+  { id: 'provider',  label: 'Switch provider',        key: 'p'  },
+  { id: 'theme',     label: 'Switch theme',           key: 't'  },
+  { id: 'thinking',  label: 'Toggle thinking mode',   key: 'T'  },
+  { id: 'density',   label: 'Toggle density',         key: 'd'  },
+  { id: 'view',      label: 'Toggle transcript view', key: 'v'  },
+  { id: 'rail',      label: 'Toggle session rail',    key: 'h'  },
+  { id: 'focus',     label: 'Toggle focus mode',      key: 'z'  },
+  { id: 'refresh',   label: 'Refresh sessions',       key: 'r'  },
+  { id: 'quit',      label: 'Quit',                   key: 'q'  },
 ]
 
 function extractDiffText(lines: TuiTranscriptCardLine[]): string | null {
@@ -742,8 +745,11 @@ export default function OpenTuiApp() {
   const [draftBeforeHistory, setDraftBeforeHistory] = useState('')
   const [thinkingMode, setThinkingMode] = useState(false)
 
+  const [openTabKeys, setOpenTabKeys] = useState<string[]>([])
+
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const sidebarScrollRef = useRef<ScrollBoxRenderable>(null)
+  const tabSelectRef = useRef<TabSelectRenderable>(null)
   const sessionRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
   const providerSwitchRef = useRef(false)
@@ -893,7 +899,32 @@ export default function OpenTuiApp() {
   const mainContentHeight = Math.max(height - 3 - (searchMode ? 3 : 1) - COMPOSER_HEIGHT, 8)
   const sidebarWidth = showRail ? clamp(Math.floor((width - 4) * 0.27), 28, 40) : 0
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
-  const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7), 8)
+
+  const showTabs = openTabKeys.length > 0
+  const TAB_BAR_HEIGHT = 1 // tab label row only (no underline)
+  const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7) - (showTabs ? TAB_BAR_HEIGHT : 0), 8)
+
+  const activeTabIndex = useMemo(() => {
+    if (!selectedSessionKey) return -1
+    return openTabKeys.indexOf(selectedSessionKey)
+  }, [selectedSessionKey, openTabKeys])
+
+  const tabOptions = useMemo((): TabSelectOption[] => (
+    openTabKeys.flatMap((key) => {
+      const session = sessions.find((s) => sessionKey(s) === key)
+      if (!session) return []
+      return [{ name: formatSessionTitle(session), description: formatProviderLabel(session.provider ?? 'claude'), value: key }]
+    })
+  ), [openTabKeys, sessions])
+
+  const tabWidth = useMemo(() => {
+    if (openTabKeys.length === 0) return 16
+    // Fill available width proportionally so tabs look natural at any count,
+    // capped to avoid very wide tabs when only a few sessions are open.
+    const available = Math.max(rightPaneWidth - 6, 20)
+    const fill = Math.floor(available / openTabKeys.length)
+    return Math.max(10, Math.min(fill, 24))
+  }, [rightPaneWidth, openTabKeys.length])
   const sidebarRowBudget = Math.max(mainContentHeight - 7, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
 
@@ -1215,6 +1246,35 @@ export default function OpenTuiApp() {
         setFocusedPane('messages')
         toggleExpansion()
         break
+      case 'tab-prev': {
+        setFocusedPane('messages')
+        const prevIdx = Math.max(activeTabIndex - 1, 0)
+        const prevKey = openTabKeys[prevIdx]
+        if (prevKey) setSelectedSessionKey(prevKey)
+        break
+      }
+      case 'tab-next': {
+        setFocusedPane('messages')
+        const nextIdx = Math.min(activeTabIndex + 1, openTabKeys.length - 1)
+        const nextKey = openTabKeys[nextIdx]
+        if (nextKey) setSelectedSessionKey(nextKey)
+        break
+      }
+      case 'tab-close': {
+        if (selectedSessionKey) {
+          const idx = openTabKeys.indexOf(selectedSessionKey)
+          const next = openTabKeys.filter((k) => k !== selectedSessionKey)
+          setOpenTabKeys(next)
+          if (next.length > 0) {
+            const newKey = next[Math.min(idx, next.length - 1)]
+            if (newKey) setSelectedSessionKey(newKey)
+          } else {
+            const first = sessions[0]
+            setSelectedSessionKey(first ? sessionKey(first) : null)
+          }
+        }
+        break
+      }
       case 'composer':
         setComposerActive(true)
         break
@@ -1230,10 +1290,10 @@ export default function OpenTuiApp() {
         process.exit(0)
     }
   }, [
-    closeCommandPalette, density, focusMode, focusedPane, jumpToResumeMarker,
-    jumpToTranscriptTail, jumpToUnreadBoundary, provider, railVisible,
-    refreshSessions, refreshSelectedSessionDetail, renderer, selectedSessionTarget,
-    themeMode, toggleExpansion, transcriptView,
+    activeTabIndex, closeCommandPalette, density, focusMode, focusedPane, jumpToResumeMarker,
+    jumpToTranscriptTail, jumpToUnreadBoundary, openTabKeys, provider, railVisible,
+    refreshSessions, refreshSelectedSessionDetail, renderer, selectedSessionKey, selectedSessionTarget,
+    sessions, themeMode, toggleExpansion, transcriptView,
   ])
 
   const chooseProvider = useCallback(async (nextProvider: ProviderSelection) => {
@@ -1688,6 +1748,21 @@ export default function OpenTuiApp() {
     setSearchMatchIndex((current) => clamp(current, 0, searchMatches.length - 1))
   }, [searchMatches.length])
 
+  // Add newly selected session to open tabs (if not already present)
+  useEffect(() => {
+    if (!selectedSessionKey) return
+    setOpenTabKeys((current) => {
+      if (current.includes(selectedSessionKey)) return current
+      return [...current, selectedSessionKey]
+    })
+  }, [selectedSessionKey])
+
+  // Sync tab-select visual position when active tab changes
+  useEffect(() => {
+    if (!tabSelectRef.current || activeTabIndex < 0) return
+    tabSelectRef.current.setSelectedIndex(activeTabIndex)
+  }, [activeTabIndex])
+
   useEffect(() => {
     if (!transcriptCursorKey) return
     const timer = setTimeout(() => {
@@ -1713,7 +1788,7 @@ export default function OpenTuiApp() {
 
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  T thinking  r refresh  ? commands  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  T thinking  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
     [width, transcriptView, density],
@@ -1879,6 +1954,39 @@ export default function OpenTuiApp() {
       handled(() => {
         const last = sessions.at(-1)
         if (last) setSelectedSessionKey(sessionKey(last))
+      })
+      return
+    }
+
+    if (effectiveFocus === 'messages' && key.name === 'left' && showTabs) {
+      handled(() => {
+        const nextIndex = Math.max(activeTabIndex - 1, 0)
+        const nextKey = openTabKeys[nextIndex]
+        if (nextKey) setSelectedSessionKey(nextKey)
+      })
+      return
+    }
+
+    if (effectiveFocus === 'messages' && key.name === 'right' && showTabs) {
+      handled(() => {
+        const nextIndex = Math.min(activeTabIndex + 1, openTabKeys.length - 1)
+        const nextKey = openTabKeys[nextIndex]
+        if (nextKey) setSelectedSessionKey(nextKey)
+      })
+      return
+    }
+
+    if (effectiveFocus === 'messages' && key.name === 'w' && showTabs && selectedSessionKey) {
+      handled(() => {
+        const idx = openTabKeys.indexOf(selectedSessionKey)
+        const next = openTabKeys.filter((k) => k !== selectedSessionKey)
+        setOpenTabKeys(next)
+        if (next.length > 0) {
+          const newActiveKey = next[Math.min(idx, next.length - 1)]
+          if (newActiveKey) setSelectedSessionKey(newActiveKey)
+        } else {
+          setSelectedSessionKey(sessions[0] ? sessionKey(sessions[0]) : null)
+        }
       })
       return
     }
@@ -2271,6 +2379,29 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
+          {showTabs ? (
+            <tab-select
+              ref={tabSelectRef}
+              options={tabOptions}
+              width={rightPaneWidth - 2}
+              tabWidth={tabWidth}
+              backgroundColor={theme.surface2}
+              focusedBackgroundColor={theme.surface3}
+              textColor={theme.muted}
+              focusedTextColor={theme.text}
+              selectedBackgroundColor={theme.surface3}
+              selectedTextColor={theme.cyan}
+              selectedDescriptionColor={theme.dim}
+              showDescription={false}
+              showUnderline={false}
+              showScrollArrows={true}
+              wrapSelection={false}
+              onChange={(index) => {
+                const key = openTabKeys[index]
+                if (key) setSelectedSessionKey(key)
+              }}
+            />
+          ) : null}
 
           {error ? (
             <box paddingX={1} marginTop={1}>
