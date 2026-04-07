@@ -2338,12 +2338,16 @@ export default function OpenTuiApp() {
                   const isThinkingCard = card.lines.some((line) => line.tone === 'thinking')
                   const { landmarks, bodyLines, diffText, diffLineCount, codeBlockLineCounts, headerMeta, isSearchHit } = display
                   const isActiveMatch = isSearchHit && searchMatches[searchMatchIndex] === index
-                  const marker = hasCursor ? '>' : isSelected ? ':' : card.role === 'user' ? '▸' : '⏺'
+                  const marker = hasCursor ? '>' : isSelected ? ':' : card.role === 'user' ? '▸' : '●'
                   const isInsight = card.category === 'insight'
                   const cardBg = hasCursor ? theme.surface3 : isSelected ? theme.surface2 : card.role === 'user' ? theme.userBg : isInsight ? theme.surface2 : theme.surface
                   const borderColor = hasCursor ? accent : isActiveMatch ? theme.amber : isSearchHit ? theme.cyan : isInsight ? theme.violet : isSelected ? theme.border2 : card.role === 'user' ? accent : theme.border
                   const maxTitleWidth = Math.max(rightPaneWidth - 6, 20)
-                  const cardTitleFull = `${marker} ${card.label}  ${headerMeta}`
+                  const isTechnical = card.category === 'technical'
+                  const isDiff = card.category === 'diff'
+                  const isSystem = card.category === 'system'
+                  const categoryEmoji = isInsight ? '✨ ' : isTechnical ? '🔧 ' : isDiff ? '✏️ ' : isSystem ? '⚙️ ' : ''
+                  const cardTitleFull = `${marker} ${categoryEmoji}${card.label}  ${headerMeta}`
                   const cardTitle = cardTitleFull.length > maxTitleWidth
                     ? cardTitleFull.slice(0, maxTitleWidth - 1) + '…'
                     : cardTitleFull
