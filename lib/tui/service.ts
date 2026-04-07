@@ -5,12 +5,14 @@ import {
   getConfiguredTuiFocusMode,
   getConfiguredTuiRailVisible,
   getConfiguredTuiSessionReaderState,
+  getConfiguredTuiTabsEnabled,
   getConfiguredTuiTheme,
   getConfiguredTuiTranscriptView,
   setConfiguredTuiDensity,
   setConfiguredTuiFocusMode,
   setConfiguredTuiRailVisible,
   setConfiguredTuiSessionReaderState,
+  setConfiguredTuiTabsEnabled,
   setConfiguredTuiTheme,
   setConfiguredTuiTranscriptView,
   type TuiSessionReaderState,
@@ -78,6 +80,14 @@ export async function readTuiTranscriptView(): Promise<TuiTranscriptView> {
 
 export async function writeTuiTranscriptView(transcriptView: TuiTranscriptView): Promise<void> {
   await setConfiguredTuiTranscriptView(transcriptView)
+}
+
+export async function readTuiTabsEnabled(): Promise<boolean> {
+  return getConfiguredTuiTabsEnabled()
+}
+
+export async function writeTuiTabsEnabled(tabsEnabled: boolean): Promise<void> {
+  await setConfiguredTuiTabsEnabled(tabsEnabled)
 }
 
 export async function readTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {

@@ -10,6 +10,7 @@ type TuiState = {
   focusMode?: unknown
   density?: unknown
   transcriptView?: unknown
+  tabsEnabled?: unknown
   sessionReaderState?: unknown
 }
 
@@ -102,6 +103,15 @@ export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptVie
 
 export async function setConfiguredTuiTranscriptView(transcriptView: TuiTranscriptView): Promise<void> {
   await writeTuiState({ transcriptView })
+}
+
+export async function getConfiguredTuiTabsEnabled(): Promise<boolean> {
+  const parsed = await readTuiState()
+  return parsed.tabsEnabled !== false
+}
+
+export async function setConfiguredTuiTabsEnabled(tabsEnabled: boolean): Promise<void> {
+  await writeTuiState({ tabsEnabled })
 }
 
 export async function getConfiguredTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {

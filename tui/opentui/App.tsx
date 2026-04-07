@@ -29,6 +29,7 @@ import {
   readTuiSessionDetail,
   readTuiSessionReaderState,
   readTuiSessions,
+  readTuiTabsEnabled,
   readTuiTheme,
   readTuiTranscriptView,
   writeTuiDensity,
@@ -36,6 +37,7 @@ import {
   writeTuiProvider,
   writeTuiRailVisible,
   writeTuiSessionReaderState,
+  writeTuiTabsEnabled,
   writeTuiTheme,
   writeTuiTranscriptView,
   type TuiSessionDetail,
@@ -621,6 +623,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'unread',    label: 'Jump to first unread',   key: 'u'  },
   { id: 'mark',      label: 'Mark position',          key: 'm'  },
   { id: 'fold',      label: 'Fold/expand card',       key: 'e'  },
+  { id: 'tab-toggle', label: 'Toggle tab bar',         key: 'b'  },
   { id: 'tab-prev',  label: 'Previous tab',           key: '←'  },
   { id: 'tab-next',  label: 'Next tab',               key: '→'  },
   { id: 'tab-close', label: 'Close current tab',      key: 'w'  },
@@ -700,6 +703,7 @@ export default function OpenTuiApp() {
   const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
   const [focusMode, setFocusMode] = useState(false)
   const [railVisible, setRailVisible] = useState(true)
+  const [tabsEnabled, setTabsEnabled] = useState(true)
   const [sessions, setSessions] = useState<Session[]>([])
   const [runningSessions, setRunningSessions] = useState<RunningSessionRef[]>([])
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null)
@@ -900,7 +904,7 @@ export default function OpenTuiApp() {
   const sidebarWidth = showRail ? clamp(Math.floor((width - 4) * 0.27), 28, 40) : 0
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
 
-  const showTabs = openTabKeys.length > 0
+  const showTabs = tabsEnabled && openTabKeys.length > 0
   const TAB_BAR_HEIGHT = 1 // tab label row only (no underline)
   const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7) - (showTabs ? TAB_BAR_HEIGHT : 0), 8)
 
@@ -1246,6 +1250,12 @@ export default function OpenTuiApp() {
         setFocusedPane('messages')
         toggleExpansion()
         break
+      case 'tab-toggle': {
+        const next = !tabsEnabled
+        setTabsEnabled(next)
+        void writeTuiTabsEnabled(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tab setting'))
+        break
+      }
       case 'tab-prev': {
         setFocusedPane('messages')
         const prevIdx = Math.max(activeTabIndex - 1, 0)
@@ -1291,6 +1301,7 @@ export default function OpenTuiApp() {
     }
   }, [
     activeTabIndex, closeCommandPalette, density, focusMode, focusedPane, jumpToResumeMarker,
+    tabsEnabled,
     jumpToTranscriptTail, jumpToUnreadBoundary, openTabKeys, provider, railVisible,
     refreshSessions, refreshSelectedSessionDetail, renderer, selectedSessionKey, selectedSessionTarget,
     sessions, themeMode, toggleExpansion, transcriptView,
@@ -1459,6 +1470,7 @@ export default function OpenTuiApp() {
           configuredFocusMode,
           configuredDensity,
           configuredTranscriptView,
+          configuredTabsEnabled,
         ] = await Promise.all([
           readTuiTheme(),
           readTuiProvider(),
@@ -1466,6 +1478,7 @@ export default function OpenTuiApp() {
           readTuiFocusMode(),
           readTuiDensity(),
           readTuiTranscriptView(),
+          readTuiTabsEnabled(),
         ])
         if (cancelled) return
         setThemeMode(configuredTheme)
@@ -1475,6 +1488,7 @@ export default function OpenTuiApp() {
         setFocusMode(configuredFocusMode)
         setDensity(configuredDensity)
         setTranscriptView(configuredTranscriptView)
+        setTabsEnabled(configuredTabsEnabled)
         if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
         await Promise.all([
           refreshSessions(configuredProvider, false, true),
@@ -1788,10 +1802,10 @@ export default function OpenTuiApp() {
 
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  T thinking  r refresh  ? commands  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b ${tabsEnabled ? 'hide' : 'show'} tabs  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  T thinking  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
-    [width, transcriptView, density],
+    [width, transcriptView, density, tabsEnabled],
   )
 
   const composerStatusMessage = composerError
@@ -2179,6 +2193,17 @@ export default function OpenTuiApp() {
         setActiveTheme(nextTheme)
         void writeTuiTheme(nextTheme).catch((err) => {
           setError(err instanceof Error ? err.message : 'Failed to store theme')
+        })
+      })
+      return
+    }
+
+    if (key.name === 'b') {
+      handled(() => {
+        const next = !tabsEnabled
+        setTabsEnabled(next)
+        void writeTuiTabsEnabled(next).catch((err) => {
+          setError(err instanceof Error ? err.message : 'Failed to store tab setting')
         })
       })
       return
