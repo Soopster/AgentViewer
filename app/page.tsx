@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
-import TabBar from '@/components/TabBar'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
 import { isProviderSelection } from '@/lib/provider'
 import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
@@ -500,18 +499,16 @@ export default function Home() {
         onToggleWorktrees={setIncludeWorktrees}
       />
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, overflow: 'hidden' }}>
-        <TabBar
-          tabs={openTabSessions}
-          activeId={selectedId}
-          onSelect={(s) => void selectSession(s)}
-          onClose={closeTab}
-        />
         <MessageView
           messages={messages}
           loading={loadingMessages}
           session={selectedSession}
           projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
           onFork={handleFork}
+          openTabs={openTabSessions}
+          selectedTabId={selectedId}
+          onSelectTab={(s) => void selectSession(s)}
+          onCloseTab={closeTab}
         />
       </div>
     </div>

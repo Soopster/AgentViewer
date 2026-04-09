@@ -2384,15 +2384,45 @@ export default function OpenTuiApp() {
           </box>
         ) : null}
 
-        <box
-          width={rightPaneWidth}
-          border
-          borderStyle="single"
-          borderColor={effectiveFocus === 'messages' ? theme.border2 : theme.border}
-          backgroundColor={theme.surface}
-          flexDirection="column"
-          title={headerStatusRight}
-        >
+        <box width={rightPaneWidth} flexDirection="column">
+          {showTabs ? (
+            <box
+              paddingX={1}
+              backgroundColor={theme.bg}
+            >
+              <tab-select
+                ref={tabSelectRef}
+                options={tabOptions}
+                width={rightPaneWidth - 2}
+                tabWidth={tabWidth}
+                backgroundColor={theme.surface2}
+                focusedBackgroundColor={theme.surface3}
+                textColor={theme.muted}
+                focusedTextColor={theme.text}
+                selectedBackgroundColor={theme.surface3}
+                selectedTextColor={theme.cyan}
+                selectedDescriptionColor={theme.dim}
+                showDescription={false}
+                showUnderline={false}
+                showScrollArrows={true}
+                wrapSelection={false}
+                onChange={(index) => {
+                  const key = openTabKeys[index]
+                  if (key) setSelectedSessionKey(key)
+                }}
+              />
+            </box>
+          ) : null}
+
+          <box
+            flexGrow={1}
+            border
+            borderStyle="single"
+            borderColor={effectiveFocus === 'messages' ? theme.border2 : theme.border}
+            backgroundColor={theme.surface}
+            flexDirection="column"
+            title={headerStatusRight}
+          >
           {!focusMode ? (
             <box paddingX={1} paddingTop={1}>
               <box width={Math.max(rightPaneWidth - 16, 16)} overflow="hidden">
@@ -2402,30 +2432,6 @@ export default function OpenTuiApp() {
                 <text fg={providerAccent}>{fitText(providerSummary, 12)}</text>
               </box>
             </box>
-          ) : null}
-
-          {showTabs ? (
-            <tab-select
-              ref={tabSelectRef}
-              options={tabOptions}
-              width={rightPaneWidth - 2}
-              tabWidth={tabWidth}
-              backgroundColor={theme.surface2}
-              focusedBackgroundColor={theme.surface3}
-              textColor={theme.muted}
-              focusedTextColor={theme.text}
-              selectedBackgroundColor={theme.surface3}
-              selectedTextColor={theme.cyan}
-              selectedDescriptionColor={theme.dim}
-              showDescription={false}
-              showUnderline={false}
-              showScrollArrows={true}
-              wrapSelection={false}
-              onChange={(index) => {
-                const key = openTabKeys[index]
-                if (key) setSelectedSessionKey(key)
-              }}
-            />
           ) : null}
 
           {error ? (
@@ -2617,6 +2623,7 @@ export default function OpenTuiApp() {
               <Spinner label="waiting for new messages" fg={theme.dim} />
             </box>
           ) : null}
+          </box>
         </box>
 
         {providerMenuOpen ? (
