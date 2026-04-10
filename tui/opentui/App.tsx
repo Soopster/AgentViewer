@@ -749,7 +749,9 @@ export default function OpenTuiApp() {
   const [draftBeforeHistory, setDraftBeforeHistory] = useState('')
   const [thinkingMode, setThinkingMode] = useState(false)
 
-  const [openTabKeys, setOpenTabKeys] = useState<string[]>([])
+  // Store full Session objects so tabs retain provider context across
+  // provider switches (looking them up in `sessions` loses other-provider tabs).
+  const [openTabSessions, setOpenTabSessions] = useState<Session[]>([])
 
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const sidebarScrollRef = useRef<ScrollBoxRenderable>(null)
@@ -904,31 +906,31 @@ export default function OpenTuiApp() {
   const sidebarWidth = showRail ? clamp(Math.floor((width - 4) * 0.27), 28, 40) : 0
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
 
-  const showTabs = tabsEnabled && openTabKeys.length > 0
+  const showTabs = tabsEnabled && openTabSessions.length > 0
   const TAB_BAR_HEIGHT = 1 // tab label row only (no underline)
   const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7) - (showTabs ? TAB_BAR_HEIGHT : 0), 8)
 
   const activeTabIndex = useMemo(() => {
     if (!selectedSessionKey) return -1
-    return openTabKeys.indexOf(selectedSessionKey)
-  }, [selectedSessionKey, openTabKeys])
+    return openTabSessions.findIndex((s) => sessionKey(s) === selectedSessionKey)
+  }, [selectedSessionKey, openTabSessions])
 
   const tabOptions = useMemo((): TabSelectOption[] => (
-    openTabKeys.flatMap((key) => {
-      const session = sessions.find((s) => sessionKey(s) === key)
-      if (!session) return []
-      return [{ name: formatSessionTitle(session), description: formatProviderLabel(session.provider ?? 'claude'), value: key }]
-    })
-  ), [openTabKeys, sessions])
+    openTabSessions.map((s) => ({
+      name: formatSessionTitle(s),
+      description: formatProviderLabel(s.provider ?? 'claude'),
+      value: sessionKey(s),
+    }))
+  ), [openTabSessions])
 
   const tabWidth = useMemo(() => {
-    if (openTabKeys.length === 0) return 16
+    if (openTabSessions.length === 0) return 16
     // Fill available width proportionally so tabs look natural at any count,
     // capped to avoid very wide tabs when only a few sessions are open.
     const available = Math.max(rightPaneWidth - 6, 20)
-    const fill = Math.floor(available / openTabKeys.length)
+    const fill = Math.floor(available / openTabSessions.length)
     return Math.max(10, Math.min(fill, 24))
-  }, [rightPaneWidth, openTabKeys.length])
+  }, [rightPaneWidth, openTabSessions.length])
   const sidebarRowBudget = Math.max(mainContentHeight - 7, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
 
@@ -1190,6 +1192,57 @@ export default function OpenTuiApp() {
     return COMMANDS.filter((cmd) => cmd.label.toLowerCase().includes(q))
   }, [commandPaletteQuery])
 
+  const chooseProvider = useCallback(async (
+    nextProvider: ProviderSelection,
+    targetSession: Session | null = null,
+  ) => {
+    if (nextProvider === provider) {
+      closeProviderMenu()
+      if (targetSession) setSelectedSessionKey(sessionKey(targetSession))
+      return
+    }
+
+    closeProviderMenu()
+    providerSwitchRef.current = true
+    setProvider(nextProvider)
+    setSessionDetail(null)
+    setSelectedSessionKey(targetSession ? sessionKey(targetSession) : null)
+    setTranscriptCursorKey(null)
+    setExpandedCardKeys(new Set())
+    setCollapsedCardKeys(new Set())
+    setFollowTail(true)
+    setPendingNewCount(0)
+    setUnreadBoundaryKey(null)
+    setResumeMarkerKey(null)
+    setSearchMode(false)
+    setSearchQuery('')
+    setSearchMatchIndex(0)
+    setRestoredReaderState({ sessionKey: null, loaded: false, state: null })
+    setError(null)
+
+    try {
+      await writeTuiProvider(nextProvider)
+      await refreshSessions(nextProvider, targetSession !== null, true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to switch provider')
+    } finally {
+      providerSwitchRef.current = false
+    }
+  }, [closeProviderMenu, provider, refreshSessions])
+
+  // Select a session that is already an open tab. If the tab belongs to a
+  // different provider than the one currently active, transparently switch
+  // providers first (carrying the target session through) so cross-provider
+  // tab navigation works without losing the tab's context.
+  const selectTabSession = useCallback((session: Session) => {
+    const targetProvider: ProviderSelection = session.provider ?? 'claude'
+    if (provider !== 'all' && targetProvider !== provider) {
+      void chooseProvider(targetProvider, session)
+      return
+    }
+    setSelectedSessionKey(sessionKey(session))
+  }, [chooseProvider, provider])
+
   const executeCommandPalette = useCallback((id: string) => {
     closeCommandPalette()
     switch (id) {
@@ -1259,25 +1312,25 @@ export default function OpenTuiApp() {
       case 'tab-prev': {
         setFocusedPane('messages')
         const prevIdx = Math.max(activeTabIndex - 1, 0)
-        const prevKey = openTabKeys[prevIdx]
-        if (prevKey) setSelectedSessionKey(prevKey)
+        const prev = openTabSessions[prevIdx]
+        if (prev) selectTabSession(prev)
         break
       }
       case 'tab-next': {
         setFocusedPane('messages')
-        const nextIdx = Math.min(activeTabIndex + 1, openTabKeys.length - 1)
-        const nextKey = openTabKeys[nextIdx]
-        if (nextKey) setSelectedSessionKey(nextKey)
+        const nextIdx = Math.min(activeTabIndex + 1, openTabSessions.length - 1)
+        const next = openTabSessions[nextIdx]
+        if (next) selectTabSession(next)
         break
       }
       case 'tab-close': {
         if (selectedSessionKey) {
-          const idx = openTabKeys.indexOf(selectedSessionKey)
-          const next = openTabKeys.filter((k) => k !== selectedSessionKey)
-          setOpenTabKeys(next)
+          const idx = openTabSessions.findIndex((s) => sessionKey(s) === selectedSessionKey)
+          const next = openTabSessions.filter((s) => sessionKey(s) !== selectedSessionKey)
+          setOpenTabSessions(next)
           if (next.length > 0) {
-            const newKey = next[Math.min(idx, next.length - 1)]
-            if (newKey) setSelectedSessionKey(newKey)
+            const newActive = next[Math.min(Math.max(idx, 0), next.length - 1)]
+            if (newActive) selectTabSession(newActive)
           } else {
             const first = sessions[0]
             setSelectedSessionKey(first ? sessionKey(first) : null)
@@ -1302,44 +1355,10 @@ export default function OpenTuiApp() {
   }, [
     activeTabIndex, closeCommandPalette, density, focusMode, focusedPane, jumpToResumeMarker,
     tabsEnabled,
-    jumpToTranscriptTail, jumpToUnreadBoundary, openTabKeys, provider, railVisible,
-    refreshSessions, refreshSelectedSessionDetail, renderer, selectedSessionKey, selectedSessionTarget,
-    sessions, themeMode, toggleExpansion, transcriptView,
+    jumpToTranscriptTail, jumpToUnreadBoundary, openTabSessions, provider, railVisible,
+    refreshSessions, refreshSelectedSessionDetail, renderer, selectTabSession, selectedSessionKey,
+    selectedSessionTarget, sessions, themeMode, toggleExpansion, transcriptView,
   ])
-
-  const chooseProvider = useCallback(async (nextProvider: ProviderSelection) => {
-    if (nextProvider === provider) {
-      closeProviderMenu()
-      return
-    }
-
-    closeProviderMenu()
-    providerSwitchRef.current = true
-    setProvider(nextProvider)
-    setSessionDetail(null)
-    setSelectedSessionKey(null)
-    setTranscriptCursorKey(null)
-    setExpandedCardKeys(new Set())
-    setCollapsedCardKeys(new Set())
-    setFollowTail(true)
-    setPendingNewCount(0)
-    setUnreadBoundaryKey(null)
-    setResumeMarkerKey(null)
-    setSearchMode(false)
-    setSearchQuery('')
-    setSearchMatchIndex(0)
-    setRestoredReaderState({ sessionKey: null, loaded: false, state: null })
-    setError(null)
-
-    try {
-      await writeTuiProvider(nextProvider)
-      await refreshSessions(nextProvider, false, true)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to switch provider')
-    } finally {
-      providerSwitchRef.current = false
-    }
-  }, [closeProviderMenu, provider, refreshSessions])
 
   const cancelComposerSend = useCallback(() => {
     if (composerAbortRef.current) {
@@ -1762,14 +1781,37 @@ export default function OpenTuiApp() {
     setSearchMatchIndex((current) => clamp(current, 0, searchMatches.length - 1))
   }, [searchMatches.length])
 
-  // Add newly selected session to open tabs (if not already present)
+  // Add newly selected session to open tabs (if not already present).
+  // We use the full `selectedSession` object so tabs retain provider context
+  // even when the user later switches to a different provider.
   useEffect(() => {
-    if (!selectedSessionKey) return
-    setOpenTabKeys((current) => {
-      if (current.includes(selectedSessionKey)) return current
-      return [...current, selectedSessionKey]
+    if (!selectedSession) return
+    const key = sessionKey(selectedSession)
+    setOpenTabSessions((current) => {
+      if (current.some((s) => sessionKey(s) === key)) return current
+      return [...current, selectedSession]
     })
-  }, [selectedSessionKey])
+  }, [selectedSession])
+
+  // Keep open-tab metadata in sync when the current provider's sessions list
+  // refreshes (e.g. title updates from polling). Tabs for *other* providers
+  // are left untouched — they retain whatever snapshot was captured when the
+  // user last visited them.
+  useEffect(() => {
+    if (sessions.length === 0) return
+    setOpenTabSessions((current) => {
+      let changed = false
+      const next = current.map((tab) => {
+        const fresh = sessions.find((s) => sessionKey(s) === sessionKey(tab))
+        if (fresh && fresh !== tab) {
+          changed = true
+          return fresh
+        }
+        return tab
+      })
+      return changed ? next : current
+    })
+  }, [sessions])
 
   // Sync tab-select visual position when active tab changes
   useEffect(() => {
@@ -1974,30 +2016,30 @@ export default function OpenTuiApp() {
 
     if (effectiveFocus === 'messages' && key.name === 'left' && showTabs) {
       handled(() => {
-        const nextIndex = Math.max(activeTabIndex - 1, 0)
-        const nextKey = openTabKeys[nextIndex]
-        if (nextKey) setSelectedSessionKey(nextKey)
+        const prevIdx = Math.max(activeTabIndex - 1, 0)
+        const prev = openTabSessions[prevIdx]
+        if (prev) selectTabSession(prev)
       })
       return
     }
 
     if (effectiveFocus === 'messages' && key.name === 'right' && showTabs) {
       handled(() => {
-        const nextIndex = Math.min(activeTabIndex + 1, openTabKeys.length - 1)
-        const nextKey = openTabKeys[nextIndex]
-        if (nextKey) setSelectedSessionKey(nextKey)
+        const nextIdx = Math.min(activeTabIndex + 1, openTabSessions.length - 1)
+        const next = openTabSessions[nextIdx]
+        if (next) selectTabSession(next)
       })
       return
     }
 
     if (effectiveFocus === 'messages' && key.name === 'w' && showTabs && selectedSessionKey) {
       handled(() => {
-        const idx = openTabKeys.indexOf(selectedSessionKey)
-        const next = openTabKeys.filter((k) => k !== selectedSessionKey)
-        setOpenTabKeys(next)
+        const idx = openTabSessions.findIndex((s) => sessionKey(s) === selectedSessionKey)
+        const next = openTabSessions.filter((s) => sessionKey(s) !== selectedSessionKey)
+        setOpenTabSessions(next)
         if (next.length > 0) {
-          const newActiveKey = next[Math.min(idx, next.length - 1)]
-          if (newActiveKey) setSelectedSessionKey(newActiveKey)
+          const newActive = next[Math.min(Math.max(idx, 0), next.length - 1)]
+          if (newActive) selectTabSession(newActive)
         } else {
           setSelectedSessionKey(sessions[0] ? sessionKey(sessions[0]) : null)
         }
@@ -2407,8 +2449,8 @@ export default function OpenTuiApp() {
                 showScrollArrows={true}
                 wrapSelection={false}
                 onChange={(index) => {
-                  const key = openTabKeys[index]
-                  if (key) setSelectedSessionKey(key)
+                  const tab = openTabSessions[index]
+                  if (tab) selectTabSession(tab)
                 }}
               />
             </box>
