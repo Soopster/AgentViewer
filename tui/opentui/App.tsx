@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { GitPopover } from './GitPopover'
 import { RGBA, SyntaxStyle } from '@opentui/core'
 import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable } from '@opentui/core'
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react'
@@ -635,6 +636,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'view',      label: 'Toggle transcript view', key: 'v'  },
   { id: 'rail',      label: 'Toggle session rail',    key: 'h'  },
   { id: 'focus',     label: 'Toggle focus mode',      key: 'z'  },
+  { id: 'git',       label: 'Git status',             key: '^G' },
   { id: 'refresh',   label: 'Refresh sessions',       key: 'r'  },
   { id: 'quit',      label: 'Quit',                   key: 'q'  },
 ]
@@ -718,6 +720,8 @@ export default function OpenTuiApp() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteQuery, setCommandPaletteQuery] = useState('')
   const [commandPaletteIndex, setCommandPaletteIndex] = useState(0)
+  const [gitOpen, setGitOpen] = useState(false)
+  const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIndex, setSearchMatchIndex] = useState(0)
@@ -907,7 +911,7 @@ export default function OpenTuiApp() {
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
 
   const showTabs = tabsEnabled && openTabSessions.length > 0
-  const TAB_BAR_HEIGHT = 1 // tab label row only (no underline)
+  const TAB_BAR_HEIGHT = 1
   const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7) - (showTabs ? TAB_BAR_HEIGHT : 0), 8)
 
   const activeTabIndex = useMemo(() => {
@@ -1343,6 +1347,9 @@ export default function OpenTuiApp() {
         break
       case 'thinking':
         setThinkingMode((current) => !current)
+        break
+      case 'git':
+        setGitOpen(true)
         break
       case 'refresh':
         void refreshSessions(provider)
@@ -1878,6 +1885,11 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (gitOpen) {
+      handled(() => { gitKeyHandlerRef.current?.(key) })
+      return
+    }
+
     if (providerMenuOpen) {
       if (key.name === 'escape' || key.name === 'p') {
         handled(() => {
@@ -1982,6 +1994,12 @@ export default function OpenTuiApp() {
       handled(() => {
         setFocusedPane((current) => current === 'sessions' ? 'messages' : 'sessions')
       })
+      return
+    }
+
+    // Global git status popover
+    if (key.ctrl && key.name === 'g') {
+      handled(() => setGitOpen(true))
       return
     }
 
@@ -2430,7 +2448,7 @@ export default function OpenTuiApp() {
           {showTabs ? (
             <box
               paddingX={1}
-              backgroundColor={theme.bg}
+              backgroundColor={theme.surface2}
             >
               <tab-select
                 ref={tabSelectRef}
@@ -2745,6 +2763,16 @@ export default function OpenTuiApp() {
               </box>
             ) : null}
           </box>
+        ) : null}
+
+        {gitOpen ? (
+          <GitPopover
+            theme={theme}
+            width={width}
+            height={height}
+            onClose={() => setGitOpen(false)}
+            onKeyHandlerReady={(handler) => { gitKeyHandlerRef.current = handler }}
+          />
         ) : null}
       </box>
 
