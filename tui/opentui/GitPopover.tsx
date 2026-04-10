@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { execFileSync } from 'child_process'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 
@@ -26,19 +27,23 @@ type GitStatusEntry = {
 }
 
 // ---------------------------------------------------------------------------
-// Run a git command synchronously using Bun
+// Run a git command synchronously
 // ---------------------------------------------------------------------------
 
 function git(...args: string[]): string {
   try {
-    // @ts-expect-error – Bun global, not in @types/node
-    const proc = Bun.spawnSync(['git', ...args], {
+    return execFileSync('git', args, {
       cwd: process.cwd(),
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
-    return proc.stdout ? new TextDecoder().decode(proc.stdout).trim() : ''
-  } catch {
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    }).trimEnd()
+  } catch (err: unknown) {
+    // git diff exits with code 1 when differences exist — stdout is in the error
+    if (err && typeof err === 'object' && 'stdout' in err) {
+      const out = (err as { stdout?: unknown }).stdout
+      if (!out) return ''
+      return Buffer.isBuffer(out) ? out.toString('utf-8').trimEnd() : String(out).trimEnd()
+    }
     return ''
   }
 }
@@ -179,11 +184,16 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
     setData(fetchGitData())
   }, [])
 
-  // When data loads, expand all dirs by default and reset cursor
+  // When data loads, expand all dirs and place cursor on the first file node
   useEffect(() => {
     if (!data) return
-    setExpandedDirs(allDirPaths(data.status))
-    setTreeCursor(0)
+    const dirs = allDirPaths(data.status)
+    setExpandedDirs(dirs)
+    // Compute nodes inline so we can find the first file without waiting for
+    // visibleNodes to recompute in a separate render cycle.
+    const nodes = buildVisibleNodes(data.status, dirs)
+    const firstFile = nodes.findIndex((n) => n.kind === 'file')
+    setTreeCursor(firstFile >= 0 ? firstFile : 0)
   }, [data])
 
   // Visible tree nodes (recomputed when data or expanded state changes)
@@ -233,9 +243,15 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
       }
       case 2: {
         if (!selectedFilePath) { content = data.status.length === 0 ? '(working tree clean)' : '(select a file)'; break }
-        const unstaged = git('diff', '--', selectedFilePath)
-        const staged = git('diff', '--cached', '--', selectedFilePath)
-        content = [unstaged, staged].filter(Boolean).join('\n\n') || '(no diff — file may be untracked)'
+        const entry = data.status.find((e) => e.path === selectedFilePath)
+        const isUntracked = entry?.x === '?' && entry?.y === '?'
+        if (isUntracked) {
+          content = git('diff', '--no-index', '/dev/null', selectedFilePath) || '(empty file)'
+        } else {
+          content = git('diff', 'HEAD', '--', selectedFilePath)
+            || git('diff', '--cached', '--', selectedFilePath)
+            || '(no changes)'
+        }
         break
       }
       case 3: {
