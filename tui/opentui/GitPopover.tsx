@@ -337,10 +337,11 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
   const rightH = popH - 2
 
   function statusColor(x: string, y: string): string {
-    if (x.trim()) return theme.green    // staged change
-    if (y === 'M') return theme.amber   // unstaged modified
-    if (y === 'D') return theme.red     // deleted
-    return theme.muted                  // untracked (??) or other
+    if (x === '?' && y === '?') return theme.red  // untracked
+    if (x.trim()) return theme.green              // staged change
+    if (y === 'M') return theme.amber             // unstaged modified
+    if (y === 'D') return theme.red               // deleted
+    return theme.muted
   }
 
   const diffLines = rightContent.split('\n')
@@ -370,8 +371,8 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
           borderColor={pane === 1 ? theme.border2 : theme.border}
           backgroundColor={pane === 1 ? theme.surface2 : theme.surface}
         >
-          <box paddingX={1}>
-            <text fg={pane === 1 ? theme.cyan : theme.muted}>[1] Status</text>
+          <box paddingX={1} width={leftW - 2} backgroundColor={pane === 1 ? theme.cyan : 'transparent'}>
+            <text fg={pane === 1 ? theme.surface : theme.muted}>[1] Status</text>
           </box>
           <box paddingX={1}>
             <text fg={theme.text} wrapMode="none">
@@ -388,11 +389,11 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
           borderColor={pane === 2 ? theme.border2 : theme.border}
           backgroundColor={pane === 2 ? theme.surface2 : theme.surface}
         >
-          <box paddingX={1} flexDirection="row">
-            <text fg={pane === 2 ? theme.cyan : theme.muted}>[2] Files</text>
+          <box paddingX={1} width={leftW - 2} flexDirection="row" backgroundColor={pane === 2 ? theme.cyan : 'transparent'}>
+            <text fg={pane === 2 ? theme.surface : theme.muted}>[2] Files</text>
             {pane === 2 && fileCount > 0 ? (
               <box flexGrow={1}>
-                <text fg={theme.dim}>{`  ${filePosition}/${fileCount}`}</text>
+                <text fg={pane === 2 ? theme.surface2 : theme.dim}>{`  ${filePosition}/${fileCount}`}</text>
               </box>
             ) : null}
           </box>
@@ -434,28 +435,41 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
           borderColor={pane === 3 ? theme.border2 : theme.border}
           backgroundColor={pane === 3 ? theme.surface2 : theme.surface}
         >
-          <box paddingX={1}>
-            <text fg={pane === 3 ? theme.cyan : theme.muted}>[3] Branches</text>
+          <box paddingX={1} width={leftW - 2} backgroundColor={pane === 3 ? theme.cyan : 'transparent'}>
+            <text fg={pane === 3 ? theme.surface : theme.muted}>[3] Branches</text>
           </box>
-          {(data?.branches ?? []).slice(0, branchesH - 2).map((b, i) => (
-            <box key={b} paddingX={1} backgroundColor={i === branchIndex && pane === 3 ? theme.surface3 : 'transparent'}>
-              <text fg={i === branchIndex && pane === 3 ? theme.text : theme.muted} wrapMode="none">{b}</text>
-            </box>
-          ))}
+          {(data?.branches ?? []).slice(0, branchesH - 2).map((b, i) => {
+            const isCurrent = b === data?.branch
+            const isSel = i === branchIndex && pane === 3
+            return (
+              <box key={b} paddingX={1} backgroundColor={isSel ? theme.surface3 : 'transparent'}>
+                <text fg={isCurrent ? theme.green : isSel ? theme.text : theme.muted} wrapMode="none">
+                  {isCurrent ? `* ${b}` : `  ${b}`}
+                </text>
+              </box>
+            )
+          })}
         </box>
 
         {/* [4] Commits */}
         <box flexGrow={1} flexDirection="column" backgroundColor={pane === 4 ? theme.surface2 : theme.surface}>
-          <box paddingX={1}>
-            <text fg={pane === 4 ? theme.cyan : theme.muted}>[4] Commits</text>
+          <box paddingX={1} width={leftW - 2} backgroundColor={pane === 4 ? theme.cyan : 'transparent'}>
+            <text fg={pane === 4 ? theme.surface : theme.muted}>[4] Commits</text>
           </box>
-          {(data?.commits ?? []).slice(0, commitsH - 1).map((c, i) => (
-            <box key={c} paddingX={1} backgroundColor={i === commitIndex && pane === 4 ? theme.surface3 : 'transparent'}>
-              <text fg={i === commitIndex && pane === 4 ? theme.text : theme.muted} wrapMode="none">
-                {c.slice(0, leftW - 3)}
-              </text>
-            </box>
-          ))}
+          {(data?.commits ?? []).slice(0, commitsH - 1).map((c, i) => {
+            const isSel = i === commitIndex && pane === 4
+            const spaceIdx = c.indexOf(' ')
+            const hash = spaceIdx > 0 ? c.slice(0, spaceIdx) : c
+            const msg = spaceIdx > 0 ? c.slice(spaceIdx + 1) : ''
+            return (
+              <box key={c} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'}>
+                <text fg={theme.amber} wrapMode="none">{hash} </text>
+                <text fg={isSel ? theme.text : theme.dim} wrapMode="none">
+                  {msg.slice(0, leftW - hash.length - 4)}
+                </text>
+              </box>
+            )
+          })}
         </box>
       </box>
 
