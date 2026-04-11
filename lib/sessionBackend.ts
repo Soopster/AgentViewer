@@ -635,6 +635,7 @@ function createClaudeStream(sessionId: string, request: NextRequest, body: Recor
           resumeSessionAt,
           forkSession: forkSessionOnSend,
           includePartialMessages: true,
+          agentProgressSummaries: true,
         },
       })
 
