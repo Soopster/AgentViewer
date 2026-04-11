@@ -323,7 +323,7 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
 
   // Dimensions
   const popW = Math.min(width - 4, 160)
-  const popH = Math.min(height - 4, 50)
+  const popH = Math.min(height - 4, 60)
   const leftW = Math.min(40, Math.floor(popW * 0.28))
   const rightW = popW - leftW - 3
   const popTop = Math.floor((height - popH) / 2)
@@ -359,6 +359,8 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
       backgroundColor={theme.surface}
       zIndex={50}
       flexDirection="row"
+      title=" Git "
+      titleAlignment="left"
     >
       {/* ── Left column ─────────────────────────────────── */}
       <box width={leftW} flexDirection="column" border={['right']} borderStyle="single" borderColor={theme.border}>

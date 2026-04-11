@@ -2765,27 +2765,6 @@ export default function OpenTuiApp() {
           </box>
         ) : null}
 
-        {gitOpen ? (
-          <box
-            position="absolute"
-            top={0}
-            left={0}
-            width={width}
-            height={height}
-            backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-            zIndex={49}
-          />
-        ) : null}
-
-        {gitOpen ? (
-          <GitPopover
-            theme={theme}
-            width={width}
-            height={height}
-            onClose={() => setGitOpen(false)}
-            onKeyHandlerReady={(handler) => { gitKeyHandlerRef.current = handler }}
-          />
-        ) : null}
       </box>
 
       {searchMode ? (
@@ -2878,6 +2857,28 @@ export default function OpenTuiApp() {
         <box backgroundColor={theme.surface} paddingX={1}>
           <text fg={theme.dim}>{footerText}</text>
         </box>
+      ) : null}
+
+      {gitOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {gitOpen ? (
+        <GitPopover
+          theme={theme}
+          width={width}
+          height={height}
+          onClose={() => setGitOpen(false)}
+          onKeyHandlerReady={(handler) => { gitKeyHandlerRef.current = handler }}
+        />
       ) : null}
     </box>
   )
