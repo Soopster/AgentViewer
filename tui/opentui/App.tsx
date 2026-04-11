@@ -2766,6 +2766,18 @@ export default function OpenTuiApp() {
         ) : null}
 
         {gitOpen ? (
+          <box
+            position="absolute"
+            top={0}
+            left={0}
+            width={width}
+            height={height}
+            backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+            zIndex={49}
+          />
+        ) : null}
+
+        {gitOpen ? (
           <GitPopover
             theme={theme}
             width={width}
