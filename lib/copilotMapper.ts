@@ -107,6 +107,29 @@ function toolResultContent(event: Extract<SessionEvent, { type: 'tool.execution_
     ?? (event.data.success ? 'Tool completed.' : 'Tool failed.')
 }
 
+function usageFromCopilotEvent(event: Extract<SessionEvent, { type: 'assistant.usage' }>): NonNullable<ApiMessage['usage']> {
+  return {
+    input_tokens: event.data.inputTokens ?? 0,
+    output_tokens: event.data.outputTokens ?? 0,
+    cache_read_input_tokens: event.data.cacheReadTokens ?? 0,
+    cache_creation_input_tokens: event.data.cacheWriteTokens ?? 0,
+  }
+}
+
+function mergeUsage(
+  left: ApiMessage['usage'] | undefined,
+  right: ApiMessage['usage'] | undefined,
+): ApiMessage['usage'] | undefined {
+  if (!left) return right
+  if (!right) return left
+  return {
+    input_tokens: left.input_tokens + right.input_tokens,
+    output_tokens: left.output_tokens + right.output_tokens,
+    cache_read_input_tokens: (left.cache_read_input_tokens ?? 0) + (right.cache_read_input_tokens ?? 0),
+    cache_creation_input_tokens: (left.cache_creation_input_tokens ?? 0) + (right.cache_creation_input_tokens ?? 0),
+  }
+}
+
 function sessionContextFromEvents(events: SessionEvent[]): SessionContext | undefined {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
@@ -212,6 +235,8 @@ export function mapCopilotSessionToInfo(
 export function mapCopilotEventsToSessionMessages(sessionId: string, events: SessionEvent[]): SessionMessage[] {
   const messages: SessionMessage[] = []
   let currentTurnId: string | undefined
+  const lastAssistantMessageIndexByTurn = new Map<string, number>()
+  const pendingUsageByTurn = new Map<string, NonNullable<ApiMessage['usage']>>()
 
   for (const event of events) {
     switch (event.type) {
@@ -266,7 +291,30 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
             content: assistantMessageContent(event),
           },
         })
+        if (currentTurnId) {
+          const index = messages.length - 1
+          lastAssistantMessageIndexByTurn.set(currentTurnId, index)
+          const pendingUsage = pendingUsageByTurn.get(currentTurnId)
+          if (pendingUsage) {
+            ;(messages[index].message as ApiMessage).usage = pendingUsage
+            pendingUsageByTurn.delete(currentTurnId)
+          }
+        }
         break
+      case 'assistant.usage': {
+        if (!currentTurnId) break
+        const usage = mergeUsage(pendingUsageByTurn.get(currentTurnId), usageFromCopilotEvent(event))
+        const assistantIndex = lastAssistantMessageIndexByTurn.get(currentTurnId)
+        if (assistantIndex != null) {
+          const message = messages[assistantIndex]
+          if (message?.type === 'assistant') {
+            ;(message.message as ApiMessage).usage = mergeUsage((message.message as ApiMessage).usage, usage)
+          }
+        } else if (usage) {
+          pendingUsageByTurn.set(currentTurnId, usage as NonNullable<ApiMessage['usage']>)
+        }
+        break
+      }
       case 'tool.execution_complete':
         messages.push({
           type: 'user',
