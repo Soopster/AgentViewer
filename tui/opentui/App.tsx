@@ -635,28 +635,39 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
   value: provider,
 }))
 
-type PaletteCommand = { id: string; label: string; key: string }
+type PaletteCommand = { id: string; label: string; key: string; category: string }
+type PaletteRow =
+  | { kind: 'header'; label: string }
+  | { kind: 'cmd'; cmd: PaletteCommand; cmdIndex: number }
+
 const COMMANDS: PaletteCommand[] = [
-  { id: 'search',    label: 'Search messages',       key: '/'  },
-  { id: 'live',      label: 'Jump to live tail',      key: 'f'  },
-  { id: 'unread',    label: 'Jump to first unread',   key: 'u'  },
-  { id: 'mark',      label: 'Mark position',          key: 'm'  },
-  { id: 'fold',      label: 'Fold/expand card',       key: 'e'  },
-  { id: 'tab-toggle', label: 'Toggle tab bar',         key: 'b'  },
-  { id: 'tab-prev',  label: 'Previous tab',           key: '←'  },
-  { id: 'tab-next',  label: 'Next tab',               key: '→'  },
-  { id: 'tab-close', label: 'Close current tab',      key: 'w'  },
-  { id: 'composer',  label: 'Open composer',          key: 'c'  },
-  { id: 'provider',  label: 'Switch provider',        key: 'p'  },
-  { id: 'theme',     label: 'Switch theme',           key: 't'  },
-  { id: 'thinking',  label: 'Toggle thinking mode',   key: 'T'  },
-  { id: 'density',   label: 'Toggle density',         key: 'd'  },
-  { id: 'view',      label: 'Toggle transcript view', key: 'v'  },
-  { id: 'rail',      label: 'Toggle session rail',    key: 'h'  },
-  { id: 'focus',     label: 'Toggle focus mode',      key: 'z'  },
-  { id: 'git',       label: 'Git status',             key: '^G' },
-  { id: 'refresh',   label: 'Refresh sessions',       key: 'r'  },
-  { id: 'quit',      label: 'Quit',                   key: 'q'  },
+  // Navigation
+  { id: 'live',       label: 'Jump to live tail',      key: 'f',  category: 'Navigation' },
+  { id: 'unread',     label: 'Jump to first unread',   key: 'u',  category: 'Navigation' },
+  { id: 'mark',       label: 'Mark position',          key: 'm',  category: 'Navigation' },
+  // Transcript
+  { id: 'search',     label: 'Search messages',        key: '/',  category: 'Transcript' },
+  { id: 'fold',       label: 'Fold/expand card',       key: 'e',  category: 'Transcript' },
+  // Session
+  { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
+  { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
+  { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
+  { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
+  // Tabs
+  { id: 'tab-toggle', label: 'Toggle tab bar',         key: 'b',  category: 'Tabs'       },
+  { id: 'tab-prev',   label: 'Previous tab',           key: '←',  category: 'Tabs'       },
+  { id: 'tab-next',   label: 'Next tab',               key: '→',  category: 'Tabs'       },
+  { id: 'tab-close',  label: 'Close current tab',      key: 'w',  category: 'Tabs'       },
+  // View
+  { id: 'theme',      label: 'Switch theme',           key: 't',  category: 'View'       },
+  { id: 'thinking',   label: 'Toggle thinking mode',   key: 'T',  category: 'View'       },
+  { id: 'density',    label: 'Toggle density',         key: 'd',  category: 'View'       },
+  { id: 'view',       label: 'Toggle transcript view', key: 'v',  category: 'View'       },
+  { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
+  { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
+  // App
+  { id: 'refresh',    label: 'Refresh sessions',       key: 'r',  category: 'App'        },
+  { id: 'quit',       label: 'Quit',                   key: 'q',  category: 'App'        },
 ]
 
 function extractDiffText(lines: TuiTranscriptCardLine[]): string | null {
@@ -1223,6 +1234,22 @@ export default function OpenTuiApp() {
     if (!q) return COMMANDS
     return COMMANDS.filter((cmd) => cmd.label.toLowerCase().includes(q))
   }, [commandPaletteQuery])
+
+  const paletteDisplayRows = useMemo((): PaletteRow[] => {
+    if (commandPaletteQuery) {
+      return filteredCommands.map((cmd, cmdIndex) => ({ kind: 'cmd', cmd, cmdIndex }))
+    }
+    const rows: PaletteRow[] = []
+    let lastCategory = ''
+    filteredCommands.forEach((cmd, cmdIndex) => {
+      if (cmd.category !== lastCategory) {
+        rows.push({ kind: 'header', label: cmd.category })
+        lastCategory = cmd.category
+      }
+      rows.push({ kind: 'cmd', cmd, cmdIndex })
+    })
+    return rows
+  }, [commandPaletteQuery, filteredCommands])
 
   const chooseProvider = useCallback(async (
     nextProvider: ProviderSelection,
@@ -2062,7 +2089,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'sessions' && isShifted('R') && selectedSession) {
+    if (effectiveFocus === 'sessions' && key.ctrl && key.name === 'r' && selectedSession) {
       handled(() => {
         setRenameSessionKey(sessionKey(selectedSession))
         setRenameDraft(formatSessionTitle(selectedSession))
@@ -2814,43 +2841,53 @@ export default function OpenTuiApp() {
           </box>
         ) : null}
 
-        {commandPaletteOpen ? (
-          <box
-            position="absolute"
-            top={focusMode ? 2 : 4}
-            left={Math.max(Math.floor(width / 2) - 22, 2)}
-            width={44}
-            border
-            borderStyle="single"
-            borderColor={theme.border2}
-            backgroundColor={theme.surface}
-            zIndex={30}
-            flexDirection="column"
-          >
-            <box paddingX={1} paddingTop={1} paddingBottom={1}>
-              <text fg={theme.dim}>{fitText(`> ${commandPaletteQuery}█  j/k navigate  enter run  esc close`, 42)}</text>
-            </box>
-            {filteredCommands.map((cmd, i) => {
-              const isSelected = i === commandPaletteIndex
-              const bg = isSelected ? theme.surface3 : theme.surface
-              return (
-                <box key={cmd.id} paddingX={1} backgroundColor={bg} flexDirection="row">
-                  <box flexGrow={1}>
-                    <text fg={isSelected ? theme.text : theme.muted} wrapMode="none">
-                      {fitText(cmd.label, 32)}
-                    </text>
-                  </box>
-                  <text fg={isSelected ? theme.cyan : theme.dim}>{cmd.key}</text>
-                </box>
-              )
-            })}
-            {filteredCommands.length === 0 ? (
-              <box paddingX={1} paddingBottom={1}>
-                <text fg={theme.dim}>no matches</text>
+        {commandPaletteOpen ? (() => {
+          const paletteW = Math.min(width - 8, 64)
+          const labelW = paletteW - 10
+          return (
+            <box
+              position="absolute"
+              top={focusMode ? 2 : 4}
+              left={Math.max(Math.floor((width - paletteW) / 2), 2)}
+              width={paletteW}
+              border
+              borderStyle="single"
+              borderColor={theme.border2}
+              backgroundColor={theme.surface}
+              zIndex={30}
+              flexDirection="column"
+            >
+              <box paddingX={1} paddingTop={1} paddingBottom={1}>
+                <text fg={theme.dim}>{fitText(`> ${commandPaletteQuery}█  j/k  enter  esc`, paletteW - 4)}</text>
               </box>
-            ) : null}
-          </box>
-        ) : null}
+              {paletteDisplayRows.map((row, i) => {
+                if (row.kind === 'header') {
+                  return (
+                    <box key={`h-${row.label}-${i}`} paddingX={1} backgroundColor={theme.surface2}>
+                      <text fg={theme.dim}>{row.label.toUpperCase()}</text>
+                    </box>
+                  )
+                }
+                const isSelected = row.cmdIndex === commandPaletteIndex
+                return (
+                  <box key={row.cmd.id} paddingX={1} backgroundColor={isSelected ? theme.surface3 : theme.surface} flexDirection="row">
+                    <box flexGrow={1}>
+                      <text fg={isSelected ? theme.text : theme.muted} wrapMode="none">
+                        {fitText(row.cmd.label, labelW)}
+                      </text>
+                    </box>
+                    <text fg={isSelected ? theme.cyan : theme.dim}>{row.cmd.key}</text>
+                  </box>
+                )
+              })}
+              {filteredCommands.length === 0 ? (
+                <box paddingX={1} paddingBottom={1}>
+                  <text fg={theme.dim}>no matches</text>
+                </box>
+              ) : null}
+            </box>
+          )
+        })() : null}
 
       </box>
 
