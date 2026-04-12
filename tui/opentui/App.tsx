@@ -1152,7 +1152,12 @@ export default function OpenTuiApp() {
       const isRunningSession = runningSessions.some((running) =>
         running.sessionId === session.sessionId && running.provider === (session.provider ?? 'claude'),
       )
-      if (session.provider === 'claude' && !foreground && !isRunningSession) return
+      if (session.provider === 'claude' && !isRunningSession) {
+        if (cacheKey === selectedSessionKeyRef.current && !sessionContextUsageCacheRef.current.get(cacheKey)) {
+          setContextUsageStatus('unavailable')
+        }
+        return
+      }
 
       const metadataTtl = session.provider === 'claude'
         ? CLAUDE_METADATA_REFRESH_MS
