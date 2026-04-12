@@ -28,6 +28,7 @@ import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/them
 
 const DEFAULT_SESSION_LIMIT = 200
 const DEFAULT_MESSAGE_LIMIT = 400
+const CODEX_MESSAGE_LIMIT = 2000
 
 export type TuiSessionDetail = {
   info: SessionInfo | null
@@ -119,11 +120,14 @@ export async function readTuiSessions(provider: ProviderSelection): Promise<Sess
 }
 
 export async function readTuiSessionDetail(session: Session): Promise<TuiSessionDetail> {
+  const messageLimit = session.provider === 'codex'
+    ? CODEX_MESSAGE_LIMIT
+    : DEFAULT_MESSAGE_LIMIT
   const [info, messages] = await Promise.all([
     readViewSessionInfo(session.sessionId, session.provider),
     listViewSessionMessages(
       session.sessionId,
-      { limit: DEFAULT_MESSAGE_LIMIT, offset: 0, tail: true },
+      { limit: messageLimit, offset: 0, tail: true },
       session.provider,
     ),
   ])

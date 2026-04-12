@@ -139,6 +139,83 @@ function sessionContextFromEvents(events: SessionEvent[]): SessionContext | unde
   return undefined
 }
 
+function formatKeyValueSummary(value: Record<string, unknown> | undefined): string {
+  if (!value) return ''
+  return Object.entries(value)
+    .flatMap(([key, entry]) => {
+      if (entry == null) return []
+      if (Array.isArray(entry)) return [`${key}: ${entry.join(', ')}`]
+      if (typeof entry === 'object') return [`${key}: ${JSON.stringify(entry)}`]
+      return [`${key}: ${String(entry)}`]
+    })
+    .join('\n')
+}
+
+function summarizeCopilotUiCompletion(
+  event: Extract<SessionEvent, { type: 'user_input.completed' | 'elicitation.completed' | 'exit_plan_mode.completed' }>,
+): string {
+  switch (event.type) {
+    case 'user_input.completed': {
+      const answer = typeof event.data.answer === 'string' ? event.data.answer.trim() : ''
+      if (!answer) return 'User input request completed.'
+      return event.data.wasFreeform
+        ? `User input submitted (freeform): ${answer}`
+        : `User input selected: ${answer}`
+    }
+    case 'elicitation.completed': {
+      const action = typeof event.data.action === 'string' ? event.data.action : 'completed'
+      const content = event.data.content && typeof event.data.content === 'object'
+        ? formatKeyValueSummary(event.data.content as Record<string, unknown>)
+        : ''
+      return [
+        `Elicitation ${action}.`,
+        content,
+      ].filter(Boolean).join('\n')
+    }
+    case 'exit_plan_mode.completed': {
+      const lines = [
+        typeof event.data.approved === 'boolean'
+          ? `Plan mode ${event.data.approved ? 'approved' : 'not approved'}.`
+          : 'Plan mode exit completed.',
+        typeof event.data.selectedAction === 'string' ? `Action: ${event.data.selectedAction}` : '',
+        typeof event.data.autoApproveEdits === 'boolean'
+          ? `Auto-approve edits: ${event.data.autoApproveEdits ? 'on' : 'off'}`
+          : '',
+        typeof event.data.feedback === 'string' && event.data.feedback.trim()
+          ? `Feedback: ${event.data.feedback.trim()}`
+          : '',
+      ].filter(Boolean)
+      return lines.join('\n')
+    }
+  }
+}
+
+function mapCopilotUiCompletionEvent(
+  sessionId: string,
+  event: Extract<SessionEvent, { type: 'user_input.completed' | 'elicitation.completed' | 'exit_plan_mode.completed' }>,
+  turnId?: string,
+): SessionMessage {
+  const rawData = event.data as Record<string, unknown>
+  const { content: rawContent, ...restData } = rawData
+  return {
+    type: 'system',
+    uuid: event.id,
+    session_id: sessionId,
+    parent_tool_use_id: null,
+    provider: 'copilot',
+    turnId,
+    timestamp: event.timestamp,
+    message: {
+      type: 'system',
+      subtype: event.type.replace(/\./g, '_'),
+      event_type: event.type,
+      raw_content: rawContent,
+      content: summarizeCopilotUiCompletion(event),
+      ...restData,
+    },
+  }
+}
+
 export function deriveCopilotState(events: SessionEvent[], metadata?: SessionMetadata | null): CopilotDerivedState {
   const derived: CopilotDerivedState = {
     createdAt: metadata?.startTime ? metadata.startTime.getTime() : undefined,
@@ -349,6 +426,11 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
             content: `Error: ${event.data.message}`,
           },
         })
+        break
+      case 'user_input.completed':
+      case 'elicitation.completed':
+      case 'exit_plan_mode.completed':
+        messages.push(mapCopilotUiCompletionEvent(sessionId, event, currentTurnId))
         break
       default:
         break
