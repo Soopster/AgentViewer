@@ -21,8 +21,9 @@ import {
   listViewSessionMessages,
   listViewSessions,
   readViewSessionInfo,
+  readViewSessionModels,
 } from '../sessionBackend'
-import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../types'
+import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 
 const DEFAULT_SESSION_LIMIT = 200
@@ -32,6 +33,7 @@ export type TuiSessionDetail = {
   info: SessionInfo | null
   rawMessages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
+  contextUsage: ContextUsage | null
 }
 
 export async function readTuiProvider(): Promise<ProviderSelection> {
@@ -111,18 +113,20 @@ export async function readTuiSessions(provider: ProviderSelection): Promise<Sess
 }
 
 export async function readTuiSessionDetail(session: Session): Promise<TuiSessionDetail> {
-  const [info, messages] = await Promise.all([
+  const [info, messages, models] = await Promise.all([
     readViewSessionInfo(session.sessionId, session.provider),
     listViewSessionMessages(
       session.sessionId,
       { limit: DEFAULT_MESSAGE_LIMIT, offset: 0, tail: true },
       session.provider,
     ),
+    readViewSessionModels(session.sessionId, session.provider).catch(() => null),
   ])
 
   return {
     info,
     rawMessages: messages,
     threadedMessages: buildThreadedMessages(messages),
+    contextUsage: models?.contextUsage ?? null,
   }
 }

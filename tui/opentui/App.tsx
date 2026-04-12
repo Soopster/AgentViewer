@@ -85,6 +85,24 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(value, max))
 }
 
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function renderContextBar(totalTokens: number, maxTokens: number, percentage: number, barWidth = 10): string {
+  const filled = Math.round((percentage / 100) * barWidth)
+  const bar = '▓'.repeat(filled) + '░'.repeat(barWidth - filled)
+  return `${fmtTokens(totalTokens)} / ${fmtTokens(maxTokens)}  ${bar}  ${percentage}%`
+}
+
+function contextBarColor(percentage: number, theme: TuiThemePalette): string {
+  if (percentage >= 80) return theme.red
+  if (percentage >= 60) return theme.amber
+  return theme.green
+}
+
 function joinMeta(parts: Array<string | null | undefined>): string {
   return parts.filter((part): part is string => Boolean(part && part.trim())).join('  ·  ')
 }
@@ -743,6 +761,9 @@ export default function OpenTuiApp() {
     loaded: false,
     state: null,
   })
+  const [contextUsage, setContextUsage] = useState<import('../../lib/types').ContextUsage | null>(null)
+  const [renameSessionKey, setRenameSessionKey] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
   const [composerActive, setComposerActive] = useState(false)
   const [composerDraft, setComposerDraft] = useState('')
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
@@ -776,6 +797,12 @@ export default function OpenTuiApp() {
   useEffect(() => {
     if (composerActive) setFocusedPane('messages')
   }, [composerActive])
+
+  useEffect(() => {
+    setContextUsage(null)
+    setRenameSessionKey(null)
+    setRenameDraft('')
+  }, [selectedSessionKey])
 
   const theme = getThemePalette(themeMode)
   const syntaxStyle = useMemo(() => buildSyntaxStyle(theme), [themeMode])
@@ -1054,6 +1081,7 @@ export default function OpenTuiApp() {
         }
         return detail
       })
+      if (detail.contextUsage) setContextUsage(detail.contextUsage)
     } catch (err) {
       if (requestId !== detailRequestRef.current) return
       setSessionDetail(null)
@@ -1376,6 +1404,24 @@ export default function OpenTuiApp() {
     setComposerLiveText('')
   }, [])
 
+  const commitRename = useCallback(async () => {
+    if (!renameSessionKey || !selectedSession) return
+    const trimmed = renameDraft.trim()
+    setRenameSessionKey(null)
+    setRenameDraft('')
+    if (!trimmed) return
+    try {
+      await fetch(buildApiUrl(`/api/sessions/${selectedSession.sessionId}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: trimmed, provider: selectedSession.provider }),
+      })
+      void refreshSessions(provider, true, false)
+    } catch {
+      // rename failed silently — session list will show original title on next poll
+    }
+  }, [renameSessionKey, renameDraft, selectedSession, provider, refreshSessions])
+
   const sendComposerMessage = useCallback(async () => {
     if (composerSendState === 'sending') return
     const trimmed = composerDraft.trim()
@@ -1426,6 +1472,10 @@ export default function OpenTuiApp() {
               : undefined
           )
           throw new Error(typeof message === 'string' ? message : 'Unknown agent error')
+        }
+        if (frame.event === 'context-usage' && parsed) {
+          setContextUsage(parsed as import('../../lib/types').ContextUsage)
+          return
         }
         if (!parsed) return
         const delta = extractStreamingAssistantText(parsed)
@@ -1890,6 +1940,15 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (renameSessionKey) {
+      if (key.name === 'escape') {
+        handled(() => { setRenameSessionKey(null); setRenameDraft('') })
+      } else if (key.name === 'return') {
+        handled(commitRename)
+      }
+      return
+    }
+
     if (providerMenuOpen) {
       if (key.name === 'escape' || key.name === 'p') {
         handled(() => {
@@ -2000,6 +2059,14 @@ export default function OpenTuiApp() {
     // Global git status popover
     if (key.ctrl && key.name === 'g') {
       handled(() => setGitOpen(true))
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && isShifted('R') && selectedSession) {
+      handled(() => {
+        setRenameSessionKey(sessionKey(selectedSession))
+        setRenameDraft(formatSessionTitle(selectedSession))
+      })
       return
     }
 
@@ -2425,11 +2492,23 @@ export default function OpenTuiApp() {
                         backgroundColor={selected ? theme.surface3 : theme.surface}
                         marginBottom={density === 'comfortable' ? 1 : 0}
                       >
-                        <box paddingX={1} backgroundColor={selected ? theme.surface3 : theme.surface}>
-                          <text fg={selected ? theme.text : theme.muted} wrapMode="none">
-                            {fitText(formatSessionTitle(entry.session), sidebarInnerWidth - 2)}
-                          </text>
-                        </box>
+                        {entry.key === renameSessionKey ? (
+                          <box paddingX={1} backgroundColor={theme.surface3}>
+                            <input
+                              focused
+                              value={renameDraft}
+                              maxLength={80}
+                              onInput={(v: string) => setRenameDraft(v)}
+                              onSubmit={commitRename}
+                            />
+                          </box>
+                        ) : (
+                          <box paddingX={1} backgroundColor={selected ? theme.surface3 : theme.surface}>
+                            <text fg={selected ? theme.text : theme.muted} wrapMode="none">
+                              {fitText(formatSessionTitle(entry.session), sidebarInnerWidth - 2)}
+                            </text>
+                          </box>
+                        )}
                         <box paddingX={1} backgroundColor={selected ? theme.surface3 : theme.surface}>
                           <text fg={selected ? sessionAccent : theme.dim} wrapMode="none">
                             {fitText(metaLine, sidebarInnerWidth - 2)}
@@ -2491,6 +2570,14 @@ export default function OpenTuiApp() {
               <box width={12} overflow="hidden">
                 <text fg={providerAccent}>{fitText(providerSummary, 12)}</text>
               </box>
+            </box>
+          ) : null}
+
+          {!focusMode && contextUsage ? (
+            <box paddingX={1}>
+              <text fg={contextBarColor(contextUsage.percentage, theme)}>
+                {fitText(renderContextBar(contextUsage.totalTokens, contextUsage.maxTokens, contextUsage.percentage), rightPaneWidth - 4)}
+              </text>
             </box>
           ) : null}
 

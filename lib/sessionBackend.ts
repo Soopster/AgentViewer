@@ -1251,7 +1251,7 @@ export async function interruptViewSession(sessionId: string): Promise<void> {
   await running.interrupt()
 }
 
-export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null }> {
+export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; contextUsage: ContextUsage | null }> {
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const client = getCodexClient()
@@ -1260,6 +1260,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
       currentModel: resume?.model ?? null,
+      contextUsage: null,
     }
   }
   if (provider === 'opencode') {
@@ -1275,6 +1276,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     return {
       models: mapOpenCodeModelsToSessionModels(openCodeData<OpenCodeConfigProvidersResponse>(configResponse)),
       currentModel: currentOpenCodeModelValue(messages.at(-1)?.info),
+      contextUsage: null,
     }
   }
   if (provider === 'copilot') {
@@ -1288,6 +1290,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
       return {
         models: mapCopilotModelsToSessionModels(models),
         currentModel: currentModel.modelId ?? null,
+        contextUsage: null,
       }
     } finally {
       await session.disconnect().catch(() => {})
@@ -1306,6 +1309,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     return {
       models: mapPiModelsToSessionModels(currentModel),
       currentModel: currentModel ?? null,
+      contextUsage: null,
     }
   }
 
@@ -1316,11 +1320,13 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     return {
       models,
       currentModel: contextUsage?.model ?? null,
+      contextUsage: contextUsage ?? null,
     }
   } catch {
     return {
       models,
       currentModel: null,
+      contextUsage: null,
     }
   } finally {
     q.close()
