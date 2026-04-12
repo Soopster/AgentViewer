@@ -331,7 +331,7 @@ function formatBlock(block: ThreadedBlock): TuiTranscriptCardLine[] {
         ? [line(`❯ ${truncateLine(block.stdout.trim().split('\n')[0])}`, 'dim')]
         : [line('❯', 'dim')]
     case 'claude_system': {
-      if (block.subtype === 'task_progress') {
+      if (block.subtype === 'task_progress' || block.subtype === 'task_updated') {
         const text = typeof block.payload.summary === 'string' ? block.payload.summary
           : typeof block.payload.description === 'string' ? block.payload.description
           : 'task running'
@@ -729,14 +729,29 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
         ? sanitizeLine(block.stdout).trim().split('\n').map((l) => line(l.trimEnd(), 'dim'))
         : []
     case 'claude_system': {
-      if (block.subtype === 'task_progress') {
+      if (block.subtype === 'task_progress' || block.subtype === 'task_updated') {
         const p = block.payload
+        const patch = typeof p.patch === 'object' && p.patch !== null
+          ? p.patch as Record<string, unknown>
+          : null
         const summary = typeof p.summary === 'string' ? p.summary : null
-        const description = typeof p.description === 'string' ? p.description : null
+        const description = typeof p.description === 'string'
+          ? p.description
+          : typeof patch?.description === 'string'
+          ? patch.description
+          : null
+        const status = typeof p.status === 'string'
+          ? p.status
+          : typeof patch?.status === 'string'
+          ? patch.status
+          : null
         const lastTool = typeof p.last_tool_name === 'string' ? p.last_tool_name : null
         const lines: TuiTranscriptCardLine[] = [
-          line(`● ${summary ?? description ?? 'task running'}`, 'thinking'),
+          line(`● ${summary ?? description ?? status ?? 'task running'}`, 'thinking'),
         ]
+        if (status && status !== summary && status !== description) {
+          lines.push(line(`  status: ${status}`, 'dim'))
+        }
         if (lastTool) lines.push(line(`  last: ${lastTool}`, 'dim'))
         if (typeof p.usage === 'object' && p.usage !== null) {
           const u = p.usage as { tool_uses?: number; duration_ms?: number }
@@ -744,6 +759,12 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
           if (u.tool_uses != null) parts.push(`${u.tool_uses} tool calls`)
           if (u.duration_ms != null) parts.push(`${(u.duration_ms / 1000).toFixed(1)}s`)
           if (parts.length) lines.push(line(`  ${parts.join(' · ')}`, 'dim'))
+        }
+        if (typeof patch?.total_paused_ms === 'number') {
+          lines.push(line(`  paused: ${(patch.total_paused_ms / 1000).toFixed(1)}s`, 'dim'))
+        }
+        if (typeof patch?.error === 'string' && patch.error.trim()) {
+          lines.push(line(`  error: ${truncateLine(patch.error.trim())}`, 'result_error'))
         }
         return lines
       }

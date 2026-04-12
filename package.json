@@ -14,7 +14,7 @@
     "tui:ink:dev": "node --watch --import tsx ./tui/main.tsx"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.98",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.104",
     "@github/copilot-sdk": "^0.2.1",
     "@inkjs/ui": "^2.0.0",
     "@mariozechner/pi-coding-agent": "^0.66.1",
