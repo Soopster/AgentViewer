@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, startTransition, useState } from 'react'
 import { GitPopover } from './GitPopover'
 import { RGBA, SyntaxStyle } from '@opentui/core'
 import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable } from '@opentui/core'
@@ -23,6 +23,7 @@ import {
   type TuiTranscriptView,
 } from '../theme'
 import {
+  patchTuiSession,
   readTuiDensity,
   readTuiFocusMode,
   readTuiProvider,
@@ -70,6 +71,14 @@ type PaneFocus = 'sessions' | 'messages'
 type CardLandmark = {
   kind: 'resume' | 'unread' | 'day' | 'gap'
   text: string
+}
+
+// Stable per-card data: expensive to compute, independent of landmark indices and search.
+type StableCardData = {
+  bodyLines: TuiTranscriptCardLine[]
+  diffText: string | null
+  diffLineCount: number
+  codeBlockLineCounts: number[]
 }
 
 type CardDisplayData = {
@@ -798,6 +807,7 @@ export default function OpenTuiApp() {
   const [contextUsageStatus, setContextUsageStatus] = useState<'idle' | 'loading' | 'unavailable' | 'ready'>('idle')
   const [renameSessionKey, setRenameSessionKey] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
+  const renameDraftRef = useRef(renameDraft)
   const [composerActive, setComposerActive] = useState(false)
   const [composerDraft, setComposerDraft] = useState('')
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
@@ -940,13 +950,15 @@ export default function OpenTuiApp() {
   }, [collapsedCardKeys, expandedCardKeys, transcriptCards, transcriptView])
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
+  // Deferred: search computation runs after user interactions, so typing stays instant.
+  const deferredSearchQuery = useDeferredValue(normalizedSearchQuery)
   const searchMatches = useMemo(() => {
-    if (!normalizedSearchQuery) return []
+    if (!deferredSearchQuery) return []
     return transcriptCards.flatMap((card, index) => {
       const haystack = `${card.label}\n${card.searchText}`.toLowerCase()
-      return haystack.includes(normalizedSearchQuery) ? [index] : []
+      return haystack.includes(deferredSearchQuery) ? [index] : []
     })
-  }, [normalizedSearchQuery, transcriptCards])
+  }, [deferredSearchQuery, transcriptCards])
 
   const cursorIndex = useMemo(() => {
     if (transcriptCards.length === 0) return -1
@@ -1021,20 +1033,30 @@ export default function OpenTuiApp() {
   const sidebarRowBudget = Math.max(mainContentHeight - 7, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
 
-  const cardDisplayData = useMemo((): CardDisplayData[] => (
-    transcriptCards.map((card, index) => {
+  // Stable per-card data: body lines, diffs, code blocks. Does NOT depend on landmark
+  // indices (resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount) so scrolling and
+  // receiving new-message counters won't re-run renderedBodyLines() for every card.
+  const stableCardData = useMemo((): StableCardData[] => (
+    transcriptCards.map((card) => {
       const isExpanded = resolvedExpandedKeys.has(card.key)
-      const isLatest = index === transcriptCards.length - 1
-      const isSearchHit = normalizedSearchQuery.length > 0
-        && `${card.label}\n${card.searchText}`.toLowerCase().includes(normalizedSearchQuery)
-      const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
-      const landmarks = transcriptLandmarks(transcriptCards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount)
       const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, thinkingFullKeys.has(card.key))
       const diffText = cardDiffText(card, isExpanded)
       const diffLineCount = diffText ? diffText.split('\n').length : 0
       const codeBlockLineCounts = (isExpanded && card.codeBlocks)
         ? card.codeBlocks.map((cb) => cb.content.split('\n').length)
         : []
+      return { bodyLines, diffText, diffLineCount, codeBlockLineCounts }
+    })
+  ), [transcriptCards, resolvedExpandedKeys, densityState.bodyLines, thinkingFullKeys])
+
+  const cardDisplayData = useMemo((): CardDisplayData[] => (
+    transcriptCards.map((card, index) => {
+      const isExpanded = resolvedExpandedKeys.has(card.key)
+      const isLatest = index === transcriptCards.length - 1
+      const isSearchHit = deferredSearchQuery.length > 0
+        && `${card.label}\n${card.searchText}`.toLowerCase().includes(deferredSearchQuery)
+      const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
+      const landmarks = transcriptLandmarks(transcriptCards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount)
       const headerMeta = joinMeta([
         card.timestamp ?? null,
         isLatest ? 'latest' : null,
@@ -1042,17 +1064,23 @@ export default function OpenTuiApp() {
         isAutoFoldedTechnical ? 'folded' : null,
         `e ${isExpanded ? 'collapse' : 'expand'}`,
       ])
+      const { bodyLines, diffText, diffLineCount, codeBlockLineCounts } = stableCardData[index] ?? {
+        bodyLines: [],
+        diffText: null,
+        diffLineCount: 0,
+        codeBlockLineCounts: [],
+      }
       return { landmarks, bodyLines, diffText, diffLineCount, codeBlockLineCounts, headerMeta, isSearchHit }
     })
   ), [
+    stableCardData,
     transcriptCards,
     resolvedExpandedKeys,
-    normalizedSearchQuery,
+    deferredSearchQuery,
     transcriptView,
     resumeMarkerIndex,
     unreadBoundaryIndex,
     pendingNewCount,
-    densityState.bodyLines,
   ])
 
   const refreshSessions = useCallback(async (
@@ -1072,14 +1100,16 @@ export default function OpenTuiApp() {
     try {
       const nextSessions = await readTuiSessions(nextProvider)
       if (requestId !== sessionRequestRef.current) return
-      setSessions(nextSessions)
-      setSelectedSessionKey((current) => {
-        if (nextSessions.length === 0) return null
-        if (preserveSelection && current) {
-          const matched = nextSessions.find((session) => sessionKey(session) === current)
-          if (matched) return sessionKey(matched)
-        }
-        return sessionKey(nextSessions[0])
+      startTransition(() => {
+        setSessions(nextSessions)
+        setSelectedSessionKey((current) => {
+          if (nextSessions.length === 0) return null
+          if (preserveSelection && current) {
+            const matched = nextSessions.find((session) => sessionKey(session) === current)
+            if (matched) return sessionKey(matched)
+          }
+          return sessionKey(nextSessions[0])
+        })
       })
     } catch (err) {
       if (requestId !== sessionRequestRef.current) return
@@ -1111,7 +1141,7 @@ export default function OpenTuiApp() {
             provider: session.provider,
           }))
         : []
-      setRunningSessions(nextRunning)
+      startTransition(() => setRunningSessions(nextRunning))
     } catch {
       // Ignore runtime discovery errors; composer falls back to selected session.
     }
@@ -1128,33 +1158,35 @@ export default function OpenTuiApp() {
       if (requestId !== detailRequestRef.current) return
       const cacheKey = sessionKey(session)
       const cachedDetail = sessionDetailCacheRef.current.get(cacheKey)
-      setSessionDetail((prev) => {
-        if (
-          prev !== null &&
-          prev.rawMessages.length === detail.rawMessages.length &&
-          sessionMessageFingerprint(prev.rawMessages.at(-1)) === sessionMessageFingerprint(detail.rawMessages.at(-1)) &&
-          prev.info?.currentModel === detail.info?.currentModel &&
-          prev.info?.customTitle === detail.info?.customTitle
-        ) {
-          return prev
+      startTransition(() => {
+        setSessionDetail((prev) => {
+          if (
+            prev !== null &&
+            prev.rawMessages.length === detail.rawMessages.length &&
+            sessionMessageFingerprint(prev.rawMessages.at(-1)) === sessionMessageFingerprint(detail.rawMessages.at(-1)) &&
+            prev.info?.currentModel === detail.info?.currentModel &&
+            prev.info?.customTitle === detail.info?.customTitle
+          ) {
+            return prev
+          }
+          sessionDetailCacheRef.current.set(cacheKey, detail)
+          return detail
+        })
+        if (detail.contextUsage) {
+          sessionContextUsageCacheRef.current.set(cacheKey, detail.contextUsage)
+          if (cacheKey === selectedSessionKeyRef.current) {
+            setContextUsage(detail.contextUsage)
+            setContextUsageStatus('ready')
+          }
         }
-        sessionDetailCacheRef.current.set(cacheKey, detail)
-        return detail
       })
-      if (detail.contextUsage) {
-        sessionContextUsageCacheRef.current.set(cacheKey, detail.contextUsage)
-        if (cacheKey === selectedSessionKeyRef.current) {
-          setContextUsage(detail.contextUsage)
-          setContextUsageStatus('ready')
-        }
-      }
 
       const isRunningSession = runningSessions.some((running) =>
         running.sessionId === session.sessionId && running.provider === (session.provider ?? 'claude'),
       )
       if (session.provider === 'claude' && !isRunningSession) {
         if (cacheKey === selectedSessionKeyRef.current && !sessionContextUsageCacheRef.current.get(cacheKey)) {
-          setContextUsageStatus('unavailable')
+          startTransition(() => setContextUsageStatus('unavailable'))
         }
         return
       }
@@ -1188,56 +1220,58 @@ export default function OpenTuiApp() {
           if (metadataRequestId !== metadataRequestRef.current) return
           if (!metadata) {
             if (cacheKey === selectedSessionKeyRef.current) {
-              setContextUsageStatus('unavailable')
+              startTransition(() => setContextUsageStatus('unavailable'))
             }
             return
           }
           sessionMetadataFetchedAtRef.current.set(cacheKey, Date.now())
-          if (metadata.contextUsage) {
-            sessionContextUsageCacheRef.current.set(cacheKey, metadata.contextUsage)
-            if (cacheKey === selectedSessionKeyRef.current) {
-              setContextUsage(metadata.contextUsage)
-              setContextUsageStatus('ready')
+          startTransition(() => {
+            if (metadata.contextUsage) {
+              sessionContextUsageCacheRef.current.set(cacheKey, metadata.contextUsage)
+              if (cacheKey === selectedSessionKeyRef.current) {
+                setContextUsage(metadata.contextUsage)
+                setContextUsageStatus('ready')
+              }
             }
-          }
-          const currentModel = metadata.currentModel
-          if (currentModel) {
-            setSessionDetail((prev) => {
-              if (!prev) return prev
-              if (
-                prev.info?.sessionId
-                && prev.info.sessionId !== session.sessionId
-              ) {
-                return prev
-              }
-              if (!prev.info) return prev
-              if (prev.info.currentModel === currentModel) return prev
-              return {
-                ...prev,
-                info: {
-                  ...prev.info,
-                  currentModel,
-                },
-              }
-            })
-            const cached = sessionDetailCacheRef.current.get(cacheKey)
-            if (cached?.info) {
-              sessionDetailCacheRef.current.set(cacheKey, {
-                ...cached,
-                info: {
-                  ...cached.info,
-                  currentModel,
-                },
+            const currentModel = metadata.currentModel
+            if (currentModel) {
+              setSessionDetail((prev) => {
+                if (!prev) return prev
+                if (
+                  prev.info?.sessionId
+                  && prev.info.sessionId !== session.sessionId
+                ) {
+                  return prev
+                }
+                if (!prev.info) return prev
+                if (prev.info.currentModel === currentModel) return prev
+                return {
+                  ...prev,
+                  info: {
+                    ...prev.info,
+                    currentModel,
+                  },
+                }
               })
+              const cached = sessionDetailCacheRef.current.get(cacheKey)
+              if (cached?.info) {
+                sessionDetailCacheRef.current.set(cacheKey, {
+                  ...cached,
+                  info: {
+                    ...cached.info,
+                    currentModel,
+                  },
+                })
+              }
             }
-          }
-          if (!metadata.contextUsage && cacheKey === selectedSessionKeyRef.current) {
-            setContextUsageStatus('unavailable')
-          }
+            if (!metadata.contextUsage && cacheKey === selectedSessionKeyRef.current) {
+              setContextUsageStatus('unavailable')
+            }
+          })
         })
         .catch(() => {
           if (cacheKey === selectedSessionKeyRef.current) {
-            setContextUsageStatus('unavailable')
+            startTransition(() => setContextUsageStatus('unavailable'))
           }
         })
         .finally(() => {
@@ -1556,6 +1590,12 @@ export default function OpenTuiApp() {
       case 'git':
         setGitOpen(true)
         break
+      case 'rename':
+        if (selectedSession) {
+          setRenameSessionKey(sessionKey(selectedSession))
+          setRenameDraft(formatSessionTitle(selectedSession))
+        }
+        break
       case 'refresh':
         void refreshSessions(provider)
         if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
@@ -1569,7 +1609,7 @@ export default function OpenTuiApp() {
     tabsEnabled,
     jumpToTranscriptTail, jumpToUnreadBoundary, openTabSessions, provider, railVisible,
     refreshSessions, refreshSelectedSessionDetail, renderer, selectTabSession, selectedSessionKey,
-    selectedSessionTarget, sessions, themeMode, toggleExpansion, transcriptView,
+    selectedSession, selectedSessionTarget, sessions, themeMode, toggleExpansion, transcriptView,
   ])
 
   const cancelComposerSend = useCallback(() => {
@@ -1581,23 +1621,57 @@ export default function OpenTuiApp() {
     setComposerLiveText('')
   }, [])
 
+  // Keep the ref in sync on every render so commitRename always reads the latest draft,
+  // regardless of which version of the callback is held by onSubmit or the keyboard handler.
+  renameDraftRef.current = renameDraft
+
   const commitRename = useCallback(async () => {
     if (!renameSessionKey || !selectedSession) return
-    const trimmed = renameDraft.trim()
+    const trimmed = renameDraftRef.current.trim()
     setRenameSessionKey(null)
     setRenameDraft('')
+    renameDraftRef.current = ''
     if (!trimmed) return
-    try {
-      await fetch(buildApiUrl(`/api/sessions/${selectedSession.sessionId}`), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: trimmed, provider: selectedSession.provider }),
+    setSessions((prev) => prev.map((session) => (
+      sessionKey(session) === renameSessionKey
+        ? { ...session, customTitle: trimmed, summary: trimmed }
+        : session
+    )))
+    setOpenTabSessions((prev) => prev.map((session) => (
+      sessionKey(session) === renameSessionKey
+        ? { ...session, customTitle: trimmed, summary: trimmed }
+        : session
+    )))
+    setSessionDetail((prev) => (
+      prev && selectedSession && sessionKey(selectedSession) === renameSessionKey && prev.info
+        ? {
+            ...prev,
+            info: {
+              ...prev.info,
+              customTitle: trimmed,
+              summary: trimmed,
+            },
+          }
+        : prev
+    ))
+    const cachedDetail = sessionDetailCacheRef.current.get(renameSessionKey)
+    if (cachedDetail?.info) {
+      sessionDetailCacheRef.current.set(renameSessionKey, {
+        ...cachedDetail,
+        info: {
+          ...cachedDetail.info,
+          customTitle: trimmed,
+          summary: trimmed,
+        },
       })
+    }
+    try {
+      await patchTuiSession(selectedSession, { title: trimmed })
       void refreshSessions(provider, true, false)
     } catch {
       // rename failed silently — session list will show original title on next poll
     }
-  }, [renameSessionKey, renameDraft, selectedSession, provider, refreshSessions])
+  }, [renameSessionKey, selectedSession, provider, refreshSessions])
 
   const sendComposerMessage = useCallback(async () => {
     if (composerSendState === 'sending') return
@@ -2098,6 +2172,14 @@ export default function OpenTuiApp() {
     if (key.eventType === 'release') return
     const sequence = key.sequence || ''
     const isShifted = (char: string): boolean => key.name === char.toLowerCase() && key.shift
+    const isCtrl = (char: string): boolean => {
+      const normalized = char.toLowerCase()
+      const code = normalized.charCodeAt(0)
+      const ctrlSequence = code >= 97 && code <= 122
+        ? String.fromCharCode(code - 96)
+        : ''
+      return (key.ctrl && key.name === normalized) || sequence === ctrlSequence
+    }
     const handled = (action: () => void): void => {
       key.preventDefault()
       key.stopPropagation()
@@ -2134,7 +2216,7 @@ export default function OpenTuiApp() {
         })
         return
       }
-      if (key.name === 'q' || (key.ctrl && key.name === 'c')) {
+      if (key.name === 'q' || isCtrl('c')) {
         handled(() => {
           renderer.destroy()
           process.exit(0)
@@ -2219,7 +2301,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (key.name === 'q' || key.name === 'escape' || (key.ctrl && key.name === 'c')) {
+    if (key.name === 'q' || key.name === 'escape' || isCtrl('c')) {
       handled(() => {
         renderer.destroy()
         process.exit(0)
@@ -2235,12 +2317,12 @@ export default function OpenTuiApp() {
     }
 
     // Global git status popover
-    if (key.ctrl && key.name === 'g') {
+    if (isCtrl('g')) {
       handled(() => setGitOpen(true))
       return
     }
 
-    if (effectiveFocus === 'sessions' && key.ctrl && key.name === 'r' && selectedSession) {
+    if (showRail && isCtrl('r') && selectedSession) {
       handled(() => {
         setRenameSessionKey(sessionKey(selectedSession))
         setRenameDraft(formatSessionTitle(selectedSession))
@@ -2352,14 +2434,14 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'messages' && key.ctrl && key.name === 'd') {
+    if (effectiveFocus === 'messages' && isCtrl('d')) {
       handled(() => {
         moveViewport(1)
       })
       return
     }
 
-    if (effectiveFocus === 'messages' && key.ctrl && key.name === 'u') {
+    if (effectiveFocus === 'messages' && isCtrl('u')) {
       handled(() => {
         moveViewport(-1)
       })
@@ -2670,7 +2752,7 @@ export default function OpenTuiApp() {
                         backgroundColor={selected ? theme.surface3 : theme.surface}
                         marginBottom={density === 'comfortable' ? 1 : 0}
                       >
-                        {entry.key === renameSessionKey ? (
+                        {sessionKey(entry.session) === renameSessionKey ? (
                           <box paddingX={1} backgroundColor={theme.surface3}>
                             <input
                               focused

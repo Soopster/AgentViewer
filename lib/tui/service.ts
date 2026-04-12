@@ -20,6 +20,7 @@ import {
 import {
   listViewSessionMessages,
   listViewSessions,
+  patchViewSession,
   readViewSessionInfo,
   readViewSessionModels,
 } from '../sessionBackend'
@@ -142,4 +143,8 @@ export async function readTuiSessionDetail(session: Session): Promise<TuiSession
 
 export async function readTuiSessionMetadata(session: Session): Promise<TuiSessionMetadata> {
   return readViewSessionModels(session.sessionId, session.provider)
+}
+
+export async function patchTuiSession(session: Session, body: Record<string, unknown>): Promise<void> {
+  return patchViewSession(session.sessionId, body, session.provider)
 }
