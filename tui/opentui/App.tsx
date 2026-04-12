@@ -28,6 +28,7 @@ import {
   readTuiProvider,
   readTuiRailVisible,
   readTuiSessionDetail,
+  readTuiSessionMetadata,
   readTuiSessionReaderState,
   readTuiSessions,
   readTuiTabsEnabled,
@@ -130,6 +131,8 @@ function timeAgo(value?: string | number): string {
 const COMPOSER_HEIGHT = 3
 const TRANSCRIPT_TOP_MARGIN = 2
 const API_BASE_URL = process.env.AGENT_VIEWER_BASE_URL ?? 'http://localhost:3000'
+const CLAUDE_METADATA_REFRESH_MS = 60_000
+const DEFAULT_METADATA_REFRESH_MS = 15_000
 
 function buildApiUrl(path: string): string {
   return new URL(path, API_BASE_URL).toString()
@@ -812,12 +815,17 @@ export default function OpenTuiApp() {
   const tabSelectRef = useRef<TabSelectRenderable>(null)
   const sessionRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
+  const metadataRequestRef = useRef(0)
   const providerSwitchRef = useRef(false)
   const readerStateWriteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previousTranscriptRef = useRef<{ sessionKey: string | null; keys: string[] }>({
     sessionKey: null,
     keys: [],
   })
+  const sessionDetailCacheRef = useRef(new Map<string, TuiSessionDetail>())
+  const sessionContextUsageCacheRef = useRef(new Map<string, import('../../lib/types').ContextUsage | null>())
+  const sessionMetadataFetchedAtRef = useRef(new Map<string, number>())
+  const sessionMetadataInFlightRef = useRef(new Set<string>())
   const composerAbortRef = useRef<AbortController | null>(null)
   const loadingDetailRef = useRef(false)
   useEffect(() => {
@@ -833,7 +841,11 @@ export default function OpenTuiApp() {
   }, [composerActive])
 
   useEffect(() => {
-    setContextUsage(null)
+    if (!selectedSessionKey) {
+      setContextUsage(null)
+    } else {
+      setContextUsage(sessionContextUsageCacheRef.current.get(selectedSessionKey) ?? null)
+    }
     setRenameSessionKey(null)
     setRenameDraft('')
   }, [selectedSessionKey])
@@ -1098,12 +1110,15 @@ export default function OpenTuiApp() {
   const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
     if (!foreground && loadingDetailRef.current) return
     const requestId = ++detailRequestRef.current
+    const metadataRequestId = ++metadataRequestRef.current
     if (foreground) setLoadingDetail(true)
     setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
 
     try {
       const detail = await readTuiSessionDetail(session)
       if (requestId !== detailRequestRef.current) return
+      const cacheKey = sessionKey(session)
+      const cachedDetail = sessionDetailCacheRef.current.get(cacheKey)
       setSessionDetail((prev) => {
         if (
           prev !== null &&
@@ -1114,9 +1129,78 @@ export default function OpenTuiApp() {
         ) {
           return prev
         }
+        sessionDetailCacheRef.current.set(cacheKey, detail)
         return detail
       })
-      if (detail.contextUsage) setContextUsage(detail.contextUsage)
+      if (detail.contextUsage) {
+        sessionContextUsageCacheRef.current.set(cacheKey, detail.contextUsage)
+        setContextUsage(detail.contextUsage)
+      }
+
+      const isRunningSession = runningSessions.some((running) =>
+        running.sessionId === session.sessionId && running.provider === (session.provider ?? 'claude'),
+      )
+      if (session.provider === 'claude' && !isRunningSession) return
+
+      const metadataTtl = session.provider === 'claude'
+        ? CLAUDE_METADATA_REFRESH_MS
+        : DEFAULT_METADATA_REFRESH_MS
+      const lastMetadataFetch = sessionMetadataFetchedAtRef.current.get(cacheKey) ?? 0
+      const hasCachedMetadata = Boolean(
+        sessionContextUsageCacheRef.current.get(cacheKey)
+        || cachedDetail?.info?.currentModel
+        || detail.info?.currentModel,
+      )
+      const shouldFetchMetadata = !sessionMetadataInFlightRef.current.has(cacheKey) && (
+        !hasCachedMetadata || Date.now() - lastMetadataFetch >= metadataTtl
+      )
+      if (!shouldFetchMetadata) return
+
+      sessionMetadataInFlightRef.current.add(cacheKey)
+      void readTuiSessionMetadata(session)
+        .then((metadata) => {
+          if (metadataRequestId !== metadataRequestRef.current) return
+          sessionMetadataFetchedAtRef.current.set(cacheKey, Date.now())
+          if (metadata.contextUsage) {
+            sessionContextUsageCacheRef.current.set(cacheKey, metadata.contextUsage)
+            setContextUsage(metadata.contextUsage)
+          }
+          const currentModel = metadata.currentModel
+          if (currentModel) {
+            setSessionDetail((prev) => {
+              if (!prev) return prev
+              if (
+                prev.info?.sessionId
+                && prev.info.sessionId !== session.sessionId
+              ) {
+                return prev
+              }
+              if (!prev.info) return prev
+              if (prev.info.currentModel === currentModel) return prev
+              return {
+                ...prev,
+                info: {
+                  ...prev.info,
+                  currentModel,
+                },
+              }
+            })
+            const cached = sessionDetailCacheRef.current.get(cacheKey)
+            if (cached?.info) {
+              sessionDetailCacheRef.current.set(cacheKey, {
+                ...cached,
+                info: {
+                  ...cached.info,
+                  currentModel,
+                },
+              })
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          sessionMetadataInFlightRef.current.delete(cacheKey)
+        })
     } catch (err) {
       if (requestId !== detailRequestRef.current) return
       setSessionDetail(null)
@@ -1124,7 +1208,7 @@ export default function OpenTuiApp() {
     } finally {
       if (requestId === detailRequestRef.current && foreground) setLoadingDetail(false)
     }
-  }, [])
+  }, [runningSessions])
 
   const jumpToTranscriptIndex = useCallback((index: number) => {
     if (transcriptCards.length === 0) return
@@ -1643,7 +1727,8 @@ export default function OpenTuiApp() {
       return
     }
 
-    setSessionDetail(null)
+    const cachedDetail = sessionDetailCacheRef.current.get(sessionKey(selectedSessionTarget)) ?? null
+    setSessionDetail(cachedDetail)
     void refreshSelectedSessionDetail(selectedSessionTarget, true)
   }, [bootstrapped, refreshSelectedSessionDetail, selectedSessionIdentity, selectedSessionTarget])
 

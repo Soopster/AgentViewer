@@ -21,8 +21,9 @@ import {
   listViewSessionMessages,
   listViewSessions,
   readViewSessionInfo,
+  readViewSessionModels,
 } from '../sessionBackend'
-import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage } from '../types'
+import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 
 const DEFAULT_SESSION_LIMIT = 200
@@ -32,6 +33,12 @@ export type TuiSessionDetail = {
   info: SessionInfo | null
   rawMessages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
+  contextUsage: ContextUsage | null
+}
+
+export type TuiSessionMetadata = {
+  models: SessionModelInfo[]
+  currentModel: string | null
   contextUsage: ContextUsage | null
 }
 
@@ -127,4 +134,8 @@ export async function readTuiSessionDetail(session: Session): Promise<TuiSession
     threadedMessages: buildThreadedMessages(messages),
     contextUsage: null,
   }
+}
+
+export async function readTuiSessionMetadata(session: Session): Promise<TuiSessionMetadata> {
+  return readViewSessionModels(session.sessionId, session.provider)
 }
