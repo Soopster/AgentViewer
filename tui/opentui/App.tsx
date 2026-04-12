@@ -1219,13 +1219,15 @@ export default function OpenTuiApp() {
       ])
         .then((metadata) => {
           if (metadataRequestId !== metadataRequestRef.current) return
+          // Stamp the fetch time regardless of outcome so the TTL prevents
+          // hammering the SDK on every poll when context usage is unavailable.
+          sessionMetadataFetchedAtRef.current.set(cacheKey, Date.now())
           if (!metadata) {
             if (cacheKey === selectedSessionKeyRef.current) {
               startTransition(() => setContextUsageStatus('unavailable'))
             }
             return
           }
-          sessionMetadataFetchedAtRef.current.set(cacheKey, Date.now())
           startTransition(() => {
             if (metadata.contextUsage) {
               sessionContextUsageCacheRef.current.set(cacheKey, metadata.contextUsage)
