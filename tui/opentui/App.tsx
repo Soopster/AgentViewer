@@ -133,6 +133,7 @@ const TRANSCRIPT_TOP_MARGIN = 2
 const API_BASE_URL = process.env.AGENT_VIEWER_BASE_URL ?? 'http://localhost:3000'
 const CLAUDE_METADATA_REFRESH_MS = 60_000
 const DEFAULT_METADATA_REFRESH_MS = 15_000
+const METADATA_REQUEST_TIMEOUT_MS = 4_000
 
 function buildApiUrl(path: string): string {
   return new URL(path, API_BASE_URL).toString()
@@ -794,6 +795,7 @@ export default function OpenTuiApp() {
     state: null,
   })
   const [contextUsage, setContextUsage] = useState<import('../../lib/types').ContextUsage | null>(null)
+  const [contextUsageStatus, setContextUsageStatus] = useState<'idle' | 'loading' | 'unavailable' | 'ready'>('idle')
   const [renameSessionKey, setRenameSessionKey] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [composerActive, setComposerActive] = useState(false)
@@ -828,6 +830,7 @@ export default function OpenTuiApp() {
   const sessionMetadataInFlightRef = useRef(new Set<string>())
   const composerAbortRef = useRef<AbortController | null>(null)
   const loadingDetailRef = useRef(false)
+  const selectedSessionKeyRef = useRef<string | null>(null)
   useEffect(() => {
     setActiveTheme(themeMode)
   }, [themeMode])
@@ -837,14 +840,21 @@ export default function OpenTuiApp() {
   }, [loadingDetail])
 
   useEffect(() => {
+    selectedSessionKeyRef.current = selectedSessionKey
+  }, [selectedSessionKey])
+
+  useEffect(() => {
     if (composerActive) setFocusedPane('messages')
   }, [composerActive])
 
   useEffect(() => {
     if (!selectedSessionKey) {
       setContextUsage(null)
+      setContextUsageStatus('idle')
     } else {
-      setContextUsage(sessionContextUsageCacheRef.current.get(selectedSessionKey) ?? null)
+      const cachedUsage = sessionContextUsageCacheRef.current.get(selectedSessionKey) ?? null
+      setContextUsage(cachedUsage)
+      setContextUsageStatus(cachedUsage ? 'ready' : 'idle')
     }
     setRenameSessionKey(null)
     setRenameDraft('')
@@ -1110,7 +1120,6 @@ export default function OpenTuiApp() {
   const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
     if (!foreground && loadingDetailRef.current) return
     const requestId = ++detailRequestRef.current
-    const metadataRequestId = ++metadataRequestRef.current
     if (foreground) setLoadingDetail(true)
     setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
 
@@ -1134,13 +1143,16 @@ export default function OpenTuiApp() {
       })
       if (detail.contextUsage) {
         sessionContextUsageCacheRef.current.set(cacheKey, detail.contextUsage)
-        setContextUsage(detail.contextUsage)
+        if (cacheKey === selectedSessionKeyRef.current) {
+          setContextUsage(detail.contextUsage)
+          setContextUsageStatus('ready')
+        }
       }
 
       const isRunningSession = runningSessions.some((running) =>
         running.sessionId === session.sessionId && running.provider === (session.provider ?? 'claude'),
       )
-      if (session.provider === 'claude' && !isRunningSession) return
+      if (session.provider === 'claude' && !foreground && !isRunningSession) return
 
       const metadataTtl = session.provider === 'claude'
         ? CLAUDE_METADATA_REFRESH_MS
@@ -1156,14 +1168,32 @@ export default function OpenTuiApp() {
       )
       if (!shouldFetchMetadata) return
 
+      const metadataRequestId = ++metadataRequestRef.current
       sessionMetadataInFlightRef.current.add(cacheKey)
-      void readTuiSessionMetadata(session)
+      if (cacheKey === selectedSessionKeyRef.current) {
+        setContextUsageStatus('loading')
+      }
+      void Promise.race([
+        readTuiSessionMetadata(session),
+        new Promise<null>((resolve) => {
+          setTimeout(() => resolve(null), METADATA_REQUEST_TIMEOUT_MS)
+        }),
+      ])
         .then((metadata) => {
           if (metadataRequestId !== metadataRequestRef.current) return
+          if (!metadata) {
+            if (cacheKey === selectedSessionKeyRef.current) {
+              setContextUsageStatus('unavailable')
+            }
+            return
+          }
           sessionMetadataFetchedAtRef.current.set(cacheKey, Date.now())
           if (metadata.contextUsage) {
             sessionContextUsageCacheRef.current.set(cacheKey, metadata.contextUsage)
-            setContextUsage(metadata.contextUsage)
+            if (cacheKey === selectedSessionKeyRef.current) {
+              setContextUsage(metadata.contextUsage)
+              setContextUsageStatus('ready')
+            }
           }
           const currentModel = metadata.currentModel
           if (currentModel) {
@@ -1196,8 +1226,15 @@ export default function OpenTuiApp() {
               })
             }
           }
+          if (!metadata.contextUsage && cacheKey === selectedSessionKeyRef.current) {
+            setContextUsageStatus('unavailable')
+          }
         })
-        .catch(() => {})
+        .catch(() => {
+          if (cacheKey === selectedSessionKeyRef.current) {
+            setContextUsageStatus('unavailable')
+          }
+        })
         .finally(() => {
           sessionMetadataInFlightRef.current.delete(cacheKey)
         })
@@ -2715,6 +2752,14 @@ export default function OpenTuiApp() {
                 {fitText(renderContextBar(contextUsage.totalTokens, contextUsage.maxTokens, contextUsage.percentage), rightPaneWidth - 4)}
               </text>
             </box>
+          ) : !focusMode && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
+            <box paddingX={1}>
+              <text fg={theme.dim}>{fitText('Loading context usage…', rightPaneWidth - 4)}</text>
+            </box>
+          ) : !focusMode && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
+            <box paddingX={1}>
+              <text fg={theme.dim}>{fitText('Context usage unavailable', rightPaneWidth - 4)}</text>
+            </box>
           ) : null}
 
           {error ? (
@@ -2792,7 +2837,11 @@ export default function OpenTuiApp() {
                   const isDiff = card.category === 'diff'
                   const isSystem = card.category === 'system'
                   const categoryEmoji = isInsight ? '✨ ' : isTechnical ? '🔧 ' : isDiff ? '✏️ ' : isSystem ? '⚙️ ' : ''
-                  const cardTitleFull = `${marker} ${categoryEmoji}${card.label}  ${headerMeta}`
+                  const titleMeta = joinMeta([
+                    headerMeta,
+                    isSelected ? card.usageSummary ?? null : null,
+                  ])
+                  const cardTitleFull = `${marker} ${categoryEmoji}${card.label}${titleMeta ? `  ${titleMeta}` : ''}`
                   const cardTitle = cardTitleFull.length > maxTitleWidth
                     ? cardTitleFull.slice(0, maxTitleWidth - 1) + '…'
                     : cardTitleFull

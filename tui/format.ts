@@ -367,6 +367,7 @@ export type TuiTranscriptCard = {
   category: TuiTranscriptCardCategory
   autoFold: boolean
   compactSummary: string
+  usageSummary?: string
   timestamp?: string
   timestampMs?: number
   dayKey?: string
@@ -432,6 +433,23 @@ function compactAutoFoldLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCard
     normalized[0],
     line(`… ${normalized.length - 1} more`, 'dim'),
   ]
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function formatUsageSummary(message: ThreadedMessage): string | undefined {
+  if (!message.usage) return undefined
+  const parts = [
+    `${fmtTokens(message.usage.input_tokens)}↑`,
+    `${fmtTokens(message.usage.output_tokens)}↓`,
+  ]
+  const cacheRead = message.usage.cache_read_input_tokens ?? 0
+  if (cacheRead > 0) parts.push(`⚡${fmtTokens(cacheRead)}`)
+  return parts.join(' ')
 }
 
 const INSIGHT_RE = /`★\s*Insight\s*─+`/
@@ -524,6 +542,7 @@ export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiD
       category,
       autoFold,
       compactSummary,
+      usageSummary: formatUsageSummary(message),
       timestamp: message.timestamp ? formatTimestamp(message.timestamp) : undefined,
       timestampMs: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.getTime() : undefined,
       dayKey: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.toISOString().slice(0, 10) : undefined,
