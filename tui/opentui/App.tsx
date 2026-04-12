@@ -1184,11 +1184,12 @@ export default function OpenTuiApp() {
       const isRunningSession = runningSessions.some((running) =>
         running.sessionId === session.sessionId && running.provider === (session.provider ?? 'claude'),
       )
+      // For non-running Claude sessions that already have cached context usage, skip the
+      // metadata fetch — the usage won't change once the session is complete.
+      // Do NOT set 'unavailable' here: the session may be running outside the server
+      // (e.g. via CLI), or we just haven't fetched yet. Let the TTL path below handle it.
       if (session.provider === 'claude' && !isRunningSession) {
-        if (cacheKey === selectedSessionKeyRef.current && !sessionContextUsageCacheRef.current.get(cacheKey)) {
-          startTransition(() => setContextUsageStatus('unavailable'))
-        }
-        return
+        if (sessionContextUsageCacheRef.current.get(cacheKey)) return
       }
 
       const metadataTtl = session.provider === 'claude'
