@@ -393,6 +393,24 @@ function sessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
   return `${session.provider ?? 'claude'}:${session.sessionId}`
 }
 
+function sessionMessageFingerprint(message: import('../../lib/types').SessionMessage | undefined): string | null {
+  if (!message) return null
+  let payload = ''
+  try {
+    payload = JSON.stringify(message.message)
+  } catch {
+    payload = String(message.message)
+  }
+  return [
+    message.type,
+    message.uuid,
+    message.timestamp ?? '',
+    message.turnId ?? '',
+    message.origin?.kind ?? '',
+    payload,
+  ].join('|')
+}
+
 type SidebarEntry =
   | { type: 'project'; key: string; projectName: string; count: number }
   | { type: 'session'; key: string; session: Session; absoluteIndex: number }
@@ -801,9 +819,14 @@ export default function OpenTuiApp() {
     keys: [],
   })
   const composerAbortRef = useRef<AbortController | null>(null)
+  const loadingDetailRef = useRef(false)
   useEffect(() => {
     setActiveTheme(themeMode)
   }, [themeMode])
+
+  useEffect(() => {
+    loadingDetailRef.current = loadingDetail
+  }, [loadingDetail])
 
   useEffect(() => {
     if (composerActive) setFocusedPane('messages')
@@ -818,7 +841,7 @@ export default function OpenTuiApp() {
   const theme = getThemePalette(themeMode)
   const syntaxStyle = useMemo(() => buildSyntaxStyle(theme), [themeMode])
   const densityState = densityConfig(density)
-  const showRail = !focusMode && railVisible
+  const showRail = railVisible
   const effectiveFocus: PaneFocus = showRail ? focusedPane : 'messages'
   const selectedIndex = useMemo(() => {
     if (sessions.length === 0) return -1
@@ -1073,6 +1096,7 @@ export default function OpenTuiApp() {
   }, [])
 
   const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
+    if (!foreground && loadingDetailRef.current) return
     const requestId = ++detailRequestRef.current
     if (foreground) setLoadingDetail(true)
     setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
@@ -1084,7 +1108,7 @@ export default function OpenTuiApp() {
         if (
           prev !== null &&
           prev.rawMessages.length === detail.rawMessages.length &&
-          prev.rawMessages.at(-1)?.uuid === detail.rawMessages.at(-1)?.uuid &&
+          sessionMessageFingerprint(prev.rawMessages.at(-1)) === sessionMessageFingerprint(detail.rawMessages.at(-1)) &&
           prev.info?.currentModel === detail.info?.currentModel &&
           prev.info?.customTitle === detail.info?.customTitle
         ) {
