@@ -7,12 +7,16 @@ const TUI_STATE_FILE = path.join(process.cwd(), '.agent-viewer-data', 'tui.json'
 type TuiState = {
   theme?: unknown
   railVisible?: unknown
+  sidebarWidth?: unknown
   focusMode?: unknown
   density?: unknown
   transcriptView?: unknown
   tabsEnabled?: unknown
+  sidebarSort?: unknown
   sessionReaderState?: unknown
 }
+
+export type TuiSidebarSort = 'project' | 'time'
 
 export type TuiSessionReaderState = {
   followTail: boolean
@@ -77,6 +81,17 @@ export async function setConfiguredTuiRailVisible(railVisible: boolean): Promise
   await writeTuiState({ railVisible })
 }
 
+export async function getConfiguredTuiSidebarWidth(): Promise<number> {
+  const parsed = await readTuiState()
+  return typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth)
+    ? Math.max(28, Math.round(parsed.sidebarWidth))
+    : 32
+}
+
+export async function setConfiguredTuiSidebarWidth(sidebarWidth: number): Promise<void> {
+  await writeTuiState({ sidebarWidth: Math.max(28, Math.round(sidebarWidth)) })
+}
+
 export async function getConfiguredTuiFocusMode(): Promise<boolean> {
   const parsed = await readTuiState()
   return parsed.focusMode === true
@@ -112,6 +127,15 @@ export async function getConfiguredTuiTabsEnabled(): Promise<boolean> {
 
 export async function setConfiguredTuiTabsEnabled(tabsEnabled: boolean): Promise<void> {
   await writeTuiState({ tabsEnabled })
+}
+
+export async function getConfiguredTuiSidebarSort(): Promise<TuiSidebarSort> {
+  const parsed = await readTuiState()
+  return parsed.sidebarSort === 'time' ? 'time' : 'project'
+}
+
+export async function setConfiguredTuiSidebarSort(sidebarSort: TuiSidebarSort): Promise<void> {
+  await writeTuiState({ sidebarSort })
 }
 
 export async function getConfiguredTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {

@@ -288,7 +288,27 @@ async function listClaudeSessions({ limit, offset, dir, includeWorktrees }: List
     dir,
     includeWorktrees: dir ? includeWorktrees : undefined,
   })
-  return sessions.map((session) => ({
+  const normalized = await Promise.all(
+    sessions.map(async (session) => {
+      try {
+        const info = await getSessionInfo(session.sessionId, {
+          dir: typeof session.cwd === 'string' && session.cwd ? session.cwd : dir,
+        })
+        if (!info) return session
+        return {
+          ...session,
+          ...info,
+          // Keep the list-level working directory when the single-session lookup
+          // can't resolve one, but prefer the stable per-session metadata.
+          cwd: info.cwd ?? session.cwd,
+        }
+      } catch {
+        return session
+      }
+    }),
+  )
+
+  return normalized.map((session) => ({
     ...session,
     provider: 'claude',
     capabilities: getProviderCapabilities('claude'),

@@ -32,6 +32,8 @@ import {
   readTuiSessionMetadata,
   readTuiSessionReaderState,
   readTuiSessions,
+  readTuiSidebarSort,
+  readTuiSidebarWidth,
   readTuiTabsEnabled,
   readTuiTheme,
   readTuiTranscriptView,
@@ -40,10 +42,13 @@ import {
   writeTuiProvider,
   writeTuiRailVisible,
   writeTuiSessionReaderState,
+  writeTuiSidebarSort,
+  writeTuiSidebarWidth,
   writeTuiTabsEnabled,
   writeTuiTheme,
   writeTuiTranscriptView,
   type TuiSessionDetail,
+  type TuiSidebarSort,
 } from '../../lib/tui/service'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { ProviderSelection, RunningSessionRef, SendState, Session } from '../../lib/types'
@@ -65,6 +70,10 @@ const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
 const DETAIL_REFRESH_MS = 2000
 const RUNNING_SESSION_REFRESH_MS = 1500
+const DEFAULT_SIDEBAR_WIDTH = 32
+const SIDEBAR_RESIZE_STEP = 2
+const MIN_SIDEBAR_WIDTH = 28
+const MIN_READER_WIDTH = 40
 
 type PaneFocus = 'sessions' | 'messages'
 
@@ -428,9 +437,40 @@ type SidebarEntry =
   | { type: 'project'; key: string; projectName: string; count: number }
   | { type: 'session'; key: string; session: Session; absoluteIndex: number }
 
-function buildSidebarEntries(sessions: Session[]): SidebarEntry[] {
-  // Group sessions by project, preserving time-sort order within each group.
-  // Groups are ordered by the earliest (most recent) session they contain.
+function buildSidebarEntries(sessions: Session[], sort: TuiSidebarSort): SidebarEntry[] {
+  const entries: SidebarEntry[] = []
+
+  if (sort === 'time') {
+    // Sessions stay in global time-sort order. A project header is injected before
+    // each run of consecutive sessions that share a project name.
+    let prevProject = ''
+    for (let i = 0; i < sessions.length; i++) {
+      const session = sessions[i]
+      const projectName = formatSessionProject(session).toUpperCase()
+      if (projectName !== prevProject) {
+        // Measure the length of this consecutive run so the header can show a count.
+        let run = 1
+        while (
+          i + run < sessions.length
+          && formatSessionProject(sessions[i + run]).toUpperCase() === projectName
+        ) run++
+        // Key includes the absolute index so the same project appearing multiple
+        // times in time-order gets distinct keys (required by the reconciler).
+        entries.push({ type: 'project', key: `project:${projectName}:${i}`, projectName, count: run })
+        prevProject = projectName
+      }
+      entries.push({
+        type: 'session',
+        key: `session:${session.provider ?? 'claude'}:${session.sessionId}`,
+        session,
+        absoluteIndex: i,
+      })
+    }
+    return entries
+  }
+
+  // 'project' mode: group sessions by project, preserving time-sort order within each
+  // group. Groups are ordered by the most-recently modified session they contain.
   const groupOrder: string[] = []
   const groups = new Map<string, Array<{ session: Session; absoluteIndex: number }>>()
   sessions.forEach((session, absoluteIndex) => {
@@ -442,7 +482,6 @@ function buildSidebarEntries(sessions: Session[]): SidebarEntry[] {
     groups.get(projectName)!.push({ session, absoluteIndex })
   })
 
-  const entries: SidebarEntry[] = []
   for (const projectName of groupOrder) {
     const members = groups.get(projectName)!
     entries.push({ type: 'project', key: `project:${projectName}`, projectName, count: members.length })
@@ -684,6 +723,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
   { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
+  { id: 'sort',       label: 'Toggle sidebar sort',    key: 'S',  category: 'Session'    },
   // Tabs
   { id: 'tab-toggle', label: 'Toggle tab bar',         key: 'b',  category: 'Tabs'       },
   { id: 'tab-prev',   label: 'Previous tab',           key: '←',  category: 'Tabs'       },
@@ -766,6 +806,8 @@ export default function OpenTuiApp() {
   const [focusMode, setFocusMode] = useState(false)
   const [railVisible, setRailVisible] = useState(true)
   const [tabsEnabled, setTabsEnabled] = useState(true)
+  const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
+  const [sidebarWidthPreference, setSidebarWidthPreference] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [sessions, setSessions] = useState<Session[]>([])
   const [runningSessions, setRunningSessions] = useState<RunningSessionRef[]>([])
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null)
@@ -994,20 +1036,24 @@ export default function OpenTuiApp() {
     [resolvedExpandedKeys, transcriptCards],
   )
   const sidebarEntries = useMemo(
-    () => buildSidebarEntries(sessions),
-    [sessions],
+    () => buildSidebarEntries(sessions, sidebarSort),
+    [sessions, sidebarSort],
   )
+  const sidebarSortLabel = sidebarSort === 'project' ? 'PROJECT' : 'TIME'
   const selectedSidebarEntryIndex = useMemo(() => {
     const idx = sidebarEntries.findIndex((e) => e.type === 'session' && e.absoluteIndex === selectedIndex)
     return idx >= 0 ? idx : 0
   }, [sidebarEntries, selectedIndex])
   const mainContentHeight = Math.max(height - 3 - (searchMode ? 3 : 1) - COMPOSER_HEIGHT, 8)
-  const sidebarWidth = showRail ? clamp(Math.floor((width - 4) * 0.27), 28, 40) : 0
+  const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - 4 - 1 - MIN_READER_WIDTH)
+  const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
 
   const showTabs = tabsEnabled && openTabSessions.length > 0
+  const isPreviewMode = tabsEnabled && !!selectedSessionKey && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
+  const showPreviewBar = isPreviewMode && !showTabs
   const TAB_BAR_HEIGHT = 1
-  const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7) - (showTabs ? TAB_BAR_HEIGHT : 0), 8)
+  const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7) - (showTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0), 8)
 
   const activeTabIndex = useMemo(() => {
     if (!selectedSessionKey) return -1
@@ -1032,6 +1078,17 @@ export default function OpenTuiApp() {
   }, [rightPaneWidth, openTabSessions.length])
   const sidebarRowBudget = Math.max(mainContentHeight - 7, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
+  const sidebarSortHeader = useMemo(
+    () => fitText(
+      joinMeta([
+        `SESSIONS ${Math.max(sessions.length, 0)}`,
+        `sort ${sidebarSortLabel}`,
+        'S toggle',
+      ]),
+      Math.max(sidebarInnerWidth - 2, 12),
+    ),
+    [sidebarInnerWidth, sidebarSortLabel, sessions.length],
+  )
 
   // Stable per-card data: body lines, diffs, code blocks. Does NOT depend on landmark
   // indices (resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount) so scrolling and
@@ -1184,6 +1241,16 @@ export default function OpenTuiApp() {
       const isRunningSession = runningSessions.some((running) =>
         running.sessionId === session.sessionId && running.provider === (session.provider ?? 'claude'),
       )
+      const isPreviewingSession = tabsEnabled
+        && !openTabSessions.some((openSession) => sessionKey(openSession) === cacheKey)
+
+      // Preview should be read-only. Claude metadata is fetched through a control
+      // query, which can update the session's filesystem mtime and make a previewed
+      // session jump to the top of the sidebar as if it was edited.
+      if (session.provider === 'claude' && isPreviewingSession) {
+        return
+      }
+
       // For non-running Claude sessions that already have cached context usage, skip the
       // metadata fetch — the usage won't change once the session is complete.
       // Do NOT set 'unavailable' here: the session may be running outside the server
@@ -1287,7 +1354,7 @@ export default function OpenTuiApp() {
     } finally {
       if (requestId === detailRequestRef.current && foreground) setLoadingDetail(false)
     }
-  }, [runningSessions])
+  }, [openTabSessions, runningSessions, tabsEnabled])
 
   const jumpToTranscriptIndex = useCallback((index: number) => {
     if (transcriptCards.length === 0) return
@@ -1327,11 +1394,17 @@ export default function OpenTuiApp() {
 
   const moveSelection = useCallback((delta: number) => {
     if (sessions.length === 0) return
-    const currentIndex = selectedIndex >= 0 ? selectedIndex : 0
-    const nextIndex = clamp(currentIndex + delta, 0, sessions.length - 1)
-    setSelectedSessionKey(sessionKey(sessions[nextIndex]))
-    setError(null)
-  }, [selectedIndex, sessions])
+    // Navigate in sidebar visual order (grouped by project), not raw time-sort order.
+    const sessionEntries = sidebarEntries.filter((e): e is Extract<SidebarEntry, { type: 'session' }> => e.type === 'session')
+    if (sessionEntries.length === 0) return
+    const currentPos = sessionEntries.findIndex((e) => e.absoluteIndex === (selectedIndex >= 0 ? selectedIndex : 0))
+    const nextPos = clamp((currentPos >= 0 ? currentPos : 0) + delta, 0, sessionEntries.length - 1)
+    const nextEntry = sessionEntries[nextPos]
+    if (nextEntry) {
+      setSelectedSessionKey(sessionKey(nextEntry.session))
+      setError(null)
+    }
+  }, [selectedIndex, sessions.length, sidebarEntries])
 
   const moveCursor = useCallback((delta: number) => {
     if (transcriptCards.length === 0) return
@@ -1599,6 +1672,12 @@ export default function OpenTuiApp() {
           setRenameDraft(formatSessionTitle(selectedSession))
         }
         break
+      case 'sort': {
+        const next: TuiSidebarSort = sidebarSort === 'project' ? 'time' : 'project'
+        setSidebarSort(next)
+        void writeTuiSidebarSort(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store sidebar sort'))
+        break
+      }
       case 'refresh':
         void refreshSessions(provider)
         if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
@@ -1609,7 +1688,7 @@ export default function OpenTuiApp() {
     }
   }, [
     activeTabIndex, closeCommandPalette, density, focusMode, focusedPane, jumpToResumeMarker,
-    tabsEnabled,
+    tabsEnabled, sidebarSort,
     jumpToTranscriptTail, jumpToUnreadBoundary, openTabSessions, provider, railVisible,
     refreshSessions, refreshSelectedSessionDetail, renderer, selectTabSession, selectedSessionKey,
     selectedSession, selectedSessionTarget, sessions, themeMode, toggleExpansion, transcriptView,
@@ -1801,6 +1880,8 @@ export default function OpenTuiApp() {
           configuredDensity,
           configuredTranscriptView,
           configuredTabsEnabled,
+          configuredSidebarSort,
+          configuredSidebarWidth,
         ] = await Promise.all([
           readTuiTheme(),
           readTuiProvider(),
@@ -1809,6 +1890,8 @@ export default function OpenTuiApp() {
           readTuiDensity(),
           readTuiTranscriptView(),
           readTuiTabsEnabled(),
+          readTuiSidebarSort(),
+          readTuiSidebarWidth(),
         ])
         if (cancelled) return
         setThemeMode(configuredTheme)
@@ -1819,6 +1902,8 @@ export default function OpenTuiApp() {
         setDensity(configuredDensity)
         setTranscriptView(configuredTranscriptView)
         setTabsEnabled(configuredTabsEnabled)
+        setSidebarSort(configuredSidebarSort)
+        setSidebarWidthPreference(configuredSidebarWidth)
         if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
         await Promise.all([
           refreshSessions(configuredProvider, false, true),
@@ -2093,10 +2178,10 @@ export default function OpenTuiApp() {
     setSearchMatchIndex((current) => clamp(current, 0, searchMatches.length - 1))
   }, [searchMatches.length])
 
-  // Add newly selected session to open tabs (if not already present).
+  // Promote the currently-previewed session to a real open tab.
   // We use the full `selectedSession` object so tabs retain provider context
   // even when the user later switches to a different provider.
-  useEffect(() => {
+  const promotePreviewToTab = useCallback(() => {
     if (!selectedSession) return
     const key = sessionKey(selectedSession)
     setOpenTabSessions((current) => {
@@ -2170,6 +2255,15 @@ export default function OpenTuiApp() {
   const composerTargetMessage = composerAutoTargetingRunning && composerTargetSession
     ? `Auto-targeting running ${String(composerTargetSession.provider ?? 'claude').toUpperCase()} session ${composerTargetSession.sessionId.slice(-8)}`
     : null
+
+  const resizeSidebar = useCallback((delta: number) => {
+    const nextWidth = clamp(sidebarWidth + delta, MIN_SIDEBAR_WIDTH, maxSidebarWidth)
+    if (nextWidth === sidebarWidth) return
+    setSidebarWidthPreference(nextWidth)
+    void writeTuiSidebarWidth(nextWidth).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store sidebar width')
+    })
+  }, [maxSidebarWidth, sidebarWidth])
 
   useKeyboard((key) => {
     if (key.eventType === 'release') return
@@ -2314,7 +2408,9 @@ export default function OpenTuiApp() {
 
     if (key.name === 'tab' && showRail) {
       handled(() => {
-        setFocusedPane((current) => current === 'sessions' ? 'messages' : 'sessions')
+        const next: PaneFocus = focusedPane === 'sessions' ? 'messages' : 'sessions'
+        if (next === 'messages') promotePreviewToTab()
+        setFocusedPane(next)
       })
       return
     }
@@ -2349,15 +2445,47 @@ export default function OpenTuiApp() {
 
     if (effectiveFocus === 'sessions' && key.name === 'g' && !key.shift) {
       handled(() => {
-        if (sessions[0]) setSelectedSessionKey(sessionKey(sessions[0]))
+        const first = sidebarEntries.find((e): e is Extract<SidebarEntry, { type: 'session' }> => e.type === 'session')
+        if (first) setSelectedSessionKey(sessionKey(first.session))
       })
       return
     }
 
     if (effectiveFocus === 'sessions' && isShifted('G')) {
       handled(() => {
-        const last = sessions.at(-1)
-        if (last) setSelectedSessionKey(sessionKey(last))
+        const last = [...sidebarEntries].reverse().find((e): e is Extract<SidebarEntry, { type: 'session' }> => e.type === 'session')
+        if (last) setSelectedSessionKey(sessionKey(last.session))
+      })
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && isShifted('S')) {
+      handled(() => {
+        const next: TuiSidebarSort = sidebarSort === 'project' ? 'time' : 'project'
+        setSidebarSort(next)
+        void writeTuiSidebarSort(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store sidebar sort'))
+      })
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && sequence === '[') {
+      handled(() => {
+        resizeSidebar(-SIDEBAR_RESIZE_STEP)
+      })
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && sequence === ']') {
+      handled(() => {
+        resizeSidebar(SIDEBAR_RESIZE_STEP)
+      })
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && key.name === 'return') {
+      handled(() => {
+        promotePreviewToTab()
+        setFocusedPane('messages')
       })
       return
     }
@@ -2681,6 +2809,15 @@ export default function OpenTuiApp() {
     ),
     [selectedSession, readerModel, width],
   )
+  const previewBarText = useMemo(
+    () => selectedSession
+      ? fitText(
+          `${formatSessionTitle(selectedSession)}  ·  preview  ·  ↵ open  ·  tab focus`,
+          Math.max(rightPaneWidth - 2, 16),
+        )
+      : '',
+    [rightPaneWidth, selectedSession],
+  )
 
   const providerOptions = PROVIDER_SELECT_OPTIONS
   const providerAccent = getProviderAccent(provider)
@@ -2697,10 +2834,10 @@ export default function OpenTuiApp() {
             borderColor={effectiveFocus === 'sessions' ? theme.border2 : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
-            title={`SESSIONS  ${Math.max(sessions.length, 0)}`}
+            title={sidebarSortHeader}
           >
-            <box paddingX={1} paddingTop={1}>
-              <text fg={theme.cyan}>{fitText('tab focus  h hide rails  / search', sidebarInnerWidth)}</text>
+            <box paddingX={1} paddingTop={1} paddingBottom={1}>
+              <text fg={theme.cyan}>{fitText('tab focus  h hide rails  [ ] resize  / search', sidebarInnerWidth)}</text>
             </box>
             <box flexGrow={1} paddingX={1} paddingBottom={1}>
               {loadingSessions && sessions.length === 0 ? (
@@ -2813,6 +2950,10 @@ export default function OpenTuiApp() {
                   if (tab) selectTabSession(tab)
                 }}
               />
+            </box>
+          ) : showPreviewBar && selectedSession ? (
+            <box paddingX={1} backgroundColor={theme.surface2}>
+              <text fg={theme.cyan} wrapMode="none">{previewBarText}</text>
             </box>
           ) : null}
 
