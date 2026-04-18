@@ -3,15 +3,33 @@ import path from 'node:path'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../tui/theme'
 
 const TUI_STATE_FILE = path.join(process.cwd(), '.agent-viewer-data', 'tui.json')
+const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
+  'light',
+  'paper',
+  'solarized-light',
+  'github-light',
+  'gruvbox-light',
+  'dark',
+  'solarized-dark',
+  'nord',
+  'gruvbox-dark',
+  'dracula',
+  'cyber',
+]
 
 type TuiState = {
   theme?: unknown
   railVisible?: unknown
+  sidebarWidth?: unknown
   focusMode?: unknown
   density?: unknown
   transcriptView?: unknown
+  tabsEnabled?: unknown
+  sidebarSort?: unknown
   sessionReaderState?: unknown
 }
+
+export type TuiSidebarSort = 'project' | 'time'
 
 export type TuiSessionReaderState = {
   followTail: boolean
@@ -60,7 +78,9 @@ async function writeTuiState(update: Partial<TuiState>): Promise<void> {
 export async function getConfiguredTuiTheme(): Promise<TuiThemeMode> {
   const parsed = await readTuiState()
   if (parsed.theme === 'cyber' || parsed.theme === 'lazygit') return 'cyber'
-  return parsed.theme === 'dark' ? 'dark' : 'light'
+  return VALID_TUI_THEMES.includes(parsed.theme as TuiThemeMode)
+    ? parsed.theme as TuiThemeMode
+    : 'light'
 }
 
 export async function setConfiguredTuiTheme(theme: TuiThemeMode): Promise<void> {
@@ -74,6 +94,17 @@ export async function getConfiguredTuiRailVisible(): Promise<boolean> {
 
 export async function setConfiguredTuiRailVisible(railVisible: boolean): Promise<void> {
   await writeTuiState({ railVisible })
+}
+
+export async function getConfiguredTuiSidebarWidth(): Promise<number> {
+  const parsed = await readTuiState()
+  return typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth)
+    ? Math.max(28, Math.round(parsed.sidebarWidth))
+    : 32
+}
+
+export async function setConfiguredTuiSidebarWidth(sidebarWidth: number): Promise<void> {
+  await writeTuiState({ sidebarWidth: Math.max(28, Math.round(sidebarWidth)) })
 }
 
 export async function getConfiguredTuiFocusMode(): Promise<boolean> {
@@ -102,6 +133,24 @@ export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptVie
 
 export async function setConfiguredTuiTranscriptView(transcriptView: TuiTranscriptView): Promise<void> {
   await writeTuiState({ transcriptView })
+}
+
+export async function getConfiguredTuiTabsEnabled(): Promise<boolean> {
+  const parsed = await readTuiState()
+  return parsed.tabsEnabled !== false
+}
+
+export async function setConfiguredTuiTabsEnabled(tabsEnabled: boolean): Promise<void> {
+  await writeTuiState({ tabsEnabled })
+}
+
+export async function getConfiguredTuiSidebarSort(): Promise<TuiSidebarSort> {
+  const parsed = await readTuiState()
+  return parsed.sidebarSort === 'time' ? 'time' : 'project'
+}
+
+export async function setConfiguredTuiSidebarSort(sidebarSort: TuiSidebarSort): Promise<void> {
+  await writeTuiState({ sidebarSort })
 }
 
 export async function getConfiguredTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {

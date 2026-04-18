@@ -25,6 +25,7 @@ It provides a single UI for session browsing, project-level views, message inspe
 
 - Node.js 20+
 - npm
+- Bun for the OpenTUI terminal UI on the `opentui-migration` branch
 - At least one supported provider installed and usable locally
 
 ## Providers
@@ -83,6 +84,35 @@ npm run dev
 
 Then open `http://localhost:3000`.
 
+Run the terminal app directly with `npx`:
+
+```bash
+npx agent-viewer
+```
+
+This launches the OpenTUI entrypoint in `tui/opentui/main.tsx` and requires Bun
+to be available on `PATH`.
+
+Run the web app instead:
+
+```bash
+npx agent-viewer web
+```
+
+This starts the Next.js dev server for the browser UI.
+
+You can choose a different port:
+
+```bash
+npx agent-viewer web --port 3001
+```
+
+If you want the legacy Ink terminal UI:
+
+```bash
+npx agent-viewer --legacy
+```
+
 ## How To Use
 
 1. Select a provider from the sidebar dropdown.
@@ -92,7 +122,7 @@ Then open `http://localhost:3000`.
 
 ## Theming
 
-The theme picker is in the top-left corner of the sidebar. Five themes are available:
+The theme picker is in the top-left corner of the sidebar. Themes are grouped into dark and light categories:
 
 | Theme | Description |
 |-------|-------------|
@@ -130,12 +160,27 @@ npm run tui
 
 ## TUI Preview
 
-An Ink-based terminal UI is now scaffolded as an early read-only preview.
+The terminal UI is being migrated from Ink to OpenTUI on the `opentui-migration` branch.
+
+Primary runtime on this branch:
+
+```bash
+bun run tui
+```
+
+Legacy Ink runtime during migration:
+
+```bash
+npm run tui:ink
+```
+
+The OpenTUI reader on this branch is the primary terminal UI and ports the Ink reader onto the existing TUI service layer.
 
 - Browse providers
 - Navigate sessions
-- Inspect recent transcript output
+- Read full long-form transcripts with keyboard navigation, search, folding, and live-follow controls
 - Refresh from the terminal without going through the browser
+- Keep the previous Ink implementation available while the remaining non-reader TUI surfaces are migrated
 
 Current limitations:
 

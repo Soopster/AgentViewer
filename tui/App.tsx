@@ -407,8 +407,7 @@ function cardHeight(
     ? expandedBodyRows(card)
     : collapsedBodyRows(card)
   const landmarkRows = transcriptLandmarks(cards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount).length
-  const borderRows = expandedKeys.has(card.key) ? expandedBorderRows : 0
-  return landmarkRows + 1 + bodyRows + borderRows + cardGap
+  return landmarkRows + 1 + bodyRows + expandedBorderRows + cardGap
 }
 
 function selectTranscriptWindow(
@@ -603,10 +602,9 @@ export default function App() {
   const densityState = densityConfig(density)
   const providerAccent = getProviderAccent(provider)
   const showPaneBorders = themeMode !== 'light'
-  const showExpandedCardBorders = themeMode !== 'light'
   const paneBorderCols = showPaneBorders ? 2 : 0
   const paneBorderRows = showPaneBorders ? 2 : 0
-  const expandedCardBorderRows = showExpandedCardBorders ? 2 : 0
+  const expandedCardBorderRows = 1
   const paneBorderStyle = 'single'
   const inactivePaneBorderColor = themeMode === 'light' ? theme.border : theme.border
   const activePaneBorderColor = themeMode === 'light' ? theme.border2 : theme.border2
@@ -2092,7 +2090,8 @@ export default function App() {
                       : isSelected
                       ? theme.border2
                       : theme.surface2
-                    const marker = hasCursor ? '>' : isSelected ? ':' : '.'
+                    const borderLineColor = hasCursor ? accent : isSelected ? theme.border2 : theme.dim
+                    const marker = hasCursor ? '>' : isSelected ? ':' : '⏺'
                     const timestampColor = hasCursor
                       ? theme.muted
                       : isSelected
@@ -2106,11 +2105,10 @@ export default function App() {
                       isAutoFoldedTechnical ? 'folded' : null,
                       `e ${isExpanded ? 'collapse' : 'expand'}`,
                     ])
-                    const headerMetaWidth = Math.max(
-                      Math.min(headerMeta.length, Math.max(Math.floor(transcriptLineWidth * 0.5), 18)),
-                      18,
-                    )
-                    const headerLabelWidth = Math.max(transcriptLineWidth - 2 - headerMetaWidth, 8)
+                    const markerColor = isSelected ? accent : theme.muted
+                    const maxLabelWidth = Math.max(transcriptLineWidth - 2 - 1 - 2 - headerMeta.length, 4)
+                    const titleLabel = card.label.length > maxLabelWidth ? card.label.slice(0, maxLabelWidth - 1) + '…' : card.label
+                    const titleFill = '─'.repeat(Math.max(transcriptLineWidth - 2 - titleLabel.length - 2 - headerMeta.length, 0))
 
                     return (
                       <React.Fragment key={card.key}>
@@ -2134,20 +2132,13 @@ export default function App() {
                           overflow="hidden"
                           backgroundColor={cardShellBg}
                         >
-                          <Box width={2} justifyContent="flex-start">
-                            <Text color={railColor}>{isSelected ? '|' : ' '}</Text>
-                          </Box>
                           <Box flexGrow={1} flexDirection="column">
-                            <Box backgroundColor={headerBg} overflow="hidden">
-                              <Box width={2}>
-                                <Text color={isSelected ? accent : theme.muted}>{marker}</Text>
-                              </Box>
-                              <Box width={headerLabelWidth} overflow="hidden">
-                                <Text bold color={accent}>{fitText(card.label, headerLabelWidth)}</Text>
-                              </Box>
-                              <Box flexGrow={1} overflow="hidden">
-                                <Text color={timestampColor}>{fitText(headerMeta, headerMetaWidth)}</Text>
-                              </Box>
+                            <Box overflow="hidden">
+                              <Text color={borderLineColor}>─</Text>
+                              <Text color={markerColor}>{marker} </Text>
+                              <Text bold color={accent}>{titleLabel}</Text>
+                              <Text color={timestampColor}>{'  '}{headerMeta}</Text>
+                              <Text color={borderLineColor}>{titleFill}</Text>
                             </Box>
                             <Box flexDirection="column" marginLeft={densityState.bodyIndent} backgroundColor={bodyBg}>
                             {isExpanded && expandedLines && expandedLines.length > 0 ? (
@@ -2187,6 +2178,9 @@ export default function App() {
                               </>
                             )}
                           </Box>
+                            <Box overflow="hidden">
+                              <Text color={borderLineColor}>{'─'.repeat(transcriptLineWidth)}</Text>
+                            </Box>
                         </Box>
                         </Box>
                       </React.Fragment>
@@ -2298,22 +2292,13 @@ export default function App() {
                       ? theme.surface2
                       : theme.surface2
                     : undefined
-                  const showExpandedCardBorder = showExpandedCardBorders && isExpanded
-                  const expandedCardBorderColor = hasCursor
-                    ? accent
-                    : isSelected
-                    ? theme.border2
-                    : theme.border
-                  const expandedBodyLineWidth = Math.max(
-                    bodyLineWidth - (showExpandedCardBorder ? 2 : 0),
-                    16,
-                  )
                   const railColor = hasCursor
                     ? accent
                     : isSelected
                     ? theme.border2
                     : theme.surface2
-                  const marker = hasCursor ? '>' : isSelected ? ':' : '.'
+                  const borderLineColor = hasCursor ? accent : isSelected ? theme.border2 : theme.dim
+                  const marker = hasCursor ? '>' : isSelected ? ':' : '⏺'
                   const timestampColor = hasCursor
                     ? theme.muted
                     : isSelected
@@ -2327,11 +2312,10 @@ export default function App() {
                     isAutoFoldedTechnical ? 'folded' : null,
                     `e ${isExpanded ? 'collapse' : 'expand'}`,
                   ])
-                  const headerMetaWidth = Math.max(
-                    Math.min(headerMeta.length, Math.max(Math.floor(transcriptLineWidth * 0.5), 18)),
-                    18,
-                  )
-                  const headerLabelWidth = Math.max(transcriptLineWidth - 2 - headerMetaWidth, 8)
+                  const markerColor = isSelected ? accent : theme.muted
+                  const maxLabelWidth = Math.max(transcriptLineWidth - 2 - 1 - 2 - headerMeta.length, 4)
+                  const titleLabel = card.label.length > maxLabelWidth ? card.label.slice(0, maxLabelWidth - 1) + '…' : card.label
+                  const titleFill = '─'.repeat(Math.max(transcriptLineWidth - 2 - titleLabel.length - 2 - headerMeta.length, 0))
 
                   return (
                     <React.Fragment key={card.key}>
@@ -2355,25 +2339,16 @@ export default function App() {
                         overflow="hidden"
                         backgroundColor={cardShellBg}
                         >
-                        <Box width={2} justifyContent="flex-start">
-                            <Text color={railColor}>{isSelected ? '|' : ' '}</Text>
-                          </Box>
                           <Box
                             flexGrow={1}
                             flexDirection="column"
-                            borderStyle={showExpandedCardBorder ? 'single' : undefined}
-                            borderColor={showExpandedCardBorder ? expandedCardBorderColor : undefined}
                           >
-                            <Box backgroundColor={headerBg} overflow="hidden">
-                              <Box width={2}>
-                                <Text color={isSelected ? accent : theme.muted}>{marker}</Text>
-                              </Box>
-                              <Box width={headerLabelWidth} overflow="hidden">
-                                <Text bold color={accent}>{fitText(card.label, headerLabelWidth)}</Text>
-                              </Box>
-                              <Box flexGrow={1} overflow="hidden">
-                                <Text color={timestampColor}>{fitText(headerMeta, headerMetaWidth)}</Text>
-                              </Box>
+                            <Box overflow="hidden">
+                              <Text color={borderLineColor}>─</Text>
+                              <Text color={markerColor}>{marker} </Text>
+                              <Text bold color={accent}>{titleLabel}</Text>
+                              <Text color={timestampColor}>{'  '}{headerMeta}</Text>
+                              <Text color={borderLineColor}>{titleFill}</Text>
                             </Box>
                           <Box flexDirection="column" marginLeft={densityState.bodyIndent} backgroundColor={bodyBg}>
                           {isExpanded && expandedLines && expandedLines.length > 0 ? (
@@ -2384,15 +2359,15 @@ export default function App() {
                                   const tt = tm?.[2] ?? ''
                                   return (
                                     <Box key={`${card.key}:exp:${lnIndex}`} flexDirection="column" backgroundColor={theme.surface3} paddingX={1}>
-                                      <Text bold color={theme.cyan}>{fitText(tn, expandedBodyLineWidth - 2)}</Text>
-                                      {tt ? <Text color={theme.muted}>{fitText(tt, expandedBodyLineWidth - 2)}</Text> : null}
+                                      <Text bold color={theme.cyan}>{fitText(tn, bodyLineWidth - 2)}</Text>
+                                      {tt ? <Text color={theme.muted}>{fitText(tt, bodyLineWidth - 2)}</Text> : null}
                                     </Box>
                                   )
                                 }
                                 return (
                                   <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={1}>
                                     <Text color={transcriptColor(ln)}>
-                                      {fitText(ln.text, expandedBodyLineWidth - 2)}
+                                      {fitText(ln.text, bodyLineWidth - 2)}
                                     </Text>
                                   </Box>
                                 )
@@ -2413,6 +2388,9 @@ export default function App() {
                             </>
                           )}
                         </Box>
+                            <Box overflow="hidden">
+                              <Text color={borderLineColor}>{'─'.repeat(transcriptLineWidth)}</Text>
+                            </Box>
                       </Box>
                       </Box>
                     </React.Fragment>

@@ -2724,6 +2724,12 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     if (subtype === 'compact_boundary') return 'Conversation compacted'
     if (subtype === 'task_started' && typeof payload.description === 'string') return payload.description
     if (subtype === 'task_progress' && typeof payload.summary === 'string') return payload.summary
+    if (subtype === 'task_updated') {
+      if (typeof payload.summary === 'string') return payload.summary
+      const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch as Record<string, unknown> : null
+      if (typeof patch?.description === 'string') return patch.description
+      if (typeof patch?.status === 'string') return `Task ${patch.status}`
+    }
     if (subtype === 'task_notification' && typeof payload.summary === 'string') return payload.summary
     if (subtype === 'tool_progress' && typeof payload.tool_name === 'string') {
       return `${payload.tool_name} · ${typeof payload.elapsed_time_seconds === 'number' ? `${payload.elapsed_time_seconds}s` : 'running'}`
@@ -2763,6 +2769,17 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     if (subtype === 'task_notification') return content || (typeof payload.result === 'string' ? payload.result : '')
     if (subtype === 'task_progress') {
       return [content, typeof payload.last_tool_name === 'string' ? `Last tool: ${payload.last_tool_name}` : ''].filter(Boolean).join('\n')
+    }
+    if (subtype === 'task_updated') {
+      const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch as Record<string, unknown> : null
+      const lines = [
+        content,
+        typeof patch?.description === 'string' ? `Description: ${patch.description}` : '',
+        typeof patch?.status === 'string' ? `Status: ${patch.status}` : '',
+        typeof patch?.error === 'string' ? `Error: ${patch.error}` : '',
+        typeof patch?.total_paused_ms === 'number' ? `Paused: ${(patch.total_paused_ms / 1000).toFixed(1)}s` : '',
+      ].filter(Boolean)
+      return lines.join('\n')
     }
     if (subtype === 'hook_response') {
       return [content, typeof payload.stdout === 'string' ? payload.stdout : '', typeof payload.stderr === 'string' ? payload.stderr : ''].filter(Boolean).join('\n\n')

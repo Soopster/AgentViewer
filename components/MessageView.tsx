@@ -26,12 +26,18 @@ import { Textarea } from '@/components/ui/textarea'
 import MessageItem from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
 
+import TabBar from './TabBar'
+
 type Props = {
   messages: SessionMessage[]
   loading: boolean
   session: Session | null
   projectView?: { key: string; sessionCount: number; providerMode: 'current' | 'all' }
   onFork?: (newSessionId: string) => void
+  openTabs?: Session[]
+  selectedTabId?: string | null
+  onSelectTab?: (session: Session) => void
+  onCloseTab?: (sessionId: string) => void
 }
 
 type SseFrame = {
@@ -1005,7 +1011,7 @@ function VirtualTimelineRow({
   )
 }
 
-export default function MessageView({ messages, loading, session, projectView, onFork }: Props) {
+export default function MessageView({ messages, loading, session, projectView, onFork, openTabs, selectedTabId, onSelectTab, onCloseTab }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
   const [sendError, setSendError] = useState<string | null>(null)
@@ -2335,6 +2341,16 @@ export default function MessageView({ messages, loading, session, projectView, o
           </span>
         </div>
       </div>
+
+      {/* ── Tab bar ──────────────────────────────────── */}
+      {openTabs && openTabs.length > 0 && (
+        <TabBar
+          tabs={openTabs}
+          activeId={selectedTabId ?? null}
+          onSelect={onSelectTab ?? (() => {})}
+          onClose={onCloseTab ?? (() => {})}
+        />
+      )}
 
       {/* ── Timeline feed ────────────────────────────── */}
       <div

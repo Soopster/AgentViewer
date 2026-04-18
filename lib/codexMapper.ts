@@ -318,11 +318,11 @@ export function mapCodexThreadToSessionInfo(thread: CodexThread, tag: string | n
 
 export function mapCodexThreadToMessages(thread: CodexThread): SessionMessage[] {
   const messages: SessionMessage[] = []
-  const turns = [...thread.turns].sort((a, b) => a.id.localeCompare(b.id))
+  const turns = [...thread.turns]
 
   for (const turn of turns) {
     const turnTimestamp = uuidV7ToIsoTimestamp(turn.id)
-    const items = [...turn.items].sort((a, b) => a.id.localeCompare(b.id))
+    const items = [...turn.items]
     for (const item of items) {
       const itemTimestamp = uuidV7ToIsoTimestamp(item.id) ?? turnTimestamp
       messages.push(...mapItemToMessages(thread.id, turn.id, item, itemTimestamp))

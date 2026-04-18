@@ -1,7 +1,7 @@
 import { getAssistantLabel } from '../lib/provider'
 import { pathBasename } from '../lib/projectPaths'
 import type { ThreadedBlock, ThreadedMessage, ToolThread } from '../lib/threading'
-import type { Session, SessionInfo } from '../lib/types'
+import type { ContentBlock, Session, SessionInfo } from '../lib/types'
 import type { TuiDensity } from './theme'
 
 const MAX_PREVIEW_CHARS = 160
@@ -14,6 +14,7 @@ export type TuiTranscriptLineTone =
   | 'muted'
   | 'dim'
   | 'tool'
+  | 'agent'
   | 'result_ok'
   | 'result_error'
   | 'thinking'
@@ -27,7 +28,7 @@ export type TuiTranscriptCardLine = {
   tone: TuiTranscriptLineTone
 }
 
-export type TuiTranscriptCardCategory = 'conversation' | 'technical' | 'diff' | 'system'
+export type TuiTranscriptCardCategory = 'conversation' | 'technical' | 'diff' | 'system' | 'insight'
 
 function sanitizeLine(value: string): string {
   return value
@@ -41,7 +42,7 @@ function formatTimestamp(value?: string): string {
   if (!value) return ''
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return ''
-  return parsed.toISOString().slice(11, 19)
+  return parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 }
 
 function truncateLine(value: string, maxChars = MAX_PREVIEW_CHARS): string {
@@ -83,6 +84,59 @@ function summarizeKind(kind: unknown): string {
     if (typeof obj.kind === 'string' && obj.kind.trim()) return obj.kind
   }
   return 'change'
+}
+
+/**
+ * Normalise a unified diff that may have Codex-specific quirks:
+ * - strips non-standard leading lines before the first @@ or --- header
+ * - rewrites @@ hunk headers with the actual line counts from the hunk body
+ */
+function normalizeUnifiedDiff(diff: string): string {
+  const raw = diff.split('\n')
+  const out: string[] = []
+  let i = 0
+
+  // Skip any non-standard prefix lines (e.g. "update /path/to/file")
+  while (i < raw.length) {
+    const l = raw[i]
+    if (l.startsWith('@@') || l.startsWith('---') || l.startsWith('+++')
+        || l.startsWith('diff ') || l.startsWith('index ')) break
+    i++
+  }
+
+  while (i < raw.length) {
+    const l = raw[i]
+    if (!l.startsWith('@@')) {
+      out.push(l)
+      i++
+      continue
+    }
+
+    // Collect hunk body up to the next @@ or end
+    const bodyStart = i + 1
+    let j = bodyStart
+    while (j < raw.length && !raw[j].startsWith('@@')) j++
+    const body = raw.slice(bodyStart, j)
+
+    // Recount: context lines count for both old and new
+    let oldCount = 0
+    let newCount = 0
+    for (const bl of body) {
+      if (bl === '\\ No newline at end of file') continue
+      if (bl.startsWith('-')) oldCount++
+      else if (bl.startsWith('+')) newCount++
+      else { oldCount++; newCount++ }
+    }
+
+    const m = l.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/)
+    out.push(m
+      ? `@@ -${m[1]},${oldCount} +${m[2]},${newCount} @@${m[3] ?? ''}`
+      : l)
+    out.push(...body)
+    i = j
+  }
+
+  return out.join('\n')
 }
 
 function previewDiff(diffText: string, limit: number): TuiTranscriptCardLine[] {
@@ -159,7 +213,7 @@ function previewFileChange(thread: ToolThread): TuiTranscriptCardLine[] {
   const lines: TuiTranscriptCardLine[] = [
     line(toolSummary, 'tool'),
     line(`${kind} ${filePath}`, 'diff_meta'),
-    ...previewDiff(first.diff ?? '', Math.max(MAX_CARD_LINES - 2 - (changes.length > 1 ? 1 : 0), 1)),
+    ...previewDiff(normalizeUnifiedDiff(first.diff ?? ''), Math.max(MAX_CARD_LINES - 2 - (changes.length > 1 ? 1 : 0), 1)),
   ]
 
   if (changes.length > 1) {
@@ -169,12 +223,69 @@ function previewFileChange(thread: ToolThread): TuiTranscriptCardLine[] {
   return lines
 }
 
+function extractAgentResultText(content: string | ContentBlock[] | null | undefined): string | null {
+  if (!content) return null
+  if (typeof content === 'string') return content.trim() || null
+  const parts = content
+    .filter((b) => b.type === 'text' && typeof (b as { text?: unknown }).text === 'string')
+    .map((b) => ((b as { text: string }).text).trim())
+    .filter((t) => t.length > 0)
+  return parts.length > 0 ? parts.join('\n\n') : null
+}
+
 function previewTool(thread: ToolThread): TuiTranscriptCardLine[] {
   if (thread.toolUse.name === 'FileChange') {
     return previewFileChange(thread)
   }
 
   const input = thread.toolUse.input as Record<string, unknown>
+  const toolName = thread.toolUse.name
+
+  if (toolName === 'Agent') {
+    const description = typeof input.description === 'string' ? input.description : 'agent'
+    const subagentType = typeof input.subagent_type === 'string' ? input.subagent_type : ''
+    const isError = thread.result?.is_error === true
+    const resultText = extractAgentResultText(thread.result?.content)
+    const previewText = resultText
+      ? truncateLine(resultText.split('\n').find((l) => l.trim()) ?? resultText)
+      : thread.result ? 'done' : 'running…'
+    return [
+      line(`agent ${description}${subagentType ? ` [${subagentType}]` : ''}`, 'tool'),
+      line(`${isError ? '✗' : '✓'} ${previewText}`, isError ? 'result_error' : 'result_ok'),
+    ]
+  }
+
+  if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write') {
+    const filePath = typeof input.file_path === 'string' ? pathBasename(input.file_path) : ''
+    const isError = thread.result?.is_error === true
+
+    let removedLines = 0
+    let addedLines = 0
+
+    if (toolName === 'MultiEdit') {
+      const edits = Array.isArray(input.edits) ? (input.edits as Array<Record<string, unknown>>) : []
+      for (const edit of edits) {
+        removedLines += typeof edit.old_string === 'string' ? edit.old_string.split('\n').filter((l: string) => l.trim()).length : 0
+        addedLines += typeof edit.new_string === 'string' ? edit.new_string.split('\n').filter((l: string) => l.trim()).length : 0
+      }
+    } else if (toolName === 'Write') {
+      const content = typeof input.content === 'string' ? input.content : ''
+      addedLines = content.split('\n').filter((l) => l.trim()).length
+    } else {
+      removedLines = typeof input.old_string === 'string' ? input.old_string.split('\n').filter((l: string) => l.trim()).length : 0
+      addedLines = typeof input.new_string === 'string' ? input.new_string.split('\n').filter((l: string) => l.trim()).length : 0
+    }
+
+    const summary = toolName === 'Write'
+      ? `+${addedLines} lines`
+      : `-${removedLines} +${addedLines} lines`
+
+    return [
+      line(`tool ${toolName}${filePath ? `: ${filePath}` : ''}`, 'tool'),
+      line(isError ? '✗ ERROR' : `✓ ${summary}`, isError ? 'result_error' : 'result_ok'),
+    ]
+  }
+
   const target = typeof input.file_path === 'string'
     ? pathBasename(input.file_path)
     : typeof input.path === 'string'
@@ -214,13 +325,20 @@ function formatBlock(block: ThreadedBlock): TuiTranscriptCardLine[] {
     case 'system_reminder':
       return [line(`system reminder: ${truncateLine(block.content)}`, 'system')]
     case 'slash_command':
-      return [line(truncateLine(`slash command: /${block.command} ${block.args}`.trim()), 'tool')]
+      return [line(truncateLine(`/${block.command} ${block.args}`.trim()), 'tool')]
     case 'local_command_stdout':
       return block.stdout.trim()
-        ? [line(`stdout: ${truncateLine(block.stdout.trim().split('\n')[0])}`, 'muted')]
-        : [line('stdout', 'muted')]
-    case 'claude_system':
+        ? [line(`❯ ${truncateLine(block.stdout.trim().split('\n')[0])}`, 'dim')]
+        : [line('❯', 'dim')]
+    case 'claude_system': {
+      if (block.subtype === 'task_progress' || block.subtype === 'task_updated') {
+        const text = typeof block.payload.summary === 'string' ? block.payload.summary
+          : typeof block.payload.description === 'string' ? block.payload.description
+          : 'task running'
+        return [line(`● ${truncateLine(text)}`, 'thinking')]
+      }
       return [line(`system ${block.subtype}`, 'system')]
+    }
     case 'image':
       return [line('image attachment', 'muted')]
     default:
@@ -249,6 +367,7 @@ export type TuiTranscriptCard = {
   category: TuiTranscriptCardCategory
   autoFold: boolean
   compactSummary: string
+  usageSummary?: string
   timestamp?: string
   timestampMs?: number
   dayKey?: string
@@ -256,6 +375,9 @@ export type TuiTranscriptCard = {
   lines: TuiTranscriptCardLine[]
   expandedLines: TuiTranscriptCardLine[]
   searchText: string
+  codeBlocks?: Array<{ key: string; lang: string; content: string }>
+  editDiff?: string
+  markdownContent?: string
 }
 
 function cardLineLimit(density: TuiDensity): number {
@@ -313,11 +435,36 @@ function compactAutoFoldLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCard
   ]
 }
 
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function formatUsageSummary(message: ThreadedMessage): string | undefined {
+  if (!message.usage) return undefined
+  const parts = [
+    `${fmtTokens(message.usage.input_tokens)}↑`,
+    `${fmtTokens(message.usage.output_tokens)}↓`,
+  ]
+  const cacheRead = message.usage.cache_read_input_tokens ?? 0
+  if (cacheRead > 0) parts.push(`⚡${fmtTokens(cacheRead)}`)
+  return parts.join(' ')
+}
+
+const INSIGHT_RE = /`★\s*Insight\s*─+`/
+
 function classifyCardCategory(message: ThreadedMessage): TuiTranscriptCardCategory {
   if (message.role === 'system') return 'system'
-  if (message.blocks.some((block) => block.type === 'tool_thread' && block.toolUse.name === 'FileChange')) {
+  const DIFF_TOOLS = new Set(['FileChange', 'Edit', 'MultiEdit', 'Write'])
+  if (message.blocks.some((block) => block.type === 'tool_thread' && DIFF_TOOLS.has(block.toolUse.name))) {
     return 'diff'
   }
+
+  const hasInsight = message.blocks.some(
+    (block) => block.type === 'text' && INSIGHT_RE.test(block.text),
+  )
+  if (hasInsight) return 'insight'
 
   const hasOperationalBlock = message.blocks.some((block) => (
     block.type === 'tool_thread'
@@ -331,18 +478,57 @@ function classifyCardCategory(message: ThreadedMessage): TuiTranscriptCardCatego
   return hasOperationalBlock ? 'technical' : 'conversation'
 }
 
+function makeUnifiedDiffHunk(filePath: string, oldStr: string, newStr: string): string {
+  const oldLines = oldStr ? oldStr.split('\n') : []
+  const newLines = newStr ? newStr.split('\n') : []
+  return [
+    `--- a/${filePath}`,
+    `+++ b/${filePath}`,
+    `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
+    ...oldLines.map((l) => `-${l}`),
+    ...newLines.map((l) => `+${l}`),
+  ].join('\n')
+}
+
+function synthesizeEditDiff(message: ThreadedMessage): string | undefined {
+  const hunks: string[] = []
+  for (const block of message.blocks) {
+    if (block.type !== 'tool_thread') continue
+    const { name, input } = block.toolUse
+    const inp = input as Record<string, unknown>
+
+    if (name === 'Edit') {
+      const filePath = typeof inp.file_path === 'string' ? inp.file_path : 'unknown'
+      const oldStr = typeof inp.old_string === 'string' ? inp.old_string : ''
+      const newStr = typeof inp.new_string === 'string' ? inp.new_string : ''
+      if (oldStr || newStr) hunks.push(makeUnifiedDiffHunk(filePath, oldStr, newStr))
+    } else if (name === 'MultiEdit') {
+      const edits = Array.isArray(inp.edits) ? (inp.edits as Array<Record<string, unknown>>) : []
+      for (const edit of edits) {
+        const filePath = typeof edit.file_path === 'string' ? edit.file_path : 'unknown'
+        const oldStr = typeof edit.old_string === 'string' ? edit.old_string : ''
+        const newStr = typeof edit.new_string === 'string' ? edit.new_string : ''
+        if (oldStr || newStr) hunks.push(makeUnifiedDiffHunk(filePath, oldStr, newStr))
+      }
+    } else if (name === 'Write') {
+      const filePath = typeof inp.file_path === 'string' ? inp.file_path : 'unknown'
+      const content = typeof inp.content === 'string' ? inp.content : ''
+      if (content) hunks.push(makeUnifiedDiffHunk(filePath, '', content))
+    }
+  }
+  return hunks.length > 0 ? hunks.join('\n') : undefined
+}
+
 export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiDensity = 'balanced'): TuiTranscriptCard[] {
   return messages.map((message) => {
     const label = message.role === 'assistant'
       ? getAssistantLabel(message.provider)
       : message.role.toUpperCase()
     const previewLines = message.blocks.flatMap(formatBlock)
-    const expandedLines = message.blocks
-      .flatMap(formatBlockExpanded)
-      .filter((entry) => entry.text.trim().length > 0)
+    const { processedLines: expandedLines, codeBlocks } = extractCodeBlocksFromBlocks(message.blocks)
     const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
     const category = classifyCardCategory(message)
-    const autoFold = category !== 'conversation'
+    const autoFold = category !== 'conversation' && category !== 'insight'
     const collapsedLines = autoFold
       ? compactAutoFoldLines(previewLines)
       : compactCardLines(previewLines, density)
@@ -356,6 +542,7 @@ export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiD
       category,
       autoFold,
       compactSummary,
+      usageSummary: formatUsageSummary(message),
       timestamp: message.timestamp ? formatTimestamp(message.timestamp) : undefined,
       timestampMs: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.getTime() : undefined,
       dayKey: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.toISOString().slice(0, 10) : undefined,
@@ -363,6 +550,11 @@ export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiD
       lines: collapsedLines,
       expandedLines,
       searchText: expandedLines.map((entry) => entry.text).join('\n'),
+      codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
+      editDiff: synthesizeEditDiff(message),
+      markdownContent: (category === 'conversation' || category === 'insight')
+        ? extractMarkdownContent(message.blocks)
+        : undefined,
     }
   })
 }
@@ -386,6 +578,48 @@ export function formatProviderLabel(provider?: Session['provider']): string {
   return (provider ?? 'claude').toUpperCase()
 }
 
+function extractMarkdownContent(blocks: ThreadedBlock[]): string | undefined {
+  const chunks: string[] = []
+  for (const block of blocks) {
+    if (block.type === 'text' && block.text.trim()) {
+      chunks.push(block.text.trim())
+    }
+  }
+  return chunks.length > 0 ? chunks.join('\n\n') : undefined
+}
+
+const CODE_FENCE_RE = /^```(\w*)\s*\n([\s\S]*?)^```[ \t]*$/gm
+
+function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[]): {
+  processedLines: TuiTranscriptCardLine[]
+  codeBlocks: Array<{ key: string; lang: string; content: string }>
+} {
+  const all: Array<{ key: string; lang: string; content: string }> = []
+  let n = 0
+  const lines: TuiTranscriptCardLine[] = []
+
+  for (const block of blocks) {
+    if (block.type !== 'text' || !block.text.trim()) {
+      lines.push(...formatBlockExpanded(block).filter((l) => l.text.trim()))
+      continue
+    }
+    const matches = Array.from(block.text.matchAll(CODE_FENCE_RE))
+    let replaced = block.text
+    for (const match of matches) {
+      const lang = (match[1] ?? '').trim() || 'text'
+      const content = (match[2] ?? '').trimEnd()
+      all.push({ key: `cb${n++}`, lang, content })
+      replaced = replaced.replace(match[0], `[code: ${lang}]`)
+    }
+    const processed = sanitizeLine(replaced).trim().split('\n')
+      .map((l) => line(l.trimEnd()))
+      .filter((l) => l.text.trim().length > 0)
+    lines.push(...processed)
+  }
+
+  return { processedLines: lines, codeBlocks: all }
+}
+
 function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
   switch (block.type) {
     case 'text':
@@ -393,10 +627,14 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
         ? sanitizeLine(block.text).trim().split('\n').map((l) => line(l.trimEnd()))
         : []
 
-    case 'thinking':
-      return block.thinking.trim()
-        ? [line(`thinking: ${truncateLine(block.thinking.trim().split('\n')[0])}`, 'thinking')]
-        : []
+    case 'thinking': {
+      const content = block.thinking.trim()
+      if (!content) return []
+      return content
+        .split('\n')
+        .map((ln) => line(ln.trim(), 'thinking'))
+        .filter((entry) => entry.text.length > 0)
+    }
 
     case 'tool_thread': {
       const input = block.toolUse.input as Record<string, unknown>
@@ -415,9 +653,36 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
           const kind = summarizeKind(change.kind)
           if (idx > 0) result.push(line('', 'dim'))
           result.push(line(`${kind} ${filePath}`, 'diff_meta'))
-          if (change.diff) result.push(...previewDiff(change.diff, 60))
+          if (change.diff) result.push(...previewDiff(normalizeUnifiedDiff(change.diff), 60))
         }
         return result
+      }
+
+      if (toolName === 'Agent') {
+        const description = typeof input.description === 'string' ? input.description : 'agent'
+        const subagentType = typeof input.subagent_type === 'string' ? input.subagent_type : ''
+        const isError = block.result?.is_error === true
+        const resultText = extractAgentResultText(block.result?.content)
+        const header = line(`agent ${description}${subagentType ? ` [${subagentType}]` : ''}`, 'tool')
+        if (!block.result) return [header, line('running…', 'dim')]
+        if (!resultText) return [header, line(isError ? '✗ ERROR' : '✓ done', isError ? 'result_error' : 'result_ok')]
+        return [
+          header,
+          ...sanitizeLine(resultText).split('\n')
+            .map((l) => l.trimEnd())
+            .filter((l) => l.length > 0)
+            .map((l) => line(l, 'agent')),
+        ]
+      }
+
+      if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write') {
+        const filePath = typeof input.file_path === 'string' ? input.file_path : ''
+        const isError = block.result?.is_error === true
+        // Diff content is handled via card.editDiff → <diff> component; only emit header + status here
+        return [
+          line(`tool ${toolName}${filePath ? `: ${filePath}` : ''}`, 'tool'),
+          line(isError ? '✗ ERROR' : '✓ OK', isError ? 'result_error' : 'result_ok'),
+        ]
       }
 
       const target = typeof input.file_path === 'string'
@@ -461,10 +726,50 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
       return [line(truncateLine(`/${block.command} ${block.args}`.trim()), 'tool')]
     case 'local_command_stdout':
       return block.stdout.trim()
-        ? sanitizeLine(block.stdout).trim().split('\n').map((l) => line(l.trimEnd(), 'muted'))
+        ? sanitizeLine(block.stdout).trim().split('\n').map((l) => line(l.trimEnd(), 'dim'))
         : []
-    case 'claude_system':
+    case 'claude_system': {
+      if (block.subtype === 'task_progress' || block.subtype === 'task_updated') {
+        const p = block.payload
+        const patch = typeof p.patch === 'object' && p.patch !== null
+          ? p.patch as Record<string, unknown>
+          : null
+        const summary = typeof p.summary === 'string' ? p.summary : null
+        const description = typeof p.description === 'string'
+          ? p.description
+          : typeof patch?.description === 'string'
+          ? patch.description
+          : null
+        const status = typeof p.status === 'string'
+          ? p.status
+          : typeof patch?.status === 'string'
+          ? patch.status
+          : null
+        const lastTool = typeof p.last_tool_name === 'string' ? p.last_tool_name : null
+        const lines: TuiTranscriptCardLine[] = [
+          line(`● ${summary ?? description ?? status ?? 'task running'}`, 'thinking'),
+        ]
+        if (status && status !== summary && status !== description) {
+          lines.push(line(`  status: ${status}`, 'dim'))
+        }
+        if (lastTool) lines.push(line(`  last: ${lastTool}`, 'dim'))
+        if (typeof p.usage === 'object' && p.usage !== null) {
+          const u = p.usage as { tool_uses?: number; duration_ms?: number }
+          const parts: string[] = []
+          if (u.tool_uses != null) parts.push(`${u.tool_uses} tool calls`)
+          if (u.duration_ms != null) parts.push(`${(u.duration_ms / 1000).toFixed(1)}s`)
+          if (parts.length) lines.push(line(`  ${parts.join(' · ')}`, 'dim'))
+        }
+        if (typeof patch?.total_paused_ms === 'number') {
+          lines.push(line(`  paused: ${(patch.total_paused_ms / 1000).toFixed(1)}s`, 'dim'))
+        }
+        if (typeof patch?.error === 'string' && patch.error.trim()) {
+          lines.push(line(`  error: ${truncateLine(patch.error.trim())}`, 'result_error'))
+        }
+        return lines
+      }
       return [line(`system ${block.subtype}`, 'system')]
+    }
     case 'image':
       return [line('image attachment', 'muted')]
     default:

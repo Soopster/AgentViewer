@@ -114,6 +114,7 @@ function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): 
 export default function Home() {
   const [mounted, setMounted] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
+  const [openTabSessions, setOpenTabSessions] = useState<Session[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedProject, setSelectedProject] = useState<ProjectSelection | null>(null)
   const [messages, setMessages] = useState<SessionMessage[]>([])
@@ -227,6 +228,16 @@ export default function Home() {
     return () => clearInterval(id)
   }, [fetchSessions])
 
+  // Keep open tab metadata (title, tag, etc.) in sync with polled sessions
+  useEffect(() => {
+    setOpenTabSessions((prev) => prev.map((tab) => {
+      const updated = sessions.find((s) =>
+        s.sessionId === tab.sessionId && (s.provider ?? 'claude') === (tab.provider ?? 'claude'),
+      )
+      return updated ?? tab
+    }))
+  }, [sessions])
+
   useEffect(() => {
     setSelectedProject((prev) => {
       if (!prev) return prev
@@ -311,6 +322,12 @@ export default function Home() {
   }, [fetchProjectMessageBatches, provider, selectedProject])
 
   async function selectSession(session: Session) {
+    setOpenTabSessions((prev) => {
+      const alreadyOpen = prev.some(
+        (s) => s.sessionId === session.sessionId && (s.provider ?? 'claude') === (session.provider ?? 'claude'),
+      )
+      return alreadyOpen ? prev : [...prev, session]
+    })
     setSelectedId(session.sessionId)
     setSelectedProject(null)
     projectMessageCountsRef.current.clear()
@@ -323,6 +340,21 @@ export default function Home() {
       console.error('Failed to load messages:', err)
     } finally {
       setLoadingMessages(false)
+    }
+  }
+
+  function closeTab(sessionId: string) {
+    const idx = openTabSessions.findIndex((s) => s.sessionId === sessionId)
+    const next = openTabSessions.filter((s) => s.sessionId !== sessionId)
+    setOpenTabSessions(next)
+    if (sessionId === selectedId) {
+      if (next.length > 0) {
+        const adjacent = next[Math.min(idx, next.length - 1)]
+        if (adjacent) void selectSession(adjacent)
+      } else {
+        setSelectedId(null)
+        setMessages([])
+      }
     }
   }
 
@@ -466,13 +498,19 @@ export default function Home() {
         onChangeScope={setSessionScope}
         onToggleWorktrees={setIncludeWorktrees}
       />
-      <MessageView
-        messages={messages}
-        loading={loadingMessages}
-        session={selectedSession}
-        projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
-        onFork={handleFork}
-      />
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, overflow: 'hidden' }}>
+        <MessageView
+          messages={messages}
+          loading={loadingMessages}
+          session={selectedSession}
+          projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
+          onFork={handleFork}
+          openTabs={openTabSessions}
+          selectedTabId={selectedId}
+          onSelectTab={(s) => void selectSession(s)}
+          onCloseTab={closeTab}
+        />
+      </div>
     </div>
     </CodeThemeProvider>
   )

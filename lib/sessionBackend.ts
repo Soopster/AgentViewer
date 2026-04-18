@@ -288,7 +288,27 @@ async function listClaudeSessions({ limit, offset, dir, includeWorktrees }: List
     dir,
     includeWorktrees: dir ? includeWorktrees : undefined,
   })
-  return sessions.map((session) => ({
+  const normalized = await Promise.all(
+    sessions.map(async (session) => {
+      try {
+        const info = await getSessionInfo(session.sessionId, {
+          dir: typeof session.cwd === 'string' && session.cwd ? session.cwd : dir,
+        })
+        if (!info) return session
+        return {
+          ...session,
+          ...info,
+          // Keep the list-level working directory when the single-session lookup
+          // can't resolve one, but prefer the stable per-session metadata.
+          cwd: info.cwd ?? session.cwd,
+        }
+      } catch {
+        return session
+      }
+    }),
+  )
+
+  return normalized.map((session) => ({
     ...session,
     provider: 'claude',
     capabilities: getProviderCapabilities('claude'),
@@ -614,7 +634,7 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
 }
 
 function createClaudeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Response {
-  const userMessage = String(body.message ?? '')
+  const userMessage = String(body.message ?? '').trim()
   const model = typeof body.model === 'string' ? body.model : 'claude-sonnet-4-6'
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
   const forkSessionOnSend = Boolean(body.forkSession)
@@ -635,6 +655,7 @@ function createClaudeStream(sessionId: string, request: NextRequest, body: Recor
           resumeSessionAt,
           forkSession: forkSessionOnSend,
           includePartialMessages: true,
+          agentProgressSummaries: true,
         },
       })
 
@@ -746,16 +767,34 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       let completionSeen = false
       let completionCloseTimer: ReturnType<typeof setTimeout> | null = null
 
-      const closeStream = (unsubscribe: () => void) => {
+      const safeEnqueue = (chunk: string) => {
+        if (closed) return
+        try {
+          controller.enqueue(encoder.encode(chunk))
+        } catch {
+          closed = true
+        }
+      }
+
+      const safeClose = () => {
         if (closed) return
         closed = true
+        try {
+          controller.close()
+        } catch {
+          /* stream already closed by consumer/runtime */
+        }
+      }
+
+      const closeStream = (unsubscribe: () => void) => {
+        if (closed) return
         if (completionCloseTimer) {
           clearTimeout(completionCloseTimer)
           completionCloseTimer = null
         }
-        controller.close()
         clearRunningSession(sessionId)
         unsubscribe()
+        safeClose()
       }
 
       const scheduleCompletionClose = (unsubscribe: () => void) => {
@@ -768,7 +807,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       const flushNotification = (notification: CodexNotification) => {
         const payload = formatCodexNotification(notification)
         if (!payload) return
-        controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
+        safeEnqueue(`data: ${payload}\n\n`)
       }
 
       const unsubscribe = client.subscribe((notification) => {
@@ -782,7 +821,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
             (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
             currentModel,
           )
-          controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+          safeEnqueue(codexContextUsageToEventData(usage))
           return
         }
 
@@ -812,11 +851,11 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       try {
         const resume = await resumeCodexThread(sessionId).catch(() => null)
         currentModel = model ?? resume?.model ?? currentModel
-        controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`))
+        safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`)
 
         const started = await client.request<CodexTurnStartResponse>('turn/start', {
           threadId: sessionId,
-          model,
+          model: model ?? undefined,
           input: [{ type: 'text', text: userMessage, text_elements: [] }],
         })
 
@@ -840,7 +879,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
               (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
               currentModel,
             )
-            controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+            safeEnqueue(codexContextUsageToEventData(usage))
             continue
           }
           if (completionSeen) scheduleCompletionClose(unsubscribe)
@@ -853,9 +892,8 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
       } catch (err) {
         unsubscribe()
         clearRunningSession(sessionId)
-        closed = true
-        controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
-        controller.close()
+        safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
+        safeClose()
       }
     },
   })
@@ -1016,6 +1054,7 @@ async function createCopilotStream(sessionId: string, request: NextRequest, body
         const modelsById = new Map(models.map((model) => [model.id, model]))
 
         const handleEvent = (event: CopilotSessionEvent) => {
+          if (closed) return
           if (event.type === 'assistant.usage') {
             const usage = mapCopilotUsageToContextUsage(event, modelsById)
             controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
@@ -1024,6 +1063,7 @@ async function createCopilotStream(sessionId: string, request: NextRequest, body
           if (event.type === 'session.error') {
             emittedError = true
             controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: event.data.message })}\n\n`))
+            return
           }
 
           controller.enqueue(encoder.encode(`data: ${formatCopilotEvent(event)}\n\n`))
@@ -1085,6 +1125,7 @@ async function createPiStream(sessionId: string, request: NextRequest, body: Rec
   const stream = new ReadableStream({
     async start(controller) {
       let closed = false
+      let unsubscribePi: (() => void) | undefined
       const close = () => {
         if (closed) return
         closed = true
@@ -1109,19 +1150,21 @@ async function createPiStream(sessionId: string, request: NextRequest, body: Rec
           }
         })
 
-        const unsubscribe = agentSession.agent.subscribe((event) => {
+        unsubscribePi = agentSession.agent.subscribe((event) => {
+          if (closed) return
           const payload = JSON.stringify({ type: 'pi_event', event })
           controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
 
           if (event.type === 'agent_end') {
             clearRunningSession(sessionId)
-            unsubscribe()
+            unsubscribePi?.()
             close()
           }
         })
 
         await agentSession.prompt(userMessage)
       } catch (err) {
+        unsubscribePi?.()
         controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
         clearRunningSession(sessionId)
         close()
@@ -1228,7 +1271,7 @@ export async function interruptViewSession(sessionId: string): Promise<void> {
   await running.interrupt()
 }
 
-export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null }> {
+export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; contextUsage: ContextUsage | null }> {
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const client = getCodexClient()
@@ -1237,6 +1280,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
       currentModel: resume?.model ?? null,
+      contextUsage: null,
     }
   }
   if (provider === 'opencode') {
@@ -1252,6 +1296,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     return {
       models: mapOpenCodeModelsToSessionModels(openCodeData<OpenCodeConfigProvidersResponse>(configResponse)),
       currentModel: currentOpenCodeModelValue(messages.at(-1)?.info),
+      contextUsage: null,
     }
   }
   if (provider === 'copilot') {
@@ -1265,6 +1310,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
       return {
         models: mapCopilotModelsToSessionModels(models),
         currentModel: currentModel.modelId ?? null,
+        contextUsage: null,
       }
     } finally {
       await session.disconnect().catch(() => {})
@@ -1283,6 +1329,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     return {
       models: mapPiModelsToSessionModels(currentModel),
       currentModel: currentModel ?? null,
+      contextUsage: null,
     }
   }
 
@@ -1293,11 +1340,13 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     return {
       models,
       currentModel: contextUsage?.model ?? null,
+      contextUsage: contextUsage ?? null,
     }
   } catch {
     return {
       models,
       currentModel: null,
+      contextUsage: null,
     }
   } finally {
     q.close()

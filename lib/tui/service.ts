@@ -5,31 +5,48 @@ import {
   getConfiguredTuiFocusMode,
   getConfiguredTuiRailVisible,
   getConfiguredTuiSessionReaderState,
+  getConfiguredTuiSidebarSort,
+  getConfiguredTuiSidebarWidth,
+  getConfiguredTuiTabsEnabled,
   getConfiguredTuiTheme,
   getConfiguredTuiTranscriptView,
   setConfiguredTuiDensity,
   setConfiguredTuiFocusMode,
   setConfiguredTuiRailVisible,
   setConfiguredTuiSessionReaderState,
+  setConfiguredTuiSidebarSort,
+  setConfiguredTuiSidebarWidth,
+  setConfiguredTuiTabsEnabled,
   setConfiguredTuiTheme,
   setConfiguredTuiTranscriptView,
   type TuiSessionReaderState,
+  type TuiSidebarSort,
 } from '../tuiState'
 import {
   listViewSessionMessages,
   listViewSessions,
+  patchViewSession,
   readViewSessionInfo,
+  readViewSessionModels,
 } from '../sessionBackend'
-import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../types'
+import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 
 const DEFAULT_SESSION_LIMIT = 200
-const DEFAULT_MESSAGE_LIMIT = 400
+const CLAUDE_MESSAGE_LIMIT = 400
+const TOOL_HEAVY_PROVIDER_MESSAGE_LIMIT = 2000
 
 export type TuiSessionDetail = {
   info: SessionInfo | null
   rawMessages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
+  contextUsage: ContextUsage | null
+}
+
+export type TuiSessionMetadata = {
+  models: SessionModelInfo[]
+  currentModel: string | null
+  contextUsage: ContextUsage | null
 }
 
 export async function readTuiProvider(): Promise<ProviderSelection> {
@@ -56,6 +73,14 @@ export async function writeTuiRailVisible(railVisible: boolean): Promise<void> {
   await setConfiguredTuiRailVisible(railVisible)
 }
 
+export async function readTuiSidebarWidth(): Promise<number> {
+  return getConfiguredTuiSidebarWidth()
+}
+
+export async function writeTuiSidebarWidth(sidebarWidth: number): Promise<void> {
+  await setConfiguredTuiSidebarWidth(sidebarWidth)
+}
+
 export async function readTuiFocusMode(): Promise<boolean> {
   return getConfiguredTuiFocusMode()
 }
@@ -80,6 +105,24 @@ export async function writeTuiTranscriptView(transcriptView: TuiTranscriptView):
   await setConfiguredTuiTranscriptView(transcriptView)
 }
 
+export async function readTuiTabsEnabled(): Promise<boolean> {
+  return getConfiguredTuiTabsEnabled()
+}
+
+export async function writeTuiTabsEnabled(tabsEnabled: boolean): Promise<void> {
+  await setConfiguredTuiTabsEnabled(tabsEnabled)
+}
+
+export async function readTuiSidebarSort(): Promise<TuiSidebarSort> {
+  return getConfiguredTuiSidebarSort()
+}
+
+export async function writeTuiSidebarSort(sidebarSort: TuiSidebarSort): Promise<void> {
+  await setConfiguredTuiSidebarSort(sidebarSort)
+}
+
+export type { TuiSidebarSort }
+
 export async function readTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {
   return getConfiguredTuiSessionReaderState(sessionKey)
 }
@@ -101,11 +144,14 @@ export async function readTuiSessions(provider: ProviderSelection): Promise<Sess
 }
 
 export async function readTuiSessionDetail(session: Session): Promise<TuiSessionDetail> {
+  const messageLimit = session.provider === 'claude'
+    ? CLAUDE_MESSAGE_LIMIT
+    : TOOL_HEAVY_PROVIDER_MESSAGE_LIMIT
   const [info, messages] = await Promise.all([
     readViewSessionInfo(session.sessionId, session.provider),
     listViewSessionMessages(
       session.sessionId,
-      { limit: DEFAULT_MESSAGE_LIMIT, offset: 0, tail: true },
+      { limit: messageLimit, offset: 0, tail: true },
       session.provider,
     ),
   ])
@@ -114,5 +160,14 @@ export async function readTuiSessionDetail(session: Session): Promise<TuiSession
     info,
     rawMessages: messages,
     threadedMessages: buildThreadedMessages(messages),
+    contextUsage: null,
   }
+}
+
+export async function readTuiSessionMetadata(session: Session): Promise<TuiSessionMetadata> {
+  return readViewSessionModels(session.sessionId, session.provider)
+}
+
+export async function patchTuiSession(session: Session, body: Record<string, unknown>): Promise<void> {
+  return patchViewSession(session.sessionId, body, session.provider)
 }

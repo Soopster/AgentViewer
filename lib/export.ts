@@ -442,16 +442,31 @@ function safeJson(value: unknown): string {
 function renderClaudeSystem(block: ClaudeSystemBlock): string {
   const payload = block.payload as SystemMessagePayload
   const subtype = block.subtype
-  const content = typeof payload.content === 'string' ? payload.content : ''
+  const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch as Record<string, unknown> : null
+  const content = typeof payload.content === 'string'
+    ? payload.content
+    : subtype === 'task_updated'
+    ? [
+        typeof patch?.description === 'string' ? `Description: ${patch.description}` : '',
+        typeof patch?.status === 'string' ? `Status: ${patch.status}` : '',
+        typeof patch?.error === 'string' ? `Error: ${patch.error}` : '',
+      ].filter(Boolean).join('\n')
+    : ''
   const tone = payload.level === 'warning'
     ? '#fbbf24'
     : subtype === 'compact_boundary'
+    ? '#8b80f0'
+    : subtype.startsWith('task_')
     ? '#8b80f0'
     : subtype === 'tool_progress' || subtype === 'tool_use_summary'
     ? '#38d9f5'
     : '#7b8db0'
   const badges = [
-    typeof payload.status === 'string' ? payload.status : null,
+    typeof payload.status === 'string'
+      ? payload.status
+      : typeof patch?.status === 'string'
+      ? patch.status
+      : null,
     typeof payload.task_id === 'string' ? payload.task_id.slice(0, 8) : null,
     typeof payload.tool_use_id === 'string' ? payload.tool_use_id.slice(0, 8) : null,
     typeof payload.tool_name === 'string' ? payload.tool_name : null,
