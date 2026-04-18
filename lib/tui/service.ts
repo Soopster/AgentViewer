@@ -18,6 +18,7 @@ import {
   setConfiguredTuiSidebarWidth,
   setConfiguredTuiTabsEnabled,
   setConfiguredTuiTheme,
+  setConfiguredTuiThemeSync,
   setConfiguredTuiTranscriptView,
   type TuiSessionReaderState,
   type TuiSidebarSort,
@@ -63,6 +64,10 @@ export async function readTuiTheme(): Promise<TuiThemeMode> {
 
 export async function writeTuiTheme(theme: TuiThemeMode): Promise<void> {
   await setConfiguredTuiTheme(theme)
+}
+
+export function writeTuiThemeSync(theme: TuiThemeMode): void {
+  setConfiguredTuiThemeSync(theme)
 }
 
 export async function readTuiRailVisible(): Promise<boolean> {

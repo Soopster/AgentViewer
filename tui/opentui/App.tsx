@@ -47,6 +47,7 @@ import {
   writeTuiSidebarWidth,
   writeTuiTabsEnabled,
   writeTuiTheme,
+  writeTuiThemeSync,
   writeTuiTranscriptView,
   type TuiSessionDetail,
   type TuiSidebarSort,
@@ -1252,6 +1253,8 @@ export default function OpenTuiApp() {
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIndex, setSearchMatchIndex] = useState(0)
+  const [sessionSearchMode, setSessionSearchMode] = useState(false)
+  const [sessionSearchQuery, setSessionSearchQuery] = useState('')
 
   const [transcriptCursorKey, setTranscriptCursorKey] = useState<string | null>(null)
   const [expandedCardKeys, setExpandedCardKeys] = useState<Set<string>>(() => new Set())
@@ -1310,6 +1313,7 @@ export default function OpenTuiApp() {
   const loadingDetailRef = useRef(false)
   const selectedSessionKeyRef = useRef<string | null>(null)
   const themeMenuOriginRef = useRef<TuiThemeMode | null>(null)
+  const currentThemeRef = useRef<TuiThemeMode>('light')
   useEffect(() => {
     setActiveTheme(themeMode)
   }, [themeMode])
@@ -1489,16 +1493,37 @@ export default function OpenTuiApp() {
     () => shouldEnableSyntaxHighlighting ? buildSyntaxStyle(theme) : null,
     [shouldEnableSyntaxHighlighting, theme],
   )
-  const sidebarEntries = useMemo(
-    () => buildSidebarEntries(sessions, sidebarSort),
-    [sessions, sidebarSort],
-  )
+  const normalizedSessionQuery = sessionSearchQuery.trim().toLowerCase()
+  const filteredSessionsForSidebar = useMemo(() => {
+    if (!normalizedSessionQuery) return sessions
+    return sessions.filter((session) => {
+      const title = formatSessionTitle(session).toLowerCase()
+      const project = formatSessionProject(session).toLowerCase()
+      const id = (session.sessionId ?? '').toLowerCase()
+      return (
+        title.includes(normalizedSessionQuery)
+        || project.includes(normalizedSessionQuery)
+        || id.includes(normalizedSessionQuery)
+      )
+    })
+  }, [sessions, normalizedSessionQuery])
+  const sidebarEntries = useMemo(() => {
+    const entries = buildSidebarEntries(filteredSessionsForSidebar, sidebarSort)
+    if (filteredSessionsForSidebar === sessions) return entries
+    const originalIndex = new Map<string, number>()
+    sessions.forEach((s, i) => { originalIndex.set(sessionKey(s), i) })
+    return entries.map((entry) => {
+      if (entry.type !== 'session') return entry
+      const idx = originalIndex.get(sessionKey(entry.session))
+      return idx === undefined ? entry : { ...entry, absoluteIndex: idx }
+    })
+  }, [filteredSessionsForSidebar, sessions, sidebarSort])
   const sidebarSortLabel = sidebarSort === 'project' ? 'PROJECT' : 'TIME'
   const selectedSidebarEntryIndex = useMemo(() => {
     const idx = sidebarEntries.findIndex((e) => e.type === 'session' && e.absoluteIndex === selectedIndex)
     return idx >= 0 ? idx : 0
   }, [sidebarEntries, selectedIndex])
-  const mainContentHeight = Math.max(height - 3 - (searchMode ? 3 : 1) - COMPOSER_HEIGHT, 8)
+  const mainContentHeight = Math.max(height - 3 - (searchMode || sessionSearchMode ? 4 : 1) - COMPOSER_HEIGHT, 8)
   const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - 4 - 1 - MIN_READER_WIDTH)
   const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
@@ -1539,18 +1564,20 @@ export default function OpenTuiApp() {
     const fill = Math.floor(available / visibleTabSessions.length)
     return Math.max(10, Math.min(fill, 24))
   }, [rightPaneWidth, visibleTabSessions.length])
-  const sidebarRowBudget = Math.max(mainContentHeight - 7, 4)
+  const sidebarRowBudget = Math.max(mainContentHeight - 4, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
   const sidebarSortHeader = useMemo(
     () => fitText(
       joinMeta([
-        `SESSIONS ${Math.max(sessions.length, 0)}`,
+        normalizedSessionQuery
+          ? `SESSIONS ${filteredSessionsForSidebar.length}/${Math.max(sessions.length, 0)}`
+          : `SESSIONS ${Math.max(sessions.length, 0)}`,
         `sort ${sidebarSortLabel}`,
-        'S toggle',
+        normalizedSessionQuery ? `/${sessionSearchQuery}` : '/ search',
       ]),
       Math.max(sidebarInnerWidth - 2, 12),
     ),
-    [sidebarInnerWidth, sidebarSortLabel, sessions.length],
+    [sidebarInnerWidth, sidebarSortLabel, sessions.length, filteredSessionsForSidebar.length, normalizedSessionQuery, sessionSearchQuery],
   )
 
   // Stable per-card data: body lines, diffs, code blocks. Cached by card reference so
@@ -2124,6 +2151,30 @@ export default function OpenTuiApp() {
     const previewTheme = THEMES[themeMenuIndex]
     if (previewTheme && previewTheme !== themeMode) setThemeMode(previewTheme)
   }, [themeMenuIndex, themeMenuOpen, themeMode])
+
+  useEffect(() => {
+    currentThemeRef.current = themeMode
+  }, [themeMode])
+
+  useEffect(() => {
+    const persist = () => {
+      try { writeTuiThemeSync(currentThemeRef.current) } catch { /* best-effort */ }
+    }
+    const onSignal = () => {
+      persist()
+      process.exit(0)
+    }
+    process.on('exit', persist)
+    process.on('SIGINT', onSignal)
+    process.on('SIGTERM', onSignal)
+    process.on('SIGHUP', onSignal)
+    return () => {
+      process.off('exit', persist)
+      process.off('SIGINT', onSignal)
+      process.off('SIGTERM', onSignal)
+      process.off('SIGHUP', onSignal)
+    }
+  }, [])
 
   const paletteDisplayRows = useMemo((): PaletteRow[] => {
     if (commandPaletteQuery) {
@@ -2951,6 +3002,16 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (sessionSearchMode) {
+      if (key.name === 'escape') {
+        handled(() => {
+          setSessionSearchMode(false)
+          setSessionSearchQuery('')
+        })
+      }
+      return
+    }
+
     if (gitOpen) {
       handled(() => { gitKeyHandlerRef.current?.(key) })
       return
@@ -3304,6 +3365,13 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (effectiveFocus === 'sessions' && sequence === '/') {
+      handled(() => {
+        setSessionSearchMode(true)
+      })
+      return
+    }
+
     if (effectiveFocus === 'messages' && sequence === 'y') {
       handled(() => {
         void copySelectedMessage()
@@ -3515,10 +3583,7 @@ export default function OpenTuiApp() {
             flexDirection="column"
             title={sidebarSortHeader}
           >
-            <box paddingX={1} paddingTop={1} paddingBottom={1}>
-              <text fg={theme.cyan}>{fitText('tab focus  h hide rails  [ ] resize  / search', sidebarInnerWidth)}</text>
-            </box>
-            <box flexGrow={1} paddingX={1} paddingBottom={1}>
+            <box flexGrow={1} paddingX={1} paddingY={1}>
               {loadingSessions && sessions.length === 0 ? (
                 <Spinner label={fitText('Loading…', sidebarInnerWidth - 2)} fg={theme.dim} />
               ) : sidebarEntries.length === 0 ? (
@@ -3923,14 +3988,14 @@ export default function OpenTuiApp() {
         <box paddingX={1}>
           <box
             width={Math.max(width - 2, 20)}
-            height={3}
+            height={4}
             border
             borderStyle="single"
             borderColor={theme.border2}
             backgroundColor={theme.surface}
             flexDirection="column"
           >
-            <box paddingX={1}>
+            <box paddingX={1} height={1}>
               <text fg={theme.dim}>
                 {fitText(
                   `SEARCH  ${searchMatches.length === 0 ? 'no matches' : `${searchMatchIndex + 1}/${searchMatches.length} matches`}  enter jump  esc close`,
@@ -3938,7 +4003,7 @@ export default function OpenTuiApp() {
                 )}
               </text>
             </box>
-            <box paddingX={1}>
+            <box paddingX={1} height={1}>
               <input
                 focused
                 value={searchQuery}
@@ -3948,6 +4013,47 @@ export default function OpenTuiApp() {
                 onSubmit={() => {
                   if (searchMatches.length > 0) jumpToTranscriptIndex(searchMatches[searchMatchIndex] ?? 0)
                   setSearchMode(false)
+                }}
+              />
+            </box>
+          </box>
+        </box>
+      ) : null}
+
+      {sessionSearchMode ? (
+        <box paddingX={1}>
+          <box
+            width={Math.max(width - 2, 20)}
+            height={4}
+            border
+            borderStyle="single"
+            borderColor={theme.border2}
+            backgroundColor={theme.surface}
+            flexDirection="column"
+          >
+            <box paddingX={1} height={1}>
+              <text fg={theme.dim}>
+                {fitText(
+                  `SESSION SEARCH  ${filteredSessionsForSidebar.length}/${sessions.length} matches  enter select  esc clear`,
+                  width - 6,
+                )}
+              </text>
+            </box>
+            <box paddingX={1} height={1}>
+              <input
+                focused
+                value={sessionSearchQuery}
+                placeholder="Type to filter sessions..."
+                maxLength={SEARCH_MAX_CHARS}
+                onInput={setSessionSearchQuery}
+                onSubmit={() => {
+                  const firstSession = sidebarEntries.find(
+                    (e): e is Extract<SidebarEntry, { type: 'session' }> => e.type === 'session',
+                  )
+                  if (firstSession) {
+                    setSelectedSessionKey(sessionKey(firstSession.session))
+                  }
+                  setSessionSearchMode(false)
                 }}
               />
             </box>

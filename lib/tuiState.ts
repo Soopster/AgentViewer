@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../tui/theme'
 
@@ -9,11 +10,16 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'solarized-light',
   'github-light',
   'gruvbox-light',
+  'catppuccin-latte',
+  'rose-pine-dawn',
   'dark',
   'solarized-dark',
   'nord',
   'gruvbox-dark',
   'dracula',
+  'tokyo-night',
+  'catppuccin-mocha',
+  'obsidian',
   'cyber',
 ]
 
@@ -85,6 +91,18 @@ export async function getConfiguredTuiTheme(): Promise<TuiThemeMode> {
 
 export async function setConfiguredTuiTheme(theme: TuiThemeMode): Promise<void> {
   await writeTuiState({ theme })
+}
+
+export function setConfiguredTuiThemeSync(theme: TuiThemeMode): void {
+  let current: TuiState = {}
+  try {
+    const contents = readFileSync(TUI_STATE_FILE, 'utf8')
+    current = JSON.parse(contents) as TuiState
+  } catch {
+    current = {}
+  }
+  mkdirSync(path.dirname(TUI_STATE_FILE), { recursive: true })
+  writeFileSync(TUI_STATE_FILE, JSON.stringify({ ...current, theme }, null, 2), 'utf8')
 }
 
 export async function getConfiguredTuiRailVisible(): Promise<boolean> {
