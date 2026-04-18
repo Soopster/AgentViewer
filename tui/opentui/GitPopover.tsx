@@ -27,75 +27,6 @@ type GitStatusEntry = {
 }
 
 // ---------------------------------------------------------------------------
-// Run git commands asynchronously so the popover does not block input.
-// ---------------------------------------------------------------------------
-
-function execGit(args: string[]): Promise<string> {
-  return new Promise((resolve) => {
-    execFile('git', args, {
-      cwd: process.cwd(),
-      encoding: 'utf-8',
-      maxBuffer: 10 * 1024 * 1024,
-    }, (err, stdout) => {
-      if (!err) {
-        resolve(String(stdout).trimEnd())
-        return
-      }
-
-      // git diff exits with code 1 when differences exist — stdout is in the error.
-      if (typeof err === 'object' && err && 'stdout' in err) {
-        const out = (err as { stdout?: unknown }).stdout
-        if (!out) {
-          resolve('')
-          return
-        }
-        resolve(Buffer.isBuffer(out) ? out.toString('utf-8').trimEnd() : String(out).trimEnd())
-        return
-      }
-
-      resolve('')
-    })
-  })
-}
-
-// ---------------------------------------------------------------------------
-// Fetch all git data in one shot
-// ---------------------------------------------------------------------------
-
-async function fetchGitData(): Promise<GitData> {
-  const [branch, upstreamRaw, statusRaw, unstaged, staged, branchesRaw, commitsRaw] = await Promise.all([
-    execGit(['rev-parse', '--abbrev-ref', 'HEAD']),
-    execGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
-    execGit(['status', '--porcelain', '-u']),
-    execGit(['diff']),
-    execGit(['diff', '--cached']),
-    execGit(['branch', '-a', '--format=%(refname:short)']),
-    execGit(['log', '--oneline', '-30']),
-  ])
-
-  const upstream = upstreamRaw.startsWith('fatal') ? null : upstreamRaw || null
-  const aheadBehindRaw = upstream
-    ? await execGit(['rev-list', '--left-right', '--count', `${upstream}...HEAD`])
-    : ''
-  const [behindStr, aheadStr] = aheadBehindRaw.split('\t')
-  const ahead = parseInt(aheadStr ?? '0', 10) || 0
-  const behind = parseInt(behindStr ?? '0', 10) || 0
-
-  const status: GitStatusEntry[] = statusRaw
-    ? statusRaw.split('\n').filter(Boolean).map((line) => ({
-        x: line[0] ?? ' ',
-        y: line[1] ?? ' ',
-        path: line.slice(3),
-      }))
-    : []
-
-  const branches = branchesRaw ? branchesRaw.split('\n').filter(Boolean) : []
-  const commits = commitsRaw ? commitsRaw.split('\n').filter(Boolean) : []
-
-  return { branch: branch || 'HEAD', upstream, ahead, behind, status, unstaged, staged, branches, commits }
-}
-
-// ---------------------------------------------------------------------------
 // File tree
 // ---------------------------------------------------------------------------
 
@@ -172,6 +103,7 @@ const PANE_TITLES: Record<PaneId, string> = {
 type GitKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
 type Props = {
+  cwd?: string | null
   theme: TuiThemePalette
   width: number
   height: number
@@ -179,7 +111,69 @@ type Props = {
   onKeyHandlerReady: (handler: (key: GitKeyEvent) => void) => void
 }
 
-export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }: Props) {
+function execGit(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    execFile('git', args, {
+      cwd,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    }, (err, stdout) => {
+      if (!err) {
+        resolve(String(stdout).trimEnd())
+        return
+      }
+
+      // git diff exits with code 1 when differences exist — stdout is in the error.
+      if (typeof err === 'object' && err && 'stdout' in err) {
+        const out = (err as { stdout?: unknown }).stdout
+        if (!out) {
+          resolve('')
+          return
+        }
+        resolve(Buffer.isBuffer(out) ? out.toString('utf-8').trimEnd() : String(out).trimEnd())
+        return
+      }
+
+      resolve('')
+    })
+  })
+}
+
+async function fetchGitData(cwd: string): Promise<GitData> {
+  const [branch, upstreamRaw, statusRaw, unstaged, staged, branchesRaw, commitsRaw] = await Promise.all([
+    execGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    execGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
+    execGit(cwd, ['status', '--porcelain', '-u']),
+    execGit(cwd, ['diff']),
+    execGit(cwd, ['diff', '--cached']),
+    execGit(cwd, ['branch', '-a', '--format=%(refname:short)']),
+    execGit(cwd, ['log', '--oneline', '-30']),
+  ])
+
+  const upstream = upstreamRaw.startsWith('fatal') ? null : upstreamRaw || null
+  const aheadBehindRaw = upstream
+    ? await execGit(cwd, ['rev-list', '--left-right', '--count', `${upstream}...HEAD`])
+    : ''
+  const [behindStr, aheadStr] = aheadBehindRaw.split('\t')
+  const ahead = parseInt(aheadStr ?? '0', 10) || 0
+  const behind = parseInt(behindStr ?? '0', 10) || 0
+
+  const status: GitStatusEntry[] = statusRaw
+    ? statusRaw.split('\n').filter(Boolean).map((line) => ({
+        x: line[0] ?? ' ',
+        y: line[1] ?? ' ',
+        path: line.slice(3),
+      }))
+    : []
+
+  const branches = branchesRaw ? branchesRaw.split('\n').filter(Boolean) : []
+  const commits = commitsRaw ? commitsRaw.split('\n').filter(Boolean) : []
+
+  return { branch: branch || 'HEAD', upstream, ahead, behind, status, unstaged, staged, branches, commits }
+}
+
+export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerReady }: Props) {
+  const repoCwd = cwd || process.cwd()
   const [data, setData] = useState<GitData | null>(null)
   const [loading, setLoading] = useState(true)
   const [contentLoading, setContentLoading] = useState(false)
@@ -197,7 +191,7 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
     let cancelled = false
     setLoading(true)
     setData(null)
-    void fetchGitData()
+    void fetchGitData(repoCwd)
       .then((next) => {
         if (!cancelled) setData(next)
       })
@@ -208,7 +202,7 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [repoCwd])
 
   // When data loads, expand all dirs and place cursor on the first file node
   useEffect(() => {
@@ -295,24 +289,24 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
             const entry = data.status.find((e) => e.path === selectedFilePath)
             const isUntracked = entry?.x === '?' && entry?.y === '?'
             if (isUntracked) {
-              content = await execGit(['diff', '--no-index', '/dev/null', selectedFilePath]) || '(empty file)'
+              content = await execGit(repoCwd, ['diff', '--no-index', '/dev/null', selectedFilePath]) || '(empty file)'
             } else {
-              content = await execGit(['diff', 'HEAD', '--', selectedFilePath])
-                || await execGit(['diff', '--cached', '--', selectedFilePath])
+              content = await execGit(repoCwd, ['diff', 'HEAD', '--', selectedFilePath])
+                || await execGit(repoCwd, ['diff', '--cached', '--', selectedFilePath])
                 || '(no changes)'
             }
             break
           }
           case 3: {
             const b = data.branches[branchIndex]
-            content = b ? (await execGit(['log', '--oneline', '-20', b]) || b) : '(no branches)'
+            content = b ? (await execGit(repoCwd, ['log', '--oneline', '-20', b]) || b) : '(no branches)'
             break
           }
           case 4: {
             const commit = data.commits[commitIndex]
             if (!commit) { content = '(no commits)'; break }
             const hash = commit.split(' ')[0]
-            content = hash ? await execGit(['show', '--stat', hash]) : commit
+            content = hash ? await execGit(repoCwd, ['show', '--stat', hash]) : commit
             break
           }
           default:
@@ -338,7 +332,7 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
         rightContentRequestRef.current += 1
       }
     }
-  }, [data, pane, selectedFilePath, branchIndex, commitIndex])
+  }, [branchIndex, commitIndex, data, pane, repoCwd, selectedFilePath])
 
   const handleKey = useCallback((key: GitKeyEvent) => {
     if (key.name === 'escape') { onClose(); return }
@@ -382,12 +376,12 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
     if (key.name === 'u') { diffScrollRef.current?.scrollBy(-10); return }
     if (key.name === 'r') {
       setLoading(true)
-      void fetchGitData()
+      void fetchGitData(repoCwd)
         .then((next) => setData(next))
         .finally(() => setLoading(false))
       return
     }
-  }, [data, onClose, pane, visibleNodes, treeCursor])
+  }, [data, onClose, pane, repoCwd, treeCursor, visibleNodes])
 
   // Register key handler with parent
   useEffect(() => {

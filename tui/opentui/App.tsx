@@ -1455,6 +1455,7 @@ export default function OpenTuiApp() {
   ), [selectedSession, sessionDetail?.info])
 
   const readerModel = sessionDetail?.info?.currentModel ?? 'unknown'
+  const gitRepoCwd = sessionDetail?.info?.cwd ?? selectedSession?.cwd ?? null
   const projectCount = useMemo(
     () => new Set(sessions.map((session) => formatSessionProject(session))).size,
     [sessions],
@@ -4005,6 +4006,7 @@ export default function OpenTuiApp() {
 
       {gitOpen ? (
         <GitPopover
+          cwd={gitRepoCwd}
           theme={theme}
           width={width}
           height={height}
