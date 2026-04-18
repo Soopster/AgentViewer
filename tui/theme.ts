@@ -6,11 +6,16 @@ export type TuiThemeMode =
   | 'solarized-light'
   | 'github-light'
   | 'gruvbox-light'
+  | 'catppuccin-latte'
+  | 'rose-pine-dawn'
   | 'dark'
   | 'solarized-dark'
   | 'nord'
   | 'gruvbox-dark'
   | 'dracula'
+  | 'tokyo-night'
+  | 'catppuccin-mocha'
+  | 'obsidian'
   | 'cyber'
 export type TuiDensity = 'comfortable' | 'balanced' | 'dense'
 export type TuiTranscriptView = 'conversation' | 'full'
@@ -279,6 +284,116 @@ export const CYBER_THEME: TuiThemePalette = {
   userBg: '#1a2f60',
 } as const
 
+export const CATPPUCCIN_LATTE_THEME: TuiThemePalette = {
+  bg: '#eff1f5',
+  surface: '#e6e9ef',
+  surface2: '#dce0e8',
+  surface3: '#ccd0da',
+  diffAddBg: '#dbe9d4',
+  diffRemoveBg: '#f3d5d4',
+  diffMetaBg: '#d6e0f5',
+  border: '#bcc0cc',
+  border2: '#4c4f69',
+  text: '#4c4f69',
+  muted: '#6c6f85',
+  dim: '#9ca0b0',
+  violet: '#8839ef',
+  cyan: '#209fb5',
+  green: '#40a02b',
+  red: '#d20f39',
+  amber: '#df8e1d',
+  pink: '#ea76cb',
+  userBg: '#bcc0cc',
+} as const
+
+export const ROSE_PINE_DAWN_THEME: TuiThemePalette = {
+  bg: '#faf4ed',
+  surface: '#fffaf3',
+  surface2: '#f2e9e1',
+  surface3: '#dfdad9',
+  diffAddBg: '#e5ecd7',
+  diffRemoveBg: '#f5d9d4',
+  diffMetaBg: '#e1e3ee',
+  border: '#cecacd',
+  border2: '#575279',
+  text: '#575279',
+  muted: '#797593',
+  dim: '#9893a5',
+  violet: '#907aa9',
+  cyan: '#56949f',
+  green: '#286983',
+  red: '#b4637a',
+  amber: '#ea9d34',
+  pink: '#d7827e',
+  userBg: '#dfdad9',
+} as const
+
+export const TOKYO_NIGHT_THEME: TuiThemePalette = {
+  bg: '#1a1b26',
+  surface: '#24283b',
+  surface2: '#2f334d',
+  surface3: '#414868',
+  diffAddBg: '#273c39',
+  diffRemoveBg: '#462a3a',
+  diffMetaBg: '#283457',
+  border: '#414868',
+  border2: '#7aa2f7',
+  text: '#c0caf5',
+  muted: '#a9b1d6',
+  dim: '#565f89',
+  violet: '#bb9af7',
+  cyan: '#7dcfff',
+  green: '#9ece6a',
+  red: '#f7768e',
+  amber: '#e0af68',
+  pink: '#ff9e64',
+  userBg: '#283457',
+} as const
+
+export const CATPPUCCIN_MOCHA_THEME: TuiThemePalette = {
+  bg: '#1e1e2e',
+  surface: '#181825',
+  surface2: '#313244',
+  surface3: '#45475a',
+  diffAddBg: '#2d4332',
+  diffRemoveBg: '#4b2d38',
+  diffMetaBg: '#2c3159',
+  border: '#45475a',
+  border2: '#cba6f7',
+  text: '#cdd6f4',
+  muted: '#bac2de',
+  dim: '#6c7086',
+  violet: '#cba6f7',
+  cyan: '#89dceb',
+  green: '#a6e3a1',
+  red: '#f38ba8',
+  amber: '#f9e2af',
+  pink: '#f5c2e7',
+  userBg: '#313244',
+} as const
+
+export const OBSIDIAN_THEME: TuiThemePalette = {
+  bg: '#000000',
+  surface: '#050505',
+  surface2: '#0d0d0d',
+  surface3: '#181818',
+  diffAddBg: '#0e2a1a',
+  diffRemoveBg: '#2c0f15',
+  diffMetaBg: '#101a2a',
+  border: '#1f1f1f',
+  border2: '#3a3a3a',
+  text: '#e6e6e6',
+  muted: '#9a9a9a',
+  dim: '#5a5a5a',
+  violet: '#a78bfa',
+  cyan: '#67e8f9',
+  green: '#4ade80',
+  red: '#f87171',
+  amber: '#fbbf24',
+  pink: '#f472b6',
+  userBg: '#111111',
+} as const
+
 export let THEME: TuiThemePalette = LIGHT_THEME
 
 export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
@@ -293,6 +408,11 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'gruvbox-light': return GRUVBOX_LIGHT_THEME
     case 'gruvbox-dark': return GRUVBOX_DARK_THEME
     case 'dracula': return DRACULA_THEME
+    case 'catppuccin-latte': return CATPPUCCIN_LATTE_THEME
+    case 'rose-pine-dawn': return ROSE_PINE_DAWN_THEME
+    case 'tokyo-night': return TOKYO_NIGHT_THEME
+    case 'catppuccin-mocha': return CATPPUCCIN_MOCHA_THEME
+    case 'obsidian': return OBSIDIAN_THEME
     default: return LIGHT_THEME
   }
 }

@@ -72,6 +72,8 @@ const LIGHT_MODES: TuiThemeMode[] = [
   'github-light',
   'solarized-light',
   'gruvbox-light',
+  'catppuccin-latte',
+  'rose-pine-dawn',
 ]
 const DARK_MODES: TuiThemeMode[] = [
   'dark',
@@ -79,6 +81,9 @@ const DARK_MODES: TuiThemeMode[] = [
   'nord',
   'gruvbox-dark',
   'dracula',
+  'tokyo-night',
+  'catppuccin-mocha',
+  'obsidian',
   'cyber',
 ]
 const THEMES: TuiThemeMode[] = [...LIGHT_MODES, ...DARK_MODES]
@@ -860,11 +865,16 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   'github-light': 'GitHub neutral light',
   'solarized-light': 'Solarized cream',
   'gruvbox-light': 'Gruvbox retro cream',
+  'catppuccin-latte': 'Catppuccin pastel latte',
+  'rose-pine-dawn': 'Rosé Pine muted dawn',
   dark: 'Deep navy background',
   'solarized-dark': 'Solarized teal',
   nord: 'Cool arctic greys',
   'gruvbox-dark': 'Gruvbox retro dark',
   dracula: 'Purple-heavy dracula',
+  'tokyo-night': 'Tokyo Night indigo',
+  'catppuccin-mocha': 'Catppuccin pastel mocha',
+  obsidian: 'Pure black minimal',
   cyber: 'Neon accents',
 }
 
@@ -874,11 +884,16 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   'github-light': 'GITHUB LIGHT',
   'solarized-light': 'SOLARIZED LIGHT',
   'gruvbox-light': 'GRUVBOX LIGHT',
+  'catppuccin-latte': 'CATPPUCCIN LATTE',
+  'rose-pine-dawn': 'ROSÉ PINE DAWN',
   dark: 'DARK',
   'solarized-dark': 'SOLARIZED DARK',
   nord: 'NORD',
   'gruvbox-dark': 'GRUVBOX DARK',
   dracula: 'DRACULA',
+  'tokyo-night': 'TOKYO NIGHT',
+  'catppuccin-mocha': 'CATPPUCCIN MOCHA',
+  obsidian: 'OBSIDIAN',
   cyber: 'CYBER',
 }
 
@@ -3443,12 +3458,16 @@ export default function OpenTuiApp() {
 
   const statusLabel = loadingSessions ? 'syncing' : refreshingSessions ? 'refreshing' : 'live'
   const readerMode = followTail ? 'live mode' : pendingNewCount > 0 ? 'new content waiting' : 'reading mode'
+  const sessionIdLabel = selectedSession?.sessionId
+    ? `id ${selectedSession.sessionId.slice(-8)}`
+    : null
   const headerStatusRight = useMemo(
     () => fitText(
       joinMeta([
         statusLabel,
         `position ${transcriptCards.length === 0 ? '0' : `${Math.max(cursorIndex, 0) + 1}`}/${transcriptCards.length}`,
         readerMode,
+        sessionIdLabel,
         themeMode.toUpperCase(),
         provider.toUpperCase(),
         density.toUpperCase(),
@@ -3457,7 +3476,7 @@ export default function OpenTuiApp() {
       ]),
       Math.max(Math.floor(width * 0.55), 20),
     ),
-    [statusLabel, transcriptCards.length, cursorIndex, readerMode, themeMode, provider, density, pendingNewCount, railVisible, width],
+    [statusLabel, transcriptCards.length, cursorIndex, readerMode, sessionIdLabel, themeMode, provider, density, pendingNewCount, railVisible, width],
   )
   const headerContextLeft = useMemo(
     () => fitText(
@@ -3804,7 +3823,7 @@ export default function OpenTuiApp() {
             top={focusMode ? 1 : 3}
             right={2}
             width={36}
-            height={20}
+            height={25}
             border
             borderStyle="single"
             borderColor={theme.border2}
