@@ -1035,7 +1035,6 @@ export default function OpenTuiApp() {
   }, [openTabSessions, selectedSessionKey])
 
   const theme = getThemePalette(themeMode)
-  const syntaxStyle = useMemo(() => buildSyntaxStyle(theme), [themeMode])
   const densityState = densityConfig(density)
   const showRail = railVisible
   const effectiveFocus: PaneFocus = showRail ? focusedPane : 'messages'
@@ -1156,6 +1155,16 @@ export default function OpenTuiApp() {
   const foldedTechnicalCount = useMemo(
     () => transcriptCards.filter((card) => card.autoFold && !resolvedExpandedKeys.has(card.key)).length,
     [resolvedExpandedKeys, transcriptCards],
+  )
+  const shouldEnableSyntaxHighlighting = useMemo(() => (
+    transcriptCards.some((card) => {
+      if (!resolvedExpandedKeys.has(card.key)) return false
+      return Boolean(card.markdownContent || (card.codeBlocks && card.codeBlocks.length > 0))
+    })
+  ), [resolvedExpandedKeys, transcriptCards])
+  const syntaxStyle = useMemo(
+    () => shouldEnableSyntaxHighlighting ? buildSyntaxStyle(theme) : null,
+    [shouldEnableSyntaxHighlighting, theme],
   )
   const sidebarEntries = useMemo(
     () => buildSidebarEntries(sessions, sidebarSort),
@@ -3297,7 +3306,7 @@ export default function OpenTuiApp() {
                         title={cardTitle}
                       >
                         <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={1}>
-                          {(isExpanded && card.markdownContent) ? (
+                          {(isExpanded && card.markdownContent && syntaxStyle) ? (
                             <box paddingX={1}>
                               <markdown
                                 content={card.markdownContent}
@@ -3307,6 +3316,14 @@ export default function OpenTuiApp() {
                                 width={Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20)}
                                 tableOptions={{ widthMode: 'content', borders: true, borderColor: theme.border }}
                               />
+                            </box>
+                          ) : (isExpanded && card.markdownContent) ? (
+                            <box paddingX={1}>
+                              {card.markdownContent.split('\n').map((line, lineIndex) => (
+                                <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={theme.text}>
+                                  {fitText(line, Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20))}
+                                </text>
+                              ))}
                             </box>
                           ) : (
                             <>
@@ -3326,14 +3343,22 @@ export default function OpenTuiApp() {
                                 card.codeBlocks.map((cb, cbIndex) => (
                                   <box key={cb.key} paddingX={1} marginTop={1}>
                                     <text fg={theme.dim}>{cb.lang}</text>
-                                    <code
-                                      content={cb.content}
-                                      filetype={cb.lang}
-                                      syntaxStyle={syntaxStyle}
-                                      drawUnstyledText={true}
-                                      style={{ height: Math.min((codeBlockLineCounts[cbIndex] ?? 0) + 1, 20) }}
-                                      width={Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20)}
-                                    />
+                                    {syntaxStyle ? (
+                                      <code
+                                        content={cb.content}
+                                        filetype={cb.lang}
+                                        syntaxStyle={syntaxStyle}
+                                        drawUnstyledText={true}
+                                        style={{ height: Math.min((codeBlockLineCounts[cbIndex] ?? 0) + 1, 20) }}
+                                        width={Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20)}
+                                      />
+                                    ) : (
+                                      cb.content.split('\n').slice(0, 20).map((line, lineIndex) => (
+                                        <text key={`${cb.key}:fallback:${lineIndex}`} fg={theme.text}>
+                                          {fitText(line, Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20))}
+                                        </text>
+                                      ))
+                                    )}
                                   </box>
                                 ))
                               ) : null}
