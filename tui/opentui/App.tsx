@@ -2,6 +2,7 @@
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, startTransition, useState } from 'react'
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
+import { AnalyticsPopover } from './AnalyticsPopover'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
 import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable } from '@opentui/core'
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react'
@@ -916,6 +917,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
   { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
+  { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
   { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
   { id: 'sort',       label: 'Toggle sidebar sort',    key: 'S',  category: 'Session'    },
   // Tabs
@@ -1250,6 +1252,8 @@ export default function OpenTuiApp() {
   const [commandPaletteIndex, setCommandPaletteIndex] = useState(0)
   const [gitOpen, setGitOpen] = useState(false)
   const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [analyticsOpen, setAnalyticsOpen] = useState(false)
+  const analyticsKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIndex, setSearchMatchIndex] = useState(0)
@@ -2947,6 +2951,9 @@ export default function OpenTuiApp() {
       case 'git':
         setGitOpen(true)
         break
+      case 'analytics':
+        setAnalyticsOpen(true)
+        break
       case 'rename':
         if (selectedSession) {
           setRenameSessionKey(sessionKey(selectedSession))
@@ -3014,6 +3021,11 @@ export default function OpenTuiApp() {
 
     if (gitOpen) {
       handled(() => { gitKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (analyticsOpen) {
+      handled(() => { analyticsKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -3169,6 +3181,12 @@ export default function OpenTuiApp() {
     // Global git status popover
     if (isCtrl('g')) {
       handled(() => setGitOpen(true))
+      return
+    }
+
+    // Global analytics popover
+    if (isCtrl('a')) {
+      handled(() => setAnalyticsOpen(true))
       return
     }
 
@@ -4137,6 +4155,29 @@ export default function OpenTuiApp() {
           height={height}
           onClose={() => setGitOpen(false)}
           onKeyHandlerReady={(handler) => { gitKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
+      {analyticsOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {analyticsOpen ? (
+        <AnalyticsPopover
+          detail={sessionDetail}
+          theme={theme}
+          width={width}
+          height={height}
+          onClose={() => setAnalyticsOpen(false)}
+          onKeyHandlerReady={(handler) => { analyticsKeyHandlerRef.current = handler }}
         />
       ) : null}
     </box>
