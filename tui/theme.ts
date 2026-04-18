@@ -4,9 +4,13 @@ export type TuiThemeMode =
   | 'light'
   | 'paper'
   | 'solarized-light'
+  | 'github-light'
+  | 'gruvbox-light'
   | 'dark'
   | 'solarized-dark'
   | 'nord'
+  | 'gruvbox-dark'
+  | 'dracula'
   | 'cyber'
 export type TuiDensity = 'comfortable' | 'balanced' | 'dense'
 export type TuiTranscriptView = 'conversation' | 'full'
@@ -165,6 +169,94 @@ export const NORD_THEME: TuiThemePalette = {
   userBg: '#3b506b',
 } as const
 
+export const GITHUB_LIGHT_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#ffffff',
+  surface2: '#f6f8fa',
+  surface3: '#eaeef2',
+  diffAddBg: '#dafbe1',
+  diffRemoveBg: '#ffebe9',
+  diffMetaBg: '#ddf4ff',
+  border: '#d0d7de',
+  border2: '#1f2328',
+  text: '#1f2328',
+  muted: '#57606a',
+  dim: '#8c959f',
+  violet: '#8250df',
+  cyan: '#0969da',
+  green: '#1a7f37',
+  red: '#cf222e',
+  amber: '#9a6700',
+  pink: '#bf3989',
+  userBg: '#ddf4ff',
+} as const
+
+export const GRUVBOX_LIGHT_THEME: TuiThemePalette = {
+  bg: '#fbf1c7',
+  surface: '#f9f5d7',
+  surface2: '#ebdbb2',
+  surface3: '#d5c4a1',
+  diffAddBg: '#d8e4bc',
+  diffRemoveBg: '#f1cdc4',
+  diffMetaBg: '#d8e1cf',
+  border: '#bdae93',
+  border2: '#3c3836',
+  text: '#3c3836',
+  muted: '#665c54',
+  dim: '#928374',
+  violet: '#8f3f71',
+  cyan: '#427b58',
+  green: '#79740e',
+  red: '#9d0006',
+  amber: '#b57614',
+  pink: '#d3869b',
+  userBg: '#ebdbb2',
+} as const
+
+export const GRUVBOX_DARK_THEME: TuiThemePalette = {
+  bg: '#282828',
+  surface: '#32302f',
+  surface2: '#3c3836',
+  surface3: '#504945',
+  diffAddBg: '#3a4a1e',
+  diffRemoveBg: '#5a2626',
+  diffMetaBg: '#2f3f57',
+  border: '#504945',
+  border2: '#a89984',
+  text: '#ebdbb2',
+  muted: '#d5c4a1',
+  dim: '#928374',
+  violet: '#d3869b',
+  cyan: '#8ec07c',
+  green: '#b8bb26',
+  red: '#fb4934',
+  amber: '#fabd2f',
+  pink: '#d3869b',
+  userBg: '#3c4758',
+} as const
+
+export const DRACULA_THEME: TuiThemePalette = {
+  bg: '#282a36',
+  surface: '#343746',
+  surface2: '#3f4254',
+  surface3: '#4b4d5e',
+  diffAddBg: '#254a34',
+  diffRemoveBg: '#5a2633',
+  diffMetaBg: '#2c3459',
+  border: '#44475a',
+  border2: '#bd93f9',
+  text: '#f8f8f2',
+  muted: '#c4c6d6',
+  dim: '#6272a4',
+  violet: '#bd93f9',
+  cyan: '#8be9fd',
+  green: '#50fa7b',
+  red: '#ff5555',
+  amber: '#ffb86c',
+  pink: '#ff79c6',
+  userBg: '#44475a',
+} as const
+
 export const CYBER_THEME: TuiThemePalette = {
   bg: '#191532',
   surface: '#211c43',
@@ -197,6 +289,10 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'solarized-light': return SOLARIZED_LIGHT_THEME
     case 'solarized-dark': return SOLARIZED_DARK_THEME
     case 'nord': return NORD_THEME
+    case 'github-light': return GITHUB_LIGHT_THEME
+    case 'gruvbox-light': return GRUVBOX_LIGHT_THEME
+    case 'gruvbox-dark': return GRUVBOX_DARK_THEME
+    case 'dracula': return DRACULA_THEME
     default: return LIGHT_THEME
   }
 }

@@ -69,10 +69,14 @@ const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot'
 const THEMES: TuiThemeMode[] = [
   'light',
   'paper',
+  'github-light',
   'solarized-light',
+  'gruvbox-light',
   'dark',
   'solarized-dark',
   'nord',
+  'gruvbox-dark',
+  'dracula',
   'cyber',
 ]
 const SEARCH_MAX_CHARS = 80
@@ -846,20 +850,28 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
 const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   light: 'Crisp white background',
   paper: 'Warm off-white',
+  'github-light': 'GitHub neutral light',
   'solarized-light': 'Solarized cream',
+  'gruvbox-light': 'Gruvbox retro cream',
   dark: 'Deep navy background',
   'solarized-dark': 'Solarized teal',
   nord: 'Cool arctic greys',
+  'gruvbox-dark': 'Gruvbox retro dark',
+  dracula: 'Purple-heavy dracula',
   cyber: 'Neon accents',
 }
 
 const THEME_LABELS: Record<TuiThemeMode, string> = {
   light: 'LIGHT',
   paper: 'PAPER',
+  'github-light': 'GITHUB LIGHT',
   'solarized-light': 'SOLARIZED LIGHT',
+  'gruvbox-light': 'GRUVBOX LIGHT',
   dark: 'DARK',
   'solarized-dark': 'SOLARIZED DARK',
   nord: 'NORD',
+  'gruvbox-dark': 'GRUVBOX DARK',
+  dracula: 'DRACULA',
   cyber: 'CYBER',
 }
 
@@ -3756,7 +3768,7 @@ export default function OpenTuiApp() {
             top={focusMode ? 1 : 3}
             right={2}
             width={36}
-            height={16}
+            height={20}
             border
             borderStyle="single"
             borderColor={theme.border2}
@@ -3769,7 +3781,7 @@ export default function OpenTuiApp() {
             </box>
             <box flexGrow={1} paddingX={1} paddingBottom={1}>
               <select
-                style={{ height: 12 }}
+                style={{ height: 16 }}
                 focused
                 options={THEME_SELECT_OPTIONS}
                 selectedIndex={themeMenuIndex}
