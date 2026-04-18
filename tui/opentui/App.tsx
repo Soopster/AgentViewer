@@ -75,6 +75,7 @@ const DEFAULT_SIDEBAR_WIDTH = 32
 const SIDEBAR_RESIZE_STEP = 2
 const MIN_SIDEBAR_WIDTH = 28
 const MIN_READER_WIDTH = 40
+const SESSION_CACHE_LIMIT = 8
 
 type PaneFocus = 'sessions' | 'messages'
 
@@ -866,6 +867,37 @@ function currentProjectName(session: Session | null): string {
   return session ? formatSessionProject(session) : 'no-project'
 }
 
+function touchMapEntry<K, V>(map: Map<K, V>, key: K, value: V): void {
+  if (map.has(key)) map.delete(key)
+  map.set(key, value)
+}
+
+function pruneSessionCaches(
+  detailCache: Map<string, TuiSessionDetail>,
+  usageCache: Map<string, import('../../lib/types').ContextUsage | null>,
+  metadataFetchedAt: Map<string, number>,
+  pinnedKeys: Set<string>,
+  limit = SESSION_CACHE_LIMIT,
+): void {
+  const orderedKeys = [
+    ...detailCache.keys(),
+    ...usageCache.keys(),
+    ...metadataFetchedAt.keys(),
+  ].filter((key, index, keys) => keys.indexOf(key) === index)
+
+  let evictableCount = orderedKeys.filter((key) => !pinnedKeys.has(key)).length
+  if (evictableCount <= limit) return
+
+  for (const key of orderedKeys) {
+    if (pinnedKeys.has(key)) continue
+    detailCache.delete(key)
+    usageCache.delete(key)
+    metadataFetchedAt.delete(key)
+    evictableCount -= 1
+    if (evictableCount <= limit) break
+  }
+}
+
 export default function OpenTuiApp() {
   const renderer = useRenderer()
   const { width, height } = useTerminalDimensions()
@@ -988,6 +1020,19 @@ export default function OpenTuiApp() {
     setRenameSessionKey(null)
     setRenameDraft('')
   }, [selectedSessionKey])
+
+  useEffect(() => {
+    const pinnedKeys = new Set([
+      selectedSessionKey,
+      ...openTabSessions.map((session) => sessionKey(session)),
+    ].filter((key): key is string => Boolean(key)))
+    pruneSessionCaches(
+      sessionDetailCacheRef.current,
+      sessionContextUsageCacheRef.current,
+      sessionMetadataFetchedAtRef.current,
+      pinnedKeys,
+    )
+  }, [openTabSessions, selectedSessionKey])
 
   const theme = getThemePalette(themeMode)
   const syntaxStyle = useMemo(() => buildSyntaxStyle(theme), [themeMode])
@@ -1301,6 +1346,10 @@ export default function OpenTuiApp() {
       if (requestId !== detailRequestRef.current) return
       const cacheKey = sessionKey(session)
       const cachedDetail = sessionDetailCacheRef.current.get(cacheKey)
+      const pinnedKeys = new Set([
+        ...openTabSessions.map((openSession) => sessionKey(openSession)),
+        selectedSessionKeyRef.current,
+      ].filter((key): key is string => Boolean(key)))
       startTransition(() => {
         setSessionDetail((prev) => {
           if (
@@ -1312,11 +1361,23 @@ export default function OpenTuiApp() {
           ) {
             return prev
           }
-          sessionDetailCacheRef.current.set(cacheKey, detail)
+          touchMapEntry(sessionDetailCacheRef.current, cacheKey, detail)
+          pruneSessionCaches(
+            sessionDetailCacheRef.current,
+            sessionContextUsageCacheRef.current,
+            sessionMetadataFetchedAtRef.current,
+            pinnedKeys,
+          )
           return detail
         })
         if (detail.contextUsage) {
-          sessionContextUsageCacheRef.current.set(cacheKey, detail.contextUsage)
+          touchMapEntry(sessionContextUsageCacheRef.current, cacheKey, detail.contextUsage)
+          pruneSessionCaches(
+            sessionDetailCacheRef.current,
+            sessionContextUsageCacheRef.current,
+            sessionMetadataFetchedAtRef.current,
+            pinnedKeys,
+          )
           if (cacheKey === selectedSessionKeyRef.current) {
             setContextUsage(detail.contextUsage)
             setContextUsageStatus('ready')
@@ -1372,10 +1433,20 @@ export default function OpenTuiApp() {
       ])
         .then((metadata) => {
           if (metadataRequestId !== metadataRequestRef.current) return
+          const pinnedKeys = new Set([
+            ...openTabSessions.map((openSession) => sessionKey(openSession)),
+            selectedSessionKeyRef.current,
+          ].filter((key): key is string => Boolean(key)))
           // Stamp the fetch time regardless of outcome so the TTL prevents
           // hammering the SDK on every poll when context usage is unavailable.
-          sessionMetadataFetchedAtRef.current.set(cacheKey, Date.now())
+          touchMapEntry(sessionMetadataFetchedAtRef.current, cacheKey, Date.now())
           if (!metadata) {
+            pruneSessionCaches(
+              sessionDetailCacheRef.current,
+              sessionContextUsageCacheRef.current,
+              sessionMetadataFetchedAtRef.current,
+              pinnedKeys,
+            )
             if (cacheKey === selectedSessionKeyRef.current) {
               startTransition(() => setContextUsageStatus('unavailable'))
             }
@@ -1383,7 +1454,7 @@ export default function OpenTuiApp() {
           }
           startTransition(() => {
             if (metadata.contextUsage) {
-              sessionContextUsageCacheRef.current.set(cacheKey, metadata.contextUsage)
+              touchMapEntry(sessionContextUsageCacheRef.current, cacheKey, metadata.contextUsage)
               if (cacheKey === selectedSessionKeyRef.current) {
                 setContextUsage(metadata.contextUsage)
                 setContextUsageStatus('ready')
@@ -1411,7 +1482,7 @@ export default function OpenTuiApp() {
               })
               const cached = sessionDetailCacheRef.current.get(cacheKey)
               if (cached?.info) {
-                sessionDetailCacheRef.current.set(cacheKey, {
+                touchMapEntry(sessionDetailCacheRef.current, cacheKey, {
                   ...cached,
                   info: {
                     ...cached.info,
@@ -1420,6 +1491,12 @@ export default function OpenTuiApp() {
                 })
               }
             }
+            pruneSessionCaches(
+              sessionDetailCacheRef.current,
+              sessionContextUsageCacheRef.current,
+              sessionMetadataFetchedAtRef.current,
+              pinnedKeys,
+            )
             if (!metadata.contextUsage && cacheKey === selectedSessionKeyRef.current) {
               setContextUsageStatus('unavailable')
             }
@@ -1692,7 +1769,7 @@ export default function OpenTuiApp() {
     ))
     const cachedDetail = sessionDetailCacheRef.current.get(renameSessionKey)
     if (cachedDetail?.info) {
-      sessionDetailCacheRef.current.set(renameSessionKey, {
+      touchMapEntry(sessionDetailCacheRef.current, renameSessionKey, {
         ...cachedDetail,
         info: {
           ...cachedDetail.info,
