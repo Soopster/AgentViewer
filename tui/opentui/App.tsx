@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, startTransition, useState } from 'react'
+import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
 import { RGBA, SyntaxStyle } from '@opentui/core'
 import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable } from '@opentui/core'
@@ -100,8 +101,77 @@ type CardDisplayData = {
   isSearchHit: boolean
 }
 
+type NoticeTone = 'info' | 'error'
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(value, max))
+}
+
+async function writeClipboard(text: string): Promise<void> {
+  const tryCommand = (command: string, args: readonly string[] = []): Promise<void> => (
+    new Promise((resolve, reject) => {
+      const child = spawn(command, [...args], {
+        stdio: ['pipe', 'ignore', 'pipe'],
+      })
+
+      let stderr = ''
+      child.on('error', reject)
+      child.stderr.on('data', (chunk) => {
+        stderr += String(chunk)
+      })
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve()
+          return
+        }
+        reject(new Error(stderr.trim() || `Clipboard command failed: ${command}`))
+      })
+      child.stdin.end(text)
+    })
+  )
+
+  const platform = process.platform
+  const candidates = platform === 'darwin'
+    ? [['pbcopy', []] as const]
+    : platform === 'win32'
+    ? [['clip', []] as const, ['powershell', ['-Command', 'Set-Clipboard']] as const]
+    : [
+        ['wl-copy', []] as const,
+        ['xclip', ['-selection', 'clipboard']] as const,
+        ['xsel', ['--clipboard', '--input']] as const,
+      ]
+
+  let lastError: Error | null = null
+  for (const [command, args] of candidates) {
+    try {
+      await tryCommand(command, args)
+      return
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+    }
+  }
+
+  throw lastError ?? new Error('No clipboard command available')
+}
+
+function cardClipboardText(card: TuiTranscriptCard): string {
+  const sections: string[] = []
+  const mainBody = card.markdownContent
+    ?? card.expandedLines.map((line) => line.text).join('\n').trim()
+
+  if (mainBody) sections.push(mainBody)
+
+  if (card.codeBlocks?.length) {
+    for (const block of card.codeBlocks) {
+      sections.push(`\`\`\`${block.lang}\n${block.content}\n\`\`\``)
+    }
+  }
+
+  if (card.editDiff) {
+    sections.push(card.editDiff)
+  }
+
+  return sections.join('\n\n').trim()
 }
 
 function fmtTokens(n: number): string {
@@ -718,6 +788,7 @@ const COMMANDS: PaletteCommand[] = [
   // Transcript
   { id: 'search',     label: 'Search messages',        key: '/',  category: 'Transcript' },
   { id: 'fold',       label: 'Fold/expand card',       key: 'e',  category: 'Transcript' },
+  { id: 'copy',       label: 'Copy selected message',  key: 'y',  category: 'Transcript' },
   // Session
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
   { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
@@ -816,6 +887,7 @@ export default function OpenTuiApp() {
   const [refreshingSessions, setRefreshingSessions] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ tone: NoticeTone; text: string } | null>(null)
   const [focusedPane, setFocusedPane] = useState<PaneFocus>('sessions')
   const [providerMenuOpen, setProviderMenuOpen] = useState(false)
   const [providerMenuIndex, setProviderMenuIndex] = useState(0)
@@ -881,6 +953,7 @@ export default function OpenTuiApp() {
   const sessionMetadataFetchedAtRef = useRef(new Map<string, number>())
   const sessionMetadataInFlightRef = useRef(new Set<string>())
   const composerAbortRef = useRef<AbortController | null>(null)
+  const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadingDetailRef = useRef(false)
   const selectedSessionKeyRef = useRef<string | null>(null)
   useEffect(() => {
@@ -894,6 +967,10 @@ export default function OpenTuiApp() {
   useEffect(() => {
     selectedSessionKeyRef.current = selectedSessionKey
   }, [selectedSessionKey])
+
+  useEffect(() => () => {
+    if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
+  }, [])
 
   useEffect(() => {
     if (composerActive) setFocusedPane('messages')
@@ -1562,138 +1639,6 @@ export default function OpenTuiApp() {
     setSelectedSessionKey(sessionKey(session))
   }, [chooseProvider, provider])
 
-  const executeCommandPalette = useCallback((id: string) => {
-    closeCommandPalette()
-    switch (id) {
-      case 'provider':
-        setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
-        setProviderMenuOpen(true)
-        break
-      case 'theme': {
-        const nextTheme = cycleTheme(themeMode)
-        setThemeMode(nextTheme)
-        setActiveTheme(nextTheme)
-        void writeTuiTheme(nextTheme).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store theme'))
-        break
-      }
-      case 'density': {
-        const next = cycleDensityValue(density)
-        setDensity(next)
-        void writeTuiDensity(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store density'))
-        break
-      }
-      case 'rail': {
-        const nextVisible = !railVisible
-        setRailVisible(nextVisible)
-        if (!nextVisible && focusedPane === 'sessions') setFocusedPane('messages')
-        void writeTuiRailVisible(nextVisible).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store rail'))
-        break
-      }
-      case 'focus': {
-        const next = !focusMode
-        setFocusMode(next)
-        if (next) setFocusedPane('messages')
-        void writeTuiFocusMode(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store focus mode'))
-        break
-      }
-      case 'view': {
-        const next = cycleTranscriptViewValue(transcriptView)
-        setTranscriptView(next)
-        void writeTuiTranscriptView(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store transcript view'))
-        break
-      }
-      case 'live':
-        setFocusedPane('messages')
-        jumpToTranscriptTail()
-        break
-      case 'unread':
-        setFocusedPane('messages')
-        jumpToUnreadBoundary()
-        break
-      case 'mark':
-        setFocusedPane('messages')
-        jumpToResumeMarker()
-        break
-      case 'search':
-        setFocusedPane('messages')
-        setSearchMode(true)
-        break
-      case 'fold':
-        setFocusedPane('messages')
-        toggleExpansion()
-        break
-      case 'tab-toggle': {
-        const next = !tabsEnabled
-        setTabsEnabled(next)
-        void writeTuiTabsEnabled(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tab setting'))
-        break
-      }
-      case 'tab-prev': {
-        setFocusedPane('messages')
-        const prevIdx = Math.max(activeTabIndex - 1, 0)
-        const prev = openTabSessions[prevIdx]
-        if (prev) selectTabSession(prev)
-        break
-      }
-      case 'tab-next': {
-        setFocusedPane('messages')
-        const nextIdx = Math.min(activeTabIndex + 1, openTabSessions.length - 1)
-        const next = openTabSessions[nextIdx]
-        if (next) selectTabSession(next)
-        break
-      }
-      case 'tab-close': {
-        if (selectedSessionKey) {
-          const idx = openTabSessions.findIndex((s) => sessionKey(s) === selectedSessionKey)
-          const next = openTabSessions.filter((s) => sessionKey(s) !== selectedSessionKey)
-          setOpenTabSessions(next)
-          if (next.length > 0) {
-            const newActive = next[Math.min(Math.max(idx, 0), next.length - 1)]
-            if (newActive) selectTabSession(newActive)
-          } else {
-            const first = sessions[0]
-            setSelectedSessionKey(first ? sessionKey(first) : null)
-          }
-        }
-        break
-      }
-      case 'composer':
-        setComposerActive(true)
-        break
-      case 'thinking':
-        setThinkingMode((current) => !current)
-        break
-      case 'git':
-        setGitOpen(true)
-        break
-      case 'rename':
-        if (selectedSession) {
-          setRenameSessionKey(sessionKey(selectedSession))
-          setRenameDraft(formatSessionTitle(selectedSession))
-        }
-        break
-      case 'sort': {
-        const next: TuiSidebarSort = sidebarSort === 'project' ? 'time' : 'project'
-        setSidebarSort(next)
-        void writeTuiSidebarSort(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store sidebar sort'))
-        break
-      }
-      case 'refresh':
-        void refreshSessions(provider)
-        if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
-        break
-      case 'quit':
-        renderer.destroy()
-        process.exit(0)
-    }
-  }, [
-    activeTabIndex, closeCommandPalette, density, focusMode, focusedPane, jumpToResumeMarker,
-    tabsEnabled, sidebarSort,
-    jumpToTranscriptTail, jumpToUnreadBoundary, openTabSessions, provider, railVisible,
-    refreshSessions, refreshSelectedSessionDetail, renderer, selectTabSession, selectedSessionKey,
-    selectedSession, selectedSessionTarget, sessions, themeMode, toggleExpansion, transcriptView,
-  ])
-
   const cancelComposerSend = useCallback(() => {
     if (composerAbortRef.current) {
       composerAbortRef.current.abort()
@@ -2265,6 +2210,170 @@ export default function OpenTuiApp() {
     })
   }, [maxSidebarWidth, sidebarWidth])
 
+  const showNotice = useCallback((tone: NoticeTone, text: string) => {
+    if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
+    setNotice({ tone, text })
+    noticeTimeoutRef.current = setTimeout(() => {
+      setNotice((current) => current?.text === text ? null : current)
+      noticeTimeoutRef.current = null
+    }, 2000)
+  }, [])
+
+  const copySelectedMessage = useCallback(async () => {
+    const card = cursorIndex >= 0 ? transcriptCards[cursorIndex] : null
+    if (!card) {
+      showNotice('error', 'No message selected')
+      return
+    }
+    const text = cardClipboardText(card)
+    if (!text) {
+      showNotice('error', 'Selected message has no copyable text')
+      return
+    }
+    try {
+      await writeClipboard(text)
+      showNotice('info', 'Copied selected message to clipboard')
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Failed to copy to clipboard')
+    }
+  }, [cursorIndex, showNotice, transcriptCards])
+
+  const executeCommandPalette = useCallback((id: string) => {
+    closeCommandPalette()
+    switch (id) {
+      case 'provider':
+        setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
+        setProviderMenuOpen(true)
+        break
+      case 'theme': {
+        const nextTheme = cycleTheme(themeMode)
+        setThemeMode(nextTheme)
+        setActiveTheme(nextTheme)
+        void writeTuiTheme(nextTheme).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store theme'))
+        break
+      }
+      case 'density': {
+        const next = cycleDensityValue(density)
+        setDensity(next)
+        void writeTuiDensity(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store density'))
+        break
+      }
+      case 'rail': {
+        const nextVisible = !railVisible
+        setRailVisible(nextVisible)
+        if (!nextVisible && focusedPane === 'sessions') setFocusedPane('messages')
+        void writeTuiRailVisible(nextVisible).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store rail'))
+        break
+      }
+      case 'focus': {
+        const next = !focusMode
+        setFocusMode(next)
+        if (next) setFocusedPane('messages')
+        void writeTuiFocusMode(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store focus mode'))
+        break
+      }
+      case 'view': {
+        const next = cycleTranscriptViewValue(transcriptView)
+        setTranscriptView(next)
+        void writeTuiTranscriptView(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store transcript view'))
+        break
+      }
+      case 'live':
+        setFocusedPane('messages')
+        jumpToTranscriptTail()
+        break
+      case 'unread':
+        setFocusedPane('messages')
+        jumpToUnreadBoundary()
+        break
+      case 'mark':
+        setFocusedPane('messages')
+        jumpToResumeMarker()
+        break
+      case 'search':
+        setFocusedPane('messages')
+        setSearchMode(true)
+        break
+      case 'fold':
+        setFocusedPane('messages')
+        toggleExpansion()
+        break
+      case 'copy':
+        setFocusedPane('messages')
+        void copySelectedMessage()
+        break
+      case 'tab-toggle': {
+        const next = !tabsEnabled
+        setTabsEnabled(next)
+        void writeTuiTabsEnabled(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tab setting'))
+        break
+      }
+      case 'tab-prev': {
+        setFocusedPane('messages')
+        const prevIdx = Math.max(activeTabIndex - 1, 0)
+        const prev = openTabSessions[prevIdx]
+        if (prev) selectTabSession(prev)
+        break
+      }
+      case 'tab-next': {
+        setFocusedPane('messages')
+        const nextIdx = Math.min(activeTabIndex + 1, openTabSessions.length - 1)
+        const next = openTabSessions[nextIdx]
+        if (next) selectTabSession(next)
+        break
+      }
+      case 'tab-close': {
+        if (selectedSessionKey) {
+          const idx = openTabSessions.findIndex((s) => sessionKey(s) === selectedSessionKey)
+          const next = openTabSessions.filter((s) => sessionKey(s) !== selectedSessionKey)
+          setOpenTabSessions(next)
+          if (next.length > 0) {
+            const newActive = next[Math.min(Math.max(idx, 0), next.length - 1)]
+            if (newActive) selectTabSession(newActive)
+          } else {
+            const first = sessions[0]
+            setSelectedSessionKey(first ? sessionKey(first) : null)
+          }
+        }
+        break
+      }
+      case 'composer':
+        setComposerActive(true)
+        break
+      case 'thinking':
+        setThinkingMode((current) => !current)
+        break
+      case 'git':
+        setGitOpen(true)
+        break
+      case 'rename':
+        if (selectedSession) {
+          setRenameSessionKey(sessionKey(selectedSession))
+          setRenameDraft(formatSessionTitle(selectedSession))
+        }
+        break
+      case 'sort': {
+        const next: TuiSidebarSort = sidebarSort === 'project' ? 'time' : 'project'
+        setSidebarSort(next)
+        void writeTuiSidebarSort(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store sidebar sort'))
+        break
+      }
+      case 'refresh':
+        void refreshSessions(provider)
+        if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
+        break
+      case 'quit':
+        renderer.destroy()
+        process.exit(0)
+    }
+  }, [
+    activeTabIndex, closeCommandPalette, copySelectedMessage, density, focusMode, focusedPane, jumpToResumeMarker,
+    tabsEnabled, sidebarSort,
+    jumpToTranscriptTail, jumpToUnreadBoundary, openTabSessions, provider, railVisible,
+    refreshSessions, refreshSelectedSessionDetail, renderer, selectTabSession, selectedSessionKey,
+    selectedSession, selectedSessionTarget, sessions, themeMode, toggleExpansion, transcriptView,
+  ])
+
   useKeyboard((key) => {
     if (key.eventType === 'release') return
     const sequence = key.sequence || ''
@@ -2614,6 +2723,13 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (effectiveFocus === 'messages' && sequence === 'y') {
+      handled(() => {
+        void copySelectedMessage()
+      })
+      return
+    }
+
     if (effectiveFocus === 'messages' && sequence === '[' && searchMatches.length > 0) {
       handled(() => {
         setSearchMatchIndex(0)
@@ -2954,6 +3070,14 @@ export default function OpenTuiApp() {
           ) : showPreviewBar && selectedSession ? (
             <box paddingX={1} backgroundColor={theme.surface2}>
               <text fg={theme.cyan} wrapMode="none">{previewBarText}</text>
+            </box>
+          ) : null}
+
+          {notice ? (
+            <box paddingX={1} backgroundColor={notice.tone === 'error' ? theme.diffRemoveBg : theme.surface3}>
+              <text fg={notice.tone === 'error' ? theme.red : theme.cyan} wrapMode="none">
+                {fitText(notice.text, Math.max(rightPaneWidth - 2, 16))}
+              </text>
             </box>
           ) : null}
 
