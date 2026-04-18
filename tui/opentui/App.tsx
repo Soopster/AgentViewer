@@ -101,6 +101,11 @@ type CardDisplayData = {
   codeBlockLineCounts: number[]
   headerMeta: string
   isSearchHit: boolean
+  accent: string
+  isThinkingCard: boolean
+  categoryEmoji: string
+  isInsight: boolean
+  markdownFallbackLines: string[] | null
 }
 
 type NoticeTone = 'info' | 'error'
@@ -657,6 +662,63 @@ function transcriptBackground(line: TuiTranscriptCardLine, theme: TuiThemePalett
   }
 }
 
+const EMPTY_LANDMARKS: CardLandmark[] = []
+
+function landmarksEqual(a: CardLandmark[], b: CardLandmark[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].kind !== b[i].kind || a[i].text !== b[i].text) return false
+  }
+  return true
+}
+
+function computeAllLandmarks(
+  cards: TuiTranscriptCard[],
+  resumeMarkerIndex: number,
+  unreadBoundaryIndex: number,
+  pendingNewCount: number,
+  previous: CardLandmark[][] | null,
+): CardLandmark[][] {
+  const result: CardLandmark[][] = new Array(cards.length)
+  for (let i = 0; i < cards.length; i++) {
+    const card = cards[i]
+    const prev = i > 0 ? cards[i - 1] : null
+    let landmarks: CardLandmark[] | null = null
+
+    if (i === resumeMarkerIndex) {
+      landmarks = landmarks ?? []
+      landmarks.push({ kind: 'resume', text: 'LAST READ POSITION' })
+    }
+
+    if (i === unreadBoundaryIndex && pendingNewCount > 0) {
+      landmarks = landmarks ?? []
+      landmarks.push({
+        kind: 'unread',
+        text: `NEW SINCE LAST READ  ${pendingNewCount} message${pendingNewCount === 1 ? '' : 's'}`,
+      })
+    }
+
+    if (!prev || prev.dayKey !== card.dayKey) {
+      if (card.dayLabel) {
+        landmarks = landmarks ?? []
+        landmarks.push({ kind: 'day', text: card.dayLabel.toUpperCase() })
+      }
+    } else if (card.timestampMs != null && prev.timestampMs != null) {
+      const gap = formatTimeGap(card.timestampMs - prev.timestampMs)
+      if (gap) {
+        landmarks = landmarks ?? []
+        landmarks.push({ kind: 'gap', text: gap.toUpperCase() })
+      }
+    }
+
+    const next = landmarks ?? EMPTY_LANDMARKS
+    const prevEntry = previous?.[i]
+    result[i] = prevEntry && landmarksEqual(prevEntry, next) ? prevEntry : next
+  }
+  return result
+}
+
 function transcriptLandmarks(
   cards: TuiTranscriptCard[],
   index: number,
@@ -899,6 +961,204 @@ function pruneSessionCaches(
   }
 }
 
+type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number }
+
+type TranscriptCardProps = {
+  card: TuiTranscriptCard
+  display: CardDisplayData
+  theme: TuiThemePalette
+  densityState: DensityState
+  syntaxStyle: SyntaxStyle | null
+  rightPaneWidth: number
+  isExpanded: boolean
+  hasCursor: boolean
+  isSelected: boolean
+  isActiveMatch: boolean
+  thinkingMode: boolean
+}
+
+function TranscriptCardInner({
+  card,
+  display,
+  theme,
+  densityState,
+  syntaxStyle,
+  rightPaneWidth,
+  isExpanded,
+  hasCursor,
+  isSelected,
+  isActiveMatch,
+  thinkingMode,
+}: TranscriptCardProps) {
+  const {
+    landmarks,
+    bodyLines,
+    diffText,
+    diffLineCount,
+    codeBlockLineCounts,
+    headerMeta,
+    isSearchHit,
+    accent,
+    isThinkingCard,
+    categoryEmoji,
+    isInsight,
+    markdownFallbackLines,
+  } = display
+
+  const marker = hasCursor ? '>' : isSelected ? ':' : card.role === 'user' ? '▸' : '●'
+  const cardBg = hasCursor
+    ? theme.surface3
+    : isSelected
+      ? theme.surface2
+      : card.role === 'user'
+        ? theme.userBg
+        : isInsight
+          ? theme.surface2
+          : theme.surface
+  const borderColor = hasCursor
+    ? accent
+    : isActiveMatch
+      ? theme.amber
+      : isSearchHit
+        ? theme.cyan
+        : isInsight
+          ? theme.violet
+          : isSelected
+            ? theme.border2
+            : card.role === 'user'
+              ? accent
+              : theme.border
+  const maxTitleWidth = Math.max(rightPaneWidth - 6, 20)
+  const titleMeta = joinMeta([
+    headerMeta,
+    isSelected ? card.usageSummary ?? null : null,
+  ])
+  const cardTitleFull = `${marker} ${categoryEmoji}${card.label}${titleMeta ? `  ${titleMeta}` : ''}`
+  const cardTitle = cardTitleFull.length > maxTitleWidth
+    ? cardTitleFull.slice(0, maxTitleWidth - 1) + '…'
+    : cardTitleFull
+  const bodyInnerWidth = Math.max(rightPaneWidth - densityState.bodyIndent - 8, 16)
+  const markdownWidth = Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20)
+  const landmarkWidth = rightPaneWidth - 4
+
+  return (
+    <box flexDirection="column" marginBottom={densityState.cardGap}>
+      {landmarks.map((landmark, landmarkIndex) => {
+        const color = landmark.kind === 'resume'
+          ? theme.cyan
+          : landmark.kind === 'unread'
+            ? theme.amber
+            : landmark.kind === 'day'
+              ? theme.violet
+              : theme.dim
+        return (
+          <box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
+            <text fg={color}>{fitText(landmark.text, landmarkWidth)}</text>
+          </box>
+        )
+      })}
+
+      <box
+        id={`card:${card.key}`}
+        border
+        borderStyle="single"
+        borderColor={borderColor}
+        backgroundColor={cardBg}
+        flexDirection="column"
+        title={cardTitle}
+      >
+        <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={1}>
+          {(isExpanded && card.markdownContent && syntaxStyle) ? (
+            <box paddingX={1}>
+              <markdown
+                content={card.markdownContent}
+                syntaxStyle={syntaxStyle}
+                fg={theme.text}
+                streaming={false}
+                width={markdownWidth}
+                tableOptions={{ widthMode: 'content', borders: true, borderColor: theme.border }}
+              />
+            </box>
+          ) : markdownFallbackLines ? (
+            <box paddingX={1}>
+              {markdownFallbackLines.map((line, lineIndex) => (
+                <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={theme.text}>
+                  {fitText(line, markdownWidth)}
+                </text>
+              ))}
+            </box>
+          ) : (
+            <>
+              {bodyLines.map((line, lineIndex) => (
+                <box
+                  key={`${card.key}:line:${lineIndex}`}
+                  paddingX={1}
+                  backgroundColor={transcriptBackground(line, theme) ?? cardBg}
+                >
+                  <text fg={transcriptColor(line, theme)} wrapMode="none">
+                    {fitText(line.text, bodyInnerWidth)}
+                  </text>
+                </box>
+              ))}
+
+              {isExpanded && card.codeBlocks && card.codeBlocks.length > 0 ? (
+                card.codeBlocks.map((cb, cbIndex) => (
+                  <box key={cb.key} paddingX={1} marginTop={1}>
+                    <text fg={theme.dim}>{cb.lang}</text>
+                    {syntaxStyle ? (
+                      <code
+                        content={cb.content}
+                        filetype={cb.lang}
+                        syntaxStyle={syntaxStyle}
+                        drawUnstyledText={true}
+                        style={{ height: Math.min((codeBlockLineCounts[cbIndex] ?? 0) + 1, 20) }}
+                        width={markdownWidth}
+                      />
+                    ) : (
+                      cb.content.split('\n').slice(0, 20).map((line, lineIndex) => (
+                        <text key={`${cb.key}:fallback:${lineIndex}`} fg={theme.text}>
+                          {fitText(line, markdownWidth)}
+                        </text>
+                      ))
+                    )}
+                  </box>
+                ))
+              ) : null}
+            </>
+          )}
+
+          {diffText ? (
+            <box paddingX={1} marginTop={1}>
+              <diff
+                diff={diffText}
+                view="unified"
+                wrapMode="char"
+                showLineNumbers={true}
+                addedBg={theme.diffAddBg}
+                removedBg={theme.diffRemoveBg}
+                contextBg={theme.surface}
+                lineNumberBg={theme.surface}
+                lineNumberFg={theme.dim}
+                fg={theme.text}
+                style={{ height: isExpanded ? Math.max(diffLineCount + 2, 4) : Math.min(densityState.bodyLines, Math.max(diffLineCount + 2, 4)) }}
+              />
+            </box>
+          ) : null}
+          {isThinkingCard ? (
+            <box paddingX={1} marginTop={1}>
+              <text fg={thinkingMode ? theme.cyan : theme.dim}>
+                {thinkingMode ? 'Thinking mode on (T to disable)' : 'T toggles thinking mode for all thinking cards'}
+              </text>
+            </box>
+          ) : null}
+        </box>
+      </box>
+    </box>
+  )
+}
+
+const TranscriptCard = React.memo(TranscriptCardInner)
+
 export default function OpenTuiApp() {
   const renderer = useRenderer()
   const { width, height } = useTerminalDimensions()
@@ -1035,8 +1295,8 @@ export default function OpenTuiApp() {
     )
   }, [openTabSessions, selectedSessionKey])
 
-  const theme = getThemePalette(themeMode)
-  const densityState = densityConfig(density)
+  const theme = useMemo(() => getThemePalette(themeMode), [themeMode])
+  const densityState = useMemo(() => densityConfig(density), [density])
   const showRail = railVisible
   const effectiveFocus: PaneFocus = showRail ? focusedPane : 'messages'
   const selectedIndex = useMemo(() => {
@@ -1231,30 +1491,100 @@ export default function OpenTuiApp() {
     [sidebarInnerWidth, sidebarSortLabel, sessions.length],
   )
 
-  // Stable per-card data: body lines, diffs, code blocks. Does NOT depend on landmark
-  // indices (resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount) so scrolling and
-  // receiving new-message counters won't re-run renderedBodyLines() for every card.
-  const stableCardData = useMemo((): StableCardData[] => (
-    transcriptCards.map((card) => {
+  // Stable per-card data: body lines, diffs, code blocks. Cached by card reference so
+  // when only one card's expansion toggles (transcriptCards ref unchanged), the other
+  // cards reuse their prior StableCardData object — TranscriptCard memo then bails out.
+  const stableCardCacheRef = useRef(new WeakMap<TuiTranscriptCard, {
+    isExpanded: boolean
+    bodyLineLimit: number
+    thinkingFull: boolean
+    value: StableCardData
+  }>())
+  const stableCardData = useMemo((): StableCardData[] => {
+    const cache = stableCardCacheRef.current
+    return transcriptCards.map((card) => {
       const isExpanded = resolvedExpandedKeys.has(card.key)
-      const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, thinkingFullKeys.has(card.key))
+      const thinkingFull = thinkingFullKeys.has(card.key)
+      const prev = cache.get(card)
+      if (
+        prev
+        && prev.isExpanded === isExpanded
+        && prev.bodyLineLimit === densityState.bodyLines
+        && prev.thinkingFull === thinkingFull
+      ) {
+        return prev.value
+      }
+      const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, thinkingFull)
       const diffText = cardDiffText(card, isExpanded)
       const diffLineCount = diffText ? diffText.split('\n').length : 0
       const codeBlockLineCounts = (isExpanded && card.codeBlocks)
         ? card.codeBlocks.map((cb) => cb.content.split('\n').length)
         : []
-      return { bodyLines, diffText, diffLineCount, codeBlockLineCounts }
+      const value: StableCardData = { bodyLines, diffText, diffLineCount, codeBlockLineCounts }
+      cache.set(card, { isExpanded, bodyLineLimit: densityState.bodyLines, thinkingFull, value })
+      return value
     })
-  ), [transcriptCards, resolvedExpandedKeys, densityState.bodyLines, thinkingFullKeys])
+  }, [transcriptCards, resolvedExpandedKeys, densityState.bodyLines, thinkingFullKeys])
 
-  const cardDisplayData = useMemo((): CardDisplayData[] => (
-    transcriptCards.map((card, index) => {
+  const allLandmarksRef = useRef<CardLandmark[][] | null>(null)
+  const allLandmarks = useMemo(() => {
+    const next = computeAllLandmarks(
+      transcriptCards,
+      resumeMarkerIndex,
+      unreadBoundaryIndex,
+      pendingNewCount,
+      allLandmarksRef.current,
+    )
+    allLandmarksRef.current = next
+    return next
+  }, [transcriptCards, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount])
+
+  const cardDisplayCacheRef = useRef(new WeakMap<TuiTranscriptCard, {
+    inputs: {
+      isExpanded: boolean
+      isLatest: boolean
+      isSearchHit: boolean
+      isAutoFoldedTechnical: boolean
+      landmarks: CardLandmark[]
+      stable: StableCardData
+      providerKey: ProviderSelection
+      syntaxEnabled: boolean
+    }
+    value: CardDisplayData
+  }>())
+
+  const cardDisplayData = useMemo((): CardDisplayData[] => {
+    const cache = cardDisplayCacheRef.current
+    return transcriptCards.map((card, index) => {
       const isExpanded = resolvedExpandedKeys.has(card.key)
       const isLatest = index === transcriptCards.length - 1
       const isSearchHit = deferredSearchQuery.length > 0
         && `${card.label}\n${card.searchText}`.toLowerCase().includes(deferredSearchQuery)
       const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
-      const landmarks = transcriptLandmarks(transcriptCards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount)
+      const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
+      const stable = stableCardData[index] ?? {
+        bodyLines: [],
+        diffText: null,
+        diffLineCount: 0,
+        codeBlockLineCounts: [],
+      }
+      const providerKey = card.provider ?? provider
+
+      const prev = cache.get(card)
+      if (
+        prev
+        && prev.inputs.isExpanded === isExpanded
+        && prev.inputs.isLatest === isLatest
+        && prev.inputs.isSearchHit === isSearchHit
+        && prev.inputs.isAutoFoldedTechnical === isAutoFoldedTechnical
+        && prev.inputs.landmarks === landmarks
+        && prev.inputs.stable === stable
+        && prev.inputs.providerKey === providerKey
+        && prev.inputs.syntaxEnabled === shouldEnableSyntaxHighlighting
+      ) {
+        return prev.value
+      }
+
       const headerMeta = joinMeta([
         card.timestamp ?? null,
         isLatest ? 'latest' : null,
@@ -1262,23 +1592,54 @@ export default function OpenTuiApp() {
         isAutoFoldedTechnical ? 'folded' : null,
         `e ${isExpanded ? 'collapse' : 'expand'}`,
       ])
-      const { bodyLines, diffText, diffLineCount, codeBlockLineCounts } = stableCardData[index] ?? {
-        bodyLines: [],
-        diffText: null,
-        diffLineCount: 0,
-        codeBlockLineCounts: [],
+      const accent = transcriptAccent(card.role, providerKey)
+      const isThinkingCard = card.lines.some((line) => line.tone === 'thinking')
+      const isInsight = card.category === 'insight'
+      const isTechnical = card.category === 'technical'
+      const isDiff = card.category === 'diff'
+      const isSystem = card.category === 'system'
+      const categoryEmoji = isInsight ? '✨ ' : isTechnical ? '🔧 ' : isDiff ? '✏️ ' : isSystem ? '⚙️ ' : ''
+      const markdownFallbackLines = (isExpanded && card.markdownContent && !shouldEnableSyntaxHighlighting)
+        ? card.markdownContent.split('\n')
+        : null
+      const value: CardDisplayData = {
+        landmarks,
+        bodyLines: stable.bodyLines,
+        diffText: stable.diffText,
+        diffLineCount: stable.diffLineCount,
+        codeBlockLineCounts: stable.codeBlockLineCounts,
+        headerMeta,
+        isSearchHit,
+        accent,
+        isThinkingCard,
+        categoryEmoji,
+        isInsight,
+        markdownFallbackLines,
       }
-      return { landmarks, bodyLines, diffText, diffLineCount, codeBlockLineCounts, headerMeta, isSearchHit }
+      cache.set(card, {
+        inputs: {
+          isExpanded,
+          isLatest,
+          isSearchHit,
+          isAutoFoldedTechnical,
+          landmarks,
+          stable,
+          providerKey,
+          syntaxEnabled: shouldEnableSyntaxHighlighting,
+        },
+        value,
+      })
+      return value
     })
-  ), [
+  }, [
+    allLandmarks,
     stableCardData,
     transcriptCards,
     resolvedExpandedKeys,
     deferredSearchQuery,
     transcriptView,
-    resumeMarkerIndex,
-    unreadBoundaryIndex,
-    pendingNewCount,
+    provider,
+    shouldEnableSyntaxHighlighting,
   ])
 
   const refreshSessions = useCallback(async (
@@ -3256,144 +3617,26 @@ export default function OpenTuiApp() {
                 <box height={TRANSCRIPT_TOP_MARGIN} />
                 {transcriptCards.map((card, index) => {
                   const display = cardDisplayData[index]
+                  if (!display) return null
                   const isSelected = card.key === transcriptCursorKey
                   const hasCursor = isSelected && effectiveFocus === 'messages'
                   const isExpanded = resolvedExpandedKeys.has(card.key)
-                  const accent = transcriptAccent(card.role, card.provider ?? provider)
-                  const isThinkingCard = card.lines.some((line) => line.tone === 'thinking')
-                  const { landmarks, bodyLines, diffText, diffLineCount, codeBlockLineCounts, headerMeta, isSearchHit } = display
-                  const isActiveMatch = isSearchHit && searchMatches[searchMatchIndex] === index
-                  const marker = hasCursor ? '>' : isSelected ? ':' : card.role === 'user' ? '▸' : '●'
-                  const isInsight = card.category === 'insight'
-                  const cardBg = hasCursor ? theme.surface3 : isSelected ? theme.surface2 : card.role === 'user' ? theme.userBg : isInsight ? theme.surface2 : theme.surface
-                  const borderColor = hasCursor ? accent : isActiveMatch ? theme.amber : isSearchHit ? theme.cyan : isInsight ? theme.violet : isSelected ? theme.border2 : card.role === 'user' ? accent : theme.border
-                  const maxTitleWidth = Math.max(rightPaneWidth - 6, 20)
-                  const isTechnical = card.category === 'technical'
-                  const isDiff = card.category === 'diff'
-                  const isSystem = card.category === 'system'
-                  const categoryEmoji = isInsight ? '✨ ' : isTechnical ? '🔧 ' : isDiff ? '✏️ ' : isSystem ? '⚙️ ' : ''
-                  const titleMeta = joinMeta([
-                    headerMeta,
-                    isSelected ? card.usageSummary ?? null : null,
-                  ])
-                  const cardTitleFull = `${marker} ${categoryEmoji}${card.label}${titleMeta ? `  ${titleMeta}` : ''}`
-                  const cardTitle = cardTitleFull.length > maxTitleWidth
-                    ? cardTitleFull.slice(0, maxTitleWidth - 1) + '…'
-                    : cardTitleFull
-
+                  const isActiveMatch = display.isSearchHit && searchMatches[searchMatchIndex] === index
                   return (
-                    <box key={card.key} flexDirection="column" marginBottom={densityState.cardGap}>
-                      {landmarks.map((landmark, landmarkIndex) => {
-                        const color = landmark.kind === 'resume'
-                          ? theme.cyan
-                          : landmark.kind === 'unread'
-                          ? theme.amber
-                          : landmark.kind === 'day'
-                          ? theme.violet
-                          : theme.dim
-                        return (
-                          <box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
-                            <text fg={color}>{fitText(landmark.text, rightPaneWidth - 4)}</text>
-                          </box>
-                        )
-                      })}
-
-                      <box
-                        id={`card:${card.key}`}
-                        border
-                        borderStyle="single"
-                        borderColor={borderColor}
-                        backgroundColor={cardBg}
-                        flexDirection="column"
-                        title={cardTitle}
-                      >
-                        <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={1}>
-                          {(isExpanded && card.markdownContent && syntaxStyle) ? (
-                            <box paddingX={1}>
-                              <markdown
-                                content={card.markdownContent}
-                                syntaxStyle={syntaxStyle}
-                                fg={theme.text}
-                                streaming={false}
-                                width={Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20)}
-                                tableOptions={{ widthMode: 'content', borders: true, borderColor: theme.border }}
-                              />
-                            </box>
-                          ) : (isExpanded && card.markdownContent) ? (
-                            <box paddingX={1}>
-                              {card.markdownContent.split('\n').map((line, lineIndex) => (
-                                <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={theme.text}>
-                                  {fitText(line, Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20))}
-                                </text>
-                              ))}
-                            </box>
-                          ) : (
-                            <>
-                              {bodyLines.map((line, lineIndex) => (
-                                <box
-                                  key={`${card.key}:line:${lineIndex}`}
-                                  paddingX={1}
-                                  backgroundColor={transcriptBackground(line, theme) ?? cardBg}
-                                >
-                                  <text fg={transcriptColor(line, theme)} wrapMode="none">
-                                    {fitText(line.text, Math.max(rightPaneWidth - densityState.bodyIndent - 8, 16))}
-                                  </text>
-                                </box>
-                              ))}
-
-                              {isExpanded && card.codeBlocks && card.codeBlocks.length > 0 ? (
-                                card.codeBlocks.map((cb, cbIndex) => (
-                                  <box key={cb.key} paddingX={1} marginTop={1}>
-                                    <text fg={theme.dim}>{cb.lang}</text>
-                                    {syntaxStyle ? (
-                                      <code
-                                        content={cb.content}
-                                        filetype={cb.lang}
-                                        syntaxStyle={syntaxStyle}
-                                        drawUnstyledText={true}
-                                        style={{ height: Math.min((codeBlockLineCounts[cbIndex] ?? 0) + 1, 20) }}
-                                        width={Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20)}
-                                      />
-                                    ) : (
-                                      cb.content.split('\n').slice(0, 20).map((line, lineIndex) => (
-                                        <text key={`${cb.key}:fallback:${lineIndex}`} fg={theme.text}>
-                                          {fitText(line, Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20))}
-                                        </text>
-                                      ))
-                                    )}
-                                  </box>
-                                ))
-                              ) : null}
-                            </>
-                          )}
-
-                          {diffText ? (
-                            <box paddingX={1} marginTop={1}>
-                              <diff
-                                diff={diffText}
-                                view="unified"
-                                wrapMode="char"
-                                showLineNumbers={true}
-                                addedBg={theme.diffAddBg}
-                                removedBg={theme.diffRemoveBg}
-                                contextBg={theme.surface}
-                                lineNumberBg={theme.surface}
-                                lineNumberFg={theme.dim}
-                                fg={theme.text}
-                                style={{ height: isExpanded ? Math.max(diffLineCount + 2, 4) : Math.min(densityState.bodyLines, Math.max(diffLineCount + 2, 4)) }}
-                              />
-                            </box>
-                          ) : null}
-                          {isThinkingCard ? (
-                            <box paddingX={1} marginTop={1}>
-                              <text fg={thinkingMode ? theme.cyan : theme.dim}>
-                                {thinkingMode ? 'Thinking mode on (T to disable)' : 'T toggles thinking mode for all thinking cards'}
-                              </text>
-                            </box>
-                          ) : null}
-                        </box>
-                      </box>
-                    </box>
+                    <TranscriptCard
+                      key={card.key}
+                      card={card}
+                      display={display}
+                      theme={theme}
+                      densityState={densityState}
+                      syntaxStyle={syntaxStyle}
+                      rightPaneWidth={rightPaneWidth}
+                      isExpanded={isExpanded}
+                      hasCursor={hasCursor}
+                      isSelected={isSelected}
+                      isActiveMatch={isActiveMatch}
+                      thinkingMode={thinkingMode}
+                    />
                   )
                 })}
 
