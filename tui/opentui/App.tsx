@@ -2,7 +2,7 @@
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, startTransition, useState } from 'react'
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
-import { RGBA, SyntaxStyle } from '@opentui/core'
+import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
 import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable } from '@opentui/core'
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react'
 import {
@@ -76,6 +76,7 @@ const SIDEBAR_RESIZE_STEP = 2
 const MIN_SIDEBAR_WIDTH = 28
 const MIN_READER_WIDTH = 40
 const SESSION_CACHE_LIMIT = 8
+const MESSAGE_SCROLL_ACCEL = new MacOSScrollAccel()
 
 type PaneFocus = 'sessions' | 'messages'
 
@@ -3243,6 +3244,7 @@ export default function OpenTuiApp() {
                 stickyScroll={followTail}
                 stickyStart="bottom"
                 scrollY
+                scrollAcceleration={MESSAGE_SCROLL_ACCEL}
                 viewportCulling
                 scrollbarOptions={{
                   trackOptions: {

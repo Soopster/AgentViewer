@@ -7,7 +7,7 @@ import OpenTuiApp from './App'
 const renderer = await createCliRenderer({
   exitOnCtrlC: false,
   screenMode: 'alternate-screen',
-  useMouse: false,
+  useMouse: true,
   useKittyKeyboard: {
     disambiguate: true,
     alternateKeys: true,
