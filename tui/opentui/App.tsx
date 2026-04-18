@@ -817,10 +817,6 @@ function cardHeight(
   return landmarkRows + borderRows + bodyPaddingBottom + bodyRows + diffRows + codeRows + mdRows + cardGap
 }
 
-function cycleTheme(current: TuiThemeMode): TuiThemeMode {
-  return current === 'light' ? 'dark' : current === 'dark' ? 'cyber' : 'light'
-}
-
 function cycleDensityValue(current: TuiDensity): TuiDensity {
   return current === 'comfortable'
     ? 'balanced'
@@ -837,6 +833,18 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
   name: provider.toUpperCase(),
   description: provider === 'all' ? 'All providers' : `${provider} sessions`,
   value: provider,
+}))
+
+const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
+  light: 'Bright background',
+  dark: 'Dark background',
+  cyber: 'Neon accents',
+}
+
+const THEME_SELECT_OPTIONS: SelectOption[] = THEMES.map((mode) => ({
+  name: mode.toUpperCase(),
+  description: THEME_DESCRIPTIONS[mode],
+  value: mode,
 }))
 
 type PaletteCommand = { id: string; label: string; key: string; category: string }
@@ -1184,6 +1192,8 @@ export default function OpenTuiApp() {
   const [focusedPane, setFocusedPane] = useState<PaneFocus>('sessions')
   const [providerMenuOpen, setProviderMenuOpen] = useState(false)
   const [providerMenuIndex, setProviderMenuIndex] = useState(0)
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false)
+  const [themeMenuIndex, setThemeMenuIndex] = useState(0)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteQuery, setCommandPaletteQuery] = useState('')
   const [commandPaletteIndex, setCommandPaletteIndex] = useState(0)
@@ -2017,6 +2027,20 @@ export default function OpenTuiApp() {
     setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
   }, [provider])
 
+  const closeThemeMenu = useCallback(() => {
+    setThemeMenuOpen(false)
+    setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
+  }, [themeMode])
+
+  const chooseTheme = useCallback((nextTheme: TuiThemeMode) => {
+    setThemeMode(nextTheme)
+    setActiveTheme(nextTheme)
+    void writeTuiTheme(nextTheme).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store theme')
+    })
+    setThemeMenuOpen(false)
+  }, [])
+
   const closeCommandPalette = useCallback(() => {
     setCommandPaletteOpen(false)
     setCommandPaletteQuery('')
@@ -2703,10 +2727,8 @@ export default function OpenTuiApp() {
         setProviderMenuOpen(true)
         break
       case 'theme': {
-        const nextTheme = cycleTheme(themeMode)
-        setThemeMode(nextTheme)
-        setActiveTheme(nextTheme)
-        void writeTuiTheme(nextTheme).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store theme'))
+        setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
+        setThemeMenuOpen(true)
         break
       }
       case 'density': {
@@ -2876,6 +2898,22 @@ export default function OpenTuiApp() {
       if (key.name === 'escape' || key.name === 'p') {
         handled(() => {
           closeProviderMenu()
+        })
+        return
+      }
+      if (key.name === 'q' || isCtrl('c')) {
+        handled(() => {
+          renderer.destroy()
+          process.exit(0)
+        })
+      }
+      return
+    }
+
+    if (themeMenuOpen) {
+      if (key.name === 'escape' || key.name === 't') {
+        handled(() => {
+          closeThemeMenu()
         })
         return
       }
@@ -3262,12 +3300,8 @@ export default function OpenTuiApp() {
 
     if (key.name === 't') {
       handled(() => {
-        const nextTheme = cycleTheme(themeMode)
-        setThemeMode(nextTheme)
-        setActiveTheme(nextTheme)
-        void writeTuiTheme(nextTheme).catch((err) => {
-          setError(err instanceof Error ? err.message : 'Failed to store theme')
-        })
+        setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
+        setThemeMenuOpen(true)
       })
       return
     }
@@ -3687,6 +3721,47 @@ export default function OpenTuiApp() {
                 onSelect={(_, option) => {
                   const nextProvider = option?.value as ProviderSelection | undefined
                   if (nextProvider) void chooseProvider(nextProvider)
+                }}
+              />
+            </box>
+          </box>
+        ) : null}
+
+        {themeMenuOpen ? (
+          <box
+            position="absolute"
+            top={focusMode ? 1 : 3}
+            right={2}
+            width={34}
+            height={11}
+            border
+            borderStyle="single"
+            borderColor={theme.border2}
+            backgroundColor={theme.surface}
+            zIndex={20}
+            flexDirection="column"
+          >
+            <box paddingX={1} paddingTop={1}>
+              <text fg={theme.text}>THEME</text>
+            </box>
+            <box flexGrow={1} paddingX={1} paddingBottom={1}>
+              <select
+                style={{ height: 7 }}
+                focused
+                options={THEME_SELECT_OPTIONS}
+                selectedIndex={themeMenuIndex}
+                selectedBackgroundColor={theme.surface3}
+                selectedTextColor={theme.text}
+                textColor={theme.muted}
+                descriptionColor={theme.dim}
+                selectedDescriptionColor={theme.cyan}
+                backgroundColor={theme.surface}
+                showScrollIndicator={false}
+                itemSpacing={0}
+                onChange={(index) => setThemeMenuIndex(index)}
+                onSelect={(_, option) => {
+                  const nextTheme = option?.value as TuiThemeMode | undefined
+                  if (nextTheme) chooseTheme(nextTheme)
                 }}
               />
             </box>
