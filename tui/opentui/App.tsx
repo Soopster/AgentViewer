@@ -1126,33 +1126,42 @@ export default function OpenTuiApp() {
   const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
 
-  const showTabs = tabsEnabled && openTabSessions.length > 0
   const isPreviewMode = tabsEnabled && !!selectedSessionKey && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
-  const showPreviewBar = isPreviewMode && !showTabs
+  const visibleTabSessions = useMemo(() => (
+    isPreviewMode && selectedSession
+      ? [...openTabSessions, selectedSession]
+      : openTabSessions
+  ), [isPreviewMode, openTabSessions, selectedSession])
+  const showTabs = tabsEnabled && visibleTabSessions.length > 0
+  const showPreviewBar = false
   const TAB_BAR_HEIGHT = 1
   const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7) - (showTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0), 8)
 
   const activeTabIndex = useMemo(() => {
     if (!selectedSessionKey) return -1
-    return openTabSessions.findIndex((s) => sessionKey(s) === selectedSessionKey)
-  }, [selectedSessionKey, openTabSessions])
+    return visibleTabSessions.findIndex((s) => sessionKey(s) === selectedSessionKey)
+  }, [selectedSessionKey, visibleTabSessions])
 
   const tabOptions = useMemo((): TabSelectOption[] => (
-    openTabSessions.map((s) => ({
-      name: formatSessionTitle(s),
-      description: formatProviderLabel(s.provider ?? 'claude'),
+    visibleTabSessions.map((s) => ({
+      name: isPreviewMode && selectedSessionKey === sessionKey(s)
+        ? `PREVIEW · ${formatSessionTitle(s)}`
+        : formatSessionTitle(s),
+      description: isPreviewMode && selectedSessionKey === sessionKey(s)
+        ? 'Preview tab'
+        : formatProviderLabel(s.provider ?? 'claude'),
       value: sessionKey(s),
     }))
-  ), [openTabSessions])
+  ), [isPreviewMode, selectedSessionKey, visibleTabSessions])
 
   const tabWidth = useMemo(() => {
-    if (openTabSessions.length === 0) return 16
+    if (visibleTabSessions.length === 0) return 16
     // Fill available width proportionally so tabs look natural at any count,
     // capped to avoid very wide tabs when only a few sessions are open.
     const available = Math.max(rightPaneWidth - 6, 20)
-    const fill = Math.floor(available / openTabSessions.length)
+    const fill = Math.floor(available / visibleTabSessions.length)
     return Math.max(10, Math.min(fill, 24))
-  }, [rightPaneWidth, openTabSessions.length])
+  }, [rightPaneWidth, visibleTabSessions.length])
   const sidebarRowBudget = Math.max(mainContentHeight - 7, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
   const sidebarSortHeader = useMemo(
@@ -2599,19 +2608,19 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'messages' && key.name === 'left' && showTabs) {
+    if (key.name === 'left' && showTabs) {
       handled(() => {
         const prevIdx = Math.max(activeTabIndex - 1, 0)
-        const prev = openTabSessions[prevIdx]
+        const prev = visibleTabSessions[prevIdx]
         if (prev) selectTabSession(prev)
       })
       return
     }
 
-    if (effectiveFocus === 'messages' && key.name === 'right' && showTabs) {
+    if (key.name === 'right' && showTabs) {
       handled(() => {
-        const nextIdx = Math.min(activeTabIndex + 1, openTabSessions.length - 1)
-        const next = openTabSessions[nextIdx]
+        const nextIdx = Math.min(activeTabIndex + 1, visibleTabSessions.length - 1)
+        const next = visibleTabSessions[nextIdx]
         if (next) selectTabSession(next)
       })
       return
@@ -3045,7 +3054,7 @@ export default function OpenTuiApp() {
                 showScrollArrows={true}
                 wrapSelection={false}
                 onChange={(index) => {
-                  const tab = openTabSessions[index]
+                  const tab = visibleTabSessions[index]
                   if (tab) selectTabSession(tab)
                 }}
               />

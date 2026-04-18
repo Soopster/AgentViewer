@@ -14,13 +14,13 @@
     "tui:ink:dev": "node --watch --import tsx ./tui/main.tsx"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.104",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.113",
     "@github/copilot-sdk": "^0.2.2",
     "@inkjs/ui": "^2.0.0",
-    "@mariozechner/pi-coding-agent": "^0.66.1",
-    "@opencode-ai/sdk": "^1.4.3",
-    "@opentui/core": "^0.1.97",
-    "@opentui/react": "^0.1.97",
+    "@mariozechner/pi-coding-agent": "^0.67.68",
+    "@opencode-ai/sdk": "^1.4.11",
+    "@opentui/core": "^0.1.100",
+    "@opentui/react": "^0.1.100",
     "@radix-ui/react-checkbox": "^1.3.3",
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-select": "^2.2.6",
@@ -28,11 +28,11 @@
     "@types/react-syntax-highlighter": "^15.5.13",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "diff": "^8.0.4",
-    "ink": "^7.0.0",
+    "diff": "^9.0.0",
+    "ink": "^7.0.1",
     "lucide-react": "^1.8.0",
-    "marked": "^18.0.0",
-    "next": "^16.2.3",
+    "marked": "^18.0.1",
+    "next": "^16.2.4",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-markdown": "^10.1.0",
@@ -46,10 +46,10 @@
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "postcss": "^8.5.9",
-    "shadcn": "^4.2.0",
+    "postcss": "^8.5.10",
+    "shadcn": "^4.3.0",
     "tailwindcss": "^4.2.2",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.3"
   }
 }
