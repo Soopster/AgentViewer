@@ -3,6 +3,19 @@ import path from 'node:path'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../tui/theme'
 
 const TUI_STATE_FILE = path.join(process.cwd(), '.agent-viewer-data', 'tui.json')
+const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
+  'light',
+  'paper',
+  'solarized-light',
+  'github-light',
+  'gruvbox-light',
+  'dark',
+  'solarized-dark',
+  'nord',
+  'gruvbox-dark',
+  'dracula',
+  'cyber',
+]
 
 type TuiState = {
   theme?: unknown
@@ -65,7 +78,9 @@ async function writeTuiState(update: Partial<TuiState>): Promise<void> {
 export async function getConfiguredTuiTheme(): Promise<TuiThemeMode> {
   const parsed = await readTuiState()
   if (parsed.theme === 'cyber' || parsed.theme === 'lazygit') return 'cyber'
-  return parsed.theme === 'dark' ? 'dark' : 'light'
+  return VALID_TUI_THEMES.includes(parsed.theme as TuiThemeMode)
+    ? parsed.theme as TuiThemeMode
+    : 'light'
 }
 
 export async function setConfiguredTuiTheme(theme: TuiThemeMode): Promise<void> {
