@@ -66,18 +66,25 @@ function Spinner({ label, fg }: { label: string; fg: string }) {
 }
 
 const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'all']
-const THEMES: TuiThemeMode[] = [
+const LIGHT_MODES: TuiThemeMode[] = [
   'light',
   'paper',
   'github-light',
   'solarized-light',
   'gruvbox-light',
+]
+const DARK_MODES: TuiThemeMode[] = [
   'dark',
   'solarized-dark',
   'nord',
   'gruvbox-dark',
   'dracula',
   'cyber',
+]
+const THEMES: TuiThemeMode[] = [...LIGHT_MODES, ...DARK_MODES]
+const THEME_GROUPS: Array<{ label: string; themes: TuiThemeMode[] }> = [
+  { label: 'LIGHT', themes: LIGHT_MODES },
+  { label: 'DARK', themes: DARK_MODES },
 ]
 const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
@@ -875,12 +882,6 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   cyber: 'CYBER',
 }
 
-const THEME_SELECT_OPTIONS: SelectOption[] = THEMES.map((mode) => ({
-  name: THEME_LABELS[mode],
-  description: THEME_DESCRIPTIONS[mode],
-  value: mode,
-}))
-
 type PaletteCommand = { id: string; label: string; key: string; category: string }
 type PaletteRow =
   | { kind: 'header'; label: string }
@@ -1293,6 +1294,7 @@ export default function OpenTuiApp() {
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadingDetailRef = useRef(false)
   const selectedSessionKeyRef = useRef<string | null>(null)
+  const themeMenuOriginRef = useRef<TuiThemeMode | null>(null)
   useEffect(() => {
     setActiveTheme(themeMode)
   }, [themeMode])
@@ -2061,14 +2063,28 @@ export default function OpenTuiApp() {
     setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
   }, [provider])
 
-  const closeThemeMenu = useCallback(() => {
-    setThemeMenuOpen(false)
+  const openThemeMenu = useCallback(() => {
+    themeMenuOriginRef.current = themeMode
     setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
+    setThemeMenuOpen(true)
+  }, [themeMode])
+
+  const closeThemeMenu = useCallback(() => {
+    const originTheme = themeMenuOriginRef.current
+    setThemeMenuOpen(false)
+    if (originTheme) {
+      setThemeMode(originTheme)
+      setThemeMenuIndex(Math.max(THEMES.indexOf(originTheme), 0))
+    } else {
+      setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
+    }
+    themeMenuOriginRef.current = null
   }, [themeMode])
 
   const chooseTheme = useCallback((nextTheme: TuiThemeMode) => {
     setThemeMode(nextTheme)
-    setActiveTheme(nextTheme)
+    setThemeMenuIndex(Math.max(THEMES.indexOf(nextTheme), 0))
+    themeMenuOriginRef.current = null
     void writeTuiTheme(nextTheme).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store theme')
     })
@@ -2086,6 +2102,12 @@ export default function OpenTuiApp() {
     if (!q) return COMMANDS
     return COMMANDS.filter((cmd) => cmd.label.toLowerCase().includes(q))
   }, [commandPaletteQuery])
+
+  useEffect(() => {
+    if (!themeMenuOpen) return
+    const previewTheme = THEMES[themeMenuIndex]
+    if (previewTheme && previewTheme !== themeMode) setThemeMode(previewTheme)
+  }, [themeMenuIndex, themeMenuOpen, themeMode])
 
   const paletteDisplayRows = useMemo((): PaletteRow[] => {
     if (commandPaletteQuery) {
@@ -2761,8 +2783,7 @@ export default function OpenTuiApp() {
         setProviderMenuOpen(true)
         break
       case 'theme': {
-        setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
-        setThemeMenuOpen(true)
+        openThemeMenu()
         break
       }
       case 'density': {
@@ -2945,6 +2966,21 @@ export default function OpenTuiApp() {
     }
 
     if (themeMenuOpen) {
+      if (key.name === 'j' || key.name === 'down') {
+        handled(() => setThemeMenuIndex((i) => Math.min(i + 1, THEMES.length - 1)))
+        return
+      }
+      if (key.name === 'k' || key.name === 'up') {
+        handled(() => setThemeMenuIndex((i) => Math.max(i - 1, 0)))
+        return
+      }
+      if (key.name === 'return') {
+        handled(() => {
+          const nextTheme = THEMES[themeMenuIndex]
+          if (nextTheme) chooseTheme(nextTheme)
+        })
+        return
+      }
       if (key.name === 'escape' || key.name === 't') {
         handled(() => {
           closeThemeMenu()
@@ -3334,8 +3370,7 @@ export default function OpenTuiApp() {
 
     if (key.name === 't') {
       handled(() => {
-        setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
-        setThemeMenuOpen(true)
+        openThemeMenu()
       })
       return
     }
@@ -3779,27 +3814,37 @@ export default function OpenTuiApp() {
             <box paddingX={1} paddingTop={1}>
               <text fg={theme.text}>THEME</text>
             </box>
-            <box flexGrow={1} paddingX={1} paddingBottom={1}>
-              <select
-                style={{ height: 16 }}
-                focused
-                options={THEME_SELECT_OPTIONS}
-                selectedIndex={themeMenuIndex}
-                selectedBackgroundColor={theme.surface3}
-                selectedTextColor={theme.text}
-                textColor={theme.muted}
-                descriptionColor={theme.dim}
-                selectedDescriptionColor={theme.cyan}
-                backgroundColor={theme.surface}
-                focusedBackgroundColor={theme.surface}
-                showScrollIndicator={false}
-                itemSpacing={0}
-                onChange={(index) => setThemeMenuIndex(index)}
-                onSelect={(_, option) => {
-                  const nextTheme = option?.value as TuiThemeMode | undefined
-                  if (nextTheme) chooseTheme(nextTheme)
-                }}
-              />
+            <box flexGrow={1} paddingX={1} paddingBottom={1} flexDirection="column">
+              {THEME_GROUPS.map((group, groupIndex) => (
+                <React.Fragment key={group.label}>
+                  {groupIndex > 0 ? <box height={1} /> : null}
+                  <box paddingX={1}>
+                    <text fg={theme.dim} wrapMode="none">{group.label}</text>
+                  </box>
+                  {group.themes.map((mode) => {
+                    const globalIndex = THEMES.indexOf(mode)
+                    const selected = globalIndex === themeMenuIndex
+                    const active = mode === themeMode
+                    return (
+                      <box
+                        key={mode}
+                        paddingX={1}
+                        backgroundColor={selected ? theme.surface3 : theme.surface}
+                        flexDirection="row"
+                      >
+                        <box flexGrow={1}>
+                          <text fg={selected ? theme.text : active ? theme.cyan : theme.muted} wrapMode="none">
+                            {fitText(THEME_LABELS[mode], 24)}
+                          </text>
+                        </box>
+                        <text fg={active ? theme.cyan : theme.dim} wrapMode="none">
+                          {active ? '✓' : ' '}
+                        </text>
+                      </box>
+                    )
+                  })}
+                </React.Fragment>
+              ))}
             </box>
           </box>
         ) : null}

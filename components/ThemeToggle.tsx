@@ -4,18 +4,31 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 
 type Theme = 'dark' | 'light' | 'terminal' | 'paper' | 'imessage'
+type ThemeCategory = 'dark' | 'light'
 
 const THEMES: Theme[] = ['dark', 'light', 'terminal', 'paper', 'imessage']
 
-const THEME_META: Record<Theme, { icon: string; label: string }> = {
-  dark:     { icon: '☾', label: 'Dark'     },
-  light:    { icon: '☀', label: 'Light'    },
-  terminal: { icon: '⌨', label: 'Terminal' },
-  paper:    { icon: '✦', label: 'Paper'    },
-  imessage: { icon: '💬', label: 'iMessage' },
+const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; label: string }> = {
+  dark:     { category: 'dark', icon: '☾', label: 'Dark'     },
+  light:    { category: 'light', icon: '☀', label: 'Light'    },
+  terminal: { category: 'dark', icon: '⌨', label: 'Terminal' },
+  paper:    { category: 'light', icon: '✦', label: 'Paper'    },
+  imessage: { category: 'light', icon: '💬', label: 'iMessage' },
 }
 
 const VALID: Set<string> = new Set(THEMES)
+const THEME_GROUPS: Array<{ category: ThemeCategory; label: string; themes: Theme[] }> = [
+  {
+    category: 'dark',
+    label: 'Dark',
+    themes: THEMES.filter(theme => THEME_META[theme].category === 'dark'),
+  },
+  {
+    category: 'light',
+    label: 'Light',
+    themes: THEMES.filter(theme => THEME_META[theme].category === 'light'),
+  },
+]
 
 function applyTheme(theme: Theme) {
   document.documentElement.dataset.theme = theme
@@ -88,7 +101,7 @@ export default function ThemeToggle() {
             position: 'absolute',
             top: 'calc(100% + 6px)',
             right: 0,
-            minWidth: 130,
+            minWidth: 152,
             background: 'var(--surface-2)',
             border: '1px solid var(--border-2)',
             borderRadius: 7,
@@ -98,44 +111,68 @@ export default function ThemeToggle() {
             padding: '4px 0',
           }}
         >
-          {THEMES.map((t) => {
-            const m = THEME_META[t]
-            const isActive = t === theme
-            const isHov = hovered === t
-            return (
+          {THEME_GROUPS.map((group, groupIndex) => (
+            <div key={group.category}>
+              {groupIndex > 0 && (
+                <div
+                  style={{
+                    margin: '4px 12px',
+                    borderTop: '1px solid var(--border)',
+                  }}
+                />
+              )}
               <div
-                key={t}
-                onClick={() => select(t)}
-                onMouseEnter={() => setHovered(t)}
-                onMouseLeave={() => setHovered(null)}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 9,
-                  padding: '7px 14px',
-                  cursor: 'pointer',
-                  background: isHov ? 'var(--surface-3)' : 'transparent',
-                  transition: 'background 0.1s ease',
+                  padding: '6px 14px 4px',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10,
+                  letterSpacing: '0.12em',
+                  textTransform: 'uppercase',
+                  color: 'var(--text-3)',
                 }}
               >
-                <span style={{ fontSize: 13, lineHeight: 1, width: 16, textAlign: 'center' }}>{m.icon}</span>
-                <span
-                  style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                    letterSpacing: '0.05em',
-                    color: isActive ? 'var(--violet)' : isHov ? 'var(--text)' : 'var(--text-2)',
-                    flex: 1,
-                  }}
-                >
-                  {m.label}
-                </span>
-                {isActive && (
-                  <span style={{ color: 'var(--violet)', fontSize: 10 }}>✓</span>
-                )}
+                {group.label}
               </div>
-            )
-          })}
+              {group.themes.map((t) => {
+                const m = THEME_META[t]
+                const isActive = t === theme
+                const isHov = hovered === t
+                return (
+                  <div
+                    key={t}
+                    onClick={() => select(t)}
+                    onMouseEnter={() => setHovered(t)}
+                    onMouseLeave={() => setHovered(null)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 9,
+                      padding: '7px 14px',
+                      cursor: 'pointer',
+                      background: isHov ? 'var(--surface-3)' : 'transparent',
+                      transition: 'background 0.1s ease',
+                    }}
+                  >
+                    <span style={{ fontSize: 13, lineHeight: 1, width: 16, textAlign: 'center' }}>{m.icon}</span>
+                    <span
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        letterSpacing: '0.05em',
+                        color: isActive ? 'var(--violet)' : isHov ? 'var(--text)' : 'var(--text-2)',
+                        flex: 1,
+                      }}
+                    >
+                      {m.label}
+                    </span>
+                    {isActive && (
+                      <span style={{ color: 'var(--violet)', fontSize: 10 }}>✓</span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          ))}
         </div>
       )}
     </div>

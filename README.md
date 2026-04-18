@@ -122,7 +122,7 @@ npx agent-viewer --legacy
 
 ## Theming
 
-The theme picker is in the top-left corner of the sidebar. Five themes are available:
+The theme picker is in the top-left corner of the sidebar. Themes are grouped into dark and light categories:
 
 | Theme | Description |
 |-------|-------------|
