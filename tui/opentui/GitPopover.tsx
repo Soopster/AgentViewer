@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { execFileSync } from 'child_process'
+import { execFile } from 'child_process'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 
@@ -27,45 +27,60 @@ type GitStatusEntry = {
 }
 
 // ---------------------------------------------------------------------------
-// Run a git command synchronously
+// Run git commands asynchronously so the popover does not block input.
 // ---------------------------------------------------------------------------
 
-function git(...args: string[]): string {
-  try {
-    return execFileSync('git', args, {
+function execGit(args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    execFile('git', args, {
       cwd: process.cwd(),
       encoding: 'utf-8',
       maxBuffer: 10 * 1024 * 1024,
-    }).trimEnd()
-  } catch (err: unknown) {
-    // git diff exits with code 1 when differences exist — stdout is in the error
-    if (err && typeof err === 'object' && 'stdout' in err) {
-      const out = (err as { stdout?: unknown }).stdout
-      if (!out) return ''
-      return Buffer.isBuffer(out) ? out.toString('utf-8').trimEnd() : String(out).trimEnd()
-    }
-    return ''
-  }
+    }, (err, stdout) => {
+      if (!err) {
+        resolve(String(stdout).trimEnd())
+        return
+      }
+
+      // git diff exits with code 1 when differences exist — stdout is in the error.
+      if (typeof err === 'object' && err && 'stdout' in err) {
+        const out = (err as { stdout?: unknown }).stdout
+        if (!out) {
+          resolve('')
+          return
+        }
+        resolve(Buffer.isBuffer(out) ? out.toString('utf-8').trimEnd() : String(out).trimEnd())
+        return
+      }
+
+      resolve('')
+    })
+  })
 }
 
 // ---------------------------------------------------------------------------
 // Fetch all git data in one shot
 // ---------------------------------------------------------------------------
 
-function fetchGitData(): GitData {
-  const branch = git('rev-parse', '--abbrev-ref', 'HEAD') || 'HEAD'
+async function fetchGitData(): Promise<GitData> {
+  const [branch, upstreamRaw, statusRaw, unstaged, staged, branchesRaw, commitsRaw] = await Promise.all([
+    execGit(['rev-parse', '--abbrev-ref', 'HEAD']),
+    execGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
+    execGit(['status', '--porcelain', '-u']),
+    execGit(['diff']),
+    execGit(['diff', '--cached']),
+    execGit(['branch', '-a', '--format=%(refname:short)']),
+    execGit(['log', '--oneline', '-30']),
+  ])
 
-  const upstreamRaw = git('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
-  const upstream = upstreamRaw.startsWith('fatal') ? null : upstreamRaw
-
+  const upstream = upstreamRaw.startsWith('fatal') ? null : upstreamRaw || null
   const aheadBehindRaw = upstream
-    ? git('rev-list', '--left-right', '--count', `${upstream}...HEAD`)
+    ? await execGit(['rev-list', '--left-right', '--count', `${upstream}...HEAD`])
     : ''
   const [behindStr, aheadStr] = aheadBehindRaw.split('\t')
   const ahead = parseInt(aheadStr ?? '0', 10) || 0
   const behind = parseInt(behindStr ?? '0', 10) || 0
 
-  const statusRaw = git('status', '--porcelain', '-u')
   const status: GitStatusEntry[] = statusRaw
     ? statusRaw.split('\n').filter(Boolean).map((line) => ({
         x: line[0] ?? ' ',
@@ -74,16 +89,10 @@ function fetchGitData(): GitData {
       }))
     : []
 
-  const unstaged = git('diff')
-  const staged = git('diff', '--cached')
-
-  const branchesRaw = git('branch', '-a', '--format=%(refname:short)')
   const branches = branchesRaw ? branchesRaw.split('\n').filter(Boolean) : []
-
-  const commitsRaw = git('log', '--oneline', '-30')
   const commits = commitsRaw ? commitsRaw.split('\n').filter(Boolean) : []
 
-  return { branch, upstream, ahead, behind, status, unstaged, staged, branches, commits }
+  return { branch: branch || 'HEAD', upstream, ahead, behind, status, unstaged, staged, branches, commits }
 }
 
 // ---------------------------------------------------------------------------
@@ -172,16 +181,33 @@ type Props = {
 
 export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }: Props) {
   const [data, setData] = useState<GitData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [contentLoading, setContentLoading] = useState(false)
   const [pane, setPane] = useState<PaneId>(2)
   const [treeCursor, setTreeCursor] = useState(0)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [branchIndex, setBranchIndex] = useState(0)
   const [commitIndex, setCommitIndex] = useState(0)
   const diffScrollRef = useRef<ScrollBoxRenderable>(null)
+  const rightContentRequestRef = useRef(0)
+  const rightContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Refresh on mount
   useEffect(() => {
-    setData(fetchGitData())
+    let cancelled = false
+    setLoading(true)
+    setData(null)
+    void fetchGitData()
+      .then((next) => {
+        if (!cancelled) setData(next)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // When data loads, expand all dirs and place cursor on the first file node
@@ -221,56 +247,97 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
     return pos
   }, [visibleNodes, treeCursor])
 
-  // Right-panel content computed in an effect so git() calls happen after render
+  // Right-panel content is loaded in an effect so git commands do not block render.
   const [rightContent, setRightContent] = useState('Loading…')
 
   useEffect(() => {
-    if (!data) { setRightContent('Loading…'); return }
-    let content: string
-    switch (pane) {
-      case 0:
-        content = data.unstaged || (data.staged
-          ? '(no unstaged changes)\n\n' + data.staged
-          : '(working tree clean)')
-        break
-      case 1: {
-        const parts = [`Branch:   ${data.branch}`]
-        parts.push(data.upstream
-          ? `Upstream: ${data.upstream}  ↑${data.ahead}  ↓${data.behind}`
-          : 'No upstream configured')
-        content = parts.join('\n')
-        break
-      }
-      case 2: {
-        if (!selectedFilePath) { content = data.status.length === 0 ? '(working tree clean)' : '(select a file)'; break }
-        const entry = data.status.find((e) => e.path === selectedFilePath)
-        const isUntracked = entry?.x === '?' && entry?.y === '?'
-        if (isUntracked) {
-          content = git('diff', '--no-index', '/dev/null', selectedFilePath) || '(empty file)'
-        } else {
-          content = git('diff', 'HEAD', '--', selectedFilePath)
-            || git('diff', '--cached', '--', selectedFilePath)
-            || '(no changes)'
-        }
-        break
-      }
-      case 3: {
-        const b = data.branches[branchIndex]
-        content = b ? (git('log', '--oneline', '-20', b) || b) : '(no branches)'
-        break
-      }
-      case 4: {
-        const commit = data.commits[commitIndex]
-        if (!commit) { content = '(no commits)'; break }
-        const hash = commit.split(' ')[0]
-        content = hash ? git('show', '--stat', hash) : commit
-        break
-      }
-      default:
-        content = ''
+    const requestId = ++rightContentRequestRef.current
+    if (rightContentTimerRef.current) {
+      clearTimeout(rightContentTimerRef.current)
+      rightContentTimerRef.current = null
     }
-    setRightContent(content)
-    diffScrollRef.current?.scrollTo(0)
+
+    if (!data) {
+      setContentLoading(false)
+      setRightContent('Loading…')
+      return () => {
+        if (rightContentRequestRef.current === requestId) {
+          rightContentRequestRef.current += 1
+        }
+      }
+    }
+
+    setRightContent('Loading…')
+    setContentLoading(true)
+    rightContentTimerRef.current = setTimeout(() => {
+      const activeRequestId = rightContentRequestRef.current
+      void (async () => {
+        let content = ''
+        switch (pane) {
+          case 0:
+            content = data.unstaged || (data.staged
+              ? '(no unstaged changes)\n\n' + data.staged
+              : '(working tree clean)')
+            break
+          case 1: {
+            const parts = [`Branch:   ${data.branch}`]
+            parts.push(data.upstream
+              ? `Upstream: ${data.upstream}  ↑${data.ahead}  ↓${data.behind}`
+              : 'No upstream configured')
+            content = parts.join('\n')
+            break
+          }
+          case 2: {
+            if (!selectedFilePath) {
+              content = data.status.length === 0 ? '(working tree clean)' : '(select a file)'
+              break
+            }
+            const entry = data.status.find((e) => e.path === selectedFilePath)
+            const isUntracked = entry?.x === '?' && entry?.y === '?'
+            if (isUntracked) {
+              content = await execGit(['diff', '--no-index', '/dev/null', selectedFilePath]) || '(empty file)'
+            } else {
+              content = await execGit(['diff', 'HEAD', '--', selectedFilePath])
+                || await execGit(['diff', '--cached', '--', selectedFilePath])
+                || '(no changes)'
+            }
+            break
+          }
+          case 3: {
+            const b = data.branches[branchIndex]
+            content = b ? (await execGit(['log', '--oneline', '-20', b]) || b) : '(no branches)'
+            break
+          }
+          case 4: {
+            const commit = data.commits[commitIndex]
+            if (!commit) { content = '(no commits)'; break }
+            const hash = commit.split(' ')[0]
+            content = hash ? await execGit(['show', '--stat', hash]) : commit
+            break
+          }
+          default:
+            content = ''
+        }
+
+        if (rightContentRequestRef.current !== activeRequestId) return
+        setRightContent(content)
+        setContentLoading(false)
+        diffScrollRef.current?.scrollTo(0)
+      })().catch(() => {
+        if (rightContentRequestRef.current !== activeRequestId) return
+        setContentLoading(false)
+      })
+    }, 75)
+
+    return () => {
+      if (rightContentTimerRef.current) {
+        clearTimeout(rightContentTimerRef.current)
+        rightContentTimerRef.current = null
+      }
+      if (rightContentRequestRef.current === requestId) {
+        rightContentRequestRef.current += 1
+      }
+    }
   }, [data, pane, selectedFilePath, branchIndex, commitIndex])
 
   const handleKey = useCallback((key: GitKeyEvent) => {
@@ -313,7 +380,13 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
 
     if (key.name === 'd') { diffScrollRef.current?.scrollBy(10); return }
     if (key.name === 'u') { diffScrollRef.current?.scrollBy(-10); return }
-    if (key.name === 'r') { setData(fetchGitData()); return }
+    if (key.name === 'r') {
+      setLoading(true)
+      void fetchGitData()
+        .then((next) => setData(next))
+        .finally(() => setLoading(false))
+      return
+    }
   }, [data, onClose, pane, visibleNodes, treeCursor])
 
   // Register key handler with parent
@@ -378,7 +451,7 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
           </box>
           <box paddingX={1}>
             <text fg={theme.text} wrapMode="none">
-              {data ? `${data.branch}${data.upstream ? `  ↑${data.ahead}↓${data.behind}` : ''}` : '…'}
+              {loading ? 'loading…' : data ? `${data.branch}${data.upstream ? `  ↑${data.ahead}↓${data.behind}` : ''}` : '…'}
             </text>
           </box>
         </box>
@@ -488,7 +561,11 @@ export function GitPopover({ theme, width, height, onClose, onKeyHandlerReady }:
           scrollY
           scrollbarOptions={{ trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
         >
-          {diffLines.map((line, i) => {
+          {contentLoading && diffLines.length === 1 && diffLines[0] === 'Loading…' ? (
+            <box width={rightW}>
+              <text fg={theme.dim} wrapMode="none">loading…</text>
+            </box>
+          ) : diffLines.map((line, i) => {
             const fg = line.startsWith('+') && !line.startsWith('+++')
               ? theme.green
               : line.startsWith('-') && !line.startsWith('---')
