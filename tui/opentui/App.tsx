@@ -1564,7 +1564,7 @@ export default function OpenTuiApp() {
     const fill = Math.floor(available / visibleTabSessions.length)
     return Math.max(10, Math.min(fill, 24))
   }, [rightPaneWidth, visibleTabSessions.length])
-  const sidebarRowBudget = Math.max(mainContentHeight - 4, 4)
+  const sidebarRowBudget = Math.max(mainContentHeight - 2, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
   const sidebarSortHeader = useMemo(
     () => fitText(
@@ -3583,7 +3583,7 @@ export default function OpenTuiApp() {
             flexDirection="column"
             title={sidebarSortHeader}
           >
-            <box flexGrow={1} paddingX={1} paddingY={1}>
+            <box flexGrow={1} paddingX={1}>
               {loadingSessions && sessions.length === 0 ? (
                 <Spinner label={fitText('Loading…', sidebarInnerWidth - 2)} fg={theme.dim} />
               ) : sidebarEntries.length === 0 ? (
