@@ -2577,14 +2577,14 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'sessions' && sequence === '[') {
+    if (showRail && sequence === '[') {
       handled(() => {
         resizeSidebar(-SIDEBAR_RESIZE_STEP)
       })
       return
     }
 
-    if (effectiveFocus === 'sessions' && sequence === ']') {
+    if (showRail && sequence === ']') {
       handled(() => {
         resizeSidebar(SIDEBAR_RESIZE_STEP)
       })
@@ -2726,23 +2726,6 @@ export default function OpenTuiApp() {
     if (effectiveFocus === 'messages' && sequence === 'y') {
       handled(() => {
         void copySelectedMessage()
-      })
-      return
-    }
-
-    if (effectiveFocus === 'messages' && sequence === '[' && searchMatches.length > 0) {
-      handled(() => {
-        setSearchMatchIndex(0)
-        jumpToTranscriptIndex(searchMatches[0] ?? 0)
-      })
-      return
-    }
-
-    if (effectiveFocus === 'messages' && sequence === ']' && searchMatches.length > 0) {
-      handled(() => {
-        const lastMatchIndex = searchMatches.length - 1
-        setSearchMatchIndex(lastMatchIndex)
-        jumpToTranscriptIndex(searchMatches[lastMatchIndex] ?? 0)
       })
       return
     }
