@@ -3737,6 +3737,7 @@ export default function OpenTuiApp() {
                 descriptionColor={theme.dim}
                 selectedDescriptionColor={theme.cyan}
                 backgroundColor={theme.surface}
+                focusedBackgroundColor={theme.surface}
                 showScrollIndicator={false}
                 itemSpacing={0}
                 onChange={(index) => setProviderMenuIndex(index)}
@@ -3778,6 +3779,7 @@ export default function OpenTuiApp() {
                 descriptionColor={theme.dim}
                 selectedDescriptionColor={theme.cyan}
                 backgroundColor={theme.surface}
+                focusedBackgroundColor={theme.surface}
                 showScrollIndicator={false}
                 itemSpacing={0}
                 onChange={(index) => setThemeMenuIndex(index)}
