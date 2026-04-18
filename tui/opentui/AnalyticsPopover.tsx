@@ -74,6 +74,9 @@ type FileOps = {
   linesAdded: number
   linesRemoved: number
   filesTouched: Set<string>
+  readsByFile: Map<string, number>
+  editsByFile: Map<string, number>
+  bashByVerb: Map<string, number>
 }
 
 type Analytics = {
@@ -113,6 +116,15 @@ type Analytics = {
   costPerTurn: number
   avgOutputPerAssistant: number
   longestIdleMs: number
+  // Additional
+  cacheSavings: number        // USD saved by cache reads vs full input pricing
+  toolsPerTurn: number        // agent depth
+  maxOutputInReply: number    // biggest single assistant reply (tokens)
+  longestAssistantChain: number // longest run of consecutive assistant messages
+  slashCommands: number
+  shellOutputLines: number
+  hourActivity: number[]      // 24-slot histogram (messages per hour)
+  tokensPerSecond: number     // output tokens / active seconds
 }
 
 function parseTs(value: string | undefined): number | null {
@@ -127,20 +139,46 @@ function countLines(s: string): number {
   return s.endsWith('\n') ? n - 1 : n
 }
 
-type BlockStats = { thinkingBlocks: number; thinkingChars: number; textChars: number }
+type BlockStats = {
+  thinkingBlocks: number
+  thinkingChars: number
+  textChars: number
+  slashCommands: number
+  shellOutputLines: number
+}
+
+function bashVerb(cmd: string): string {
+  // Grab the first token after any env-var prefixes like FOO=bar
+  const tokens = cmd.trim().split(/\s+/)
+  for (const tok of tokens) {
+    if (/^[A-Z_][A-Z0-9_]*=/.test(tok)) continue
+    if (tok === 'sudo' || tok === 'time' || tok === 'env') continue
+    // Strip leading paths: /usr/bin/foo → foo
+    const base = tok.split('/').pop() ?? tok
+    return base || 'bash'
+  }
+  return 'bash'
+}
 
 function collectBlocks(
   blocks: ThreadedBlock[],
   tools: Map<string, ToolBucket>,
   ops: FileOps,
 ): BlockStats {
-  const stats: BlockStats = { thinkingBlocks: 0, thinkingChars: 0, textChars: 0 }
+  const stats: BlockStats = {
+    thinkingBlocks: 0, thinkingChars: 0, textChars: 0,
+    slashCommands: 0, shellOutputLines: 0,
+  }
   for (const block of blocks) {
     if (block.type === 'text') {
       stats.textChars += block.text?.length ?? 0
     } else if (block.type === 'thinking') {
       stats.thinkingBlocks += 1
       stats.thinkingChars += block.thinking?.length ?? 0
+    } else if (block.type === 'slash_command') {
+      stats.slashCommands += 1
+    } else if (block.type === 'local_command_stdout') {
+      stats.shellOutputLines += countLines(block.stdout || '')
     } else if (block.type === 'tool_thread') {
       const name = block.toolUse.name || 'tool'
       const bucket = tools.get(name) ?? { name, count: 0, errors: 0 }
@@ -153,11 +191,17 @@ function collectBlocks(
       switch (name) {
         case 'Read':
           ops.reads += 1
-          if (fp) ops.filesTouched.add(fp)
+          if (fp) {
+            ops.filesTouched.add(fp)
+            ops.readsByFile.set(fp, (ops.readsByFile.get(fp) ?? 0) + 1)
+          }
           break
         case 'Edit': {
           ops.edits += 1
-          if (fp) ops.filesTouched.add(fp)
+          if (fp) {
+            ops.filesTouched.add(fp)
+            ops.editsByFile.set(fp, (ops.editsByFile.get(fp) ?? 0) + 1)
+          }
           const oldS = typeof input.old_string === 'string' ? input.old_string : ''
           const newS = typeof input.new_string === 'string' ? input.new_string : ''
           ops.linesRemoved += countLines(oldS)
@@ -166,7 +210,10 @@ function collectBlocks(
         }
         case 'MultiEdit': {
           ops.multiEdits += 1
-          if (fp) ops.filesTouched.add(fp)
+          if (fp) {
+            ops.filesTouched.add(fp)
+            ops.editsByFile.set(fp, (ops.editsByFile.get(fp) ?? 0) + 1)
+          }
           const edits = Array.isArray(input.edits) ? (input.edits as Record<string, unknown>[]) : []
           for (const e of edits) {
             const oldS = typeof e.old_string === 'string' ? e.old_string : ''
@@ -178,14 +225,23 @@ function collectBlocks(
         }
         case 'Write': {
           ops.writes += 1
-          if (fp) ops.filesTouched.add(fp)
+          if (fp) {
+            ops.filesTouched.add(fp)
+            ops.editsByFile.set(fp, (ops.editsByFile.get(fp) ?? 0) + 1)
+          }
           const content = typeof input.content === 'string' ? input.content : ''
           ops.linesAdded += countLines(content)
           break
         }
-        case 'Bash':
+        case 'Bash': {
           ops.bashCommands += 1
+          const cmd = typeof input.command === 'string' ? input.command : ''
+          if (cmd) {
+            const verb = bashVerb(cmd)
+            ops.bashByVerb.set(verb, (ops.bashByVerb.get(verb) ?? 0) + 1)
+          }
           break
+        }
         case 'Grep':
         case 'Glob':
           ops.searches += 1
@@ -212,6 +268,7 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
     reads: 0, edits: 0, writes: 0, multiEdits: 0,
     bashCommands: 0, searches: 0, webFetches: 0,
     linesAdded: 0, linesRemoved: 0, filesTouched: new Set(),
+    readsByFile: new Map(), editsByFile: new Map(), bashByVerb: new Map(),
   }
   const empty: Analytics = {
     provider: undefined, model: 'unknown',
@@ -226,6 +283,10 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
     cacheHitRate: 0, idleMs: 0, activeMs: 0,
     ops: emptyOps,
     errorRate: 0, costPerTurn: 0, avgOutputPerAssistant: 0, longestIdleMs: 0,
+    cacheSavings: 0, toolsPerTurn: 0, maxOutputInReply: 0, longestAssistantChain: 0,
+    slashCommands: 0, shellOutputLines: 0,
+    hourActivity: new Array(24).fill(0),
+    tokensPerSecond: 0,
   }
   if (!detail) return empty
 
@@ -240,6 +301,7 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
     reads: 0, edits: 0, writes: 0, multiEdits: 0,
     bashCommands: 0, searches: 0, webFetches: 0,
     linesAdded: 0, linesRemoved: 0, filesTouched: new Set(),
+    readsByFile: new Map(), editsByFile: new Map(), bashByVerb: new Map(),
   }
 
   let userMessages = 0, assistantMessages = 0, systemMessages = 0
@@ -247,6 +309,10 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
   let startTs: number | null = null, endTs: number | null = null
   let thinkingBlocks = 0, thinkingChars = 0, assistantTextChars = 0, userTextChars = 0
   let turns = 0, lastUserTs: number | null = null, prevTs: number | null = null
+  let slashCommands = 0, shellOutputLines = 0
+  let maxOutputInReply = 0
+  let currentChain = 0, longestAssistantChain = 0
+  const hourActivity = new Array<number>(24).fill(0)
   const firstResponseLatencies: number[] = []
   const gaps: number[] = []
   let currentModel = info?.currentModel ?? 'unknown'
@@ -254,12 +320,16 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
   for (let i = 0; i < threaded.length; i += 1) {
     const msg = threaded[i]!
     const stats = collectBlocks(msg.blocks, tools, ops)
+    slashCommands += stats.slashCommands
+    shellOutputLines += stats.shellOutputLines
     const ts = parseTs(msg.timestamp)
     if (ts !== null) {
       if (startTs === null || ts < startTs) startTs = ts
       if (endTs === null || ts > endTs) endTs = ts
       if (prevTs !== null) gaps.push(ts - prevTs)
       prevTs = ts
+      const hour = new Date(ts).getHours()
+      if (hour >= 0 && hour < 24) hourActivity[hour] = (hourActivity[hour] ?? 0) + 1
     }
 
     let latencyMs: number | null = null
@@ -268,11 +338,16 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
       userTextChars += stats.textChars
       lastUserTs = ts
       turns += 1
+      currentChain = 0
     } else if (msg.role === 'assistant') {
       assistantMessages += 1
       assistantTextChars += stats.textChars
       thinkingBlocks += stats.thinkingBlocks
       thinkingChars += stats.thinkingChars
+      currentChain += 1
+      if (currentChain > longestAssistantChain) longestAssistantChain = currentChain
+      const mOutLocal = msg.usage?.output_tokens ?? 0
+      if (mOutLocal > maxOutputInReply) maxOutputInReply = mOutLocal
       // First assistant message after a user counts as response latency
       if (lastUserTs !== null && ts !== null) {
         latencyMs = ts - lastUserTs
@@ -281,6 +356,7 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
       }
     } else {
       systemMessages += 1
+      currentChain = 0
     }
 
     const u = msg.usage
@@ -364,6 +440,20 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
 
   const durationMs = startTs !== null && endTs !== null ? endTs - startTs : null
 
+  // Cache savings: assume the model's dominant pricing. If cache reads were
+  // billed as full input instead of at the cache-read rate, how much more
+  // would the session have cost?
+  let cacheSavings = 0
+  for (const bucket of modelList) {
+    const p = priceForModel(bucket.model)
+    const cacheRate = p.cacheRead ?? p.in * 0.1
+    cacheSavings += (bucket.cacheReadTokens * (p.in - cacheRate)) / 1_000_000
+  }
+
+  const toolsPerTurn = turns > 0 ? toolUses / turns : 0
+  const activeSeconds = activeMs > 0 ? activeMs / 1000 : (durationMs ?? 0) / 1000
+  const tokensPerSecond = activeSeconds > 0 ? outputTokens / activeSeconds : 0
+
   return {
     provider: info?.provider,
     model: info?.currentModel ?? 'unknown',
@@ -385,6 +475,8 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
     errorRate: toolUses > 0 ? toolErrors / toolUses : 0,
     costPerTurn: turns > 0 ? cost / turns : 0,
     avgOutputPerAssistant: assistantMessages > 0 ? outputTokens / assistantMessages : 0,
+    cacheSavings, toolsPerTurn, maxOutputInReply, longestAssistantChain,
+    slashCommands, shellOutputLines, hourActivity, tokensPerSecond,
   }
 }
 
@@ -647,7 +739,27 @@ function SummaryPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette
         <Kpi theme={theme} width={colWidth} label="Avg output / reply"
              value={fmtNum(a.avgOutputPerAssistant)}
              accent={theme.violet}
-             sub={a.assistantMessages > 0 ? `${a.assistantMessages} replies` : '—'} />
+             sub={a.assistantMessages > 0 ? `${a.assistantMessages} replies · max ${fmtNum(a.maxOutputInReply)}` : '—'} />
+      </box>
+      <box flexDirection="row" width={width}>
+        <Kpi theme={theme} width={colWidth} label="Cache savings"
+             value={fmtCost(a.cacheSavings)} accent={theme.green}
+             sub={a.cacheReadTokens > 0
+               ? `${fmtNum(a.cacheReadTokens)} tok read at cache rate`
+               : 'no cache hits'} />
+        <Kpi theme={theme} width={colWidth} label="Agent depth"
+             value={a.toolsPerTurn > 0 ? a.toolsPerTurn.toFixed(1) : '0'} accent={theme.pink}
+             sub={`tools/turn · longest chain ${a.longestAssistantChain}`} />
+      </box>
+      <box flexDirection="row" width={width}>
+        <Kpi theme={theme} width={colWidth} label="Throughput"
+             value={a.tokensPerSecond > 0 ? `${fmtNum(a.tokensPerSecond)} tok/s` : '—'}
+             accent={theme.cyan}
+             sub="output tokens / active second" />
+        <Kpi theme={theme} width={colWidth} label="Slash / stdout"
+             value={`${a.slashCommands} / ${fmtNum(a.shellOutputLines)}`}
+             accent={theme.amber}
+             sub="slash commands · shell stdout lines" />
       </box>
 
       {/* Token composition */}
@@ -924,16 +1036,33 @@ function ActivityPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
         </box>
       ) : null}
 
-      {/* Top files */}
-      {ops.filesTouched.size > 0 ? (
+      {/* Most-edited files */}
+      {ops.editsByFile.size > 0 ? (
         <box flexDirection="column" width={width} marginTop={1}>
-          <text fg={theme.muted}>{`Files touched (${ops.filesTouched.size})`}</text>
-          {[...ops.filesTouched].slice(0, 10).map((fp) => (
-            <box key={fp}><text fg={theme.dim} wrapMode="none">  {fp}</text></box>
-          ))}
-          {ops.filesTouched.size > 10 ? (
-            <box><text fg={theme.dim}>{`  … and ${ops.filesTouched.size - 10} more`}</text></box>
-          ) : null}
+          <text fg={theme.muted}>Most-edited files</text>
+          <RankedBars theme={theme} width={width - 2}
+            entries={[...ops.editsByFile.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)}
+            color={theme.violet} />
+        </box>
+      ) : null}
+
+      {/* Most-read files */}
+      {ops.readsByFile.size > 0 ? (
+        <box flexDirection="column" width={width} marginTop={1}>
+          <text fg={theme.muted}>Most-read files</text>
+          <RankedBars theme={theme} width={width - 2}
+            entries={[...ops.readsByFile.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)}
+            color={theme.cyan} />
+        </box>
+      ) : null}
+
+      {/* Top shell commands */}
+      {ops.bashByVerb.size > 0 ? (
+        <box flexDirection="column" width={width} marginTop={1}>
+          <text fg={theme.muted}>Top shell commands</text>
+          <RankedBars theme={theme} width={width - 2}
+            entries={[...ops.bashByVerb.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)}
+            color={theme.amber} />
         </box>
       ) : null}
 
@@ -944,6 +1073,34 @@ function ActivityPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
           <LatencyHistogram latencies={latencies} theme={theme} width={width - 4} />
         </box>
       ) : null}
+    </box>
+  )
+}
+
+function RankedBars({
+  entries, theme, width, color,
+}: {
+  entries: [string, number][]; theme: TuiThemePalette; width: number; color: string
+}) {
+  if (entries.length === 0) return null
+  const max = Math.max(1, ...entries.map(([, v]) => v))
+  const labelW = Math.min(40, Math.max(12, ...entries.map(([k]) => Math.min(40, k.length))))
+  const countW = 6
+  const barWidth = Math.max(8, width - labelW - countW - 2)
+  return (
+    <box flexDirection="column" width={width}>
+      {entries.map(([key, count]) => {
+        const trimmed = key.length > labelW ? '…' + key.slice(-(labelW - 1)) : key
+        return (
+          <box key={key} flexDirection="row" width={width}>
+            <box width={labelW}><text fg={theme.text} wrapMode="none">{trimmed}</text></box>
+            <box width={countW}><text fg={color} wrapMode="none">{String(count)}</text></box>
+            <box width={barWidth}>
+              <text fg={color} wrapMode="none">{bar(count, max, barWidth)}</text>
+            </box>
+          </box>
+        )
+      })}
     </box>
   )
 }
@@ -1030,6 +1187,57 @@ function TimelinePane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
         <text fg={theme.muted}>Role distribution over time</text>
         <RoleStrip theme={theme} timeline={a.timeline} width={Math.max(16, width - 4)} />
       </box>
+
+      <box marginTop={1} flexDirection="column">
+        <text fg={theme.muted}>Activity by hour of day (local)</text>
+        <HourHeatmap counts={a.hourActivity} theme={theme} width={Math.max(48, width - 4)} />
+      </box>
+    </box>
+  )
+}
+
+function HourHeatmap({
+  counts, theme, width,
+}: {
+  counts: number[]; theme: TuiThemePalette; width: number
+}) {
+  const max = Math.max(1, ...counts)
+  // Each hour gets a cell. Cell width scales with terminal width.
+  const cellW = Math.max(1, Math.floor((width - 6) / 24))
+  const height = 5
+  // Build height × 24 grid
+  const heights = counts.map((c) => Math.round((c / max) * (height - 1)))
+  const rows: React.ReactNode[] = []
+  for (let r = height - 1; r >= 0; r -= 1) {
+    const cells: React.ReactNode[] = []
+    for (let h = 0; h < 24; h += 1) {
+      const on = (heights[h] ?? 0) >= r
+      const intensity = (counts[h] ?? 0) / max
+      const color = !on
+        ? theme.surface2
+        : intensity > 0.66 ? theme.amber
+        : intensity > 0.33 ? theme.violet
+        : theme.cyan
+      cells.push(
+        <text key={h} fg={color} wrapMode="none">{(on ? '█' : '░').repeat(cellW)}</text>
+      )
+    }
+    rows.push(<box key={r} flexDirection="row">{cells}</box>)
+  }
+  // Hour axis
+  const axis: React.ReactNode[] = []
+  for (let h = 0; h < 24; h += 1) {
+    const label = h % 6 === 0 ? String(h).padStart(2, '0') : ' '
+    axis.push(
+      <text key={h} fg={theme.dim} wrapMode="none">
+        {label.padEnd(cellW, ' ').slice(0, cellW)}
+      </text>
+    )
+  }
+  return (
+    <box flexDirection="column" width={width}>
+      {rows}
+      <box flexDirection="row">{axis}</box>
     </box>
   )
 }
