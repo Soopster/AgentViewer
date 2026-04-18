@@ -84,6 +84,35 @@ npm run dev
 
 Then open `http://localhost:3000`.
 
+Run the terminal app directly with `npx`:
+
+```bash
+npx agent-viewer
+```
+
+This launches the OpenTUI entrypoint in `tui/opentui/main.tsx` and requires Bun
+to be available on `PATH`.
+
+Run the web app instead:
+
+```bash
+npx agent-viewer web
+```
+
+This starts the Next.js dev server for the browser UI.
+
+You can choose a different port:
+
+```bash
+npx agent-viewer web --port 3001
+```
+
+If you want the legacy Ink terminal UI:
+
+```bash
+npx agent-viewer --legacy
+```
+
 ## How To Use
 
 1. Select a provider from the sidebar dropdown.

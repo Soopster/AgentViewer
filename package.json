@@ -1,8 +1,29 @@
 {
   "name": "agent-viewer",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
+  "bin": {
+    "agent-viewer": "./bin/agent-viewer.mjs"
+  },
+  "files": [
+    "README.md",
+    "app",
+    "bin",
+    "components",
+    "components.json",
+    "lib",
+    "next-env.d.ts",
+    "next.config.ts",
+    "package.json",
+    "postcss.config.mjs",
+    "proxy.ts",
+    "tsconfig.json",
+    "tsconfig.opentui.json",
+    "tsconfig.tui.json",
+    "tui",
+    "workers"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
