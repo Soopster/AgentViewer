@@ -66,7 +66,15 @@ function Spinner({ label, fg }: { label: string; fg: string }) {
 }
 
 const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'all']
-const THEMES: TuiThemeMode[] = ['light', 'dark', 'cyber']
+const THEMES: TuiThemeMode[] = [
+  'light',
+  'paper',
+  'solarized-light',
+  'dark',
+  'solarized-dark',
+  'nord',
+  'cyber',
+]
 const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
 const DETAIL_REFRESH_MS = 2000
@@ -836,13 +844,27 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
 }))
 
 const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
-  light: 'Bright background',
-  dark: 'Dark background',
+  light: 'Crisp white background',
+  paper: 'Warm off-white',
+  'solarized-light': 'Solarized cream',
+  dark: 'Deep navy background',
+  'solarized-dark': 'Solarized teal',
+  nord: 'Cool arctic greys',
   cyber: 'Neon accents',
 }
 
+const THEME_LABELS: Record<TuiThemeMode, string> = {
+  light: 'LIGHT',
+  paper: 'PAPER',
+  'solarized-light': 'SOLARIZED LIGHT',
+  dark: 'DARK',
+  'solarized-dark': 'SOLARIZED DARK',
+  nord: 'NORD',
+  cyber: 'CYBER',
+}
+
 const THEME_SELECT_OPTIONS: SelectOption[] = THEMES.map((mode) => ({
-  name: mode.toUpperCase(),
+  name: THEME_LABELS[mode],
   description: THEME_DESCRIPTIONS[mode],
   value: mode,
 }))
@@ -3732,8 +3754,8 @@ export default function OpenTuiApp() {
             position="absolute"
             top={focusMode ? 1 : 3}
             right={2}
-            width={34}
-            height={11}
+            width={36}
+            height={16}
             border
             borderStyle="single"
             borderColor={theme.border2}
@@ -3746,7 +3768,7 @@ export default function OpenTuiApp() {
             </box>
             <box flexGrow={1} paddingX={1} paddingBottom={1}>
               <select
-                style={{ height: 7 }}
+                style={{ height: 12 }}
                 focused
                 options={THEME_SELECT_OPTIONS}
                 selectedIndex={themeMenuIndex}
