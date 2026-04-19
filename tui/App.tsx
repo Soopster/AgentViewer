@@ -29,6 +29,7 @@ import {
   readTuiSessionDetail,
   readTuiSessionReaderState,
   readTuiSessions,
+  readTuiShowToolCalls,
   readTuiTheme,
   readTuiTranscriptView,
   writeTuiDensity,
@@ -36,10 +37,12 @@ import {
   writeTuiProvider,
   writeTuiRailVisible,
   writeTuiSessionReaderState,
+  writeTuiShowToolCalls,
   writeTuiTheme,
   writeTuiTranscriptView,
 } from '../lib/tui/service'
 import type { TuiSessionReaderState } from '../lib/tuiState'
+import { stripToolCallBlocks } from '../lib/threading'
 import type { ProviderSelection, Session } from '../lib/types'
 import type { TuiTranscriptView } from './theme'
 
@@ -546,6 +549,7 @@ export default function App() {
   const [focusedPane, setFocusedPane] = useState<PaneFocus>('sessions')
   const [focusMode, setFocusMode] = useState(false)
   const [density, setDensity] = useState<TuiDensity>('balanced')
+  const [showToolCalls, setShowToolCalls] = useState(true)
   const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
   const [railVisible, setRailVisible] = useState(true)
   const [sidebarTopKey, setSidebarTopKey] = useState<string | null>(null)
@@ -647,9 +651,13 @@ export default function App() {
     4,
   )
 
-  const transcriptCards = useMemo(() => (
-    sessionDetail ? formatTranscriptCards(sessionDetail.threadedMessages, density) : []
-  ), [density, sessionDetail])
+  const transcriptCards = useMemo(() => {
+    if (!sessionDetail) return []
+    const messages = showToolCalls
+      ? sessionDetail.threadedMessages
+      : stripToolCallBlocks(sessionDetail.threadedMessages)
+    return formatTranscriptCards(messages, density)
+  }, [density, sessionDetail, showToolCalls])
   const resolvedExpandedKeys = useMemo(() => {
     const next = new Set<string>()
     for (const card of transcriptCards) {
@@ -978,13 +986,14 @@ export default function App() {
 
     void (async () => {
       try {
-        const [configuredTheme, configuredProvider, configuredRailVisible, configuredFocusMode, configuredDensity, configuredTranscriptView] = await Promise.all([
+        const [configuredTheme, configuredProvider, configuredRailVisible, configuredFocusMode, configuredDensity, configuredTranscriptView, configuredShowToolCalls] = await Promise.all([
           readTuiTheme(),
           readTuiProvider(),
           readTuiRailVisible(),
           readTuiFocusMode(),
           readTuiDensity(),
           readTuiTranscriptView(),
+          readTuiShowToolCalls(),
         ])
         if (cancelled) return
         setThemeMode(configuredTheme)
@@ -994,6 +1003,7 @@ export default function App() {
         setFocusMode(configuredFocusMode)
         setDensity(configuredDensity)
         setTranscriptView(configuredTranscriptView)
+        setShowToolCalls(configuredShowToolCalls)
         if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
 
         await refreshSessions(configuredProvider, false, true)
@@ -1737,6 +1747,15 @@ export default function App() {
       return
     }
 
+    if (input === 'X') {
+      setShowToolCalls((v) => {
+        const next = !v
+        void writeTuiShowToolCalls(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
+        return next
+      })
+      return
+    }
+
     if (input === 'r') {
       void refreshSessions(provider)
       if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
@@ -1783,7 +1802,7 @@ export default function App() {
   const topBarStatusText = fitText(topBarStatus, Math.max(terminalColumns - slimBarTitle.length - 8, 16))
   const showReaderNotice = !followTail && pendingNewCount > 0
   const footerText = fitText(
-    `tab focus  j/k move  ctrl-u/d page  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  r refresh  q quit`,
+    `tab focus  j/k move  ctrl-u/d page  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  X ${showToolCalls ? 'hide tools' : 'show tools'}  r refresh  q quit`,
     Math.max(terminalColumns - 2, 16),
   )
   const headerLeftText = fitText(

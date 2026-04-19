@@ -14,7 +14,7 @@ import type {
   SendAttachment,
   ReasoningEffortLevel,
 } from '@/lib/types'
-import { buildThreadedMessages, buildThreadedMessagesIncremental, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
+import { buildThreadedMessages, buildThreadedMessagesIncremental, stripToolCallBlocks, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
@@ -1094,6 +1094,14 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [forking, setForking] = useState(false)
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null)
   const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const [showTools, setShowTools] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true
+    return window.localStorage.getItem('agentViewer:showTools') !== 'false'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('agentViewer:showTools', showTools ? 'true' : 'false')
+  }, [showTools])
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
   const [exporting, setExporting] = useState(false)
@@ -1295,7 +1303,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       if (!node) return
       setTimelineScrollTop(node.scrollTop)
       const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
-      setAutoFollow(distanceFromBottom < 72)
+      setAutoFollow(distanceFromBottom <= TIMELINE_BOTTOM_GUTTER_PX + 16)
     })
   }, [])
 
@@ -1806,8 +1814,8 @@ export default function MessageView({ messages, loading, session, projectView, o
     })
     threadedCacheRef.current = new Map(stabilized.map((message) => [threadedMessageKey(message), message]))
     prevThreadingRef.current = { messages, threaded: stabilized }
-    return stabilized
-  }, [messages])
+    return showTools ? stabilized : stripToolCallBlocks(stabilized)
+  }, [messages, showTools])
   const isProject = !!projectView
   const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
@@ -1897,7 +1905,8 @@ export default function MessageView({ messages, loading, session, projectView, o
       })
     }
 
-    liveThreadedMessages.forEach((msg, index) => {
+    const liveThreadedVisible = showTools ? liveThreadedMessages : stripToolCallBlocks(liveThreadedMessages)
+    liveThreadedVisible.forEach((msg, index) => {
       rows.push({
         key: `live:threaded:${msg.provider ?? 'claude'}:${msg.uuid}`,
         message: msg,
@@ -1920,6 +1929,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     session?.provider,
     sessionCapabilities?.messageFork,
     sessionCapabilities?.resumeAtMessage,
+    showTools,
     threaded,
   ])
   const hasLiveTimeline = timelineRows.length > 0
@@ -2656,6 +2666,28 @@ export default function MessageView({ messages, loading, session, projectView, o
             DIAG
           </Button>
         )}
+
+        <Button
+          onClick={() => setShowTools((v) => !v)}
+          title={showTools ? 'Hide tool calls' : 'Show tool calls'}
+          variant="outline"
+          size="sm"
+          style={{
+            flexShrink: 0,
+            height: 26,
+            padding: '0 10px',
+            background: showTools ? 'rgba(139,92,246,0.14)' : 'rgba(139,92,246,0.05)',
+            border: '1px solid rgba(139,92,246,0.22)',
+            borderRadius: 5,
+            cursor: 'pointer',
+            color: showTools ? 'var(--violet)' : 'var(--text-3)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            letterSpacing: '0.08em',
+          }}
+        >
+          {showTools ? 'TOOLS ON' : 'TOOLS OFF'}
+        </Button>
 
         {/* Live pill */}
         <div

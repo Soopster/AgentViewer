@@ -359,3 +359,17 @@ export function buildThreadedMessagesIncremental(
 
   return [...stablePrefix, ...partialThreaded]
 }
+
+/**
+ * Strips tool_thread blocks from each message. Messages left with no visible
+ * blocks are dropped so the transcript doesn't show empty turns.
+ */
+export function stripToolCallBlocks(messages: ThreadedMessage[]): ThreadedMessage[] {
+  const out: ThreadedMessage[] = []
+  for (const msg of messages) {
+    const kept = msg.blocks.filter((b) => b.type !== 'tool_thread')
+    if (kept.length === 0) continue
+    out.push(kept.length === msg.blocks.length ? msg : { ...msg, blocks: kept })
+  }
+  return out
+}

@@ -12,6 +12,7 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'gruvbox-light',
   'catppuccin-latte',
   'rose-pine-dawn',
+  'imessage',
   'dark',
   'solarized-dark',
   'nord',
@@ -31,6 +32,7 @@ type TuiState = {
   density?: unknown
   transcriptView?: unknown
   tabsEnabled?: unknown
+  showToolCalls?: unknown
   sidebarSort?: unknown
   sessionReaderState?: unknown
 }
@@ -160,6 +162,15 @@ export async function getConfiguredTuiTabsEnabled(): Promise<boolean> {
 
 export async function setConfiguredTuiTabsEnabled(tabsEnabled: boolean): Promise<void> {
   await writeTuiState({ tabsEnabled })
+}
+
+export async function getConfiguredTuiShowToolCalls(): Promise<boolean> {
+  const parsed = await readTuiState()
+  return parsed.showToolCalls !== false
+}
+
+export async function setConfiguredTuiShowToolCalls(showToolCalls: boolean): Promise<void> {
+  await writeTuiState({ showToolCalls })
 }
 
 export async function getConfiguredTuiSidebarSort(): Promise<TuiSidebarSort> {

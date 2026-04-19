@@ -7,6 +7,7 @@ import {
   getConfiguredTuiSessionReaderState,
   getConfiguredTuiSidebarSort,
   getConfiguredTuiSidebarWidth,
+  getConfiguredTuiShowToolCalls,
   getConfiguredTuiTabsEnabled,
   getConfiguredTuiTheme,
   getConfiguredTuiTranscriptView,
@@ -15,6 +16,7 @@ import {
   setConfiguredTuiRailVisible,
   setConfiguredTuiSessionReaderState,
   setConfiguredTuiSidebarSort,
+  setConfiguredTuiShowToolCalls,
   setConfiguredTuiSidebarWidth,
   setConfiguredTuiTabsEnabled,
   setConfiguredTuiTheme,
@@ -116,6 +118,14 @@ export async function readTuiTabsEnabled(): Promise<boolean> {
 
 export async function writeTuiTabsEnabled(tabsEnabled: boolean): Promise<void> {
   await setConfiguredTuiTabsEnabled(tabsEnabled)
+}
+
+export async function readTuiShowToolCalls(): Promise<boolean> {
+  return getConfiguredTuiShowToolCalls()
+}
+
+export async function writeTuiShowToolCalls(showToolCalls: boolean): Promise<void> {
+  await setConfiguredTuiShowToolCalls(showToolCalls)
 }
 
 export async function readTuiSidebarSort(): Promise<TuiSidebarSort> {

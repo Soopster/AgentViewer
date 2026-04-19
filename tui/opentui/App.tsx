@@ -36,6 +36,7 @@ import {
   readTuiSessions,
   readTuiSidebarSort,
   readTuiSidebarWidth,
+  readTuiShowToolCalls,
   readTuiTabsEnabled,
   readTuiTheme,
   readTuiTranscriptView,
@@ -44,6 +45,7 @@ import {
   writeTuiProvider,
   writeTuiRailVisible,
   writeTuiSessionReaderState,
+  writeTuiShowToolCalls,
   writeTuiSidebarSort,
   writeTuiSidebarWidth,
   writeTuiTabsEnabled,
@@ -54,6 +56,7 @@ import {
   type TuiSidebarSort,
 } from '../../lib/tui/service'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
+import { stripToolCallBlocks } from '../../lib/threading'
 import type { ProviderSelection, RunningSessionRef, SendState, Session } from '../../lib/types'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
@@ -76,6 +79,7 @@ const LIGHT_MODES: TuiThemeMode[] = [
   'gruvbox-light',
   'catppuccin-latte',
   'rose-pine-dawn',
+  'imessage',
 ]
 const DARK_MODES: TuiThemeMode[] = [
   'dark',
@@ -869,6 +873,7 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   'gruvbox-light': 'Gruvbox retro cream',
   'catppuccin-latte': 'Catppuccin pastel latte',
   'rose-pine-dawn': 'Rosé Pine muted dawn',
+  imessage: 'iOS Messages bubbles',
   dark: 'Deep navy background',
   'solarized-dark': 'Solarized teal',
   nord: 'Cool arctic greys',
@@ -888,6 +893,7 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   'gruvbox-light': 'GRUVBOX LIGHT',
   'catppuccin-latte': 'CATPPUCCIN LATTE',
   'rose-pine-dawn': 'ROSÉ PINE DAWN',
+  imessage: 'iMESSAGE',
   dark: 'DARK',
   'solarized-dark': 'SOLARIZED DARK',
   nord: 'NORD',
@@ -932,6 +938,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'view',       label: 'Toggle transcript view', key: 'v',  category: 'View'       },
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
+  { id: 'tools',      label: 'Toggle tool calls',      key: 'X',  category: 'View'       },
   // App
   { id: 'refresh',    label: 'Refresh sessions',       key: 'r',  category: 'App'        },
   { id: 'quit',       label: 'Quit',                   key: 'q',  category: 'App'        },
@@ -1036,6 +1043,7 @@ type TranscriptCardProps = {
   isSelected: boolean
   isActiveMatch: boolean
   thinkingMode: boolean
+  imessageStyle: boolean
 }
 
 function TranscriptCardInner({
@@ -1050,6 +1058,7 @@ function TranscriptCardInner({
   isSelected,
   isActiveMatch,
   thinkingMode,
+  imessageStyle,
 }: TranscriptCardProps) {
   const {
     landmarks,
@@ -1098,12 +1107,22 @@ function TranscriptCardInner({
   const cardTitle = cardTitleFull.length > maxTitleWidth
     ? cardTitleFull.slice(0, maxTitleWidth - 1) + '…'
     : cardTitleFull
-  const bodyInnerWidth = Math.max(rightPaneWidth - densityState.bodyIndent - 8, 16)
-  const markdownWidth = Math.max(rightPaneWidth - densityState.bodyIndent - 8, 20)
+  const imessageUserBubble = imessageStyle && card.role === 'user'
+  const userBubbleWidth = imessageUserBubble
+    ? Math.max(Math.min(Math.floor(rightPaneWidth * 0.7), rightPaneWidth - 4), 20)
+    : undefined
+  const bubbleTextColor = imessageUserBubble ? '#ffffff' : theme.text
+  const bodyInnerWidth = Math.max((userBubbleWidth ?? rightPaneWidth) - densityState.bodyIndent - 8, 16)
+  const markdownWidth = Math.max((userBubbleWidth ?? rightPaneWidth) - densityState.bodyIndent - 8, 20)
   const landmarkWidth = rightPaneWidth - 4
 
   return (
-    <box flexDirection="column" marginBottom={densityState.cardGap}>
+    <box
+      flexDirection="column"
+      marginBottom={densityState.cardGap}
+      alignSelf={imessageUserBubble ? 'flex-end' : undefined}
+      width={userBubbleWidth}
+    >
       {landmarks.map((landmark, landmarkIndex) => {
         const color = landmark.kind === 'resume'
           ? theme.cyan
@@ -1134,7 +1153,7 @@ function TranscriptCardInner({
               <markdown
                 content={card.markdownContent}
                 syntaxStyle={syntaxStyle}
-                fg={theme.text}
+                fg={bubbleTextColor}
                 streaming={false}
                 width={markdownWidth}
                 tableOptions={{ widthMode: 'content', borders: true, borderColor: theme.border }}
@@ -1143,7 +1162,7 @@ function TranscriptCardInner({
           ) : markdownFallbackLines ? (
             <box paddingX={1}>
               {markdownFallbackLines.map((line, lineIndex) => (
-                <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={theme.text}>
+                <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={bubbleTextColor}>
                   {fitText(line, markdownWidth)}
                 </text>
               ))}
@@ -1156,7 +1175,7 @@ function TranscriptCardInner({
                   paddingX={1}
                   backgroundColor={transcriptBackground(line, theme) ?? cardBg}
                 >
-                  <text fg={transcriptColor(line, theme)} wrapMode="none">
+                  <text fg={imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme)} wrapMode="none">
                     {fitText(line.text, bodyInnerWidth)}
                   </text>
                 </box>
@@ -1231,6 +1250,7 @@ export default function OpenTuiApp() {
   const [focusMode, setFocusMode] = useState(false)
   const [railVisible, setRailVisible] = useState(true)
   const [tabsEnabled, setTabsEnabled] = useState(true)
+  const [showToolCalls, setShowToolCalls] = useState(true)
   const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
   const [sidebarWidthPreference, setSidebarWidthPreference] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [sessions, setSessions] = useState<Session[]>([])
@@ -1416,9 +1436,13 @@ export default function OpenTuiApp() {
     ),
   )
 
-  const transcriptCards = useMemo(() => (
-    sessionDetail ? formatTranscriptCards(sessionDetail.threadedMessages, density) : []
-  ), [density, sessionDetail])
+  const transcriptCards = useMemo(() => {
+    if (!sessionDetail) return []
+    const messages = showToolCalls
+      ? sessionDetail.threadedMessages
+      : stripToolCallBlocks(sessionDetail.threadedMessages)
+    return formatTranscriptCards(messages, density)
+  }, [density, sessionDetail, showToolCalls])
   const thinkingFullKeys = useMemo(() => {
     if (!thinkingMode) return new Set<string>()
     const next = new Set<string>()
@@ -2435,6 +2459,7 @@ export default function OpenTuiApp() {
           configuredTabsEnabled,
           configuredSidebarSort,
           configuredSidebarWidth,
+          configuredShowToolCalls,
         ] = await Promise.all([
           readTuiTheme(),
           readTuiProvider(),
@@ -2445,6 +2470,7 @@ export default function OpenTuiApp() {
           readTuiTabsEnabled(),
           readTuiSidebarSort(),
           readTuiSidebarWidth(),
+          readTuiShowToolCalls(),
         ])
         if (cancelled) return
         setThemeMode(configuredTheme)
@@ -2457,6 +2483,7 @@ export default function OpenTuiApp() {
         setTabsEnabled(configuredTabsEnabled)
         setSidebarSort(configuredSidebarSort)
         setSidebarWidthPreference(configuredSidebarWidth)
+        setShowToolCalls(configuredShowToolCalls)
         if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
         await Promise.all([
           refreshSessions(configuredProvider, false, true),
@@ -2794,10 +2821,10 @@ export default function OpenTuiApp() {
 
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b ${tabsEnabled ? 'hide' : 'show'} tabs  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  T thinking  r refresh  ? commands  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b ${tabsEnabled ? 'hide' : 'show'} tabs  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  T thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
-    [width, transcriptView, density, tabsEnabled],
+    [width, transcriptView, density, tabsEnabled, showToolCalls],
   )
 
   const composerStatusMessage = composerError
@@ -2875,6 +2902,14 @@ export default function OpenTuiApp() {
         setFocusMode(next)
         if (next) setFocusedPane('messages')
         void writeTuiFocusMode(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store focus mode'))
+        break
+      }
+      case 'tools': {
+        setShowToolCalls((v) => {
+          const next = !v
+          void writeTuiShowToolCalls(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
+          return next
+        })
         break
       }
       case 'view': {
@@ -3453,6 +3488,17 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (sequence === 'X') {
+      handled(() => {
+        setShowToolCalls((v) => {
+          const next = !v
+          void writeTuiShowToolCalls(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
+          return next
+        })
+      })
+      return
+    }
+
     if (sequence === '?') {
       handled(() => {
         setCommandPaletteIndex(0)
@@ -3842,6 +3888,7 @@ export default function OpenTuiApp() {
                       isSelected={isSelected}
                       isActiveMatch={isActiveMatch}
                       thinkingMode={thinkingMode}
+                      imessageStyle={themeMode === 'imessage'}
                     />
                   )
                 })}

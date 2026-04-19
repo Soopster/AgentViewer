@@ -8,6 +8,7 @@ export type TuiThemeMode =
   | 'gruvbox-light'
   | 'catppuccin-latte'
   | 'rose-pine-dawn'
+  | 'imessage'
   | 'dark'
   | 'solarized-dark'
   | 'nord'
@@ -394,6 +395,28 @@ export const OBSIDIAN_THEME: TuiThemePalette = {
   userBg: '#111111',
 } as const
 
+export const IMESSAGE_THEME: TuiThemePalette = {
+  bg: '#f2f2f7',
+  surface: '#ffffff',
+  surface2: '#f2f2f7',
+  surface3: '#e5e5ea',
+  diffAddBg: '#e4f7e8',
+  diffRemoveBg: '#ffe3e0',
+  diffMetaBg: '#e5edff',
+  border: '#c7c7cc',
+  border2: '#1c1c1e',
+  text: '#1c1c1e',
+  muted: '#48484a',
+  dim: '#8e8e93',
+  violet: '#007aff',
+  cyan: '#34c759',
+  green: '#34c759',
+  red: '#ff3b30',
+  amber: '#ff9500',
+  pink: '#ff2d55',
+  userBg: '#007aff',
+} as const
+
 export let THEME: TuiThemePalette = LIGHT_THEME
 
 export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
@@ -410,6 +433,7 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'dracula': return DRACULA_THEME
     case 'catppuccin-latte': return CATPPUCCIN_LATTE_THEME
     case 'rose-pine-dawn': return ROSE_PINE_DAWN_THEME
+    case 'imessage': return IMESSAGE_THEME
     case 'tokyo-night': return TOKYO_NIGHT_THEME
     case 'catppuccin-mocha': return CATPPUCCIN_MOCHA_THEME
     case 'obsidian': return OBSIDIAN_THEME
