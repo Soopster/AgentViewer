@@ -7,6 +7,7 @@ import {
   forkSession,
   getSessionInfo,
   getSessionMessages,
+  getSubagentMessages,
   listSubagents,
   listSessions,
   query,
@@ -197,6 +198,51 @@ type SessionActionParams = {
 
 const REASONING_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'max', 'xhigh'] as const
 const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
+
+function sortMessagesChronologically(messages: SessionMessage[]): SessionMessage[] {
+  return messages
+    .map((message, index) => ({ message, index }))
+    .sort((a, b) => {
+      const aTimestamp = a.message.timestamp ? Date.parse(a.message.timestamp) : Number.NaN
+      const bTimestamp = b.message.timestamp ? Date.parse(b.message.timestamp) : Number.NaN
+      if (!Number.isNaN(aTimestamp) && !Number.isNaN(bTimestamp) && aTimestamp !== bTimestamp) {
+        return aTimestamp - bTimestamp
+      }
+      return a.index - b.index
+    })
+    .map(({ message }) => message)
+}
+
+function withOriginKind(messages: SessionMessage[], originKind: string): SessionMessage[] {
+  return messages.map((message) => ({
+    ...message,
+    origin: message.origin ?? { kind: originKind },
+  }))
+}
+
+async function readClaudeSessionMessages(sessionId: string): Promise<SessionMessage[]> {
+  const [mainMessages, subagentIds] = await Promise.all([
+    getSessionMessages(sessionId, { includeSystemMessages: true }),
+    listSubagents(sessionId).catch(() => [] as string[]),
+  ])
+
+  const subagentMessages = await Promise.all(
+    subagentIds.map(async (agentId) => {
+      const messages = await getSubagentMessages(sessionId, agentId).catch(() => [] as SessionMessage[])
+      return withOriginKind(normalizeClaudeHistoryMessages(messages as unknown[]), `subagent:${agentId}`)
+    }),
+  )
+
+  const deduped = new Map<string, SessionMessage>()
+  for (const message of [
+    ...normalizeClaudeHistoryMessages(mainMessages as unknown[]),
+    ...subagentMessages.flat(),
+  ]) {
+    deduped.set(`${message.provider ?? 'claude'}:${message.uuid}`, message)
+  }
+
+  return sortMessagesChronologically([...deduped.values()])
+}
 
 function parseEffort(body: Record<string, unknown>): ReasoningEffortLevel | undefined {
   const effort = typeof body.effort === 'string' ? body.effort.trim() : ''
@@ -890,19 +936,6 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
 }
 
 export async function listViewSessionMessages(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessage[]> {
-  const sortMessagesChronologically = (messages: SessionMessage[]): SessionMessage[] => (
-    messages
-      .map((message, index) => ({ message, index }))
-      .sort((a, b) => {
-        const aTimestamp = a.message.timestamp ? Date.parse(a.message.timestamp) : Number.NaN
-        const bTimestamp = b.message.timestamp ? Date.parse(b.message.timestamp) : Number.NaN
-        if (!Number.isNaN(aTimestamp) && !Number.isNaN(bTimestamp) && aTimestamp !== bTimestamp) {
-          return aTimestamp - bTimestamp
-        }
-        return a.index - b.index
-      })
-      .map(({ message }) => message)
-  )
   const sliceMessages = (messages: SessionMessage[]): SessionMessage[] => {
     if (!params.tail) return messages.slice(params.offset, params.offset + params.limit)
     const start = Math.max(messages.length - params.limit, 0)
@@ -928,10 +961,8 @@ export async function listViewSessionMessages(sessionId: string, params: Message
     return sliceMessages(sortMessagesChronologically(mapPiMessagesToSessionMessages(sessionId, messages)))
   }
 
-  const messages = await getSessionMessages(sessionId, {
-    includeSystemMessages: true,
-  })
-  return sliceMessages(sortMessagesChronologically(normalizeClaudeHistoryMessages(messages as unknown[])))
+  const messages = await readClaudeSessionMessages(sessionId)
+  return sliceMessages(messages)
 }
 
 export async function listProjectSessionMessageBatches(params: ProjectMessageBatchParams): Promise<{
