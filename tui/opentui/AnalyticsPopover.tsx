@@ -124,7 +124,17 @@ type Analytics = {
   slashCommands: number
   shellOutputLines: number
   hourActivity: number[]      // 24-slot histogram (messages per hour)
+  dayOfWeekActivity: number[] // 7-slot histogram (messages per day)
   tokensPerSecond: number     // output tokens / active seconds
+  tokensPerToolUse: number
+  costPerFileTouched: number
+  costPerLineChanged: number
+  avgAssistantChain: number
+  fileExtensions: Array<[string, number]>
+  blockTypes: { text: number; thinking: number; toolUse: number; toolResult: number; other: number }
+  messageSizes: number[]
+  cumulativeCost: number[]
+  peakTokensPerMin: number
 }
 
 function parseTs(value: string | undefined): number | null {
@@ -139,12 +149,19 @@ function countLines(s: string): number {
   return s.endsWith('\n') ? n - 1 : n
 }
 
+function formatExt(path: string): string {
+  const base = path.split('/').pop() ?? path
+  const dot = base.lastIndexOf('.')
+  return dot > 0 ? base.slice(dot).toLowerCase() : '(no ext)'
+}
+
 type BlockStats = {
   thinkingBlocks: number
   thinkingChars: number
   textChars: number
   slashCommands: number
   shellOutputLines: number
+  blockTypeCounts: { text: number; thinking: number; toolUse: number; toolResult: number; other: number }
 }
 
 function bashVerb(cmd: string): string {
@@ -168,6 +185,7 @@ function collectBlocks(
   const stats: BlockStats = {
     thinkingBlocks: 0, thinkingChars: 0, textChars: 0,
     slashCommands: 0, shellOutputLines: 0,
+    blockTypeCounts: { text: 0, thinking: 0, toolUse: 0, toolResult: 0, other: 0 },
   }
   for (const block of blocks) {
     if (block.type === 'text') {
@@ -286,7 +304,17 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
     cacheSavings: 0, toolsPerTurn: 0, maxOutputInReply: 0, longestAssistantChain: 0,
     slashCommands: 0, shellOutputLines: 0,
     hourActivity: new Array(24).fill(0),
+    dayOfWeekActivity: new Array(7).fill(0),
     tokensPerSecond: 0,
+    tokensPerToolUse: 0,
+    costPerFileTouched: 0,
+    costPerLineChanged: 0,
+    avgAssistantChain: 0,
+    fileExtensions: [],
+    blockTypes: { text: 0, thinking: 0, toolUse: 0, toolResult: 0, other: 0 },
+    messageSizes: [],
+    cumulativeCost: [],
+    peakTokensPerMin: 0,
   }
   if (!detail) return empty
 
@@ -313,6 +341,10 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
   let maxOutputInReply = 0
   let currentChain = 0, longestAssistantChain = 0
   const hourActivity = new Array<number>(24).fill(0)
+  const dayOfWeekActivity = new Array<number>(7).fill(0)
+  const blockTypes = { text: 0, thinking: 0, toolUse: 0, toolResult: 0, other: 0 }
+  const messageSizes: number[] = []
+  const assistantChains: number[] = []
   const firstResponseLatencies: number[] = []
   const gaps: number[] = []
   let currentModel = info?.currentModel ?? 'unknown'
@@ -322,14 +354,22 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
     const stats = collectBlocks(msg.blocks, tools, ops)
     slashCommands += stats.slashCommands
     shellOutputLines += stats.shellOutputLines
+    blockTypes.text += stats.blockTypeCounts.text
+    blockTypes.thinking += stats.blockTypeCounts.thinking
+    blockTypes.toolUse += stats.blockTypeCounts.toolUse
+    blockTypes.toolResult += stats.blockTypeCounts.toolResult
+    blockTypes.other += stats.blockTypeCounts.other
     const ts = parseTs(msg.timestamp)
     if (ts !== null) {
       if (startTs === null || ts < startTs) startTs = ts
       if (endTs === null || ts > endTs) endTs = ts
       if (prevTs !== null) gaps.push(ts - prevTs)
       prevTs = ts
-      const hour = new Date(ts).getHours()
+      const dt = new Date(ts)
+      const hour = dt.getHours()
       if (hour >= 0 && hour < 24) hourActivity[hour] = (hourActivity[hour] ?? 0) + 1
+      const dow = dt.getDay()
+      if (dow >= 0 && dow < 7) dayOfWeekActivity[dow] = (dayOfWeekActivity[dow] ?? 0) + 1
     }
 
     let latencyMs: number | null = null
@@ -338,6 +378,7 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
       userTextChars += stats.textChars
       lastUserTs = ts
       turns += 1
+      if (currentChain > 0) assistantChains.push(currentChain)
       currentChain = 0
     } else if (msg.role === 'assistant') {
       assistantMessages += 1
@@ -391,17 +432,24 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
       totalTokens: mIn + mOut + (mCr ?? 0) + (mCw ?? 0),
       latencyMs,
     })
+    messageSizes.push(mIn + mOut + (mCr ?? 0) + (mCw ?? 0))
   }
+  if (currentChain > 0) assistantChains.push(currentChain)
 
   // Compute cost per model bucket
   let cost = 0
+  const costByCategory = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   for (const bucket of models.values()) {
     const p = priceForModel(bucket.model)
-    const c =
-      (bucket.inputTokens  * p.in) / 1_000_000 +
-      (bucket.outputTokens * p.out) / 1_000_000 +
-      (bucket.cacheReadTokens  * (p.cacheRead  ?? p.in  * 0.1)) / 1_000_000 +
-      (bucket.cacheWriteTokens * (p.cacheWrite ?? p.in  * 1.25)) / 1_000_000
+    const cIn = (bucket.inputTokens  * p.in) / 1_000_000
+    const cOut = (bucket.outputTokens * p.out) / 1_000_000
+    const cCr = (bucket.cacheReadTokens  * (p.cacheRead  ?? p.in  * 0.1)) / 1_000_000
+    const cCw = (bucket.cacheWriteTokens * (p.cacheWrite ?? p.in  * 1.25)) / 1_000_000
+    const c = cIn + cOut + cCr + cCw
+    costByCategory.input += cIn
+    costByCategory.output += cOut
+    costByCategory.cacheRead += cCr
+    costByCategory.cacheWrite += cCw
     bucket.cost = c
     cost += c
   }
@@ -453,6 +501,44 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
   const toolsPerTurn = turns > 0 ? toolUses / turns : 0
   const activeSeconds = activeMs > 0 ? activeMs / 1000 : (durationMs ?? 0) / 1000
   const tokensPerSecond = activeSeconds > 0 ? outputTokens / activeSeconds : 0
+  const tokensPerToolUse = toolUses > 0 ? outputTokens / toolUses : 0
+  const costPerFileTouched = ops.filesTouched.size > 0 ? cost / ops.filesTouched.size : 0
+  const costPerLineChanged = (ops.linesAdded + ops.linesRemoved) > 0 ? cost / (ops.linesAdded + ops.linesRemoved) : 0
+  const avgAssistantChain = assistantChains.length > 0
+    ? assistantChains.reduce((a, b) => a + b, 0) / assistantChains.length
+    : 0
+
+  const extMap = new Map<string, number>()
+  for (const fp of ops.filesTouched) {
+    const ext = formatExt(fp)
+    extMap.set(ext, (extMap.get(ext) ?? 0) + 1)
+  }
+  const fileExtensions = [...extMap.entries()].sort((a, b) => b[1] - a[1])
+
+  let peakTokensPerMin = 0
+  const windowMs = 60_000
+  for (let i = 0; i < timeline.length; i += 1) {
+    const start = timeline[i]!
+    if (start.ts === null) continue
+    let sum = 0
+    for (let j = i; j < timeline.length; j += 1) {
+      const p = timeline[j]!
+      if (p.ts === null) continue
+      if (p.ts - start.ts > windowMs) break
+      sum += p.outputTokens
+    }
+    if (sum > peakTokensPerMin) peakTokensPerMin = sum
+  }
+
+  const cumulativeCost: number[] = []
+  let accCost = 0
+  const totalMsgTokens = timeline.reduce((a, b) => a + b.totalTokens, 0)
+  if (totalMsgTokens > 0 && cost > 0) {
+    for (const p of timeline) {
+      accCost += (p.totalTokens / totalMsgTokens) * cost
+      cumulativeCost.push(accCost)
+    }
+  }
 
   return {
     provider: info?.provider,
@@ -476,7 +562,9 @@ function computeAnalytics(detail: TuiSessionDetail | null): Analytics {
     costPerTurn: turns > 0 ? cost / turns : 0,
     avgOutputPerAssistant: assistantMessages > 0 ? outputTokens / assistantMessages : 0,
     cacheSavings, toolsPerTurn, maxOutputInReply, longestAssistantChain,
-    slashCommands, shellOutputLines, hourActivity, tokensPerSecond,
+    slashCommands, shellOutputLines, hourActivity, dayOfWeekActivity, tokensPerSecond,
+    tokensPerToolUse, costPerFileTouched, costPerLineChanged, avgAssistantChain,
+    fileExtensions, blockTypes, messageSizes, cumulativeCost, peakTokensPerMin,
   }
 }
 
@@ -520,7 +608,7 @@ function bar(value: number, max: number, width: number): string {
 // Pane definitions
 // ---------------------------------------------------------------------------
 
-type PaneId = 0 | 1 | 2 | 3 | 4 | 5
+type PaneId = 0 | 1 | 2 | 3 | 4 | 5 | 6
 const PANE_TITLES: Record<PaneId, string> = {
   0: 'Summary',
   1: 'Tokens',
@@ -528,8 +616,9 @@ const PANE_TITLES: Record<PaneId, string> = {
   3: 'Activity',
   4: 'Timeline',
   5: 'Insights',
+  6: 'Profile',
 }
-const PANE_COUNT = 6
+const PANE_COUNT = 7
 
 type AnalyticsKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
@@ -596,7 +685,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
 
   const handleKey = useCallback((key: AnalyticsKeyEvent) => {
     if (key.name === 'escape') { onClose(); return }
-    if (key.sequence >= '0' && key.sequence <= '5') {
+    if (key.sequence >= '0' && key.sequence <= '6') {
       setPane(parseInt(key.sequence, 10) as PaneId)
       return
     }
@@ -644,7 +733,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
         borderStyle="single"
         borderColor={theme.border}
       >
-        {([0, 1, 2, 3, 4, 5] as PaneId[]).map((p) => (
+        {([0, 1, 2, 3, 4, 5, 6] as PaneId[]).map((p) => (
           <box
             key={p}
             paddingX={1}
@@ -657,7 +746,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
           </box>
         ))}
         <box flexGrow={1} />
-        <text fg={theme.dim}>{'tab/0-5 switch · j/k scroll · esc close'}</text>
+        <text fg={theme.dim}>{'tab/0-6 switch · j/k scroll · esc close'}</text>
       </box>
 
       {/* Body */}
@@ -675,6 +764,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
         {pane === 3 ? <ActivityPane a={analytics} theme={theme} width={popW - 4} /> : null}
         {pane === 4 ? <TimelinePane a={analytics} theme={theme} width={popW - 4} /> : null}
         {pane === 5 ? <InsightsPane a={analytics} theme={theme} width={popW - 4} /> : null}
+        {pane === 6 ? <ProfilePane a={analytics} theme={theme} width={popW - 4} /> : null}
       </scrollbox>
     </box>
   )
@@ -1565,6 +1655,153 @@ function InsightsPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
           </box>
         )
       })}
+    </box>
+  )
+}
+
+function DayOfWeekBar({
+  counts, theme, width,
+}: {
+  counts: number[]; theme: TuiThemePalette; width: number
+}) {
+  const labels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const max = Math.max(1, ...counts)
+  const cellW = Math.max(1, Math.floor((width - 6) / 7))
+  const rows: React.ReactNode[] = []
+  for (let r = 4; r >= 0; r -= 1) {
+    const cells: React.ReactNode[] = []
+    for (let d = 0; d < 7; d += 1) {
+      const pct = (counts[d] ?? 0) / max
+      const filled = Math.round(pct * 4)
+      const on = filled >= r
+      const color = !on
+        ? theme.surface2
+        : pct > 0.66 ? theme.violet
+        : pct > 0.33 ? theme.cyan
+        : theme.amber
+      cells.push(
+        <text key={d} fg={color} wrapMode="none">{(on ? '█' : '░').repeat(cellW)}</text>
+      )
+    }
+    rows.push(<box key={r} flexDirection="row">{cells}</box>)
+  }
+  const axis: React.ReactNode[] = labels.map((label, i) => (
+    <box key={label} width={cellW} marginRight={i < 6 ? 0 : 0}>
+      <text fg={theme.dim} wrapMode="none">{label.slice(0, cellW)}</text>
+    </box>
+  ))
+  return (
+    <box flexDirection="column" width={width}>
+      {rows}
+      <box flexDirection="row">{axis}</box>
+    </box>
+  )
+}
+
+function SizeHistogram({
+  values, theme, width,
+}: {
+  values: number[]; theme: TuiThemePalette; width: number
+}) {
+  if (values.length === 0) {
+    return <box width={width}><text fg={theme.dim}>(no data)</text></box>
+  }
+  const buckets: { label: string; max: number; count: number }[] = [
+    { label: '<100', max: 100, count: 0 },
+    { label: '100-500', max: 500, count: 0 },
+    { label: '500-2k', max: 2_000, count: 0 },
+    { label: '2k-10k', max: 10_000, count: 0 },
+    { label: '10k-50k', max: 50_000, count: 0 },
+    { label: '50k-200k', max: 200_000, count: 0 },
+    { label: '>200k', max: Infinity, count: 0 },
+  ]
+  for (const v of values) {
+    for (const b of buckets) {
+      if (v < b.max) { b.count += 1; break }
+    }
+  }
+  const max = Math.max(1, ...buckets.map((b) => b.count))
+  const labelW = 10
+  const countW = 6
+  const barW = Math.max(8, width - labelW - countW - 2)
+  return (
+    <box flexDirection="column" width={width}>
+      {buckets.map((b) => (
+        <box key={b.label} flexDirection="row" width={width}>
+          <box width={labelW}><text fg={theme.dim} wrapMode="none">{b.label}</text></box>
+          <box width={countW}><text fg={theme.violet} wrapMode="none">{String(b.count)}</text></box>
+          <box width={barW}>
+            <text fg={theme.cyan} wrapMode="none">{bar(b.count, max, barW)}</text>
+          </box>
+        </box>
+      ))}
+    </box>
+  )
+}
+
+function ProfilePane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette; width: number }) {
+  const extEntries = a.fileExtensions.slice(0, 12)
+  const totalExts = extEntries.reduce((sum, [, count]) => sum + count, 0)
+  const colWidth = Math.floor((width - 2) / 2)
+  return (
+    <box flexDirection="column" paddingX={1} width={width}>
+      <box flexDirection="row" width={width}>
+        <Kpi theme={theme} width={colWidth} label="Tokens / tool"
+             value={a.tokensPerToolUse > 0 ? fmtNum(a.tokensPerToolUse) : '—'}
+             accent={theme.violet}
+             sub={`${a.toolUses} tool uses · output only`} />
+        <Kpi theme={theme} width={colWidth} label="Avg chain"
+             value={a.avgAssistantChain > 0 ? a.avgAssistantChain.toFixed(1) : '0'}
+             accent={theme.pink}
+             sub={`max ${a.longestAssistantChain} assistant replies`} />
+      </box>
+      <box flexDirection="row" width={width}>
+        <Kpi theme={theme} width={colWidth} label="Files touched"
+             value={fmtNum(a.ops.filesTouched.size)}
+             accent={theme.cyan}
+             sub={a.costPerFileTouched > 0 ? `${fmtCost(a.costPerFileTouched)}/file` : 'no files'} />
+        <Kpi theme={theme} width={colWidth} label="Lines changed"
+             value={fmtNum(a.ops.linesAdded + a.ops.linesRemoved)}
+             accent={theme.amber}
+             sub={a.costPerLineChanged > 0 ? `${fmtCost(a.costPerLineChanged)}/line` : 'no diff'} />
+      </box>
+
+      <box marginTop={1} marginBottom={1}>
+        <text fg={theme.muted}>Activity by day of week</text>
+      </box>
+      <DayOfWeekBar counts={a.dayOfWeekActivity} theme={theme} width={width - 2} />
+
+      <box marginTop={1} marginBottom={1}>
+        <text fg={theme.muted}>File extensions touched</text>
+      </box>
+      {extEntries.length > 0 ? (
+        <box flexDirection="column">
+          <RankedBars theme={theme} width={width - 2} entries={extEntries} color={theme.pink} />
+          <box marginTop={0}>
+            <text fg={theme.dim} wrapMode="none">
+              {`${totalExts} file touches across ${extEntries.length} extension${extEntries.length === 1 ? '' : 's'}`}
+            </text>
+          </box>
+        </box>
+      ) : (
+        <box><text fg={theme.dim}>(no file extensions recorded)</text></box>
+      )}
+
+      <box marginTop={1} marginBottom={1}>
+        <text fg={theme.muted}>Block types</text>
+      </box>
+      <CompositionBar theme={theme} width={width - 2} segments={[
+        { label: `text (${a.blockTypes.text})`, value: a.blockTypes.text, color: theme.cyan },
+        { label: `thinking (${a.blockTypes.thinking})`, value: a.blockTypes.thinking, color: theme.amber },
+        { label: `tool use (${a.blockTypes.toolUse})`, value: a.blockTypes.toolUse, color: theme.violet },
+        { label: `tool result (${a.blockTypes.toolResult})`, value: a.blockTypes.toolResult, color: theme.green },
+        { label: `other (${a.blockTypes.other})`, value: a.blockTypes.other, color: theme.dim },
+      ]} />
+
+      <box marginTop={1} marginBottom={1}>
+        <text fg={theme.muted}>Message size distribution</text>
+      </box>
+      <SizeHistogram values={a.messageSizes} theme={theme} width={width - 2} />
     </box>
   )
 }

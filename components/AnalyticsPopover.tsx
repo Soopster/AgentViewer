@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Analytics, AnalyticsInput, FileOps, TimelinePoint } from '@/lib/analytics'
 import { computeAnalytics, fmtCost, fmtDuration, fmtNum } from '@/lib/analytics'
 
-type PaneId = 0 | 1 | 2 | 3 | 4 | 5
+type PaneId = 0 | 1 | 2 | 3 | 4 | 5 | 6
 
 const PANE_TITLES: Record<PaneId, string> = {
   0: 'Summary',
@@ -13,8 +13,9 @@ const PANE_TITLES: Record<PaneId, string> = {
   3: 'Activity',
   4: 'Timeline',
   5: 'Insights',
+  6: 'Profile',
 }
-const PANE_COUNT = 6
+const PANE_COUNT = 7
 
 type Props = {
   open: boolean
@@ -30,7 +31,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
     if (!open) return
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose()
-      else if (e.key >= '0' && e.key <= '5') setPane(parseInt(e.key, 10) as PaneId)
+      else if (e.key >= '0' && e.key <= '6') setPane(parseInt(e.key, 10) as PaneId)
       else if (e.key === 'Tab' && !e.shiftKey) {
         e.preventDefault()
         setPane((p) => ((p + 1) % PANE_COUNT) as PaneId)
@@ -93,7 +94,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
           >
             Session analytics
           </span>
-          {([0, 1, 2, 3, 4, 5] as PaneId[]).map((p) => (
+          {([0, 1, 2, 3, 4, 5, 6] as PaneId[]).map((p) => (
             <button
               key={p}
               onClick={() => setPane(p)}
@@ -114,7 +115,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
           ))}
           <span style={{ flex: 1 }} />
           <span style={{ fontSize: 10, color: 'var(--text-3)', marginRight: 8 }}>
-            tab / 0-5 switch · esc close
+            tab / 0-6 switch · esc close
           </span>
           <button
             onClick={onClose}
@@ -151,6 +152,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
           {pane === 3 && <ActivityPane a={analytics} />}
           {pane === 4 && <TimelinePane a={analytics} />}
           {pane === 5 && <InsightsPane a={analytics} />}
+          {pane === 6 && <ProfilePane a={analytics} />}
         </div>
       </div>
     </div>
@@ -1060,6 +1062,80 @@ function InsightsPane({ a }: { a: Analytics }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Profile pane
+// ---------------------------------------------------------------------------
+
+function ProfilePane({ a }: { a: Analytics }) {
+  const extEntries = a.fileExtensions.slice(0, 12)
+  const totalExts = extEntries.reduce((sum, [, count]) => sum + count, 0)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <KpiRow>
+        <Kpi
+          label="Tokens / tool"
+          value={a.tokensPerToolUse > 0 ? fmtNum(a.tokensPerToolUse) : '—'}
+          accent="var(--violet)"
+          sub={`${a.toolUses} tool uses · output only`}
+        />
+        <Kpi
+          label="Avg chain"
+          value={a.avgAssistantChain > 0 ? a.avgAssistantChain.toFixed(1) : '0'}
+          accent="var(--pink, #f472b6)"
+          sub={`max ${a.longestAssistantChain} assistant replies`}
+        />
+        <Kpi
+          label="Files touched"
+          value={fmtNum(a.ops.filesTouched.size)}
+          accent="var(--cyan, #5eead4)"
+          sub={a.costPerFileTouched > 0 ? `${fmtCost(a.costPerFileTouched)}/file` : 'no files'}
+        />
+        <Kpi
+          label="Lines changed"
+          value={fmtNum(a.ops.linesAdded + a.ops.linesRemoved)}
+          accent="var(--amber, #fbbf24)"
+          sub={a.costPerLineChanged > 0 ? `${fmtCost(a.costPerLineChanged)}/line` : 'no diff'}
+        />
+      </KpiRow>
+
+      <div>
+        <SectionLabel>Activity by day of week</SectionLabel>
+        <DayOfWeekBar counts={a.dayOfWeekActivity} />
+      </div>
+
+      <div>
+        <SectionLabel>File extensions touched</SectionLabel>
+        {extEntries.length > 0 ? (
+          <div>
+            <RankedBars entries={extEntries} color="var(--pink, #f472b6)" />
+            <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
+              {totalExts} file touches across {extEntries.length} extension{extEntries.length === 1 ? '' : 's'}
+            </div>
+          </div>
+        ) : (
+          <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no file extensions recorded)</div>
+        )}
+      </div>
+
+      <div>
+        <SectionLabel>Block types</SectionLabel>
+        <CompositionBar segments={[
+          { label: `text (${a.blockTypes.text})`,              value: a.blockTypes.text,       color: 'var(--cyan, #5eead4)' },
+          { label: `thinking (${a.blockTypes.thinking})`,      value: a.blockTypes.thinking,   color: 'var(--amber, #fbbf24)' },
+          { label: `tool use (${a.blockTypes.toolUse})`,       value: a.blockTypes.toolUse,    color: 'var(--violet)' },
+          { label: `tool result (${a.blockTypes.toolResult})`, value: a.blockTypes.toolResult, color: 'var(--green, #4ade80)' },
+          { label: `other (${a.blockTypes.other})`,            value: a.blockTypes.other,      color: 'var(--text-3)' },
+        ]} />
+      </div>
+
+      <div>
+        <SectionLabel>Message size distribution</SectionLabel>
+        <SizeHistogram values={a.messageSizes} />
+      </div>
     </div>
   )
 }
