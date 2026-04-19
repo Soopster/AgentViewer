@@ -788,14 +788,14 @@ export default function SessionList({
                 <SelectTrigger
                   style={{
                     width: '100%',
-                    height: 34,
+                    height: 36,
                     borderRadius: 9,
                     border: '1px solid var(--border)',
                     background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
                     color: 'var(--text)',
-                    padding: '0 10px',
+                    padding: '0 12px',
                     fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
+                    fontSize: 11,
                     fontWeight: 500,
                     letterSpacing: '0.04em',
                     cursor: switchingProvider ? 'not-allowed' : 'pointer',
@@ -812,18 +812,18 @@ export default function SessionList({
                     background: 'var(--surface)',
                     boxShadow: '0 14px 32px rgba(0,0,0,0.14)',
                     fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
+                    fontSize: 12,
                     fontWeight: 500,
                     letterSpacing: '0.04em',
-                    padding: '4px',
+                    padding: '6px',
                   }}
                 >
-                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="claude">CLAUDE</SelectItem>
-                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="codex">CODEX</SelectItem>
-                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="opencode">OPENCODE</SelectItem>
-                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="copilot">COPILOT</SelectItem>
-                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="pi">PI</SelectItem>
-                  <SelectItem className="rounded-md py-2.5 px-3.5 pr-8 text-[11px] leading-[1.25] tracking-[0.04em] [font-family:'IBM_Plex_Mono',monospace]" value="all">ALL</SelectItem>
+                  <SelectItem value="claude">CLAUDE</SelectItem>
+                  <SelectItem value="codex">CODEX</SelectItem>
+                  <SelectItem value="opencode">OPENCODE</SelectItem>
+                  <SelectItem value="copilot">COPILOT</SelectItem>
+                  <SelectItem value="pi">PI</SelectItem>
+                  <SelectItem value="all">ALL</SelectItem>
                 </SelectContent>
               </Select>
             </div>

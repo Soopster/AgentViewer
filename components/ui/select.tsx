@@ -31,7 +31,7 @@ function SelectTrigger({
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
       className={cn(
-        "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground shadow-xs outline-none transition-[color,box-shadow,border-color] data-[placeholder]:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background [&_svg]:pointer-events-none [&_svg]:shrink-0 [font-family:'IBM_Plex_Mono',monospace]",
+        "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-[11px] text-foreground shadow-xs outline-none transition-[color,box-shadow,border-color] data-[placeholder]:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background [&_svg]:pointer-events-none [&_svg]:shrink-0 [font-family:'IBM_Plex_Mono',monospace]",
         className
       )}
       {...props}
@@ -55,7 +55,7 @@ function SelectContent({
       <SelectPrimitive.Content
         data-slot="select-content"
         className={cn(
-          "relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-md border border-border bg-popover text-xs text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 [font-family:'IBM_Plex_Mono',monospace]",
+          "relative z-50 max-h-96 min-w-[12rem] overflow-hidden rounded-md border border-border bg-popover text-xs text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 [font-family:'IBM_Plex_Mono',monospace]",
           position === "popper" &&
             "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
           className
@@ -65,7 +65,7 @@ function SelectContent({
       >
         <SelectPrimitive.Viewport
           className={cn(
-            "p-1",
+            "p-2",
             position === "popper" &&
               "w-full min-w-[var(--radix-select-trigger-width)]"
           )}
@@ -84,7 +84,7 @@ function SelectLabel({
   return (
     <SelectPrimitive.Label
       data-slot="select-label"
-      className={cn("px-2 py-1.5 text-[11px] font-medium [font-family:'IBM_Plex_Mono',monospace]", className)}
+      className={cn("px-3.5 py-2 text-[11px] font-medium [font-family:'IBM_Plex_Mono',monospace]", className)}
       {...props}
     />
   )
@@ -99,12 +99,12 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-default select-none items-start gap-2 rounded-sm py-2 pr-8 pl-2.5 text-[11px] leading-[1.5] outline-none whitespace-normal break-words data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground [font-family:'IBM_Plex_Mono',monospace]",
+        "relative flex w-full cursor-default select-none items-center gap-2 rounded-md border-l-2 border-l-transparent px-3.5 py-2.5 text-[12px] leading-[1.35] outline-none whitespace-normal break-words data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--surface-2)] data-[highlighted]:text-[var(--text)] data-[state=checked]:border-l-[var(--violet)] data-[state=checked]:bg-[var(--violet-glow)] data-[state=checked]:text-[var(--violet)] data-[state=checked]:font-medium [font-family:'IBM_Plex_Mono',monospace]",
         className
       )}
       {...props}
     >
-      <span className="absolute right-2 top-2 flex size-3.5 items-center justify-center">
+      <span className="absolute right-2 top-2.5 flex size-3.5 items-center justify-center">
         <SelectPrimitive.ItemIndicator>
           <Check className="size-4" />
         </SelectPrimitive.ItemIndicator>

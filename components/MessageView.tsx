@@ -3023,16 +3023,16 @@ export default function MessageView({ messages, loading, session, projectView, o
                 <Select value={selectedModelValue ?? ''} onValueChange={setSelectedModel}>
                   <SelectTrigger
                     style={{
-                      height: 26,
+                      height: 30,
                       minWidth: 0,
                       flex: 1,
                       background: 'var(--surface-2)',
                       border: '1px solid var(--border)',
                       borderRadius: 5,
                       color: 'var(--text)',
-                      padding: '0 6px',
+                      padding: '0 10px',
                       fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 10,
+                      fontSize: 11,
                     }}
                   >
                     <SelectValue placeholder="Model" />
@@ -3040,7 +3040,8 @@ export default function MessageView({ messages, loading, session, projectView, o
                   <SelectContent
                     style={{
                       fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 11,
+                      fontSize: 12,
+                      padding: '6px',
                     }}
                   >
                     {modelOptions.map((model) => (
@@ -3064,16 +3065,16 @@ export default function MessageView({ messages, loading, session, projectView, o
                   <Select value={selectedEffort} onValueChange={(value) => setSelectedEffort(value as 'auto' | ReasoningEffortLevel)}>
                     <SelectTrigger
                       style={{
-                        height: 26,
+                        height: 30,
                         minWidth: 0,
                         flex: 1,
                         background: 'var(--surface-2)',
                         border: '1px solid var(--border)',
                         borderRadius: 5,
                         color: 'var(--text)',
-                        padding: '0 6px',
+                        padding: '0 10px',
                         fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 10,
+                        fontSize: 11,
                       }}
                     >
                       <SelectValue placeholder="Effort" />
@@ -3081,7 +3082,8 @@ export default function MessageView({ messages, loading, session, projectView, o
                     <SelectContent
                       style={{
                         fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 11,
+                        fontSize: 12,
+                        padding: '6px',
                       }}
                     >
                       <SelectItem value="auto">AUTO</SelectItem>
@@ -3101,14 +3103,14 @@ export default function MessageView({ messages, loading, session, projectView, o
                       style={{
                         flex: 1,
                         minWidth: 0,
-                        height: 26,
+                        height: 30,
                         background: 'var(--surface-2)',
                         border: '1px solid var(--border)',
                         borderRadius: 5,
                         color: 'var(--text)',
-                        padding: '0 8px',
+                        padding: '0 10px',
                         fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 10,
+                        fontSize: 11,
                       }}
                     >
                       <SelectValue placeholder="Rewind target" />
@@ -3116,7 +3118,10 @@ export default function MessageView({ messages, loading, session, projectView, o
                     <SelectContent
                       style={{
                         fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 11,
+                        fontSize: 12,
+                        padding: '6px',
+                        minWidth: '28rem',
+                        maxWidth: 'calc(100vw - 48px)',
                       }}
                     >
                       {rewindCandidates.slice().reverse().map((candidate) => (
@@ -3155,16 +3160,16 @@ export default function MessageView({ messages, loading, session, projectView, o
                   <Select value={String(rollbackTurns)} onValueChange={(value) => setRollbackTurns(Number(value))}>
                     <SelectTrigger
                       style={{
-                        height: 26,
+                        height: 30,
                         minWidth: 0,
                         flex: 1,
                         background: 'var(--surface-2)',
                         border: '1px solid var(--border)',
                         borderRadius: 5,
                         color: 'var(--text)',
-                        padding: '0 6px',
+                        padding: '0 10px',
                         fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 10,
+                        fontSize: 11,
                       }}
                     >
                       <SelectValue placeholder="Turns" />
@@ -3172,7 +3177,8 @@ export default function MessageView({ messages, loading, session, projectView, o
                     <SelectContent
                       style={{
                         fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 11,
+                        fontSize: 12,
+                        padding: '6px',
                       }}
                     >
                       {Array.from({ length: Math.min(10, rollbackCandidates.length) }, (_, index) => index + 1).map((value) => (
@@ -3297,22 +3303,22 @@ export default function MessageView({ messages, loading, session, projectView, o
               <Select value={attachmentType} onValueChange={(value) => setAttachmentType(value as SendAttachment['type'])}>
                 <SelectTrigger
                   style={{
-                    width: 104,
-                    height: 26,
+                    width: 112,
+                    height: 30,
                     background: 'var(--surface-2)',
                     border: '1px solid var(--border)',
                     borderRadius: 5,
                     color: 'var(--text)',
-                    padding: '0 6px',
+                    padding: '0 10px',
                     fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
+                    fontSize: 11,
                   }}
                 >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent
                   className="min-w-[10.5rem]"
-                  style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}
+                  style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, padding: '6px' }}
                 >
                   <SelectItem value="file">FILE</SelectItem>
                   <SelectItem value="directory">DIR</SelectItem>
