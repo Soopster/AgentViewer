@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Analytics, AnalyticsInput, FileOps, TimelinePoint } from '@/lib/analytics'
 import { computeAnalytics, fmtCost, fmtDuration, fmtNum } from '@/lib/analytics'
 
-type PaneId = 0 | 1 | 2 | 3 | 4
+type PaneId = 0 | 1 | 2 | 3 | 4 | 5
 
 const PANE_TITLES: Record<PaneId, string> = {
   0: 'Summary',
@@ -12,7 +12,9 @@ const PANE_TITLES: Record<PaneId, string> = {
   2: 'Tools',
   3: 'Activity',
   4: 'Timeline',
+  5: 'Insights',
 }
+const PANE_COUNT = 6
 
 type Props = {
   open: boolean
@@ -28,10 +30,10 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
     if (!open) return
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose()
-      else if (e.key >= '0' && e.key <= '4') setPane(parseInt(e.key, 10) as PaneId)
+      else if (e.key >= '0' && e.key <= '5') setPane(parseInt(e.key, 10) as PaneId)
       else if (e.key === 'Tab' && !e.shiftKey) {
         e.preventDefault()
-        setPane((p) => ((p + 1) % 5) as PaneId)
+        setPane((p) => ((p + 1) % PANE_COUNT) as PaneId)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -91,7 +93,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
           >
             Session analytics
           </span>
-          {([0, 1, 2, 3, 4] as PaneId[]).map((p) => (
+          {([0, 1, 2, 3, 4, 5] as PaneId[]).map((p) => (
             <button
               key={p}
               onClick={() => setPane(p)}
@@ -112,7 +114,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
           ))}
           <span style={{ flex: 1 }} />
           <span style={{ fontSize: 10, color: 'var(--text-3)', marginRight: 8 }}>
-            tab / 0-4 switch · esc close
+            tab / 0-5 switch · esc close
           </span>
           <button
             onClick={onClose}
@@ -148,6 +150,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
           {pane === 2 && <ToolsPane a={analytics} />}
           {pane === 3 && <ActivityPane a={analytics} />}
           {pane === 4 && <TimelinePane a={analytics} />}
+          {pane === 5 && <InsightsPane a={analytics} />}
         </div>
       </div>
     </div>
@@ -840,6 +843,223 @@ function HourHeatmap({ counts }: { counts: number[] }) {
           <span key={h}>{h % 6 === 0 ? String(h).padStart(2, '0') : ''}</span>
         ))}
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Insights pane
+// ---------------------------------------------------------------------------
+
+type InsightSeverity = 'good' | 'warn' | 'info' | 'tip'
+type Insight = { severity: InsightSeverity; icon: string; title: string; detail: string }
+
+const SEVERITY_COLORS: Record<InsightSeverity, { fg: string; bg: string; border: string }> = {
+  good: { fg: 'var(--green, #4ade80)',  bg: 'rgba(74,222,128,0.08)',  border: 'rgba(74,222,128,0.30)' },
+  warn: { fg: 'var(--amber, #fbbf24)',  bg: 'rgba(251,191,36,0.08)',  border: 'rgba(251,191,36,0.30)' },
+  info: { fg: 'var(--cyan, #5eead4)',   bg: 'rgba(94,234,212,0.08)',  border: 'rgba(94,234,212,0.28)' },
+  tip:  { fg: 'var(--violet)',          bg: 'rgba(139,128,240,0.08)', border: 'rgba(139,128,240,0.30)' },
+}
+
+function buildInsights(a: Analytics): Insight[] {
+  const out: Insight[] = []
+
+  // Session character
+  const ops = a.ops
+  const editTotal = ops.edits + ops.multiEdits + ops.writes
+  const totalOps = ops.reads + editTotal + ops.bashCommands + ops.searches
+  if (totalOps > 0) {
+    const readShare = ops.reads / totalOps
+    const editShare = editTotal / totalOps
+    if (readShare > 0.6 && editTotal < 3) {
+      out.push({ severity: 'info', icon: '🔍', title: 'Exploration session',
+        detail: `${ops.reads} reads vs only ${editTotal} edits — mostly investigating rather than modifying.` })
+    } else if (editShare > 0.5) {
+      out.push({ severity: 'info', icon: '✏️', title: 'Code-modification session',
+        detail: `${editTotal} edits/writes across ${ops.filesTouched.size} files · +${ops.linesAdded.toLocaleString()}/-${ops.linesRemoved.toLocaleString()} lines.` })
+    } else if (ops.bashCommands > Math.max(ops.reads, editTotal)) {
+      out.push({ severity: 'info', icon: '⌨', title: 'Shell-heavy session',
+        detail: `${ops.bashCommands} shell commands dominate — infrastructure or ops work.` })
+    }
+  }
+
+  // Cache efficiency
+  if (a.inputTokens + a.cacheReadTokens > 10_000) {
+    if (a.cacheHitRate > 0.6) {
+      out.push({ severity: 'good', icon: '⚡', title: 'Strong cache utilization',
+        detail: `${(a.cacheHitRate * 100).toFixed(0)}% of input served from cache — saved approximately ${fmtCost(a.cacheSavings)}.` })
+    } else if (a.cacheHitRate < 0.15 && a.inputTokens > 50_000) {
+      out.push({ severity: 'warn', icon: '💸', title: 'Low cache hit rate',
+        detail: `Only ${(a.cacheHitRate * 100).toFixed(1)}% of ${fmtNum(a.inputTokens)} input tokens hit cache. Reusing context could reduce cost.` })
+    }
+  }
+
+  // Error rate
+  if (a.toolUses > 5) {
+    if (a.errorRate > 0.15) {
+      out.push({ severity: 'warn', icon: '⚠', title: 'Elevated tool error rate',
+        detail: `${a.toolErrors} of ${a.toolUses} tool calls errored (${(a.errorRate * 100).toFixed(1)}%).` })
+    } else if (a.errorRate === 0) {
+      out.push({ severity: 'good', icon: '✓', title: 'No tool errors',
+        detail: `All ${a.toolUses} tool calls succeeded.` })
+    }
+  }
+
+  // Top tool
+  if (a.tools.length > 0) {
+    const top = a.tools[0]!
+    const share = top.count / Math.max(1, a.toolUses)
+    if (share > 0.5) {
+      out.push({ severity: 'info', icon: '🔧', title: `${top.name} dominates`,
+        detail: `${top.count} of ${a.toolUses} tool calls (${(share * 100).toFixed(0)}%) used ${top.name}.` })
+    }
+  }
+
+  // Latency
+  if (a.medianFirstResponseMs !== null && a.medianFirstResponseMs > 30_000) {
+    out.push({ severity: 'warn', icon: '🐢', title: 'Slow response latency',
+      detail: `Median time to first reply: ${fmtDuration(a.medianFirstResponseMs)}. The agent is spending a lot of time per turn.` })
+  } else if (a.medianFirstResponseMs !== null && a.medianFirstResponseMs < 3_000) {
+    out.push({ severity: 'good', icon: '🚀', title: 'Snappy responses',
+      detail: `Median first-response latency: ${fmtDuration(a.medianFirstResponseMs)}.` })
+  }
+
+  // Idle time
+  if (a.longestIdleMs > 30 * 60_000) {
+    out.push({ severity: 'info', icon: '⏸', title: 'Session spans a long idle gap',
+      detail: `Longest quiet period was ${fmtDuration(a.longestIdleMs)} — session was paused between turns.` })
+  }
+
+  // Cost
+  if (a.cost > 5) {
+    out.push({ severity: 'warn', icon: '💰', title: 'High session cost',
+      detail: `Estimated ${fmtCost(a.cost)} · ${fmtCost(a.costPerTurn)}/turn across ${a.turns} turns.` })
+  } else if (a.cost > 0 && a.cost < 0.05 && a.messages > 10) {
+    out.push({ severity: 'good', icon: '💵', title: 'Very low cost',
+      detail: `${a.messages} messages for only ${fmtCost(a.cost)} — cache kept this cheap.` })
+  }
+
+  // Thinking share
+  if (a.thinkingBlocks > 0 && a.assistantTextChars > 0) {
+    const thinkShare = a.thinkingChars / (a.thinkingChars + a.assistantTextChars)
+    if (thinkShare > 0.5) {
+      out.push({ severity: 'info', icon: '🧠', title: 'Heavy reasoning',
+        detail: `${(thinkShare * 100).toFixed(0)}% of assistant output was extended thinking — ${a.thinkingBlocks} blocks, ${fmtNum(a.thinkingChars)} chars.` })
+    }
+  }
+
+  // Agent depth
+  if (a.toolsPerTurn > 8) {
+    out.push({ severity: 'info', icon: '🪜', title: 'Deep agent loops',
+      detail: `${a.toolsPerTurn.toFixed(1)} tool calls per user turn · longest chain of ${a.longestAssistantChain} assistant messages.` })
+  }
+
+  // Largest reply
+  if (a.maxOutputInReply > 8_000) {
+    out.push({ severity: 'tip', icon: '📏', title: 'Very long assistant reply',
+      detail: `One reply generated ${fmtNum(a.maxOutputInReply)} output tokens. Consider breaking such requests into smaller steps.` })
+  }
+
+  // Peak throughput
+  if (a.peakTokensPerMin > 20_000) {
+    out.push({ severity: 'info', icon: '📈', title: 'Bursty output',
+      detail: `Peak throughput reached ${fmtNum(a.peakTokensPerMin)} output tokens/minute.` })
+  }
+
+  // Most-edited file
+  if (ops.editsByFile.size > 0) {
+    const topFile = [...ops.editsByFile.entries()].sort((a, b) => b[1] - a[1])[0]!
+    if (topFile[1] >= 5) {
+      const base = topFile[0].split('/').pop() ?? topFile[0]
+      out.push({ severity: 'tip', icon: '📝', title: 'Hot-spot file',
+        detail: `${base} was edited ${topFile[1]} times — likely the centerpiece of this session.` })
+    }
+  }
+
+  // Shell patterns
+  if (ops.bashByVerb.size > 0) {
+    const topVerb = [...ops.bashByVerb.entries()].sort((a, b) => b[1] - a[1])[0]!
+    if (topVerb[1] >= 5) {
+      out.push({ severity: 'info', icon: '⌨', title: `${topVerb[0]} used ${topVerb[1]}×`,
+        detail: `The most-run shell command verb in this session.` })
+    }
+  }
+
+  // Hour peak
+  if (a.messages > 0) {
+    const maxCount = Math.max(...a.hourActivity)
+    if (maxCount > 0) {
+      const peakHour = a.hourActivity.indexOf(maxCount)
+      const share = maxCount / a.messages
+      if (share > 0.35) {
+        out.push({ severity: 'info', icon: '🕒', title: `Peak activity around ${peakHour}:00`,
+          detail: `${maxCount} of ${a.messages} messages (${(share * 100).toFixed(0)}%) landed in that single hour.` })
+      }
+    }
+  }
+
+  // Slash commands
+  if (a.slashCommands >= 3) {
+    out.push({ severity: 'info', icon: '/', title: `${a.slashCommands} slash commands`,
+      detail: `Session made heavy use of slash commands — you may want to review what was invoked.` })
+  }
+
+  // Thinking with no tools
+  if (a.toolUses === 0 && a.messages > 6) {
+    out.push({ severity: 'info', icon: '💬', title: 'Conversation-only session',
+      detail: `No tool calls across ${a.messages} messages — pure Q&A or planning.` })
+  }
+
+  // Cost per line
+  if (a.costPerLineChanged > 0 && (ops.linesAdded + ops.linesRemoved) > 100) {
+    out.push({ severity: 'tip', icon: '📊', title: 'Cost per line changed',
+      detail: `${fmtCost(a.costPerLineChanged)} per line touched across ${(ops.linesAdded + ops.linesRemoved).toLocaleString()} lines.` })
+  }
+
+  // Fallback: no signal
+  if (out.length === 0) {
+    out.push({ severity: 'info', icon: 'ℹ', title: 'Not much to highlight yet',
+      detail: 'This session is short or light on signals. Insights will sharpen as more activity accumulates.' })
+  }
+
+  return out
+}
+
+function InsightsPane({ a }: { a: Analytics }) {
+  const insights = useMemo(() => buildInsights(a), [a])
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>
+        {insights.length} observation{insights.length === 1 ? '' : 's'} from this session
+      </div>
+      {insights.map((ins, i) => {
+        const c = SEVERITY_COLORS[ins.severity]
+        return (
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              gap: 12,
+              padding: '10px 12px',
+              background: c.bg,
+              border: `1px solid ${c.border}`,
+              borderRadius: 6,
+            }}
+          >
+            <span style={{ fontSize: 18, lineHeight: '22px', flexShrink: 0, width: 24, textAlign: 'center' }}>
+              {ins.icon}
+            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+              <span style={{ fontSize: 12, color: c.fg, fontWeight: 500, letterSpacing: '0.04em' }}>
+                {ins.title}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.5 }}>
+                {ins.detail}
+              </span>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
