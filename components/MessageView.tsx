@@ -42,7 +42,7 @@ type Props = {
   openTabs?: Session[]
   selectedTabId?: string | null
   onSelectTab?: (session: Session) => void
-  onCloseTab?: (sessionId: string) => void
+  onCloseTab?: (sessionKey: string) => void
 }
 
 type SseFrame = {

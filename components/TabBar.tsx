@@ -20,7 +20,7 @@ type Props = {
   tabs: Session[]
   activeId: string | null
   onSelect: (session: Session) => void
-  onClose: (sessionId: string) => void
+  onClose: (sessionKey: string) => void
 }
 
 export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
@@ -87,7 +87,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
               aria-label="Close tab"
               onClick={(e) => {
                 e.stopPropagation()
-                onClose(session.sessionId)
+                onClose(sessionTabKey(session))
               }}
               style={{
                 color: 'var(--text-3)',
