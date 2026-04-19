@@ -5,6 +5,12 @@ export const CLAUDE_CAPABILITIES: SessionCapabilities = {
   resumeAtMessage: true,
   fileRewind: true,
   rollback: false,
+  deleteSession: true,
+  shareSession: false,
+  unshareSession: false,
+  summarizeSession: false,
+  unrevertSession: false,
+  respondToPermission: false,
 }
 
 export const CODEX_CAPABILITIES: SessionCapabilities = {
@@ -12,6 +18,12 @@ export const CODEX_CAPABILITIES: SessionCapabilities = {
   resumeAtMessage: false,
   fileRewind: false,
   rollback: true,
+  deleteSession: false,
+  shareSession: false,
+  unshareSession: false,
+  summarizeSession: false,
+  unrevertSession: false,
+  respondToPermission: false,
 }
 
 export const OPENCODE_CAPABILITIES: SessionCapabilities = {
@@ -19,6 +31,12 @@ export const OPENCODE_CAPABILITIES: SessionCapabilities = {
   resumeAtMessage: true,
   fileRewind: true,
   rollback: false,
+  deleteSession: true,
+  shareSession: true,
+  unshareSession: true,
+  summarizeSession: true,
+  unrevertSession: true,
+  respondToPermission: true,
 }
 
 export const COPILOT_CAPABILITIES: SessionCapabilities = {
@@ -26,6 +44,12 @@ export const COPILOT_CAPABILITIES: SessionCapabilities = {
   resumeAtMessage: false,
   fileRewind: false,
   rollback: false,
+  deleteSession: true,
+  shareSession: false,
+  unshareSession: false,
+  summarizeSession: false,
+  unrevertSession: false,
+  respondToPermission: false,
 }
 
 export const PI_CAPABILITIES: SessionCapabilities = {
@@ -33,6 +57,12 @@ export const PI_CAPABILITIES: SessionCapabilities = {
   resumeAtMessage: false,
   fileRewind: false,
   rollback: false,
+  deleteSession: false,
+  shareSession: false,
+  unshareSession: false,
+  summarizeSession: false,
+  unrevertSession: false,
+  respondToPermission: false,
 }
 
 export function getProviderCapabilities(provider: AgentProvider): SessionCapabilities {

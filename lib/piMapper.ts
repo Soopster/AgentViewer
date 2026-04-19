@@ -1,4 +1,5 @@
 import type { AgentMessage } from '@mariozechner/pi-agent-core'
+import type { Model } from '@mariozechner/pi-ai'
 import type {
   ContentBlock,
   Session,
@@ -6,6 +7,7 @@ import type {
   SessionInfo,
   SessionMessage,
   SessionModelInfo,
+  ReasoningEffortLevel,
 } from './types'
 import { PI_CAPABILITIES } from './provider'
 import type { PiSessionListEntry } from './piClient'
@@ -13,6 +15,27 @@ import type { PiSessionListEntry } from './piClient'
 type PiStoredMetadata = {
   title: string | null
   tag: string | null
+}
+
+type PiModelRef = {
+  providerID: string
+  modelID: string
+}
+
+export function encodePiModelValue(model: PiModelRef): string {
+  return JSON.stringify(model)
+}
+
+export function decodePiModelValue(value: string | null | undefined): PiModelRef | null {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value) as Partial<PiModelRef>
+    return typeof parsed.providerID === 'string' && typeof parsed.modelID === 'string'
+      ? { providerID: parsed.providerID, modelID: parsed.modelID }
+      : null
+  } catch {
+    return null
+  }
 }
 
 function messageTimestamp(msg: AgentMessage): string | undefined {
@@ -303,7 +326,25 @@ export function mapPiSessionToInfo(
   }
 }
 
-export function mapPiModelsToSessionModels(currentModel?: string): SessionModelInfo[] {
+export function currentPiModelValue(model?: Model<any> | null, fallbackModel?: string): string | null {
+  if (model?.provider && model.id) {
+    return encodePiModelValue({ providerID: model.provider, modelID: model.id })
+  }
+  return fallbackModel ?? null
+}
+
+export function mapPiModelsToSessionModels(models: Model<any>[], currentModel?: string): SessionModelInfo[] {
+  const mapped = models.map((model) => ({
+    value: encodePiModelValue({ providerID: model.provider, modelID: model.id }),
+    displayName: `${model.provider} · ${model.name}`,
+    description: `${model.provider}/${model.id}`,
+    supportsEffort: model.reasoning,
+    supportedEffortLevels: model.reasoning
+      ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] satisfies ReasoningEffortLevel[]
+      : undefined,
+  }))
+
+  if (mapped.length > 0) return mapped
   if (!currentModel) return []
   return [{
     value: currentModel,
@@ -319,8 +360,28 @@ export function mapPiDiagnosticsToSections(params: {
   thinkingLevel?: string
   toolNames: string[]
   sessionFile?: string
+  stats?: {
+    userMessages: number
+    assistantMessages: number
+    toolCalls: number
+    toolResults: number
+    totalMessages: number
+    cost: number
+    tokens: {
+      input: number
+      output: number
+      cacheRead: number
+      cacheWrite: number
+      total: number
+    }
+    contextUsage?: {
+      tokens?: number | null
+      contextWindow?: number | null
+      percent?: number | null
+    }
+  }
 }): SessionDiagnosticSection[] {
-  return [
+  const sections: SessionDiagnosticSection[] = [
     {
       id: 'status',
       title: 'STATUS',
@@ -346,4 +407,23 @@ export function mapPiDiagnosticsToSections(params: {
         : ['None'],
     },
   ]
+
+  if (params.stats) {
+    const context = params.stats.contextUsage
+    sections.push({
+      id: 'usage',
+      title: 'USAGE',
+      items: [
+        `Messages ${params.stats.totalMessages} · user ${params.stats.userMessages} · assistant ${params.stats.assistantMessages}`,
+        `Tools ${params.stats.toolCalls} calls · ${params.stats.toolResults} results`,
+        `Tokens ${params.stats.tokens.total.toLocaleString()} · in ${params.stats.tokens.input.toLocaleString()} · out ${params.stats.tokens.output.toLocaleString()}`,
+        `Cost $${params.stats.cost.toFixed(4)}`,
+        context
+          ? `Context ${context.tokens ?? '?'} / ${context.contextWindow ?? '?'}${context.percent == null ? '' : ` · ${Math.round(context.percent)}%`}`
+          : 'Context unavailable',
+      ],
+    })
+  }
+
+  return sections
 }

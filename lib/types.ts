@@ -49,12 +49,19 @@ export type SystemMessagePayload = {
 
 export type AgentProvider = 'claude' | 'codex' | 'opencode' | 'copilot' | 'pi'
 export type ProviderSelection = AgentProvider | 'all'
+export type ReasoningEffortLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh'
 
 export type SessionCapabilities = {
   messageFork: boolean
   resumeAtMessage: boolean
   fileRewind: boolean
   rollback: boolean
+  deleteSession: boolean
+  shareSession: boolean
+  unshareSession: boolean
+  summarizeSession: boolean
+  unrevertSession: boolean
+  respondToPermission: boolean
 }
 
 /**
@@ -103,7 +110,22 @@ export type SessionModelInfo = {
   displayName: string
   description: string
   supportsEffort?: boolean
-  supportedEffortLevels?: ('low' | 'medium' | 'high' | 'max' | 'xhigh')[]
+  supportedEffortLevels?: ReasoningEffortLevel[]
+}
+
+export type SendAttachment = {
+  id?: string
+  type: 'file' | 'directory' | 'selection' | 'image' | 'mention' | 'skill' | 'blob'
+  path?: string
+  filePath?: string
+  displayName?: string
+  text?: string
+  data?: string
+  mimeType?: string
+  selection?: {
+    start: { line: number; character: number }
+    end: { line: number; character: number }
+  }
 }
 
 export type SessionDiagnosticSection = {

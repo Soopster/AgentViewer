@@ -1,16 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { readFile } from 'node:fs/promises'
+import { basename, extname, resolve as resolvePath } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
+  deleteSession as deleteClaudeSession,
   forkSession,
   getSessionInfo,
   getSessionMessages,
+  listSubagents,
   listSessions,
   query,
   renameSession,
   tagSession,
 } from '@anthropic-ai/claude-agent-sdk'
+import type { ContentBlockParam as ClaudeContentBlockParam, MessageParam as ClaudeMessageParam } from '@anthropic-ai/sdk/resources'
 import type {
   GetAuthStatusResponse as CopilotGetAuthStatusResponse,
   GetStatusResponse as CopilotGetStatusResponse,
+  MessageOptions as CopilotMessageOptions,
   ModelInfo as CopilotModelInfo,
   SessionEvent as CopilotSessionEvent,
   SessionMetadata as CopilotSessionMetadata,
@@ -26,6 +33,8 @@ import type {
   SessionInfo,
   SessionMessage,
   SessionModelInfo,
+  SendAttachment,
+  ReasoningEffortLevel,
 } from './types'
 import { createSessionControlQuery } from './sdkControlQuery'
 import { getCopilotClient, resumeCopilotSession } from './copilotClient'
@@ -58,6 +67,7 @@ import type {
   CodexThreadRollbackResponse,
   CodexThreadTokenUsage,
   CodexTurnStartResponse,
+  CodexUserInput,
 } from './codexProtocol'
 import {
   mapCodexDiagnosticsToSections,
@@ -88,12 +98,14 @@ import type {
   ConfigProvidersResponse as OpenCodeConfigProvidersResponse,
   Event as OpenCodeEvent,
   FileDiff as OpenCodeFileDiff,
+  FilePartInput as OpenCodeFilePartInput,
   FormatterStatus as OpenCodeFormatterStatus,
   LspStatus as OpenCodeLspStatus,
   McpStatus as OpenCodeMcpStatus,
   Message as OpenCodeMessage,
   Part as OpenCodePart,
   Session as OpenCodeSession,
+  TextPartInput as OpenCodeTextPartInput,
 } from '@opencode-ai/sdk'
 import { normalizeProjectPath, sameProjectPath } from './projectPaths'
 import {
@@ -110,6 +122,8 @@ import {
   mapPiModelsToSessionModels,
   mapPiSessionToInfo,
   mapPiSessionToSession,
+  currentPiModelValue,
+  decodePiModelValue,
 } from './piMapper'
 import {
   getPiStoredMetadata,
@@ -175,6 +189,256 @@ type RewindParams = {
   provider?: AgentProvider
 }
 
+type SessionActionParams = {
+  sessionId: string
+  body: Record<string, unknown>
+  provider?: AgentProvider
+}
+
+const REASONING_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'max', 'xhigh'] as const
+const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
+
+function parseEffort(body: Record<string, unknown>): ReasoningEffortLevel | undefined {
+  const effort = typeof body.effort === 'string' ? body.effort.trim() : ''
+  return REASONING_EFFORT_LEVELS.includes(effort as typeof REASONING_EFFORT_LEVELS[number])
+    ? effort as typeof REASONING_EFFORT_LEVELS[number]
+    : undefined
+}
+
+function parseAttachments(body: Record<string, unknown>): SendAttachment[] {
+  const raw = body.attachments
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((entry): SendAttachment[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const record = entry as Record<string, unknown>
+    const type = typeof record.type === 'string' ? record.type : ''
+    if (!['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob'].includes(type)) return []
+    return [{
+      id: typeof record.id === 'string' ? record.id : undefined,
+      type: type as SendAttachment['type'],
+      path: typeof record.path === 'string' ? record.path.trim() : undefined,
+      filePath: typeof record.filePath === 'string' ? record.filePath.trim() : undefined,
+      displayName: typeof record.displayName === 'string' ? record.displayName.trim() : undefined,
+      text: typeof record.text === 'string' ? record.text : undefined,
+      data: typeof record.data === 'string' ? record.data : undefined,
+      mimeType: typeof record.mimeType === 'string' ? record.mimeType.trim() : undefined,
+      selection: normalizeSelection(record.selection),
+    }]
+  }).slice(0, 12)
+}
+
+function normalizeSelection(value: unknown): SendAttachment['selection'] | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const start = normalizePosition(record.start)
+  const end = normalizePosition(record.end)
+  return start && end ? { start, end } : undefined
+}
+
+function normalizePosition(value: unknown): { line: number; character: number } | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const line = Number(record.line)
+  const character = Number(record.character)
+  return Number.isFinite(line) && Number.isFinite(character)
+    ? { line, character }
+    : undefined
+}
+
+function attachmentPath(attachment: SendAttachment): string | undefined {
+  return attachment.path || attachment.filePath
+}
+
+function attachmentName(attachment: SendAttachment): string {
+  const path = attachmentPath(attachment)
+  return attachment.displayName || (path ? basename(path) : attachment.type)
+}
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value)
+}
+
+function absoluteAttachmentPath(value: string): string {
+  return value.startsWith('/') ? value : resolvePath(value)
+}
+
+function inferMimeType(path: string | undefined, fallback = 'application/octet-stream'): string {
+  const extension = extname(path ?? '').toLowerCase()
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg'
+  if (extension === '.png') return 'image/png'
+  if (extension === '.gif') return 'image/gif'
+  if (extension === '.webp') return 'image/webp'
+  if (extension === '.svg') return 'image/svg+xml'
+  if (extension === '.json') return 'application/json'
+  if (extension === '.md' || extension === '.markdown') return 'text/markdown'
+  if (extension === '.txt' || extension === '.log') return 'text/plain'
+  if (extension === '.ts' || extension === '.tsx' || extension === '.js' || extension === '.jsx' || extension === '.css' || extension === '.html') return 'text/plain'
+  return fallback
+}
+
+function isSupportedClaudeImageMime(mimeType: string): mimeType is 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' {
+  return mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/gif' || mimeType === 'image/webp'
+}
+
+async function readLocalImageAttachment(attachment: SendAttachment): Promise<{ data: string; mimeType: string; name: string } | null> {
+  if (attachment.type !== 'image' && attachment.mimeType?.startsWith('image/') !== true) return null
+  if (attachment.type === 'blob' && attachment.data && attachment.mimeType) {
+    return { data: attachment.data, mimeType: attachment.mimeType, name: attachmentName(attachment) }
+  }
+  const path = attachmentPath(attachment)
+  if (!path || isHttpUrl(path)) return null
+  const mimeType = attachment.mimeType || inferMimeType(path)
+  const data = await readFile(absoluteAttachmentPath(path), 'base64')
+  return { data, mimeType, name: attachmentName(attachment) }
+}
+
+function attachmentPromptLine(attachment: SendAttachment): string | null {
+  const path = attachmentPath(attachment)
+  const label = `[${attachment.type}: ${attachmentName(attachment)}]`
+  if (attachment.type === 'selection' && attachment.text?.trim()) {
+    const location = path ? ` ${path}` : ''
+    return `${label}${location}\n${attachment.text.trim()}`
+  }
+  if (path) return `${label} ${path}`
+  if (attachment.text?.trim()) return `${label}\n${attachment.text.trim()}`
+  return null
+}
+
+function attachmentsAsPromptText(attachments: SendAttachment[], ignoredTypes: SendAttachment['type'][] = ['image', 'blob']): string {
+  const ignored = new Set<SendAttachment['type']>(ignoredTypes)
+  const lines = attachments.flatMap((attachment) => {
+    if (ignored.has(attachment.type)) return []
+    const line = attachmentPromptLine(attachment)
+    return line ? [line] : []
+  })
+  return lines.length > 0 ? `\n\n${lines.join('\n')}` : ''
+}
+
+async function buildClaudePrompt(userMessage: string, attachments: SendAttachment[]): Promise<string | AsyncIterable<{ type: 'user'; message: ClaudeMessageParam; parent_tool_use_id: null }>> {
+  const imageBlocks: ClaudeContentBlockParam[] = []
+  for (const attachment of attachments) {
+    const image = await readLocalImageAttachment(attachment)
+    if (!image) continue
+    if (!isSupportedClaudeImageMime(image.mimeType)) {
+      throw new Error(`Claude image attachment ${image.name} has unsupported MIME type ${image.mimeType}`)
+    }
+    imageBlocks.push({
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: image.mimeType,
+        data: image.data,
+      },
+    })
+  }
+
+  const text = `${userMessage}${attachmentsAsPromptText(attachments)}`.trim()
+  if (imageBlocks.length === 0) return text
+
+  async function* messages() {
+    yield {
+      type: 'user' as const,
+      message: {
+        role: 'user' as const,
+        content: [
+          { type: 'text' as const, text },
+          ...imageBlocks,
+        ],
+      },
+      parent_tool_use_id: null,
+    }
+  }
+
+  return messages()
+}
+
+function buildCodexInput(userMessage: string, attachments: SendAttachment[]): CodexUserInput[] {
+  const input: CodexUserInput[] = [{ type: 'text', text: userMessage, text_elements: [] }]
+  for (const attachment of attachments) {
+    const path = attachmentPath(attachment)
+    if (attachment.type === 'image' && path) {
+      input.push(isHttpUrl(path)
+        ? { type: 'image', url: path }
+        : { type: 'localImage', path: absoluteAttachmentPath(path) })
+    } else if (attachment.type === 'skill' && path) {
+      input.push({ type: 'skill', name: attachmentName(attachment), path: absoluteAttachmentPath(path) })
+    } else if ((attachment.type === 'file' || attachment.type === 'directory' || attachment.type === 'mention') && path) {
+      input.push({ type: 'mention', name: attachmentName(attachment), path: absoluteAttachmentPath(path) })
+    }
+  }
+  return input
+}
+
+function buildCopilotAttachments(attachments: SendAttachment[]): NonNullable<CopilotMessageOptions['attachments']> {
+  const result: NonNullable<CopilotMessageOptions['attachments']> = []
+  for (const attachment of attachments) {
+    const path = attachmentPath(attachment)
+    if (attachment.type === 'file' || attachment.type === 'image') {
+      if (path) result.push({ type: 'file', path, displayName: attachment.displayName })
+      continue
+    }
+    if (attachment.type === 'directory') {
+      if (path) result.push({ type: 'directory', path, displayName: attachment.displayName })
+      continue
+    }
+    if (attachment.type === 'selection') {
+      const filePath = attachment.filePath || attachment.path
+      if (filePath && attachment.displayName) {
+        result.push({
+          type: 'selection',
+          filePath,
+          displayName: attachment.displayName,
+          selection: attachment.selection,
+          text: attachment.text,
+        })
+      }
+      continue
+    }
+    if (attachment.type === 'blob' && attachment.data && attachment.mimeType) {
+      result.push({
+        type: 'blob',
+        data: attachment.data,
+        mimeType: attachment.mimeType,
+        displayName: attachment.displayName,
+      })
+    }
+  }
+  return result
+}
+
+function buildOpenCodeParts(userMessage: string, attachments: SendAttachment[]): Array<OpenCodeTextPartInput | OpenCodeFilePartInput> {
+  const text = `${userMessage}${attachmentsAsPromptText(attachments, ['file', 'image', 'blob'])}`.trim()
+  const parts: Array<OpenCodeTextPartInput | OpenCodeFilePartInput> = [{ type: 'text', text }]
+  for (const attachment of attachments) {
+    const path = attachmentPath(attachment)
+    if (!path || (attachment.type !== 'file' && attachment.type !== 'image')) continue
+    const name = attachmentName(attachment)
+    const resolved = isHttpUrl(path) ? path : absoluteAttachmentPath(path)
+    const label = `@${name}`
+    parts.push({
+      type: 'file',
+      mime: attachment.mimeType || inferMimeType(path, 'text/plain'),
+      filename: name,
+      url: isHttpUrl(resolved) ? resolved : pathToFileURL(resolved).toString(),
+      source: {
+        type: 'file',
+        path: resolved,
+        text: { value: label, start: 0, end: label.length },
+      },
+    })
+  }
+  return parts
+}
+
+async function buildPiImages(attachments: SendAttachment[]): Promise<Array<{ type: 'image'; data: string; mimeType: string }>> {
+  const images: Array<{ type: 'image'; data: string; mimeType: string }> = []
+  for (const attachment of attachments) {
+    const image = await readLocalImageAttachment(attachment)
+    if (image) images.push({ type: 'image', data: image.data, mimeType: image.mimeType })
+  }
+  return images
+}
+
 function codexContextUsageToEventData(contextUsage: ContextUsage): string {
   return `event: context-usage\ndata: ${JSON.stringify(contextUsage)}\n\n`
 }
@@ -237,6 +501,8 @@ function formatCopilotEvent(event: CopilotSessionEvent): string {
 
 async function findCopilotSessionMetadata(sessionId: string): Promise<CopilotSessionMetadata | null> {
   const client = await getCopilotClient()
+  const metadata = await client.getSessionMetadata(sessionId).catch(() => undefined)
+  if (metadata) return metadata
   const sessions = await client.listSessions()
   return sessions.find((session) => session.sessionId === sessionId) ?? null
 }
@@ -548,6 +814,81 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
   throw new Error('title or tag required')
 }
 
+export async function deleteViewSession(sessionId: string, providerOverride?: AgentProvider): Promise<void> {
+  const provider = await resolveProvider(providerOverride)
+  if (provider === 'opencode') {
+    const client = await getOpenCodeClient()
+    await client.session.delete({
+      ...OPENCODE_OPTIONS,
+      path: { id: sessionId },
+    })
+    return
+  }
+  if (provider === 'copilot') {
+    const client = await getCopilotClient()
+    await client.deleteSession(sessionId)
+    return
+  }
+  if (provider === 'claude') {
+    await deleteClaudeSession(sessionId)
+    return
+  }
+  throw new Error(`Delete is not supported for ${provider} sessions`)
+}
+
+export async function runViewSessionAction({ sessionId, body, provider }: SessionActionParams): Promise<Record<string, unknown>> {
+  const resolvedProvider = await resolveProvider(provider)
+  const action = typeof body.action === 'string' ? body.action : ''
+
+  if (resolvedProvider === 'opencode') {
+    const client = await getOpenCodeClient()
+    if (action === 'share') {
+      const response = await client.session.share({
+        ...OPENCODE_OPTIONS,
+        path: { id: sessionId },
+      })
+      return { session: openCodeData<OpenCodeSession>(response) }
+    }
+    if (action === 'unshare') {
+      await client.session.unshare({
+        ...OPENCODE_OPTIONS,
+        path: { id: sessionId },
+      })
+      return { ok: true }
+    }
+    if (action === 'summarize') {
+      const response = await client.session.summarize({
+        ...OPENCODE_OPTIONS,
+        path: { id: sessionId },
+      })
+      return { ok: openCodeData<boolean>(response) }
+    }
+    if (action === 'unrevert') {
+      const response = await client.session.unrevert({
+        ...OPENCODE_OPTIONS,
+        path: { id: sessionId },
+      })
+      return { session: openCodeData<OpenCodeSession>(response) }
+    }
+    if (action === 'respondPermission') {
+      const permissionID = typeof body.permissionId === 'string' ? body.permissionId : ''
+      const response = typeof body.response === 'string' ? body.response : ''
+      if (!permissionID) throw new Error('permissionId is required')
+      if (response !== 'once' && response !== 'always' && response !== 'reject') {
+        throw new Error('response must be once, always, or reject')
+      }
+      const result = await client.postSessionIdPermissionsPermissionId({
+        ...OPENCODE_OPTIONS,
+        path: { id: sessionId, permissionID },
+        body: { response },
+      })
+      return { ok: openCodeData<boolean>(result) }
+    }
+  }
+
+  throw new Error(`Action ${action || '(missing)'} is not supported for ${resolvedProvider} sessions`)
+}
+
 export async function listViewSessionMessages(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessage[]> {
   const sortMessagesChronologically = (messages: SessionMessage[]): SessionMessage[] => (
     messages
@@ -633,9 +974,12 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
   return { sessions, batches }
 }
 
-function createClaudeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Response {
+async function createClaudeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const model = typeof body.model === 'string' ? body.model : 'claude-sonnet-4-6'
+  const effort = parseEffort(body)
+  const attachments = parseAttachments(body)
+  const prompt = await buildClaudePrompt(userMessage, attachments)
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
   const forkSessionOnSend = Boolean(body.forkSession)
 
@@ -646,10 +990,16 @@ function createClaudeStream(sessionId: string, request: NextRequest, body: Recor
   const stream = new ReadableStream({
     async start(controller) {
       const q = query({
-        prompt: userMessage,
+        prompt,
         options: {
           resume: sessionId,
           model,
+          effort: effort === 'off' || effort === 'minimal' ? undefined : effort,
+          thinking: effort === 'off'
+            ? { type: 'disabled' }
+            : effort
+            ? { type: 'adaptive' }
+            : undefined,
           abortController,
           enableFileCheckpointing: true,
           resumeSessionAt,
@@ -755,6 +1105,7 @@ function getCodexNotificationTurnId(notification: CodexNotification): string | n
 async function createCodexStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const model = typeof body.model === 'string' ? body.model : null
+  const attachments = parseAttachments(body)
   const client = getCodexClient()
   const encoder = new TextEncoder()
 
@@ -856,7 +1207,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
         const started = await client.request<CodexTurnStartResponse>('turn/start', {
           threadId: sessionId,
           model: model ?? undefined,
-          input: [{ type: 'text', text: userMessage, text_elements: [] }],
+          input: buildCodexInput(userMessage, attachments),
         })
 
         targetTurnId = started.turn.id
@@ -910,6 +1261,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
 async function createOpenCodeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const selectedModel = decodeOpenCodeModelValue(typeof body.model === 'string' ? body.model : null)
+  const attachments = parseAttachments(body)
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
   const client = await getOpenCodeClient()
   const encoder = new TextEncoder()
@@ -1001,7 +1353,7 @@ async function createOpenCodeStream(sessionId: string, request: NextRequest, bod
           path: { id: targetSessionId },
           body: {
             model: selectedModel ?? undefined,
-            parts: [{ type: 'text', text: userMessage }],
+            parts: buildOpenCodeParts(userMessage, attachments),
           },
         })
 
@@ -1034,6 +1386,8 @@ async function createOpenCodeStream(sessionId: string, request: NextRequest, bod
 async function createCopilotStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const selectedModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null
+  const effort = parseEffort(body)
+  const attachments = buildCopilotAttachments(parseAttachments(body))
   const client = await getCopilotClient()
   const encoder = new TextEncoder()
 
@@ -1089,14 +1443,19 @@ async function createCopilotStream(sessionId: string, request: NextRequest, body
           }
         })
 
-        if (selectedModel) {
+        const copilotEffort = effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'xhigh'
+          ? effort
+          : undefined
+
+        if (selectedModel || copilotEffort) {
           const current = await session.rpc.model.getCurrent().catch(() => ({ modelId: undefined }))
-          if (current.modelId !== selectedModel) {
-            await session.setModel(selectedModel)
+          const nextModel = selectedModel ?? current.modelId
+          if (nextModel && (current.modelId !== nextModel || copilotEffort)) {
+            await session.setModel(nextModel, copilotEffort ? { reasoningEffort: copilotEffort } : undefined)
           }
         }
 
-        await session.sendAndWait({ prompt: userMessage }, 300_000)
+        await session.sendAndWait({ prompt: userMessage, attachments: attachments.length > 0 ? attachments : undefined }, 300_000)
       } catch (err) {
         if (!emittedError) {
           controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
@@ -1120,6 +1479,9 @@ async function createCopilotStream(sessionId: string, request: NextRequest, body
 
 async function createPiStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
+  const selectedModel = decodePiModelValue(typeof body.model === 'string' ? body.model : null)
+  const effort = parseEffort(body)
+  const attachments = parseAttachments(body)
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({
@@ -1135,6 +1497,19 @@ async function createPiStream(sessionId: string, request: NextRequest, body: Rec
       try {
         const agentSession = await openPiAgentSession(sessionId)
         const targetSessionId = agentSession.sessionId
+        if (selectedModel) {
+          const model = agentSession.modelRegistry.find(selectedModel.providerID, selectedModel.modelID)
+          if (!model) {
+            throw new Error(`Pi model not found: ${selectedModel.providerID}/${selectedModel.modelID}`)
+          }
+          if (agentSession.model?.provider !== selectedModel.providerID || agentSession.model?.id !== selectedModel.modelID) {
+            await agentSession.setModel(model)
+          }
+        }
+        if (effort && PI_THINKING_LEVELS.includes(effort as typeof PI_THINKING_LEVELS[number])) {
+          agentSession.setThinkingLevel(effort as typeof PI_THINKING_LEVELS[number])
+        }
+        const images = await buildPiImages(attachments)
 
         controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: targetSessionId })}\n\n`))
 
@@ -1162,7 +1537,8 @@ async function createPiStream(sessionId: string, request: NextRequest, body: Rec
           }
         })
 
-        await agentSession.prompt(userMessage)
+        const text = `${userMessage}${attachmentsAsPromptText(attachments)}`.trim()
+        await agentSession.prompt(text, images.length > 0 ? { images } : undefined)
       } catch (err) {
         unsubscribePi?.()
         controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
@@ -1326,10 +1702,24 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
         break
       }
     }
+    const agentSession = await openPiAgentSession(sessionId)
+    const availableModels = agentSession.modelRegistry.getAvailable()
+    const currentModelValue = currentPiModelValue(agentSession.model, currentModel)
+    const piContextUsage = agentSession.getContextUsage()
     return {
-      models: mapPiModelsToSessionModels(currentModel),
-      currentModel: currentModel ?? null,
-      contextUsage: null,
+      models: mapPiModelsToSessionModels(availableModels, currentModelValue ?? currentModel),
+      currentModel: currentModelValue ?? currentModel ?? null,
+      contextUsage: piContextUsage
+        ? {
+            totalTokens: piContextUsage.tokens ?? 0,
+            maxTokens: piContextUsage.contextWindow,
+            percentage: piContextUsage.percent ?? 0,
+            model: agentSession.model?.id ?? currentModel ?? 'unknown',
+            categories: [
+              { name: 'Context', tokens: piContextUsage.tokens ?? 0, color: 'var(--cyan)' },
+            ],
+          }
+        : null,
     }
   }
 
@@ -1382,7 +1772,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
     const client = await getOpenCodeClient()
     const session = await getOpenCodeSession(sessionId)
     const query = openCodeDirectoryQuery(session)
-    const [providers, commands, agents, lsp, formatters, mcp, messages] = await Promise.all([
+    const [providers, commands, agents, lsp, formatters, mcp, messages, children] = await Promise.all([
       client.config.providers({
         ...OPENCODE_OPTIONS,
         query,
@@ -1408,6 +1798,11 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
         query,
       }),
       getOpenCodeSessionMessages(sessionId),
+      client.session.children({
+        ...OPENCODE_OPTIONS,
+        path: { id: sessionId },
+        query,
+      }).catch(() => ({ data: [] as OpenCodeSession[] })),
     ])
 
     return {
@@ -1419,6 +1814,8 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
         lsp: openCodeData<OpenCodeLspStatus[]>(lsp),
         formatters: openCodeData<OpenCodeFormatterStatus[]>(formatters),
         mcp: openCodeData<Record<string, OpenCodeMcpStatus>>(mcp),
+        children: openCodeData<OpenCodeSession[]>(children),
+        currentSession: session,
       }),
     }
   }
@@ -1493,6 +1890,8 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
     const sm = openPiSessionManager(sessionId)
     const sessionFile = sm.getSessionFile()
     const cwd = sm.getCwd()
+    const agentSession = await openPiAgentSession(sessionId)
+    const stats = agentSession.getSessionStats()
 
     return {
       currentModel: currentModel ?? null,
@@ -1500,9 +1899,10 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
         sessionId,
         cwd,
         currentModel,
-        thinkingLevel,
-        toolNames: [],
+        thinkingLevel: agentSession.thinkingLevel ?? thinkingLevel,
+        toolNames: agentSession.getActiveToolNames(),
         sessionFile,
+        stats,
       }),
     }
   }
@@ -1510,11 +1910,12 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
   const q = createSessionControlQuery(sessionId)
   try {
     await q.initializationResult()
-    const [commands, agents, mcpServers, contextUsage] = await Promise.all([
+    const [commands, agents, mcpServers, contextUsage, subagents] = await Promise.all([
       q.supportedCommands(),
       q.supportedAgents(),
       q.mcpServerStatus(),
       q.getContextUsage().catch(() => null),
+      listSubagents(sessionId).catch(() => [] as string[]),
     ])
     return {
       currentModel: contextUsage?.model ?? null,
@@ -1527,6 +1928,11 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
           items: mcpServers.length > 0
             ? mcpServers.map((server) => `${server.name} · ${server.status}`)
             : ['None'],
+        },
+        {
+          id: 'subagents',
+          title: 'SUBAGENTS',
+          items: subagents.length > 0 ? subagents.slice(0, 20) : ['None'],
         },
       ],
     }

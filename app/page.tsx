@@ -421,6 +421,21 @@ export default function Home() {
     void selectSession({ sessionId: newSessionId, provider: selectedSession.provider } as Session)
   }, [selectedSession?.provider])
 
+  const handleDelete = useCallback((sessionId: string, deletedProvider?: AgentProvider) => {
+    const sameSession = (session: Session) =>
+      session.sessionId === sessionId && (!deletedProvider || (session.provider ?? 'claude') === deletedProvider)
+    setSessions((prev) => prev.filter((session) => !sameSession(session)))
+    setOpenTabSessions((prev) => prev.filter((session) => !sameSession(session)))
+    setSelectedProject((prev) => prev
+      ? { ...prev, sessions: prev.sessions.filter((session) => !sameSession(session)) }
+      : prev
+    )
+    if (selectedId === sessionId) {
+      setSelectedId(null)
+      setMessages([])
+    }
+  }, [selectedId])
+
   const handleChangeProvider = useCallback(async (nextProvider: ProviderSelection) => {
     if (nextProvider === provider || switchingProvider) return
     setSwitchingProvider(true)
@@ -505,6 +520,7 @@ export default function Home() {
           session={selectedSession}
           projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
           onFork={handleFork}
+          onDelete={handleDelete}
           openTabs={openTabSessions}
           selectedTabId={selectedId}
           onSelectTab={(s) => void selectSession(s)}

@@ -11,6 +11,8 @@ import type {
   SessionDiagnosticSection,
   ToolUseBlock,
   ContentBlock,
+  SendAttachment,
+  ReasoningEffortLevel,
 } from '@/lib/types'
 import { buildThreadedMessages, buildThreadedMessagesIncremental, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
@@ -23,6 +25,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
 import MessageItem from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
 
@@ -34,6 +37,7 @@ type Props = {
   session: Session | null
   projectView?: { key: string; sessionCount: number; providerMode: 'current' | 'all' }
   onFork?: (newSessionId: string) => void
+  onDelete?: (sessionId: string, provider?: Session['provider']) => void
   openTabs?: Session[]
   selectedTabId?: string | null
   onSelectTab?: (session: Session) => void
@@ -64,6 +68,12 @@ type RollbackPreview = {
   turnsRemoved: Array<{ turnId: string; preview: string }>
 }
 
+type PendingPermission = {
+  id: string
+  title: string
+  detail?: string
+}
+
 type TimelineRow = {
   key: string
   message: ThreadedMessage
@@ -86,6 +96,57 @@ const TIMELINE_BOTTOM_GUTTER_PX = 72
 function normalizeSelectValue(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
   return trimmed ? trimmed : null
+}
+
+function effortLabel(level: ReasoningEffortLevel): string {
+  if (level === 'xhigh') return 'XHIGH'
+  return level.toUpperCase()
+}
+
+function attachmentDisplayName(attachment: SendAttachment): string {
+  if (attachment.displayName) return attachment.displayName
+  const path = attachment.path ?? attachment.filePath ?? attachment.type
+  return path.split('/').filter(Boolean).at(-1) ?? path
+}
+
+function extractOpenCodePermission(payload: unknown): PendingPermission | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  if (record.type !== 'opencode_event') return null
+  const event = record.event
+  if (!event || typeof event !== 'object') return null
+  const eventRecord = event as Record<string, unknown>
+  if (eventRecord.type !== 'permission.updated') return null
+  const permission = eventRecord.properties
+  if (!permission || typeof permission !== 'object') return null
+  const permissionRecord = permission as Record<string, unknown>
+  const id = typeof permissionRecord.id === 'string' ? permissionRecord.id : null
+  if (!id) return null
+  const pattern = permissionRecord.pattern
+  const detail = Array.isArray(pattern)
+    ? pattern.join(', ')
+    : typeof pattern === 'string'
+    ? pattern
+    : undefined
+  return {
+    id,
+    title: typeof permissionRecord.title === 'string' ? permissionRecord.title : 'Permission requested',
+    detail,
+  }
+}
+
+function extractOpenCodePermissionReply(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  if (record.type !== 'opencode_event') return null
+  const event = record.event
+  if (!event || typeof event !== 'object') return null
+  const eventRecord = event as Record<string, unknown>
+  if (eventRecord.type !== 'permission.replied') return null
+  const properties = eventRecord.properties
+  if (!properties || typeof properties !== 'object') return null
+  const permissionID = (properties as Record<string, unknown>).permissionID
+  return typeof permissionID === 'string' ? permissionID : null
 }
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
@@ -1011,7 +1072,7 @@ function VirtualTimelineRow({
   )
 }
 
-export default function MessageView({ messages, loading, session, projectView, onFork, openTabs, selectedTabId, onSelectTab, onCloseTab }: Props) {
+export default function MessageView({ messages, loading, session, projectView, onFork, onDelete, openTabs, selectedTabId, onSelectTab, onCloseTab }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
   const [sendError, setSendError] = useState<string | null>(null)
@@ -1019,6 +1080,10 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
   const [availableModels, setAvailableModels] = useState<SessionModelInfo[]>([])
   const [selectedModel, setSelectedModel] = useState('')
+  const [selectedEffort, setSelectedEffort] = useState<'auto' | ReasoningEffortLevel>('auto')
+  const [attachments, setAttachments] = useState<SendAttachment[]>([])
+  const [attachmentType, setAttachmentType] = useState<SendAttachment['type']>('file')
+  const [attachmentPath, setAttachmentPath] = useState('')
   const [rewindTargetId, setRewindTargetId] = useState('')
   const [rollbackTurns, setRollbackTurns] = useState(1)
   const [resumeFromMessageId, setResumeFromMessageId] = useState<string | null>(null)
@@ -1032,12 +1097,15 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
   const [exporting, setExporting] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [sessionActionLoading, setSessionActionLoading] = useState<string | null>(null)
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
   const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
   const [liveAssistantText, setLiveAssistantText] = useState('')
   const [liveToolActivities, setLiveToolActivities] = useState<LiveToolActivity[]>([])
   const [liveThreadedMessages, setLiveThreadedMessages] = useState<ThreadedMessage[]>([])
+  const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
   const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useState(false)
   const [autoFollow, setAutoFollow] = useState(false)
   const [timelineScrollTop, setTimelineScrollTop] = useState(0)
@@ -1059,6 +1127,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const initialScrollDoneRef = useRef(false)
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
   const assistantName = assistantDisplayName(sessionInfo?.provider ?? session?.provider)
+  const activeProvider = sessionInfo?.provider ?? session?.provider
   const modelOptions = useMemo(() => {
     const filtered = availableModels.filter((model) => normalizeSelectValue(model.value))
     if (filtered.length > 0) return filtered
@@ -1067,6 +1136,23 @@ export default function MessageView({ messages, loading, session, projectView, o
     return fallbackValue ? [{ value: fallbackValue, displayName: fallbackValue, description: '' }] : []
   }, [availableModels, selectedModel])
   const selectedModelValue = normalizeSelectValue(selectedModel)
+  const selectedModelInfo = useMemo(
+    () => modelOptions.find((model) => model.value === selectedModelValue) ?? null,
+    [modelOptions, selectedModelValue],
+  )
+  const effortOptions = useMemo<ReasoningEffortLevel[]>(() => {
+    if (!selectedModelInfo?.supportsEffort) return []
+    if (activeProvider === 'codex' || activeProvider === 'opencode') return []
+    const levels = selectedModelInfo.supportedEffortLevels?.filter((level) => {
+      if (activeProvider === 'copilot') return level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh'
+      if (activeProvider === 'claude') return level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh' || level === 'max'
+      if (activeProvider === 'pi') return level === 'off' || level === 'minimal' || level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh'
+      return false
+    }) ?? []
+    if (levels.length > 0) return levels
+    if (activeProvider === 'pi') return ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
+    return ['low', 'medium', 'high']
+  }, [activeProvider, selectedModelInfo])
 
   // Load session info (git branch, summary, etc.) when session changes
   useEffect(() => {
@@ -1081,6 +1167,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     if (!session) {
       setAvailableModels([])
       setSelectedModel('')
+      setSelectedEffort('auto')
       return
     }
 
@@ -1099,6 +1186,13 @@ export default function MessageView({ messages, loading, session, projectView, o
       .catch(() => {})
   }, [session?.provider, session?.sessionId])
 
+  useEffect(() => {
+    if (selectedEffort === 'auto') return
+    if (!effortOptions.includes(selectedEffort)) {
+      setSelectedEffort('auto')
+    }
+  }, [effortOptions, selectedEffort])
+
   // Reset context usage when switching sessions
   useEffect(() => {
     setContextUsage(null)
@@ -1109,6 +1203,10 @@ export default function MessageView({ messages, loading, session, projectView, o
     setRollbackPreview(null)
     setShowDiagnostics(false)
     setDiagnosticSections([])
+    setAttachments([])
+    setAttachmentPath('')
+    setSelectedEffort('auto')
+    setPendingPermissions([])
     setOptimisticUserText(null)
     setLiveAssistantText('')
     setLiveToolActivities([])
@@ -1248,6 +1346,8 @@ export default function MessageView({ messages, loading, session, projectView, o
     if (!session || !inputText.trim() || sendState === 'sending') return
 
     const text = inputText.trim()
+    const sendAttachments = attachments
+    const effort = selectedEffort === 'auto' ? undefined : selectedEffort
     setInputText('')
     setSendState('sending')
     setSendError(null)
@@ -1279,6 +1379,8 @@ export default function MessageView({ messages, loading, session, projectView, o
         body: JSON.stringify({
           message: text,
           model: selectedModel,
+          effort,
+          attachments: sendAttachments,
           resumeSessionAt: resumeFromMessageId ?? undefined,
           forkSession: Boolean(resumeFromMessageId),
           provider: session.provider,
@@ -1327,6 +1429,17 @@ export default function MessageView({ messages, loading, session, projectView, o
 
           try {
             const parsed = JSON.parse(frame.data)
+            const pendingPermission = extractOpenCodePermission(parsed)
+            if (pendingPermission) {
+              setPendingPermissions((prev) => [
+                ...prev.filter((permission) => permission.id !== pendingPermission.id),
+                pendingPermission,
+              ])
+            }
+            const repliedPermissionId = extractOpenCodePermissionReply(parsed)
+            if (repliedPermissionId) {
+              setPendingPermissions((prev) => prev.filter((permission) => permission.id !== repliedPermissionId))
+            }
             const toolStart = extractLiveToolStart(parsed)
             if (toolStart) {
               if (parsed.type === 'stream_event') {
@@ -1433,6 +1546,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       }
 
       setSendState('idle')
+      setAttachments([])
       if (session.provider === 'claude') {
         setLiveThreadedMessages((prev) => prev.length > 0
           ? prev
@@ -1465,7 +1579,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     } finally {
       abortControllerRef.current = null
     }
-  }, [inputText, messages, onFork, resumeFromMessageId, selectedModel, sendState, session])
+  }, [attachments, inputText, messages, onFork, resumeFromMessageId, selectedEffort, selectedModel, sendState, session])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -1505,6 +1619,102 @@ export default function MessageView({ messages, loading, session, projectView, o
     }
     worker.postMessage({ session, messages })
   }, [session, messages])
+
+  const addAttachment = useCallback(() => {
+    const path = attachmentPath.trim()
+    if (!path) return
+    setAttachments((prev) => [
+      ...prev,
+      {
+        id: `${Date.now()}-${prev.length}`,
+        type: attachmentType,
+        path,
+      },
+    ])
+    setAttachmentPath('')
+  }, [attachmentPath, attachmentType])
+
+  const removeAttachment = useCallback((id: string | undefined, index: number) => {
+    setAttachments((prev) => prev.filter((attachment, attachmentIndex) => (
+      id ? attachment.id !== id : attachmentIndex !== index
+    )))
+  }, [])
+
+  const handleDeleteSession = useCallback(async () => {
+    if (!session || deleting || !sessionCapabilities?.deleteSession) return
+    const confirmed = window.confirm('Delete this session? This cannot be undone from Agent Viewer.')
+    if (!confirmed) return
+    setDeleting(true)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}`, session.provider), {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: session.provider }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      onDelete?.(session.sessionId, session.provider)
+      setSessionActionNotice('Session deleted.')
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to delete session')
+    } finally {
+      setDeleting(false)
+    }
+  }, [deleting, onDelete, session, sessionCapabilities?.deleteSession])
+
+  const runSessionAction = useCallback(async (action: string) => {
+    if (!session || sessionActionLoading) return
+    setSessionActionLoading(action)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, provider: session.provider }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const shareUrl = data.result?.session?.share?.url
+      setSessionActionNotice(
+        action === 'share' && shareUrl
+          ? `Shared: ${shareUrl}`
+          : `${action.toUpperCase()} complete.`
+      )
+      setDiagnosticSections([])
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : `Failed to run ${action}`)
+    } finally {
+      setSessionActionLoading(null)
+    }
+  }, [session, sessionActionLoading])
+
+  const respondToPermission = useCallback(async (permissionId: string, response: 'once' | 'always' | 'reject') => {
+    if (!session || sessionActionLoading) return
+    setSessionActionLoading(`permission:${permissionId}`)
+    setSessionActionError(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'respondPermission',
+          permissionId,
+          response,
+          provider: session.provider,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      setPendingPermissions((prev) => prev.filter((permission) => permission.id !== permissionId))
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to respond to permission')
+    } finally {
+      setSessionActionLoading(null)
+    }
+  }, [session, sessionActionLoading])
 
   const handleFork = useCallback(async () => {
     if (!session || forking) return
@@ -2242,6 +2452,111 @@ export default function MessageView({ messages, loading, session, projectView, o
           </Button>
         )}
 
+        {!isProject && activeProvider === 'opencode' && (
+          <>
+            {sessionCapabilities?.shareSession && (
+              <Button
+                onClick={() => runSessionAction('share')}
+                disabled={!!sessionActionLoading}
+                title="Share OpenCode session"
+                variant="outline"
+                size="sm"
+                style={{
+                  flexShrink: 0,
+                  height: 26,
+                  padding: '0 8px',
+                  background: 'rgba(45,212,160,0.07)',
+                  border: '1px solid rgba(45,212,160,0.18)',
+                  borderRadius: 5,
+                  color: 'var(--text-3)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10,
+                  letterSpacing: '0.08em',
+                  cursor: sessionActionLoading ? 'not-allowed' : 'pointer',
+                  opacity: sessionActionLoading ? 0.55 : 1,
+                }}
+              >
+                SHARE
+              </Button>
+            )}
+            {sessionCapabilities?.unshareSession && (
+              <Button
+                onClick={() => runSessionAction('unshare')}
+                disabled={!!sessionActionLoading}
+                title="Unshare OpenCode session"
+                variant="outline"
+                size="sm"
+                style={{
+                  flexShrink: 0,
+                  height: 26,
+                  padding: '0 8px',
+                  background: 'rgba(45,212,160,0.07)',
+                  border: '1px solid rgba(45,212,160,0.18)',
+                  borderRadius: 5,
+                  color: 'var(--text-3)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10,
+                  letterSpacing: '0.08em',
+                  cursor: sessionActionLoading ? 'not-allowed' : 'pointer',
+                  opacity: sessionActionLoading ? 0.55 : 1,
+                }}
+              >
+                UNSHARE
+              </Button>
+            )}
+            {sessionCapabilities?.summarizeSession && (
+              <Button
+                onClick={() => runSessionAction('summarize')}
+                disabled={!!sessionActionLoading}
+                title="Summarize OpenCode session"
+                variant="outline"
+                size="sm"
+                style={{
+                  flexShrink: 0,
+                  height: 26,
+                  padding: '0 8px',
+                  background: 'rgba(234,170,64,0.07)',
+                  border: '1px solid rgba(234,170,64,0.18)',
+                  borderRadius: 5,
+                  color: 'var(--text-3)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10,
+                  letterSpacing: '0.08em',
+                  cursor: sessionActionLoading ? 'not-allowed' : 'pointer',
+                  opacity: sessionActionLoading ? 0.55 : 1,
+                }}
+              >
+                SUMMARY
+              </Button>
+            )}
+            {sessionCapabilities?.unrevertSession && (
+              <Button
+                onClick={() => runSessionAction('unrevert')}
+                disabled={!!sessionActionLoading}
+                title="Restore reverted OpenCode changes"
+                variant="outline"
+                size="sm"
+                style={{
+                  flexShrink: 0,
+                  height: 26,
+                  padding: '0 8px',
+                  background: 'rgba(234,170,64,0.07)',
+                  border: '1px solid rgba(234,170,64,0.18)',
+                  borderRadius: 5,
+                  color: 'var(--text-3)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10,
+                  letterSpacing: '0.08em',
+                  cursor: sessionActionLoading ? 'not-allowed' : 'pointer',
+                  opacity: sessionActionLoading ? 0.55 : 1,
+                }}
+              >
+                UNREVERT
+              </Button>
+            )}
+          </>
+        )}
+
         {/* Export button (single session only) */}
         {!isProject && (
           <Button
@@ -2279,6 +2594,32 @@ export default function MessageView({ messages, loading, session, projectView, o
             }}
           >
             {exporting ? 'EXPORTING…' : 'EXPORT'}
+          </Button>
+        )}
+
+        {!isProject && sessionCapabilities?.deleteSession && (
+          <Button
+            onClick={handleDeleteSession}
+            disabled={deleting}
+            title="Delete session"
+            variant="outline"
+            size="sm"
+            style={{
+              flexShrink: 0,
+              height: 26,
+              padding: '0 10px',
+              background: 'rgba(248,113,113,0.07)',
+              border: '1px solid rgba(248,113,113,0.18)',
+              borderRadius: 5,
+              cursor: deleting ? 'not-allowed' : 'pointer',
+              color: deleting ? 'var(--red, #f87171)' : 'var(--text-3)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.08em',
+              opacity: deleting ? 0.55 : 1,
+            }}
+          >
+            {deleting ? 'DELETING…' : 'DELETE'}
           </Button>
         )}
 
@@ -2553,6 +2894,49 @@ export default function MessageView({ messages, loading, session, projectView, o
                   </SelectContent>
                 </Select>
               </label>
+              {effortOptions.length > 0 && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 150px', minWidth: 128 }}>
+                  <Label style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    color: 'var(--text-3)',
+                    letterSpacing: '0.05em',
+                  }}>
+                    EFFORT
+                  </Label>
+                  <Select value={selectedEffort} onValueChange={(value) => setSelectedEffort(value as 'auto' | ReasoningEffortLevel)}>
+                    <SelectTrigger
+                      style={{
+                        height: 26,
+                        minWidth: 0,
+                        flex: 1,
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 5,
+                        color: 'var(--text)',
+                        padding: '0 6px',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 10,
+                      }}
+                    >
+                      <SelectValue placeholder="Effort" />
+                    </SelectTrigger>
+                    <SelectContent
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                      }}
+                    >
+                      <SelectItem value="auto">AUTO</SelectItem>
+                      {effortOptions.map((level) => (
+                        <SelectItem key={level} value={level}>
+                          {effortLabel(level)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </label>
+              )}
               {sessionCapabilities?.fileRewind && rewindCandidates.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 300px', minWidth: 220 }}>
                   <Select value={rewindTargetId} onValueChange={setRewindTargetId}>
@@ -2699,6 +3083,159 @@ export default function MessageView({ messages, loading, session, projectView, o
                 </Button>
               </div>
             )}
+            {pendingPermissions.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+                {pendingPermissions.map((permission) => (
+                  <div
+                    key={permission.id}
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'center',
+                      padding: '7px 8px',
+                      borderRadius: 6,
+                      border: '1px solid rgba(234,170,64,0.24)',
+                      background: 'rgba(234,170,64,0.07)',
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.06em' }}>
+                        {permission.title}
+                      </div>
+                      {permission.detail && (
+                        <div style={{ marginTop: 2, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {permission.detail}
+                        </div>
+                      )}
+                    </div>
+                    {(['once', 'always', 'reject'] as const).map((response) => (
+                      <Button
+                        key={response}
+                        onClick={() => respondToPermission(permission.id, response)}
+                        disabled={sessionActionLoading === `permission:${permission.id}`}
+                        variant="outline"
+                        size="sm"
+                        style={{
+                          height: 24,
+                          padding: '0 8px',
+                          borderRadius: 4,
+                          border: response === 'reject' ? '1px solid rgba(248,113,113,0.24)' : '1px solid rgba(45,212,160,0.24)',
+                          background: response === 'reject' ? 'rgba(248,113,113,0.08)' : 'rgba(45,212,160,0.08)',
+                          color: response === 'reject' ? 'var(--red, #f87171)' : 'var(--green)',
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 9,
+                          letterSpacing: '0.06em',
+                          cursor: sessionActionLoading === `permission:${permission.id}` ? 'not-allowed' : 'pointer',
+                          opacity: sessionActionLoading === `permission:${permission.id}` ? 0.55 : 1,
+                        }}
+                      >
+                        {response.toUpperCase()}
+                      </Button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+              <Select value={attachmentType} onValueChange={(value) => setAttachmentType(value as SendAttachment['type'])}>
+                <SelectTrigger
+                  style={{
+                    width: 104,
+                    height: 26,
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 5,
+                    color: 'var(--text)',
+                    padding: '0 6px',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                  }}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent
+                  className="min-w-[10.5rem]"
+                  style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}
+                >
+                  <SelectItem className="py-2 pl-3 pr-10 text-[11px] leading-none" value="file">FILE</SelectItem>
+                  <SelectItem className="py-2 pl-3 pr-10 text-[11px] leading-none" value="directory">DIR</SelectItem>
+                  <SelectItem className="py-2 pl-3 pr-10 text-[11px] leading-none" value="image">IMAGE</SelectItem>
+                  <SelectItem className="py-2 pl-3 pr-10 text-[11px] leading-none" value="mention">MENTION</SelectItem>
+                  <SelectItem className="py-2 pl-3 pr-10 text-[11px] leading-none" value="skill">SKILL</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                value={attachmentPath}
+                onChange={(event) => setAttachmentPath(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    addAttachment()
+                  }
+                }}
+                disabled={sendState === 'sending'}
+                placeholder="Attach path or URL"
+                style={{
+                  flex: '1 1 220px',
+                  minWidth: 180,
+                  height: 26,
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 5,
+                  color: 'var(--text)',
+                  padding: '0 8px',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10,
+                }}
+              />
+              <Button
+                onClick={addAttachment}
+                disabled={!attachmentPath.trim() || sendState === 'sending'}
+                variant="outline"
+                size="sm"
+                style={{
+                  height: 26,
+                  padding: '0 8px',
+                  borderRadius: 5,
+                  border: '1px solid rgba(56,217,245,0.22)',
+                  background: 'rgba(56,217,245,0.07)',
+                  color: 'var(--cyan)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10,
+                  letterSpacing: '0.06em',
+                  cursor: !attachmentPath.trim() || sendState === 'sending' ? 'not-allowed' : 'pointer',
+                  opacity: !attachmentPath.trim() || sendState === 'sending' ? 0.5 : 1,
+                }}
+              >
+                ADD
+              </Button>
+              {attachments.map((attachment, index) => (
+                <button
+                  key={attachment.id ?? `${attachment.type}-${index}`}
+                  type="button"
+                  onClick={() => removeAttachment(attachment.id, index)}
+                  disabled={sendState === 'sending'}
+                  title={attachment.path ?? attachment.filePath ?? attachmentDisplayName(attachment)}
+                  style={{
+                    height: 24,
+                    maxWidth: 180,
+                    borderRadius: 5,
+                    border: '1px solid rgba(139,128,240,0.22)',
+                    background: 'rgba(139,128,240,0.08)',
+                    color: 'var(--violet)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    padding: '0 7px',
+                    cursor: sendState === 'sending' ? 'not-allowed' : 'pointer',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {attachment.type.toUpperCase()} {attachmentDisplayName(attachment)}
+                </button>
+              ))}
+            </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
               <Textarea
                 ref={textareaRef}

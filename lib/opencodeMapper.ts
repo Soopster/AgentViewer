@@ -308,6 +308,8 @@ export function mapOpenCodeDiagnosticsToSections(params: {
   lsp: LspStatus[]
   formatters: FormatterStatus[]
   mcp: Record<string, McpStatus>
+  children?: OpenCodeSession[]
+  currentSession?: OpenCodeSession
 }): SessionDiagnosticSection[] {
   const connectedProviders = params.providers.providers.map((provider) =>
     `${provider.id} · default ${params.providers.default[provider.id] ?? 'none'}`
@@ -317,7 +319,7 @@ export function mapOpenCodeDiagnosticsToSections(params: {
     `${name} · ${status.status}${'error' in status && status.error ? ` · ${status.error}` : ''}`
   )
 
-  return [
+  const sections: SessionDiagnosticSection[] = [
     {
       id: 'providers',
       title: 'PROVIDERS',
@@ -349,6 +351,19 @@ export function mapOpenCodeDiagnosticsToSections(params: {
       items: mcpItems.length > 0 ? mcpItems : ['None'],
     },
   ]
+
+  sections.push({
+    id: 'session',
+    title: 'SESSION',
+    items: [
+      params.currentSession?.share?.url ? `Share ${params.currentSession.share.url}` : 'Share not active',
+      params.children && params.children.length > 0
+        ? `Children ${params.children.length}: ${params.children.slice(0, 5).map((child) => child.id).join(', ')}`
+        : 'Children none',
+    ],
+  })
+
+  return sections
 }
 
 export function summarizeOpenCodeDiffs(diffs: FileDiff[]): string[] {
