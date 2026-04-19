@@ -28,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import MessageItem from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
+import AnalyticsPopover from './AnalyticsPopover'
 
 import TabBar from './TabBar'
 
@@ -1110,6 +1111,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     if (typeof window === 'undefined') return
     window.localStorage.setItem('agentViewer:composerCollapsed', composerCollapsed ? 'true' : 'false')
   }, [composerCollapsed])
+  const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
   const [exporting, setExporting] = useState(false)
@@ -2421,6 +2423,31 @@ export default function MessageView({ messages, loading, session, projectView, o
           </div>
         )}
 
+        {/* Analytics */}
+        {!isProject && (
+          <Button
+            onClick={() => setAnalyticsOpen(true)}
+            title="Session analytics"
+            variant="outline"
+            size="sm"
+            style={{
+              flexShrink: 0,
+              height: 26,
+              padding: '0 10px',
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              borderRadius: 5,
+              color: 'var(--text-2)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.08em',
+              cursor: 'pointer',
+            }}
+          >
+            📊 ANALYTICS
+          </Button>
+        )}
+
         {/* Code theme picker */}
         <CodeThemeToggle />
 
@@ -3608,6 +3635,11 @@ export default function MessageView({ messages, loading, session, projectView, o
           </Card>
         )}
       </div>}
+      <AnalyticsPopover
+        open={analyticsOpen}
+        onClose={() => setAnalyticsOpen(false)}
+        input={{ info: sessionInfo, threadedMessages: threaded, rawMessages: messages }}
+      />
     </div>
   )
 }
