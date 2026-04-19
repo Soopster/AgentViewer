@@ -3,31 +3,68 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 
-type Theme = 'dark' | 'light' | 'terminal' | 'paper' | 'imessage'
+type Theme =
+  | 'light'
+  | 'paper'
+  | 'solarized-light'
+  | 'github-light'
+  | 'gruvbox-light'
+  | 'catppuccin-latte'
+  | 'rose-pine-dawn'
+  | 'ayu-light'
+  | 'one-light'
+  | 'everforest-light'
+  | 'imessage'
+  | 'dark'
+  | 'terminal'
+  | 'solarized-dark'
+  | 'nord'
+  | 'gruvbox-dark'
+  | 'dracula'
+  | 'tokyo-night'
+  | 'catppuccin-mocha'
+  | 'one-dark'
+  | 'monokai'
+  | 'kanagawa'
+  | 'everforest-dark'
+  | 'obsidian'
+  | 'cyber'
+
 type ThemeCategory = 'dark' | 'light'
 
-const THEMES: Theme[] = ['dark', 'light', 'terminal', 'paper', 'imessage']
-
 const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; label: string }> = {
-  dark:     { category: 'dark', icon: '☾', label: 'Dark'     },
-  light:    { category: 'light', icon: '☀', label: 'Light'    },
-  terminal: { category: 'dark', icon: '⌨', label: 'Terminal' },
-  paper:    { category: 'light', icon: '✦', label: 'Paper'    },
-  imessage: { category: 'light', icon: '💬', label: 'iMessage' },
+  light:              { category: 'light', icon: '☀', label: 'Light' },
+  paper:              { category: 'light', icon: '✦', label: 'Paper' },
+  'solarized-light':  { category: 'light', icon: '☀', label: 'Solarized Light' },
+  'github-light':     { category: 'light', icon: '☀', label: 'GitHub Light' },
+  'gruvbox-light':    { category: 'light', icon: '☀', label: 'Gruvbox Light' },
+  'catppuccin-latte': { category: 'light', icon: '☀', label: 'Catppuccin Latte' },
+  'rose-pine-dawn':   { category: 'light', icon: '☀', label: 'Rosé Pine Dawn' },
+  'ayu-light':        { category: 'light', icon: '☀', label: 'Ayu Light' },
+  'one-light':        { category: 'light', icon: '☀', label: 'One Light' },
+  'everforest-light': { category: 'light', icon: '☀', label: 'Everforest Light' },
+  imessage:           { category: 'light', icon: '💬', label: 'iMessage' },
+  dark:               { category: 'dark',  icon: '☾', label: 'Dark' },
+  terminal:           { category: 'dark',  icon: '⌨', label: 'Terminal' },
+  'solarized-dark':   { category: 'dark',  icon: '☾', label: 'Solarized Dark' },
+  nord:               { category: 'dark',  icon: '☾', label: 'Nord' },
+  'gruvbox-dark':     { category: 'dark',  icon: '☾', label: 'Gruvbox Dark' },
+  dracula:            { category: 'dark',  icon: '☾', label: 'Dracula' },
+  'tokyo-night':      { category: 'dark',  icon: '☾', label: 'Tokyo Night' },
+  'catppuccin-mocha': { category: 'dark',  icon: '☾', label: 'Catppuccin Mocha' },
+  'one-dark':         { category: 'dark',  icon: '☾', label: 'One Dark' },
+  monokai:            { category: 'dark',  icon: '☾', label: 'Monokai' },
+  kanagawa:           { category: 'dark',  icon: '☾', label: 'Kanagawa' },
+  'everforest-dark':  { category: 'dark',  icon: '☾', label: 'Everforest Dark' },
+  obsidian:           { category: 'dark',  icon: '☾', label: 'Obsidian' },
+  cyber:              { category: 'dark',  icon: '✦', label: 'Cyber' },
 }
 
+const THEMES: Theme[] = Object.keys(THEME_META) as Theme[]
 const VALID: Set<string> = new Set(THEMES)
 const THEME_GROUPS: Array<{ category: ThemeCategory; label: string; themes: Theme[] }> = [
-  {
-    category: 'dark',
-    label: 'Dark',
-    themes: THEMES.filter(theme => THEME_META[theme].category === 'dark'),
-  },
-  {
-    category: 'light',
-    label: 'Light',
-    themes: THEMES.filter(theme => THEME_META[theme].category === 'light'),
-  },
+  { category: 'light', label: 'Light', themes: THEMES.filter((t) => THEME_META[t].category === 'light') },
+  { category: 'dark',  label: 'Dark',  themes: THEMES.filter((t) => THEME_META[t].category === 'dark') },
 ]
 
 function applyTheme(theme: Theme) {
@@ -65,7 +102,6 @@ export default function ThemeToggle() {
 
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
-      {/* Trigger button */}
       <Button
         onClick={() => setOpen(v => !v)}
         variant="outline"
@@ -94,20 +130,20 @@ export default function ThemeToggle() {
         <span style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
       </Button>
 
-      {/* Dropdown */}
       {open && (
         <div
           style={{
             position: 'absolute',
             top: 'calc(100% + 6px)',
             right: 0,
-            minWidth: 152,
+            minWidth: 180,
+            maxHeight: 360,
+            overflowY: 'auto',
             background: 'var(--surface-2)',
             border: '1px solid var(--border-2)',
             borderRadius: 7,
             boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
             zIndex: 100,
-            overflow: 'hidden',
             padding: '4px 0',
           }}
         >
@@ -147,7 +183,7 @@ export default function ThemeToggle() {
                       display: 'flex',
                       alignItems: 'center',
                       gap: 9,
-                      padding: '7px 14px',
+                      padding: '6px 14px',
                       cursor: 'pointer',
                       background: isHov ? 'var(--surface-3)' : 'transparent',
                       transition: 'background 0.1s ease',

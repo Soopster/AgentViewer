@@ -1102,6 +1102,14 @@ export default function MessageView({ messages, loading, session, projectView, o
     if (typeof window === 'undefined') return
     window.localStorage.setItem('agentViewer:showTools', showTools ? 'true' : 'false')
   }, [showTools])
+  const [composerCollapsed, setComposerCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem('agentViewer:composerCollapsed') === 'true'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('agentViewer:composerCollapsed', composerCollapsed ? 'true' : 'false')
+  }, [composerCollapsed])
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
   const [exporting, setExporting] = useState(false)
@@ -2878,14 +2886,68 @@ export default function MessageView({ messages, loading, session, projectView, o
       </div>
 
       {/* ── Message input (single session only) ──────── */}
-      {!isProject && <div
+      {!isProject && composerCollapsed && (
+        <div
+          style={{
+            padding: '4px 16px',
+            borderTop: '1px solid var(--border)',
+            background: 'var(--surface)',
+            flexShrink: 0,
+            display: 'flex',
+            justifyContent: 'flex-end',
+          }}
+        >
+          <button
+            onClick={() => setComposerCollapsed(false)}
+            title="Expand composer"
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              cursor: 'pointer',
+              color: 'var(--text-3)',
+              padding: '2px 8px',
+              borderRadius: 6,
+              lineHeight: 1,
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              letterSpacing: '0.08em',
+            }}
+          >
+            ▲ COMPOSER
+          </button>
+        </div>
+      )}
+      {!isProject && !composerCollapsed && <div
         style={{
           padding: '8px 16px 10px',
           borderTop: '1px solid var(--border)',
           background: 'var(--surface)',
           flexShrink: 0,
+          position: 'relative',
         }}
       >
+        <button
+          onClick={() => setComposerCollapsed(true)}
+          title="Collapse composer"
+          style={{
+            position: 'absolute',
+            top: 2,
+            right: 18,
+            zIndex: 5,
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
+            cursor: 'pointer',
+            color: 'var(--text-3)',
+            padding: '1px 6px',
+            borderRadius: 5,
+            lineHeight: 1,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10,
+            letterSpacing: '0.08em',
+          }}
+        >
+          ▼
+        </button>
         {sendError && (
           <div style={{
             fontFamily: "'IBM Plex Mono', monospace",
@@ -3221,11 +3283,11 @@ export default function MessageView({ messages, loading, session, projectView, o
                   className="min-w-[10.5rem]"
                   style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}
                 >
-                  <SelectItem className="py-2 pl-3 pr-10 text-[11px] leading-none" value="file">FILE</SelectItem>
-                  <SelectItem className="py-2 pl-3 pr-10 text-[11px] leading-none" value="directory">DIR</SelectItem>
-                  <SelectItem className="py-2 pl-3 pr-10 text-[11px] leading-none" value="image">IMAGE</SelectItem>
-                  <SelectItem className="py-2 pl-3 pr-10 text-[11px] leading-none" value="mention">MENTION</SelectItem>
-                  <SelectItem className="py-2 pl-3 pr-10 text-[11px] leading-none" value="skill">SKILL</SelectItem>
+                  <SelectItem value="file">FILE</SelectItem>
+                  <SelectItem value="directory">DIR</SelectItem>
+                  <SelectItem value="image">IMAGE</SelectItem>
+                  <SelectItem value="mention">MENTION</SelectItem>
+                  <SelectItem value="skill">SKILL</SelectItem>
                 </SelectContent>
               </Select>
               <Input

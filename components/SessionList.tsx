@@ -585,6 +585,34 @@ export default function SessionList({
   onToggleWorktrees,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return 290
+    const stored = Number(window.localStorage.getItem('agentViewer:sidebarWidth'))
+    return Number.isFinite(stored) && stored >= 220 && stored <= 640 ? stored : 290
+  })
+  const [resizing, setResizing] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('agentViewer:sidebarWidth', String(sidebarWidth))
+  }, [sidebarWidth])
+  useEffect(() => {
+    if (!resizing) return
+    const onMove = (e: MouseEvent) => {
+      const next = Math.max(220, Math.min(640, e.clientX))
+      setSidebarWidth(next)
+    }
+    const onUp = () => setResizing(false)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [resizing])
   const [searchText, setSearchText] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
   const normalizedSearch = searchText.trim().toLowerCase()
@@ -617,18 +645,36 @@ export default function SessionList({
   return (
     <div
       style={{
-        width: collapsed ? 32 : 290,
-        minWidth: collapsed ? 32 : 290,
+        width: collapsed ? 32 : sidebarWidth,
+        minWidth: collapsed ? 32 : sidebarWidth,
         height: '100vh',
         display: 'flex',
         flexDirection: 'column',
         borderRight: '1px solid var(--border)',
         background: 'var(--surface)',
         overflow: 'hidden',
-        transition: 'width 0.2s ease, min-width 0.2s ease',
+        transition: resizing ? 'none' : 'width 0.2s ease, min-width 0.2s ease',
         flexShrink: 0,
+        position: 'relative',
       }}
     >
+      {!collapsed && (
+        <div
+          onMouseDown={(e) => { e.preventDefault(); setResizing(true) }}
+          onDoubleClick={() => setSidebarWidth(290)}
+          title="Drag to resize · double-click to reset"
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            width: 6,
+            height: '100%',
+            cursor: 'col-resize',
+            zIndex: 20,
+            background: resizing ? 'var(--violet-glow)' : 'transparent',
+          }}
+        />
+      )}
       {/* ── Collapse toggle (always visible) ───────────── */}
       <div
         style={{

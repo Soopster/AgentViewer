@@ -79,6 +79,9 @@ const LIGHT_MODES: TuiThemeMode[] = [
   'gruvbox-light',
   'catppuccin-latte',
   'rose-pine-dawn',
+  'ayu-light',
+  'one-light',
+  'everforest-light',
   'imessage',
 ]
 const DARK_MODES: TuiThemeMode[] = [
@@ -89,6 +92,10 @@ const DARK_MODES: TuiThemeMode[] = [
   'dracula',
   'tokyo-night',
   'catppuccin-mocha',
+  'one-dark',
+  'monokai',
+  'kanagawa',
+  'everforest-dark',
   'obsidian',
   'cyber',
 ]
@@ -873,6 +880,9 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   'gruvbox-light': 'Gruvbox retro cream',
   'catppuccin-latte': 'Catppuccin pastel latte',
   'rose-pine-dawn': 'Rosé Pine muted dawn',
+  'ayu-light': 'Ayu warm light',
+  'one-light': 'Atom One light',
+  'everforest-light': 'Everforest warm light',
   imessage: 'iOS Messages bubbles',
   dark: 'Deep navy background',
   'solarized-dark': 'Solarized teal',
@@ -881,6 +891,10 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   dracula: 'Purple-heavy dracula',
   'tokyo-night': 'Tokyo Night indigo',
   'catppuccin-mocha': 'Catppuccin pastel mocha',
+  'one-dark': 'Atom One dark',
+  monokai: 'Monokai classic',
+  kanagawa: 'Kanagawa muted waves',
+  'everforest-dark': 'Everforest forest dark',
   obsidian: 'Pure black minimal',
   cyber: 'Neon accents',
 }
@@ -893,6 +907,9 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   'gruvbox-light': 'GRUVBOX LIGHT',
   'catppuccin-latte': 'CATPPUCCIN LATTE',
   'rose-pine-dawn': 'ROSÉ PINE DAWN',
+  'ayu-light': 'AYU LIGHT',
+  'one-light': 'ONE LIGHT',
+  'everforest-light': 'EVERFOREST LIGHT',
   imessage: 'iMESSAGE',
   dark: 'DARK',
   'solarized-dark': 'SOLARIZED DARK',
@@ -901,6 +918,10 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   dracula: 'DRACULA',
   'tokyo-night': 'TOKYO NIGHT',
   'catppuccin-mocha': 'CATPPUCCIN MOCHA',
+  'one-dark': 'ONE DARK',
+  monokai: 'MONOKAI',
+  kanagawa: 'KANAGAWA',
+  'everforest-dark': 'EVERFOREST DARK',
   obsidian: 'OBSIDIAN',
   cyber: 'CYBER',
 }
@@ -3947,57 +3968,81 @@ export default function OpenTuiApp() {
           </box>
         ) : null}
 
-        {themeMenuOpen ? (
-          <box
-            position="absolute"
-            top={focusMode ? 1 : 3}
-            right={2}
-            width={36}
-            height={25}
-            border
-            borderStyle="single"
-            borderColor={theme.border2}
-            backgroundColor={theme.surface}
-            zIndex={20}
-            flexDirection="column"
-          >
-            <box paddingX={1} paddingTop={1}>
-              <text fg={theme.text}>THEME</text>
-            </box>
-            <box flexGrow={1} paddingX={1} paddingBottom={1} flexDirection="column">
-              {THEME_GROUPS.map((group, groupIndex) => (
-                <React.Fragment key={group.label}>
-                  {groupIndex > 0 ? <box height={1} /> : null}
-                  <box paddingX={1}>
-                    <text fg={theme.dim} wrapMode="none">{group.label}</text>
-                  </box>
-                  {group.themes.map((mode) => {
-                    const globalIndex = THEMES.indexOf(mode)
-                    const selected = globalIndex === themeMenuIndex
-                    const active = mode === themeMode
+        {themeMenuOpen ? (() => {
+          type ThemeRow =
+            | { kind: 'header'; label: string }
+            | { kind: 'gap' }
+            | { kind: 'theme'; mode: TuiThemeMode; globalIndex: number }
+          const rows: ThemeRow[] = []
+          THEME_GROUPS.forEach((group, groupIndex) => {
+            if (groupIndex > 0) rows.push({ kind: 'gap' })
+            rows.push({ kind: 'header', label: group.label })
+            for (const mode of group.themes) {
+              rows.push({ kind: 'theme', mode, globalIndex: THEMES.indexOf(mode) })
+            }
+          })
+          const menuHeight = Math.max(12, Math.min(height - 4, 30))
+          const visibleRows = Math.max(3, menuHeight - 5)
+          const cursorRow = rows.findIndex((row) => row.kind === 'theme' && row.globalIndex === themeMenuIndex)
+          let offset = 0
+          if (cursorRow >= 0 && cursorRow >= visibleRows) {
+            offset = Math.min(cursorRow - visibleRows + 1, rows.length - visibleRows)
+          }
+          offset = Math.max(0, offset)
+          const sliced = rows.slice(offset, offset + visibleRows)
+          return (
+            <box
+              position="absolute"
+              top={focusMode ? 1 : 3}
+              right={2}
+              width={36}
+              height={menuHeight}
+              border
+              borderStyle="single"
+              borderColor={theme.border2}
+              backgroundColor={theme.surface}
+              zIndex={20}
+              flexDirection="column"
+            >
+              <box paddingX={1} paddingTop={1}>
+                <text fg={theme.text}>THEME</text>
+              </box>
+              <box flexGrow={1} paddingX={1} paddingBottom={1} flexDirection="column">
+                {sliced.map((row, i) => {
+                  if (row.kind === 'gap') {
+                    return <box key={`gap-${i}`} height={1} />
+                  }
+                  if (row.kind === 'header') {
                     return (
-                      <box
-                        key={mode}
-                        paddingX={1}
-                        backgroundColor={selected ? theme.surface3 : theme.surface}
-                        flexDirection="row"
-                      >
-                        <box flexGrow={1}>
-                          <text fg={selected ? theme.text : active ? theme.cyan : theme.muted} wrapMode="none">
-                            {fitText(THEME_LABELS[mode], 24)}
-                          </text>
-                        </box>
-                        <text fg={active ? theme.cyan : theme.dim} wrapMode="none">
-                          {active ? '✓' : ' '}
-                        </text>
+                      <box key={`h-${row.label}-${i}`} paddingX={1}>
+                        <text fg={theme.dim} wrapMode="none">{row.label}</text>
                       </box>
                     )
-                  })}
-                </React.Fragment>
-              ))}
+                  }
+                  const selected = row.globalIndex === themeMenuIndex
+                  const active = row.mode === themeMode
+                  return (
+                    <box
+                      key={row.mode}
+                      paddingX={1}
+                      backgroundColor={selected ? theme.surface3 : theme.surface}
+                      flexDirection="row"
+                    >
+                      <box flexGrow={1}>
+                        <text fg={selected ? theme.text : active ? theme.cyan : theme.muted} wrapMode="none">
+                          {fitText(THEME_LABELS[row.mode], 24)}
+                        </text>
+                      </box>
+                      <text fg={active ? theme.cyan : theme.dim} wrapMode="none">
+                        {active ? '✓' : ' '}
+                      </text>
+                    </box>
+                  )
+                })}
+              </box>
             </box>
-          </box>
-        ) : null}
+          )
+        })() : null}
 
         {commandPaletteOpen ? (() => {
           const paletteW = Math.min(width - 8, 64)

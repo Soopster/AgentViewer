@@ -113,6 +113,7 @@ function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): 
 
 export default function Home() {
   const [mounted, setMounted] = useState(false)
+  const [messagePaneCollapsed, setMessagePaneCollapsed] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
   const [openTabSessions, setOpenTabSessions] = useState<Session[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -137,6 +138,18 @@ export default function Home() {
 
   useEffect(() => {
     setMounted(true)
+    try {
+      const stored = window.localStorage.getItem('agentViewer:messagePaneCollapsed')
+      if (stored === '1') setMessagePaneCollapsed(true)
+    } catch { /* ignore */ }
+  }, [])
+
+  const toggleMessagePane = useCallback(() => {
+    setMessagePaneCollapsed((prev) => {
+      const next = !prev
+      try { window.localStorage.setItem('agentViewer:messagePaneCollapsed', next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
   }, [])
 
   const fetchProjectSessions = useCallback(async (dir: string, selection: ProviderSelection) => {
@@ -513,7 +526,60 @@ export default function Home() {
         onChangeScope={setSessionScope}
         onToggleWorktrees={setIncludeWorktrees}
       />
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, overflow: 'hidden' }}>
+      {messagePaneCollapsed ? (
+        <div
+          style={{
+            width: 32,
+            minWidth: 32,
+            height: '100vh',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            paddingTop: 10,
+            borderLeft: '1px solid var(--border)',
+            background: 'var(--surface)',
+            flexShrink: 0,
+          }}
+        >
+          <button
+            onClick={toggleMessagePane}
+            title="Expand message pane"
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: 'var(--text-3)',
+              padding: '4px 6px',
+              borderRadius: 6,
+              lineHeight: 1,
+              fontSize: 14,
+            }}
+          >
+            ‹
+          </button>
+        </div>
+      ) : (
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, overflow: 'hidden', position: 'relative' }}>
+        <button
+          onClick={toggleMessagePane}
+          title="Collapse message pane"
+          style={{
+            position: 'absolute',
+            top: 6,
+            right: 8,
+            zIndex: 10,
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
+            cursor: 'pointer',
+            color: 'var(--text-3)',
+            padding: '2px 6px',
+            borderRadius: 6,
+            lineHeight: 1,
+            fontSize: 12,
+          }}
+        >
+          ›
+        </button>
         <MessageView
           messages={messages}
           loading={loadingMessages}
@@ -527,6 +593,7 @@ export default function Home() {
           onCloseTab={closeTab}
         />
       </div>
+      )}
     </div>
     </CodeThemeProvider>
   )
