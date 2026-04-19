@@ -2281,17 +2281,18 @@ function ImageResultSection({ block }: { block: ImageBlock }) {
 }
 
 function ToolResultSection({ result, toolName, filePath }: { result: ToolResultBlock; toolName: string; filePath?: string }) {
-  // Detect image blocks before calling resultToString (which would base64-dump them)
-  if (Array.isArray(result.content)) {
-    const img = result.content.find((b): b is ImageBlock => (b as ImageBlock).type === 'image')
-    if (img) return <ImageResultSection block={img} />
-  }
+  const imageBlock = useMemo(() => (
+    Array.isArray(result.content)
+      ? result.content.find((b): b is ImageBlock => (b as ImageBlock).type === 'image') ?? null
+      : null
+  ), [result.content])
+  const raw = useMemo(() => imageBlock ? '' : resultToString(result.content), [imageBlock, result.content])
+  const nonEmpty = useMemo(() => raw.split('\n').filter(l => l.trim()), [raw])
 
-  const raw = useMemo(() => resultToString(result.content), [result.content])
+  if (imageBlock) return <ImageResultSection block={imageBlock} />
 
   if (result.is_error) return <GenericResultSection raw={raw} isError />
 
-  const nonEmpty = useMemo(() => raw.split('\n').filter(l => l.trim()), [raw])
   if (nonEmpty.length === 1 && raw.length < 140) {
     return (
       <div style={{

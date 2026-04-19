@@ -1266,6 +1266,16 @@ export default function MessageView({ messages, loading, session, projectView, o
     node.scrollTo({ top: targetTop, behavior })
   }, [])
 
+  const toggleLiveFollow = useCallback(() => {
+    setAutoFollow((current) => {
+      const next = !current
+      if (next) {
+        window.requestAnimationFrame(() => scrollTimelineToBottom('smooth'))
+      }
+      return next
+    })
+  }, [scrollTimelineToBottom])
+
   const alignLastTimelineRowToViewportBottom = useCallback(() => {
     const node = timelineRef.current
     const lastRow = lastTimelineRowRef.current
@@ -2678,10 +2688,32 @@ export default function MessageView({ messages, loading, session, projectView, o
               letterSpacing: '0.08em',
             }}
           >
-            LIVE
-          </span>
+              LIVE
+            </span>
+          </div>
+
+          <Button
+            onClick={toggleLiveFollow}
+            title={autoFollow ? 'Pause live follow' : 'Follow new messages live'}
+            variant="outline"
+            size="sm"
+            style={{
+              flexShrink: 0,
+              height: 26,
+              padding: '0 10px',
+              borderRadius: 999,
+              border: autoFollow ? '1px solid rgba(45,212,160,0.26)' : '1px solid rgba(56,217,245,0.22)',
+              background: autoFollow ? 'rgba(45,212,160,0.12)' : 'rgba(56,217,245,0.08)',
+              color: autoFollow ? 'var(--green)' : 'var(--cyan)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              letterSpacing: '0.07em',
+              cursor: 'pointer',
+            }}
+          >
+            {autoFollow ? 'FOLLOWING LIVE' : 'FOLLOW LIVE'}
+          </Button>
         </div>
-      </div>
 
       {/* ── Tab bar ──────────────────────────────────── */}
       {openTabs && openTabs.length > 0 && (
@@ -2806,8 +2838,8 @@ export default function MessageView({ messages, loading, session, projectView, o
                 cursor: 'pointer',
                 boxShadow: '0 10px 30px var(--cyan-glow)',
               }}
-            >
-              JUMP TO LIVE
+              >
+              FOLLOW LIVE
             </Button>
           </div>
         )}
