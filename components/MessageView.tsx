@@ -1813,7 +1813,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     }
   }, [diagnosticSections.length, diagnosticsLoading, selectedModelValue, session, showDiagnostics])
 
-  const threaded = useMemo(() => {
+  const threadedFull = useMemo(() => {
     const prev = prevThreadingRef.current
     const nextMessages = (prev ? buildThreadedMessagesIncremental(messages, prev) : null)
       ?? buildThreadedMessages(messages)
@@ -1824,8 +1824,12 @@ export default function MessageView({ messages, loading, session, projectView, o
     })
     threadedCacheRef.current = new Map(stabilized.map((message) => [threadedMessageKey(message), message]))
     prevThreadingRef.current = { messages, threaded: stabilized }
-    return showTools ? stabilized : stripToolCallBlocks(stabilized)
-  }, [messages, showTools])
+    return stabilized
+  }, [messages])
+  const threaded = useMemo(
+    () => (showTools ? threadedFull : stripToolCallBlocks(threadedFull)),
+    [threadedFull, showTools],
+  )
   const isProject = !!projectView
   const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
@@ -3638,7 +3642,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       <AnalyticsPopover
         open={analyticsOpen}
         onClose={() => setAnalyticsOpen(false)}
-        input={{ info: sessionInfo, threadedMessages: threaded, rawMessages: messages }}
+        input={{ info: sessionInfo, threadedMessages: threadedFull, rawMessages: messages }}
       />
     </div>
   )

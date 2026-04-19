@@ -109,7 +109,18 @@ export type Analytics = {
   slashCommands: number
   shellOutputLines: number
   hourActivity: number[]
+  dayOfWeekActivity: number[]
   tokensPerSecond: number
+  costByCategory: { input: number; output: number; cacheRead: number; cacheWrite: number }
+  fileExtensions: Array<[string, number]>
+  blockTypes: { text: number; thinking: number; toolUse: number; toolResult: number; other: number }
+  messageSizes: number[]
+  cumulativeCost: number[]
+  peakTokensPerMin: number
+  tokensPerToolUse: number
+  costPerFileTouched: number
+  costPerLineChanged: number
+  avgAssistantChain: number
 }
 
 export type AnalyticsInput = {
@@ -136,6 +147,7 @@ type BlockStats = {
   textChars: number
   slashCommands: number
   shellOutputLines: number
+  blockTypeCounts: { text: number; thinking: number; toolUse: number; toolResult: number; other: number }
 }
 
 function bashVerb(cmd: string): string {
@@ -157,18 +169,25 @@ function collectBlocks(
   const stats: BlockStats = {
     thinkingBlocks: 0, thinkingChars: 0, textChars: 0,
     slashCommands: 0, shellOutputLines: 0,
+    blockTypeCounts: { text: 0, thinking: 0, toolUse: 0, toolResult: 0, other: 0 },
   }
   for (const block of blocks) {
     if (block.type === 'text') {
       stats.textChars += block.text?.length ?? 0
+      stats.blockTypeCounts.text += 1
     } else if (block.type === 'thinking') {
       stats.thinkingBlocks += 1
       stats.thinkingChars += block.thinking?.length ?? 0
+      stats.blockTypeCounts.thinking += 1
     } else if (block.type === 'slash_command') {
       stats.slashCommands += 1
+      stats.blockTypeCounts.other += 1
     } else if (block.type === 'local_command_stdout') {
       stats.shellOutputLines += countLines(block.stdout || '')
+      stats.blockTypeCounts.other += 1
     } else if (block.type === 'tool_thread') {
+      stats.blockTypeCounts.toolUse += 1
+      if (block.result) stats.blockTypeCounts.toolResult += 1
       const name = block.toolUse.name || 'tool'
       const bucket = tools.get(name) ?? { name, count: 0, errors: 0 }
       bucket.count += 1
@@ -275,7 +294,18 @@ export function computeAnalytics(input: AnalyticsInput | null): Analytics {
     cacheSavings: 0, toolsPerTurn: 0, maxOutputInReply: 0, longestAssistantChain: 0,
     slashCommands: 0, shellOutputLines: 0,
     hourActivity: new Array(24).fill(0),
+    dayOfWeekActivity: new Array(7).fill(0),
     tokensPerSecond: 0,
+    costByCategory: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    fileExtensions: [],
+    blockTypes: { text: 0, thinking: 0, toolUse: 0, toolResult: 0, other: 0 },
+    messageSizes: [],
+    cumulativeCost: [],
+    peakTokensPerMin: 0,
+    tokensPerToolUse: 0,
+    costPerFileTouched: 0,
+    costPerLineChanged: 0,
+    avgAssistantChain: 0,
   }
   if (!input) return empty
 
@@ -302,6 +332,10 @@ export function computeAnalytics(input: AnalyticsInput | null): Analytics {
   let maxOutputInReply = 0
   let currentChain = 0, longestAssistantChain = 0
   const hourActivity = new Array<number>(24).fill(0)
+  const dayOfWeekActivity = new Array<number>(7).fill(0)
+  const blockTypes = { text: 0, thinking: 0, toolUse: 0, toolResult: 0, other: 0 }
+  const messageSizes: number[] = []
+  const assistantChains: number[] = []
   const firstResponseLatencies: number[] = []
   const gaps: number[] = []
   const currentModel = info?.currentModel ?? 'unknown'
@@ -311,14 +345,22 @@ export function computeAnalytics(input: AnalyticsInput | null): Analytics {
     const stats = collectBlocks(msg.blocks, tools, ops)
     slashCommands += stats.slashCommands
     shellOutputLines += stats.shellOutputLines
+    blockTypes.text += stats.blockTypeCounts.text
+    blockTypes.thinking += stats.blockTypeCounts.thinking
+    blockTypes.toolUse += stats.blockTypeCounts.toolUse
+    blockTypes.toolResult += stats.blockTypeCounts.toolResult
+    blockTypes.other += stats.blockTypeCounts.other
     const ts = parseTs(msg.timestamp)
     if (ts !== null) {
       if (startTs === null || ts < startTs) startTs = ts
       if (endTs === null || ts > endTs) endTs = ts
       if (prevTs !== null) gaps.push(ts - prevTs)
       prevTs = ts
-      const hour = new Date(ts).getHours()
+      const d = new Date(ts)
+      const hour = d.getHours()
       if (hour >= 0 && hour < 24) hourActivity[hour] = (hourActivity[hour] ?? 0) + 1
+      const dow = d.getDay()
+      if (dow >= 0 && dow < 7) dayOfWeekActivity[dow] = (dayOfWeekActivity[dow] ?? 0) + 1
     }
 
     let latencyMs: number | null = null
@@ -327,6 +369,7 @@ export function computeAnalytics(input: AnalyticsInput | null): Analytics {
       userTextChars += stats.textChars
       lastUserTs = ts
       turns += 1
+      if (currentChain > 0) assistantChains.push(currentChain)
       currentChain = 0
     } else if (msg.role === 'assistant') {
       assistantMessages += 1
@@ -369,6 +412,8 @@ export function computeAnalytics(input: AnalyticsInput | null): Analytics {
       models.set(key, bucket)
     }
 
+    const totalTokens = mIn + mOut + (mCr ?? 0) + (mCw ?? 0)
+    messageSizes.push(totalTokens)
     timeline.push({
       index: i,
       ts,
@@ -376,19 +421,25 @@ export function computeAnalytics(input: AnalyticsInput | null): Analytics {
       inputTokens: mIn,
       outputTokens: mOut,
       cacheReadTokens: mCr ?? 0,
-      totalTokens: mIn + mOut + (mCr ?? 0) + (mCw ?? 0),
+      totalTokens,
       latencyMs,
     })
   }
+  if (currentChain > 0) assistantChains.push(currentChain)
 
   let cost = 0
+  const costByCategory = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   for (const bucket of models.values()) {
     const p = priceForModel(bucket.model)
-    const c =
-      (bucket.inputTokens  * p.in) / 1_000_000 +
-      (bucket.outputTokens * p.out) / 1_000_000 +
-      (bucket.cacheReadTokens  * (p.cacheRead  ?? p.in  * 0.1)) / 1_000_000 +
-      (bucket.cacheWriteTokens * (p.cacheWrite ?? p.in  * 1.25)) / 1_000_000
+    const cIn = (bucket.inputTokens  * p.in) / 1_000_000
+    const cOut = (bucket.outputTokens * p.out) / 1_000_000
+    const cCr = (bucket.cacheReadTokens  * (p.cacheRead  ?? p.in  * 0.1)) / 1_000_000
+    const cCw = (bucket.cacheWriteTokens * (p.cacheWrite ?? p.in  * 1.25)) / 1_000_000
+    const c = cIn + cOut + cCr + cCw
+    costByCategory.input += cIn
+    costByCategory.output += cOut
+    costByCategory.cacheRead += cCr
+    costByCategory.cacheWrite += cCw
     bucket.cost = c
     cost += c
   }
@@ -436,6 +487,49 @@ export function computeAnalytics(input: AnalyticsInput | null): Analytics {
   const activeSeconds = activeMs > 0 ? activeMs / 1000 : (durationMs ?? 0) / 1000
   const tokensPerSecond = activeSeconds > 0 ? outputTokens / activeSeconds : 0
 
+  // File extension breakdown
+  const extMap = new Map<string, number>()
+  for (const fp of ops.filesTouched) {
+    const base = fp.split('/').pop() ?? fp
+    const dot = base.lastIndexOf('.')
+    const ext = dot > 0 ? base.slice(dot).toLowerCase() : '(no ext)'
+    extMap.set(ext, (extMap.get(ext) ?? 0) + 1)
+  }
+  const fileExtensions = [...extMap.entries()].sort((a, b) => b[1] - a[1])
+
+  // Cumulative cost over timeline (pro-rated by per-message token share)
+  const cumulativeCost: number[] = []
+  let accCost = 0
+  const totalMsgTokens = timeline.reduce((a, b) => a + b.totalTokens, 0)
+  if (totalMsgTokens > 0 && cost > 0) {
+    for (const p of timeline) {
+      accCost += (p.totalTokens / totalMsgTokens) * cost
+      cumulativeCost.push(accCost)
+    }
+  } else {
+    for (let i = 0; i < timeline.length; i += 1) cumulativeCost.push(0)
+  }
+
+  // Peak tokens per minute (sliding 1-min window over output tokens)
+  let peakTokensPerMin = 0
+  const windowMs = 60_000
+  for (let i = 0; i < timeline.length; i += 1) {
+    const start = timeline[i]!
+    if (start.ts === null) continue
+    let sum = 0
+    for (let j = i; j < timeline.length; j += 1) {
+      const p = timeline[j]!
+      if (p.ts === null) continue
+      if (p.ts - start.ts > windowMs) break
+      sum += p.outputTokens
+    }
+    if (sum > peakTokensPerMin) peakTokensPerMin = sum
+  }
+
+  const avgAssistantChain = assistantChains.length > 0
+    ? assistantChains.reduce((a, b) => a + b, 0) / assistantChains.length
+    : 0
+
   return {
     provider: info?.provider,
     model: info?.currentModel ?? 'unknown',
@@ -458,7 +552,19 @@ export function computeAnalytics(input: AnalyticsInput | null): Analytics {
     costPerTurn: turns > 0 ? cost / turns : 0,
     avgOutputPerAssistant: assistantMessages > 0 ? outputTokens / assistantMessages : 0,
     cacheSavings, toolsPerTurn, maxOutputInReply, longestAssistantChain,
-    slashCommands, shellOutputLines, hourActivity, tokensPerSecond,
+    slashCommands, shellOutputLines, hourActivity,
+    dayOfWeekActivity,
+    tokensPerSecond,
+    costByCategory,
+    fileExtensions,
+    blockTypes,
+    messageSizes,
+    cumulativeCost,
+    peakTokensPerMin,
+    tokensPerToolUse: toolUses > 0 ? outputTokens / toolUses : 0,
+    costPerFileTouched: ops.filesTouched.size > 0 ? cost / ops.filesTouched.size : 0,
+    costPerLineChanged: (ops.linesAdded + ops.linesRemoved) > 0 ? cost / (ops.linesAdded + ops.linesRemoved) : 0,
+    avgAssistantChain,
   }
 }
 

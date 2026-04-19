@@ -158,6 +158,20 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
 // Shared primitives
 // ---------------------------------------------------------------------------
 
+function median(values: number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!
+}
+
+function percentile(values: number[], p: number): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * p))
+  return sorted[idx]!
+}
+
 const LABEL_STYLE: React.CSSProperties = {
   fontSize: 10,
   letterSpacing: '0.1em',
@@ -345,15 +359,34 @@ function SummaryPane({ a }: { a: Analytics }) {
         <Kpi label="Agent depth"
           value={a.toolsPerTurn > 0 ? a.toolsPerTurn.toFixed(1) : '0'}
           accent="var(--pink, #f472b6)"
-          sub={`tools/turn · longest chain ${a.longestAssistantChain}`} />
+          sub={`tools/turn · avg chain ${a.avgAssistantChain.toFixed(1)} · max ${a.longestAssistantChain}`} />
         <Kpi label="Throughput"
           value={a.tokensPerSecond > 0 ? `${fmtNum(a.tokensPerSecond)} tok/s` : '—'}
           accent="var(--cyan, #5eead4)"
-          sub="output tokens / active second" />
+          sub={a.peakTokensPerMin > 0 ? `peak ${fmtNum(a.peakTokensPerMin)} tok/min` : 'output / active sec'} />
         <Kpi label="Slash / stdout"
           value={`${a.slashCommands} / ${fmtNum(a.shellOutputLines)}`}
           accent="var(--amber, #fbbf24)"
           sub="slash commands · shell stdout" />
+      </KpiRow>
+
+      <KpiRow>
+        <Kpi label="Tokens / tool use"
+          value={a.tokensPerToolUse > 0 ? fmtNum(a.tokensPerToolUse) : '—'}
+          accent="var(--violet)"
+          sub={`${a.toolUses} tool uses · output only`} />
+        <Kpi label="Cost / file touched"
+          value={a.costPerFileTouched > 0 ? fmtCost(a.costPerFileTouched) : '—'}
+          accent="var(--green, #4ade80)"
+          sub={`${a.ops.filesTouched.size} files`} />
+        <Kpi label="Cost / line changed"
+          value={a.costPerLineChanged > 0 ? fmtCost(a.costPerLineChanged) : '—'}
+          accent="var(--amber, #fbbf24)"
+          sub={`${(a.ops.linesAdded + a.ops.linesRemoved).toLocaleString()} lines`} />
+        <Kpi label="Msg size (median)"
+          value={fmtNum(median(a.messageSizes) ?? 0)}
+          accent="var(--cyan, #5eead4)"
+          sub={`p95 ${fmtNum(percentile(a.messageSizes, 0.95) ?? 0)} tok`} />
       </KpiRow>
 
       <div style={{ marginTop: 12 }}>
@@ -365,6 +398,18 @@ function SummaryPane({ a }: { a: Analytics }) {
           { label: 'cache write', value: a.cacheWriteTokens, color: 'var(--amber, #fbbf24)' },
         ]} />
       </div>
+
+      {a.cost > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <SectionLabel>Cost composition</SectionLabel>
+          <CompositionBar segments={[
+            { label: `input ${fmtCost(a.costByCategory.input)}`,        value: a.costByCategory.input,      color: 'var(--cyan, #5eead4)' },
+            { label: `output ${fmtCost(a.costByCategory.output)}`,      value: a.costByCategory.output,     color: 'var(--violet)' },
+            { label: `cache-read ${fmtCost(a.costByCategory.cacheRead)}`,  value: a.costByCategory.cacheRead,  color: 'var(--green, #4ade80)' },
+            { label: `cache-write ${fmtCost(a.costByCategory.cacheWrite)}`,value: a.costByCategory.cacheWrite, color: 'var(--amber, #fbbf24)' },
+          ]} />
+        </div>
+      )}
 
       {rateInPerMin !== null && (
         <div style={{ marginTop: 12 }}>
@@ -426,6 +471,18 @@ function TokensPane({ a }: { a: Analytics }) {
       <div>
         <SectionLabel>Cache read tokens per message</SectionLabel>
         <Sparkline values={cacheSeries} height={60} colors={['var(--green, #4ade80)']} />
+      </div>
+
+      {a.cost > 0 && (
+        <div>
+          <SectionLabel>Cumulative cost ({fmtCost(a.cost)} total)</SectionLabel>
+          <Sparkline values={a.cumulativeCost} height={60} colors={['var(--green, #4ade80)', 'var(--amber, #fbbf24)']} />
+        </div>
+      )}
+
+      <div>
+        <SectionLabel>Message size distribution (tokens)</SectionLabel>
+        <SizeHistogram values={a.messageSizes} />
       </div>
 
       <div>
@@ -566,6 +623,24 @@ function ActivityPane({ a }: { a: Analytics }) {
         </div>
       )}
 
+      {a.fileExtensions.length > 0 && (
+        <div>
+          <SectionLabel>File extensions touched</SectionLabel>
+          <RankedBars entries={a.fileExtensions.slice(0, 12)} color="var(--pink, #f472b6)" />
+        </div>
+      )}
+
+      <div>
+        <SectionLabel>Block types</SectionLabel>
+        <CompositionBar segments={[
+          { label: `text (${a.blockTypes.text})`,              value: a.blockTypes.text,       color: 'var(--cyan, #5eead4)' },
+          { label: `thinking (${a.blockTypes.thinking})`,      value: a.blockTypes.thinking,   color: 'var(--amber, #fbbf24)' },
+          { label: `tool use (${a.blockTypes.toolUse})`,       value: a.blockTypes.toolUse,    color: 'var(--violet)' },
+          { label: `tool result (${a.blockTypes.toolResult})`, value: a.blockTypes.toolResult, color: 'var(--green, #4ade80)' },
+          { label: `other (${a.blockTypes.other})`,            value: a.blockTypes.other,      color: 'var(--text-3)' },
+        ]} />
+      </div>
+
       {latencies.length > 0 && (
         <div>
           <SectionLabel>Response latency distribution ({latencies.length} paired turns)</SectionLabel>
@@ -585,6 +660,32 @@ function RankedBars({ entries, color }: { entries: [string, number][]; color: st
         const trimmed = key.length > 50 ? '…' + key.slice(-49) : key
         return <HBar key={key} label={trimmed} count={count} max={max} color={color} width={320} />
       })}
+    </div>
+  )
+}
+
+function SizeHistogram({ values }: { values: number[] }) {
+  if (values.length === 0) return <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no data)</div>
+  const buckets = [
+    { label: '<100',     max: 100,      count: 0 },
+    { label: '100-500',  max: 500,      count: 0 },
+    { label: '500-2k',   max: 2_000,    count: 0 },
+    { label: '2k-10k',   max: 10_000,   count: 0 },
+    { label: '10k-50k',  max: 50_000,   count: 0 },
+    { label: '50k-200k', max: 200_000,  count: 0 },
+    { label: '>200k',    max: Infinity, count: 0 },
+  ]
+  for (const v of values) {
+    for (const b of buckets) {
+      if (v < b.max) { b.count += 1; break }
+    }
+  }
+  const max = Math.max(1, ...buckets.map((b) => b.count))
+  return (
+    <div>
+      {buckets.map((b) => (
+        <HBar key={b.label} label={b.label} count={b.count} max={max} color="var(--violet)" width={80} />
+      ))}
     </div>
   )
 }
@@ -661,6 +762,41 @@ function TimelinePane({ a }: { a: Analytics }) {
       <div>
         <SectionLabel>Activity by hour of day (local)</SectionLabel>
         <HourHeatmap counts={a.hourActivity} />
+      </div>
+
+      <div>
+        <SectionLabel>Activity by day of week (local)</SectionLabel>
+        <DayOfWeekBar counts={a.dayOfWeekActivity} />
+      </div>
+    </div>
+  )
+}
+
+function DayOfWeekBar({ counts }: { counts: number[] }) {
+  const labels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const max = Math.max(1, ...counts)
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
+        {counts.map((c, d) => {
+          const pct = (c / max) * 100
+          return (
+            <div key={d} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+              <div style={{ width: '100%', height: 60, background: 'var(--surface-2)', borderRadius: 3, position: 'relative' }}>
+                <div style={{
+                  position: 'absolute',
+                  bottom: 0,
+                  width: '100%',
+                  height: `${pct}%`,
+                  background: c === 0 ? 'var(--surface-2)' : 'var(--violet)',
+                  borderRadius: 3,
+                }} />
+              </div>
+              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{labels[d]}</span>
+              <span style={{ fontSize: 10, color: 'var(--text-2)' }}>{c}</span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
