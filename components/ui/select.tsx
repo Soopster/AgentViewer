@@ -99,12 +99,12 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-default select-none items-center gap-2 rounded-md border-l-2 border-l-transparent px-3.5 py-2.5 text-[12px] leading-[1.35] outline-none whitespace-normal break-words data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--surface-2)] data-[highlighted]:text-[var(--text)] data-[state=checked]:border-l-[var(--violet)] data-[state=checked]:bg-[var(--violet-glow)] data-[state=checked]:text-[var(--violet)] data-[state=checked]:font-medium [font-family:'IBM_Plex_Mono',monospace]",
+        "relative flex w-full cursor-default select-none items-center gap-2 rounded-md border-l-2 border-l-transparent px-3.5 py-2.5 text-[12px] leading-[1.35] outline-none whitespace-normal break-words data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--surface-2)] data-[highlighted]:text-[var(--text)] data-[state=checked]:border-l-[var(--violet)] data-[state=checked]:bg-[var(--surface-3)] data-[state=checked]:text-[var(--violet)] data-[state=checked]:font-medium [font-family:'IBM_Plex_Mono',monospace]",
         className
       )}
       {...props}
     >
-      <span className="absolute right-2 top-2.5 flex size-3.5 items-center justify-center">
+      <span className="flex size-4 shrink-0 items-center justify-center text-[var(--violet)]">
         <SelectPrimitive.ItemIndicator>
           <Check className="size-4" />
         </SelectPrimitive.ItemIndicator>
