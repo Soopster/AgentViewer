@@ -116,7 +116,7 @@ export default function Home() {
   const [messagePaneCollapsed, setMessagePaneCollapsed] = useState(false)
   const [sessions, setSessions] = useState<Session[]>([])
   const [openTabSessions, setOpenTabSessions] = useState<Session[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedTabKey, setSelectedTabKey] = useState<string | null>(null)
   const [selectedProject, setSelectedProject] = useState<ProjectSelection | null>(null)
   const [messages, setMessages] = useState<SessionMessage[]>([])
   const [loadingSessions, setLoadingSessions] = useState(true)
@@ -132,7 +132,10 @@ export default function Home() {
   // Guards to prevent concurrent poll ticks from overlapping when a fetch takes > interval
   const pollInFlightRef = useRef(false)
   const projectPollInFlightRef = useRef(false)
-  const selectedSession = sessions.find((s) => s.sessionId === selectedId) ?? null
+  const selectedSession =
+    openTabSessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
+    sessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
+    null
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
 
@@ -171,6 +174,31 @@ export default function Home() {
     return (data.messages ?? []) as SessionMessage[]
   }, [])
 
+  const loadSessionsForProvider = useCallback(async (
+    selection: ProviderSelection,
+    scopeMode: SessionScopeMode = sessionScope,
+    projectDir: string | null = activeProjectDir,
+  ) => {
+    if (scopeMode === 'project' && projectDir) {
+      const loaded = await fetchProjectSessions(projectDir, selection)
+      setSessions(loaded)
+      return
+    }
+
+    const params = new URLSearchParams()
+    params.set('provider', selection)
+    params.set('limit', '500')
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    const r = await fetch(`/api/sessions${suffix}`)
+    const data = await r.json()
+    if (data.error) throw new Error(data.error)
+    setSessions((data.sessions ?? []) as Session[])
+  }, [activeProjectDir, fetchProjectSessions, sessionScope])
+
+  const fetchSessions = useCallback(async () => {
+    await loadSessionsForProvider(provider)
+  }, [loadSessionsForProvider, provider])
+
   const fetchProjectMessageBatches = useCallback(async (
     dir: string,
     selection: ProviderSelection,
@@ -196,30 +224,13 @@ export default function Home() {
     }
   }, [includeWorktrees])
 
-  const fetchSessions = useCallback(async () => {
-    if (sessionScope === 'project' && activeProjectDir) {
-      const loaded = await fetchProjectSessions(activeProjectDir, provider)
-      setSessions(loaded)
-      return
-    }
-
-    const params = new URLSearchParams()
-    if (provider === 'all') {
-      params.set('provider', 'all')
-      params.set('limit', '500')
-    }
-    const suffix = params.toString() ? `?${params.toString()}` : ''
-    const r = await fetch(`/api/sessions${suffix}`)
-    const data = await r.json()
-    if (data.error) throw new Error(data.error)
-    setSessions((data.sessions ?? []) as Session[])
-  }, [activeProjectDir, fetchProjectSessions, provider, sessionScope])
-
   const fetchProvider = useCallback(async () => {
     const r = await fetch('/api/provider')
     const data = await r.json()
     if (data.error) throw new Error(data.error)
-    setProvider(isProviderSelection(data.provider) ? data.provider : 'claude')
+    const nextProvider = isProviderSelection(data.provider) ? data.provider : 'claude'
+    setProvider(nextProvider)
+    return nextProvider
   }, [])
 
   // Keep ref in sync with state (avoids stale closures inside setInterval)
@@ -227,10 +238,21 @@ export default function Home() {
 
   // Initial session load
   useEffect(() => {
-    Promise.all([fetchProvider(), fetchSessions()])
-      .catch((err) => setSessionsError(err.message))
-      .finally(() => setLoadingSessions(false))
-  }, [fetchProvider, fetchSessions])
+    let cancelled = false
+    setLoadingSessions(true)
+    Promise.resolve()
+      .then(async () => {
+        const nextProvider = await fetchProvider()
+        await loadSessionsForProvider(nextProvider)
+      })
+      .catch((err) => {
+        if (!cancelled) setSessionsError(err.message)
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSessions(false)
+      })
+    return () => { cancelled = true }
+  }, [fetchProvider, loadSessionsForProvider])
 
   // Poll sessions list silently every 5 s
   useEffect(() => {
@@ -267,11 +289,12 @@ export default function Home() {
   }, [activeProjectDir, sessionScope])
 
   useEffect(() => {
-    if (!selectedId) return
-    if (sessions.some((s) => s.sessionId === selectedId)) return
-    setSelectedId(null)
+    if (!selectedTabKey) return
+    if (openTabSessions.some((s) => projectSessionKey(s) === selectedTabKey)) return
+    if (sessions.some((s) => projectSessionKey(s) === selectedTabKey)) return
+    setSelectedTabKey(null)
     setMessages([])
-  }, [selectedId, sessions])
+  }, [openTabSessions, selectedTabKey, sessions])
 
   useEffect(() => {
     if (selectedProject) return
@@ -280,13 +303,13 @@ export default function Home() {
 
   // Poll active single session for new messages every 2 s (incremental via offset)
   useEffect(() => {
-    if (!selectedId || loadingMessages) return
+    if (!selectedSession || loadingMessages) return
     const id = setInterval(async () => {
       if (pollInFlightRef.current) return
       pollInFlightRef.current = true
       const offset = Math.max(0, msgCountRef.current - MESSAGE_POLL_BACKFILL)
       try {
-        const r = await fetch(withProviderQuery(`/api/sessions/${selectedId}/messages?offset=${offset}&limit=${200 + MESSAGE_POLL_BACKFILL}`, selectedSession?.provider))
+        const r = await fetch(withProviderQuery(`/api/sessions/${selectedSession.sessionId}/messages?offset=${offset}&limit=${200 + MESSAGE_POLL_BACKFILL}`, selectedSession.provider))
         const data = await r.json()
         if (!data.error && data.messages?.length > 0) {
           setMessages((prev) => mergeMessages(prev, data.messages as SessionMessage[]))
@@ -296,7 +319,7 @@ export default function Home() {
       }
     }, 2000)
     return () => clearInterval(id)
-  }, [loadingMessages, selectedId, selectedSession?.provider])
+  }, [loadingMessages, selectedSession])
 
   // Poll project view every 2 s using per-session incremental fetches.
   useEffect(() => {
@@ -335,13 +358,22 @@ export default function Home() {
   }, [fetchProjectMessageBatches, provider, selectedProject])
 
   async function selectSession(session: Session) {
+    const nextProvider = session.provider ?? 'claude'
+    const nextScopeMode: SessionScopeMode = 'all'
+    if (nextProvider !== provider) {
+      setProvider(nextProvider)
+      setLoadingSessions(true)
+      void loadSessionsForProvider(nextProvider, nextScopeMode, null)
+        .catch((err) => setSessionsError(err instanceof Error ? err.message : 'Failed to sync sessions'))
+        .finally(() => setLoadingSessions(false))
+    }
     setOpenTabSessions((prev) => {
       const alreadyOpen = prev.some(
-        (s) => s.sessionId === session.sessionId && (s.provider ?? 'claude') === (session.provider ?? 'claude'),
+        (s) => projectSessionKey(s) === projectSessionKey(session),
       )
       return alreadyOpen ? prev : [...prev, session]
     })
-    setSelectedId(session.sessionId)
+    setSelectedTabKey(projectSessionKey(session))
     setSelectedProject(null)
     projectMessageCountsRef.current.clear()
     setLoadingMessages(true)
@@ -356,16 +388,16 @@ export default function Home() {
     }
   }
 
-  function closeTab(sessionId: string) {
-    const idx = openTabSessions.findIndex((s) => s.sessionId === sessionId)
-    const next = openTabSessions.filter((s) => s.sessionId !== sessionId)
+  function closeTab(sessionKey: string) {
+    const idx = openTabSessions.findIndex((s) => projectSessionKey(s) === sessionKey)
+    const next = openTabSessions.filter((s) => projectSessionKey(s) !== sessionKey)
     setOpenTabSessions(next)
-    if (sessionId === selectedId) {
+    if (sessionKey === selectedTabKey) {
       if (next.length > 0) {
         const adjacent = next[Math.min(idx, next.length - 1)]
         if (adjacent) void selectSession(adjacent)
       } else {
-        setSelectedId(null)
+        setSelectedTabKey(null)
         setMessages([])
       }
     }
@@ -373,7 +405,7 @@ export default function Home() {
 
   async function selectProject(projectDir: string, projectName: string, projectSessions: Session[]) {
     setSelectedProject({ key: projectName, dir: projectDir, sessions: projectSessions })
-    setSelectedId(null)
+    setSelectedTabKey(null)
     setLoadingMessages(true)
     setMessages([])
     try {
@@ -437,20 +469,23 @@ export default function Home() {
   const handleDelete = useCallback((sessionId: string, deletedProvider?: AgentProvider) => {
     const sameSession = (session: Session) =>
       session.sessionId === sessionId && (!deletedProvider || (session.provider ?? 'claude') === deletedProvider)
+    const deletedTabKey = deletedProvider ? `${deletedProvider}:${sessionId}` : null
     setSessions((prev) => prev.filter((session) => !sameSession(session)))
     setOpenTabSessions((prev) => prev.filter((session) => !sameSession(session)))
     setSelectedProject((prev) => prev
       ? { ...prev, sessions: prev.sessions.filter((session) => !sameSession(session)) }
       : prev
     )
-    if (selectedId === sessionId) {
-      setSelectedId(null)
+    if (selectedTabKey && (deletedTabKey ? selectedTabKey === deletedTabKey : openTabSessions.some((session) => session.sessionId === sessionId))) {
+      setSelectedTabKey(null)
       setMessages([])
     }
-  }, [selectedId])
+  }, [openTabSessions, selectedTabKey])
 
   const handleChangeProvider = useCallback(async (nextProvider: ProviderSelection) => {
     if (nextProvider === provider || switchingProvider) return
+    const nextScopeMode = sessionScope
+    const nextProjectDir = activeProjectDir
     setSwitchingProvider(true)
     setSessionsError(null)
     try {
@@ -463,33 +498,19 @@ export default function Home() {
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
 
       setProvider(nextProvider)
-      setSelectedId(null)
+      setSelectedTabKey(null)
       setSelectedProject(null)
       setMessages([])
       setLoadingMessages(false)
       setLoadingSessions(true)
-      if (sessionScope === 'project' && activeProjectDir) {
-        const loaded = await fetchProjectSessions(activeProjectDir, nextProvider)
-        setSessions(loaded)
-        return
-      }
-      const params = new URLSearchParams()
-      if (nextProvider === 'all') {
-        params.set('provider', 'all')
-        params.set('limit', '500')
-      }
-      const suffix = params.toString() ? `?${params.toString()}` : ''
-      const resessions = await fetch(`/api/sessions${suffix}`)
-      const sessionData = await resessions.json()
-      if (!resessions.ok || sessionData.error) throw new Error(sessionData.error ?? `HTTP ${resessions.status}`)
-      setSessions((sessionData.sessions ?? []) as Session[])
+      await loadSessionsForProvider(nextProvider, nextScopeMode, nextProjectDir)
     } catch (err) {
       setSessionsError(err instanceof Error ? err.message : 'Failed to switch provider')
     } finally {
       setLoadingSessions(false)
       setSwitchingProvider(false)
     }
-  }, [activeProjectDir, fetchProjectSessions, provider, sessionScope, switchingProvider])
+  }, [activeProjectDir, loadSessionsForProvider, provider, sessionScope, switchingProvider])
 
   if (!mounted) {
     return (
@@ -512,7 +533,7 @@ export default function Home() {
         error={sessionsError}
         provider={provider}
         switchingProvider={switchingProvider}
-        selectedId={selectedId}
+        selectedId={selectedTabKey}
         selectedProject={selectedProject?.dir ?? null}
         onSelect={selectSession}
         onSelectProject={selectProject}
@@ -588,7 +609,7 @@ export default function Home() {
           onFork={handleFork}
           onDelete={handleDelete}
           openTabs={openTabSessions}
-          selectedTabId={selectedId}
+          selectedTabId={selectedTabKey}
           onSelectTab={(s) => void selectSession(s)}
           onCloseTab={closeTab}
         />

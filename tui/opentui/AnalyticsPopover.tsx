@@ -520,15 +520,16 @@ function bar(value: number, max: number, width: number): string {
 // Pane definitions
 // ---------------------------------------------------------------------------
 
-type PaneId = 0 | 1 | 2 | 3 | 4
+type PaneId = 0 | 1 | 2 | 3 | 4 | 5
 const PANE_TITLES: Record<PaneId, string> = {
   0: 'Summary',
   1: 'Tokens',
   2: 'Tools',
   3: 'Activity',
   4: 'Timeline',
+  5: 'Insights',
 }
-const PANE_COUNT = 5
+const PANE_COUNT = 6
 
 type AnalyticsKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 
@@ -595,7 +596,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
 
   const handleKey = useCallback((key: AnalyticsKeyEvent) => {
     if (key.name === 'escape') { onClose(); return }
-    if (key.sequence >= '0' && key.sequence <= '4') {
+    if (key.sequence >= '0' && key.sequence <= '5') {
       setPane(parseInt(key.sequence, 10) as PaneId)
       return
     }
@@ -643,7 +644,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
         borderStyle="single"
         borderColor={theme.border}
       >
-        {([0, 1, 2, 3, 4] as PaneId[]).map((p) => (
+        {([0, 1, 2, 3, 4, 5] as PaneId[]).map((p) => (
           <box
             key={p}
             paddingX={1}
@@ -656,7 +657,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
           </box>
         ))}
         <box flexGrow={1} />
-        <text fg={theme.dim}>{'tab/0-4 switch · j/k scroll · esc close'}</text>
+        <text fg={theme.dim}>{'tab/0-5 switch · j/k scroll · esc close'}</text>
       </box>
 
       {/* Body */}
@@ -673,6 +674,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
         {pane === 2 ? <ToolsPane a={analytics} theme={theme} width={popW - 4} /> : null}
         {pane === 3 ? <ActivityPane a={analytics} theme={theme} width={popW - 4} /> : null}
         {pane === 4 ? <TimelinePane a={analytics} theme={theme} width={popW - 4} /> : null}
+        {pane === 5 ? <InsightsPane a={analytics} theme={theme} width={popW - 4} /> : null}
       </scrollbox>
     </box>
   )
@@ -1263,6 +1265,306 @@ function RoleStrip({
       {chars.map((c, i) => (
         <text key={i} fg={c.color}>{c.ch}</text>
       ))}
+    </box>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Insights pane
+// ---------------------------------------------------------------------------
+
+type InsightSeverity = 'good' | 'warn' | 'info' | 'tip'
+type Insight = { severity: InsightSeverity; icon: string; title: string; detail: string }
+
+function buildInsights(a: Analytics): Insight[] {
+  const out: Insight[] = []
+
+  const ops = a.ops
+  const editTotal = ops.edits + ops.multiEdits + ops.writes
+  const totalOps = ops.reads + editTotal + ops.bashCommands + ops.searches
+  if (totalOps > 0) {
+    const readShare = ops.reads / totalOps
+    const editShare = editTotal / totalOps
+    if (readShare > 0.6 && editTotal < 3) {
+      out.push({
+        severity: 'info',
+        icon: '🔍',
+        title: 'Exploration session',
+        detail: `${ops.reads} reads vs only ${editTotal} edits - mostly investigating rather than modifying.`,
+      })
+    } else if (editShare > 0.5) {
+      out.push({
+        severity: 'info',
+        icon: '✏',
+        title: 'Code-modification session',
+        detail: `${editTotal} edits/writes across ${ops.filesTouched.size} files · +${ops.linesAdded.toLocaleString()}/-${ops.linesRemoved.toLocaleString()} lines.`,
+      })
+    } else if (ops.bashCommands > Math.max(ops.reads, editTotal)) {
+      out.push({
+        severity: 'info',
+        icon: '⌨',
+        title: 'Shell-heavy session',
+        detail: `${ops.bashCommands} shell commands dominate - infrastructure or ops work.`,
+      })
+    }
+  }
+
+  if (a.inputTokens + a.cacheReadTokens > 10_000) {
+    if (a.cacheHitRate > 0.6) {
+      out.push({
+        severity: 'good',
+        icon: '⚡',
+        title: 'Strong cache utilization',
+        detail: `${(a.cacheHitRate * 100).toFixed(0)}% of input served from cache - saved approximately ${fmtCost(a.cacheSavings)}.`,
+      })
+    } else if (a.cacheHitRate < 0.15 && a.inputTokens > 50_000) {
+      out.push({
+        severity: 'warn',
+        icon: '💸',
+        title: 'Low cache hit rate',
+        detail: `Only ${(a.cacheHitRate * 100).toFixed(1)}% of ${fmtNum(a.inputTokens)} input tokens hit cache. Reusing context could reduce cost.`,
+      })
+    }
+  }
+
+  if (a.toolUses > 5) {
+    if (a.errorRate > 0.15) {
+      out.push({
+        severity: 'warn',
+        icon: '⚠',
+        title: 'Elevated tool error rate',
+        detail: `${a.toolErrors} of ${a.toolUses} tool calls errored (${(a.errorRate * 100).toFixed(1)}%).`,
+      })
+    } else if (a.errorRate === 0) {
+      out.push({
+        severity: 'good',
+        icon: '✓',
+        title: 'No tool errors',
+        detail: `All ${a.toolUses} tool calls succeeded.`,
+      })
+    }
+  }
+
+  if (a.tools.length > 0) {
+    const top = a.tools[0]!
+    const share = top.count / Math.max(1, a.toolUses)
+    if (share > 0.5) {
+      out.push({
+        severity: 'info',
+        icon: '🔧',
+        title: `${top.name} dominates`,
+        detail: `${top.count} of ${a.toolUses} tool calls (${(share * 100).toFixed(0)}%) used ${top.name}.`,
+      })
+    }
+  }
+
+  if (a.medianFirstResponseMs !== null && a.medianFirstResponseMs > 30_000) {
+    out.push({
+      severity: 'warn',
+      icon: '🐢',
+      title: 'Slow response latency',
+      detail: `Median time to first reply: ${fmtDuration(a.medianFirstResponseMs)}. The agent is spending a lot of time per turn.`,
+    })
+  } else if (a.medianFirstResponseMs !== null && a.medianFirstResponseMs < 3_000) {
+    out.push({
+      severity: 'good',
+      icon: '🚀',
+      title: 'Snappy responses',
+      detail: `Median first-response latency: ${fmtDuration(a.medianFirstResponseMs)}.`,
+    })
+  }
+
+  if (a.longestIdleMs > 30 * 60_000) {
+    out.push({
+      severity: 'info',
+      icon: '⏸',
+      title: 'Session spans a long idle gap',
+      detail: `Longest quiet period was ${fmtDuration(a.longestIdleMs)} - session was paused between turns.`,
+    })
+  }
+
+  if (a.cost > 5) {
+    out.push({
+      severity: 'warn',
+      icon: '💰',
+      title: 'High session cost',
+      detail: `Estimated ${fmtCost(a.cost)} · ${fmtCost(a.costPerTurn)}/turn across ${a.turns} turns.`,
+    })
+  } else if (a.cost > 0 && a.cost < 0.05 && a.messages > 10) {
+    out.push({
+      severity: 'good',
+      icon: '💵',
+      title: 'Very low cost',
+      detail: `${a.messages} messages for only ${fmtCost(a.cost)} - cache kept this cheap.`,
+    })
+  }
+
+  if (a.thinkingBlocks > 0 && a.assistantTextChars > 0) {
+    const thinkShare = a.thinkingChars / (a.thinkingChars + a.assistantTextChars)
+    if (thinkShare > 0.5) {
+      out.push({
+        severity: 'info',
+        icon: '🧠',
+        title: 'Heavy reasoning',
+        detail: `${(thinkShare * 100).toFixed(0)}% of assistant output was extended thinking - ${a.thinkingBlocks} blocks, ${fmtNum(a.thinkingChars)} chars.`,
+      })
+    }
+  }
+
+  if (a.toolsPerTurn > 8) {
+    out.push({
+      severity: 'info',
+      icon: '🪜',
+      title: 'Deep agent loops',
+      detail: `${a.toolsPerTurn.toFixed(1)} tool calls per user turn · longest chain of ${a.longestAssistantChain} assistant messages.`,
+    })
+  }
+
+  if (a.maxOutputInReply > 8_000) {
+    out.push({
+      severity: 'tip',
+      icon: '📏',
+      title: 'Very long assistant reply',
+      detail: `One reply generated ${fmtNum(a.maxOutputInReply)} output tokens. Consider breaking such requests into smaller steps.`,
+    })
+  }
+
+  if (a.tokensPerSecond > 333) {
+    out.push({
+      severity: 'info',
+      icon: '📈',
+      title: 'Bursty output',
+      detail: `Peak throughput reached about ${fmtNum(a.tokensPerSecond * 60)} output tokens/minute.`,
+    })
+  }
+
+  if (ops.editsByFile.size > 0) {
+    const topFile = [...ops.editsByFile.entries()].sort((a, b) => b[1] - a[1])[0]!
+    if (topFile[1] >= 5) {
+      const base = topFile[0].split('/').pop() ?? topFile[0]
+      out.push({
+        severity: 'tip',
+        icon: '📝',
+        title: 'Hot-spot file',
+        detail: `${base} was edited ${topFile[1]} times - likely the centerpiece of this session.`,
+      })
+    }
+  }
+
+  if (ops.bashByVerb.size > 0) {
+    const topVerb = [...ops.bashByVerb.entries()].sort((a, b) => b[1] - a[1])[0]!
+    if (topVerb[1] >= 5) {
+      out.push({
+        severity: 'info',
+        icon: '⌨',
+        title: `${topVerb[0]} used ${topVerb[1]}×`,
+        detail: 'The most-run shell command verb in this session.',
+      })
+    }
+  }
+
+  if (a.messages > 0) {
+    const maxCount = Math.max(...a.hourActivity)
+    if (maxCount > 0) {
+      const peakHour = a.hourActivity.indexOf(maxCount)
+      const share = maxCount / a.messages
+      if (share > 0.35) {
+        out.push({
+          severity: 'info',
+          icon: '🕒',
+          title: `Peak activity around ${peakHour}:00`,
+          detail: `${maxCount} of ${a.messages} messages (${(share * 100).toFixed(0)}%) landed in that single hour.`,
+        })
+      }
+    }
+  }
+
+  if (a.slashCommands >= 3) {
+    out.push({
+      severity: 'info',
+      icon: '/',
+      title: `${a.slashCommands} slash commands`,
+      detail: 'Session made heavy use of slash commands - you may want to review what was invoked.',
+    })
+  }
+
+  if (a.toolUses === 0 && a.messages > 6) {
+    out.push({
+      severity: 'info',
+      icon: '💬',
+      title: 'Conversation-only session',
+      detail: `No tool calls across ${a.messages} messages - pure Q&A or planning.`,
+    })
+  }
+
+  if ((ops.linesAdded + ops.linesRemoved) > 100) {
+    const totalLines = ops.linesAdded + ops.linesRemoved
+    if (a.costPerTurn > 0 && totalLines > 0) {
+      out.push({
+        severity: 'tip',
+        icon: '📊',
+        title: 'Cost per line changed',
+        detail: `${fmtCost(a.costPerTurn / Math.max(1, totalLines))} per line touched across ${totalLines.toLocaleString()} lines.`,
+      })
+    }
+  }
+
+  if (out.length === 0) {
+    out.push({
+      severity: 'info',
+      icon: 'ℹ',
+      title: 'Not much to highlight yet',
+      detail: 'This session is short or light on signals. Insights will sharpen as more activity accumulates.',
+    })
+  }
+
+  return out
+}
+
+function InsightsPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette; width: number }) {
+  const insights = useMemo(() => buildInsights(a), [a])
+  const accentForSeverity = (severity: InsightSeverity): string => {
+    switch (severity) {
+      case 'good':
+        return theme.green
+      case 'warn':
+        return theme.amber
+      case 'info':
+        return theme.cyan
+      case 'tip':
+        return theme.violet
+    }
+  }
+  return (
+    <box flexDirection="column" paddingX={1} width={width}>
+      <box marginBottom={1}>
+        <text fg={theme.dim}>{`${insights.length} observation${insights.length === 1 ? '' : 's'} from this session`}</text>
+      </box>
+      {insights.map((ins, i) => {
+        const c = accentForSeverity(ins.severity)
+        return (
+          <box
+            key={i}
+            flexDirection="row"
+            width={width - 2}
+            marginBottom={1}
+            paddingX={1}
+            paddingY={0}
+            backgroundColor={theme.surface2}
+            border
+            borderStyle="single"
+            borderColor={theme.border}
+          >
+            <box width={3}>
+              <text fg={c} wrapMode="none">{ins.icon}</text>
+            </box>
+            <box flexDirection="column" flexGrow={1}>
+              <text fg={c} wrapMode="none">{ins.title}</text>
+              <text fg={theme.muted} wrapMode="word">{ins.detail}</text>
+            </box>
+          </box>
+        )
+      })}
     </box>
   )
 }

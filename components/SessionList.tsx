@@ -79,6 +79,10 @@ function getSessionPreview(session: Session, sessionTitle: string): string | nul
   return preview
 }
 
+function sessionTabKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
+  return `${session.provider ?? 'claude'}:${session.sessionId}`
+}
+
 type IndexedSession = {
   session: Session
   tags: string[]
@@ -481,7 +485,7 @@ const ProjectGroup = memo(function ProjectGroup({
   const [collapsed, setCollapsed] = useState(false)
   const [hovered, setHovered] = useState(false)
   const isProjectSelected = sameProjectPath(selectedProject, projectKey)
-  const hasSelected = isProjectSelected || sessions.some(s => s.sessionId === selectedId)
+  const hasSelected = isProjectSelected || sessions.some((s) => sessionTabKey(s) === selectedId)
 
   return (
     <div>
@@ -552,9 +556,9 @@ const ProjectGroup = memo(function ProjectGroup({
       {/* Sessions */}
       {!collapsed && sessions.map((session) => (
         <SessionRow
-          key={session.sessionId}
+          key={sessionTabKey(session)}
           session={session}
-          selected={session.sessionId === selectedId}
+          selected={sessionTabKey(session) === selectedId}
           onSelect={onSelect}
           onRename={onRename}
           onTag={onTag}

@@ -12,6 +12,10 @@ function sessionTabTitle(session: Session): string {
   ) || 'Untitled'
 }
 
+function sessionTabKey(session: Session): string {
+  return `${session.provider ?? 'claude'}:${session.sessionId}`
+}
+
 type Props = {
   tabs: Session[]
   activeId: string | null
@@ -37,7 +41,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
       }}
     >
       {tabs.map((session) => {
-        const isActive = session.sessionId === activeId
+        const isActive = sessionTabKey(session) === activeId
         const title = sessionTabTitle(session)
         return (
           <button
