@@ -1380,6 +1380,8 @@ export default function OpenTuiApp() {
   const providerSwitchRef = useRef(false)
   const readerStateWriteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const readerStatePersistSignatureRef = useRef<string | null>(null)
+  const expandedKeysRevisionRef = useRef(0)
+  const collapsedKeysRevisionRef = useRef(0)
   const previousTranscriptRef = useRef<{ sessionKey: string | null; keys: string[] }>({
     sessionKey: null,
     keys: [],
@@ -1407,6 +1409,14 @@ export default function OpenTuiApp() {
   useEffect(() => {
     selectedSessionKeyRef.current = selectedSessionKey
   }, [selectedSessionKey])
+
+  useEffect(() => {
+    expandedKeysRevisionRef.current += 1
+  }, [expandedCardKeys])
+
+  useEffect(() => {
+    collapsedKeysRevisionRef.current += 1
+  }, [collapsedCardKeys])
 
   useEffect(() => () => {
     if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
@@ -2823,8 +2833,8 @@ export default function OpenTuiApp() {
       selectedSessionKey,
       followTail ? 'follow' : 'free',
       transcriptCursorKey ?? '',
-      [...expandedCardKeys].join(','),
-      [...collapsedCardKeys].join(','),
+      expandedKeysRevisionRef.current,
+      collapsedKeysRevisionRef.current,
     ].join('|')
     if (readerStatePersistSignatureRef.current === persistSignature) return
 
