@@ -1379,6 +1379,7 @@ export default function OpenTuiApp() {
   const metadataRequestRef = useRef(0)
   const providerSwitchRef = useRef(false)
   const readerStateWriteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const readerStatePersistSignatureRef = useRef<string | null>(null)
   const previousTranscriptRef = useRef<{ sessionKey: string | null; keys: string[] }>({
     sessionKey: null,
     keys: [],
@@ -2818,6 +2819,15 @@ export default function OpenTuiApp() {
 
     if (readerStateWriteTimeoutRef.current) clearTimeout(readerStateWriteTimeoutRef.current)
 
+    const persistSignature = [
+      selectedSessionKey,
+      followTail ? 'follow' : 'free',
+      transcriptCursorKey ?? '',
+      [...expandedCardKeys].join(','),
+      [...collapsedCardKeys].join(','),
+    ].join('|')
+    if (readerStatePersistSignatureRef.current === persistSignature) return
+
     // Build the persist payload inside the debounce timer so the O(n) work
     // over transcriptCards + expanded/collapsed keys only runs once per pause
     // — not on every j/k keystroke. This was a visible hitch on large
@@ -2831,6 +2841,7 @@ export default function OpenTuiApp() {
         expandedKeys: [...expandedCardKeys].filter((key) => validKeys.has(key)),
         collapsedKeys: [...collapsedCardKeys].filter((key) => validKeys.has(key)),
       }
+      readerStatePersistSignatureRef.current = persistSignature
       void writeTuiSessionReaderState(selectedSessionKey, persistState).catch((err) => {
         setError(err instanceof Error ? err.message : 'Failed to store reader position')
       })
@@ -2900,12 +2911,9 @@ export default function OpenTuiApp() {
 
   useEffect(() => {
     if (!transcriptCursorKey) return
+    if (followTail) return
     const timer = setTimeout(() => {
-      if (followTail) {
-        transcriptScrollRef.current?.scrollTo(Number.MAX_SAFE_INTEGER)
-      } else {
-        transcriptScrollRef.current?.scrollChildIntoView(`card:${transcriptCursorKey}`)
-      }
+      transcriptScrollRef.current?.scrollChildIntoView(`card:${transcriptCursorKey}`)
     }, 0)
     return () => clearTimeout(timer)
   }, [followTail, transcriptCursorKey])
