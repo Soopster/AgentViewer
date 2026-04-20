@@ -196,23 +196,38 @@ function Kpi({
         flex: 1,
         minWidth: 0,
         padding: '10px 12px',
-        border: '1px solid var(--border)',
-        borderRadius: 6,
+        border: `1px solid ${accent}`,
+        borderRadius: 8,
         background: 'var(--surface-2)',
         display: 'flex',
-        flexDirection: 'column',
-        gap: 3,
+        flexDirection: 'row',
+        gap: 10,
+        alignItems: 'stretch',
+        boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.02)',
       }}
     >
-      <span style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-3)' }}>
-        {label}
-      </span>
-      <span style={{ fontSize: 18, color: accent, fontWeight: 500 }}>{value}</span>
-      {sub && (
-        <span style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {sub}
+      <span
+        aria-hidden="true"
+        style={{
+          width: 4,
+          borderRadius: 999,
+          background: accent,
+          flexShrink: 0,
+        }}
+      />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 }}>
+        <span style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: accent }}>
+          {label}
         </span>
-      )}
+        <span style={{ fontSize: 18, color: 'var(--text)', fontWeight: 500, lineHeight: 1.1 }}>
+          {value}
+        </span>
+        {sub && (
+          <span style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {sub}
+          </span>
+        )}
+      </div>
     </div>
   )
 }

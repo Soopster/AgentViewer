@@ -381,12 +381,15 @@ function Kpi({
       backgroundColor={theme.surface2}
       border
       borderStyle="single"
-      borderColor={theme.border}
-      flexDirection="column"
+      borderColor={accent}
+      flexDirection="row"
     >
-      <text fg={theme.dim} wrapMode="none">{label}</text>
-      <text fg={accent} wrapMode="none">{value}</text>
-      {sub ? <text fg={theme.muted} wrapMode="none">{sub}</text> : null}
+      <box width={1} marginRight={1} backgroundColor={accent} />
+      <box flexDirection="column" flexGrow={1}>
+        <text fg={accent} wrapMode="none">{label}</text>
+        <text fg={theme.text} wrapMode="none">{value}</text>
+        {sub ? <text fg={theme.muted} wrapMode="none">{sub}</text> : null}
+      </box>
     </box>
   )
 }
@@ -839,6 +842,128 @@ function RoleStrip({
 
 type InsightSeverity = 'good' | 'warn' | 'info' | 'tip'
 type Insight = { severity: InsightSeverity; icon: string; title: string; detail: string }
+const INSIGHT_SEVERITY_WEIGHT: Record<InsightSeverity, number> = {
+  warn: 3,
+  good: 2,
+  info: 1,
+  tip: 0,
+}
+
+function percent(part: number, total: number): number {
+  return total > 0 ? part / total : 0
+}
+
+function topEntry(entries: Array<[string, number]>): [string, number] | null {
+  if (entries.length === 0) return null
+  return [...entries].sort((a, b) => b[1] - a[1])[0] ?? null
+}
+
+function summarizeRisk(a: Analytics): { label: string; detail: string; accent: string } {
+  const high = a.errorRate > 0.15 || a.cost > 5 || (a.toolUses > 0 && a.toolErrors > 0)
+  const medium = a.errorRate > 0.05 || a.longestIdleMs > 30 * 60_000 || a.cacheHitRate < 0.2
+  if (high) {
+    return {
+      label: 'high',
+      detail: `${a.toolErrors} tool errors · ${fmtCost(a.cost)} spend`,
+      accent: '#f87171',
+    }
+  }
+  if (medium) {
+    return {
+      label: 'medium',
+      detail: `${(a.errorRate * 100).toFixed(1)}% error rate · ${fmtDuration(a.longestIdleMs)}`,
+      accent: '#fbbf24',
+    }
+  }
+  return {
+    label: 'low',
+    detail: 'No major reliability signals',
+    accent: '#34d399',
+  }
+}
+
+function summarizePace(a: Analytics): { label: string; detail: string; accent: string } {
+  if (a.medianFirstResponseMs !== null) {
+    if (a.medianFirstResponseMs < 3_000) {
+      return {
+        label: 'snappy',
+        detail: `median ${fmtDuration(a.medianFirstResponseMs)} first reply`,
+        accent: '#34d399',
+      }
+    }
+    if (a.medianFirstResponseMs > 30_000) {
+      return {
+        label: 'slow',
+        detail: `median ${fmtDuration(a.medianFirstResponseMs)} first reply`,
+        accent: '#fbbf24',
+      }
+    }
+  }
+  return {
+    label: a.tokensPerSecond > 0 ? `${fmtNum(a.tokensPerSecond)} tok/s` : 'steady',
+    detail: a.tokensPerSecond > 0
+      ? `peak output ${fmtNum(a.peakTokensPerMin)} tok/min`
+      : 'not enough activity to measure',
+    accent: '#38bdf8',
+  }
+}
+
+function summarizeActivity(a: Analytics): { label: string; detail: string; accent: string } {
+  const activeRatio = a.durationMs && a.durationMs > 0 ? a.activeMs / a.durationMs : 0
+  if (activeRatio > 0.8) {
+    return {
+      label: 'focused',
+      detail: `${(activeRatio * 100).toFixed(0)}% active time`,
+      accent: '#34d399',
+    }
+  }
+  if (activeRatio < 0.25 && a.durationMs !== null) {
+    return {
+      label: 'interrupted',
+      detail: `${fmtDuration(a.longestIdleMs)} longest gap`,
+      accent: '#fbbf24',
+    }
+  }
+  return {
+    label: 'mixed',
+    detail: `${fmtDuration(a.activeMs)} active time`,
+    accent: '#38bdf8',
+  }
+}
+
+function summarizeCache(a: Analytics): { label: string; detail: string; accent: string } {
+  if (a.cacheHitRate > 0.6) {
+    return {
+      label: `${(a.cacheHitRate * 100).toFixed(0)}% hit`,
+      detail: `${fmtCost(a.cacheSavings)} saved`,
+      accent: '#34d399',
+    }
+  }
+  if (a.cacheHitRate < 0.15 && a.inputTokens > 50_000) {
+    return {
+      label: 'weak',
+      detail: `${fmtNum(a.inputTokens)} input tokens`,
+      accent: '#fbbf24',
+    }
+  }
+  return {
+    label: `${(a.cacheHitRate * 100).toFixed(0)}% hit`,
+    detail: `${fmtNum(a.cacheReadTokens)} cache reads`,
+    accent: '#38bdf8',
+  }
+}
+
+function sortInsights(insights: Insight[]): Insight[] {
+  return [...insights]
+    .map((ins, index) => ({ ins, index }))
+    .sort((a, b) => {
+      const weightA = INSIGHT_SEVERITY_WEIGHT[a.ins.severity]
+      const weightB = INSIGHT_SEVERITY_WEIGHT[b.ins.severity]
+      if (weightA !== weightB) return weightB - weightA
+      return a.index - b.index
+    })
+    .map(({ ins }) => ins)
+}
 
 function buildInsights(a: Analytics): Insight[] {
   const out: Insight[] = []
@@ -891,6 +1016,25 @@ function buildInsights(a: Analytics): Insight[] {
     }
   }
 
+  if (a.durationMs !== null && a.durationMs > 0) {
+    const activeRatio = a.activeMs / a.durationMs
+    if (activeRatio > 0.8 && a.durationMs > 10 * 60_000) {
+      out.push({
+        severity: 'good',
+        icon: '🎯',
+        title: 'Sustained focus',
+        detail: `${(activeRatio * 100).toFixed(0)}% of the session was active time.`,
+      })
+    } else if (activeRatio < 0.25 && a.durationMs > 30 * 60_000) {
+      out.push({
+        severity: 'info',
+        icon: '⏳',
+        title: 'Interrupted session',
+        detail: `Only ${(activeRatio * 100).toFixed(0)}% active time across ${fmtDuration(a.durationMs)}.`,
+      })
+    }
+  }
+
   if (a.toolUses > 5) {
     if (a.errorRate > 0.15) {
       out.push({
@@ -909,6 +1053,38 @@ function buildInsights(a: Analytics): Insight[] {
     }
   }
 
+  if (a.durationMs !== null && a.durationMs > 0 && a.outputTokens > 0) {
+    const avgPerMin = (a.outputTokens / a.durationMs) * 60_000
+    if (avgPerMin > 0 && a.peakTokensPerMin / avgPerMin >= 3) {
+      out.push({
+        severity: 'tip',
+        icon: '⚡',
+        title: 'Bursty output',
+        detail: `Peak output rate was ${(a.peakTokensPerMin / avgPerMin).toFixed(1)}× the session average.`,
+      })
+    }
+  }
+
+  if (a.cost > 0) {
+    const outputShare = percent(a.costByCategory.output, a.cost)
+    const cacheShare = percent(a.costByCategory.cacheRead + a.costByCategory.cacheWrite, a.cost)
+    if (outputShare > 0.6) {
+      out.push({
+        severity: 'info',
+        icon: '🧾',
+        title: 'Output-driven spend',
+        detail: `${(outputShare * 100).toFixed(0)}% of cost came from model output tokens.`,
+      })
+    } else if (cacheShare > 0.35 && a.cacheHitRate > 0.4) {
+      out.push({
+        severity: 'good',
+        icon: '♻',
+        title: 'Cache-heavy workload',
+        detail: `${(cacheShare * 100).toFixed(0)}% of spend was cache-related, with ${(a.cacheHitRate * 100).toFixed(0)}% cache hit rate.`,
+      })
+    }
+  }
+
   if (a.tools.length > 0) {
     const top = a.tools[0]!
     const share = top.count / Math.max(1, a.toolUses)
@@ -919,6 +1095,22 @@ function buildInsights(a: Analytics): Insight[] {
         title: `${top.name} dominates`,
         detail: `${top.count} of ${a.toolUses} tool calls (${(share * 100).toFixed(0)}%) used ${top.name}.`,
       })
+    }
+  }
+
+  if (a.fileExtensions.length > 0) {
+    const topExt = topEntry(a.fileExtensions)
+    if (topExt) {
+      const totalExtTouches = a.fileExtensions.reduce((sum, [, count]) => sum + count, 0)
+      const share = percent(topExt[1], totalExtTouches)
+      if (share > 0.55 && topExt[0] !== '(no ext)') {
+        out.push({
+          severity: 'tip',
+          icon: '📁',
+          title: `Mostly ${topExt[0]} work`,
+          detail: `${topExt[0]} accounted for ${(share * 100).toFixed(0)}% of touched file types.`,
+        })
+      }
     }
   }
 
@@ -975,6 +1167,15 @@ function buildInsights(a: Analytics): Insight[] {
     }
   }
 
+  if (a.turns > 0 && a.avgAssistantChain > 1.5) {
+    out.push({
+      severity: 'info',
+      icon: '🪃',
+      title: 'Multi-reply assistant chains',
+      detail: `${a.avgAssistantChain.toFixed(1)} assistant messages per turn on average.`,
+    })
+  }
+
   if (a.toolsPerTurn > 8) {
     out.push({
       severity: 'info',
@@ -997,7 +1198,7 @@ function buildInsights(a: Analytics): Insight[] {
     out.push({
       severity: 'info',
       icon: '📈',
-      title: 'Bursty output',
+      title: 'Fast output peak',
       detail: `Peak throughput reached about ${fmtNum(a.tokensPerSecond * 60)} output tokens/minute.`,
     })
   }
@@ -1038,6 +1239,23 @@ function buildInsights(a: Analytics): Insight[] {
           icon: '🕒',
           title: `Peak activity around ${peakHour}:00`,
           detail: `${maxCount} of ${a.messages} messages (${(share * 100).toFixed(0)}%) landed in that single hour.`,
+        })
+      }
+    }
+  }
+
+  if (a.messages > 0) {
+    const maxDay = Math.max(...a.dayOfWeekActivity)
+    if (maxDay > 0) {
+      const peakDay = a.dayOfWeekActivity.indexOf(maxDay)
+      const share = maxDay / a.messages
+      const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+      if (share > 0.35) {
+        out.push({
+          severity: 'tip',
+          icon: '📅',
+          title: `Most activity on ${dayLabels[peakDay]}`,
+          detail: `${maxDay} of ${a.messages} messages (${(share * 100).toFixed(0)}%) landed on that day.`,
         })
       }
     }
@@ -1087,6 +1305,11 @@ function buildInsights(a: Analytics): Insight[] {
 
 function InsightsPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette; width: number }) {
   const insights = useMemo(() => buildInsights(a), [a])
+  const topTakeaways = useMemo(() => sortInsights(insights).slice(0, 3), [insights])
+  const activitySummary = useMemo(() => summarizeActivity(a), [a])
+  const cacheSummary = useMemo(() => summarizeCache(a), [a])
+  const riskSummary = useMemo(() => summarizeRisk(a), [a])
+  const paceSummary = useMemo(() => summarizePace(a), [a])
   const accentForSeverity = (severity: InsightSeverity): string => {
     switch (severity) {
       case 'good':
@@ -1101,9 +1324,82 @@ function InsightsPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
   }
   return (
     <box flexDirection="column" paddingX={1} width={width}>
+      <box flexDirection="row" width={width - 2}>
+        <Kpi
+          theme={theme}
+          width={Math.floor((width - 2) / 3)}
+          label="Cost"
+          value={fmtCost(a.cost)}
+          accent={theme.green}
+          sub={a.turns > 0 ? `${fmtCost(a.costPerTurn)}/turn` : 'no turns'}
+        />
+        <Kpi
+          theme={theme}
+          width={Math.floor((width - 2) / 3)}
+          label="Risk"
+          value={riskSummary.label}
+          accent={riskSummary.accent}
+          sub={riskSummary.detail}
+        />
+        <Kpi
+          theme={theme}
+          width={Math.floor((width - 2) / 3)}
+          label="Pace"
+          value={paceSummary.label}
+          accent={paceSummary.accent}
+          sub={paceSummary.detail}
+        />
+      </box>
+      <box flexDirection="row" width={width - 2}>
+        <Kpi
+          theme={theme}
+          width={Math.floor((width - 2) / 3)}
+          label="Activity"
+          value={activitySummary.label}
+          accent={activitySummary.accent}
+          sub={activitySummary.detail}
+        />
+        <Kpi
+          theme={theme}
+          width={Math.floor((width - 2) / 3)}
+          label="Cache"
+          value={cacheSummary.label}
+          accent={cacheSummary.accent}
+          sub={cacheSummary.detail}
+        />
+        <Kpi
+          theme={theme}
+          width={Math.floor((width - 2) / 3)}
+          label="Turns"
+          value={String(a.turns)}
+          accent={theme.violet}
+          sub={a.turns > 0 ? `${a.assistantMessages} assistant replies` : 'no turns'}
+        />
+      </box>
       <box marginBottom={1}>
         <text fg={theme.dim}>{`${insights.length} observation${insights.length === 1 ? '' : 's'} from this session`}</text>
       </box>
+      {topTakeaways.length > 0 ? (
+        <box flexDirection="column" marginBottom={1}>
+          <box marginBottom={0}>
+            <text fg={theme.muted}>Top takeaways</text>
+          </box>
+          {topTakeaways.map((ins, i) => {
+            const c = accentForSeverity(ins.severity)
+            return (
+              <box key={`${ins.title}-${i}`} flexDirection="row" width={width - 2} marginBottom={0}>
+                <box width={3}>
+                  <text fg={c} wrapMode="none">{`${i + 1}.`}</text>
+                </box>
+                <box flexDirection="column" flexGrow={1}>
+                  <text fg={c} wrapMode="none">{`${ins.icon} ${ins.title}`}</text>
+                  <text fg={theme.muted} wrapMode="word">{ins.detail}</text>
+                </box>
+              </box>
+            )
+          })}
+        </box>
+      ) : null}
       {insights.map((ins, i) => {
         const c = accentForSeverity(ins.severity)
         return (
