@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, startTransition, useState } from 'react'
+import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState } from 'react'
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
 import { AnalyticsPopover } from './AnalyticsPopover'
@@ -1086,6 +1086,24 @@ function pruneSessionCaches(
 
 type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number }
 
+type TranscriptCardElementCache = {
+  elements: React.ReactNode[]
+  transcriptCards: TuiTranscriptCard[] | null
+  cardDisplayData: CardDisplayData[] | null
+  theme: TuiThemePalette | null
+  densityState: DensityState | null
+  syntaxStyle: SyntaxStyle | null
+  rightPaneWidth: number
+  transcriptView: TuiTranscriptView | null
+  provider: ProviderSelection | null
+  thinkingMode: boolean
+  imessageStyle: boolean
+  shouldEnableSyntaxHighlighting: boolean
+  selectedKey: string | null
+  activeMatchIndex: number
+  cursorVisible: boolean
+}
+
 type TranscriptCardProps = {
   card: TuiTranscriptCard
   display: CardDisplayData
@@ -1511,6 +1529,13 @@ export default function OpenTuiApp() {
       : stripToolCallBlocks(sessionDetail.threadedMessages)
     return formatTranscriptCards(messages, density)
   }, [density, sessionDetail, showToolCalls])
+  const transcriptIndexByKey = useMemo(() => {
+    const indexByKey = new Map<string, number>()
+    transcriptCards.forEach((card, index) => {
+      indexByKey.set(card.key, index)
+    })
+    return indexByKey
+  }, [transcriptCards])
   const thinkingFullKeys = useMemo(() => {
     if (!thinkingMode) return new Set<string>()
     const next = new Set<string>()
@@ -1547,18 +1572,18 @@ export default function OpenTuiApp() {
 
   const cursorIndex = useMemo(() => {
     if (transcriptCards.length === 0) return -1
-    const index = findCardIndex(transcriptCards, transcriptCursorKey)
+    const index = transcriptCursorKey ? transcriptIndexByKey.get(transcriptCursorKey) ?? -1 : -1
     if (index >= 0) return index
     return followTail ? transcriptCards.length - 1 : 0
-  }, [followTail, transcriptCards, transcriptCursorKey])
+  }, [followTail, transcriptCards.length, transcriptCursorKey, transcriptIndexByKey])
 
   const unreadBoundaryIndex = useMemo(
-    () => findCardIndex(transcriptCards, unreadBoundaryKey),
-    [transcriptCards, unreadBoundaryKey],
+    () => unreadBoundaryKey ? (transcriptIndexByKey.get(unreadBoundaryKey) ?? -1) : -1,
+    [transcriptIndexByKey, unreadBoundaryKey],
   )
   const resumeMarkerIndex = useMemo(
-    () => findCardIndex(transcriptCards, resumeMarkerKey),
-    [resumeMarkerKey, transcriptCards],
+    () => resumeMarkerKey ? (transcriptIndexByKey.get(resumeMarkerKey) ?? -1) : -1,
+    [resumeMarkerKey, transcriptIndexByKey],
   )
 
   const readerTitle = useMemo(() => (
@@ -1825,6 +1850,131 @@ export default function OpenTuiApp() {
     transcriptView,
     provider,
     shouldEnableSyntaxHighlighting,
+  ])
+  const imessageStyle = themeMode === 'imessage'
+
+  const transcriptCardElementsCacheRef = useRef<TranscriptCardElementCache>({
+    elements: [],
+    transcriptCards: null,
+    cardDisplayData: null,
+    theme: null,
+    densityState: null,
+    syntaxStyle: null,
+    rightPaneWidth: -1,
+    transcriptView: null,
+    provider: null,
+    thinkingMode: false,
+    imessageStyle: false,
+    shouldEnableSyntaxHighlighting: false,
+    selectedKey: null,
+    activeMatchIndex: -1,
+    cursorVisible: false,
+  })
+
+  const transcriptCardElements = useMemo(() => {
+    const cache = transcriptCardElementsCacheRef.current
+    const nextSelectedKey = transcriptCursorKey
+    const nextSelectedIndex = nextSelectedKey ? (transcriptIndexByKey.get(nextSelectedKey) ?? -1) : -1
+    const nextActiveMatchIndex = searchMatches[searchMatchIndex] ?? -1
+    const nextCursorVisible = effectiveFocus === 'messages'
+    const shouldRebuildAll =
+      cache.transcriptCards !== transcriptCards
+      || cache.cardDisplayData !== cardDisplayData
+      || cache.theme !== theme
+      || cache.densityState !== densityState
+      || cache.syntaxStyle !== syntaxStyle
+      || cache.rightPaneWidth !== rightPaneWidth
+      || cache.transcriptView !== transcriptView
+      || cache.provider !== provider
+      || cache.thinkingMode !== thinkingMode
+      || cache.imessageStyle !== imessageStyle
+      || cache.shouldEnableSyntaxHighlighting !== shouldEnableSyntaxHighlighting
+      || cache.elements.length !== transcriptCards.length
+
+    const buildElement = (card: TuiTranscriptCard, index: number): React.ReactNode => {
+      const display = cardDisplayData[index]
+      if (!display) return <React.Fragment key={card.key} />
+      const isSelected = card.key === nextSelectedKey
+      const hasCursor = isSelected && nextCursorVisible
+      const isActiveMatch = display.isSearchHit && nextActiveMatchIndex === index
+      return (
+        <TranscriptCard
+          key={card.key}
+          card={card}
+          display={display}
+          theme={theme}
+          densityState={densityState}
+          syntaxStyle={syntaxStyle}
+          rightPaneWidth={rightPaneWidth}
+          isExpanded={resolvedExpandedKeys.has(card.key)}
+          hasCursor={hasCursor}
+          isSelected={isSelected}
+          isActiveMatch={isActiveMatch}
+          thinkingMode={thinkingMode}
+          imessageStyle={imessageStyle}
+        />
+      )
+    }
+
+    if (shouldRebuildAll) {
+      const nextElements: React.ReactNode[] = transcriptCards.map((card, index) => buildElement(card, index))
+      cache.elements = nextElements
+    } else {
+      const dirtyIndices = new Set<number>()
+      if (cache.selectedKey !== nextSelectedKey || cache.cursorVisible !== nextCursorVisible) {
+        if (cache.selectedKey) {
+          const oldSelectedIndex = transcriptIndexByKey.get(cache.selectedKey) ?? -1
+          if (oldSelectedIndex >= 0) dirtyIndices.add(oldSelectedIndex)
+        }
+        if (nextSelectedIndex >= 0) dirtyIndices.add(nextSelectedIndex)
+      }
+      if (cache.activeMatchIndex !== nextActiveMatchIndex) {
+        if (cache.activeMatchIndex >= 0) dirtyIndices.add(cache.activeMatchIndex)
+        if (nextActiveMatchIndex >= 0) dirtyIndices.add(nextActiveMatchIndex)
+      }
+      if (dirtyIndices.size > 0) {
+        for (const index of dirtyIndices) {
+          const card = transcriptCards[index]
+          if (!card) continue
+          cache.elements[index] = buildElement(card, index)
+        }
+      }
+    }
+
+    cache.transcriptCards = transcriptCards
+    cache.cardDisplayData = cardDisplayData
+    cache.theme = theme
+    cache.densityState = densityState
+    cache.syntaxStyle = syntaxStyle
+    cache.rightPaneWidth = rightPaneWidth
+    cache.transcriptView = transcriptView
+    cache.provider = provider
+    cache.thinkingMode = thinkingMode
+    cache.imessageStyle = imessageStyle
+    cache.shouldEnableSyntaxHighlighting = shouldEnableSyntaxHighlighting
+    cache.selectedKey = nextSelectedKey
+    cache.activeMatchIndex = nextActiveMatchIndex
+    cache.cursorVisible = nextCursorVisible
+
+    return cache.elements.slice()
+  }, [
+    cardDisplayData,
+    densityState,
+    effectiveFocus,
+    imessageStyle,
+    provider,
+    rightPaneWidth,
+    resolvedExpandedKeys,
+    searchMatchIndex,
+    searchMatches,
+    shouldEnableSyntaxHighlighting,
+    syntaxStyle,
+    thinkingMode,
+    transcriptCards,
+    transcriptCursorKey,
+    transcriptIndexByKey,
+    transcriptView,
+    theme,
   ])
 
   const refreshSessions = useCallback(async (
@@ -2137,9 +2287,9 @@ export default function OpenTuiApp() {
   }, [jumpToTranscriptIndex, jumpToTranscriptTail, unreadBoundaryIndex])
 
   const jumpToResumeMarker = useCallback(() => {
-    const index = findCardIndex(transcriptCards, resumeMarkerKey)
+    const index = resumeMarkerKey ? (transcriptIndexByKey.get(resumeMarkerKey) ?? -1) : -1
     if (index >= 0) jumpToTranscriptIndex(index)
-  }, [jumpToTranscriptIndex, resumeMarkerKey, transcriptCards])
+  }, [jumpToTranscriptIndex, resumeMarkerKey, transcriptIndexByKey])
 
   const moveSelection = useCallback((delta: number) => {
     if (sessions.length === 0) return
@@ -2763,7 +2913,7 @@ export default function OpenTuiApp() {
       if (restoredReaderState.sessionKey !== selectedSessionKey || !restoredReaderState.loaded) return
       const restoredState = restoredReaderState.state
       if (restoredState?.followTail === false) {
-        const restoredIndex = findCardIndex(transcriptCards, restoredState.cursorKey)
+        const restoredIndex = restoredState.cursorKey ? (transcriptIndexByKey.get(restoredState.cursorKey) ?? -1) : -1
         const targetIndex = restoredIndex >= 0 ? restoredIndex : 0
         setTranscriptCursorKey(transcriptCards[targetIndex]?.key ?? transcriptCards[0].key)
         setFollowTail(false)
@@ -2819,6 +2969,7 @@ export default function OpenTuiApp() {
     restoredReaderState,
     selectedSessionKey,
     transcriptCards,
+    transcriptIndexByKey,
   ])
 
 
@@ -2927,6 +3078,14 @@ export default function OpenTuiApp() {
     }, 0)
     return () => clearTimeout(timer)
   }, [followTail, transcriptCursorKey])
+
+  useLayoutEffect(() => {
+    if (!followTail) return
+    if (transcriptCards.length === 0) return
+    const lastKey = transcriptCards[transcriptCards.length - 1]?.key
+    if (!lastKey) return
+    transcriptScrollRef.current?.scrollChildIntoView(`card:${lastKey}`)
+  }, [followTail, transcriptCards.length])
 
   useEffect(() => {
     const entry = sidebarEntries[selectedSidebarEntryIndex]
@@ -3985,33 +4144,9 @@ export default function OpenTuiApp() {
                     backgroundColor: theme.surface2,
                   },
                 }}
-              >
+                >
                 <box height={TRANSCRIPT_TOP_MARGIN} />
-                {transcriptCards.map((card, index) => {
-                  const display = cardDisplayData[index]
-                  if (!display) return null
-                  const isSelected = card.key === transcriptCursorKey
-                  const hasCursor = isSelected && effectiveFocus === 'messages'
-                  const isExpanded = resolvedExpandedKeys.has(card.key)
-                  const isActiveMatch = display.isSearchHit && searchMatches[searchMatchIndex] === index
-                  return (
-                    <TranscriptCard
-                      key={card.key}
-                      card={card}
-                      display={display}
-                      theme={theme}
-                      densityState={densityState}
-                      syntaxStyle={syntaxStyle}
-                      rightPaneWidth={rightPaneWidth}
-                      isExpanded={isExpanded}
-                      hasCursor={hasCursor}
-                      isSelected={isSelected}
-                      isActiveMatch={isActiveMatch}
-                      thinkingMode={thinkingMode}
-                      imessageStyle={themeMode === 'imessage'}
-                    />
-                  )
-                })}
+                {transcriptCardElements}
 
               </scrollbox>
             )}
