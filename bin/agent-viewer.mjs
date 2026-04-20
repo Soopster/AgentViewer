@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
+import { accessSync, constants as fsConstants, statSync } from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const args = process.argv.slice(2)
@@ -71,8 +73,116 @@ function trackExit(child) {
   })
 }
 
+function getCaseInsensitiveEnvValue(name) {
+  const target = name.toLowerCase()
+  for (const key of Object.keys(process.env)) {
+    if (key.toLowerCase() === target) {
+      const value = process.env[key]
+      if (value) return value
+    }
+  }
+  return undefined
+}
+
+function getPathEntries() {
+  const rawPaths = []
+  const seen = new Set()
+
+  for (const key of Object.keys(process.env)) {
+    if (key.toLowerCase() === 'path') {
+      const value = process.env[key]
+      if (value) {
+        for (const entry of value.split(path.delimiter)) {
+          if (entry && !seen.has(entry)) {
+            seen.add(entry)
+            rawPaths.push(entry)
+          }
+        }
+      }
+    }
+  }
+
+  return rawPaths
+}
+
+function candidateExecutables(name) {
+  if (process.platform !== 'win32') return [name]
+
+  const pathext = (getCaseInsensitiveEnvValue('PATHEXT') ?? '.EXE;.CMD;.BAT;.COM')
+    .split(';')
+    .filter(Boolean)
+
+  const candidates = [name]
+  for (const ext of pathext) {
+    candidates.push(`${name}${ext.toLowerCase()}`)
+    candidates.push(`${name}${ext.toUpperCase()}`)
+  }
+
+  return candidates
+}
+
+function resolveExecutable(name, extraCandidates = []) {
+  const directPath = getCaseInsensitiveEnvValue(`${name.toUpperCase()}_PATH`)
+  if (directPath) {
+    try {
+      accessSync(directPath, fsConstants.F_OK)
+      if (statSync(directPath).isFile()) {
+        return directPath
+      }
+    } catch {
+      // Fall through to PATH lookup.
+    }
+  }
+
+  const searchPaths = getPathEntries()
+  const candidates = [...candidateExecutables(name), ...extraCandidates]
+
+  for (const basePath of searchPaths) {
+    for (const candidate of candidates) {
+      const resolvedPath = path.isAbsolute(candidate) ? candidate : path.join(basePath, candidate)
+      try {
+        accessSync(resolvedPath, fsConstants.F_OK)
+        if (statSync(resolvedPath).isFile()) {
+          return resolvedPath
+        }
+      } catch {
+        // Keep searching.
+      }
+    }
+  }
+
+  return undefined
+}
+
+function resolveBunLauncher() {
+  if (process.platform !== 'win32') {
+    return { command: resolveExecutable('bun') ?? 'bun', args: [] }
+  }
+
+  const bunExecutable = resolveExecutable('bun')
+  if (bunExecutable) {
+    return { command: bunExecutable, args: [] }
+  }
+
+  const bunScript = resolveExecutable('bun', ['bun.ps1'])
+  if (bunScript && bunScript.toLowerCase().endsWith('.ps1')) {
+    const shell = resolveExecutable('pwsh', ['pwsh.exe']) ?? resolveExecutable('powershell', ['powershell.exe'])
+    if (shell) {
+      return {
+        command: shell,
+        args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', bunScript],
+      }
+    }
+  }
+
+  return { command: undefined, args: [] }
+}
+
 function failMissingBun() {
   console.error('OpenTUI requires Bun on PATH. Install Bun, then rerun `npx agent-viewer`.')
+  if (process.platform === 'win32') {
+    console.error('If Bun is already installed, make sure the terminal session inherited the updated PATH and that either `bun.exe` or a PowerShell shim like `bun.ps1` is reachable.')
+  }
   process.exitCode = 1
 }
 
@@ -128,19 +238,24 @@ if (command === '-h' || command === '--help' || command === 'help') {
 } else {
   const { forwarded } = parseArgs(args)
   const entrypoint = fileURLToPath(new URL('../tui/opentui/main.tsx', import.meta.url))
-  const child = spawn('bun', ['run', entrypoint, ...forwarded], {
-    stdio: 'inherit',
-  })
+  const bunLauncher = resolveBunLauncher()
+  if (!bunLauncher.command) {
+    failMissingBun()
+  } else {
+    const child = spawn(bunLauncher.command, [...bunLauncher.args, 'run', entrypoint, ...forwarded], {
+      stdio: 'inherit',
+    })
 
-  child.on('error', (error) => {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-      failMissingBun()
-      return
-    }
+    child.on('error', (error) => {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+        failMissingBun()
+        return
+      }
 
-    throw error
-  })
+      throw error
+    })
 
-  forwardSignals(child)
-  trackExit(child)
+    forwardSignals(child)
+    trackExit(child)
+  }
 }

@@ -93,6 +93,12 @@ npx agent-viewer
 This launches the OpenTUI entrypoint in `tui/opentui/main.tsx` and requires Bun
 to be available on `PATH`.
 
+On Windows, `agent-viewer` also works when Bun is exposed as a PowerShell shim
+such as `bun.ps1`, not only as `bun.exe`.
+
+If that still fails, open a fresh terminal session so the updated PATH is
+visible, and confirm PowerShell can run the shim directly.
+
 Run the web app instead:
 
 ```bash
