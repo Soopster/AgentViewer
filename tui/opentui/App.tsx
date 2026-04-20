@@ -32,7 +32,6 @@ import {
   readTuiProvider,
   readTuiRailVisible,
   readTuiSessionDetail,
-  readTuiSessionMetadata,
   readTuiSessionReaderState,
   readTuiSessions,
   readTuiSidebarSort,
@@ -56,6 +55,7 @@ import {
   type TuiSessionDetail,
   type TuiSidebarSort,
 } from '../../lib/tui/service'
+import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { ProviderSelection, RunningSessionRef, SendState, Session } from '../../lib/types'
 
@@ -2075,7 +2075,7 @@ export default function OpenTuiApp() {
           setContextUsageStatus('loading')
         }
         void Promise.race([
-          readTuiSessionMetadata(session),
+          readTuiSessionMetadataAsync(session),
           new Promise<null>((resolve) => {
             setTimeout(() => resolve(null), METADATA_REQUEST_TIMEOUT_MS)
           }),
