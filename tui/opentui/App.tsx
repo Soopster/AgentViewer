@@ -56,6 +56,7 @@ import {
   type TuiSidebarSort,
 } from '../../lib/tui/service'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
+import { readTuiSessionDetailAsync } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { ProviderSelection, RunningSessionRef, SendState, Session } from '../../lib/types'
 
@@ -2033,7 +2034,7 @@ export default function OpenTuiApp() {
     setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
 
     try {
-      const detail = await readTuiSessionDetail(session)
+      const detail = await readTuiSessionDetailAsync(session)
       if (requestId !== detailRequestRef.current) return
       if (typeof session.lastModified === 'number') {
         sessionDetailMtimeRef.current.set(cacheKeyForGuards, session.lastModified)

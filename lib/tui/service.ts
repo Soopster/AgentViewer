@@ -179,7 +179,10 @@ function threadMessages(session: Session, messages: SessionMessage[]): ThreadedM
   return threaded
 }
 
-export async function readTuiSessionDetail(session: Session): Promise<TuiSessionDetail> {
+export async function readTuiSessionDetailSource(session: Session): Promise<{
+  info: SessionInfo | null
+  rawMessages: SessionMessage[]
+}> {
   const messageLimit = session.provider === 'claude'
     ? CLAUDE_MESSAGE_LIMIT
     : TOOL_HEAVY_PROVIDER_MESSAGE_LIMIT
@@ -195,7 +198,16 @@ export async function readTuiSessionDetail(session: Session): Promise<TuiSession
   return {
     info,
     rawMessages: messages,
-    threadedMessages: threadMessages(session, messages),
+  }
+}
+
+export async function readTuiSessionDetail(session: Session): Promise<TuiSessionDetail> {
+  const { info, rawMessages } = await readTuiSessionDetailSource(session)
+
+  return {
+    info,
+    rawMessages,
+    threadedMessages: threadMessages(session, rawMessages),
     contextUsage: null,
   }
 }
