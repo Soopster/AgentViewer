@@ -1141,6 +1141,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
   const measurementFrameRef = useRef<number | null>(null)
   const scrollRafRef = useRef<number | null>(null)
+  const suppressFollowEvalUntilRef = useRef<number>(0)
   const timelineRowsRef = useRef<TimelineRow[]>([])
   const initialScrollDoneRef = useRef(false)
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
@@ -1281,6 +1282,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     if (!node) return
     const targetTop = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
     setTimelineScrollTop(targetTop)
+    suppressFollowEvalUntilRef.current = performance.now() + 200
     node.scrollTo({ top: targetTop, behavior })
   }, [])
 
@@ -1301,6 +1303,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     const nodeRect = node.getBoundingClientRect()
     const rowRect = lastRow.getBoundingClientRect()
     const targetTop = Math.max(node.scrollTop + (rowRect.bottom - nodeRect.bottom), 0)
+    suppressFollowEvalUntilRef.current = performance.now() + 200
     node.scrollTop = targetTop
     setTimelineScrollTop(targetTop)
   }, [])
@@ -1312,6 +1315,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       const node = timelineRef.current
       if (!node) return
       setTimelineScrollTop(node.scrollTop)
+      if (performance.now() < suppressFollowEvalUntilRef.current) return
       const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
       setAutoFollow(distanceFromBottom <= TIMELINE_BOTTOM_GUTTER_PX + 16)
     })
@@ -1968,6 +1972,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     const node = timelineRef.current
     if (node) {
       const targetTop = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
+      suppressFollowEvalUntilRef.current = performance.now() + 200
       node.scrollTop = targetTop
       setTimelineScrollTop(targetTop)
     }
@@ -2040,6 +2045,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       pending.clear()
 
       if (node && scrollDelta !== 0) {
+        suppressFollowEvalUntilRef.current = performance.now() + 200
         node.scrollTop += scrollDelta
         setTimelineScrollTop(node.scrollTop)
       }
