@@ -2756,8 +2756,13 @@ export default function OpenTuiApp() {
       return transcriptCards[Math.max(cursorIndex, 0)]?.key ?? transcriptCards[0].key
     })
     previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
+    // cursorIndex is intentionally omitted from deps: the effect reconciles
+    // cursor/pending state when transcriptCards changes, and the cursorIndex
+    // fallback only fires when the current cursor key is missing from the new
+    // card list. Re-running on every j/k keystroke would do O(n) indexOf +
+    // includes work over the full transcript for a no-op setter result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    cursorIndex,
     followTail,
     restoredReaderState,
     selectedSessionKey,
@@ -2770,18 +2775,21 @@ export default function OpenTuiApp() {
       return
     }
 
-    const validKeys = new Set(transcriptCards.map((card) => card.key))
-    const persistState: TuiSessionReaderState = {
-      followTail,
-      cursorKey: followTail ? null : (transcriptCursorKey && validKeys.has(transcriptCursorKey) ? transcriptCursorKey : null),
-      topKey: null,
-      expandedKeys: [...expandedCardKeys].filter((key) => validKeys.has(key)),
-      collapsedKeys: [...collapsedCardKeys].filter((key) => validKeys.has(key)),
-    }
-
     if (readerStateWriteTimeoutRef.current) clearTimeout(readerStateWriteTimeoutRef.current)
 
+    // Build the persist payload inside the debounce timer so the O(n) work
+    // over transcriptCards + expanded/collapsed keys only runs once per pause
+    // — not on every j/k keystroke. This was a visible hitch on large
+    // sessions when rapidly navigating the cursor on Windows.
     readerStateWriteTimeoutRef.current = setTimeout(() => {
+      const validKeys = new Set(transcriptCards.map((card) => card.key))
+      const persistState: TuiSessionReaderState = {
+        followTail,
+        cursorKey: followTail ? null : (transcriptCursorKey && validKeys.has(transcriptCursorKey) ? transcriptCursorKey : null),
+        topKey: null,
+        expandedKeys: [...expandedCardKeys].filter((key) => validKeys.has(key)),
+        collapsedKeys: [...collapsedCardKeys].filter((key) => validKeys.has(key)),
+      }
       void writeTuiSessionReaderState(selectedSessionKey, persistState).catch((err) => {
         setError(err instanceof Error ? err.message : 'Failed to store reader position')
       })
