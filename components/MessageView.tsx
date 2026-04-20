@@ -1175,10 +1175,8 @@ export default function MessageView({ messages, loading, session, projectView, o
   const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
   const measurementFrameRef = useRef<number | null>(null)
   const scrollRafRef = useRef<number | null>(null)
-  const liveFollowFrameRef = useRef<number | null>(null)
   const suppressFollowEvalUntilRef = useRef<number>(0)
   const autoFollowRef = useRef(false)
-  const followPinFrameRef = useRef<number | null>(null)
   const timelineRowsRef = useRef<TimelineRow[]>([])
   const initialScrollDoneRef = useRef(false)
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
@@ -1291,9 +1289,6 @@ export default function MessageView({ messages, loading, session, projectView, o
     }
     if (scrollRafRef.current != null) {
       window.cancelAnimationFrame(scrollRafRef.current)
-    }
-    if (liveFollowFrameRef.current != null) {
-      window.cancelAnimationFrame(liveFollowFrameRef.current)
     }
   }, [])
 
@@ -2062,6 +2057,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       if (pending.size === 0) return
 
       const node = timelineRef.current
+      const isFollowing = autoFollowRef.current
       let offset = 0
       let scrollDelta = 0
       let changed = false
@@ -2074,7 +2070,7 @@ export default function MessageView({ messages, loading, session, projectView, o
         if (nextMeasuredHeight != null && nextMeasuredHeight !== previousHeight) {
           rowHeightsRef.current.set(row.key, nextMeasuredHeight)
           changed = true
-          if (node && offset < node.scrollTop) {
+          if (!isFollowing && node && offset < node.scrollTop) {
             scrollDelta += nextMeasuredHeight - previousHeight
           }
         }
@@ -2084,7 +2080,7 @@ export default function MessageView({ messages, loading, session, projectView, o
 
       pending.clear()
 
-      if (node && scrollDelta !== 0) {
+      if (node && !isFollowing && scrollDelta !== 0) {
         suppressFollowEvalUntilRef.current = performance.now() + 200
         node.scrollTop += scrollDelta
         setTimelineScrollTop(node.scrollTop)
@@ -2096,32 +2092,11 @@ export default function MessageView({ messages, loading, session, projectView, o
     })
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!autoFollow || !hasLiveTimeline || loading) return
-    if (liveFollowFrameRef.current != null) {
-      window.cancelAnimationFrame(liveFollowFrameRef.current)
-    }
-
-    let cancelled = false
-    let pass = 0
-    const pinLiveTail = () => {
-      if (cancelled || !autoFollowRef.current) return
-      scrollTimelineToBottom()
-      pass += 1
-      if (pass < 3) {
-        liveFollowFrameRef.current = window.requestAnimationFrame(pinLiveTail)
-      }
-    }
-
-    liveFollowFrameRef.current = window.requestAnimationFrame(pinLiveTail)
-
-    return () => {
-      cancelled = true
-      if (liveFollowFrameRef.current != null) {
-        window.cancelAnimationFrame(liveFollowFrameRef.current)
-      }
-    }
-  }, [autoFollow, hasLiveTimeline, loading, rowMeasurementVersion, timelineRows.length, scrollTimelineToBottom])
+    scrollTimelineToBottom()
+    alignLastTimelineRowToViewportBottom()
+  }, [alignLastTimelineRowToViewportBottom, autoFollow, hasLiveTimeline, loading, rowMeasurementVersion, scrollTimelineToBottom, timelineRows.length])
 
   const virtualTimeline = useMemo(() => {
     let offset = 0
