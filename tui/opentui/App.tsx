@@ -1375,6 +1375,7 @@ export default function OpenTuiApp() {
   const sidebarScrollRef = useRef<ScrollBoxRenderable>(null)
   const pausedTranscriptScrollTopRef = useRef<number | null>(null)
   const prevFollowTailRef = useRef(true)
+  const prevTranscriptLengthRef = useRef(0)
   const tabSelectRef = useRef<TabSelectRenderable>(null)
   const sessionRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
@@ -2971,11 +2972,8 @@ export default function OpenTuiApp() {
 
   useLayoutEffect(() => {
     if (followTail) {
-      if (!prevFollowTailRef.current && transcriptCards.length > 0) {
-        const lastKey = transcriptCards[transcriptCards.length - 1]?.key
-        if (lastKey) {
-          transcriptScrollRef.current?.scrollChildIntoView(`card:${lastKey}`)
-        }
+      if (transcriptCards.length > 0 && (prevTranscriptLengthRef.current !== transcriptCards.length || !prevFollowTailRef.current)) {
+        transcriptScrollRef.current?.scrollTo(transcriptScrollRef.current?.scrollHeight ?? Number.MAX_SAFE_INTEGER)
       }
     } else {
       const scrollTop = pausedTranscriptScrollTopRef.current
@@ -2984,6 +2982,7 @@ export default function OpenTuiApp() {
       }
     }
     prevFollowTailRef.current = followTail
+    prevTranscriptLengthRef.current = transcriptCards.length
   }, [followTail, transcriptCards.length])
 
   const footerText = useMemo(
