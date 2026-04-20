@@ -1,4 +1,9 @@
-import { buildThreadedMessages, type ThreadedMessage } from '../threading'
+import {
+  buildThreadedMessages,
+  buildThreadedMessagesIncremental,
+  type IncrementalThreadingCache,
+  type ThreadedMessage,
+} from '../threading'
 import { getConfiguredProvider, setConfiguredProvider } from '../providerState'
 import {
   getConfiguredTuiDensity,
@@ -158,6 +163,22 @@ export async function readTuiSessions(provider: ProviderSelection): Promise<Sess
   })
 }
 
+const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
+
+function threadingCacheKey(session: Session): string {
+  return `${session.provider ?? 'claude'}:${session.sessionId}`
+}
+
+function threadMessages(session: Session, messages: SessionMessage[]): ThreadedMessage[] {
+  const key = threadingCacheKey(session)
+  const cached = threadingCacheByKey.get(key)
+  let threaded: ThreadedMessage[] | null = null
+  if (cached) threaded = buildThreadedMessagesIncremental(messages, cached)
+  if (!threaded) threaded = buildThreadedMessages(messages)
+  threadingCacheByKey.set(key, { messages, threaded })
+  return threaded
+}
+
 export async function readTuiSessionDetail(session: Session): Promise<TuiSessionDetail> {
   const messageLimit = session.provider === 'claude'
     ? CLAUDE_MESSAGE_LIMIT
@@ -174,7 +195,7 @@ export async function readTuiSessionDetail(session: Session): Promise<TuiSession
   return {
     info,
     rawMessages: messages,
-    threadedMessages: buildThreadedMessages(messages),
+    threadedMessages: threadMessages(session, messages),
     contextUsage: null,
   }
 }

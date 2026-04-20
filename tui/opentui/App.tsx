@@ -10,10 +10,11 @@ import {
   formatProviderLabel,
   formatSessionProject,
   formatSessionTitle,
-  formatTranscriptCards,
+  formatTranscriptCard,
   type TuiTranscriptCard,
   type TuiTranscriptCardLine,
 } from '../format'
+import type { ThreadedMessage } from '../../lib/threading'
 import {
   THEME,
   getProviderAccent,
@@ -56,7 +57,6 @@ import {
   type TuiSidebarSort,
 } from '../../lib/tui/service'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import { stripToolCallBlocks } from '../../lib/threading'
 import type { ProviderSelection, RunningSessionRef, SendState, Session } from '../../lib/types'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
@@ -563,15 +563,18 @@ function runningSessionsEqual(a: RunningSessionRef[], b: RunningSessionRef[]): b
   return true
 }
 
+const sessionMessageFingerprintCache = new WeakMap<object, string>()
 function sessionMessageFingerprint(message: import('../../lib/types').SessionMessage | undefined): string | null {
   if (!message) return null
+  const cached = sessionMessageFingerprintCache.get(message)
+  if (cached !== undefined) return cached
   let payload = ''
   try {
     payload = JSON.stringify(message.message)
   } catch {
     payload = String(message.message)
   }
-  return [
+  const fingerprint = [
     message.type,
     message.uuid,
     message.timestamp ?? '',
@@ -579,6 +582,8 @@ function sessionMessageFingerprint(message: import('../../lib/types').SessionMes
     message.origin?.kind ?? '',
     payload,
   ].join('|')
+  sessionMessageFingerprintCache.set(message, fingerprint)
+  return fingerprint
 }
 
 type SidebarEntry =
@@ -1507,12 +1512,46 @@ export default function OpenTuiApp() {
     ),
   )
 
+  // Preserve reference stability for partially-stripped messages so the
+  // per-message card cache below keeps hitting when only the tail changes.
+  const strippedCacheRef = useRef(new WeakMap<ThreadedMessage, ThreadedMessage>())
+  const transcriptCardCacheRef = useRef(new Map<string, { threaded: ThreadedMessage; density: TuiDensity; card: TuiTranscriptCard }>())
   const transcriptCards = useMemo(() => {
     if (!sessionDetail) return []
-    const messages = showToolCalls
-      ? sessionDetail.threadedMessages
-      : stripToolCallBlocks(sessionDetail.threadedMessages)
-    return formatTranscriptCards(messages, density)
+    const source = sessionDetail.threadedMessages
+    let messages: ThreadedMessage[]
+    if (showToolCalls) {
+      messages = source
+    } else {
+      const cache = strippedCacheRef.current
+      messages = []
+      for (const msg of source) {
+        const cached = cache.get(msg)
+        if (cached) {
+          messages.push(cached)
+          continue
+        }
+        const kept = msg.blocks.filter((b) => b.type !== 'tool_thread')
+        if (kept.length === 0) continue
+        const stripped = kept.length === msg.blocks.length ? msg : { ...msg, blocks: kept }
+        cache.set(msg, stripped)
+        messages.push(stripped)
+      }
+    }
+    const prevCache = transcriptCardCacheRef.current
+    const nextCache = new Map<string, { threaded: ThreadedMessage; density: TuiDensity; card: TuiTranscriptCard }>()
+    const cards = messages.map((message) => {
+      const cached = prevCache.get(message.uuid)
+      if (cached && cached.threaded === message && cached.density === density) {
+        nextCache.set(message.uuid, cached)
+        return cached.card
+      }
+      const card = formatTranscriptCard(message, density)
+      nextCache.set(message.uuid, { threaded: message, density, card })
+      return card
+    })
+    transcriptCardCacheRef.current = nextCache
+    return cards
   }, [density, sessionDetail, showToolCalls])
   const transcriptIndexByKey = useMemo(() => {
     const indexByKey = new Map<string, number>()

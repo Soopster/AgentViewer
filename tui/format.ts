@@ -30,6 +30,22 @@ export type TuiTranscriptCardLine = {
 
 export type TuiTranscriptCardCategory = 'conversation' | 'technical' | 'diff' | 'system' | 'insight'
 
+function countNonBlankLines(value: string): number {
+  let count = 0
+  let lineHasContent = false
+  for (let i = 0; i < value.length; i++) {
+    const ch = value.charCodeAt(i)
+    if (ch === 10) {
+      if (lineHasContent) count++
+      lineHasContent = false
+    } else if (ch !== 32 && ch !== 9 && ch !== 13) {
+      lineHasContent = true
+    }
+  }
+  if (lineHasContent) count++
+  return count
+}
+
 function sanitizeLine(value: string): string {
   return value
     .replace(ANSI_ESCAPE_PATTERN, '')
@@ -175,9 +191,10 @@ function previewDiff(diffText: string, limit: number): TuiTranscriptCardLine[] {
   }
 
   if (selected.length === 0) {
-    const fallback = rawLines.filter(Boolean).slice(0, limit).map((entry) => line(truncateLine(entry), 'muted'))
-    if (rawLines.filter(Boolean).length > limit) {
-      fallback.push(line(`… ${rawLines.filter(Boolean).length - limit} more diff lines`, 'dim'))
+    const nonEmpty = rawLines.filter(Boolean)
+    const fallback = nonEmpty.slice(0, limit).map((entry) => line(truncateLine(entry), 'muted'))
+    if (nonEmpty.length > limit) {
+      fallback.push(line(`… ${nonEmpty.length - limit} more diff lines`, 'dim'))
     }
     return fallback.length > 0 ? fallback.slice(0, limit) : [line('No diff body recorded.', 'muted')]
   }
@@ -265,15 +282,15 @@ function previewTool(thread: ToolThread): TuiTranscriptCardLine[] {
     if (toolName === 'MultiEdit') {
       const edits = Array.isArray(input.edits) ? (input.edits as Array<Record<string, unknown>>) : []
       for (const edit of edits) {
-        removedLines += typeof edit.old_string === 'string' ? edit.old_string.split('\n').filter((l: string) => l.trim()).length : 0
-        addedLines += typeof edit.new_string === 'string' ? edit.new_string.split('\n').filter((l: string) => l.trim()).length : 0
+        if (typeof edit.old_string === 'string') removedLines += countNonBlankLines(edit.old_string)
+        if (typeof edit.new_string === 'string') addedLines += countNonBlankLines(edit.new_string)
       }
     } else if (toolName === 'Write') {
       const content = typeof input.content === 'string' ? input.content : ''
-      addedLines = content.split('\n').filter((l) => l.trim()).length
+      addedLines = countNonBlankLines(content)
     } else {
-      removedLines = typeof input.old_string === 'string' ? input.old_string.split('\n').filter((l: string) => l.trim()).length : 0
-      addedLines = typeof input.new_string === 'string' ? input.new_string.split('\n').filter((l: string) => l.trim()).length : 0
+      if (typeof input.old_string === 'string') removedLines = countNonBlankLines(input.old_string)
+      if (typeof input.new_string === 'string') addedLines = countNonBlankLines(input.new_string)
     }
 
     const summary = toolName === 'Write'
@@ -519,44 +536,46 @@ function synthesizeEditDiff(message: ThreadedMessage): string | undefined {
   return hunks.length > 0 ? hunks.join('\n') : undefined
 }
 
-export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiDensity = 'balanced'): TuiTranscriptCard[] {
-  return messages.map((message) => {
-    const label = message.role === 'assistant'
-      ? getAssistantLabel(message.provider)
-      : message.role.toUpperCase()
-    const previewLines = message.blocks.flatMap(formatBlock)
-    const { processedLines: expandedLines, codeBlocks } = extractCodeBlocksFromBlocks(message.blocks)
-    const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
-    const category = classifyCardCategory(message)
-    const autoFold = category !== 'conversation' && category !== 'insight'
-    const collapsedLines = autoFold
-      ? compactAutoFoldLines(previewLines)
-      : compactCardLines(previewLines, density)
-    const compactSummary = collapsedLines.map((entry) => entry.text).join(' · ')
+export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensity = 'balanced'): TuiTranscriptCard {
+  const label = message.role === 'assistant'
+    ? getAssistantLabel(message.provider)
+    : message.role.toUpperCase()
+  const previewLines = message.blocks.flatMap(formatBlock)
+  const { processedLines: expandedLines, codeBlocks } = extractCodeBlocksFromBlocks(message.blocks)
+  const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
+  const category = classifyCardCategory(message)
+  const autoFold = category !== 'conversation' && category !== 'insight'
+  const collapsedLines = autoFold
+    ? compactAutoFoldLines(previewLines)
+    : compactCardLines(previewLines, density)
+  const compactSummary = collapsedLines.map((entry) => entry.text).join(' · ')
 
-    return {
-      key: message.uuid,
-      role: message.role,
-      provider: message.provider,
-      label,
-      category,
-      autoFold,
-      compactSummary,
-      usageSummary: formatUsageSummary(message),
-      timestamp: message.timestamp ? formatTimestamp(message.timestamp) : undefined,
-      timestampMs: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.getTime() : undefined,
-      dayKey: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.toISOString().slice(0, 10) : undefined,
-      dayLabel: formatDayLabel(message.timestamp),
-      lines: collapsedLines,
-      expandedLines,
-      searchText: expandedLines.map((entry) => entry.text).join('\n'),
-      codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
-      editDiff: synthesizeEditDiff(message),
-      markdownContent: (category === 'conversation' || category === 'insight')
-        ? extractMarkdownContent(message.blocks)
-        : undefined,
-    }
-  })
+  return {
+    key: message.uuid,
+    role: message.role,
+    provider: message.provider,
+    label,
+    category,
+    autoFold,
+    compactSummary,
+    usageSummary: formatUsageSummary(message),
+    timestamp: message.timestamp ? formatTimestamp(message.timestamp) : undefined,
+    timestampMs: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.getTime() : undefined,
+    dayKey: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.toISOString().slice(0, 10) : undefined,
+    dayLabel: formatDayLabel(message.timestamp),
+    lines: collapsedLines,
+    expandedLines,
+    searchText: expandedLines.map((entry) => entry.text).join('\n'),
+    codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
+    editDiff: synthesizeEditDiff(message),
+    markdownContent: (category === 'conversation' || category === 'insight')
+      ? extractMarkdownContent(message.blocks)
+      : undefined,
+  }
+}
+
+export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiDensity = 'balanced'): TuiTranscriptCard[] {
+  return messages.map((message) => formatTranscriptCard(message, density))
 }
 
 export function formatSessionLabel(session: Session): string {
