@@ -619,6 +619,15 @@ export default function SessionList({
   }, [resizing])
   const [searchText, setSearchText] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
+  const [sortMode, setSortMode] = useState<'project' | 'time'>(() => {
+    if (typeof window === 'undefined') return 'project'
+    const stored = window.localStorage.getItem('agentViewer:sessionSort')
+    return stored === 'time' ? 'time' : 'project'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('agentViewer:sessionSort', sortMode)
+  }, [sortMode])
   const normalizedSearch = searchText.trim().toLowerCase()
   const indexedSessions = useMemo(() => sessions.map(indexSession), [sessions])
   const filteredSessions = useMemo(
@@ -626,6 +635,56 @@ export default function SessionList({
     [indexedSessions, normalizedSearch, activeTag],
   )
   const groups = useMemo(() => groupByProject(filteredSessions), [filteredSessions])
+  const sessionActivityMs = useCallback((session: Session): number => {
+    const value = session.lastModified ?? session.createdAt
+    if (value == null) return 0
+    const ms = new Date(value).getTime()
+    return Number.isNaN(ms) ? 0 : ms
+  }, [])
+  const timeEntries = useMemo(() => {
+    if (sortMode !== 'time') return [] as Array<
+      | { type: 'header'; key: string; projectDir: string; projectName: string; count: number; projectSessions: Session[] }
+      | { type: 'session'; key: string; session: Session }
+    >
+    const sorted = [...filteredSessions].sort(
+      (a, b) => sessionActivityMs(b.session) - sessionActivityMs(a.session),
+    )
+    const projectSessionsByDir = new Map<string, Session[]>()
+    for (const indexed of sorted) {
+      const list = projectSessionsByDir.get(indexed.normalizedProjectDir)
+      if (list) list.push(indexed.session)
+      else projectSessionsByDir.set(indexed.normalizedProjectDir, [indexed.session])
+    }
+    const entries: Array<
+      | { type: 'header'; key: string; projectDir: string; projectName: string; count: number; projectSessions: Session[] }
+      | { type: 'session'; key: string; session: Session }
+    > = []
+    for (let i = 0; i < sorted.length; i++) {
+      const indexed = sorted[i]
+      const prev = i > 0 ? sorted[i - 1] : null
+      if (!prev || prev.normalizedProjectDir !== indexed.normalizedProjectDir) {
+        let run = 1
+        while (
+          i + run < sorted.length
+          && sorted[i + run].normalizedProjectDir === indexed.normalizedProjectDir
+        ) run++
+        entries.push({
+          type: 'header',
+          key: `project:${indexed.normalizedProjectDir}:${i}`,
+          projectDir: indexed.normalizedProjectDir,
+          projectName: indexed.projectName,
+          count: run,
+          projectSessions: projectSessionsByDir.get(indexed.normalizedProjectDir) ?? [],
+        })
+      }
+      entries.push({
+        type: 'session',
+        key: `${sessionTabKey(indexed.session)}:${i}`,
+        session: indexed.session,
+      })
+    }
+    return entries
+  }, [filteredSessions, sortMode, sessionActivityMs])
   const tagCounts = useMemo(() => {
     const map = new Map<string, number>()
     for (const session of indexedSessions) {
@@ -757,6 +816,10 @@ export default function SessionList({
           >
             {loading
               ? 'syncing…'
+              : sortMode === 'time'
+              ? filteredSessions.length === sessions.length
+                ? `${sessions.length} session${sessions.length !== 1 ? 's' : ''} · by time`
+                : `${filteredSessions.length}/${sessions.length} sessions · by time`
               : filteredSessions.length === sessions.length
               ? `${groups.length} project${groups.length !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
               : `${filteredSessions.length}/${sessions.length} sessions · ${groups.length} projects`}
@@ -902,6 +965,48 @@ export default function SessionList({
             )}
             <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
               <Button
+                onClick={() => setSortMode('project')}
+                variant="outline"
+                size="sm"
+                style={{
+                  flex: 1,
+                  height: 28,
+                  borderRadius: 5,
+                  border: `1px solid ${sortMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                  background: sortMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                  color: sortMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.06em',
+                  cursor: 'pointer',
+                }}
+                title="Group sessions by project"
+              >
+                BY PROJECT
+              </Button>
+              <Button
+                onClick={() => setSortMode('time')}
+                variant="outline"
+                size="sm"
+                style={{
+                  flex: 1,
+                  height: 28,
+                  borderRadius: 5,
+                  border: `1px solid ${sortMode === 'time' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                  background: sortMode === 'time' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                  color: sortMode === 'time' ? 'var(--violet)' : 'var(--text-3)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.06em',
+                  cursor: 'pointer',
+                }}
+                title="Sort sessions by most recent activity"
+              >
+                BY TIME
+              </Button>
+            </div>
+            <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+              <Button
                 onClick={() => onChangeScope('all')}
                 variant="outline"
                 size="sm"
@@ -998,7 +1103,7 @@ export default function SessionList({
           </div>
         )}
 
-        {!loading && !error && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
+        {!loading && !error && sortMode === 'project' && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
           <ProjectGroup
             key={projectDir}
             name={projectName}
@@ -1012,6 +1117,71 @@ export default function SessionList({
             onTag={onTag}
           />
         ))}
+        {!loading && !error && sortMode === 'time' && timeEntries.map((entry) => {
+          if (entry.type === 'header') {
+            const isProjectSelected = sameProjectPath(selectedProject, entry.projectDir)
+            return (
+              <div
+                key={entry.key}
+                onClick={() => onSelectProject(entry.projectDir, entry.projectName, entry.projectSessions)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  padding: '8px 14px 8px 16px',
+                  userSelect: 'none',
+                  background: isProjectSelected
+                    ? 'linear-gradient(to right, rgba(139,128,240,0.12) 0%, var(--surface-2) 70%)'
+                    : 'var(--surface-2)',
+                  borderBottom: '1px solid var(--border)',
+                  borderLeft: `2px solid ${isProjectSelected ? 'var(--violet)' : 'transparent'}`,
+                  cursor: 'pointer',
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: "'Oxanium', monospace",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {entry.projectName}
+                </span>
+                <span
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
+                    background: isProjectSelected ? 'rgba(139,128,240,0.12)' : 'var(--surface-3)',
+                    border: `1px solid ${isProjectSelected ? 'rgba(139,128,240,0.3)' : 'var(--border)'}`,
+                    borderRadius: 3,
+                    padding: '1px 6px',
+                    flexShrink: 0,
+                  }}
+                >
+                  {entry.count}
+                </span>
+              </div>
+            )
+          }
+          return (
+            <SessionRow
+              key={entry.key}
+              session={entry.session}
+              selected={sessionTabKey(entry.session) === selectedId}
+              onSelect={onSelect}
+              onRename={onRename}
+              onTag={onTag}
+            />
+          )
+        })}
         {!loading && !error && filteredSessions.length === 0 && (
           <div
             style={{
