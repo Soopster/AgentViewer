@@ -1131,6 +1131,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [rowMeasurementVersion, setRowMeasurementVersion] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
+  const timelineContentRef = useRef<HTMLDivElement | null>(null)
   const lastTimelineRowRef = useRef<HTMLDivElement | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; lastFingerprint: string | null; sessionId: string } | null>(null)
@@ -2046,10 +2047,7 @@ export default function MessageView({ messages, loading, session, projectView, o
 
       pending.clear()
 
-      // When autoFollow is on we'll re-pin to the bottom on the next frame, so
-      // skip the compensation — applying it here causes visible jitter as the
-      // viewport briefly shifts up before getting snapped back down.
-      if (node && scrollDelta !== 0 && !autoFollowRef.current) {
+      if (node && scrollDelta !== 0) {
         suppressFollowEvalUntilRef.current = performance.now() + 200
         node.scrollTop += scrollDelta
         setTimelineScrollTop(node.scrollTop)
@@ -2094,25 +2092,35 @@ export default function MessageView({ messages, loading, session, projectView, o
     autoFollowRef.current = autoFollow
   }, [autoFollow])
 
+  // Pin to bottom synchronously via ResizeObserver — fires after layout but
+  // before paint, so new content simply appears at the bottom of the viewport
+  // without any visible scroll or shift.
+  useEffect(() => {
+    const node = timelineRef.current
+    const content = timelineContentRef.current
+    if (!node || !content) return
+    const pin = () => {
+      if (!autoFollowRef.current) return
+      const target = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
+      if (Math.abs(node.scrollTop - target) < 1) return
+      suppressFollowEvalUntilRef.current = performance.now() + 200
+      node.scrollTop = target
+      setTimelineScrollTop(target)
+    }
+    const observer = new ResizeObserver(() => pin())
+    observer.observe(content)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [hasLiveTimeline, session?.sessionId])
+
+  // When autoFollow is first enabled, pin once.
   useEffect(() => {
     if (!autoFollow) return
-    if (followPinFrameRef.current != null) return
-    followPinFrameRef.current = window.requestAnimationFrame(() => {
-      followPinFrameRef.current = null
-      scrollTimelineToBottom()
+    const frame = window.requestAnimationFrame(() => {
+      if (autoFollowRef.current) scrollTimelineToBottom()
     })
-    return () => {
-      if (followPinFrameRef.current != null) {
-        window.cancelAnimationFrame(followPinFrameRef.current)
-        followPinFrameRef.current = null
-      }
-    }
-  }, [
-    autoFollow,
-    loading,
-    virtualTimeline.totalHeight,
-    scrollTimelineToBottom,
-  ])
+    return () => window.cancelAnimationFrame(frame)
+  }, [autoFollow, loading, scrollTimelineToBottom])
 
   useEffect(() => {
     const fallbackId = rewindCandidates.at(-1)?.uuid ?? ''
@@ -2897,7 +2905,10 @@ export default function MessageView({ messages, loading, session, projectView, o
                 pointerEvents: 'none',
               }}
             />
-            <div style={{ position: 'relative', minHeight: virtualTimeline.totalHeight, height: virtualTimeline.totalHeight }}>
+            <div
+              ref={timelineContentRef}
+              style={{ position: 'relative', minHeight: virtualTimeline.totalHeight, height: virtualTimeline.totalHeight }}
+            >
               {virtualTimeline.visibleRows.map(({ row, top }) => (
                 <VirtualTimelineRow
                   key={row.key}
