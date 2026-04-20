@@ -140,15 +140,17 @@ function execGit(cwd: string, args: string[]): Promise<string> {
 }
 
 async function fetchGitData(cwd: string): Promise<GitData> {
-  const [branch, upstreamRaw, statusRaw, unstaged, staged, branchesRaw, commitsRaw] = await Promise.all([
+  // Full working-tree diffs are deferred to the per-pane loader — on Windows,
+  // `git diff` on a large repo adds seconds to popover open.
+  const [branch, upstreamRaw, statusRaw, branchesRaw, commitsRaw] = await Promise.all([
     execGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
     execGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
     execGit(cwd, ['status', '--porcelain', '-u']),
-    execGit(cwd, ['diff']),
-    execGit(cwd, ['diff', '--cached']),
     execGit(cwd, ['branch', '-a', '--format=%(refname:short)']),
     execGit(cwd, ['log', '--oneline', '-30']),
   ])
+  const unstaged = ''
+  const staged = ''
 
   const upstream = upstreamRaw.startsWith('fatal') ? null : upstreamRaw || null
   const aheadBehindRaw = upstream
@@ -263,16 +265,23 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
 
     setRightContent('Loading…')
     setContentLoading(true)
+    // Debounce keeps rapid navigation (j/k) from spawning a git process per
+    // keystroke — costly on Windows where process creation is slow.
     rightContentTimerRef.current = setTimeout(() => {
       const activeRequestId = rightContentRequestRef.current
       void (async () => {
         let content = ''
         switch (pane) {
-          case 0:
-            content = data.unstaged || (data.staged
-              ? '(no unstaged changes)\n\n' + data.staged
+          case 0: {
+            const [unstaged, staged] = await Promise.all([
+              execGit(repoCwd, ['diff']),
+              execGit(repoCwd, ['diff', '--cached']),
+            ])
+            content = unstaged || (staged
+              ? '(no unstaged changes)\n\n' + staged
               : '(working tree clean)')
             break
+          }
           case 1: {
             const parts = [`Branch:   ${data.branch}`]
             parts.push(data.upstream
@@ -321,7 +330,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
         if (rightContentRequestRef.current !== activeRequestId) return
         setContentLoading(false)
       })
-    }, 75)
+    }, 180)
 
     return () => {
       if (rightContentTimerRef.current) {
@@ -411,7 +420,13 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     return theme.muted
   }
 
-  const diffLines = rightContent.split('\n')
+  const allDiffLines = rightContent.split('\n')
+  // Cap rendered lines so large diffs do not stall the render loop — each
+  // line becomes a box/text pair and OpenTUI does not virtualize scrollbox
+  // children, so ~10k+ lines can visibly hang the app on Windows.
+  const MAX_DIFF_LINES = 1500
+  const diffTruncated = allDiffLines.length > MAX_DIFF_LINES
+  const diffLines = diffTruncated ? allDiffLines.slice(0, MAX_DIFF_LINES) : allDiffLines
 
   return (
     <box
@@ -559,22 +574,33 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
             <box width={rightW}>
               <text fg={theme.dim} wrapMode="none">loading…</text>
             </box>
-          ) : diffLines.map((line, i) => {
-            const fg = line.startsWith('+') && !line.startsWith('+++')
-              ? theme.green
-              : line.startsWith('-') && !line.startsWith('---')
-                ? theme.red
-                : line.startsWith('@@')
-                  ? theme.cyan
-                  : line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')
-                    ? theme.muted
-                    : theme.text
-            return (
-              <box key={i} width={rightW}>
-                <text fg={fg} wrapMode="none">{line || ' '}</text>
-              </box>
-            )
-          })}
+          ) : (
+            <>
+              {diffLines.map((line, i) => {
+                const fg = line.startsWith('+') && !line.startsWith('+++')
+                  ? theme.green
+                  : line.startsWith('-') && !line.startsWith('---')
+                    ? theme.red
+                    : line.startsWith('@@')
+                      ? theme.cyan
+                      : line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')
+                        ? theme.muted
+                        : theme.text
+                return (
+                  <box key={i} width={rightW}>
+                    <text fg={fg} wrapMode="none">{line || ' '}</text>
+                  </box>
+                )
+              })}
+              {diffTruncated && (
+                <box width={rightW}>
+                  <text fg={theme.amber} wrapMode="none">
+                    {`… diff truncated — ${allDiffLines.length - MAX_DIFF_LINES} more lines not shown`}
+                  </text>
+                </box>
+              )}
+            </>
+          )}
         </scrollbox>
       </box>
     </box>
