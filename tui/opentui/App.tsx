@@ -1356,6 +1356,7 @@ export default function OpenTuiApp() {
   const composerAbortRef = useRef<AbortController | null>(null)
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadingDetailRef = useRef(false)
+  const backgroundRefreshInFlightRef = useRef(new Set<string>())
   const selectedSessionKeyRef = useRef<string | null>(null)
   const themeMenuOriginRef = useRef<TuiThemeMode | null>(null)
   const currentThemeRef = useRef<TuiThemeMode>('light')
@@ -1845,9 +1846,23 @@ export default function OpenTuiApp() {
   }, [])
 
   const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
-    if (!foreground && loadingDetailRef.current) return
+    const cacheKeyForGuards = sessionKey(session)
+    if (!foreground && (loadingDetailRef.current || backgroundRefreshInFlightRef.current.has(cacheKeyForGuards))) return
     const requestId = ++detailRequestRef.current
-    if (foreground) setLoadingDetail(true)
+
+    // Cache-first for foreground loads — show the last-known detail immediately
+    // rather than flashing a spinner while disk IO / JSON parsing runs. A
+    // background refresh still fires below so the UI catches up.
+    if (foreground) {
+      const cached = sessionDetailCacheRef.current.get(cacheKeyForGuards)
+      if (cached) {
+        setSessionDetail(cached)
+        setLoadingDetail(false)
+      } else {
+        setLoadingDetail(true)
+      }
+    }
+    if (!foreground) backgroundRefreshInFlightRef.current.add(cacheKeyForGuards)
     setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
 
     try {
@@ -2021,10 +2036,13 @@ export default function OpenTuiApp() {
         })
     } catch (err) {
       if (requestId !== detailRequestRef.current) return
-      setSessionDetail(null)
+      // Only clear the view if we have nothing cached to fall back on — keeps
+      // the last-known good detail visible during transient read failures.
+      if (!sessionDetailCacheRef.current.has(cacheKeyForGuards)) setSessionDetail(null)
       setError(err instanceof Error ? `Failed to load session detail: ${err.message}` : 'Failed to load session detail')
     } finally {
       if (requestId === detailRequestRef.current && foreground) setLoadingDetail(false)
+      if (!foreground) backgroundRefreshInFlightRef.current.delete(cacheKeyForGuards)
     }
   }, [openTabSessions, runningSessions, tabsEnabled])
 
