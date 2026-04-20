@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { execFile } from 'child_process'
+import { extname } from 'node:path'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 
@@ -102,6 +103,7 @@ const PANE_TITLES: Record<PaneId, string> = {
 
 type GitKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 type FocusSide = 'left' | 'right'
+type FileDiffMode = 'text' | 'viewer'
 
 type Props = {
   cwd?: string | null
@@ -182,6 +184,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const [contentLoading, setContentLoading] = useState(false)
   const [pane, setPane] = useState<PaneId>(2)
   const [focusSide, setFocusSide] = useState<FocusSide>('left')
+  const [fileDiffMode, setFileDiffMode] = useState<FileDiffMode>('text')
   const [treeCursor, setTreeCursor] = useState(0)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [branchIndex, setBranchIndex] = useState(0)
@@ -231,6 +234,11 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     const node = visibleNodes[treeCursor]
     return node?.kind === 'file' ? node.path : null
   }, [visibleNodes, treeCursor])
+  const selectedFileType = useMemo(() => {
+    if (!selectedFilePath) return undefined
+    const ext = extname(selectedFilePath).slice(1)
+    return ext || undefined
+  }, [selectedFilePath])
 
   // File count for the N of M counter
   const fileCount = useMemo(
@@ -402,6 +410,10 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
         .finally(() => setLoading(false))
       return
     }
+    if (key.name === 'v' && pane === 2) {
+      setFileDiffMode((mode) => (mode === 'text' ? 'viewer' : 'text'))
+      return
+    }
   }, [data, focusSide, onClose, pane, repoCwd, treeCursor, visibleNodes])
 
   // Register key handler with parent
@@ -424,6 +436,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const commitsH = Math.max(leftInnerH - statusH - treeH - branchesH, 4)
   const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
+  const fileDiffLabel = fileDiffMode === 'viewer' ? 'v plain diff' : 'v opentui diff'
 
   function statusColor(x: string, y: string): string {
     if (x === '?' && y === '?') return theme.red  // untracked
@@ -573,7 +586,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       {/* ── Right column ────────────────────────────────── */}
       <box flexGrow={1} flexDirection="column">
         <box paddingX={1}>
-          <text fg={theme.cyan}>{`${focusLabel}  ·  ${PANE_TITLES[pane]}  ·  1-4 sections  ·  j/k move or scroll  ·  enter toggle  ·  r refresh  ·  esc close`}</text>
+          <text fg={theme.cyan}>{`${focusLabel}  ·  ${PANE_TITLES[pane]}  ·  1-4 sections  ·  ${fileDiffLabel}  ·  j/k move or scroll  ·  enter toggle  ·  r refresh  ·  esc close`}</text>
         </box>
         <scrollbox
           ref={diffScrollRef}
@@ -586,6 +599,23 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           {contentLoading && diffLines.length === 1 && diffLines[0] === 'Loading…' ? (
             <box width={rightW}>
               <text fg={theme.dim} wrapMode="none">loading…</text>
+            </box>
+          ) : pane === 2 && fileDiffMode === 'viewer' ? (
+            <box width={rightW}>
+              <diff
+                diff={rightContent}
+                view="unified"
+                wrapMode="char"
+                showLineNumbers={true}
+                filetype={selectedFileType}
+                addedBg={theme.diffAddBg}
+                removedBg={theme.diffRemoveBg}
+                contextBg={theme.surface}
+                lineNumberBg={theme.surface}
+                lineNumberFg={theme.dim}
+                fg={theme.text}
+                style={{ width: rightW }}
+              />
             </box>
           ) : (
             <>
@@ -605,13 +635,13 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                   </box>
                 )
               })}
-              {diffTruncated && (
+              {pane === 2 && diffTruncated ? (
                 <box width={rightW}>
                   <text fg={theme.amber} wrapMode="none">
                     {`… diff truncated — ${allDiffLines.length - MAX_DIFF_LINES} more lines not shown`}
                   </text>
                 </box>
-              )}
+              ) : null}
             </>
           )}
         </scrollbox>
