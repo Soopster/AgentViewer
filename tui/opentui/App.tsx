@@ -529,6 +529,40 @@ function sessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
   return `${session.provider ?? 'claude'}:${session.sessionId}`
 }
 
+// Stable content-equality check for the sessions list. The sidebar refresh
+// fires every 5s and the running-session poll every 1.5s — returning the
+// same array reference when nothing materially changed avoids invalidating
+// the entire downstream memo chain (sidebarEntries, projectCount, tabs, …)
+// and, more importantly, avoids rebuilding callbacks/intervals that list
+// `sessions` or `runningSessions` in their deps.
+function sessionsShallowEqual(a: Session[], b: Session[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const prev = a[i]
+    const next = b[i]
+    if (
+      prev.sessionId !== next.sessionId
+      || prev.provider !== next.provider
+      || prev.lastModified !== next.lastModified
+      || prev.customTitle !== next.customTitle
+      || prev.summary !== next.summary
+      || prev.cwd !== next.cwd
+      || prev.tag !== next.tag
+    ) return false
+  }
+  return true
+}
+
+function runningSessionsEqual(a: RunningSessionRef[], b: RunningSessionRef[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].sessionId !== b[i].sessionId || a[i].provider !== b[i].provider) return false
+  }
+  return true
+}
+
 function sessionMessageFingerprint(message: import('../../lib/types').SessionMessage | undefined): string | null {
   if (!message) return null
   let payload = ''
@@ -1800,7 +1834,7 @@ export default function OpenTuiApp() {
       const nextSessions = await readTuiSessions(nextProvider)
       if (requestId !== sessionRequestRef.current) return
       startTransition(() => {
-        setSessions(nextSessions)
+        setSessions((prev) => sessionsShallowEqual(prev, nextSessions) ? prev : nextSessions)
         setSelectedSessionKey((current) => {
           if (nextSessions.length === 0) return null
           if (preserveSelection && current) {
@@ -1840,7 +1874,7 @@ export default function OpenTuiApp() {
             provider: session.provider,
           }))
         : []
-      startTransition(() => setRunningSessions(nextRunning))
+      startTransition(() => setRunningSessions((prev) => runningSessionsEqual(prev, nextRunning) ? prev : nextRunning))
     } catch {
       // Ignore runtime discovery errors; composer falls back to selected session.
     }
@@ -2672,8 +2706,14 @@ export default function OpenTuiApp() {
   }, [selectedSessionKey])
 
   useEffect(() => {
+    // Skip building the `allowed` Set when both sets are empty — the common
+    // case on a freshly loaded session — otherwise every poll rebuilds an
+    // O(n) Set from the transcript for nothing. We also build the allowed
+    // Set at most once and share it between both state updates.
+    let allowed: Set<string> | null = null
     setExpandedCardKeys((current) => {
-      const allowed = new Set(transcriptCards.map((card) => card.key))
+      if (current.size === 0) return current
+      if (!allowed) allowed = new Set(transcriptCards.map((card) => card.key))
       let changed = false
       const next = new Set<string>()
       for (const key of current) {
@@ -2683,7 +2723,8 @@ export default function OpenTuiApp() {
       return changed ? next : current
     })
     setCollapsedCardKeys((current) => {
-      const allowed = new Set(transcriptCards.map((card) => card.key))
+      if (current.size === 0) return current
+      if (!allowed) allowed = new Set(transcriptCards.map((card) => card.key))
       let changed = false
       const next = new Set<string>()
       for (const key of current) {
