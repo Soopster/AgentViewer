@@ -1892,6 +1892,52 @@ export default function OpenTuiApp() {
   ])
   const imessageStyle = themeMode === 'imessage'
 
+  // Memoize the full list of <TranscriptCard /> elements so unrelated
+  // re-renders (composer input, notice banner, theme menu, status tick, etc.)
+  // don't rebuild N elements + run N React.memo comparisons. Only deps that
+  // actually change what a card displays belong here.
+  const transcriptChildren = useMemo(() => (
+    transcriptCards.map((card, index) => {
+      const display = cardDisplayData[index]
+      if (!display) return null
+      const isSelected = card.key === transcriptCursorKey
+      const hasCursor = isSelected && effectiveFocus === 'messages'
+      const isExpanded = resolvedExpandedKeys.has(card.key)
+      const isActiveMatch = display.isSearchHit && searchMatches[searchMatchIndex] === index
+      return (
+        <TranscriptCard
+          key={card.key}
+          card={card}
+          display={display}
+          theme={theme}
+          densityState={densityState}
+          syntaxStyle={syntaxStyle}
+          rightPaneWidth={rightPaneWidth}
+          isExpanded={isExpanded}
+          hasCursor={hasCursor}
+          isSelected={isSelected}
+          isActiveMatch={isActiveMatch}
+          thinkingMode={thinkingMode}
+          imessageStyle={imessageStyle}
+        />
+      )
+    })
+  ), [
+    transcriptCards,
+    cardDisplayData,
+    transcriptCursorKey,
+    effectiveFocus,
+    resolvedExpandedKeys,
+    searchMatches,
+    searchMatchIndex,
+    theme,
+    densityState,
+    syntaxStyle,
+    rightPaneWidth,
+    thinkingMode,
+    imessageStyle,
+  ])
+
   const refreshSessions = useCallback(async (
     nextProvider: ProviderSelection,
     preserveSelection = true,
@@ -4087,31 +4133,7 @@ export default function OpenTuiApp() {
                 }}
                 >
                 <box height={TRANSCRIPT_TOP_MARGIN} />
-                {transcriptCards.map((card, index) => {
-                  const display = cardDisplayData[index]
-                  if (!display) return null
-                  const isSelected = card.key === transcriptCursorKey
-                  const hasCursor = isSelected && effectiveFocus === 'messages'
-                  const isExpanded = resolvedExpandedKeys.has(card.key)
-                  const isActiveMatch = display.isSearchHit && searchMatches[searchMatchIndex] === index
-                  return (
-                    <TranscriptCard
-                      key={card.key}
-                      card={card}
-                      display={display}
-                      theme={theme}
-                      densityState={densityState}
-                      syntaxStyle={syntaxStyle}
-                      rightPaneWidth={rightPaneWidth}
-                      isExpanded={isExpanded}
-                      hasCursor={hasCursor}
-                      isSelected={isSelected}
-                      isActiveMatch={isActiveMatch}
-                      thinkingMode={thinkingMode}
-                      imessageStyle={imessageStyle}
-                    />
-                  )
-                })}
+                {transcriptChildren}
 
               </scrollbox>
             )}
