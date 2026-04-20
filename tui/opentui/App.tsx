@@ -1357,6 +1357,7 @@ export default function OpenTuiApp() {
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadingDetailRef = useRef(false)
   const backgroundRefreshInFlightRef = useRef(new Set<string>())
+  const sessionDetailMtimeRef = useRef(new Map<string, number>())
   const selectedSessionKeyRef = useRef<string | null>(null)
   const themeMenuOriginRef = useRef<TuiThemeMode | null>(null)
   const currentThemeRef = useRef<TuiThemeMode>('light')
@@ -1848,6 +1849,16 @@ export default function OpenTuiApp() {
   const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
     const cacheKeyForGuards = sessionKey(session)
     if (!foreground && (loadingDetailRef.current || backgroundRefreshInFlightRef.current.has(cacheKeyForGuards))) return
+
+    // Skip background polls when the session file hasn't changed since the
+    // cached detail was populated — avoids re-reading and re-threading the
+    // full message file every interval for idle sessions. Worst case the
+    // sidebar's lastModified is stale and we skip one poll; the next sidebar
+    // refresh catches us up.
+    if (!foreground && typeof session.lastModified === 'number') {
+      const recordedMtime = sessionDetailMtimeRef.current.get(cacheKeyForGuards)
+      if (recordedMtime != null && recordedMtime >= session.lastModified) return
+    }
     const requestId = ++detailRequestRef.current
 
     // Cache-first for foreground loads — show the last-known detail immediately
@@ -1868,6 +1879,9 @@ export default function OpenTuiApp() {
     try {
       const detail = await readTuiSessionDetail(session)
       if (requestId !== detailRequestRef.current) return
+      if (typeof session.lastModified === 'number') {
+        sessionDetailMtimeRef.current.set(cacheKeyForGuards, session.lastModified)
+      }
       const cacheKey = sessionKey(session)
       const cachedDetail = sessionDetailCacheRef.current.get(cacheKey)
       const pinnedKeys = new Set([
