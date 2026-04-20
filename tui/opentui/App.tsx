@@ -2210,12 +2210,10 @@ export default function OpenTuiApp() {
         }
       })
 
-      // Defer the metadata check to a later task so the transcript update above
-      // commits and renders first. For active tabs this still fetches metadata,
-      // but background tabs now use a separate, slower refresh loop.
-      setTimeout(() => {
-        refreshSessionMetadata(session, foreground, detail, cachedDetail)
-      }, 0)
+      // Context usage metadata is disabled for open tabs.
+      // setTimeout(() => {
+      //   refreshSessionMetadata(session, foreground, detail, cachedDetail)
+      // }, 0)
     } catch (err) {
       if (requestId !== detailRequestRef.current) return
       // Only clear the view if we have nothing cached to fall back on — keeps
@@ -2780,7 +2778,8 @@ export default function OpenTuiApp() {
       backgroundMetadataCursorRef.current = (backgroundMetadataCursorRef.current + 1) % backgroundTabs.length
       const target = backgroundTabs[cursor]
       if (!target) return
-      void refreshSessionMetadata(target, false)
+      // Context usage metadata is disabled for open tabs.
+      // void refreshSessionMetadata(target, false)
     }, CLAUDE_BACKGROUND_METADATA_REFRESH_MS)
     return () => {
       active = false
