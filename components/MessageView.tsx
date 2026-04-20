@@ -1142,6 +1142,8 @@ export default function MessageView({ messages, loading, session, projectView, o
   const measurementFrameRef = useRef<number | null>(null)
   const scrollRafRef = useRef<number | null>(null)
   const suppressFollowEvalUntilRef = useRef<number>(0)
+  const autoFollowRef = useRef(false)
+  const followPinFrameRef = useRef<number | null>(null)
   const timelineRowsRef = useRef<TimelineRow[]>([])
   const initialScrollDoneRef = useRef(false)
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
@@ -2044,7 +2046,10 @@ export default function MessageView({ messages, loading, session, projectView, o
 
       pending.clear()
 
-      if (node && scrollDelta !== 0) {
+      // When autoFollow is on we'll re-pin to the bottom on the next frame, so
+      // skip the compensation — applying it here causes visible jitter as the
+      // viewport briefly shifts up before getting snapped back down.
+      if (node && scrollDelta !== 0 && !autoFollowRef.current) {
         suppressFollowEvalUntilRef.current = performance.now() + 200
         node.scrollTop += scrollDelta
         setTimelineScrollTop(node.scrollTop)
@@ -2086,9 +2091,22 @@ export default function MessageView({ messages, loading, session, projectView, o
   }, [timelineRows, timelineScrollTop, timelineViewportHeight, rowMeasurementVersion])
 
   useEffect(() => {
+    autoFollowRef.current = autoFollow
+  }, [autoFollow])
+
+  useEffect(() => {
     if (!autoFollow) return
-    const frame = window.requestAnimationFrame(() => scrollTimelineToBottom())
-    return () => window.cancelAnimationFrame(frame)
+    if (followPinFrameRef.current != null) return
+    followPinFrameRef.current = window.requestAnimationFrame(() => {
+      followPinFrameRef.current = null
+      scrollTimelineToBottom()
+    })
+    return () => {
+      if (followPinFrameRef.current != null) {
+        window.cancelAnimationFrame(followPinFrameRef.current)
+        followPinFrameRef.current = null
+      }
+    }
   }, [
     autoFollow,
     loading,
