@@ -1086,24 +1086,6 @@ function pruneSessionCaches(
 
 type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number }
 
-type TranscriptCardElementCache = {
-  elements: React.ReactNode[]
-  transcriptCards: TuiTranscriptCard[] | null
-  cardDisplayData: CardDisplayData[] | null
-  theme: TuiThemePalette | null
-  densityState: DensityState | null
-  syntaxStyle: SyntaxStyle | null
-  rightPaneWidth: number
-  transcriptView: TuiTranscriptView | null
-  provider: ProviderSelection | null
-  thinkingMode: boolean
-  imessageStyle: boolean
-  shouldEnableSyntaxHighlighting: boolean
-  selectedKey: string | null
-  activeMatchIndex: number
-  cursorVisible: boolean
-}
-
 type TranscriptCardProps = {
   card: TuiTranscriptCard
   display: CardDisplayData
@@ -1852,130 +1834,6 @@ export default function OpenTuiApp() {
     shouldEnableSyntaxHighlighting,
   ])
   const imessageStyle = themeMode === 'imessage'
-
-  const transcriptCardElementsCacheRef = useRef<TranscriptCardElementCache>({
-    elements: [],
-    transcriptCards: null,
-    cardDisplayData: null,
-    theme: null,
-    densityState: null,
-    syntaxStyle: null,
-    rightPaneWidth: -1,
-    transcriptView: null,
-    provider: null,
-    thinkingMode: false,
-    imessageStyle: false,
-    shouldEnableSyntaxHighlighting: false,
-    selectedKey: null,
-    activeMatchIndex: -1,
-    cursorVisible: false,
-  })
-
-  const transcriptCardElements = useMemo(() => {
-    const cache = transcriptCardElementsCacheRef.current
-    const nextSelectedKey = transcriptCursorKey
-    const nextSelectedIndex = nextSelectedKey ? (transcriptIndexByKey.get(nextSelectedKey) ?? -1) : -1
-    const nextActiveMatchIndex = searchMatches[searchMatchIndex] ?? -1
-    const nextCursorVisible = effectiveFocus === 'messages'
-    const shouldRebuildAll =
-      cache.transcriptCards !== transcriptCards
-      || cache.cardDisplayData !== cardDisplayData
-      || cache.theme !== theme
-      || cache.densityState !== densityState
-      || cache.syntaxStyle !== syntaxStyle
-      || cache.rightPaneWidth !== rightPaneWidth
-      || cache.transcriptView !== transcriptView
-      || cache.provider !== provider
-      || cache.thinkingMode !== thinkingMode
-      || cache.imessageStyle !== imessageStyle
-      || cache.shouldEnableSyntaxHighlighting !== shouldEnableSyntaxHighlighting
-      || cache.elements.length !== transcriptCards.length
-
-    const buildElement = (card: TuiTranscriptCard, index: number): React.ReactNode => {
-      const display = cardDisplayData[index]
-      if (!display) return <React.Fragment key={card.key} />
-      const isSelected = card.key === nextSelectedKey
-      const hasCursor = isSelected && nextCursorVisible
-      const isActiveMatch = display.isSearchHit && nextActiveMatchIndex === index
-      return (
-        <TranscriptCard
-          key={card.key}
-          card={card}
-          display={display}
-          theme={theme}
-          densityState={densityState}
-          syntaxStyle={syntaxStyle}
-          rightPaneWidth={rightPaneWidth}
-          isExpanded={resolvedExpandedKeys.has(card.key)}
-          hasCursor={hasCursor}
-          isSelected={isSelected}
-          isActiveMatch={isActiveMatch}
-          thinkingMode={thinkingMode}
-          imessageStyle={imessageStyle}
-        />
-      )
-    }
-
-    if (shouldRebuildAll) {
-      const nextElements: React.ReactNode[] = transcriptCards.map((card, index) => buildElement(card, index))
-      cache.elements = nextElements
-    } else {
-      const dirtyIndices = new Set<number>()
-      if (cache.selectedKey !== nextSelectedKey || cache.cursorVisible !== nextCursorVisible) {
-        if (cache.selectedKey) {
-          const oldSelectedIndex = transcriptIndexByKey.get(cache.selectedKey) ?? -1
-          if (oldSelectedIndex >= 0) dirtyIndices.add(oldSelectedIndex)
-        }
-        if (nextSelectedIndex >= 0) dirtyIndices.add(nextSelectedIndex)
-      }
-      if (cache.activeMatchIndex !== nextActiveMatchIndex) {
-        if (cache.activeMatchIndex >= 0) dirtyIndices.add(cache.activeMatchIndex)
-        if (nextActiveMatchIndex >= 0) dirtyIndices.add(nextActiveMatchIndex)
-      }
-      if (dirtyIndices.size > 0) {
-        for (const index of dirtyIndices) {
-          const card = transcriptCards[index]
-          if (!card) continue
-          cache.elements[index] = buildElement(card, index)
-        }
-      }
-    }
-
-    cache.transcriptCards = transcriptCards
-    cache.cardDisplayData = cardDisplayData
-    cache.theme = theme
-    cache.densityState = densityState
-    cache.syntaxStyle = syntaxStyle
-    cache.rightPaneWidth = rightPaneWidth
-    cache.transcriptView = transcriptView
-    cache.provider = provider
-    cache.thinkingMode = thinkingMode
-    cache.imessageStyle = imessageStyle
-    cache.shouldEnableSyntaxHighlighting = shouldEnableSyntaxHighlighting
-    cache.selectedKey = nextSelectedKey
-    cache.activeMatchIndex = nextActiveMatchIndex
-    cache.cursorVisible = nextCursorVisible
-
-    return cache.elements.slice()
-  }, [
-    cardDisplayData,
-    densityState,
-    effectiveFocus,
-    imessageStyle,
-    provider,
-    rightPaneWidth,
-    resolvedExpandedKeys,
-    searchMatchIndex,
-    searchMatches,
-    shouldEnableSyntaxHighlighting,
-    syntaxStyle,
-    thinkingMode,
-    transcriptCards,
-    transcriptCursorKey,
-    transcriptIndexByKey,
-    transcriptView,
-    theme,
-  ])
 
   const refreshSessions = useCallback(async (
     nextProvider: ProviderSelection,
@@ -4146,7 +4004,31 @@ export default function OpenTuiApp() {
                 }}
                 >
                 <box height={TRANSCRIPT_TOP_MARGIN} />
-                {transcriptCardElements}
+                {transcriptCards.map((card, index) => {
+                  const display = cardDisplayData[index]
+                  if (!display) return null
+                  const isSelected = card.key === transcriptCursorKey
+                  const hasCursor = isSelected && effectiveFocus === 'messages'
+                  const isExpanded = resolvedExpandedKeys.has(card.key)
+                  const isActiveMatch = display.isSearchHit && searchMatches[searchMatchIndex] === index
+                  return (
+                    <TranscriptCard
+                      key={card.key}
+                      card={card}
+                      display={display}
+                      theme={theme}
+                      densityState={densityState}
+                      syntaxStyle={syntaxStyle}
+                      rightPaneWidth={rightPaneWidth}
+                      isExpanded={isExpanded}
+                      hasCursor={hasCursor}
+                      isSelected={isSelected}
+                      isActiveMatch={isActiveMatch}
+                      thinkingMode={thinkingMode}
+                      imessageStyle={imessageStyle}
+                    />
+                  )
+                })}
 
               </scrollbox>
             )}
