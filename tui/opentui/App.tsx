@@ -1404,6 +1404,9 @@ export default function OpenTuiApp() {
   const backgroundRefreshInFlightRef = useRef(new Set<string>())
   const sessionDetailMtimeRef = useRef(new Map<string, number>())
   const selectedSessionKeyRef = useRef<string | null>(null)
+  const openTabSessionsRef = useRef<Session[]>([])
+  const runningSessionsRef = useRef<RunningSessionRef[]>([])
+  const tabsEnabledRef = useRef(true)
   const themeMenuOriginRef = useRef<TuiThemeMode | null>(null)
   const currentThemeRef = useRef<TuiThemeMode>('light')
   useEffect(() => {
@@ -1417,6 +1420,18 @@ export default function OpenTuiApp() {
   useEffect(() => {
     selectedSessionKeyRef.current = selectedSessionKey
   }, [selectedSessionKey])
+
+  useEffect(() => {
+    openTabSessionsRef.current = openTabSessions
+  }, [openTabSessions])
+
+  useEffect(() => {
+    runningSessionsRef.current = runningSessions
+  }, [runningSessions])
+
+  useEffect(() => {
+    tabsEnabledRef.current = tabsEnabled
+  }, [tabsEnabled])
 
   useEffect(() => {
     expandedKeysRevisionRef.current += 1
@@ -1980,7 +1995,7 @@ export default function OpenTuiApp() {
       const cacheKey = sessionKey(session)
       const cachedDetail = sessionDetailCacheRef.current.get(cacheKey)
       const pinnedKeys = new Set([
-        ...openTabSessions.map((openSession) => sessionKey(openSession)),
+        ...openTabSessionsRef.current.map((openSession) => sessionKey(openSession)),
         selectedSessionKeyRef.current,
       ].filter((key): key is string => Boolean(key)))
       startTransition(() => {
@@ -2018,131 +2033,131 @@ export default function OpenTuiApp() {
         }
       })
 
-      const isRunningSession = runningSessions.some((running) =>
-        running.sessionId === session.sessionId && running.provider === (session.provider ?? 'claude'),
-      )
-      const isPreviewingSession = tabsEnabled
-        && !openTabSessions.some((openSession) => sessionKey(openSession) === cacheKey)
+      // Defer the metadata check to a later task so the transcript update above
+      // commits and renders first. For active (non-preview) Claude tabs this
+      // check fires an SDK control query, and holding it inline behind the
+      // detail-poll awaits was stalling UI paints.
+      setTimeout(() => {
+        const isRunningSession = runningSessionsRef.current.some((running) =>
+          running.sessionId === session.sessionId && running.provider === (session.provider ?? 'claude'),
+        )
+        const isPreviewingSession = tabsEnabledRef.current
+          && !openTabSessionsRef.current.some((openSession) => sessionKey(openSession) === cacheKey)
 
-      // Preview should be read-only. Claude metadata is fetched through a control
-      // query, which can update the session's filesystem mtime and make a previewed
-      // session jump to the top of the sidebar as if it was edited.
-      if (session.provider === 'claude' && isPreviewingSession) {
-        return
-      }
+        // Preview should be read-only. Claude metadata is fetched through a control
+        // query, which can update the session's filesystem mtime and make a previewed
+        // session jump to the top of the sidebar as if it was edited.
+        if (session.provider === 'claude' && isPreviewingSession) return
 
-      // For non-running Claude sessions that already have cached context usage, skip the
-      // metadata fetch — the usage won't change once the session is complete.
-      // Do NOT set 'unavailable' here: the session may be running outside the server
-      // (e.g. via CLI), or we just haven't fetched yet. Let the TTL path below handle it.
-      if (session.provider === 'claude' && !isRunningSession) {
-        if (sessionContextUsageCacheRef.current.get(cacheKey)) return
-      }
+        // For non-running Claude sessions that already have cached context usage, skip the
+        // metadata fetch — the usage won't change once the session is complete.
+        if (session.provider === 'claude' && !isRunningSession) {
+          if (sessionContextUsageCacheRef.current.get(cacheKey)) return
+        }
 
-      const metadataTtl = session.provider === 'claude'
-        ? CLAUDE_METADATA_REFRESH_MS
-        : DEFAULT_METADATA_REFRESH_MS
-      const lastMetadataFetch = sessionMetadataFetchedAtRef.current.get(cacheKey) ?? 0
-      const hasCachedMetadata = Boolean(
-        sessionContextUsageCacheRef.current.get(cacheKey)
-        || cachedDetail?.info?.currentModel
-        || detail.info?.currentModel,
-      )
-      const shouldFetchMetadata = !sessionMetadataInFlightRef.current.has(cacheKey) && (
-        !hasCachedMetadata || Date.now() - lastMetadataFetch >= metadataTtl
-      )
-      if (!shouldFetchMetadata) return
+        const metadataTtl = session.provider === 'claude'
+          ? CLAUDE_METADATA_REFRESH_MS
+          : DEFAULT_METADATA_REFRESH_MS
+        const lastMetadataFetch = sessionMetadataFetchedAtRef.current.get(cacheKey) ?? 0
+        const hasCachedMetadata = Boolean(
+          sessionContextUsageCacheRef.current.get(cacheKey)
+          || cachedDetail?.info?.currentModel
+          || detail.info?.currentModel,
+        )
+        const shouldFetchMetadata = !sessionMetadataInFlightRef.current.has(cacheKey) && (
+          !hasCachedMetadata || Date.now() - lastMetadataFetch >= metadataTtl
+        )
+        if (!shouldFetchMetadata) return
 
-      const metadataRequestId = ++metadataRequestRef.current
-      sessionMetadataInFlightRef.current.add(cacheKey)
-      if (cacheKey === selectedSessionKeyRef.current) {
-        setContextUsageStatus('loading')
-      }
-      void Promise.race([
-        readTuiSessionMetadata(session),
-        new Promise<null>((resolve) => {
-          setTimeout(() => resolve(null), METADATA_REQUEST_TIMEOUT_MS)
-        }),
-      ])
-        .then((metadata) => {
-          if (metadataRequestId !== metadataRequestRef.current) return
-          const pinnedKeys = new Set([
-            ...openTabSessions.map((openSession) => sessionKey(openSession)),
-            selectedSessionKeyRef.current,
-          ].filter((key): key is string => Boolean(key)))
-          // Stamp the fetch time regardless of outcome so the TTL prevents
-          // hammering the SDK on every poll when context usage is unavailable.
-          touchMapEntry(sessionMetadataFetchedAtRef.current, cacheKey, Date.now())
-          if (!metadata) {
-            pruneSessionCaches(
-              sessionDetailCacheRef.current,
-              sessionContextUsageCacheRef.current,
-              sessionMetadataFetchedAtRef.current,
-              pinnedKeys,
-            )
+        const metadataRequestId = ++metadataRequestRef.current
+        sessionMetadataInFlightRef.current.add(cacheKey)
+        if (cacheKey === selectedSessionKeyRef.current) {
+          setContextUsageStatus('loading')
+        }
+        void Promise.race([
+          readTuiSessionMetadata(session),
+          new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), METADATA_REQUEST_TIMEOUT_MS)
+          }),
+        ])
+          .then((metadata) => {
+            if (metadataRequestId !== metadataRequestRef.current) return
+            const pinnedKeys = new Set([
+              ...openTabSessionsRef.current.map((openSession) => sessionKey(openSession)),
+              selectedSessionKeyRef.current,
+            ].filter((key): key is string => Boolean(key)))
+            touchMapEntry(sessionMetadataFetchedAtRef.current, cacheKey, Date.now())
+            if (!metadata) {
+              pruneSessionCaches(
+                sessionDetailCacheRef.current,
+                sessionContextUsageCacheRef.current,
+                sessionMetadataFetchedAtRef.current,
+                pinnedKeys,
+              )
+              if (cacheKey === selectedSessionKeyRef.current) {
+                startTransition(() => setContextUsageStatus('unavailable'))
+              }
+              return
+            }
+            startTransition(() => {
+              if (metadata.contextUsage) {
+                touchMapEntry(sessionContextUsageCacheRef.current, cacheKey, metadata.contextUsage)
+                if (cacheKey === selectedSessionKeyRef.current) {
+                  setContextUsage(metadata.contextUsage)
+                  setContextUsageStatus('ready')
+                }
+              }
+              const currentModel = metadata.currentModel
+              if (currentModel) {
+                setSessionDetail((prev) => {
+                  if (!prev) return prev
+                  if (
+                    prev.info?.sessionId
+                    && prev.info.sessionId !== session.sessionId
+                  ) {
+                    return prev
+                  }
+                  if (!prev.info) return prev
+                  if (prev.info.currentModel === currentModel) return prev
+                  return {
+                    ...prev,
+                    info: {
+                      ...prev.info,
+                      currentModel,
+                    },
+                  }
+                })
+                const cached = sessionDetailCacheRef.current.get(cacheKey)
+                if (cached?.info) {
+                  touchMapEntry(sessionDetailCacheRef.current, cacheKey, {
+                    ...cached,
+                    info: {
+                      ...cached.info,
+                      currentModel,
+                    },
+                  })
+                }
+              }
+              pruneSessionCaches(
+                sessionDetailCacheRef.current,
+                sessionContextUsageCacheRef.current,
+                sessionMetadataFetchedAtRef.current,
+                pinnedKeys,
+              )
+              if (!metadata.contextUsage && cacheKey === selectedSessionKeyRef.current) {
+                setContextUsageStatus('unavailable')
+              }
+            })
+          })
+          .catch(() => {
             if (cacheKey === selectedSessionKeyRef.current) {
               startTransition(() => setContextUsageStatus('unavailable'))
             }
-            return
-          }
-          startTransition(() => {
-            if (metadata.contextUsage) {
-              touchMapEntry(sessionContextUsageCacheRef.current, cacheKey, metadata.contextUsage)
-              if (cacheKey === selectedSessionKeyRef.current) {
-                setContextUsage(metadata.contextUsage)
-                setContextUsageStatus('ready')
-              }
-            }
-            const currentModel = metadata.currentModel
-            if (currentModel) {
-              setSessionDetail((prev) => {
-                if (!prev) return prev
-                if (
-                  prev.info?.sessionId
-                  && prev.info.sessionId !== session.sessionId
-                ) {
-                  return prev
-                }
-                if (!prev.info) return prev
-                if (prev.info.currentModel === currentModel) return prev
-                return {
-                  ...prev,
-                  info: {
-                    ...prev.info,
-                    currentModel,
-                  },
-                }
-              })
-              const cached = sessionDetailCacheRef.current.get(cacheKey)
-              if (cached?.info) {
-                touchMapEntry(sessionDetailCacheRef.current, cacheKey, {
-                  ...cached,
-                  info: {
-                    ...cached.info,
-                    currentModel,
-                  },
-                })
-              }
-            }
-            pruneSessionCaches(
-              sessionDetailCacheRef.current,
-              sessionContextUsageCacheRef.current,
-              sessionMetadataFetchedAtRef.current,
-              pinnedKeys,
-            )
-            if (!metadata.contextUsage && cacheKey === selectedSessionKeyRef.current) {
-              setContextUsageStatus('unavailable')
-            }
           })
-        })
-        .catch(() => {
-          if (cacheKey === selectedSessionKeyRef.current) {
-            startTransition(() => setContextUsageStatus('unavailable'))
-          }
-        })
-        .finally(() => {
-          sessionMetadataInFlightRef.current.delete(cacheKey)
-        })
+          .finally(() => {
+            sessionMetadataInFlightRef.current.delete(cacheKey)
+          })
+      }, 0)
     } catch (err) {
       if (requestId !== detailRequestRef.current) return
       // Only clear the view if we have nothing cached to fall back on — keeps
@@ -2153,7 +2168,7 @@ export default function OpenTuiApp() {
       if (requestId === detailRequestRef.current && foreground) setLoadingDetail(false)
       if (!foreground) backgroundRefreshInFlightRef.current.delete(cacheKeyForGuards)
     }
-  }, [openTabSessions, runningSessions, tabsEnabled])
+  }, [])
 
   const jumpToTranscriptIndex = useCallback((index: number) => {
     if (transcriptCards.length === 0) return
