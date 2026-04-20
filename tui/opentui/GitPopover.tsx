@@ -101,6 +101,7 @@ const PANE_TITLES: Record<PaneId, string> = {
 // ---------------------------------------------------------------------------
 
 type GitKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
+type FocusSide = 'left' | 'right'
 
 type Props = {
   cwd?: string | null
@@ -180,6 +181,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const [loading, setLoading] = useState(true)
   const [contentLoading, setContentLoading] = useState(false)
   const [pane, setPane] = useState<PaneId>(2)
+  const [focusSide, setFocusSide] = useState<FocusSide>('left')
   const [treeCursor, setTreeCursor] = useState(0)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [branchIndex, setBranchIndex] = useState(0)
@@ -346,29 +348,39 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const handleKey = useCallback((key: GitKeyEvent) => {
     if (key.name === 'escape') { onClose(); return }
 
-    // 0–4 switch panes
-    if (key.sequence >= '0' && key.sequence <= '4') {
+    if (key.name === 'tab' && key.shift) {
+      setFocusSide('left')
+      return
+    }
+
+    if (key.name === 'tab') {
+      setFocusSide('right')
+      return
+    }
+
+    // 1–4 switch left-side sections.
+    if (key.sequence >= '1' && key.sequence <= '4') {
       setPane(parseInt(key.sequence, 10) as PaneId)
       return
     }
 
     if (key.name === 'j' || key.name === 'down') {
-      if (pane === 2) setTreeCursor((i) => Math.min(i + 1, visibleNodes.length - 1))
-      else if (pane === 3 && data) setBranchIndex((i) => Math.min(i + 1, data.branches.length - 1))
-      else if (pane === 4 && data) setCommitIndex((i) => Math.min(i + 1, data.commits.length - 1))
+      if (focusSide === 'left' && pane === 2) setTreeCursor((i) => Math.min(i + 1, visibleNodes.length - 1))
+      else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.min(i + 1, data.branches.length - 1))
+      else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.min(i + 1, data.commits.length - 1))
       else diffScrollRef.current?.scrollBy(1)
       return
     }
     if (key.name === 'k' || key.name === 'up') {
-      if (pane === 2) setTreeCursor((i) => Math.max(i - 1, 0))
-      else if (pane === 3 && data) setBranchIndex((i) => Math.max(i - 1, 0))
-      else if (pane === 4 && data) setCommitIndex((i) => Math.max(i - 1, 0))
+      if (focusSide === 'left' && pane === 2) setTreeCursor((i) => Math.max(i - 1, 0))
+      else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.max(i - 1, 0))
+      else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.max(i - 1, 0))
       else diffScrollRef.current?.scrollBy(-1)
       return
     }
 
     // Enter / space: toggle dir expansion
-    if ((key.name === 'return' || key.sequence === ' ') && pane === 2) {
+    if ((key.name === 'return' || key.sequence === ' ') && pane === 2 && focusSide === 'left') {
       const node = visibleNodes[treeCursor]
       if (node?.kind === 'dir') {
         setExpandedDirs((prev) => {
@@ -390,7 +402,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
         .finally(() => setLoading(false))
       return
     }
-  }, [data, onClose, pane, repoCwd, treeCursor, visibleNodes])
+  }, [data, focusSide, onClose, pane, repoCwd, treeCursor, visibleNodes])
 
   // Register key handler with parent
   useEffect(() => {
@@ -411,6 +423,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const branchesH = Math.max(4, Math.min(8, (data?.branches.length ?? 0) + 3))
   const commitsH = Math.max(leftInnerH - statusH - treeH - branchesH, 4)
   const rightH = popH - 2
+  const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
 
   function statusColor(x: string, y: string): string {
     if (x === '?' && y === '?') return theme.red  // untracked
@@ -560,7 +573,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       {/* ── Right column ────────────────────────────────── */}
       <box flexGrow={1} flexDirection="column">
         <box paddingX={1}>
-          <text fg={theme.cyan}>{`[0] ${PANE_TITLES[pane]}  ·  j/k  enter toggle  r refresh  esc close`}</text>
+          <text fg={theme.cyan}>{`${focusLabel}  ·  ${PANE_TITLES[pane]}  ·  1-4 sections  ·  j/k move or scroll  ·  enter toggle  ·  r refresh  ·  esc close`}</text>
         </box>
         <scrollbox
           ref={diffScrollRef}
