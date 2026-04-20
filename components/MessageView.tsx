@@ -93,6 +93,7 @@ const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
 const TIMELINE_OVERSCAN_PX = 1200
 const ESTIMATED_CHARS_PER_LINE = 92
 const TIMELINE_BOTTOM_GUTTER_PX = 72
+const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 
 function normalizeSelectValue(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
@@ -102,6 +103,38 @@ function normalizeSelectValue(value: string | null | undefined): string | null {
 function effortLabel(level: ReasoningEffortLevel): string {
   if (level === 'xhigh') return 'XHIGH'
   return level.toUpperCase()
+}
+
+function LiveSpinner({ label }: { label: string }) {
+  const [frame, setFrame] = useState(0)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setFrame((current) => (current + 1) % SPINNER_FRAMES.length)
+    }, 80)
+
+    return () => window.clearInterval(timer)
+  }, [])
+
+  return (
+    <span
+      aria-label={label}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 11,
+        letterSpacing: '0.08em',
+        color: 'var(--text-3)',
+      }}
+    >
+      <span aria-hidden="true" style={{ color: 'var(--cyan)' }}>
+        {SPINNER_FRAMES[frame]}
+      </span>
+      <span>{label}</span>
+    </span>
+  )
 }
 
 function attachmentDisplayName(attachment: SendAttachment): string {
@@ -2923,30 +2956,47 @@ export default function MessageView({ messages, loading, session, projectView, o
             </div>
           </div>
         )}
-        {!autoFollow && hasLiveTimeline && (
+        {hasLiveTimeline && (
           <div style={{ position: 'sticky', bottom: 12, display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-            <Button
-              onClick={() => {
-                setAutoFollow(true)
-                scrollTimelineToBottom('smooth')
-              }}
-              size="sm"
-              style={{
-                height: 28,
-                padding: '0 10px',
-                borderRadius: 999,
-                border: '1px solid rgba(56,217,245,0.24)',
-                background: 'var(--surface)',
-                color: 'var(--cyan)',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11,
-                letterSpacing: '0.05em',
-                cursor: 'pointer',
-                boxShadow: '0 10px 30px var(--cyan-glow)',
-              }}
+            {autoFollow ? (
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '6px 10px',
+                  borderRadius: 999,
+                  border: '1px solid rgba(56,217,245,0.22)',
+                  background: 'var(--surface)',
+                  boxShadow: '0 10px 30px rgba(56,217,245,0.08)',
+                }}
               >
-              FOLLOW LIVE
-            </Button>
+                <LiveSpinner label="waiting for new messages" />
+              </div>
+            ) : (
+              <Button
+                onClick={() => {
+                  setAutoFollow(true)
+                  scrollTimelineToBottom('smooth')
+                }}
+                size="sm"
+                style={{
+                  height: 28,
+                  padding: '0 10px',
+                  borderRadius: 999,
+                  border: '1px solid rgba(56,217,245,0.24)',
+                  background: 'var(--surface)',
+                  color: 'var(--cyan)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  letterSpacing: '0.05em',
+                  cursor: 'pointer',
+                  boxShadow: '0 10px 30px var(--cyan-glow)',
+                }}
+              >
+                FOLLOW LIVE
+              </Button>
+            )}
           </div>
         )}
       </div>
