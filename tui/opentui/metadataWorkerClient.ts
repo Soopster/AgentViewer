@@ -1,13 +1,13 @@
-import type { TuiSessionMetadata } from '../../lib/tui/service'
+import type { ContextUsage } from '../../lib/types'
 import type { Session } from '../../lib/types'
 
 type Pending = {
-  resolve: (metadata: TuiSessionMetadata) => void
+  resolve: (metadata: { currentModel: string | null; contextUsage: ContextUsage | null }) => void
   reject: (error: Error) => void
 }
 
 type WorkerResponse =
-  | { id: number; ok: true; metadata: TuiSessionMetadata }
+  | { id: number; ok: true; metadata: { currentModel: string | null; contextUsage: ContextUsage | null } }
   | { id: number; ok: false; error: string }
 
 let worker: Worker | null = null
@@ -40,7 +40,7 @@ function ensureWorker(): Worker {
   return w
 }
 
-export function readTuiSessionMetadataAsync(session: Session): Promise<TuiSessionMetadata> {
+export function readTuiSessionMetadataAsync(session: Session): Promise<{ currentModel: string | null; contextUsage: ContextUsage | null }> {
   const id = ++requestCounter
   const w = ensureWorker()
   return new Promise((resolve, reject) => {
