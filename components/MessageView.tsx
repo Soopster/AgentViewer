@@ -1175,6 +1175,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
   const measurementFrameRef = useRef<number | null>(null)
   const scrollRafRef = useRef<number | null>(null)
+  const liveFollowFrameRef = useRef<number | null>(null)
   const suppressFollowEvalUntilRef = useRef<number>(0)
   const autoFollowRef = useRef(false)
   const followPinFrameRef = useRef<number | null>(null)
@@ -1291,6 +1292,9 @@ export default function MessageView({ messages, loading, session, projectView, o
     if (scrollRafRef.current != null) {
       window.cancelAnimationFrame(scrollRafRef.current)
     }
+    if (liveFollowFrameRef.current != null) {
+      window.cancelAnimationFrame(liveFollowFrameRef.current)
+    }
   }, [])
 
   useEffect(() => {
@@ -1326,7 +1330,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     setAutoFollow((current) => {
       const next = !current
       if (next) {
-        window.requestAnimationFrame(() => scrollTimelineToBottom('smooth'))
+        window.requestAnimationFrame(() => scrollTimelineToBottom())
       }
       return next
     })
@@ -2091,6 +2095,33 @@ export default function MessageView({ messages, loading, session, projectView, o
       }
     })
   }, [])
+
+  useEffect(() => {
+    if (!autoFollow || !hasLiveTimeline || loading) return
+    if (liveFollowFrameRef.current != null) {
+      window.cancelAnimationFrame(liveFollowFrameRef.current)
+    }
+
+    let cancelled = false
+    let pass = 0
+    const pinLiveTail = () => {
+      if (cancelled || !autoFollowRef.current) return
+      scrollTimelineToBottom()
+      pass += 1
+      if (pass < 3) {
+        liveFollowFrameRef.current = window.requestAnimationFrame(pinLiveTail)
+      }
+    }
+
+    liveFollowFrameRef.current = window.requestAnimationFrame(pinLiveTail)
+
+    return () => {
+      cancelled = true
+      if (liveFollowFrameRef.current != null) {
+        window.cancelAnimationFrame(liveFollowFrameRef.current)
+      }
+    }
+  }, [autoFollow, hasLiveTimeline, loading, rowMeasurementVersion, timelineRows.length, scrollTimelineToBottom])
 
   const virtualTimeline = useMemo(() => {
     let offset = 0
@@ -2977,7 +3008,7 @@ export default function MessageView({ messages, loading, session, projectView, o
               <Button
                 onClick={() => {
                   setAutoFollow(true)
-                  scrollTimelineToBottom('smooth')
+                  scrollTimelineToBottom()
                 }}
                 size="sm"
                 style={{
