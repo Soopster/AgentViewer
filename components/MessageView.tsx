@@ -23,14 +23,30 @@ import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, selectContentBaseClassName } from '@/components/ui/select'
+import { NativeSelect, NativeSelectOption, nativeSelectBaseClassName } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 import MessageItem from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
 import AnalyticsPopover from './AnalyticsPopover'
 
 import TabBar from './TabBar'
+
+const compactNativeSelectClassName = cn(
+  nativeSelectBaseClassName,
+  'h-[30px] min-w-0 rounded-[5px] border-[var(--border)] bg-[var(--surface-2)] px-[10px] text-[11px] text-[var(--text)]'
+)
+
+const compactSelectTriggerClassName = cn(
+  'h-[30px] min-w-0 rounded-[5px] border-[var(--border)] bg-[var(--surface-2)] px-[10px] text-[11px] text-[var(--text)]'
+)
+
+const compactSelectContentClassName = cn(
+  selectContentBaseClassName,
+  'p-[6px] text-xs'
+)
 
 type Props = {
   messages: SessionMessage[]
@@ -3111,37 +3127,23 @@ export default function MessageView({ messages, loading, session, projectView, o
                 }}>
                   MODEL
                 </Label>
-                <Select value={selectedModelValue ?? ''} onValueChange={setSelectedModel}>
-                  <SelectTrigger
-                    style={{
-                      height: 30,
-                      minWidth: 0,
-                      flex: 1,
-                      background: 'var(--surface-2)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 5,
-                      color: 'var(--text)',
-                      padding: '0 10px',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 11,
-                    }}
-                  >
-                    <SelectValue placeholder="Model" />
-                  </SelectTrigger>
-                  <SelectContent
-                    style={{
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 12,
-                      padding: '6px',
-                    }}
-                  >
-                    {modelOptions.map((model) => (
-                      <SelectItem key={model.value} value={model.value}>
+                <NativeSelect
+                  value={selectedModelValue ?? ''}
+                  onChange={(event) => setSelectedModel(event.target.value)}
+                  className={cn(compactNativeSelectClassName, 'flex-1')}
+                >
+                  {modelOptions.length === 0 ? (
+                    <NativeSelectOption value="" disabled>
+                      No models
+                    </NativeSelectOption>
+                  ) : (
+                    modelOptions.map((model) => (
+                      <NativeSelectOption key={model.value} value={model.value}>
                         {model.displayName}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                      </NativeSelectOption>
+                    ))
+                  )}
+                </NativeSelect>
               </label>
               {effortOptions.length > 0 && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 150px', minWidth: 128 }}>
@@ -3153,67 +3155,30 @@ export default function MessageView({ messages, loading, session, projectView, o
                   }}>
                     EFFORT
                   </Label>
-                  <Select value={selectedEffort} onValueChange={(value) => setSelectedEffort(value as 'auto' | ReasoningEffortLevel)}>
-                    <SelectTrigger
-                      style={{
-                        height: 30,
-                        minWidth: 0,
-                        flex: 1,
-                        background: 'var(--surface-2)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 5,
-                        color: 'var(--text)',
-                        padding: '0 10px',
-                        fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 11,
-                      }}
-                    >
-                      <SelectValue placeholder="Effort" />
-                    </SelectTrigger>
-                    <SelectContent
-                      style={{
-                        fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 12,
-                        padding: '6px',
-                      }}
-                    >
-                      <SelectItem value="auto">AUTO</SelectItem>
-                      {effortOptions.map((level) => (
-                        <SelectItem key={level} value={level}>
-                          {effortLabel(level)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <NativeSelect
+                    value={selectedEffort}
+                    onChange={(event) => setSelectedEffort(event.target.value as 'auto' | ReasoningEffortLevel)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                  >
+                    <NativeSelectOption value="auto">AUTO</NativeSelectOption>
+                    {effortOptions.map((level) => (
+                      <NativeSelectOption key={level} value={level}>
+                        {effortLabel(level)}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
                 </label>
               )}
               {sessionCapabilities?.fileRewind && rewindCandidates.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 300px', minWidth: 220 }}>
                   <Select value={rewindTargetId} onValueChange={setRewindTargetId}>
                     <SelectTrigger
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        height: 30,
-                        background: 'var(--surface-2)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 5,
-                        color: 'var(--text)',
-                        padding: '0 10px',
-                        fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 11,
-                      }}
+                      className={cn(compactSelectTriggerClassName, 'flex-1')}
                     >
                       <SelectValue placeholder="Rewind target" />
                     </SelectTrigger>
                     <SelectContent
-                      style={{
-                        fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 12,
-                        padding: '6px',
-                        minWidth: '28rem',
-                        maxWidth: 'calc(100vw - 48px)',
-                      }}
+                      className={cn(compactSelectContentClassName, 'min-w-[28rem] max-w-[calc(100vw-48px)]')}
                     >
                       {rewindCandidates.slice().reverse().map((candidate) => (
                         <SelectItem key={candidate.uuid} value={candidate.uuid}>
@@ -3250,27 +3215,12 @@ export default function MessageView({ messages, loading, session, projectView, o
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 170px', minWidth: 146 }}>
                   <Select value={String(rollbackTurns)} onValueChange={(value) => setRollbackTurns(Number(value))}>
                     <SelectTrigger
-                      style={{
-                        height: 30,
-                        minWidth: 0,
-                        flex: 1,
-                        background: 'var(--surface-2)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 5,
-                        color: 'var(--text)',
-                        padding: '0 10px',
-                        fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 11,
-                      }}
+                      className={cn(compactSelectTriggerClassName, 'flex-1')}
                     >
                       <SelectValue placeholder="Turns" />
                     </SelectTrigger>
                     <SelectContent
-                      style={{
-                        fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 12,
-                        padding: '6px',
-                      }}
+                      className={compactSelectContentClassName}
                     >
                       {Array.from({ length: Math.min(10, rollbackCandidates.length) }, (_, index) => index + 1).map((value) => (
                         <SelectItem key={value} value={String(value)}>
@@ -3391,33 +3341,17 @@ export default function MessageView({ messages, loading, session, projectView, o
               </div>
             )}
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-              <Select value={attachmentType} onValueChange={(value) => setAttachmentType(value as SendAttachment['type'])}>
-                <SelectTrigger
-                  style={{
-                    width: 112,
-                    height: 30,
-                    background: 'var(--surface-2)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 5,
-                    color: 'var(--text)',
-                    padding: '0 10px',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                  }}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent
-                  className="min-w-[10.5rem]"
-                  style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, padding: '6px' }}
-                >
-                  <SelectItem value="file">FILE</SelectItem>
-                  <SelectItem value="directory">DIR</SelectItem>
-                  <SelectItem value="image">IMAGE</SelectItem>
-                  <SelectItem value="mention">MENTION</SelectItem>
-                  <SelectItem value="skill">SKILL</SelectItem>
-                </SelectContent>
-              </Select>
+              <NativeSelect
+                value={attachmentType}
+                onChange={(event) => setAttachmentType(event.target.value as SendAttachment['type'])}
+                className={cn(compactNativeSelectClassName, 'w-[112px]')}
+              >
+                <NativeSelectOption value="file">FILE</NativeSelectOption>
+                <NativeSelectOption value="directory">DIR</NativeSelectOption>
+                <NativeSelectOption value="image">IMAGE</NativeSelectOption>
+                <NativeSelectOption value="mention">MENTION</NativeSelectOption>
+                <NativeSelectOption value="skill">SKILL</NativeSelectOption>
+              </NativeSelect>
               <Input
                 value={attachmentPath}
                 onChange={(event) => setAttachmentPath(event.target.value)}

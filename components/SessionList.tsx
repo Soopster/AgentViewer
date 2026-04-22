@@ -9,8 +9,14 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { NativeSelect, NativeSelectOption, nativeSelectBaseClassName } from '@/components/ui/native-select'
+import { cn } from '@/lib/utils'
 import ThemeToggle from './ThemeToggle'
+
+const providerNativeSelectClassName = cn(
+  nativeSelectBaseClassName,
+  'h-9 rounded-[9px] border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--surface-2)] px-3 text-[11px] font-medium tracking-[0.04em] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+)
 
 type Props = {
   sessions: Session[]
@@ -847,48 +853,19 @@ export default function SessionList({
               >
                 PROVIDER
               </Label>
-              <Select value={provider} onValueChange={(value) => onChangeProvider(value as ProviderSelection)} disabled={switchingProvider}>
-                <SelectTrigger
-                  style={{
-                    width: '100%',
-                    height: 36,
-                    borderRadius: 9,
-                    border: '1px solid var(--border)',
-                    background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
-                    color: 'var(--text)',
-                    padding: '0 12px',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                    fontWeight: 500,
-                    letterSpacing: '0.04em',
-                    cursor: switchingProvider ? 'not-allowed' : 'pointer',
-                    opacity: switchingProvider ? 0.6 : 1,
-                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
-                  }}
-                >
-                  <SelectValue placeholder="Provider" />
-                </SelectTrigger>
-                <SelectContent
-                  style={{
-                    borderRadius: 10,
-                    border: '1px solid var(--border-2)',
-                    background: 'var(--surface)',
-                    boxShadow: '0 14px 32px rgba(0,0,0,0.14)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 12,
-                    fontWeight: 500,
-                    letterSpacing: '0.04em',
-                    padding: '6px',
-                  }}
-                >
-                  <SelectItem value="claude">CLAUDE</SelectItem>
-                  <SelectItem value="codex">CODEX</SelectItem>
-                  <SelectItem value="opencode">OPENCODE</SelectItem>
-                  <SelectItem value="copilot">COPILOT</SelectItem>
-                  <SelectItem value="pi">PI</SelectItem>
-                  <SelectItem value="all">ALL</SelectItem>
-                </SelectContent>
-              </Select>
+              <NativeSelect
+                value={provider}
+                onChange={(event) => onChangeProvider(event.target.value as ProviderSelection)}
+                disabled={switchingProvider}
+                className={cn(providerNativeSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
+              >
+                <NativeSelectOption value="claude">CLAUDE</NativeSelectOption>
+                <NativeSelectOption value="codex">CODEX</NativeSelectOption>
+                <NativeSelectOption value="opencode">OPENCODE</NativeSelectOption>
+                <NativeSelectOption value="copilot">COPILOT</NativeSelectOption>
+                <NativeSelectOption value="pi">PI</NativeSelectOption>
+                <NativeSelectOption value="all">ALL</NativeSelectOption>
+              </NativeSelect>
             </div>
             <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
               <Input
