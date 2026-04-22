@@ -83,6 +83,9 @@ const LIGHT_MODES: TuiThemeMode[] = [
   'ayu-light',
   'one-light',
   'everforest-light',
+  'tokyo-night-day',
+  'quiet-light',
+  'horizon-light',
   'imessage',
 ]
 const DARK_MODES: TuiThemeMode[] = [
@@ -98,6 +101,12 @@ const DARK_MODES: TuiThemeMode[] = [
   'kanagawa',
   'everforest-dark',
   'obsidian',
+  'github-dark',
+  'ayu-dark',
+  'rose-pine',
+  'palenight',
+  'night-owl',
+  'synthwave',
   'cyber',
 ]
 const THEMES: TuiThemeMode[] = [...LIGHT_MODES, ...DARK_MODES]
@@ -927,6 +936,9 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   'ayu-light': 'Ayu warm light',
   'one-light': 'Atom One light',
   'everforest-light': 'Everforest warm light',
+  'tokyo-night-day': 'Tokyo Night daylight',
+  'quiet-light': 'Subdued VS Code quiet',
+  'horizon-light': 'Horizon warm pastel',
   imessage: 'iOS Messages bubbles',
   dark: 'Deep navy background',
   'solarized-dark': 'Solarized teal',
@@ -940,6 +952,12 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   kanagawa: 'Kanagawa muted waves',
   'everforest-dark': 'Everforest forest dark',
   obsidian: 'Pure black minimal',
+  'github-dark': 'GitHub neutral dark',
+  'ayu-dark': 'Ayu warm dark',
+  'rose-pine': 'Rosé Pine moody',
+  synthwave: 'Synthwave neon nights',
+  palenight: 'Material Palenight',
+  'night-owl': 'Night Owl deep teal',
   cyber: 'Neon accents',
 }
 
@@ -954,6 +972,9 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   'ayu-light': 'AYU LIGHT',
   'one-light': 'ONE LIGHT',
   'everforest-light': 'EVERFOREST LIGHT',
+  'tokyo-night-day': 'TOKYO NIGHT DAY',
+  'quiet-light': 'QUIET LIGHT',
+  'horizon-light': 'HORIZON LIGHT',
   imessage: 'iMESSAGE',
   dark: 'DARK',
   'solarized-dark': 'SOLARIZED DARK',
@@ -967,6 +988,12 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   kanagawa: 'KANAGAWA',
   'everforest-dark': 'EVERFOREST DARK',
   obsidian: 'OBSIDIAN',
+  'github-dark': 'GITHUB DARK',
+  'ayu-dark': 'AYU DARK',
+  'rose-pine': 'ROSÉ PINE',
+  synthwave: 'SYNTHWAVE',
+  palenight: 'PALENIGHT',
+  'night-owl': 'NIGHT OWL',
   cyber: 'CYBER',
 }
 

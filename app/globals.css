@@ -336,6 +336,42 @@
   --t-grep: #f85552; --t-glob: #df69ba; --t-agent: #f85552; --t-other: #829181;
 }
 
+/* ── Design tokens ── tokyo-night-day ────────────────────────────────────── */
+[data-theme="tokyo-night-day"] {
+  --bg: #e1e2e7; --surface: #d0d5e3; --surface-2: #c4c8da; --surface-3: #a8aecb;
+  --border: #a8aecb; --border-2: #2e7de9;
+  --text: #3760bf; --text-2: #6172b0; --text-3: #848cb5;
+  --violet: #9854f1; --violet-glow: color-mix(in srgb, #9854f1 15%, transparent);
+  --cyan: #007197; --cyan-glow: color-mix(in srgb, #007197 12%, transparent);
+  --green: #587539; --red: #f52a65; --amber: #8c6c3e;
+  --t-bash: #8c6c3e; --t-edit: #587539; --t-write: #007197; --t-read: #2e7de9;
+  --t-grep: #f52a65; --t-glob: #9854f1; --t-agent: #9854f1; --t-other: #6172b0;
+}
+
+/* ── Design tokens ── quiet-light ────────────────────────────────────────── */
+[data-theme="quiet-light"] {
+  --bg: #f5f5f5; --surface: #ffffff; --surface-2: #eef1f5; --surface-3: #d3d9e5;
+  --border: #c7d1dd; --border-2: #333333;
+  --text: #333333; --text-2: #676867; --text-3: #aaaaaa;
+  --violet: #7a3e9d; --violet-glow: color-mix(in srgb, #7a3e9d 15%, transparent);
+  --cyan: #4b83cd; --cyan-glow: color-mix(in srgb, #4b83cd 12%, transparent);
+  --green: #448c27; --red: #aa3731; --amber: #a67f59;
+  --t-bash: #a67f59; --t-edit: #448c27; --t-write: #4b83cd; --t-read: #7a3e9d;
+  --t-grep: #aa3731; --t-glob: #7a3e9d; --t-agent: #aa3731; --t-other: #676867;
+}
+
+/* ── Design tokens ── horizon-light ──────────────────────────────────────── */
+[data-theme="horizon-light"] {
+  --bg: #fdf0ed; --surface: #fadad1; --surface-2: #f6c9bf; --surface-3: #e7aca3;
+  --border: #e7aca3; --border-2: #403c64;
+  --text: #403c64; --text-2: #6c5f80; --text-3: #a79da7;
+  --violet: #da103f; --violet-glow: color-mix(in srgb, #da103f 15%, transparent);
+  --cyan: #1d8991; --cyan-glow: color-mix(in srgb, #1d8991 12%, transparent);
+  --green: #1eb980; --red: #f43e5c; --amber: #f9c859;
+  --t-bash: #f9c859; --t-edit: #1eb980; --t-write: #1d8991; --t-read: #da103f;
+  --t-grep: #f43e5c; --t-glob: #da103f; --t-agent: #f43e5c; --t-other: #6c5f80;
+}
+
 /* ── Design tokens ── solarized-dark ─────────────────────────────────────── */
 [data-theme="solarized-dark"] {
   --bg: #002b36; --surface: #073642; --surface-2: #0e4550; --surface-3: #125460;
@@ -466,6 +502,78 @@
   --green: #4ade80; --red: #f87171; --amber: #fbbf24;
   --t-bash: #fbbf24; --t-edit: #4ade80; --t-write: #67e8f9; --t-read: #a78bfa;
   --t-grep: #f87171; --t-glob: #f472b6; --t-agent: #f472b6; --t-other: #9a9a9a;
+}
+
+/* ── Design tokens ── github-dark ────────────────────────────────────────── */
+[data-theme="github-dark"] {
+  --bg: #0d1117; --surface: #161b22; --surface-2: #21262d; --surface-3: #30363d;
+  --border: #30363d; --border-2: #58a6ff;
+  --text: #e6edf3; --text-2: #7d8590; --text-3: #484f58;
+  --violet: #bc8cff; --violet-glow: color-mix(in srgb, #bc8cff 15%, transparent);
+  --cyan: #39c5cf; --cyan-glow: color-mix(in srgb, #39c5cf 12%, transparent);
+  --green: #3fb950; --red: #f85149; --amber: #d29922;
+  --t-bash: #d29922; --t-edit: #3fb950; --t-write: #39c5cf; --t-read: #58a6ff;
+  --t-grep: #f85149; --t-glob: #bc8cff; --t-agent: #db61a2; --t-other: #7d8590;
+}
+
+/* ── Design tokens ── ayu-dark ───────────────────────────────────────────── */
+[data-theme="ayu-dark"] {
+  --bg: #0a0e14; --surface: #0d1017; --surface-2: #1f2430; --surface-3: #273747;
+  --border: #253340; --border-2: #ffb454;
+  --text: #b3b1ad; --text-2: #828c99; --text-3: #626a73;
+  --violet: #d2a6ff; --violet-glow: color-mix(in srgb, #d2a6ff 15%, transparent);
+  --cyan: #39bae6; --cyan-glow: color-mix(in srgb, #39bae6 12%, transparent);
+  --green: #aad94c; --red: #f07178; --amber: #ffb454;
+  --t-bash: #ffb454; --t-edit: #aad94c; --t-write: #39bae6; --t-read: #d2a6ff;
+  --t-grep: #f07178; --t-glob: #ff8f40; --t-agent: #f07178; --t-other: #828c99;
+}
+
+/* ── Design tokens ── rose-pine ──────────────────────────────────────────── */
+[data-theme="rose-pine"] {
+  --bg: #191724; --surface: #1f1d2e; --surface-2: #26233a; --surface-3: #393552;
+  --border: #26233a; --border-2: #c4a7e7;
+  --text: #e0def4; --text-2: #908caa; --text-3: #6e6a86;
+  --violet: #c4a7e7; --violet-glow: color-mix(in srgb, #c4a7e7 15%, transparent);
+  --cyan: #9ccfd8; --cyan-glow: color-mix(in srgb, #9ccfd8 12%, transparent);
+  --green: #31748f; --red: #eb6f92; --amber: #f6c177;
+  --t-bash: #f6c177; --t-edit: #31748f; --t-write: #9ccfd8; --t-read: #c4a7e7;
+  --t-grep: #eb6f92; --t-glob: #ebbcba; --t-agent: #ebbcba; --t-other: #908caa;
+}
+
+/* ── Design tokens ── synthwave ──────────────────────────────────────────── */
+[data-theme="synthwave"] {
+  --bg: #241b2f; --surface: #262335; --surface-2: #34294f; --surface-3: #463465;
+  --border: #463465; --border-2: #f97e72;
+  --text: #f8f8f2; --text-2: #b4bbcb; --text-3: #8e8ea3;
+  --violet: #a583f0; --violet-glow: color-mix(in srgb, #a583f0 18%, transparent);
+  --cyan: #03edf9; --cyan-glow: color-mix(in srgb, #03edf9 14%, transparent);
+  --green: #72f1b8; --red: #fe4450; --amber: #ffcc99;
+  --t-bash: #ffcc99; --t-edit: #72f1b8; --t-write: #03edf9; --t-read: #a583f0;
+  --t-grep: #fe4450; --t-glob: #ff7edb; --t-agent: #ff7edb; --t-other: #b4bbcb;
+}
+
+/* ── Design tokens ── palenight ──────────────────────────────────────────── */
+[data-theme="palenight"] {
+  --bg: #292d3e; --surface: #1f2233; --surface-2: #34374a; --surface-3: #444267;
+  --border: #444267; --border-2: #82aaff;
+  --text: #a6accd; --text-2: #8b93b1; --text-3: #676e95;
+  --violet: #c792ea; --violet-glow: color-mix(in srgb, #c792ea 15%, transparent);
+  --cyan: #89ddff; --cyan-glow: color-mix(in srgb, #89ddff 12%, transparent);
+  --green: #c3e88d; --red: #f07178; --amber: #ffcb6b;
+  --t-bash: #ffcb6b; --t-edit: #c3e88d; --t-write: #89ddff; --t-read: #82aaff;
+  --t-grep: #f07178; --t-glob: #c792ea; --t-agent: #f78c6c; --t-other: #8b93b1;
+}
+
+/* ── Design tokens ── night-owl ──────────────────────────────────────────── */
+[data-theme="night-owl"] {
+  --bg: #011627; --surface: #0b253a; --surface-2: #1d3b53; --surface-3: #234e6e;
+  --border: #1d3b53; --border-2: #7fdbca;
+  --text: #d6deeb; --text-2: #8badc1; --text-3: #5f7e97;
+  --violet: #c792ea; --violet-glow: color-mix(in srgb, #c792ea 15%, transparent);
+  --cyan: #7fdbca; --cyan-glow: color-mix(in srgb, #7fdbca 12%, transparent);
+  --green: #addb67; --red: #ef5350; --amber: #ecc48d;
+  --t-bash: #ecc48d; --t-edit: #addb67; --t-write: #7fdbca; --t-read: #82aaff;
+  --t-grep: #ef5350; --t-glob: #c792ea; --t-agent: #ff869a; --t-other: #8badc1;
 }
 
 /* ── Design tokens ── cyber ──────────────────────────────────────────────── */

@@ -15,6 +15,9 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'ayu-light',
   'one-light',
   'everforest-light',
+  'tokyo-night-day',
+  'quiet-light',
+  'horizon-light',
   'imessage',
   'dark',
   'solarized-dark',
@@ -28,6 +31,12 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'kanagawa',
   'everforest-dark',
   'obsidian',
+  'github-dark',
+  'ayu-dark',
+  'rose-pine',
+  'synthwave',
+  'palenight',
+  'night-owl',
   'cyber',
 ]
 

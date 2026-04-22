@@ -14,6 +14,9 @@ type Theme =
   | 'ayu-light'
   | 'one-light'
   | 'everforest-light'
+  | 'tokyo-night-day'
+  | 'quiet-light'
+  | 'horizon-light'
   | 'imessage'
   | 'dark'
   | 'terminal'
@@ -28,6 +31,12 @@ type Theme =
   | 'kanagawa'
   | 'everforest-dark'
   | 'obsidian'
+  | 'github-dark'
+  | 'ayu-dark'
+  | 'rose-pine'
+  | 'synthwave'
+  | 'palenight'
+  | 'night-owl'
   | 'cyber'
 
 type ThemeCategory = 'dark' | 'light'
@@ -43,6 +52,9 @@ const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; label: 
   'ayu-light':        { category: 'light', icon: '☀', label: 'Ayu Light' },
   'one-light':        { category: 'light', icon: '☀', label: 'One Light' },
   'everforest-light': { category: 'light', icon: '☀', label: 'Everforest Light' },
+  'tokyo-night-day':  { category: 'light', icon: '☀', label: 'Tokyo Night Day' },
+  'quiet-light':      { category: 'light', icon: '☀', label: 'Quiet Light' },
+  'horizon-light':    { category: 'light', icon: '☀', label: 'Horizon Light' },
   imessage:           { category: 'light', icon: '💬', label: 'iMessage' },
   dark:               { category: 'dark',  icon: '☾', label: 'Dark' },
   terminal:           { category: 'dark',  icon: '⌨', label: 'Terminal' },
@@ -57,6 +69,12 @@ const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; label: 
   kanagawa:           { category: 'dark',  icon: '☾', label: 'Kanagawa' },
   'everforest-dark':  { category: 'dark',  icon: '☾', label: 'Everforest Dark' },
   obsidian:           { category: 'dark',  icon: '☾', label: 'Obsidian' },
+  'github-dark':      { category: 'dark',  icon: '☾', label: 'GitHub Dark' },
+  'ayu-dark':         { category: 'dark',  icon: '☾', label: 'Ayu Dark' },
+  'rose-pine':        { category: 'dark',  icon: '☾', label: 'Rosé Pine' },
+  synthwave:          { category: 'dark',  icon: '✦', label: 'Synthwave' },
+  palenight:          { category: 'dark',  icon: '☾', label: 'Palenight' },
+  'night-owl':        { category: 'dark',  icon: '☾', label: 'Night Owl' },
   cyber:              { category: 'dark',  icon: '✦', label: 'Cyber' },
 }
 
