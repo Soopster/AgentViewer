@@ -529,7 +529,7 @@ export default function Home() {
     <CodeThemeProvider>
     <SidebarProvider defaultOpen>
       <div style={{ display: 'flex', height: '100vh' }}>
-        <Sidebar>
+        <Sidebar variant="inset">
           <SessionList
             sessions={sessions}
             loading={loadingSessions}

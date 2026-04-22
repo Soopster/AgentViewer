@@ -10,7 +10,14 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption, nativeSelectBaseClassName } from '@/components/ui/native-select'
-import { useSidebar } from '@/components/ui/sidebar'
+import {
+  SidebarContent,
+  SidebarFooter,
+  SidebarHeader,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
+} from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
 import ThemeToggle from './ThemeToggle'
 
@@ -595,43 +602,61 @@ export default function SessionList({
   onChangeScope,
   onToggleWorktrees,
 }: Props) {
-  const { state: sidebarState, toggleSidebar } = useSidebar()
+  const { state: sidebarState, width: sidebarWidth, setWidth: setSidebarWidth, applyWidth } = useSidebar()
   const collapsed = sidebarState === 'collapsed'
-  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-    if (typeof window === 'undefined') return 290
-    const stored = Number(window.localStorage.getItem('agentViewer:sidebarWidth'))
-    return Number.isFinite(stored) && stored >= 220 && stored <= 640 ? stored : 290
-  })
   const [resizing, setResizing] = useState(false)
+  const resizeFrameRef = useRef<number | null>(null)
+  const resizeWidthRef = useRef(sidebarWidth)
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('agentViewer:sidebarWidth', String(sidebarWidth))
+    resizeWidthRef.current = sidebarWidth
   }, [sidebarWidth])
   useEffect(() => {
     if (!resizing) return
     const onMove = (e: MouseEvent) => {
       const next = Math.max(220, Math.min(640, e.clientX))
-      setSidebarWidth(next)
+      resizeWidthRef.current = next
+      if (resizeFrameRef.current != null) return
+      resizeFrameRef.current = window.requestAnimationFrame(() => {
+        resizeFrameRef.current = null
+        applyWidth(resizeWidthRef.current)
+      })
     }
-    const onUp = () => setResizing(false)
+    const onUp = () => {
+      if (resizeFrameRef.current != null) {
+        window.cancelAnimationFrame(resizeFrameRef.current)
+        resizeFrameRef.current = null
+      }
+      setSidebarWidth(resizeWidthRef.current)
+      setResizing(false)
+    }
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
     return () => {
+      if (resizeFrameRef.current != null) {
+        window.cancelAnimationFrame(resizeFrameRef.current)
+        resizeFrameRef.current = null
+      }
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
-  }, [resizing])
+  }, [applyWidth, resizing, setSidebarWidth])
   const [searchText, setSearchText] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
-  const [sortMode, setSortMode] = useState<'project' | 'time'>(() => {
-    if (typeof window === 'undefined') return 'project'
-    const stored = window.localStorage.getItem('agentViewer:sessionSort')
-    return stored === 'time' ? 'time' : 'project'
-  })
+  const [sortMode, setSortMode] = useState<'project' | 'time'>('project')
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem('agentViewer:sessionSort')
+      if (stored === 'time' || stored === 'project') {
+        setSortMode(stored)
+      }
+    } catch {
+      // ignore storage failures
+    }
+  }, [])
   useEffect(() => {
     if (typeof window === 'undefined') return
     window.localStorage.setItem('agentViewer:sessionSort', sortMode)
@@ -716,466 +741,478 @@ export default function SessionList({
   return (
     <div
       style={{
-        width: collapsed ? 32 : sidebarWidth,
-        minWidth: collapsed ? 32 : sidebarWidth,
-        height: '100vh',
+        width: '100%',
+        minWidth: 0,
+        height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        borderRight: '1px solid var(--border)',
+        minHeight: 0,
         background: 'var(--surface)',
         overflow: 'hidden',
-        transition: resizing ? 'none' : 'width 0.2s ease, min-width 0.2s ease',
         flexShrink: 0,
         position: 'relative',
       }}
     >
       {!collapsed && (
-        <div
-          onMouseDown={(e) => { e.preventDefault(); setResizing(true) }}
-          onDoubleClick={() => setSidebarWidth(290)}
+        <SidebarRail
+          onMouseDown={(e) => {
+            e.preventDefault()
+            resizeWidthRef.current = Math.max(220, Math.min(640, e.clientX))
+            setResizing(true)
+          }}
+          onDoubleClick={() => {
+            resizeWidthRef.current = 290
+            applyWidth(290)
+            setSidebarWidth(290)
+          }}
           title="Drag to resize · double-click to reset"
           style={{
-            position: 'absolute',
-            top: 0,
-            right: 0,
-            width: 6,
-            height: '100%',
-            cursor: 'col-resize',
-            zIndex: 20,
             background: resizing ? 'var(--violet-glow)' : 'transparent',
           }}
         />
       )}
-      {/* ── Collapse toggle (always visible) ───────────── */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: collapsed ? 'center' : 'flex-end',
-          padding: collapsed ? '10px 0' : '6px 10px 0',
-          flexShrink: 0,
-        }}
-      >
-        <button
-          onClick={toggleSidebar}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            color: 'var(--text-3)',
-            padding: '4px 6px',
-            borderRadius: 6,
-            lineHeight: 1,
-            fontSize: 14,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          {collapsed ? '›' : '‹'}
-        </button>
-      </div>
-      {/* ── Header + Groups (hidden when collapsed) ────── */}
-      {!collapsed && <>
-      <div
-        style={{
-          padding: '18px 18px 15px',
-          borderBottom: '1px solid var(--border)',
-          flexShrink: 0,
-          background: 'linear-gradient(160deg, rgba(139,128,240,0.07) 0%, transparent 60%)',
-        }}
-      >
+      <SidebarHeader>
         <div
           style={{
-            fontFamily: "'Oxanium', monospace",
-            fontSize: 16,
-            fontWeight: 700,
-            letterSpacing: '0.1em',
-            textTransform: 'uppercase',
-            color: 'var(--text)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
+            padding: '12px 14px 10px',
+            borderBottom: '1px solid var(--border)',
+            flexShrink: 0,
+            background: 'linear-gradient(160deg, rgba(139,128,240,0.07) 0%, transparent 60%)',
           }}
         >
-          <span style={{ color: 'var(--violet)', fontSize: 14, lineHeight: 1 }}>◈</span>
-          <span style={{ flex: 1 }}>Agent Viewer</span>
-          <ThemeToggle />
-        </div>
-        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span
+          <div
             style={{
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              background: 'var(--green)',
-              flexShrink: 0,
-              animation: 'live-pulse 2.5s ease-in-out infinite',
-              display: 'inline-block',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 8,
             }}
-          />
-          <span
+          >
+            {!collapsed && (
+              <div
+                style={{
+                  fontFamily: "'Oxanium', monospace",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: 'var(--text)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  minWidth: 0,
+                  flex: 1,
+                }}
+              >
+                <span style={{ color: 'var(--violet)', fontSize: 13, lineHeight: 1 }}>◈</span>
+                <span style={{ flex: 1 }}>Agent Viewer</span>
+                <ThemeToggle />
+              </div>
+            )}
+            <SidebarTrigger
+              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              className="ml-auto h-7 w-7 shrink-0 rounded-md border-border bg-transparent px-0 text-[14px] text-[var(--text-3)] shadow-none hover:bg-[var(--surface-2)]"
+            />
+          </div>
+          {!collapsed && (
+            <>
+              <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: 'var(--green)',
+                    flexShrink: 0,
+                    animation: 'live-pulse 2.5s ease-in-out infinite',
+                    display: 'inline-block',
+                  }}
+                />
+                <span
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 11,
+                    color: 'var(--text-3)',
+                    letterSpacing: '0.03em',
+                  }}
+                >
+                  {loading
+                    ? 'syncing…'
+                    : sortMode === 'time'
+                    ? filteredSessions.length === sessions.length
+                      ? `${sessions.length} session${sessions.length !== 1 ? 's' : ''} · by time`
+                      : `${filteredSessions.length}/${sessions.length} sessions · by time`
+                    : filteredSessions.length === sessions.length
+                    ? `${groups.length} project${groups.length !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
+                    : `${filteredSessions.length}/${sessions.length} sessions · ${groups.length} projects`}
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+        {!collapsed && (
+          <Card
             style={{
+              margin: '10px 14px 0',
+              borderRadius: 10,
+              border: '1px solid var(--border)',
+              background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
+              boxShadow: '0 10px 24px var(--violet-glow)',
+            }}
+          >
+            <CardContent style={{ padding: 12 }}>
+              <div style={{ display: 'grid', gap: 5 }}>
+                  <Label
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 8,
+                      color: 'var(--text-3)',
+                      letterSpacing: '0.1em',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    PROVIDER
+                  </Label>
+                  <NativeSelect
+                    value={provider}
+                    onChange={(event) => onChangeProvider(event.target.value as ProviderSelection)}
+                    disabled={switchingProvider}
+                    className={cn(providerNativeSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
+                  >
+                    <NativeSelectOption value="claude">CLAUDE</NativeSelectOption>
+                    <NativeSelectOption value="codex">CODEX</NativeSelectOption>
+                    <NativeSelectOption value="opencode">OPENCODE</NativeSelectOption>
+                    <NativeSelectOption value="copilot">COPILOT</NativeSelectOption>
+                    <NativeSelectOption value="pi">PI</NativeSelectOption>
+                    <NativeSelectOption value="all">ALL</NativeSelectOption>
+                  </NativeSelect>
+                </div>
+                <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Input
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                    placeholder="Search title, tags, path, prompt…"
+                    style={{
+                      flex: 1,
+                      height: 30,
+                      borderRadius: 6,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface-2)',
+                      color: 'var(--text)',
+                      padding: '0 10px',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      outline: 'none',
+                    }}
+                  />
+                  {(searchText || activeTag) && (
+                    <Button
+                      onClick={() => {
+                        setSearchText('')
+                        setActiveTag(null)
+                      }}
+                      variant="outline"
+                      size="sm"
+                      style={{
+                        height: 30,
+                        padding: '0 10px',
+                        borderRadius: 6,
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface-2)',
+                        color: 'var(--text-3)',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        letterSpacing: '0.05em',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      CLEAR
+                    </Button>
+                  )}
+                </div>
+                {popularTags.length > 0 && (
+                  <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {popularTags.map(([tag, count]) => {
+                      const selected = activeTag?.toLowerCase() === tag.toLowerCase()
+                      return (
+                        <Button
+                          key={tag}
+                          onClick={() => setActiveTag((prev) => prev?.toLowerCase() === tag.toLowerCase() ? null : tag)}
+                          variant="outline"
+                          size="sm"
+                          style={{
+                            height: 24,
+                            padding: '0 8px',
+                            borderRadius: 999,
+                            border: `1px solid ${selected ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                            background: selected ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                            color: selected ? 'var(--violet)' : 'var(--text-3)',
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 10,
+                            letterSpacing: '0.04em',
+                            cursor: 'pointer',
+                          }}
+                          title={`${count} session${count === 1 ? '' : 's'}`}
+                        >
+                          #{tag} · {count}
+                        </Button>
+                      )
+                    })}
+                  </div>
+                )}
+                <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                  <Button
+                    onClick={() => setSortMode('project')}
+                    variant="outline"
+                    size="sm"
+                    style={{
+                      flex: 1,
+                      height: 28,
+                      borderRadius: 5,
+                      border: `1px solid ${sortMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                      background: sortMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                      color: sortMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      letterSpacing: '0.06em',
+                      cursor: 'pointer',
+                    }}
+                    title="Group sessions by project"
+                  >
+                    BY PROJECT
+                  </Button>
+                  <Button
+                    onClick={() => setSortMode('time')}
+                    variant="outline"
+                    size="sm"
+                    style={{
+                      flex: 1,
+                      height: 28,
+                      borderRadius: 5,
+                      border: `1px solid ${sortMode === 'time' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                      background: sortMode === 'time' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                      color: sortMode === 'time' ? 'var(--violet)' : 'var(--text-3)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      letterSpacing: '0.06em',
+                      cursor: 'pointer',
+                    }}
+                    title="Sort sessions by most recent activity"
+                  >
+                    BY TIME
+                  </Button>
+                </div>
+                <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
+                  <Button
+                    onClick={() => onChangeScope('all')}
+                    variant="outline"
+                    size="sm"
+                    style={{
+                      flex: 1,
+                      height: 28,
+                      borderRadius: 5,
+                      border: `1px solid ${scopeMode === 'all' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                      background: scopeMode === 'all' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                      color: scopeMode === 'all' ? 'var(--violet)' : 'var(--text-3)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      letterSpacing: '0.06em',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ALL PROJECTS
+                  </Button>
+                  <Button
+                    onClick={() => canScopeToProject && onChangeScope('project')}
+                    disabled={!canScopeToProject}
+                    title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
+                    variant="outline"
+                    size="sm"
+                    style={{
+                      flex: 1,
+                      height: 28,
+                      borderRadius: 5,
+                      border: `1px solid ${scopeMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                      background: scopeMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                      color: scopeMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      letterSpacing: '0.06em',
+                      cursor: canScopeToProject ? 'pointer' : 'not-allowed',
+                      opacity: canScopeToProject ? 1 : 0.45,
+                    }}
+                  >
+                    THIS PROJECT
+                  </Button>
+                </div>
+                {scopeMode === 'project' && scopeProjectName && (
+                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        color: 'var(--text-3)',
+                        letterSpacing: '0.04em',
+                      }}
+                    >
+                      {scopeProjectName}
+                    </span>
+                    <Label
+                      style={{
+                        marginLeft: 'auto',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        color: 'var(--text-3)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Checkbox
+                        checked={includeWorktrees}
+                        onCheckedChange={(checked) => onToggleWorktrees(checked === true)}
+                        style={{
+                          borderColor: 'var(--border)',
+                          background: includeWorktrees ? 'var(--violet)' : 'var(--surface-2)',
+                          color: includeWorktrees ? 'var(--bg)' : 'var(--text)',
+                        }}
+                      />
+                      worktrees
+                    </Label>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+        )}
+      </SidebarHeader>
+      {!collapsed && (
+        <SidebarContent>
+          <div style={{ overflow: 'auto', flex: 1 }}>
+            {error && (
+              <div
+                style={{
+                  padding: '12px 18px',
+                  fontSize: 12,
+                  color: 'var(--red)',
+                  borderBottom: '1px solid var(--border)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                }}
+              >
+                {error}
+              </div>
+            )}
+
+            {!loading && !error && sortMode === 'project' && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
+              <ProjectGroup
+                key={projectDir}
+                name={projectName}
+                projectKey={projectDir}
+                sessions={groupSessions}
+                selectedId={selectedId}
+                selectedProject={selectedProject}
+                onSelect={onSelect}
+                onSelectProject={onSelectProject}
+                onRename={onRename}
+                onTag={onTag}
+              />
+            ))}
+            {!loading && !error && sortMode === 'time' && timeEntries.map((entry) => {
+              if (entry.type === 'header') {
+                const isProjectSelected = sameProjectPath(selectedProject, entry.projectDir)
+                return (
+                  <div
+                    key={entry.key}
+                    onClick={() => onSelectProject(entry.projectDir, entry.projectName, entry.projectSessions)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 7,
+                      padding: '8px 14px 8px 16px',
+                      userSelect: 'none',
+                      background: isProjectSelected
+                        ? 'linear-gradient(to right, rgba(139,128,240,0.12) 0%, var(--surface-2) 70%)'
+                        : 'var(--surface-2)',
+                      borderBottom: '1px solid var(--border)',
+                      borderLeft: `2px solid ${isProjectSelected ? 'var(--violet)' : 'transparent'}`,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: "'Oxanium', monospace",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
+                        flex: 1,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {entry.projectName}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
+                        background: isProjectSelected ? 'rgba(139,128,240,0.12)' : 'var(--surface-3)',
+                        border: `1px solid ${isProjectSelected ? 'rgba(139,128,240,0.3)' : 'var(--border)'}`,
+                        borderRadius: 3,
+                        padding: '1px 6px',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {entry.count}
+                    </span>
+                  </div>
+                )
+              }
+              return (
+                <SessionRow
+                  key={entry.key}
+                  session={entry.session}
+                  selected={sessionTabKey(entry.session) === selectedId}
+                  onSelect={onSelect}
+                  onRename={onRename}
+                  onTag={onTag}
+                />
+              )
+            })}
+            {!loading && !error && filteredSessions.length === 0 && (
+              <div
+                style={{
+                  padding: '18px',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  color: 'var(--text-3)',
+                  lineHeight: 1.6,
+                }}
+              >
+                No sessions match the current search/filter.
+              </div>
+            )}
+          </div>
+        </SidebarContent>
+      )}
+      {!collapsed && (
+        <SidebarFooter>
+          <div
+            style={{
+              padding: '8px 14px 10px',
+              borderTop: '1px solid var(--border)',
               fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 12,
+              fontSize: 9,
               color: 'var(--text-3)',
               letterSpacing: '0.04em',
             }}
           >
-            {loading
-              ? 'syncing…'
-              : sortMode === 'time'
-              ? filteredSessions.length === sessions.length
-                ? `${sessions.length} session${sessions.length !== 1 ? 's' : ''} · by time`
-                : `${filteredSessions.length}/${sessions.length} sessions · by time`
-              : filteredSessions.length === sessions.length
-              ? `${groups.length} project${groups.length !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
-              : `${filteredSessions.length}/${sessions.length} sessions · ${groups.length} projects`}
-          </span>
-        </div>
-        <Card
-          style={{
-            marginTop: 14,
-            borderRadius: 12,
-            border: '1px solid var(--border)',
-            background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
-            boxShadow: '0 10px 24px var(--violet-glow)',
-          }}
-        >
-          <CardContent style={{ padding: 14 }}>
-            <div style={{ display: 'grid', gap: 6 }}>
-              <Label
-                style={{
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 9,
-                  color: 'var(--text-3)',
-                  letterSpacing: '0.12em',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                PROVIDER
-              </Label>
-              <NativeSelect
-                value={provider}
-                onChange={(event) => onChangeProvider(event.target.value as ProviderSelection)}
-                disabled={switchingProvider}
-                className={cn(providerNativeSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
-              >
-                <NativeSelectOption value="claude">CLAUDE</NativeSelectOption>
-                <NativeSelectOption value="codex">CODEX</NativeSelectOption>
-                <NativeSelectOption value="opencode">OPENCODE</NativeSelectOption>
-                <NativeSelectOption value="copilot">COPILOT</NativeSelectOption>
-                <NativeSelectOption value="pi">PI</NativeSelectOption>
-                <NativeSelectOption value="all">ALL</NativeSelectOption>
-              </NativeSelect>
-            </div>
-            <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-              <Input
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                placeholder="Search title, tags, path, prompt…"
-                style={{
-                  flex: 1,
-                  height: 30,
-                  borderRadius: 6,
-                  border: '1px solid var(--border)',
-                  background: 'var(--surface-2)',
-                  color: 'var(--text)',
-                  padding: '0 10px',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  outline: 'none',
-                }}
-              />
-              {(searchText || activeTag) && (
-                <Button
-                  onClick={() => {
-                    setSearchText('')
-                    setActiveTag(null)
-                  }}
-                  variant="outline"
-                  size="sm"
-                  style={{
-                    height: 30,
-                    padding: '0 10px',
-                    borderRadius: 6,
-                    border: '1px solid var(--border)',
-                    background: 'var(--surface-2)',
-                    color: 'var(--text-3)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                    letterSpacing: '0.05em',
-                    cursor: 'pointer',
-                  }}
-                >
-                  CLEAR
-                </Button>
-              )}
-            </div>
-            {popularTags.length > 0 && (
-              <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {popularTags.map(([tag, count]) => {
-                  const selected = activeTag?.toLowerCase() === tag.toLowerCase()
-                  return (
-                    <Button
-                      key={tag}
-                      onClick={() => setActiveTag((prev) => prev?.toLowerCase() === tag.toLowerCase() ? null : tag)}
-                      variant="outline"
-                      size="sm"
-                      style={{
-                        height: 24,
-                        padding: '0 8px',
-                        borderRadius: 999,
-                        border: `1px solid ${selected ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                        background: selected ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                        color: selected ? 'var(--violet)' : 'var(--text-3)',
-                        fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 10,
-                        letterSpacing: '0.04em',
-                        cursor: 'pointer',
-                      }}
-                      title={`${count} session${count === 1 ? '' : 's'}`}
-                    >
-                      #{tag} · {count}
-                    </Button>
-                  )
-                })}
-              </div>
-            )}
-            <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-              <Button
-                onClick={() => setSortMode('project')}
-                variant="outline"
-                size="sm"
-                style={{
-                  flex: 1,
-                  height: 28,
-                  borderRadius: 5,
-                  border: `1px solid ${sortMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                  background: sortMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                  color: sortMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: 'pointer',
-                }}
-                title="Group sessions by project"
-              >
-                BY PROJECT
-              </Button>
-              <Button
-                onClick={() => setSortMode('time')}
-                variant="outline"
-                size="sm"
-                style={{
-                  flex: 1,
-                  height: 28,
-                  borderRadius: 5,
-                  border: `1px solid ${sortMode === 'time' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                  background: sortMode === 'time' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                  color: sortMode === 'time' ? 'var(--violet)' : 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: 'pointer',
-                }}
-                title="Sort sessions by most recent activity"
-              >
-                BY TIME
-              </Button>
-            </div>
-            <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-              <Button
-                onClick={() => onChangeScope('all')}
-                variant="outline"
-                size="sm"
-                style={{
-                  flex: 1,
-                  height: 28,
-                  borderRadius: 5,
-                  border: `1px solid ${scopeMode === 'all' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                  background: scopeMode === 'all' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                  color: scopeMode === 'all' ? 'var(--violet)' : 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: 'pointer',
-                }}
-              >
-                ALL PROJECTS
-              </Button>
-              <Button
-                onClick={() => canScopeToProject && onChangeScope('project')}
-                disabled={!canScopeToProject}
-                title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
-                variant="outline"
-                size="sm"
-                style={{
-                  flex: 1,
-                  height: 28,
-                  borderRadius: 5,
-                  border: `1px solid ${scopeMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                  background: scopeMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                  color: scopeMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  cursor: canScopeToProject ? 'pointer' : 'not-allowed',
-                  opacity: canScopeToProject ? 1 : 0.45,
-                }}
-              >
-                THIS PROJECT
-              </Button>
-            </div>
-            {scopeMode === 'project' && scopeProjectName && (
-              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span
-                  style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                    color: 'var(--text-3)',
-                    letterSpacing: '0.04em',
-                  }}
-                >
-                  {scopeProjectName}
-                </span>
-                <Label
-                  style={{
-                    marginLeft: 'auto',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                    color: 'var(--text-3)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <Checkbox
-                    checked={includeWorktrees}
-                    onCheckedChange={(checked) => onToggleWorktrees(checked === true)}
-                    style={{
-                      borderColor: 'var(--border)',
-                      background: includeWorktrees ? 'var(--violet)' : 'var(--surface-2)',
-                      color: includeWorktrees ? 'var(--bg)' : 'var(--text)',
-                    }}
-                  />
-                  worktrees
-                </Label>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-      <div style={{ overflow: 'auto', flex: 1 }}>
-        {error && (
-          <div
-            style={{
-              padding: '12px 18px',
-              fontSize: 12,
-              color: 'var(--red)',
-              borderBottom: '1px solid var(--border)',
-              fontFamily: "'IBM Plex Mono', monospace",
-            }}
-          >
-            {error}
+            Ctrl/Cmd+B toggles the sidebar
           </div>
-        )}
-
-        {!loading && !error && sortMode === 'project' && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
-          <ProjectGroup
-            key={projectDir}
-            name={projectName}
-            projectKey={projectDir}
-            sessions={groupSessions}
-            selectedId={selectedId}
-            selectedProject={selectedProject}
-            onSelect={onSelect}
-            onSelectProject={onSelectProject}
-            onRename={onRename}
-            onTag={onTag}
-          />
-        ))}
-        {!loading && !error && sortMode === 'time' && timeEntries.map((entry) => {
-          if (entry.type === 'header') {
-            const isProjectSelected = sameProjectPath(selectedProject, entry.projectDir)
-            return (
-              <div
-                key={entry.key}
-                onClick={() => onSelectProject(entry.projectDir, entry.projectName, entry.projectSessions)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 7,
-                  padding: '8px 14px 8px 16px',
-                  userSelect: 'none',
-                  background: isProjectSelected
-                    ? 'linear-gradient(to right, rgba(139,128,240,0.12) 0%, var(--surface-2) 70%)'
-                    : 'var(--surface-2)',
-                  borderBottom: '1px solid var(--border)',
-                  borderLeft: `2px solid ${isProjectSelected ? 'var(--violet)' : 'transparent'}`,
-                  cursor: 'pointer',
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: "'Oxanium', monospace",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    letterSpacing: '0.08em',
-                    textTransform: 'uppercase',
-                    color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
-                    flex: 1,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {entry.projectName}
-                </span>
-                <span
-                  style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                    color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
-                    background: isProjectSelected ? 'rgba(139,128,240,0.12)' : 'var(--surface-3)',
-                    border: `1px solid ${isProjectSelected ? 'rgba(139,128,240,0.3)' : 'var(--border)'}`,
-                    borderRadius: 3,
-                    padding: '1px 6px',
-                    flexShrink: 0,
-                  }}
-                >
-                  {entry.count}
-                </span>
-              </div>
-            )
-          }
-          return (
-            <SessionRow
-              key={entry.key}
-              session={entry.session}
-              selected={sessionTabKey(entry.session) === selectedId}
-              onSelect={onSelect}
-              onRename={onRename}
-              onTag={onTag}
-            />
-          )
-        })}
-        {!loading && !error && filteredSessions.length === 0 && (
-          <div
-            style={{
-              padding: '18px',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              color: 'var(--text-3)',
-              lineHeight: 1.6,
-            }}
-          >
-            No sessions match the current search/filter.
-          </div>
-        )}
-      </div>
-      </>}
+        </SidebarFooter>
+      )}
     </div>
   )
 }
