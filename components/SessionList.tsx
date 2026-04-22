@@ -10,6 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption, nativeSelectBaseClassName } from '@/components/ui/native-select'
+import { useSidebar } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
 import ThemeToggle from './ThemeToggle'
 
@@ -594,7 +595,8 @@ export default function SessionList({
   onChangeScope,
   onToggleWorktrees,
 }: Props) {
-  const [collapsed, setCollapsed] = useState(false)
+  const { state: sidebarState, toggleSidebar } = useSidebar()
+  const collapsed = sidebarState === 'collapsed'
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     if (typeof window === 'undefined') return 290
     const stored = Number(window.localStorage.getItem('agentViewer:sidebarWidth'))
@@ -754,7 +756,7 @@ export default function SessionList({
         }}
       >
         <button
-          onClick={() => setCollapsed((c) => !c)}
+          onClick={toggleSidebar}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           style={{
             background: 'none',

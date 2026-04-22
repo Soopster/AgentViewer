@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
+import { Sidebar, SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { isProviderSelection } from '@/lib/provider'
 import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
@@ -526,96 +527,102 @@ export default function Home() {
 
   return (
     <CodeThemeProvider>
-    <div style={{ display: 'flex', height: '100vh' }}>
-      <SessionList
-        sessions={sessions}
-        loading={loadingSessions}
-        error={sessionsError}
-        provider={provider}
-        switchingProvider={switchingProvider}
-        selectedId={selectedTabKey}
-        selectedProject={selectedProject?.dir ?? null}
-        onSelect={selectSession}
-        onSelectProject={selectProject}
-        onRename={handleRename}
-        onTag={handleTag}
-        onChangeProvider={handleChangeProvider}
-        scopeMode={sessionScope}
-        scopeProjectName={activeProjectName}
-        canScopeToProject={!!activeProjectDir}
-        includeWorktrees={includeWorktrees}
-        onChangeScope={setSessionScope}
-        onToggleWorktrees={setIncludeWorktrees}
-      />
-      {messagePaneCollapsed ? (
-        <div
-          style={{
-            width: 32,
-            minWidth: 32,
-            height: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            paddingTop: 10,
-            borderLeft: '1px solid var(--border)',
-            background: 'var(--surface)',
-            flexShrink: 0,
-          }}
-        >
-          <button
-            onClick={toggleMessagePane}
-            title="Expand message pane"
+    <SidebarProvider defaultOpen>
+      <div style={{ display: 'flex', height: '100vh' }}>
+        <Sidebar>
+          <SessionList
+            sessions={sessions}
+            loading={loadingSessions}
+            error={sessionsError}
+            provider={provider}
+            switchingProvider={switchingProvider}
+            selectedId={selectedTabKey}
+            selectedProject={selectedProject?.dir ?? null}
+            onSelect={selectSession}
+            onSelectProject={selectProject}
+            onRename={handleRename}
+            onTag={handleTag}
+            onChangeProvider={handleChangeProvider}
+            scopeMode={sessionScope}
+            scopeProjectName={activeProjectName}
+            canScopeToProject={!!activeProjectDir}
+            includeWorktrees={includeWorktrees}
+            onChangeScope={setSessionScope}
+            onToggleWorktrees={setIncludeWorktrees}
+          />
+        </Sidebar>
+        {messagePaneCollapsed ? (
+          <div
             style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'var(--text-3)',
-              padding: '4px 6px',
-              borderRadius: 6,
-              lineHeight: 1,
-              fontSize: 14,
+              width: 32,
+              minWidth: 32,
+              height: '100vh',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              paddingTop: 10,
+              borderLeft: '1px solid var(--border)',
+              background: 'var(--surface)',
+              flexShrink: 0,
             }}
           >
-            ‹
-          </button>
-        </div>
-      ) : (
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, overflow: 'hidden', position: 'relative' }}>
-        <button
-          onClick={toggleMessagePane}
-          title="Collapse message pane"
-          style={{
-            position: 'absolute',
-            top: 6,
-            right: 8,
-            zIndex: 10,
-            background: 'var(--surface-2)',
-            border: '1px solid var(--border)',
-            cursor: 'pointer',
-            color: 'var(--text-3)',
-            padding: '2px 6px',
-            borderRadius: 6,
-            lineHeight: 1,
-            fontSize: 12,
-          }}
-        >
-          ›
-        </button>
-        <MessageView
-          messages={messages}
-          loading={loadingMessages}
-          session={selectedSession}
-          projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
-          onFork={handleFork}
-          onDelete={handleDelete}
-          openTabs={openTabSessions}
-          selectedTabId={selectedTabKey}
-          onSelectTab={(s) => void selectSession(s)}
-          onCloseTab={closeTab}
-        />
+            <button
+              onClick={toggleMessagePane}
+              title="Expand message pane"
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--text-3)',
+                padding: '4px 6px',
+                borderRadius: 6,
+                lineHeight: 1,
+                fontSize: 14,
+              }}
+            >
+              ‹
+            </button>
+          </div>
+        ) : (
+          <SidebarInset style={{ position: 'relative' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden', position: 'relative', flex: 1 }}>
+              <button
+                onClick={toggleMessagePane}
+                title="Collapse message pane"
+                style={{
+                  position: 'absolute',
+                  top: 6,
+                  right: 8,
+                  zIndex: 10,
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--border)',
+                  cursor: 'pointer',
+                  color: 'var(--text-3)',
+                  padding: '2px 6px',
+                  borderRadius: 6,
+                  lineHeight: 1,
+                  fontSize: 12,
+                }}
+              >
+                ›
+              </button>
+              <MessageView
+                messages={messages}
+                loading={loadingMessages}
+                session={selectedSession}
+                projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
+                onFork={handleFork}
+                onDelete={handleDelete}
+                openTabs={openTabSessions}
+                selectedTabId={selectedTabKey}
+                onSelectTab={(s) => void selectSession(s)}
+                onCloseTab={closeTab}
+              />
+            </div>
+          </SidebarInset>
+        )}
       </div>
-      )}
-    </div>
+    </SidebarProvider>
     </CodeThemeProvider>
   )
 }
