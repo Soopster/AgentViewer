@@ -737,6 +737,15 @@ export default function SessionList({
     if (tagCounts.has(activeTag)) return
     setActiveTag(null)
   }, [activeTag, tagCounts])
+  const summaryText = loading
+    ? 'syncing…'
+    : sortMode === 'time'
+    ? filteredSessions.length === sessions.length
+      ? `${sessions.length} session${sessions.length !== 1 ? 's' : ''} · by time`
+      : `${filteredSessions.length}/${sessions.length} sessions · by time`
+    : filteredSessions.length === sessions.length
+    ? `${groups.length} project${groups.length !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
+    : `${filteredSessions.length}/${sessions.length} sessions · ${groups.length} projects`
 
   return (
     <div
@@ -813,41 +822,6 @@ export default function SessionList({
               className="ml-auto h-7 w-7 shrink-0 rounded-md border-border bg-transparent px-0 text-[14px] text-[var(--text-3)] shadow-none hover:bg-[var(--surface-2)]"
             />
           </div>
-          {!collapsed && (
-            <>
-              <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: '50%',
-                    background: 'var(--green)',
-                    flexShrink: 0,
-                    animation: 'live-pulse 2.5s ease-in-out infinite',
-                    display: 'inline-block',
-                  }}
-                />
-                <span
-                  style={{
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 11,
-                    color: 'var(--text-3)',
-                    letterSpacing: '0.03em',
-                  }}
-                >
-                  {loading
-                    ? 'syncing…'
-                    : sortMode === 'time'
-                    ? filteredSessions.length === sessions.length
-                      ? `${sessions.length} session${sessions.length !== 1 ? 's' : ''} · by time`
-                      : `${filteredSessions.length}/${sessions.length} sessions · by time`
-                    : filteredSessions.length === sessions.length
-                    ? `${groups.length} project${groups.length !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
-                    : `${filteredSessions.length}/${sessions.length} sessions · ${groups.length} projects`}
-                </span>
-              </div>
-            </>
-          )}
         </div>
         {!collapsed && (
           <Card
@@ -1201,15 +1175,29 @@ export default function SessionList({
         <SidebarFooter>
           <div
             style={{
-              padding: '8px 14px 10px',
+              padding: '10px 14px 12px',
               borderTop: '1px solid var(--border)',
               fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 9,
+              fontSize: 10,
               color: 'var(--text-3)',
               letterSpacing: '0.04em',
             }}
           >
-            Ctrl/Cmd+B toggles the sidebar
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: 'var(--green)',
+                  flexShrink: 0,
+                  animation: 'live-pulse 2.5s ease-in-out infinite',
+                  display: 'inline-block',
+                }}
+              />
+              <span>{summaryText}</span>
+            </div>
+            <div style={{ marginTop: 4 }}>Ctrl/Cmd+B toggles the sidebar</div>
           </div>
         </SidebarFooter>
       )}
