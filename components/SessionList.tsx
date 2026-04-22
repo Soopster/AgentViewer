@@ -852,7 +852,7 @@ export default function SessionList({
         {!collapsed && (
           <Card
             style={{
-              margin: '10px 14px 0',
+              margin: '10px 14px 8px',
               borderRadius: 10,
               border: '1px solid var(--border)',
               background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
