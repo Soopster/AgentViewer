@@ -142,7 +142,7 @@ function Sidebar({
         side === "left" ? "border-r" : "border-l",
         variant === "inset" && "m-0 border-r-0",
         variant === "floating" && "m-2 rounded-xl border shadow-sm",
-        isCollapsed ? "w-12 min-w-12" : "w-[var(--sidebar-width,18rem)] min-w-[var(--sidebar-width,18rem)]",
+        isCollapsed ? "w-[92px] min-w-[92px]" : "w-[var(--sidebar-width,18rem)] min-w-[var(--sidebar-width,18rem)]",
         className
       )}
       style={

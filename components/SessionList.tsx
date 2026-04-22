@@ -19,12 +19,52 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
+import {
+  BookOpen,
+  Bot,
+  LayoutDashboard,
+  PanelLeftOpen,
+  PanelRightOpen,
+  Search,
+  SlidersHorizontal,
+} from 'lucide-react'
 import ThemeToggle from './ThemeToggle'
 
 const providerNativeSelectClassName = cn(
   nativeSelectBaseClassName,
   'h-9 rounded-[9px] border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--surface-2)] px-3 text-[11px] font-medium tracking-[0.04em] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
 )
+
+const collapsedIconButtonBaseStyle: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  borderRadius: 11,
+  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'rgba(18,24,35,0.98)',
+  color: 'rgba(255,255,255,0.9)',
+  display: 'grid',
+  placeItems: 'center',
+  cursor: 'pointer',
+}
+
+const collapsedPrimaryButtonStyle: React.CSSProperties = {
+  ...collapsedIconButtonBaseStyle,
+  width: 50,
+  height: 50,
+  borderRadius: 16,
+  border: '1px solid rgba(42,89,255,0.12)',
+  background: 'rgba(42,89,255,0.96)',
+  boxShadow: '0 8px 24px rgba(42,89,255,0.32)',
+}
+
+function collapsedIconButtonStyle(active = false): React.CSSProperties {
+  return {
+    ...collapsedIconButtonBaseStyle,
+    border: active ? '1px solid rgba(42,89,255,0.35)' : collapsedIconButtonBaseStyle.border,
+    background: active ? 'rgba(42,89,255,0.18)' : 'rgba(18,24,35,0.98)',
+    boxShadow: active ? '0 10px 18px rgba(42,89,255,0.10)' : 'none',
+  }
+}
 
 type Props = {
   sessions: Session[]
@@ -81,6 +121,8 @@ type ProjectGroupEntry = {
   projectName: string
   sessions: Session[]
 }
+
+type CollapsedPanel = 'sessions' | 'provider' | 'search' | 'project' | 'filters' | 'overview'
 
 function getSessionTitle(session: Session): string {
   return session.customTitle ?? session.summary ?? ''
@@ -602,14 +644,48 @@ export default function SessionList({
   onChangeScope,
   onToggleWorktrees,
 }: Props) {
-  const { state: sidebarState, width: sidebarWidth, setWidth: setSidebarWidth, applyWidth } = useSidebar()
+  const { state: sidebarState, width: sidebarWidth, setWidth: setSidebarWidth, applyWidth, setOpen } = useSidebar()
   const collapsed = sidebarState === 'collapsed'
   const [resizing, setResizing] = useState(false)
+  const [collapsedPanel, setCollapsedPanel] = useState<CollapsedPanel | null>(null)
   const resizeFrameRef = useRef<number | null>(null)
   const resizeWidthRef = useRef(sidebarWidth)
+  const providerSelectRef = useRef<HTMLSelectElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     resizeWidthRef.current = sidebarWidth
   }, [sidebarWidth])
+  const expandAndFocus = useCallback((target: 'provider' | 'search' | 'project' | 'view') => {
+    setOpen(true)
+    requestAnimationFrame(() => {
+      if (target === 'provider') providerSelectRef.current?.focus()
+      if (target === 'search') searchInputRef.current?.focus()
+    })
+  }, [setOpen])
+  const handleCollapsedAction = useCallback((panel: CollapsedPanel) => {
+    if (!collapsed) {
+      if (panel === 'sessions') {
+        setCollapsedPanel(null)
+        return
+      }
+      if (panel === 'provider') expandAndFocus('provider')
+      else if (panel === 'search') expandAndFocus('search')
+      else expandAndFocus('view')
+      return
+    }
+    setCollapsedPanel((current) => (current === panel ? null : panel))
+  }, [collapsed, expandAndFocus])
+  useEffect(() => {
+    if (!collapsed) setCollapsedPanel(null)
+  }, [collapsed])
+  useEffect(() => {
+    if (!collapsedPanel) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setCollapsedPanel(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [collapsedPanel])
   useEffect(() => {
     if (!resizing) return
     const onMove = (e: MouseEvent) => {
@@ -747,6 +823,623 @@ export default function SessionList({
     ? `${groups.length} project${groups.length !== 1 ? 's' : ''} · ${sessions.length} session${sessions.length !== 1 ? 's' : ''}`
     : `${filteredSessions.length}/${sessions.length} sessions · ${groups.length} projects`
 
+  if (collapsed) {
+    return (
+      <div
+        style={{
+          width: '100%',
+          minWidth: 0,
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+          background: 'var(--surface)',
+          overflow: 'hidden',
+          flexShrink: 0,
+          position: 'relative',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            flex: 1,
+            minHeight: 0,
+            background: 'linear-gradient(180deg, rgba(16,24,34,0.96) 0%, rgba(14,19,28,0.96) 100%)',
+          }}
+        >
+          <div
+            style={{
+              width: 76,
+              position: 'relative',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 9,
+              padding: '11px 0 13px',
+              borderRight: '1px solid rgba(255,255,255,0.08)',
+              background: 'rgba(10, 16, 24, 0.92)',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: 8,
+                border: '1px solid rgba(255,255,255,0.08)',
+                background: 'rgba(12,18,27,0.72)',
+                color: 'rgba(255,255,255,0.72)',
+                display: 'grid',
+                placeItems: 'center',
+                cursor: 'pointer',
+                boxShadow: 'none',
+                backdropFilter: 'blur(4px)',
+                marginBottom: 8,
+              }}
+            >
+              <PanelRightOpen size={13} strokeWidth={2.1} />
+            </button>
+
+              <button
+                type="button"
+                onClick={() => handleCollapsedAction('sessions')}
+                aria-label="Show sessions"
+                title="Show sessions"
+                style={{
+                  ...collapsedPrimaryButtonStyle,
+                  marginLeft: 2,
+                }}
+              >
+                <PanelLeftOpen size={24} strokeWidth={2.4} color="#fff" />
+              </button>
+
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 8 }}>
+              <button
+                type="button"
+                onClick={() => handleCollapsedAction('provider')}
+                aria-label="Provider controls"
+                title="Provider"
+                style={collapsedIconButtonStyle(collapsedPanel === 'provider')}
+              >
+                <Bot size={20} strokeWidth={2.2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCollapsedAction('search')}
+                aria-label="Search"
+                title="Search"
+                style={collapsedIconButtonStyle(collapsedPanel === 'search')}
+              >
+                <Search size={20} strokeWidth={2.2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCollapsedAction('project')}
+                aria-label="Project scope"
+                title="Projects"
+                style={collapsedIconButtonStyle(collapsedPanel === 'project')}
+              >
+                <LayoutDashboard size={20} strokeWidth={2.2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCollapsedAction('filters')}
+                aria-label="Filters"
+                title="Filters"
+                style={collapsedIconButtonStyle(collapsedPanel === 'filters')}
+              >
+                <SlidersHorizontal size={20} strokeWidth={2.2} />
+              </button>
+            <button
+              type="button"
+              onClick={() => handleCollapsedAction('overview')}
+              aria-label="Overview"
+              title="Overview"
+                style={collapsedIconButtonStyle(collapsedPanel === 'overview')}
+              >
+                <BookOpen size={20} strokeWidth={2.2} />
+              </button>
+            </div>
+          </div>
+        </div>
+        {collapsedPanel && (
+          <div
+            onClick={() => setCollapsedPanel(null)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 40,
+              background: 'transparent',
+            }}
+          >
+            <div
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                position: 'absolute',
+                top: 76,
+                left: 106,
+                width: 318,
+                maxWidth: 'calc(100vw - 114px)',
+                maxHeight: 'calc(100vh - 104px)',
+                borderRadius: 16,
+                border: '1px solid rgba(255,255,255,0.10)',
+                background: 'linear-gradient(180deg, rgba(19,28,40,0.98) 0%, rgba(12,18,27,0.99) 100%)',
+                boxShadow: '0 24px 60px rgba(0,0,0,0.42)',
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '9px 12px',
+                  borderBottom: '1px solid rgba(255,255,255,0.08)',
+                  background: 'rgba(255,255,255,0.02)',
+                }}
+              >
+                <div
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text-3)',
+                  }}
+                >
+                  {collapsedPanel}
+                </div>
+                <div style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  onClick={() => setCollapsedPanel(null)}
+                  style={{
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    background: 'rgba(18,24,35,0.98)',
+                    color: 'rgba(255,255,255,0.82)',
+                    borderRadius: 8,
+                    padding: '4px 8px',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    letterSpacing: '0.08em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  CLOSE
+                </button>
+              </div>
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflowY: 'auto',
+                  padding: 12,
+                  display: 'grid',
+                  gap: 10,
+                }}
+              >
+                {collapsedPanel === 'sessions' && (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div
+                        style={{
+                          fontFamily: "'Oxanium', monospace",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          letterSpacing: '0.08em',
+                          textTransform: 'uppercase',
+                          color: 'var(--text)',
+                        }}
+                      >
+                        AGENTVIEWER
+                      </div>
+                      <div style={{ flex: 1 }} />
+                      <div
+                        style={{
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 10,
+                          color: 'var(--text-3)',
+                          background: 'rgba(255,255,255,0.04)',
+                          border: '1px solid rgba(255,255,255,0.08)',
+                          borderRadius: 6,
+                          padding: '3px 8px',
+                        }}
+                      >
+                        {filteredSessions.length}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        maxHeight: 'min(72vh, 720px)',
+                        overflowY: 'auto',
+                        borderRadius: 12,
+                        border: '1px solid rgba(255,255,255,0.06)',
+                        background: 'rgba(7,11,18,0.45)',
+                      }}
+                    >
+                      {sortMode === 'project' && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
+                        <ProjectGroup
+                          key={projectDir}
+                          name={projectName}
+                          projectKey={projectDir}
+                          sessions={groupSessions}
+                          selectedId={selectedId}
+                          selectedProject={selectedProject}
+                          onSelect={onSelect}
+                          onSelectProject={onSelectProject}
+                          onRename={onRename}
+                          onTag={onTag}
+                        />
+                      ))}
+                      {sortMode === 'time' && timeEntries.map((entry) => {
+                        if (entry.type === 'header') {
+                          const isProjectSelected = sameProjectPath(selectedProject, entry.projectDir)
+                          return (
+                            <div
+                              key={entry.key}
+                              onClick={() => onSelectProject(entry.projectDir, entry.projectName, entry.projectSessions)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 7,
+                                padding: '8px 12px 8px 14px',
+                                userSelect: 'none',
+                                background: isProjectSelected
+                                  ? 'linear-gradient(to right, rgba(139,128,240,0.12) 0%, var(--surface-2) 70%)'
+                                  : 'var(--surface-2)',
+                                borderBottom: '1px solid var(--border)',
+                                borderLeft: `2px solid ${isProjectSelected ? 'var(--violet)' : 'transparent'}`,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontFamily: "'Oxanium', monospace",
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  letterSpacing: '0.08em',
+                                  textTransform: 'uppercase',
+                                  color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
+                                  flex: 1,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {entry.projectName}
+                              </span>
+                              <span
+                                style={{
+                                  fontFamily: "'IBM Plex Mono', monospace",
+                                  fontSize: 11,
+                                  color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
+                                  background: isProjectSelected ? 'rgba(139,128,240,0.12)' : 'var(--surface-3)',
+                                  border: `1px solid ${isProjectSelected ? 'rgba(139,128,240,0.3)' : 'var(--border)'}`,
+                                  borderRadius: 3,
+                                  padding: '1px 6px',
+                                  flexShrink: 0,
+                                }}
+                              >
+                                {entry.count}
+                              </span>
+                            </div>
+                          )
+                        }
+                        return (
+                          <SessionRow
+                            key={entry.key}
+                            session={entry.session}
+                            selected={sessionTabKey(entry.session) === selectedId}
+                            onSelect={onSelect}
+                            onRename={onRename}
+                            onTag={onTag}
+                          />
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+
+                {collapsedPanel === 'provider' && (
+                  <>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      <Label
+                        style={{
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 8,
+                          color: 'var(--text-3)',
+                          letterSpacing: '0.1em',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        PROVIDER
+                      </Label>
+                      <NativeSelect
+                        ref={providerSelectRef}
+                        value={provider}
+                        onChange={(event) => onChangeProvider(event.target.value as ProviderSelection)}
+                        disabled={switchingProvider}
+                        className={cn(providerNativeSelectClassName, switchingProvider ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
+                      >
+                        <NativeSelectOption value="claude">CLAUDE</NativeSelectOption>
+                        <NativeSelectOption value="codex">CODEX</NativeSelectOption>
+                        <NativeSelectOption value="opencode">OPENCODE</NativeSelectOption>
+                        <NativeSelectOption value="copilot">COPILOT</NativeSelectOption>
+                        <NativeSelectOption value="pi">PI</NativeSelectOption>
+                        <NativeSelectOption value="all">ALL</NativeSelectOption>
+                      </NativeSelect>
+                    </div>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                      Choose the provider to scope the session list. This panel behaves like the shadcn sidebar pop-out pattern.
+                    </div>
+                  </>
+                )}
+
+                {collapsedPanel === 'search' && (
+                  <>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <Input
+                        ref={searchInputRef}
+                        value={searchText}
+                        onChange={(e) => setSearchText(e.target.value)}
+                        placeholder="Search title, tags, path, prompt…"
+                        style={{
+                          flex: 1,
+                          height: 34,
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface-2)',
+                          color: 'var(--text)',
+                          padding: '0 10px',
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 11,
+                          outline: 'none',
+                        }}
+                      />
+                      {(searchText || activeTag) && (
+                        <Button
+                          onClick={() => {
+                            setSearchText('')
+                            setActiveTag(null)
+                          }}
+                          variant="outline"
+                          size="sm"
+                          style={{
+                            height: 34,
+                            padding: '0 10px',
+                            borderRadius: 8,
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface-2)',
+                            color: 'var(--text-3)',
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: 11,
+                            letterSpacing: '0.05em',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          CLEAR
+                        </Button>
+                      )}
+                    </div>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                      Search the current provider and scope. Popular tags stay available in the filter panel.
+                    </div>
+                  </>
+                )}
+
+                {collapsedPanel === 'project' && (
+                  <>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Button
+                        onClick={() => setSortMode('project')}
+                        variant="outline"
+                        size="sm"
+                        style={{
+                          flex: 1,
+                          height: 32,
+                          borderRadius: 8,
+                          border: `1px solid ${sortMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                          background: sortMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                          color: sortMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 11,
+                          letterSpacing: '0.06em',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        BY PROJECT
+                      </Button>
+                      <Button
+                        onClick={() => setSortMode('time')}
+                        variant="outline"
+                        size="sm"
+                        style={{
+                          flex: 1,
+                          height: 32,
+                          borderRadius: 8,
+                          border: `1px solid ${sortMode === 'time' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                          background: sortMode === 'time' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                          color: sortMode === 'time' ? 'var(--violet)' : 'var(--text-3)',
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 11,
+                          letterSpacing: '0.06em',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        BY TIME
+                      </Button>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Button
+                        onClick={() => onChangeScope('all')}
+                        variant="outline"
+                        size="sm"
+                        style={{
+                          flex: 1,
+                          height: 32,
+                          borderRadius: 8,
+                          border: `1px solid ${scopeMode === 'all' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                          background: scopeMode === 'all' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                          color: scopeMode === 'all' ? 'var(--violet)' : 'var(--text-3)',
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 11,
+                          letterSpacing: '0.06em',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ALL PROJECTS
+                      </Button>
+                      <Button
+                        onClick={() => canScopeToProject && onChangeScope('project')}
+                        disabled={!canScopeToProject}
+                        title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
+                        variant="outline"
+                        size="sm"
+                        style={{
+                          flex: 1,
+                          height: 32,
+                          borderRadius: 8,
+                          border: `1px solid ${scopeMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                          background: scopeMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                          color: scopeMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 11,
+                          letterSpacing: '0.06em',
+                          cursor: canScopeToProject ? 'pointer' : 'not-allowed',
+                          opacity: canScopeToProject ? 1 : 0.45,
+                        }}
+                      >
+                        THIS PROJECT
+                      </Button>
+                    </div>
+                    {scopeMode === 'project' && scopeProjectName && (
+                      <Label
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          fontSize: 11,
+                          color: 'var(--text-3)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <Checkbox
+                          checked={includeWorktrees}
+                          onCheckedChange={(checked) => onToggleWorktrees(checked === true)}
+                          style={{
+                            borderColor: 'var(--border)',
+                            background: includeWorktrees ? 'var(--violet)' : 'var(--surface-2)',
+                            color: includeWorktrees ? 'var(--bg)' : 'var(--text)',
+                          }}
+                        />
+                        worktrees
+                      </Label>
+                    )}
+                  </>
+                )}
+
+                {collapsedPanel === 'filters' && (
+                  <>
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 6,
+                      }}
+                    >
+                      {popularTags.length > 0 ? (
+                        popularTags.map(([tag, count]) => {
+                          const selected = activeTag?.toLowerCase() === tag.toLowerCase()
+                          return (
+                            <Button
+                              key={tag}
+                              onClick={() => setActiveTag((prev) => prev?.toLowerCase() === tag.toLowerCase() ? null : tag)}
+                              variant="outline"
+                              size="sm"
+                              style={{
+                                height: 26,
+                                padding: '0 8px',
+                                borderRadius: 999,
+                                border: `1px solid ${selected ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
+                                background: selected ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
+                                color: selected ? 'var(--violet)' : 'var(--text-3)',
+                                fontFamily: "'IBM Plex Mono', monospace",
+                                fontSize: 10,
+                                letterSpacing: '0.04em',
+                                cursor: 'pointer',
+                              }}
+                              title={`${count} session${count === 1 ? '' : 's'}`}
+                            >
+                              #{tag} · {count}
+                            </Button>
+                          )
+                        })
+                      ) : (
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+                          No tags available.
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                      Filter by the most common tags in the current session set.
+                    </div>
+                  </>
+                )}
+
+                {collapsedPanel === 'overview' && (
+                  <>
+                    <div
+                      style={{
+                        padding: 12,
+                        borderRadius: 12,
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        background: 'rgba(255,255,255,0.03)',
+                        display: 'grid',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 14, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text)' }}>
+                        {summaryText}
+                      </div>
+                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                        {provider.toUpperCase()} · {sortMode === 'time' ? 'sorted by time' : 'grouped by project'}
+                        {scopeMode === 'project' && scopeProjectName ? ` · ${scopeProjectName}` : ''}
+                      </div>
+                    </div>
+                    <Button
+                      onClick={() => setOpen(true)}
+                      variant="outline"
+                      size="sm"
+                      style={{
+                        height: 34,
+                        borderRadius: 8,
+                        border: '1px solid rgba(255,255,255,0.10)',
+                        background: 'rgba(18,24,35,0.98)',
+                        color: 'var(--text)',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11,
+                        letterSpacing: '0.06em',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      OPEN FULL SIDEBAR
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div
       style={{
@@ -762,24 +1455,22 @@ export default function SessionList({
         position: 'relative',
       }}
     >
-      {!collapsed && (
-        <SidebarRail
-          onMouseDown={(e) => {
-            e.preventDefault()
-            resizeWidthRef.current = Math.max(220, Math.min(640, e.clientX))
-            setResizing(true)
-          }}
-          onDoubleClick={() => {
-            resizeWidthRef.current = 290
-            applyWidth(290)
-            setSidebarWidth(290)
-          }}
-          title="Drag to resize · double-click to reset"
-          style={{
-            background: resizing ? 'var(--violet-glow)' : 'transparent',
-          }}
-        />
-      )}
+      <SidebarRail
+        onMouseDown={(e) => {
+          e.preventDefault()
+          resizeWidthRef.current = Math.max(220, Math.min(640, e.clientX))
+          setResizing(true)
+        }}
+        onDoubleClick={() => {
+          resizeWidthRef.current = 290
+          applyWidth(290)
+          setSidebarWidth(290)
+        }}
+        title="Drag to resize · double-click to reset"
+        style={{
+          background: resizing ? 'var(--violet-glow)' : 'transparent',
+        }}
+      />
       <SidebarHeader>
         <div
           style={{
@@ -847,6 +1538,7 @@ export default function SessionList({
                     PROVIDER
                   </Label>
                   <NativeSelect
+                    ref={providerSelectRef}
                     value={provider}
                     onChange={(event) => onChangeProvider(event.target.value as ProviderSelection)}
                     disabled={switchingProvider}
@@ -862,6 +1554,7 @@ export default function SessionList({
                 </div>
                 <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
                   <Input
+                    ref={searchInputRef}
                     value={searchText}
                     onChange={(e) => setSearchText(e.target.value)}
                     placeholder="Search title, tags, path, prompt…"
@@ -1175,12 +1868,12 @@ export default function SessionList({
         <SidebarFooter>
           <div
             style={{
-              padding: '10px 14px 12px',
+              padding: '12px 14px 14px',
               borderTop: '1px solid var(--border)',
               fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
+              fontSize: 11,
               color: 'var(--text-3)',
-              letterSpacing: '0.04em',
+              letterSpacing: '0.03em',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1197,7 +1890,6 @@ export default function SessionList({
               />
               <span>{summaryText}</span>
             </div>
-            <div style={{ marginTop: 4 }}>Ctrl/Cmd+B toggles the sidebar</div>
           </div>
         </SidebarFooter>
       )}
