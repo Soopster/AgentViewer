@@ -20,6 +20,8 @@ It provides a single UI for session browsing, project-level views, message inspe
 - Fork sessions and provider-native continuation controls
 - Rewind or rollback where supported by the underlying provider
 - Inspect provider diagnostics and available models
+- Open a command palette with `Ctrl/⌘K` to jump to sessions, projects, providers, and view actions
+- Use the command palette to switch themes or collapse the sidebar without touching the mouse
 
 ## Requirements
 
@@ -124,7 +126,8 @@ npx agent-viewer --legacy
 1. Select a provider from the sidebar dropdown.
 2. Choose a session, or click a project group to view a consolidated project timeline.
 3. Use search and tag filters in the sidebar to narrow sessions.
-4. In the message view, use provider-specific controls such as fork, diagnostics, rewind, or rollback.
+4. Press `Ctrl/⌘K` for the command palette when you want a faster path to a session or a view toggle.
+5. In the message view, use provider-specific controls such as fork, diagnostics, rewind, or rollback.
 
 ## Theming
 

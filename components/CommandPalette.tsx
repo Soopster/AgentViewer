@@ -1,0 +1,598 @@
+'use client'
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Bot, FolderOpen, Layers3, PanelLeftOpen, PanelRightOpen, Search, SlidersHorizontal } from 'lucide-react'
+
+import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from '@/components/ui/command'
+import { useSidebar } from '@/components/ui/sidebar'
+import { normalizeProjectPath, pathBasename, sameProjectPath } from '@/lib/projectPaths'
+import { applyTheme, THEME_GROUPS, THEME_META, type Theme } from '@/lib/themes'
+import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
+
+type ProjectSelection = {
+  key: string
+  dir: string
+  sessions: Session[]
+}
+
+type CommandPaletteProps = {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  sessions: Session[]
+  selectedSession: Session | null
+  selectedProject: ProjectSelection | null
+  provider: ProviderSelection
+  scopeMode: 'all' | 'project'
+  scopeProjectName: string | null
+  includeWorktrees: boolean
+  messagePaneCollapsed: boolean
+  onSelectSession: (session: Session) => void
+  onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
+  onChangeProvider: (provider: ProviderSelection) => void
+  onChangeScope: (mode: 'all' | 'project') => void
+  onToggleWorktrees: (include: boolean) => void
+  onToggleMessagePane: () => void
+}
+
+type PaletteItem = {
+  id: string
+  label: string
+  description: string
+  icon: React.ReactNode
+  shortcut?: string
+  active?: boolean
+  group: 'actions' | 'projects' | 'sessions' | 'themes'
+  keywords: string[]
+  score: number
+  run: () => void
+}
+
+const PROVIDER_ITEMS: Array<{ provider: ProviderSelection; label: string; description: string }> = [
+  { provider: 'claude', label: 'Claude', description: 'Use the Claude provider' },
+  { provider: 'codex', label: 'Codex', description: 'Use the Codex provider' },
+  { provider: 'opencode', label: 'OpenCode', description: 'Use the OpenCode provider' },
+  { provider: 'copilot', label: 'Copilot', description: 'Use the GitHub Copilot provider' },
+  { provider: 'pi', label: 'Pi', description: 'Use the Pi provider' },
+  { provider: 'all', label: 'All providers', description: 'Show sessions from every provider' },
+]
+
+function sessionTabKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
+  return `${session.provider ?? 'claude'}:${session.sessionId}`
+}
+
+function getSessionTitle(session: Session): string {
+  return (
+    session.customTitle ??
+    session.summary ??
+    (typeof session.firstPrompt === 'string' ? session.firstPrompt.slice(0, 56) : undefined) ??
+    session.sessionId.slice(-8)
+  ) || 'Untitled'
+}
+
+function getSessionKeywords(session: Session): string[] {
+  return [
+    getSessionTitle(session),
+    session.summary ?? '',
+    session.customTitle ?? '',
+    session.firstPrompt ?? '',
+    session.cwd ?? '',
+    session.tag ?? '',
+    session.provider ?? '',
+    session.sessionId,
+  ]
+}
+
+function getSessionSortMs(session: Session): number {
+  const value = session.lastModified ?? session.createdAt
+  if (value == null) return 0
+  const ms = new Date(value).getTime()
+  return Number.isNaN(ms) ? 0 : ms
+}
+
+function scoreMatch(text: string, query: string): number {
+  if (!query) return 0
+  const normalizedText = text.toLowerCase()
+  if (normalizedText === query) return 300
+  if (normalizedText.startsWith(query)) return 220 - normalizedText.length / 100
+  const index = normalizedText.indexOf(query)
+  if (index >= 0) return 160 - index
+  const pieces = query.split(/\s+/).filter(Boolean)
+  if (pieces.length > 1 && pieces.every((piece) => normalizedText.includes(piece))) return 120
+  return -1
+}
+
+function bestScore(fields: string[], query: string): number {
+  if (!query) return 0
+  let best = -1
+  for (const field of fields) {
+    const score = scoreMatch(field, query)
+    if (score > best) best = score
+  }
+  return best
+}
+
+function providerStyle(provider: AgentProvider): { color: string; background: string; border: string } {
+  if (provider === 'codex') {
+    return { color: 'var(--cyan)', background: 'rgba(56,217,245,0.10)', border: 'rgba(56,217,245,0.22)' }
+  }
+  if (provider === 'opencode') {
+    return { color: 'var(--green)', background: 'rgba(45,212,160,0.10)', border: 'rgba(45,212,160,0.22)' }
+  }
+  if (provider === 'copilot') {
+    return { color: 'var(--amber)', background: 'rgba(234,170,64,0.10)', border: 'rgba(234,170,64,0.22)' }
+  }
+  if (provider === 'pi') {
+    return { color: 'var(--red)', background: 'rgba(240,80,80,0.10)', border: 'rgba(240,80,80,0.22)' }
+  }
+  return { color: 'var(--violet)', background: 'rgba(139,128,240,0.10)', border: 'rgba(139,128,240,0.22)' }
+}
+
+export default function CommandPalette({
+  open,
+  onOpenChange,
+  sessions,
+  selectedSession,
+  selectedProject,
+  provider,
+  scopeMode,
+  scopeProjectName,
+  includeWorktrees,
+  messagePaneCollapsed,
+  onSelectSession,
+  onSelectProject,
+  onChangeProvider,
+  onChangeScope,
+  onToggleWorktrees,
+  onToggleMessagePane,
+}: CommandPaletteProps) {
+  const { state: sidebarState, toggleSidebar } = useSidebar()
+  const [query, setQuery] = useState('')
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const [theme, setTheme] = useState<Theme>('dark')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const normalizedQuery = query.trim().toLowerCase()
+
+  useEffect(() => {
+    if (!open) return
+    setQuery('')
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [open])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        onOpenChange(!open)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onOpenChange, open])
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem('theme')
+      if (saved && saved in THEME_META) setTheme(saved as Theme)
+    } catch {
+      // ignore storage failures
+    }
+  }, [open])
+
+  const sidebarAction = sidebarState === 'expanded'
+    ? {
+        id: 'toggle-sidebar',
+        label: 'Collapse sidebar',
+        description: 'Hide the session list',
+        icon: <PanelLeftOpen size={16} />,
+      }
+    : {
+        id: 'toggle-sidebar',
+        label: 'Expand sidebar',
+        description: 'Show the session list',
+        icon: <PanelRightOpen size={16} />,
+      }
+
+  const actions = useMemo(() => {
+    const items: PaletteItem[] = [
+      {
+        id: sidebarAction.id,
+        label: sidebarAction.label,
+        description: sidebarAction.description,
+        icon: sidebarAction.icon,
+        shortcut: 'Ctrl B',
+        group: 'actions',
+        keywords: ['sidebar', 'collapse', 'expand', 'session list', 'panel'],
+        score: 0,
+        run: toggleSidebar,
+      },
+      {
+        id: 'toggle-message-pane',
+        label: messagePaneCollapsed ? 'Expand message pane' : 'Collapse message pane',
+        description: 'Show or hide the transcript area',
+        icon: messagePaneCollapsed ? <PanelRightOpen size={16} /> : <PanelLeftOpen size={16} />,
+        group: 'actions',
+        keywords: ['message', 'pane', 'transcript', 'expand', 'collapse'],
+        score: 0,
+        run: onToggleMessagePane,
+      },
+      {
+        id: 'scope-all',
+        label: 'Show all projects',
+        description: 'Clear the project scope filter',
+        icon: <Layers3 size={16} />,
+        shortcut: 'All',
+        active: scopeMode === 'all',
+        group: 'actions',
+        keywords: ['scope', 'all', 'projects', 'filter'],
+        score: 0,
+        run: () => onChangeScope('all'),
+      },
+      {
+        id: 'scope-current',
+        label: 'Scope to current project',
+        description: scopeProjectName ? `Focus on ${scopeProjectName}` : 'Focus on the selected project',
+        icon: <FolderOpen size={16} />,
+        shortcut: 'Project',
+        active: scopeMode === 'project',
+        group: 'actions',
+        keywords: ['scope', 'project', 'current', 'focus'],
+        score: 0,
+        run: () => onChangeScope('project'),
+      },
+      {
+        id: 'worktrees-toggle',
+        label: includeWorktrees ? 'Hide worktrees' : 'Show worktrees',
+        description: 'Include or exclude worktree sessions in project views',
+        icon: <SlidersHorizontal size={16} />,
+        shortcut: includeWorktrees ? 'On' : 'Off',
+        group: 'actions',
+        keywords: ['worktree', 'worktrees', 'project', 'filter'],
+        score: 0,
+        run: () => onToggleWorktrees(!includeWorktrees),
+      },
+    ]
+
+    for (const item of PROVIDER_ITEMS) {
+      items.push({
+        id: `provider:${item.provider}`,
+        label: item.label,
+        description: item.description,
+        icon: <Bot size={16} />,
+        shortcut: provider === item.provider ? 'Active' : undefined,
+        active: provider === item.provider,
+        group: 'actions',
+        keywords: ['provider', item.provider, item.label.toLowerCase(), 'switch'],
+        score: 0,
+        run: () => onChangeProvider(item.provider),
+      })
+      }
+
+    return items
+  }, [includeWorktrees, messagePaneCollapsed, onChangeProvider, onChangeScope, onToggleMessagePane, onToggleWorktrees, provider, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+
+  const projectItems = useMemo(() => {
+    const groups = new Map<string, {
+      projectDir: string
+      projectName: string
+      sessions: Session[]
+      keywords: string[]
+      score: number
+      active: boolean
+    }>()
+
+    for (const session of sessions) {
+      const normalizedDir = normalizeProjectPath(session.cwd) || '—'
+      const projectName = pathBasename(normalizedDir) || '—'
+      const current = groups.get(normalizedDir)
+      const keywords = getSessionKeywords(session)
+      if (current) {
+        current.sessions.push(session)
+        current.keywords.push(...keywords)
+        current.score = Math.max(current.score, getSessionSortMs(session))
+        continue
+      }
+      groups.set(normalizedDir, {
+        projectDir: normalizedDir,
+        projectName,
+        sessions: [session],
+        keywords,
+        score: getSessionSortMs(session),
+        active: sameProjectPath(selectedProject?.dir, normalizedDir),
+      })
+    }
+
+    return [...groups.values()]
+      .map((group) => {
+        const score = normalizedQuery
+          ? bestScore([group.projectName, group.projectDir, ...group.keywords], normalizedQuery)
+          : group.score
+        return {
+          id: `project:${group.projectDir}`,
+          label: group.projectName,
+          description: group.projectDir === '—' ? 'Unknown project path' : group.projectDir,
+          icon: <FolderOpen size={16} />,
+          shortcut: `${group.sessions.length}`,
+          active: group.active,
+          group: 'projects' as const,
+          keywords: [group.projectName, group.projectDir, ...group.keywords],
+          score,
+          run: () => onSelectProject(group.projectDir, group.projectName, group.sessions),
+        }
+      })
+      .filter((item) => normalizedQuery ? item.score >= 0 : true)
+      .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
+      .slice(0, 8)
+  }, [onSelectProject, normalizedQuery, selectedProject?.dir, sessions])
+
+  const sessionItems = useMemo(() => {
+    return sessions
+      .map((session) => {
+        const title = getSessionTitle(session)
+        const project = session.cwd ? pathBasename(session.cwd) || session.cwd : 'No project'
+        const keywords = getSessionKeywords(session)
+        const score = normalizedQuery
+          ? bestScore(keywords, normalizedQuery)
+          : getSessionSortMs(session)
+        return {
+          id: `session:${sessionTabKey(session)}`,
+          label: title,
+          description: session.cwd ? `${project} · ${session.provider ?? 'claude'}` : (session.provider ?? 'claude'),
+          icon: <Search size={16} />,
+          shortcut: session.sessionId.slice(-6),
+          active: sessionTabKey(session) === sessionTabKey(selectedSession ?? { sessionId: '', provider: 'claude' }),
+          group: 'sessions' as const,
+          keywords,
+          score,
+          run: () => onSelectSession(session),
+        }
+      })
+      .filter((item) => normalizedQuery ? item.score >= 0 : true)
+      .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
+      .slice(0, 12)
+  }, [onSelectSession, normalizedQuery, selectedSession, sessions])
+
+  const themeItems = useMemo(() => THEME_GROUPS.map((group) => {
+    const items = group.themes
+      .map((themeName) => {
+        const meta = THEME_META[themeName]
+        const score = normalizedQuery
+          ? bestScore([meta.label, themeName, meta.category, 'theme'], normalizedQuery)
+          : 0
+        return {
+          id: `theme:${themeName}`,
+          label: meta.label,
+          description: `${group.label} theme`,
+          icon: meta.icon,
+          shortcut: theme === themeName ? 'Active' : undefined,
+          active: theme === themeName,
+          group: 'themes' as const,
+          keywords: [meta.label, themeName, meta.category, 'theme'],
+          score,
+          run: () => {
+            setTheme(themeName)
+            applyTheme(themeName)
+          },
+        }
+      })
+      .filter((item) => normalizedQuery ? item.score >= 0 : true)
+      .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
+
+    return { ...group, items }
+  }).filter((group) => group.items.length > 0), [normalizedQuery, theme])
+
+  const filteredActions = useMemo(
+    () => actions.filter((item) => (normalizedQuery ? item.keywords.join(' ').toLowerCase().includes(normalizedQuery) || item.label.toLowerCase().includes(normalizedQuery) : true)),
+    [actions, normalizedQuery],
+  )
+
+  const themeFlatItems = useMemo(() => themeItems.flatMap((group) => group.items), [themeItems])
+
+  const visibleItems = useMemo(() => [...filteredActions, ...projectItems, ...sessionItems, ...themeFlatItems], [filteredActions, projectItems, sessionItems, themeFlatItems])
+
+  useEffect(() => {
+    if (!open) {
+      setActiveId(null)
+      return
+    }
+    setActiveId((current) => {
+      if (current && visibleItems.some((item) => item.id === current)) return current
+      return visibleItems[0]?.id ?? null
+    })
+  }, [open, visibleItems])
+
+  const activeIndex = visibleItems.findIndex((item) => item.id === activeId)
+  const activeItem = activeIndex >= 0 ? visibleItems[activeIndex] : null
+
+  function moveActive(delta: number) {
+    if (visibleItems.length === 0) return
+    const nextIndex = activeIndex < 0
+      ? 0
+      : (activeIndex + delta + visibleItems.length) % visibleItems.length
+    setActiveId(visibleItems[nextIndex]?.id ?? null)
+  }
+
+  function runItem(item: PaletteItem) {
+    item.run()
+    onOpenChange(false)
+  }
+
+  const hasResults = visibleItems.length > 0
+
+  return (
+    <CommandDialog open={open} onOpenChange={onOpenChange} className="max-w-[760px]">
+      <Command>
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">
+          <div>
+            <div className="font-[Oxanium] text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text)]">
+              Command Palette
+            </div>
+            <div className="mt-0.5 font-mono text-[10px] text-[var(--text-3)]">
+              Search sessions, projects, providers, and view controls.
+            </div>
+          </div>
+          <div className="rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+            Ctrl K
+          </div>
+        </div>
+        <CommandInput
+          ref={inputRef}
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setActiveId(null)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown') {
+              event.preventDefault()
+              moveActive(1)
+            }
+            if (event.key === 'ArrowUp') {
+              event.preventDefault()
+              moveActive(-1)
+            }
+            if (event.key === 'Enter' && activeItem) {
+              event.preventDefault()
+              runItem(activeItem)
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              onOpenChange(false)
+            }
+          }}
+          placeholder="Type a command, session title, project path, or provider..."
+        />
+        <CommandList>
+          {!hasResults && normalizedQuery ? (
+            <CommandEmpty>No matches found.</CommandEmpty>
+          ) : null}
+
+          {filteredActions.length > 0 && (
+            <CommandGroup heading="Actions">
+              {filteredActions.map((item) => (
+                  <CommandItem
+                    key={item.id}
+                    active={item.id === activeId}
+                    onMouseEnter={() => setActiveId(item.id)}
+                    onClick={() => runItem(item)}
+                    title={item.description}
+                  >
+                    <span className="flex size-6 shrink-0 items-center justify-center text-[var(--cyan)]">
+                      {item.icon}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-[13px] text-[var(--text)]">{item.label}</span>
+                      <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description}</span>
+                    </span>
+                    {item.active ? (
+                      <span className="rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--violet)]">
+                        Active
+                      </span>
+                    ) : item.shortcut ? (
+                      <CommandShortcut>{item.shortcut}</CommandShortcut>
+                    ) : null}
+                  </CommandItem>
+                ))}
+            </CommandGroup>
+          )}
+
+          {projectItems.length > 0 && (
+            <>
+              <CommandSeparator />
+              <CommandGroup heading="Projects">
+                {projectItems.map((item) => (
+                  <CommandItem
+                    key={item.id}
+                    active={item.id === activeId}
+                    onMouseEnter={() => setActiveId(item.id)}
+                    onClick={() => runItem(item)}
+                    title={item.description}
+                  >
+                    <span className="flex size-6 shrink-0 items-center justify-center text-[var(--violet)]">
+                      {item.icon}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-[13px] text-[var(--text)]">{item.label}</span>
+                      <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description}</span>
+                    </span>
+                    <span className="rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--text-3)]">
+                      {item.shortcut}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </>
+          )}
+
+          {sessionItems.length > 0 && (
+            <>
+              <CommandSeparator />
+              <CommandGroup heading="Sessions">
+                {sessionItems.map((item) => {
+                  const provider = sessions.find((session) => sessionTabKey(session) === item.id.slice('session:'.length))?.provider ?? 'claude'
+                  const style = providerStyle(provider)
+                  return (
+                    <CommandItem
+                      key={item.id}
+                      active={item.id === activeId}
+                      onMouseEnter={() => setActiveId(item.id)}
+                      onClick={() => runItem(item)}
+                      title={item.description}
+                    >
+                      <span
+                        className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em]"
+                        style={{ color: style.color, background: style.background, borderColor: style.border }}
+                      >
+                        {provider}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium text-[13px] text-[var(--text)]">{item.label}</span>
+                        <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description}</span>
+                      </span>
+                      <span className="rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--text-3)]">
+                        {item.shortcut}
+                      </span>
+                    </CommandItem>
+                  )
+                })}
+              </CommandGroup>
+            </>
+          )}
+
+          {themeItems.length > 0 && (
+            <>
+              <CommandSeparator />
+              {themeItems.map((group) => (
+                <CommandGroup key={group.category} heading={`${group.label} themes`}>
+                  {group.items.map((item) => (
+                  <CommandItem
+                    key={item.id}
+                    active={item.id === activeId}
+                    onMouseEnter={() => setActiveId(item.id)}
+                    onClick={() => runItem(item)}
+                    title={item.description}
+                  >
+                      <span className="inline-flex size-6 shrink-0 items-center justify-center text-[var(--cyan)]">
+                        {item.icon}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium text-[13px] text-[var(--text)]">{item.label}</span>
+                        <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description}</span>
+                      </span>
+                      {item.active ? (
+                        <span className="rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--violet)]">
+                          Active
+                        </span>
+                      ) : item.shortcut ? (
+                        <CommandShortcut>{item.shortcut}</CommandShortcut>
+                      ) : null}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              ))}
+            </>
+          )}
+        </CommandList>
+      </Command>
+    </CommandDialog>
+  )
+}

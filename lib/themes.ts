@@ -1,0 +1,86 @@
+export type Theme =
+  | 'light'
+  | 'paper'
+  | 'solarized-light'
+  | 'github-light'
+  | 'gruvbox-light'
+  | 'catppuccin-latte'
+  | 'rose-pine-dawn'
+  | 'ayu-light'
+  | 'one-light'
+  | 'everforest-light'
+  | 'tokyo-night-day'
+  | 'quiet-light'
+  | 'horizon-light'
+  | 'imessage'
+  | 'dark'
+  | 'terminal'
+  | 'solarized-dark'
+  | 'nord'
+  | 'gruvbox-dark'
+  | 'dracula'
+  | 'tokyo-night'
+  | 'catppuccin-mocha'
+  | 'one-dark'
+  | 'monokai'
+  | 'kanagawa'
+  | 'everforest-dark'
+  | 'obsidian'
+  | 'github-dark'
+  | 'ayu-dark'
+  | 'rose-pine'
+  | 'synthwave'
+  | 'palenight'
+  | 'night-owl'
+  | 'cyber'
+
+export type ThemeCategory = 'dark' | 'light'
+
+export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; label: string }> = {
+  light:              { category: 'light', icon: '☀', label: 'Light' },
+  paper:              { category: 'light', icon: '✦', label: 'Paper' },
+  'solarized-light':  { category: 'light', icon: '☀', label: 'Solarized Light' },
+  'github-light':     { category: 'light', icon: '☀', label: 'GitHub Light' },
+  'gruvbox-light':    { category: 'light', icon: '☀', label: 'Gruvbox Light' },
+  'catppuccin-latte': { category: 'light', icon: '☀', label: 'Catppuccin Latte' },
+  'rose-pine-dawn':   { category: 'light', icon: '☀', label: 'Rosé Pine Dawn' },
+  'ayu-light':        { category: 'light', icon: '☀', label: 'Ayu Light' },
+  'one-light':        { category: 'light', icon: '☀', label: 'One Light' },
+  'everforest-light': { category: 'light', icon: '☀', label: 'Everforest Light' },
+  'tokyo-night-day':  { category: 'light', icon: '☀', label: 'Tokyo Night Day' },
+  'quiet-light':      { category: 'light', icon: '☀', label: 'Quiet Light' },
+  'horizon-light':    { category: 'light', icon: '☀', label: 'Horizon Light' },
+  imessage:           { category: 'light', icon: '💬', label: 'iMessage' },
+  dark:               { category: 'dark',  icon: '☾', label: 'Dark' },
+  terminal:           { category: 'dark',  icon: '⌨', label: 'Terminal' },
+  'solarized-dark':   { category: 'dark',  icon: '☾', label: 'Solarized Dark' },
+  nord:               { category: 'dark',  icon: '☾', label: 'Nord' },
+  'gruvbox-dark':     { category: 'dark',  icon: '☾', label: 'Gruvbox Dark' },
+  dracula:            { category: 'dark',  icon: '☾', label: 'Dracula' },
+  'tokyo-night':      { category: 'dark',  icon: '☾', label: 'Tokyo Night' },
+  'catppuccin-mocha': { category: 'dark',  icon: '☾', label: 'Catppuccin Mocha' },
+  'one-dark':         { category: 'dark',  icon: '☾', label: 'One Dark' },
+  monokai:            { category: 'dark',  icon: '☾', label: 'Monokai' },
+  kanagawa:           { category: 'dark',  icon: '☾', label: 'Kanagawa' },
+  'everforest-dark':  { category: 'dark',  icon: '☾', label: 'Everforest Dark' },
+  obsidian:           { category: 'dark',  icon: '☾', label: 'Obsidian' },
+  'github-dark':      { category: 'dark',  icon: '☾', label: 'GitHub Dark' },
+  'ayu-dark':         { category: 'dark',  icon: '☾', label: 'Ayu Dark' },
+  'rose-pine':        { category: 'dark',  icon: '☾', label: 'Rosé Pine' },
+  synthwave:          { category: 'dark',  icon: '✦', label: 'Synthwave' },
+  palenight:          { category: 'dark',  icon: '☾', label: 'Palenight' },
+  'night-owl':        { category: 'dark',  icon: '☾', label: 'Night Owl' },
+  cyber:              { category: 'dark',  icon: '✦', label: 'Cyber' },
+}
+
+export const THEMES: Theme[] = Object.keys(THEME_META) as Theme[]
+export const VALID_THEMES: Set<string> = new Set(THEMES)
+export const THEME_GROUPS: Array<{ category: ThemeCategory; label: string; themes: Theme[] }> = [
+  { category: 'light', label: 'Light', themes: THEMES.filter((theme) => THEME_META[theme].category === 'light') },
+  { category: 'dark', label: 'Dark', themes: THEMES.filter((theme) => THEME_META[theme].category === 'dark') },
+]
+
+export function applyTheme(theme: Theme) {
+  document.documentElement.dataset.theme = theme
+  localStorage.setItem('theme', theme)
+}

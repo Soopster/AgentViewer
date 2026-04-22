@@ -2,93 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-
-type Theme =
-  | 'light'
-  | 'paper'
-  | 'solarized-light'
-  | 'github-light'
-  | 'gruvbox-light'
-  | 'catppuccin-latte'
-  | 'rose-pine-dawn'
-  | 'ayu-light'
-  | 'one-light'
-  | 'everforest-light'
-  | 'tokyo-night-day'
-  | 'quiet-light'
-  | 'horizon-light'
-  | 'imessage'
-  | 'dark'
-  | 'terminal'
-  | 'solarized-dark'
-  | 'nord'
-  | 'gruvbox-dark'
-  | 'dracula'
-  | 'tokyo-night'
-  | 'catppuccin-mocha'
-  | 'one-dark'
-  | 'monokai'
-  | 'kanagawa'
-  | 'everforest-dark'
-  | 'obsidian'
-  | 'github-dark'
-  | 'ayu-dark'
-  | 'rose-pine'
-  | 'synthwave'
-  | 'palenight'
-  | 'night-owl'
-  | 'cyber'
-
-type ThemeCategory = 'dark' | 'light'
-
-const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; label: string }> = {
-  light:              { category: 'light', icon: '☀', label: 'Light' },
-  paper:              { category: 'light', icon: '✦', label: 'Paper' },
-  'solarized-light':  { category: 'light', icon: '☀', label: 'Solarized Light' },
-  'github-light':     { category: 'light', icon: '☀', label: 'GitHub Light' },
-  'gruvbox-light':    { category: 'light', icon: '☀', label: 'Gruvbox Light' },
-  'catppuccin-latte': { category: 'light', icon: '☀', label: 'Catppuccin Latte' },
-  'rose-pine-dawn':   { category: 'light', icon: '☀', label: 'Rosé Pine Dawn' },
-  'ayu-light':        { category: 'light', icon: '☀', label: 'Ayu Light' },
-  'one-light':        { category: 'light', icon: '☀', label: 'One Light' },
-  'everforest-light': { category: 'light', icon: '☀', label: 'Everforest Light' },
-  'tokyo-night-day':  { category: 'light', icon: '☀', label: 'Tokyo Night Day' },
-  'quiet-light':      { category: 'light', icon: '☀', label: 'Quiet Light' },
-  'horizon-light':    { category: 'light', icon: '☀', label: 'Horizon Light' },
-  imessage:           { category: 'light', icon: '💬', label: 'iMessage' },
-  dark:               { category: 'dark',  icon: '☾', label: 'Dark' },
-  terminal:           { category: 'dark',  icon: '⌨', label: 'Terminal' },
-  'solarized-dark':   { category: 'dark',  icon: '☾', label: 'Solarized Dark' },
-  nord:               { category: 'dark',  icon: '☾', label: 'Nord' },
-  'gruvbox-dark':     { category: 'dark',  icon: '☾', label: 'Gruvbox Dark' },
-  dracula:            { category: 'dark',  icon: '☾', label: 'Dracula' },
-  'tokyo-night':      { category: 'dark',  icon: '☾', label: 'Tokyo Night' },
-  'catppuccin-mocha': { category: 'dark',  icon: '☾', label: 'Catppuccin Mocha' },
-  'one-dark':         { category: 'dark',  icon: '☾', label: 'One Dark' },
-  monokai:            { category: 'dark',  icon: '☾', label: 'Monokai' },
-  kanagawa:           { category: 'dark',  icon: '☾', label: 'Kanagawa' },
-  'everforest-dark':  { category: 'dark',  icon: '☾', label: 'Everforest Dark' },
-  obsidian:           { category: 'dark',  icon: '☾', label: 'Obsidian' },
-  'github-dark':      { category: 'dark',  icon: '☾', label: 'GitHub Dark' },
-  'ayu-dark':         { category: 'dark',  icon: '☾', label: 'Ayu Dark' },
-  'rose-pine':        { category: 'dark',  icon: '☾', label: 'Rosé Pine' },
-  synthwave:          { category: 'dark',  icon: '✦', label: 'Synthwave' },
-  palenight:          { category: 'dark',  icon: '☾', label: 'Palenight' },
-  'night-owl':        { category: 'dark',  icon: '☾', label: 'Night Owl' },
-  cyber:              { category: 'dark',  icon: '✦', label: 'Cyber' },
-}
-
-const THEMES: Theme[] = Object.keys(THEME_META) as Theme[]
-const VALID: Set<string> = new Set(THEMES)
-const THEME_GROUPS: Array<{ category: ThemeCategory; label: string; themes: Theme[] }> = [
-  { category: 'light', label: 'Light', themes: THEMES.filter((t) => THEME_META[t].category === 'light') },
-  { category: 'dark',  label: 'Dark',  themes: THEMES.filter((t) => THEME_META[t].category === 'dark') },
-]
-
-function applyTheme(theme: Theme) {
-  document.documentElement.dataset.theme = theme
-  localStorage.setItem('theme', theme)
-}
+import { applyTheme, THEME_GROUPS, THEME_META, THEMES, VALID_THEMES, type Theme } from '@/lib/themes'
 
 export default function ThemeToggle() {
   const [theme, setTheme]   = useState<Theme>('dark')
@@ -98,7 +12,7 @@ export default function ThemeToggle() {
 
   useEffect(() => {
     const saved = localStorage.getItem('theme')
-    if (saved && VALID.has(saved)) setTheme(saved as Theme)
+    if (saved && VALID_THEMES.has(saved)) setTheme(saved as Theme)
   }, [])
 
   useEffect(() => {

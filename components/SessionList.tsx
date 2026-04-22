@@ -85,6 +85,7 @@ type Props = {
   includeWorktrees: boolean
   onChangeScope: (mode: 'all' | 'project') => void
   onToggleWorktrees: (include: boolean) => void
+  onOpenCommandPalette: () => void
 }
 
 function timeAgo(value?: string | number): string {
@@ -643,6 +644,7 @@ export default function SessionList({
   includeWorktrees,
   onChangeScope,
   onToggleWorktrees,
+  onOpenCommandPalette,
 }: Props) {
   const { state: sidebarState, width: sidebarWidth, setWidth: setSidebarWidth, applyWidth, setOpen } = useSidebar()
   const collapsed = sidebarState === 'collapsed'
@@ -1503,11 +1505,31 @@ export default function SessionList({
                   flex: 1,
                 }}
               >
-                <span style={{ color: 'var(--violet)', fontSize: 13, lineHeight: 1 }}>◈</span>
-                <span style={{ flex: 1 }}>Agent Viewer</span>
-                <ThemeToggle />
-              </div>
-            )}
+                  <span style={{ color: 'var(--violet)', fontSize: 13, lineHeight: 1 }}>◈</span>
+                  <span style={{ flex: 1 }}>Agent Viewer</span>
+                  <Button
+                    onClick={onOpenCommandPalette}
+                    variant="outline"
+                    size="sm"
+                    title="Open command palette"
+                    style={{
+                      height: 24,
+                      padding: '0 8px',
+                      borderRadius: 6,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface-2)',
+                      color: 'var(--text-3)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 10,
+                      letterSpacing: '0.06em',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ⌘K
+                  </Button>
+                  <ThemeToggle />
+                </div>
+              )}
             <SidebarTrigger
               title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               className="ml-auto h-7 w-7 shrink-0 rounded-md border-border bg-transparent px-0 text-[14px] text-[var(--text-3)] shadow-none hover:bg-[var(--surface-2)]"

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
+import CommandPalette from '@/components/CommandPalette'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
 import { Sidebar, SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { isProviderSelection } from '@/lib/provider'
@@ -127,6 +128,7 @@ export default function Home() {
   const [switchingProvider, setSwitchingProvider] = useState(false)
   const [sessionScope, setSessionScope] = useState<SessionScopeMode>('all')
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   // Tracks how many messages we've already loaded so polling can fetch only new ones
   const msgCountRef = useRef(0)
   const projectMessageCountsRef = useRef<Map<string, number>>(new Map())
@@ -549,6 +551,7 @@ export default function Home() {
             includeWorktrees={includeWorktrees}
             onChangeScope={setSessionScope}
             onToggleWorktrees={setIncludeWorktrees}
+            onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           />
         </Sidebar>
         {messagePaneCollapsed ? (
@@ -617,6 +620,24 @@ export default function Home() {
                 selectedTabId={selectedTabKey}
                 onSelectTab={(s) => void selectSession(s)}
                 onCloseTab={closeTab}
+              />
+              <CommandPalette
+                open={commandPaletteOpen}
+                onOpenChange={setCommandPaletteOpen}
+                sessions={sessions}
+                selectedSession={selectedSession}
+                selectedProject={selectedProject}
+                provider={provider}
+                scopeMode={sessionScope}
+                scopeProjectName={activeProjectName}
+                includeWorktrees={includeWorktrees}
+                messagePaneCollapsed={messagePaneCollapsed}
+                onSelectSession={(session) => void selectSession(session)}
+                onSelectProject={(projectDir, projectName, projectSessions) => void selectProject(projectDir, projectName, projectSessions)}
+                onChangeProvider={(nextProvider) => void handleChangeProvider(nextProvider)}
+                onChangeScope={setSessionScope}
+                onToggleWorktrees={setIncludeWorktrees}
+                onToggleMessagePane={toggleMessagePane}
               />
             </div>
           </SidebarInset>
