@@ -23,7 +23,6 @@ import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, selectContentBaseClassName } from '@/components/ui/select'
 import { NativeSelect, NativeSelectOption, nativeSelectBaseClassName } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
@@ -37,15 +36,6 @@ import TabBar from './TabBar'
 const compactNativeSelectClassName = cn(
   nativeSelectBaseClassName,
   'h-[30px] min-w-0 rounded-[5px] border-[var(--border)] bg-[var(--surface-2)] px-[10px] text-[11px] text-[var(--text)]'
-)
-
-const compactSelectTriggerClassName = cn(
-  'h-[30px] min-w-0 rounded-[5px] border-[var(--border)] bg-[var(--surface-2)] px-[10px] text-[11px] text-[var(--text)]'
-)
-
-const compactSelectContentClassName = cn(
-  selectContentBaseClassName,
-  'p-[6px] text-xs'
 )
 
 type Props = {
@@ -3171,22 +3161,20 @@ export default function MessageView({ messages, loading, session, projectView, o
               )}
               {sessionCapabilities?.fileRewind && rewindCandidates.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 300px', minWidth: 220 }}>
-                  <Select value={rewindTargetId} onValueChange={setRewindTargetId}>
-                    <SelectTrigger
-                      className={cn(compactSelectTriggerClassName, 'flex-1')}
-                    >
-                      <SelectValue placeholder="Rewind target" />
-                    </SelectTrigger>
-                    <SelectContent
-                      className={cn(compactSelectContentClassName, 'min-w-[28rem] max-w-[calc(100vw-48px)]')}
-                    >
-                      {rewindCandidates.slice().reverse().map((candidate) => (
-                        <SelectItem key={candidate.uuid} value={candidate.uuid}>
-                          {candidate.content.replace(/\s+/g, ' ').trim().slice(0, 72) || candidate.uuid}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <NativeSelect
+                    value={rewindTargetId}
+                    onChange={(event) => setRewindTargetId(event.target.value)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                  >
+                    <NativeSelectOption value="" disabled>
+                      Rewind target
+                    </NativeSelectOption>
+                    {rewindCandidates.slice().reverse().map((candidate) => (
+                      <NativeSelectOption key={candidate.uuid} value={candidate.uuid}>
+                        {candidate.content.replace(/\s+/g, ' ').trim().slice(0, 72) || candidate.uuid}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
                   <Button
                     onClick={handleRewind}
                     disabled={previewingRewind || applyingRewind || !rewindTargetId}
@@ -3213,22 +3201,17 @@ export default function MessageView({ messages, loading, session, projectView, o
               )}
               {sessionCapabilities?.rollback && rollbackCandidates.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 170px', minWidth: 146 }}>
-                  <Select value={String(rollbackTurns)} onValueChange={(value) => setRollbackTurns(Number(value))}>
-                    <SelectTrigger
-                      className={cn(compactSelectTriggerClassName, 'flex-1')}
-                    >
-                      <SelectValue placeholder="Turns" />
-                    </SelectTrigger>
-                    <SelectContent
-                      className={compactSelectContentClassName}
-                    >
-                      {Array.from({ length: Math.min(10, rollbackCandidates.length) }, (_, index) => index + 1).map((value) => (
-                        <SelectItem key={value} value={String(value)}>
-                          {value} turn{value === 1 ? '' : 's'}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <NativeSelect
+                    value={String(rollbackTurns)}
+                    onChange={(event) => setRollbackTurns(Number(event.target.value))}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                  >
+                    {Array.from({ length: Math.min(10, rollbackCandidates.length) }, (_, index) => index + 1).map((value) => (
+                      <NativeSelectOption key={value} value={String(value)}>
+                        {value} turn{value === 1 ? '' : 's'}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
                   <Button
                     onClick={handleRollbackPreview}
                     disabled={previewingRewind || applyingRewind}
