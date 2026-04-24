@@ -64,7 +64,7 @@ function attachmentLabel(attachment: Record<string, unknown>): string | null {
 function userMessageContent(event: Extract<SessionEvent, { type: 'user.message' }>): string {
   const parts = [event.data.content]
   for (const attachment of event.data.attachments ?? []) {
-    const label = attachmentLabel(attachment as Record<string, unknown>)
+    const label = attachmentLabel(attachment as unknown as Record<string, unknown>)
     if (label) parts.push(label)
   }
   return parts.filter(Boolean).join('\n\n').trim()
@@ -195,7 +195,7 @@ function mapCopilotUiCompletionEvent(
   event: Extract<SessionEvent, { type: 'user_input.completed' | 'elicitation.completed' | 'exit_plan_mode.completed' }>,
   turnId?: string,
 ): SessionMessage {
-  const rawData = event.data as Record<string, unknown>
+  const rawData = event.data as unknown as Record<string, unknown>
   const { content: rawContent, ...restData } = rawData
   return {
     type: 'system',

@@ -1891,7 +1891,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
           status,
           auth,
           currentModel: currentModel.modelId ?? null,
-          mode: mode.mode ?? null,
+          mode: typeof mode === 'string' ? mode : mode.mode ?? null,
           tools: tools.tools,
           quotaItems,
           metadata,

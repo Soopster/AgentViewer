@@ -36,9 +36,9 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.117",
-    "@github/copilot-sdk": "^0.2.2",
+    "@github/copilot-sdk": "^0.3.0",
     "@inkjs/ui": "^2.0.0",
-    "@mariozechner/pi-coding-agent": "^0.68.1",
+    "@mariozechner/pi-coding-agent": "^0.70.2",
     "@opencode-ai/sdk": "^1.14.20",
     "@opentui/core": "^0.1.102",
     "@opentui/react": "^0.1.102",
