@@ -33,7 +33,7 @@ export default function ThemeToggle() {
   const meta = THEME_META[theme]
 
   return (
-    <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
+    <div ref={ref} style={{ position: 'relative', flex: '1 1 auto', minWidth: 0 }}>
       <Button
         onClick={() => setOpen(v => !v)}
         variant="outline"
@@ -42,6 +42,8 @@ export default function ThemeToggle() {
           display: 'flex',
           alignItems: 'center',
           gap: 5,
+          width: '100%',
+          height: 24,
           background: open ? 'var(--surface-3)' : 'transparent',
           border: '1px solid var(--border)',
           borderRadius: 5,
@@ -53,13 +55,14 @@ export default function ThemeToggle() {
           letterSpacing: '0.05em',
           transition: 'background 0.14s ease, border-color 0.14s ease',
           whiteSpace: 'nowrap',
+          minWidth: 0,
         }}
         onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-3)' }}
         onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent' }}
       >
-        <span style={{ fontSize: 12, lineHeight: 1 }}>{meta.icon}</span>
-        <span>{meta.label}</span>
-        <span style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 1 }}>{open ? '▲' : '▼'}</span>
+        <span style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>{meta.icon}</span>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{meta.label}</span>
+        <span style={{ fontSize: 9, color: 'var(--text-3)', marginLeft: 'auto', flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
       </Button>
 
       {open && (

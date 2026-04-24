@@ -14,6 +14,7 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
+  SidebarGlyph,
   SidebarRail,
   SidebarTrigger,
   useSidebar,
@@ -23,8 +24,8 @@ import {
   BookOpen,
   Bot,
   LayoutDashboard,
+  ListTree,
   PanelLeftOpen,
-  PanelRightOpen,
   Search,
   SlidersHorizontal,
 } from 'lucide-react'
@@ -39,9 +40,9 @@ const collapsedIconButtonBaseStyle: React.CSSProperties = {
   width: 34,
   height: 34,
   borderRadius: 11,
-  border: '1px solid rgba(255,255,255,0.08)',
-  background: 'rgba(18,24,35,0.98)',
-  color: 'rgba(255,255,255,0.9)',
+  border: '1px solid var(--border)',
+  background: 'var(--surface-2)',
+  color: 'var(--text-2)',
   display: 'grid',
   placeItems: 'center',
   cursor: 'pointer',
@@ -49,20 +50,22 @@ const collapsedIconButtonBaseStyle: React.CSSProperties = {
 
 const collapsedPrimaryButtonStyle: React.CSSProperties = {
   ...collapsedIconButtonBaseStyle,
-  width: 50,
-  height: 50,
-  borderRadius: 16,
-  border: '1px solid rgba(42,89,255,0.12)',
-  background: 'rgba(42,89,255,0.96)',
-  boxShadow: '0 8px 24px rgba(42,89,255,0.32)',
+  width: 46,
+  height: 46,
+  borderRadius: 15,
+  border: '1px solid color-mix(in srgb, var(--violet) 28%, var(--border))',
+  background: 'var(--violet)',
+  color: 'var(--bg)',
+  boxShadow: '0 8px 24px var(--violet-glow)',
 }
 
 function collapsedIconButtonStyle(active = false): React.CSSProperties {
   return {
     ...collapsedIconButtonBaseStyle,
-    border: active ? '1px solid rgba(42,89,255,0.35)' : collapsedIconButtonBaseStyle.border,
-    background: active ? 'rgba(42,89,255,0.18)' : 'rgba(18,24,35,0.98)',
-    boxShadow: active ? '0 10px 18px rgba(42,89,255,0.10)' : 'none',
+    border: active ? '1px solid color-mix(in srgb, var(--violet) 46%, var(--border))' : collapsedIconButtonBaseStyle.border,
+    background: active ? 'color-mix(in srgb, var(--violet) 16%, var(--surface-2))' : 'var(--surface-2)',
+    color: active ? 'var(--violet)' : 'var(--text-2)',
+    boxShadow: active ? '0 10px 18px var(--violet-glow)' : 'none',
   }
 }
 
@@ -846,7 +849,7 @@ export default function SessionList({
             display: 'flex',
             flex: 1,
             minHeight: 0,
-            background: 'linear-gradient(180deg, rgba(16,24,34,0.96) 0%, rgba(14,19,28,0.96) 100%)',
+            background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
           }}
         >
           <div
@@ -858,8 +861,8 @@ export default function SessionList({
               alignItems: 'center',
               gap: 9,
               padding: '11px 0 13px',
-              borderRight: '1px solid rgba(255,255,255,0.08)',
-              background: 'rgba(10, 16, 24, 0.92)',
+              borderRight: '1px solid var(--border)',
+              background: 'var(--surface)',
             }}
           >
             <button
@@ -871,9 +874,9 @@ export default function SessionList({
                 width: 24,
                 height: 24,
                 borderRadius: 8,
-                border: '1px solid rgba(255,255,255,0.08)',
-                background: 'rgba(12,18,27,0.72)',
-                color: 'rgba(255,255,255,0.72)',
+                border: '1px solid var(--border)',
+                background: 'var(--surface-2)',
+                color: 'var(--text-3)',
                 display: 'grid',
                 placeItems: 'center',
                 cursor: 'pointer',
@@ -882,21 +885,18 @@ export default function SessionList({
                 marginBottom: 8,
               }}
             >
-              <PanelRightOpen size={13} strokeWidth={2.1} />
+              <SidebarGlyph size={15} strokeWidth={2} />
             </button>
 
-              <button
-                type="button"
-                onClick={() => handleCollapsedAction('sessions')}
-                aria-label="Show sessions"
-                title="Show sessions"
-                style={{
-                  ...collapsedPrimaryButtonStyle,
-                  marginLeft: 2,
-                }}
-              >
-                <PanelLeftOpen size={24} strokeWidth={2.4} color="#fff" />
-              </button>
+            <button
+              type="button"
+              onClick={() => handleCollapsedAction('sessions')}
+              aria-label="Show sessions"
+              title="Show sessions"
+              style={collapsedPrimaryButtonStyle}
+            >
+              <ListTree size={22} strokeWidth={2.3} />
+            </button>
 
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 8 }}>
               <button
@@ -935,11 +935,11 @@ export default function SessionList({
               >
                 <SlidersHorizontal size={20} strokeWidth={2.2} />
               </button>
-            <button
-              type="button"
-              onClick={() => handleCollapsedAction('overview')}
-              aria-label="Overview"
-              title="Overview"
+              <button
+                type="button"
+                onClick={() => handleCollapsedAction('overview')}
+                aria-label="Overview"
+                title="Overview"
                 style={collapsedIconButtonStyle(collapsedPanel === 'overview')}
               >
                 <BookOpen size={20} strokeWidth={2.2} />
@@ -967,9 +967,9 @@ export default function SessionList({
                 maxWidth: 'calc(100vw - 114px)',
                 maxHeight: 'calc(100vh - 104px)',
                 borderRadius: 16,
-                border: '1px solid rgba(255,255,255,0.10)',
-                background: 'linear-gradient(180deg, rgba(19,28,40,0.98) 0%, rgba(12,18,27,0.99) 100%)',
-                boxShadow: '0 24px 60px rgba(0,0,0,0.42)',
+                border: '1px solid var(--border)',
+                background: 'linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%)',
+                boxShadow: '0 24px 60px var(--shadow, rgba(0,0,0,0.22))',
                 overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
@@ -981,8 +981,8 @@ export default function SessionList({
                   alignItems: 'center',
                   gap: 8,
                   padding: '9px 12px',
-                  borderBottom: '1px solid rgba(255,255,255,0.08)',
-                  background: 'rgba(255,255,255,0.02)',
+                  borderBottom: '1px solid var(--border)',
+                  background: 'var(--surface-2)',
                 }}
               >
                 <div
@@ -1001,9 +1001,9 @@ export default function SessionList({
                   type="button"
                   onClick={() => setCollapsedPanel(null)}
                   style={{
-                    border: '1px solid rgba(255,255,255,0.08)',
-                    background: 'rgba(18,24,35,0.98)',
-                    color: 'rgba(255,255,255,0.82)',
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface)',
+                    color: 'var(--text-2)',
                     borderRadius: 8,
                     padding: '4px 8px',
                     fontFamily: "'IBM Plex Mono', monospace",
@@ -1046,8 +1046,8 @@ export default function SessionList({
                           fontFamily: "'IBM Plex Mono', monospace",
                           fontSize: 10,
                           color: 'var(--text-3)',
-                          background: 'rgba(255,255,255,0.04)',
-                          border: '1px solid rgba(255,255,255,0.08)',
+                          background: 'var(--surface-3)',
+                          border: '1px solid var(--border)',
                           borderRadius: 6,
                           padding: '3px 8px',
                         }}
@@ -1060,8 +1060,8 @@ export default function SessionList({
                         maxHeight: 'min(72vh, 720px)',
                         overflowY: 'auto',
                         borderRadius: 12,
-                        border: '1px solid rgba(255,255,255,0.06)',
-                        background: 'rgba(7,11,18,0.45)',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
                       }}
                     >
                       {sortMode === 'project' && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
@@ -1400,8 +1400,8 @@ export default function SessionList({
                       style={{
                         padding: 12,
                         borderRadius: 12,
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        background: 'rgba(255,255,255,0.03)',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface-2)',
                         display: 'grid',
                         gap: 8,
                       }}
@@ -1421,8 +1421,8 @@ export default function SessionList({
                       style={{
                         height: 34,
                         borderRadius: 8,
-                        border: '1px solid rgba(255,255,255,0.10)',
-                        background: 'rgba(18,24,35,0.98)',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface-2)',
                         color: 'var(--text)',
                         fontFamily: "'IBM Plex Mono', monospace",
                         fontSize: 11,
@@ -1485,55 +1485,77 @@ export default function SessionList({
           <div
             style={{
               display: 'flex',
-              alignItems: 'flex-start',
+              flexDirection: 'column',
               gap: 8,
             }}
           >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+                minWidth: 0,
+              }}
+            >
+              {!collapsed && (
+                <div
+                  style={{
+                    fontFamily: "'Oxanium', monospace",
+                    fontSize: 15,
+                    fontWeight: 700,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    minWidth: 0,
+                    flex: 1,
+                  }}
+                >
+                  <LayoutDashboard size={13} strokeWidth={2.2} style={{ color: 'var(--violet)', flexShrink: 0 }} />
+                  <span style={{ flex: 1 }}>Agent Viewer</span>
+                </div>
+              )}
+              <SidebarTrigger
+                title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                className="ml-auto h-7 w-7 shrink-0 rounded-md border-border bg-[var(--surface-2)] px-0 text-[var(--text-3)] shadow-none hover:bg-[var(--surface-3)] [&_svg]:size-4"
+              />
+            </div>
             {!collapsed && (
               <div
                 style={{
-                  fontFamily: "'Oxanium', monospace",
-                  fontSize: 15,
-                  fontWeight: 700,
-                  letterSpacing: '0.08em',
-                  textTransform: 'uppercase',
-                  color: 'var(--text)',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 6,
+                  gap: 8,
+                  width: '100%',
                   minWidth: 0,
-                  flex: 1,
                 }}
               >
-                  <span style={{ color: 'var(--violet)', fontSize: 13, lineHeight: 1 }}>◈</span>
-                  <span style={{ flex: 1 }}>Agent Viewer</span>
-                  <Button
-                    onClick={onOpenCommandPalette}
-                    variant="outline"
-                    size="sm"
-                    title="Open command palette"
-                    style={{
-                      height: 24,
-                      padding: '0 8px',
-                      borderRadius: 6,
-                      border: '1px solid var(--border)',
-                      background: 'var(--surface-2)',
-                      color: 'var(--text-3)',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 10,
-                      letterSpacing: '0.06em',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    ⌘K
-                  </Button>
-                  <ThemeToggle />
-                </div>
-              )}
-            <SidebarTrigger
-              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              className="ml-auto h-7 w-7 shrink-0 rounded-md border-border bg-transparent px-0 text-[14px] text-[var(--text-3)] shadow-none hover:bg-[var(--surface-2)]"
-            />
+                <Button
+                  onClick={onOpenCommandPalette}
+                  variant="outline"
+                  size="sm"
+                  title="Open command palette"
+                  style={{
+                    height: 24,
+                    padding: '0 8px',
+                    borderRadius: 6,
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface-2)',
+                    color: 'var(--text-3)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    letterSpacing: '0.06em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  ⌘K
+                </Button>
+                <ThemeToggle />
+              </div>
+            )}
           </div>
         </div>
         {!collapsed && (

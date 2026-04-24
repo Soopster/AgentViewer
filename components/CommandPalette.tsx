@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, FolderOpen, Layers3, PanelLeftOpen, PanelRightOpen, Search, SlidersHorizontal } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from '@/components/ui/command'
-import { useSidebar } from '@/components/ui/sidebar'
+import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import { applyTheme, THEME_GROUPS, THEME_META, type Theme } from '@/lib/themes'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
@@ -183,13 +183,13 @@ export default function CommandPalette({
         id: 'toggle-sidebar',
         label: 'Collapse sidebar',
         description: 'Hide the session list',
-        icon: <PanelLeftOpen size={16} />,
+        icon: <SidebarGlyph size={16} />,
       }
     : {
         id: 'toggle-sidebar',
         label: 'Expand sidebar',
         description: 'Show the session list',
-        icon: <PanelRightOpen size={16} />,
+        icon: <SidebarGlyph size={16} />,
       }
 
   const actions = useMemo(() => {

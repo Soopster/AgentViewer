@@ -233,8 +233,38 @@ function SidebarTrigger({
       )}
       {...props}
     >
-      {children ?? (state === "expanded" ? "‹" : "›")}
+      {children ?? <SidebarGlyph size={16} />}
     </button>
+  )
+}
+
+function SidebarGlyph({
+  size = 16,
+  strokeWidth = 1.9,
+  ...props
+}: React.SVGProps<SVGSVGElement> & {
+  size?: number
+  strokeWidth?: number
+}) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={strokeWidth}
+      aria-hidden="true"
+      {...props}
+    >
+      <rect x="3.5" y="4" width="17" height="16" rx="3" />
+      <path d="M9 4v16" />
+      <path d="M6.25 8h.05" />
+      <path d="M6.25 12h.05" />
+      <path d="M6.25 16h.05" />
+    </svg>
   )
 }
 
@@ -349,6 +379,7 @@ export {
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
+  SidebarGlyph,
   SidebarInset,
   SidebarGroup,
   SidebarGroupAction,
