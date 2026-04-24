@@ -197,6 +197,16 @@ const mdComponents: Components = {
       {children}
     </a>
   ),
+  img: ({ src, alt }) => (
+    <span style={{ display: 'block', margin: '8px 0 12px' }}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={typeof src === 'string' ? src : ''}
+        alt={alt ?? ''}
+        style={{ maxWidth: '100%', maxHeight: 480, display: 'block', borderRadius: 6, border: '1px solid var(--border)' }}
+      />
+    </span>
+  ),
   blockquote: ({ children }) => (
     <blockquote style={{ margin: '10px 0', paddingLeft: 14, borderLeft: '2px solid var(--border-2)', color: 'var(--text-2)' }}>
       {children}
@@ -2319,6 +2329,31 @@ function ToolResultSection({ result, toolName, filePath }: { result: ToolResultB
 // ── Block renderers ───────────────────────────────────────────────────────────
 
 type InsightPart = { kind: 'insight'; content: string } | { kind: 'text'; text: string }
+type TextMediaPart = { kind: 'text'; text: string } | { kind: 'data_image'; src: string; mediaType: string }
+
+const STANDALONE_DATA_IMAGE_RE = /^(?:\[image\]\s*)?(data:(image\/[a-zA-Z0-9.+-]+);base64,[A-Za-z0-9+/=]+)\s*$/
+
+function splitStandaloneDataImages(text: string): TextMediaPart[] {
+  const parts: TextMediaPart[] = []
+  const textLines: string[] = []
+
+  for (const line of text.split('\n')) {
+    const match = line.trim().match(STANDALONE_DATA_IMAGE_RE)
+    if (!match) {
+      textLines.push(line)
+      continue
+    }
+
+    const textBeforeImage = textLines.join('\n').trimEnd()
+    if (textBeforeImage) parts.push({ kind: 'text', text: textBeforeImage })
+    textLines.length = 0
+    parts.push({ kind: 'data_image', src: match[1], mediaType: match[2] })
+  }
+
+  const remainingText = textLines.join('\n').trimEnd()
+  if (remainingText) parts.push({ kind: 'text', text: remainingText })
+  return parts.length > 0 ? parts : [{ kind: 'text', text }]
+}
 
 function splitInsights(text: string): InsightPart[] {
   const matches = [...text.matchAll(/`★ Insight[^`]*`\n([\s\S]*?)\n`[─]+`/g)]
@@ -2366,13 +2401,29 @@ function InsightCard({ content }: { content: string }) {
   )
 }
 
-function RenderText({ block }: { block: TextBlock }) {
-  const parts = useMemo(() => splitInsights(block.text), [block.text])
+function DataImageBlock({ src, mediaType }: { src: string; mediaType: string }) {
+  return (
+    <div style={{ margin: '8px 0 12px' }}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt=""
+        style={{ maxWidth: '100%', maxHeight: 480, display: 'block', borderRadius: 6, border: '1px solid var(--border)' }}
+      />
+      <div style={{ marginTop: 4, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+        {mediaType}
+      </div>
+    </div>
+  )
+}
+
+function RenderMarkdownText({ text }: { text: string }) {
+  const parts = useMemo(() => splitInsights(text), [text])
   if (parts.length === 1 && parts[0].kind === 'text') {
     return (
       <div style={{ fontSize: 15, wordBreak: 'break-word', lineHeight: 1.75 }}>
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-          {block.text}
+          {text}
         </ReactMarkdown>
       </div>
     )
@@ -2389,6 +2440,19 @@ function RenderText({ block }: { block: TextBlock }) {
               </ReactMarkdown>
             </div>
           )
+      )}
+    </>
+  )
+}
+
+function RenderText({ block }: { block: TextBlock }) {
+  const parts = useMemo(() => splitStandaloneDataImages(block.text), [block.text])
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.kind === 'data_image'
+          ? <DataImageBlock key={i} src={part.src} mediaType={part.mediaType} />
+          : <RenderMarkdownText key={i} text={part.text} />
       )}
     </>
   )
