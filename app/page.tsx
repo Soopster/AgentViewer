@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, startTransition, ViewTransition } from 'react'
 import dynamic from 'next/dynamic'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
@@ -144,6 +144,7 @@ export default function Home() {
     null
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
+  const messageAreaKey = selectedTabKey ?? (selectedProject ? `proj:${selectedProject.dir}` : '')
 
   const toggleMessagePane = useCallback(() => {
     setMessagePaneCollapsed((prev) => {
@@ -179,7 +180,7 @@ export default function Home() {
   ) => {
     if (scopeMode === 'project' && projectDir) {
       const loaded = await fetchProjectSessions(projectDir, selection)
-      setSessions(loaded)
+      startTransition(() => { setSessions(loaded) })
       return
     }
 
@@ -190,7 +191,7 @@ export default function Home() {
     const r = await fetch(`/api/sessions${suffix}`)
     const data = await r.json()
     if (data.error) throw new Error(data.error)
-    setSessions((data.sessions ?? []) as Session[])
+    startTransition(() => { setSessions((data.sessions ?? []) as Session[]) })
   }, [activeProjectDir, fetchProjectSessions, sessionScope])
 
   const fetchSessions = useCallback(async () => {
@@ -365,14 +366,16 @@ export default function Home() {
         .catch((err) => setSessionsError(err instanceof Error ? err.message : 'Failed to sync sessions'))
         .finally(() => setLoadingSessions(false))
     }
-    setOpenTabSessions((prev) => {
-      const alreadyOpen = prev.some(
-        (s) => projectSessionKey(s) === projectSessionKey(session),
-      )
-      return alreadyOpen ? prev : [...prev, session]
+    startTransition(() => {
+      setOpenTabSessions((prev) => {
+        const alreadyOpen = prev.some(
+          (s) => projectSessionKey(s) === projectSessionKey(session),
+        )
+        return alreadyOpen ? prev : [...prev, session]
+      })
+      setSelectedTabKey(projectSessionKey(session))
+      setSelectedProject(null)
     })
-    setSelectedTabKey(projectSessionKey(session))
-    setSelectedProject(null)
     projectMessageCountsRef.current.clear()
     setLoadingMessages(true)
     setMessages([])
@@ -389,21 +392,25 @@ export default function Home() {
   function closeTab(sessionKey: string) {
     const idx = openTabSessions.findIndex((s) => projectSessionKey(s) === sessionKey)
     const next = openTabSessions.filter((s) => projectSessionKey(s) !== sessionKey)
-    setOpenTabSessions(next)
+    startTransition(() => { setOpenTabSessions(next) })
     if (sessionKey === selectedTabKey) {
       if (next.length > 0) {
         const adjacent = next[Math.min(idx, next.length - 1)]
         if (adjacent) void selectSession(adjacent)
       } else {
-        setSelectedTabKey(null)
-        setMessages([])
+        startTransition(() => {
+          setSelectedTabKey(null)
+          setMessages([])
+        })
       }
     }
   }
 
   const selectProject = useCallback(async (projectDir: string, projectName: string, projectSessions: Session[]) => {
-    setSelectedProject({ key: projectName, dir: projectDir, sessions: projectSessions })
-    setSelectedTabKey(null)
+    startTransition(() => {
+      setSelectedProject({ key: projectName, dir: projectDir, sessions: projectSessions })
+      setSelectedTabKey(null)
+    })
     setLoadingMessages(true)
     setMessages([])
     try {
@@ -592,18 +599,20 @@ export default function Home() {
               >
                 ›
               </button>
-              <MessageView
-                messages={messages}
-                loading={loadingMessages}
-                session={selectedSession}
-                projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
-                onFork={handleFork}
-                onDelete={handleDelete}
-                openTabs={openTabSessions}
-                selectedTabId={selectedTabKey}
-                onSelectTab={(s) => void selectSession(s)}
-                onCloseTab={closeTab}
-              />
+              <ViewTransition key={messageAreaKey} enter="fade-in" exit="fade-out" default="none">
+                <MessageView
+                  messages={messages}
+                  loading={loadingMessages}
+                  session={selectedSession}
+                  projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
+                  onFork={handleFork}
+                  onDelete={handleDelete}
+                  openTabs={openTabSessions}
+                  selectedTabId={selectedTabKey}
+                  onSelectTab={(s) => void selectSession(s)}
+                  onCloseTab={closeTab}
+                />
+              </ViewTransition>
               <CommandPalette
                 open={commandPaletteOpen}
                 onOpenChange={setCommandPaletteOpen}

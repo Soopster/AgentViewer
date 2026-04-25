@@ -1,5 +1,6 @@
 'use client'
 
+import { ViewTransition } from 'react'
 import type { Session } from '@/lib/types'
 
 function sessionTabTitle(session: Session): string {
@@ -41,11 +42,12 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
       }}
     >
       {tabs.map((session) => {
-        const isActive = sessionTabKey(session) === activeId
+        const tabKey = sessionTabKey(session)
+        const isActive = tabKey === activeId
         const title = sessionTabTitle(session)
         return (
+          <ViewTransition key={tabKey} enter="fade-in" exit="fade-out" default="none">
           <button
-            key={`${session.provider ?? 'claude'}:${session.sessionId}`}
             onClick={() => onSelect(session)}
             title={title}
             style={{
@@ -102,6 +104,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
               ×
             </span>
           </button>
+          </ViewTransition>
         )
       })}
     </div>

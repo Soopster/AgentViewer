@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { memo, useState, useRef, useCallback, useEffect, useMemo, ViewTransition } from 'react'
 import { normalizeProjectPath, pathBasename, pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
@@ -602,14 +602,15 @@ const ProjectGroup = memo(function ProjectGroup({
 
       {/* Sessions */}
       {!collapsed && sessions.map((session) => (
-        <SessionRow
-          key={sessionTabKey(session)}
-          session={session}
-          selected={sessionTabKey(session) === selectedId}
-          onSelect={onSelect}
-          onRename={onRename}
-          onTag={onTag}
-        />
+        <ViewTransition key={sessionTabKey(session)} enter="fade-in" default="none">
+          <SessionRow
+            session={session}
+            selected={sessionTabKey(session) === selectedId}
+            onSelect={onSelect}
+            onRename={onRename}
+            onTag={onTag}
+          />
+        </ViewTransition>
       ))}
     </div>
   )
@@ -1116,14 +1117,15 @@ export default function SessionList({
                           )
                         }
                         return (
-                          <SessionRow
-                            key={entry.key}
-                            session={entry.session}
-                            selected={sessionTabKey(entry.session) === selectedId}
-                            onSelect={onSelect}
-                            onRename={onRename}
-                            onTag={onTag}
-                          />
+                          <ViewTransition key={entry.key} enter="fade-in" default="none">
+                            <SessionRow
+                              session={entry.session}
+                              selected={sessionTabKey(entry.session) === selectedId}
+                              onSelect={onSelect}
+                              onRename={onRename}
+                              onTag={onTag}
+                            />
+                          </ViewTransition>
                         )
                       })}
                     </div>
