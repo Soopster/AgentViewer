@@ -170,6 +170,47 @@ async function getCachedSessionInfo(sessionId: string, dir: string | undefined):
   return result
 }
 
+// Per-session cache of mapped+sorted messages. Lets idle polls skip the
+// normalize/dedup/sort pipeline when the underlying transcript is unchanged.
+// Each call computes a cheap raw signature; on match we return the cached
+// array (slice happens at the call site). On mismatch we re-map and store.
+const MAPPED_MESSAGE_TTL = 60_000
+type MappedMessageCacheEntry = {
+  signature: string
+  messages: SessionMessage[]
+  ts: number
+}
+const mappedMessageCache = new Map<string, MappedMessageCacheEntry>()
+
+function pruneMappedMessageCache() {
+  const deadline = Date.now() - MAPPED_MESSAGE_TTL * 3
+  for (const [key, entry] of mappedMessageCache) {
+    if (entry.ts < deadline) mappedMessageCache.delete(key)
+  }
+}
+
+function readMappedMessagesCache(key: string, signature: string): SessionMessage[] | null {
+  const cached = mappedMessageCache.get(key)
+  if (cached && cached.signature === signature) {
+    cached.ts = Date.now()
+    return cached.messages
+  }
+  return null
+}
+
+function writeMappedMessagesCache(key: string, signature: string, messages: SessionMessage[]): SessionMessage[] {
+  pruneMappedMessageCache()
+  mappedMessageCache.set(key, { signature, messages, ts: Date.now() })
+  return messages
+}
+
+function sliceForParams(messages: SessionMessage[], params: MessageListParams): SessionMessage[] {
+  if (params.tail) {
+    return messages.slice(Math.max(messages.length - params.limit, 0))
+  }
+  return messages.slice(params.offset, params.offset + params.limit)
+}
+
 const OPENCODE_OPTIONS = {
   responseStyle: 'data' as const,
   throwOnError: true as const,
@@ -252,10 +293,15 @@ function withOriginKind(messages: SessionMessage[], originKind: string): Session
 }
 
 async function readClaudeSessionMessages(sessionId: string): Promise<SessionMessage[]> {
-  const [mainMessages, subagentIds] = await Promise.all([
+  const [mainRaw, subagentIds] = await Promise.all([
     getSessionMessages(sessionId, { includeSystemMessages: true }),
     listSubagents(sessionId).catch(() => [] as string[]),
   ])
+
+  const lastMain = mainRaw.at(-1) as { uuid?: string } | undefined
+  const signature = `${mainRaw.length}:${lastMain?.uuid ?? ''}:${subagentIds.length}:${subagentIds.at(-1) ?? ''}`
+  const cached = readMappedMessagesCache(`claude:${sessionId}`, signature)
+  if (cached) return cached
 
   const subagentMessages = await Promise.all(
     subagentIds.map(async (agentId) => {
@@ -266,13 +312,14 @@ async function readClaudeSessionMessages(sessionId: string): Promise<SessionMess
 
   const deduped = new Map<string, SessionMessage>()
   for (const message of [
-    ...normalizeClaudeHistoryMessages(mainMessages as unknown[]),
+    ...normalizeClaudeHistoryMessages(mainRaw as unknown[]),
     ...subagentMessages.flat(),
   ]) {
     deduped.set(`${message.provider ?? 'claude'}:${message.uuid}`, message)
   }
 
-  return sortMessagesChronologically([...deduped.values()])
+  const messages = sortMessagesChronologically([...deduped.values()])
+  return writeMappedMessagesCache(`claude:${sessionId}`, signature, messages)
 }
 
 function parseEffort(body: Record<string, unknown>): ReasoningEffortLevel | undefined {
@@ -964,34 +1011,64 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
   throw new Error(`Action ${action || '(missing)'} is not supported for ${resolvedProvider} sessions`)
 }
 
-export async function listViewSessionMessages(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessage[]> {
-  const sliceMessages = (messages: SessionMessage[]): SessionMessage[] => {
-    if (!params.tail) return messages.slice(params.offset, params.offset + params.limit)
-    const start = Math.max(messages.length - params.limit, 0)
-    return messages.slice(start)
-  }
+async function readCodexMessagesAll(sessionId: string): Promise<SessionMessage[]> {
+  const thread = await readCodexThread(sessionId, true)
+  const turns = thread.turns
+  const lastTurn = turns.at(-1)
+  const lastItem = lastTurn?.items.at(-1)
+  const signature = `${turns.length}:${lastTurn?.id ?? ''}:${lastTurn?.items.length ?? 0}:${lastItem?.id ?? ''}`
+  const cached = readMappedMessagesCache(`codex:${sessionId}`, signature)
+  if (cached) return cached
+  const messages = sortMessagesChronologically(mapCodexThreadToMessages(thread))
+  return writeMappedMessagesCache(`codex:${sessionId}`, signature, messages)
+}
 
+async function readOpenCodeMessagesAll(sessionId: string): Promise<SessionMessage[]> {
+  const raw = await getOpenCodeSessionMessages(sessionId)
+  const last = raw.at(-1)
+  const lastPart = last?.parts.at(-1) as { id?: string } | undefined
+  const signature = `${raw.length}:${last?.info.id ?? ''}:${last?.parts.length ?? 0}:${lastPart?.id ?? ''}`
+  const cached = readMappedMessagesCache(`opencode:${sessionId}`, signature)
+  if (cached) return cached
+  const messages = sortMessagesChronologically(mapOpenCodeMessagesToSessionMessages(raw))
+  return writeMappedMessagesCache(`opencode:${sessionId}`, signature, messages)
+}
+
+async function readCopilotMessagesAll(sessionId: string): Promise<SessionMessage[]> {
+  const events = await readCopilotSessionEvents(sessionId)
+  const last = events.at(-1) as { id?: string; type?: string } | undefined
+  const signature = `${events.length}:${last?.id ?? ''}:${last?.type ?? ''}`
+  const cached = readMappedMessagesCache(`copilot:${sessionId}`, signature)
+  if (cached) return cached
+  const messages = sortMessagesChronologically(mapCopilotEventsToSessionMessages(sessionId, events))
+  return writeMappedMessagesCache(`copilot:${sessionId}`, signature, messages)
+}
+
+function readPiMessagesAll(sessionId: string): SessionMessage[] {
+  const raw = getPiSessionMessages(sessionId)
+  const last = raw.at(-1) as { id?: string; role?: string } | undefined
+  const signature = `${raw.length}:${last?.id ?? ''}:${last?.role ?? ''}`
+  const cached = readMappedMessagesCache(`pi:${sessionId}`, signature)
+  if (cached) return cached
+  const messages = sortMessagesChronologically(mapPiMessagesToSessionMessages(sessionId, raw))
+  return writeMappedMessagesCache(`pi:${sessionId}`, signature, messages)
+}
+
+export async function listViewSessionMessages(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessage[]> {
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
-    const thread = await readCodexThread(sessionId, true)
-    const messages = sortMessagesChronologically(mapCodexThreadToMessages(thread))
-    return sliceMessages(messages)
+    return sliceForParams(await readCodexMessagesAll(sessionId), params)
   }
   if (provider === 'opencode') {
-    const messages = await getOpenCodeSessionMessages(sessionId)
-    return sliceMessages(sortMessagesChronologically(mapOpenCodeMessagesToSessionMessages(messages)))
+    return sliceForParams(await readOpenCodeMessagesAll(sessionId), params)
   }
   if (provider === 'copilot') {
-    const events = await readCopilotSessionEvents(sessionId)
-    return sliceMessages(sortMessagesChronologically(mapCopilotEventsToSessionMessages(sessionId, events)))
+    return sliceForParams(await readCopilotMessagesAll(sessionId), params)
   }
   if (provider === 'pi') {
-    const messages = getPiSessionMessages(sessionId)
-    return sliceMessages(sortMessagesChronologically(mapPiMessagesToSessionMessages(sessionId, messages)))
+    return sliceForParams(readPiMessagesAll(sessionId), params)
   }
-
-  const messages = await readClaudeSessionMessages(sessionId)
-  return sliceMessages(messages)
+  return sliceForParams(await readClaudeSessionMessages(sessionId), params)
 }
 
 export async function listProjectSessionMessageBatches(params: ProjectMessageBatchParams): Promise<{
