@@ -27,11 +27,12 @@ import { NativeSelect, NativeSelectOption, nativeSelectBaseClassName } from '@/c
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import dynamic from 'next/dynamic'
 import MessageItem, { MessageDensityProvider, type MessageDensity } from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
-import AnalyticsPopover from './AnalyticsPopover'
-
 import TabBar from './TabBar'
+
+const AnalyticsPopover = dynamic(() => import('./AnalyticsPopover'), { ssr: false })
 
 const compactNativeSelectClassName = cn(
   nativeSelectBaseClassName,

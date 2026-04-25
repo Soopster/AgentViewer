@@ -7,9 +7,9 @@ export const metadata: Metadata = {
   description: 'Browse Claude Code sessions and messages',
 }
 
-// Runs synchronously before first paint — prevents a flash of the wrong theme.
+// Runs synchronously before first paint — prevents a flash of the wrong theme and layout.
 // Safe: this is a static literal, not user-supplied content.
-const themeScript = `(function(){var v=${JSON.stringify(THEMES)};var t=localStorage.getItem('theme');if(t&&v.indexOf(t)>=0){document.documentElement.dataset.theme=t;}})()`
+const themeScript = `(function(){try{var v=${JSON.stringify(THEMES)};var t=localStorage.getItem('theme');if(t&&v.indexOf(t)>=0){document.documentElement.dataset.theme=t;}if(localStorage.getItem('agentViewer:messagePaneCollapsed')==='1'){document.documentElement.dataset.msgPane='collapsed';}}catch(e){}})()`
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

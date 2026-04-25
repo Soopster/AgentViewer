@@ -1,14 +1,16 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
-import CommandPalette from '@/components/CommandPalette'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
 import { Sidebar, SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { isProviderSelection } from '@/lib/provider'
 import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
+
+const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
 type ProjectSelection = {
@@ -114,8 +116,9 @@ function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): 
 }
 
 export default function Home() {
-  const [mounted, setMounted] = useState(false)
-  const [messagePaneCollapsed, setMessagePaneCollapsed] = useState(false)
+  const [messagePaneCollapsed, setMessagePaneCollapsed] = useState(
+    () => typeof document !== 'undefined' && document.documentElement.dataset.msgPane === 'collapsed'
+  )
   const [sessions, setSessions] = useState<Session[]>([])
   const [openTabSessions, setOpenTabSessions] = useState<Session[]>([])
   const [selectedTabKey, setSelectedTabKey] = useState<string | null>(null)
@@ -141,14 +144,6 @@ export default function Home() {
     null
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
-
-  useEffect(() => {
-    setMounted(true)
-    try {
-      const stored = window.localStorage.getItem('agentViewer:messagePaneCollapsed')
-      if (stored === '1') setMessagePaneCollapsed(true)
-    } catch { /* ignore */ }
-  }, [])
 
   const toggleMessagePane = useCallback(() => {
     setMessagePaneCollapsed((prev) => {
@@ -515,22 +510,10 @@ export default function Home() {
     }
   }, [activeProjectDir, loadSessionsForProvider, provider, sessionScope, switchingProvider])
 
-  if (!mounted) {
-    return (
-      <div
-        style={{
-          display: 'flex',
-          height: '100vh',
-          background: 'var(--bg)',
-        }}
-      />
-    )
-  }
-
   return (
     <CodeThemeProvider>
     <SidebarProvider defaultOpen>
-      <div style={{ display: 'flex', height: '100vh' }}>
+      <div suppressHydrationWarning style={{ display: 'flex', height: '100vh' }}>
         <Sidebar variant="inset">
           <SessionList
             sessions={sessions}
