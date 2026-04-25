@@ -1,19 +1,14 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Button } from '@/components/ui/button'
-import { applyTheme, THEME_GROUPS, THEME_META, THEMES, VALID_THEMES, type Theme } from '@/lib/themes'
+import { applyTheme, getCurrentTheme, subscribeTheme, THEME_GROUPS, THEME_META, THEMES, type Theme } from '@/lib/themes'
 
 export default function ThemeToggle() {
-  const [theme, setTheme]   = useState<Theme>('dark')
+  const theme = useSyncExternalStore<Theme>(subscribeTheme, getCurrentTheme, () => 'dark')
   const [open, setOpen]     = useState(false)
   const [hovered, setHovered] = useState<Theme | null>(null)
   const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const saved = localStorage.getItem('theme')
-    if (saved && VALID_THEMES.has(saved)) setTheme(saved as Theme)
-  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -25,7 +20,6 @@ export default function ThemeToggle() {
   }, [open])
 
   function select(t: Theme) {
-    setTheme(t)
     applyTheme(t)
     setOpen(false)
   }

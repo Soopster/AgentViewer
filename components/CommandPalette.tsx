@@ -1,12 +1,12 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Bot, FolderOpen, Layers3, PanelLeftOpen, PanelRightOpen, Search, SlidersHorizontal } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from '@/lib/projectPaths'
-import { applyTheme, THEME_GROUPS, THEME_META, type Theme } from '@/lib/themes'
+import { applyTheme, getCurrentTheme, subscribeTheme, THEME_GROUPS, THEME_META, type Theme } from '@/lib/themes'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 
 type ProjectSelection = {
@@ -196,11 +196,12 @@ export default function CommandPalette({
   const { state: sidebarState, toggleSidebar } = useSidebar()
   const [query, setQuery] = useState('')
   const [activeId, setActiveId] = useState<string | null>(null)
-  const [theme, setTheme] = useState<Theme>('dark')
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const itemRefs = useRef(new Map<string, HTMLButtonElement>())
   const activeIdRef = useRef<string | null>(null)
+  const lastKeyboardMoveAtRef = useRef(0)
+  const theme = useSyncExternalStore(subscribeTheme, getCurrentTheme, () => 'dark')
   const normalizedQuery = query.trim().toLowerCase()
 
   useEffect(() => {
@@ -219,15 +220,6 @@ export default function CommandPalette({
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onOpenChange, open])
-
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem('theme')
-      if (saved && saved in THEME_META) setTheme(saved as Theme)
-    } catch {
-      // ignore storage failures
-    }
-  }, [open])
 
   const sidebarAction = sidebarState === 'expanded'
     ? {
@@ -420,7 +412,6 @@ export default function CommandPalette({
           keywords: [meta.label, themeName, meta.category, 'theme'],
           score,
           run: () => {
-            setTheme(themeName)
             applyTheme(themeName)
           },
         }
@@ -498,6 +489,7 @@ export default function CommandPalette({
       : Math.max(0, Math.min(visibleItems.length - 1, currentIndex + delta))
     const nextId = visibleItems[nextIndex]?.id ?? null
     activeIdRef.current = nextId
+    lastKeyboardMoveAtRef.current = Date.now()
     setActiveId(nextId)
     if (nextId) requestAnimationFrame(() => scrollItemIntoView(nextId))
   }
@@ -514,7 +506,8 @@ export default function CommandPalette({
     }
   }
 
-  function activateFromPointer(id: string) {
+  function activateFromPointer(id: string, event: React.PointerEvent<HTMLButtonElement>) {
+    if (event.type === 'pointerenter' && Date.now() - lastKeyboardMoveAtRef.current < 250) return
     activeIdRef.current = id
     setActiveId((current) => current === id ? current : id)
   }
@@ -579,7 +572,8 @@ export default function CommandPalette({
                     ref={captureItemRef(item.id)}
                     key={item.id}
                     active={item.id === activeId}
-                    onMouseMove={() => activateFromPointer(item.id)}
+                    onPointerEnter={(event) => activateFromPointer(item.id, event)}
+                    onPointerMove={(event) => activateFromPointer(item.id, event)}
                     onClick={() => runItem(item)}
                     title={item.description}
                   >
@@ -609,7 +603,8 @@ export default function CommandPalette({
                     ref={captureItemRef(item.id)}
                     key={item.id}
                     active={item.id === activeId}
-                    onMouseMove={() => activateFromPointer(item.id)}
+                    onPointerEnter={(event) => activateFromPointer(item.id, event)}
+                    onPointerMove={(event) => activateFromPointer(item.id, event)}
                     onClick={() => runItem(item)}
                     title={item.description}
                   >
@@ -639,7 +634,8 @@ export default function CommandPalette({
                       ref={captureItemRef(item.id)}
                       key={item.id}
                       active={item.id === activeId}
-                      onMouseMove={() => activateFromPointer(item.id)}
+                      onPointerEnter={(event) => activateFromPointer(item.id, event)}
+                      onPointerMove={(event) => activateFromPointer(item.id, event)}
                       onClick={() => runItem(item)}
                       title={item.description}
                     >
@@ -672,7 +668,8 @@ export default function CommandPalette({
                       ref={captureItemRef(item.id)}
                       key={item.id}
                       active={item.id === activeId}
-                      onMouseMove={() => activateFromPointer(item.id)}
+                      onPointerEnter={(event) => activateFromPointer(item.id, event)}
+                      onPointerMove={(event) => activateFromPointer(item.id, event)}
                       onClick={() => runItem(item)}
                       title={item.description}
                     >

@@ -80,7 +80,23 @@ export const THEME_GROUPS: Array<{ category: ThemeCategory; label: string; theme
   { category: 'dark', label: 'Dark', themes: THEMES.filter((theme) => THEME_META[theme].category === 'dark') },
 ]
 
+type ThemeListener = () => void
+const themeListeners = new Set<ThemeListener>()
+
+export function getCurrentTheme(): Theme {
+  if (typeof document === 'undefined') return 'dark'
+  const current = document.documentElement.dataset.theme || localStorage.getItem('theme')
+  return current && VALID_THEMES.has(current) ? current as Theme : 'dark'
+}
+
+export function subscribeTheme(listener: ThemeListener): () => void {
+  themeListeners.add(listener)
+  return () => themeListeners.delete(listener)
+}
+
 export function applyTheme(theme: Theme) {
+  if (typeof document === 'undefined') return
   document.documentElement.dataset.theme = theme
   localStorage.setItem('theme', theme)
+  for (const listener of themeListeners) listener()
 }
