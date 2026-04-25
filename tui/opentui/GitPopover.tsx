@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { extname } from 'node:path'
-import type { ScrollBoxRenderable } from '@opentui/core'
+import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 import { fetchGitData, fetchGitPaneContent, type GitData, type GitStatusEntry } from '../../lib/gitProvider'
 import { runGitCommand } from '../../lib/gitNodeProvider'
@@ -111,6 +111,13 @@ function PanelScrollbar({ total, viewportH, scrollTop, theme }: {
 type GitKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 type FocusSide = 'left' | 'right'
 type FileDiffMode = 'text' | 'viewer'
+type LeftPaneMode = 'normal' | 'expanded' | 'hidden'
+
+const LEFT_PANE_MIN_WIDTH = 24
+const LEFT_PANE_DEFAULT_MAX_WIDTH = 40
+const LEFT_PANE_RIGHT_MIN_WIDTH = 44
+const LEFT_PANE_EXPANDED_RATIO = 0.5
+const LEFT_PANE_RESIZE_STEP = 4
 
 type Props = {
   cwd?: string | null
@@ -129,6 +136,8 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const [pane, setPane] = useState<PaneId>(2)
   const [focusSide, setFocusSide] = useState<FocusSide>('left')
   const [fileDiffMode, setFileDiffMode] = useState<FileDiffMode>('text')
+  const [leftPaneMode, setLeftPaneMode] = useState<LeftPaneMode>('normal')
+  const [leftPaneWidth, setLeftPaneWidth] = useState(LEFT_PANE_DEFAULT_MAX_WIDTH)
   const [treeCursor, setTreeCursor] = useState(0)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [branchIndex, setBranchIndex] = useState(0)
@@ -297,7 +306,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     if (key.name === 'escape') { onClose(); return }
 
     if (key.name === 'tab' && key.shift) {
-      setFocusSide('left')
+      setFocusSide(leftPaneMode === 'hidden' ? 'right' : 'left')
       return
     }
 
@@ -309,6 +318,33 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     // 1–4 switch left-side sections.
     if (key.sequence >= '1' && key.sequence <= '4') {
       setPane(parseInt(key.sequence, 10) as PaneId)
+      return
+    }
+
+    if (key.sequence === '[' || key.sequence === ']') {
+      if (leftPaneMode === 'hidden') setLeftPaneMode('normal')
+      setLeftPaneWidth((current) => {
+        const nextWidth = clampLeftPaneWidth(current + (key.sequence === ']' ? LEFT_PANE_RESIZE_STEP : -LEFT_PANE_RESIZE_STEP))
+        setLeftPaneMode(nextWidth >= maxLeftW - 1 ? 'expanded' : 'normal')
+        return nextWidth
+      })
+      return
+    }
+
+    if (key.sequence === 'w') {
+      if (leftPaneMode === 'hidden') setLeftPaneMode('normal')
+      setPresetLeftPaneWidth(leftPaneMode === 'expanded' ? 'normal' : 'expanded')
+      return
+    }
+
+    if (key.sequence === '-') {
+      if (leftPaneMode === 'hidden') {
+        setLeftPaneMode('normal')
+        setFocusSide('left')
+      } else {
+        setLeftPaneMode('hidden')
+        setFocusSide('right')
+      }
       return
     }
 
@@ -384,18 +420,28 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       setFileDiffMode((mode) => (mode === 'text' ? 'viewer' : 'text'))
       return
     }
-  }, [data, expandedDirs, focusSide, onClose, pane, repoCwd, treeCursor, visibleNodes])
+  }, [data, expandedDirs, focusSide, leftPaneMode, onClose, pane, repoCwd, treeCursor, visibleNodes])
 
   // Register key handler with parent
   useEffect(() => {
     onKeyHandlerReady(handleKey)
   }, [handleKey, onKeyHandlerReady])
 
+  useEffect(() => {
+    if (leftPaneMode === 'hidden' && focusSide === 'left') setFocusSide('right')
+  }, [focusSide, leftPaneMode])
+
   // Dimensions
   const popW = Math.min(width - 4, 160)
   const popH = Math.min(height - 4, 60)
-  const leftW = Math.min(40, Math.floor(popW * 0.28))
-  const rightW = popW - leftW - 3
+  const defaultLeftW = Math.min(LEFT_PANE_DEFAULT_MAX_WIDTH, Math.floor(popW * 0.28))
+  const minLeftW = Math.min(LEFT_PANE_MIN_WIDTH, Math.max(defaultLeftW, popW - LEFT_PANE_RIGHT_MIN_WIDTH - 4))
+  const maxLeftW = Math.max(defaultLeftW, Math.min(Math.floor(popW * LEFT_PANE_EXPANDED_RATIO), popW - LEFT_PANE_RIGHT_MIN_WIDTH - 4))
+  const leftPaneHidden = leftPaneMode === 'hidden'
+  const leftPaneExpanded = leftPaneMode === 'expanded'
+  const leftW = leftPaneHidden ? 0 : Math.max(minLeftW, Math.min(leftPaneWidth, maxLeftW))
+  const dividerW = leftPaneHidden ? 0 : 1
+  const rightW = Math.max(LEFT_PANE_RIGHT_MIN_WIDTH, popW - leftW - dividerW - 2)
   const popTop = Math.floor((height - popH) / 2)
   const popLeft = Math.floor((width - popW) / 2)
 
@@ -424,6 +470,17 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const diffTruncated = allDiffLines.length > MAX_DIFF_LINES
   const diffLines = diffTruncated ? allDiffLines.slice(0, MAX_DIFF_LINES) : allDiffLines
 
+  function clampLeftPaneWidth(nextWidth: number): number {
+    return Math.max(minLeftW, Math.min(nextWidth, maxLeftW))
+  }
+
+  function setPresetLeftPaneWidth(mode: Exclude<LeftPaneMode, 'hidden'>) {
+    setLeftPaneMode(mode)
+    setLeftPaneWidth(clampLeftPaneWidth(mode === 'expanded' ? maxLeftW : defaultLeftW))
+    setFocusSide('left')
+  }
+
+
   return (
     <box
       position="absolute"
@@ -441,6 +498,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       titleAlignment="left"
     >
       {/* ── Left column ─────────────────────────────────── */}
+      {!leftPaneHidden ? (
       <box width={leftW} flexDirection="column" border={['right']} borderStyle="single" borderColor={theme.border}>
 
         {/* [1] Status */}
@@ -567,11 +625,26 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           </box>
         </box>
       </box>
+      ) : null}
+
+      {!leftPaneHidden ? (
+        <box
+          width={1}
+          height={popH - 2}
+          backgroundColor={theme.surface}
+        >
+          {Array.from({ length: Math.max(1, popH - 2) }, (_, i) => (
+            <box key={i} width={1}>
+              <text fg={theme.border2}>│</text>
+            </box>
+          ))}
+        </box>
+      ) : null}
 
       {/* ── Right column ────────────────────────────────── */}
       <box flexGrow={1} flexDirection="column">
-        <box paddingX={1}>
-          <text fg={theme.cyan}>{`${focusLabel}  ·  ${PANE_TITLES[pane]}  ·  1-4 sections  ·  ${fileDiffLabel}  ·  j/k move  ·  h/l collapse/expand  ·  enter toggle  ·  r refresh  ·  esc close`}</text>
+        <box paddingX={1} flexDirection="row">
+          <text fg={theme.cyan}>{`${focusLabel}  ·  ${PANE_TITLES[pane]}  ·  1-4 sections  ·  ${fileDiffLabel}  ·  [ ] resize  ·  w wide  ·  - hide/show  ·  j/k move  ·  h/l collapse/expand  ·  enter toggle  ·  r refresh  ·  esc close`}</text>
         </box>
         <scrollbox
           ref={diffScrollRef}
