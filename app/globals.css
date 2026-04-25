@@ -647,6 +647,31 @@ body {
 /* Hide the vertical timeline track line */
 [data-theme="imessage"] .timeline-line { display: none !important; }
 
+.timeline-row {
+  border-radius: 8px;
+  transition: background 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+}
+
+.timeline-row:hover,
+.timeline-row:focus-within {
+  background: color-mix(in srgb, var(--surface-2) 58%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-2) 42%, transparent);
+}
+
+.timeline-row-actions {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-1px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.timeline-row:hover .timeline-row-actions,
+.timeline-row:focus-within .timeline-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
 /* Message row: stack dot-free, align to bottom for bubble tails */
 [data-theme="imessage"] .msg {
   gap: 0 !important;

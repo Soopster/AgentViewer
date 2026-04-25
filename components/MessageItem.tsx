@@ -2146,7 +2146,7 @@ function ReadResultSection({ raw, filePath }: { raw: string; filePath?: string }
     () => textPartLines.reduce((count, lines) => count + (lines?.length ?? 0), 0),
     [textPartLines],
   )
-  const hidden = expanded ? 0 : Math.max(0, totalLines - LIMIT)
+  const hidden = Math.max(0, totalLines - LIMIT)
 
   return (
     <div style={{ borderTop: '1px solid var(--border)' }}>
@@ -2167,7 +2167,7 @@ function ReadResultSection({ raw, filePath }: { raw: string; filePath?: string }
             )
             : null
       )}
-      {hidden > 0 && (
+      {totalLines > LIMIT && (
         <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
           {expanded ? '▲ collapse' : `▼ ${hidden} more lines`}
         </button>
@@ -2217,7 +2217,7 @@ function GenericResultSection({ raw, isError = false, note }: { raw: string; isE
   const totalTextLines = parts
     .filter((p): p is { kind: 'text'; text: string } => p.kind === 'text')
     .reduce((n, p) => n + p.text.split('\n').length, 0)
-  const hidden = expanded ? 0 : Math.max(0, totalTextLines - LIMIT)
+  const hidden = Math.max(0, totalTextLines - LIMIT)
 
   const preStyle: React.CSSProperties = {
     padding: '8px 14px', margin: 0,
@@ -2253,7 +2253,7 @@ function GenericResultSection({ raw, isError = false, note }: { raw: string; isE
         )
       )}
 
-      {hidden > 0 && (
+      {totalTextLines > LIMIT && (
         <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
           {expanded ? '▲ collapse' : `▼ ${hidden} more lines`}
         </button>

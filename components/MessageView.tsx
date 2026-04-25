@@ -1012,7 +1012,7 @@ function TimelineMessageRow({
         </div>
       )}
       {row.showForkControls && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, margin: '0 0 8px 0' }}>
+        <div className="timeline-row-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, margin: '0 0 8px 0' }}>
           {row.allowFork && (
             <Button
               onClick={() => onForkFromMessage(row.message.uuid)}
@@ -1100,6 +1100,7 @@ function VirtualTimelineRow({
 
   return (
     <div
+      className="timeline-row"
       ref={rowRef}
       style={{
         position: 'absolute',
