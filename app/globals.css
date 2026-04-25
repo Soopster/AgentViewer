@@ -929,6 +929,21 @@ body {
   border-color: var(--border-2);
 }
 
+/* ── Mermaid diagrams ──────────────────────────────────────────────────── */
+.agent-viewer-mermaid svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.agent-viewer-mermaid .node rect,
+.agent-viewer-mermaid .node circle,
+.agent-viewer-mermaid .node ellipse,
+.agent-viewer-mermaid .node polygon,
+.agent-viewer-mermaid .node path {
+  stroke: var(--border-2);
+}
+
 /* ── View Transitions ───────────────────────────────────────────────────── */
 :root {
   --duration-exit: 120ms;

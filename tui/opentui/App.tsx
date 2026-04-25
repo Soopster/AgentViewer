@@ -896,7 +896,7 @@ function cardHeight(
   const card = cards[index]
   const isExpanded = expandedKeys.has(card.key)
   const thinkingFull = thinkingFullKeys.has(card.key)
-  const useMarkdown = isExpanded && !!card.markdownContent
+  const useMarkdown = isExpanded && !!card.markdownContent && !card.hasMermaidDiagrams
   const landmarkRows = transcriptLandmarks(cards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount).length
   const bodyRows = useMarkdown ? 0 : renderedBodyLines(card, isExpanded, previewLimit, thinkingFull).length
   const diffRows = cardDiffRows(card, isExpanded, previewLimit)
@@ -1240,7 +1240,7 @@ function TranscriptCardInner({
         title={cardTitle}
       >
         <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={1}>
-          {(isExpanded && card.markdownContent && syntaxStyle) ? (
+          {(isExpanded && card.markdownContent && !card.hasMermaidDiagrams && syntaxStyle) ? (
             <box paddingX={1}>
               <markdown
                 content={card.markdownContent}
@@ -1881,7 +1881,7 @@ export default function OpenTuiApp() {
       const isDiff = card.category === 'diff'
       const isSystem = card.category === 'system'
       const categoryEmoji = isInsight ? '✨ ' : isTechnical ? '🔧 ' : isDiff ? '✏️ ' : isSystem ? '⚙️ ' : ''
-      const markdownFallbackLines = (isExpanded && card.markdownContent && !shouldEnableSyntaxHighlighting)
+      const markdownFallbackLines = (isExpanded && card.markdownContent && !card.hasMermaidDiagrams && !shouldEnableSyntaxHighlighting)
         ? card.markdownContent.split('\n')
         : null
       const value: CardDisplayData = {

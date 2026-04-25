@@ -1,5 +1,6 @@
 import { getAssistantLabel } from '../lib/provider'
 import { pathBasename } from '../lib/projectPaths'
+import { renderMermaidASCII } from 'beautiful-mermaid'
 import type { ThreadedBlock, ThreadedMessage, ToolThread } from '../lib/threading'
 import type { ContentBlock, Session, SessionInfo } from '../lib/types'
 import type { TuiDensity } from './theme'
@@ -395,6 +396,7 @@ export type TuiTranscriptCard = {
   codeBlocks?: Array<{ key: string; lang: string; content: string }>
   editDiff?: string
   markdownContent?: string
+  hasMermaidDiagrams?: boolean
 }
 
 function cardLineLimit(density: TuiDensity): number {
@@ -449,6 +451,27 @@ function compactAutoFoldLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCard
   return [
     normalized[0],
     line(`… ${normalized.length - 1} more`, 'dim'),
+  ]
+}
+
+function compactMermaidLines(lines: TuiTranscriptCardLine[]): TuiTranscriptCardLine[] {
+  const diagramIndex = lines.findIndex((entry) => entry.text === '[diagram: mermaid]' || entry.text.startsWith('[diagram: mermaid render failed:'))
+  if (diagramIndex === -1) return compactCardLines(lines, 'balanced')
+
+  const sourceIndex = lines.findIndex((entry) => entry.text === '[source: mermaid]')
+  const intro = lines.slice(0, diagramIndex)
+    .map((entry) => ({
+      text: truncateLine(entry.text.trim()),
+      tone: entry.tone,
+    }))
+    .filter((entry) => entry.text.length > 0)
+    .slice(0, 2)
+
+  const diagramEnd = sourceIndex > diagramIndex ? sourceIndex : lines.length
+  const diagramLineCount = Math.max(diagramEnd - diagramIndex - 1, 0)
+  return [
+    ...intro,
+    line(`Mermaid diagram · ${diagramLineCount} rendered line${diagramLineCount === 1 ? '' : 's'} · source below · e expand`, 'muted'),
   ]
 }
 
@@ -541,13 +564,16 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     ? getAssistantLabel(message.provider)
     : message.role.toUpperCase()
   const previewLines = message.blocks.flatMap(formatBlock)
-  const { processedLines: expandedLines, codeBlocks } = extractCodeBlocksFromBlocks(message.blocks)
+  const { processedLines: expandedLines, codeBlocks, hasMermaidDiagrams } = extractCodeBlocksFromBlocks(message.blocks)
   const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
   const category = classifyCardCategory(message)
   const autoFold = category !== 'conversation' && category !== 'insight'
-  const collapsedLines = autoFold
-    ? compactAutoFoldLines(previewLines)
-    : compactCardLines(previewLines, density)
+  const previewSourceLines = previewLines
+  const collapsedLines = hasMermaidDiagrams
+    ? compactMermaidLines(expandedLines)
+    : autoFold
+    ? compactAutoFoldLines(previewSourceLines)
+    : compactCardLines(previewSourceLines, density)
   const compactSummary = collapsedLines.map((entry) => entry.text).join(' · ')
 
   return {
@@ -571,6 +597,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     markdownContent: (category === 'conversation' || category === 'insight')
       ? extractMarkdownContent(message.blocks)
       : undefined,
+    hasMermaidDiagrams,
   }
 }
 
@@ -608,14 +635,45 @@ function extractMarkdownContent(blocks: ThreadedBlock[]): string | undefined {
 }
 
 const CODE_FENCE_RE = /^```(\w*)\s*\n([\s\S]*?)^```[ \t]*$/gm
+const MERMAID_LANGS = new Set(['mermaid', 'mmd'])
+
+function renderMermaidForTui(content: string): string {
+  try {
+    const rendered = renderMermaidASCII(content, {
+      colorMode: 'none',
+      useAscii: false,
+      paddingX: 3,
+      paddingY: 2,
+      boxBorderPadding: 1,
+    })
+    return [
+      '[diagram: mermaid]',
+      rendered,
+      '[source: mermaid]',
+      '```mermaid',
+      content,
+      '```',
+    ].join('\n')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unable to render Mermaid diagram.'
+    return [
+      `[diagram: mermaid render failed: ${message}]`,
+      '```mermaid',
+      content,
+      '```',
+    ].join('\n')
+  }
+}
 
 function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[]): {
   processedLines: TuiTranscriptCardLine[]
   codeBlocks: Array<{ key: string; lang: string; content: string }>
+  hasMermaidDiagrams: boolean
 } {
   const all: Array<{ key: string; lang: string; content: string }> = []
   let n = 0
   const lines: TuiTranscriptCardLine[] = []
+  let hasMermaidDiagrams = false
 
   for (const block of blocks) {
     if (block.type !== 'text' || !block.text.trim()) {
@@ -625,10 +683,15 @@ function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[]): {
     const matches = Array.from(block.text.matchAll(CODE_FENCE_RE))
     let replaced = block.text
     for (const match of matches) {
-      const lang = (match[1] ?? '').trim() || 'text'
+      const lang = ((match[1] ?? '').trim() || 'text').toLowerCase()
       const content = (match[2] ?? '').trimEnd()
-      all.push({ key: `cb${n++}`, lang, content })
-      replaced = replaced.replace(match[0], `[code: ${lang}]`)
+      if (MERMAID_LANGS.has(lang)) {
+        hasMermaidDiagrams = true
+        replaced = replaced.replace(match[0], renderMermaidForTui(content))
+      } else {
+        all.push({ key: `cb${n++}`, lang, content })
+        replaced = replaced.replace(match[0], `[code: ${lang}]`)
+      }
     }
     const processed = sanitizeLine(replaced).trim().split('\n')
       .map((l) => line(l.trimEnd()))
@@ -636,7 +699,7 @@ function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[]): {
     lines.push(...processed)
   }
 
-  return { processedLines: lines, codeBlocks: all }
+  return { processedLines: lines, codeBlocks: all, hasMermaidDiagrams }
 }
 
 function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {

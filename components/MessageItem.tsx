@@ -5,6 +5,7 @@ import { pathBasename as basename } from '@/lib/projectPaths'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { diffLines } from 'diff'
+import { renderMermaidSVG } from 'beautiful-mermaid'
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
 import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
 import c from 'react-syntax-highlighter/dist/esm/languages/prism/c'
@@ -126,42 +127,144 @@ function formatLocalMessageTime(value?: string): string {
 
 // ── Markdown components ───────────────────────────────────────────────────────
 
-function MarkdownCodeBlock({ className, children, ...rest }: React.ComponentPropsWithoutRef<'code'>) {
+function FencedCodeBlock({
+  language,
+  codeString,
+  margin = '10px 0',
+}: {
+  language: string
+  codeString: string
+  margin?: string | number
+}) {
   const { style: codeStyle } = useCodeTheme()
-  const language = className?.replace('language-', '') ?? ''
+
+  return (
+    <div style={{ margin, borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
+      {language && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+          padding: '3px 12px',
+          background: 'var(--surface-2)',
+          borderBottom: '1px solid var(--border)',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 10, color: 'var(--text-3)',
+          letterSpacing: '0.06em',
+        }}>
+          {language}
+        </div>
+      )}
+      <SyntaxHighlighter
+        language={language || undefined}
+        style={codeStyle}
+        customStyle={{
+          margin: 0,
+          padding: '12px 16px',
+          fontSize: 13,
+          lineHeight: 1.65,
+          overflowX: 'auto',
+        }}
+      >
+        {codeString}
+      </SyntaxHighlighter>
+    </div>
+  )
+}
+
+function MermaidDiagram({ codeString }: { codeString: string }) {
+  const rendered = useMemo(() => {
+    try {
+      return {
+        svg: renderMermaidSVG(codeString, {
+          bg: 'var(--surface)',
+          fg: 'var(--text)',
+          line: 'var(--text-3)',
+          accent: 'var(--violet)',
+          muted: 'var(--text-3)',
+          surface: 'var(--surface-2)',
+          border: 'var(--border-2)',
+          font: "'IBM Plex Sans', sans-serif",
+          transparent: true,
+        }),
+        error: '',
+      }
+    } catch (err) {
+      return {
+        svg: '',
+        error: err instanceof Error ? err.message : 'Unable to render Mermaid diagram.',
+      }
+    }
+  }, [codeString])
+
+  if (rendered.error) {
+    return (
+      <div>
+        <div style={{
+          margin: '10px 0 0',
+          padding: '8px 10px',
+          border: '1px solid rgba(248,113,113,0.26)',
+          borderRadius: '6px 6px 0 0',
+          background: 'rgba(248,113,113,0.08)',
+          color: 'var(--red, #f87171)',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          lineHeight: 1.5,
+        }}>
+          Mermaid render failed: {rendered.error}
+        </div>
+        <FencedCodeBlock language="mermaid" codeString={codeString} />
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ margin: '10px 0' }}>
+      <div
+        style={{
+          padding: 12,
+          borderRadius: 6,
+          border: '1px solid var(--border)',
+          background: 'var(--surface)',
+          overflowX: 'auto',
+        }}
+      >
+        <div
+          className="agent-viewer-mermaid"
+          style={{ minWidth: 0 }}
+          dangerouslySetInnerHTML={{ __html: rendered.svg }}
+        />
+      </div>
+      <details style={{
+        marginTop: 6,
+        borderRadius: 6,
+        border: '1px solid var(--border)',
+        background: 'var(--surface-2)',
+      }}>
+        <summary style={{
+          cursor: 'pointer',
+          padding: '6px 10px',
+          color: 'var(--text-3)',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          letterSpacing: '0.05em',
+          userSelect: 'none',
+        }}>
+          Mermaid source
+        </summary>
+        <div style={{ borderTop: '1px solid var(--border)' }}>
+          <FencedCodeBlock language="mermaid" codeString={codeString} margin={0} />
+        </div>
+      </details>
+    </div>
+  )
+}
+
+function MarkdownCodeBlock({ className, children, ...rest }: React.ComponentPropsWithoutRef<'code'>) {
+  const language = className?.replace('language-', '').toLowerCase() ?? ''
   const isFenced = !!className
   if (isFenced) {
     const codeString = String(children).replace(/\n$/, '')
-    return (
-      <div style={{ margin: '10px 0', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
-        {language && (
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
-            padding: '3px 12px',
-            background: 'var(--surface-2)',
-            borderBottom: '1px solid var(--border)',
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 10, color: 'var(--text-3)',
-            letterSpacing: '0.06em',
-          }}>
-            {language}
-          </div>
-        )}
-        <SyntaxHighlighter
-          language={language || undefined}
-          style={codeStyle}
-          customStyle={{
-            margin: 0,
-            padding: '12px 16px',
-            fontSize: 13,
-            lineHeight: 1.65,
-            overflowX: 'auto',
-          }}
-        >
-          {codeString}
-        </SyntaxHighlighter>
-      </div>
-    )
+    if (language === 'mermaid' || language === 'mmd') return <MermaidDiagram codeString={codeString} />
+    return <FencedCodeBlock language={language} codeString={codeString} />
   }
   return (
     <code style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, background: 'var(--surface-3)', color: 'var(--violet)', padding: '2px 6px', borderRadius: 3 }} {...rest}>
