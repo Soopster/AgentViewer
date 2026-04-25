@@ -30,35 +30,38 @@ type ChartConfig = {
 const ChartContext = React.createContext<ChartConfig | null>(null)
 
 function useChart() {
-  const context = React.useContext(ChartContext)
+  const context = React.use(ChartContext)
   if (!context) {
     throw new Error("useChart must be used within a <ChartContainer />")
   }
   return context
 }
 
-const ChartContainer = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement> & {
-    config: ChartConfig
-    children: React.ReactNode
-  }
->(({ id, className, children, config, ...props }, ref) => (
-  <ChartContext.Provider value={config}>
-    <div
-      ref={ref}
-      className={cn(
-        "flex aspect-auto h-80 w-full items-center justify-center text-xs",
-        className
-      )}
-      {...props}
-    >
-      <RechartsPrimitive.ResponsiveContainer width="100%" height="100%">
-        {children}
-      </RechartsPrimitive.ResponsiveContainer>
-    </div>
-  </ChartContext.Provider>
-))
+function ChartContainer({
+  ref,
+  id,
+  className,
+  children,
+  config,
+  ...props
+}: React.ComponentProps<"div"> & { config: ChartConfig }) {
+  return (
+    <ChartContext.Provider value={config}>
+      <div
+        ref={ref}
+        className={cn(
+          "flex aspect-auto h-80 w-full items-center justify-center text-xs",
+          className
+        )}
+        {...props}
+      >
+        <RechartsPrimitive.ResponsiveContainer width="100%" height="100%">
+          {children}
+        </RechartsPrimitive.ResponsiveContainer>
+      </div>
+    </ChartContext.Provider>
+  )
+}
 ChartContainer.displayName = "ChartContainer"
 
 const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
@@ -93,10 +96,7 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
 
 const ChartTooltip = RechartsPrimitive.Tooltip
 
-const ChartTooltipContent = React.forwardRef<
-  HTMLDivElement,
-  any
->(({ active, payload, label }: any, ref) => {
+function ChartTooltipContent({ ref, active, payload, label }: any) {
   if (!active || !payload) return null
 
   return (
@@ -141,7 +141,7 @@ const ChartTooltipContent = React.forwardRef<
       </div>
     </div>
   )
-})
+}
 ChartTooltipContent.displayName = "ChartTooltipContent"
 
 export {

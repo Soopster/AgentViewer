@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useEffect, useMemo, useState, createContext, useContext } from 'react'
+import { memo, use, useEffect, useMemo, useState, createContext } from 'react'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -3029,7 +3029,7 @@ export function MessageDensityProvider({ density, children }: { density: Message
 
 function MessageItemInner({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {
   const [hydrated, setHydrated] = useState(false)
-  const dc = useContext(MessageDensityContext)
+  const dc = use(MessageDensityContext)
   const style = ROLE_STYLE[message.role]
   const roleLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)

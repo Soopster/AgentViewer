@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, use, useEffect, useState } from 'react'
 import { CODE_THEMES, DEFAULT_CODE_THEME_ID, STORAGE_KEY, type CodeThemeId, type CodeThemeStyle } from '@/lib/codeThemes'
 
 type CodeThemeContextValue = {
@@ -42,5 +42,5 @@ export function CodeThemeProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useCodeTheme() {
-  return useContext(CodeThemeContext)
+  return use(CodeThemeContext)
 }
