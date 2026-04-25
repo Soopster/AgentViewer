@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, FolderOpen, Layers3, PanelLeftOpen, PanelRightOpen, Search, SlidersHorizontal } from 'lucide-react'
 
-import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from '@/components/ui/command'
+import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import { applyTheme, THEME_GROUPS, THEME_META, type Theme } from '@/lib/themes'
@@ -127,6 +127,54 @@ function providerStyle(provider: AgentProvider): { color: string; background: st
   return { color: 'var(--violet)', background: 'rgba(139,128,240,0.10)', border: 'rgba(139,128,240,0.22)' }
 }
 
+function providerIconLabel(provider: AgentProvider): string {
+  switch (provider) {
+    case 'codex':
+      return 'Cx'
+    case 'claude':
+      return 'Cl'
+    case 'opencode':
+      return 'Oc'
+    case 'copilot':
+      return 'Cp'
+    case 'pi':
+      return 'Pi'
+    default:
+      return 'Ai'
+  }
+}
+
+function ActiveDot() {
+  return (
+    <span
+      title="Active"
+      aria-label="Active"
+      className="ml-auto inline-flex size-2.5 shrink-0 rounded-full bg-[var(--violet)] shadow-[0_0_0_3px_var(--violet-glow)]"
+    />
+  )
+}
+
+function PaletteMetaChip({ children, title }: { children: React.ReactNode; title?: string }) {
+  return (
+    <span
+      title={title}
+      className="ml-auto inline-flex min-w-6 max-w-16 shrink-0 items-center justify-center truncate rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.04em] text-[var(--text-3)]"
+    >
+      {children}
+    </span>
+  )
+}
+
+function ShortcutChip({ value }: { value: string }) {
+  const compact = value
+    .replace(/^Ctrl\s+/i, '^')
+    .replace(/^Project$/i, 'Prj')
+    .replace(/^All$/i, 'All')
+    .replace(/^On$/i, 'On')
+    .replace(/^Off$/i, 'Off')
+  return <PaletteMetaChip title={value}>{compact}</PaletteMetaChip>
+}
+
 export default function CommandPalette({
   open,
   onOpenChange,
@@ -150,6 +198,9 @@ export default function CommandPalette({
   const [activeId, setActiveId] = useState<string | null>(null)
   const [theme, setTheme] = useState<Theme>('dark')
   const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const itemRefs = useRef(new Map<string, HTMLButtonElement>())
+  const activeIdRef = useRef<string | null>(null)
   const normalizedQuery = query.trim().toLowerCase()
 
   useEffect(() => {
@@ -391,24 +442,64 @@ export default function CommandPalette({
 
   useEffect(() => {
     if (!open) {
+      activeIdRef.current = null
       setActiveId(null)
       return
     }
     setActiveId((current) => {
       if (current && visibleItems.some((item) => item.id === current)) return current
-      return visibleItems[0]?.id ?? null
+      const nextId = visibleItems[0]?.id ?? null
+      activeIdRef.current = nextId
+      return nextId
     })
   }, [open, visibleItems])
 
   const activeIndex = visibleItems.findIndex((item) => item.id === activeId)
   const activeItem = activeIndex >= 0 ? visibleItems[activeIndex] : null
 
+  useEffect(() => {
+    activeIdRef.current = activeId
+  }, [activeId])
+
+  function scrollItemIntoView(id: string) {
+    const list = listRef.current
+    const item = itemRefs.current.get(id)
+    if (!list || !item) return
+
+    const buffer = 12
+    const listRect = list.getBoundingClientRect()
+    const itemRect = item.getBoundingClientRect()
+    const itemTop = itemRect.top - listRect.top + list.scrollTop
+    const itemBottom = itemTop + item.offsetHeight
+    const viewTop = list.scrollTop
+    const viewBottom = viewTop + list.clientHeight
+
+    if (visibleItems[0]?.id === id) {
+      list.scrollTop = 0
+      return
+    }
+
+    if (itemTop < viewTop + buffer) {
+      list.scrollTop = Math.max(0, itemTop - buffer)
+      return
+    }
+
+    if (itemBottom > viewBottom - buffer) {
+      list.scrollTop = itemBottom - list.clientHeight + buffer
+    }
+  }
+
   function moveActive(delta: number) {
     if (visibleItems.length === 0) return
-    const nextIndex = activeIndex < 0
+    const currentId = activeIdRef.current
+    const currentIndex = currentId ? visibleItems.findIndex((item) => item.id === currentId) : -1
+    const nextIndex = currentIndex < 0
       ? 0
-      : (activeIndex + delta + visibleItems.length) % visibleItems.length
-    setActiveId(visibleItems[nextIndex]?.id ?? null)
+      : Math.max(0, Math.min(visibleItems.length - 1, currentIndex + delta))
+    const nextId = visibleItems[nextIndex]?.id ?? null
+    activeIdRef.current = nextId
+    setActiveId(nextId)
+    if (nextId) requestAnimationFrame(() => scrollItemIntoView(nextId))
   }
 
   function runItem(item: PaletteItem) {
@@ -416,21 +507,36 @@ export default function CommandPalette({
     onOpenChange(false)
   }
 
+  function captureItemRef(id: string) {
+    return (node: HTMLButtonElement | null) => {
+      if (node) itemRefs.current.set(id, node)
+      else itemRefs.current.delete(id)
+    }
+  }
+
+  function activateFromPointer(id: string) {
+    activeIdRef.current = id
+    setActiveId((current) => current === id ? current : id)
+  }
+
   const hasResults = visibleItems.length > 0
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} className="max-w-[760px]">
       <Command>
-        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">
-          <div>
-            <div className="font-[Oxanium] text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text)]">
+        <div
+          className="flex shrink-0 items-center justify-between gap-5 rounded-[12px] border border-[var(--border)] bg-[var(--surface)]"
+          style={{ padding: '14px 16px' }}
+        >
+          <div className="min-w-0">
+            <div className="font-[Oxanium] text-[12px] font-semibold uppercase tracking-[0.18em] text-[var(--text)]">
               Command Palette
             </div>
-            <div className="mt-0.5 font-mono text-[10px] text-[var(--text-3)]">
+            <div className="mt-1 truncate font-mono text-[11px] text-[var(--text-3)]">
               Search sessions, projects, providers, and view controls.
             </div>
           </div>
-          <div className="rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
+          <div className="shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
             Ctrl K
           </div>
         </div>
@@ -461,7 +567,7 @@ export default function CommandPalette({
           }}
           placeholder="Type a command, session title, project path, or provider..."
         />
-        <CommandList>
+        <CommandList ref={listRef}>
           {!hasResults && normalizedQuery ? (
             <CommandEmpty>No matches found.</CommandEmpty>
           ) : null}
@@ -470,9 +576,10 @@ export default function CommandPalette({
             <CommandGroup heading="Actions">
               {filteredActions.map((item) => (
                   <CommandItem
+                    ref={captureItemRef(item.id)}
                     key={item.id}
                     active={item.id === activeId}
-                    onMouseEnter={() => setActiveId(item.id)}
+                    onMouseMove={() => activateFromPointer(item.id)}
                     onClick={() => runItem(item)}
                     title={item.description}
                   >
@@ -484,11 +591,9 @@ export default function CommandPalette({
                       <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description}</span>
                     </span>
                     {item.active ? (
-                      <span className="rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--violet)]">
-                        Active
-                      </span>
+                      <ActiveDot />
                     ) : item.shortcut ? (
-                      <CommandShortcut>{item.shortcut}</CommandShortcut>
+                      <ShortcutChip value={item.shortcut} />
                     ) : null}
                   </CommandItem>
                 ))}
@@ -501,9 +606,10 @@ export default function CommandPalette({
               <CommandGroup heading="Projects">
                 {projectItems.map((item) => (
                   <CommandItem
+                    ref={captureItemRef(item.id)}
                     key={item.id}
                     active={item.id === activeId}
-                    onMouseEnter={() => setActiveId(item.id)}
+                    onMouseMove={() => activateFromPointer(item.id)}
                     onClick={() => runItem(item)}
                     title={item.description}
                   >
@@ -514,9 +620,7 @@ export default function CommandPalette({
                       <span className="block truncate font-medium text-[13px] text-[var(--text)]">{item.label}</span>
                       <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description}</span>
                     </span>
-                    <span className="rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--text-3)]">
-                      {item.shortcut}
-                    </span>
+                    <ShortcutChip value={item.shortcut ?? ''} />
                   </CommandItem>
                 ))}
               </CommandGroup>
@@ -532,25 +636,25 @@ export default function CommandPalette({
                   const style = providerStyle(provider)
                   return (
                     <CommandItem
+                      ref={captureItemRef(item.id)}
                       key={item.id}
                       active={item.id === activeId}
-                      onMouseEnter={() => setActiveId(item.id)}
+                      onMouseMove={() => activateFromPointer(item.id)}
                       onClick={() => runItem(item)}
                       title={item.description}
                     >
                       <span
-                        className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em]"
+                        className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border font-mono text-[9px] font-semibold uppercase tracking-[-0.02em]"
                         style={{ color: style.color, background: style.background, borderColor: style.border }}
+                        title={provider}
                       >
-                        {provider}
+                        {providerIconLabel(provider)}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-medium text-[13px] text-[var(--text)]">{item.label}</span>
-                        <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description}</span>
+                        <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description} · {provider}</span>
                       </span>
-                      <span className="rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--text-3)]">
-                        {item.shortcut}
-                      </span>
+                      <PaletteMetaChip title={item.shortcut}>{item.shortcut}</PaletteMetaChip>
                     </CommandItem>
                   )
                 })}
@@ -564,13 +668,14 @@ export default function CommandPalette({
               {themeItems.map((group) => (
                 <CommandGroup key={group.category} heading={`${group.label} themes`}>
                   {group.items.map((item) => (
-                  <CommandItem
-                    key={item.id}
-                    active={item.id === activeId}
-                    onMouseEnter={() => setActiveId(item.id)}
-                    onClick={() => runItem(item)}
-                    title={item.description}
-                  >
+                    <CommandItem
+                      ref={captureItemRef(item.id)}
+                      key={item.id}
+                      active={item.id === activeId}
+                      onMouseMove={() => activateFromPointer(item.id)}
+                      onClick={() => runItem(item)}
+                      title={item.description}
+                    >
                       <span className="inline-flex size-6 shrink-0 items-center justify-center text-[var(--cyan)]">
                         {item.icon}
                       </span>
@@ -579,11 +684,9 @@ export default function CommandPalette({
                         <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description}</span>
                       </span>
                       {item.active ? (
-                        <span className="rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--violet)]">
-                          Active
-                        </span>
+                        <ActiveDot />
                       ) : item.shortcut ? (
-                        <CommandShortcut>{item.shortcut}</CommandShortcut>
+                        <ShortcutChip value={item.shortcut} />
                       ) : null}
                     </CommandItem>
                   ))}

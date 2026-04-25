@@ -26,7 +26,8 @@ const CommandDialog = React.forwardRef<HTMLDivElement, CommandDialogProps>(
 
     return (
       <div
-        className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 px-4 py-16 backdrop-blur-[2px]"
+        className="fixed inset-0 z-50 flex items-start justify-center bg-[color-mix(in_srgb,var(--bg)_72%,rgba(0,0,0,0.55))] backdrop-blur-[3px]"
+        style={{ padding: '28px 32px 32px' }}
         onMouseDown={() => onOpenChange(false)}
         role="presentation"
       >
@@ -35,9 +36,10 @@ const CommandDialog = React.forwardRef<HTMLDivElement, CommandDialogProps>(
           role="dialog"
           aria-modal="true"
           className={cn(
-            'w-full max-w-[760px] overflow-hidden rounded-[18px] border border-border bg-[var(--surface)] text-popover-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)]',
+            'flex w-full max-w-[760px] overflow-hidden rounded-[18px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[0_24px_80px_var(--shadow,rgba(0,0,0,0.24))]',
             className,
           )}
+          style={{ maxHeight: 'calc(100vh - 60px)' }}
           onMouseDown={(event) => event.stopPropagation()}
         >
           {children}
@@ -49,11 +51,12 @@ const CommandDialog = React.forwardRef<HTMLDivElement, CommandDialogProps>(
 CommandDialog.displayName = 'CommandDialog'
 
 const Command = React.forwardRef<HTMLDivElement, React.ComponentProps<'div'>>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <div
       ref={ref}
       data-slot="command"
-      className={cn('flex h-full w-full flex-col bg-[var(--surface)] text-[var(--text)]', className)}
+      className={cn('flex min-h-0 w-full flex-col bg-[var(--surface)] text-[var(--text)]', className)}
+      style={{ gap: 10, padding: 12, ...style }}
       {...props}
     />
   ),
@@ -61,14 +64,18 @@ const Command = React.forwardRef<HTMLDivElement, React.ComponentProps<'div'>>(
 Command.displayName = 'Command'
 
 const CommandInput = React.forwardRef<HTMLInputElement, React.ComponentProps<typeof Input>>(
-  ({ className, ...props }, ref) => (
-    <div className="border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2.5">
+  ({ className, style, ...props }, ref) => (
+    <div
+      className="shrink-0 rounded-[12px] border border-[var(--border)] bg-[var(--surface)]"
+      style={{ padding: 10 }}
+    >
       <Input
         ref={ref}
         className={cn(
-          'h-10 border-0 bg-[var(--surface-2)] px-3 text-[13px] text-[var(--text)] shadow-none placeholder:text-[var(--text-3)] focus-visible:ring-1 focus-visible:ring-[var(--cyan)] focus-visible:ring-offset-0',
+          'h-11 border-0 bg-[var(--surface-2)] px-4 text-[14px] text-[var(--text)] shadow-none placeholder:text-[var(--text-3)] focus-visible:ring-1 focus-visible:ring-[var(--cyan)] focus-visible:ring-offset-0',
           className,
         )}
+        style={{ padding: '0 14px', ...style }}
         {...props}
       />
     </div>
@@ -77,11 +84,12 @@ const CommandInput = React.forwardRef<HTMLInputElement, React.ComponentProps<typ
 CommandInput.displayName = 'CommandInput'
 
 const CommandList = React.forwardRef<HTMLDivElement, React.ComponentProps<'div'>>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <div
       ref={ref}
       data-slot="command-list"
-      className={cn('max-h-[460px] overflow-y-auto px-2.5 py-2', className)}
+      className={cn('min-h-0 flex-1 overflow-y-auto rounded-[12px] border border-[var(--border)] bg-[var(--surface)]', className)}
+      style={{ padding: 10, ...style }}
       {...props}
     />
   ),
@@ -106,14 +114,17 @@ CommandEmpty.displayName = 'CommandEmpty'
 const CommandGroup = React.forwardRef<
   HTMLDivElement,
   React.ComponentProps<'div'> & { heading?: string }
->(({ className, heading, children, ...props }, ref) => (
-  <div ref={ref} data-slot="command-group" className={cn('mb-3', className)} {...props}>
+>(({ className, heading, children, style, ...props }, ref) => (
+  <div ref={ref} data-slot="command-group" className={cn('mb-2.5', className)} style={style} {...props}>
     {heading ? (
-      <div className="px-3 pb-1.5 pt-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--text-3)]">
+      <div
+        className="font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--text-3)]"
+        style={{ padding: '1px 8px 6px' }}
+      >
         {heading}
       </div>
     ) : null}
-    <div className="grid gap-0.5">{children}</div>
+    <div className="grid" style={{ gap: 2 }}>{children}</div>
   </div>
 ))
 CommandGroup.displayName = 'CommandGroup'
@@ -121,17 +132,18 @@ CommandGroup.displayName = 'CommandGroup'
 const CommandItem = React.forwardRef<
   HTMLButtonElement,
   React.ButtonHTMLAttributes<HTMLButtonElement> & { active?: boolean }
->(({ className, active, ...props }, ref) => (
+>(({ className, active, style, ...props }, ref) => (
   <button
     ref={ref}
     type="button"
     data-slot="command-item"
     data-active={active ? 'true' : 'false'}
     className={cn(
-      'flex w-full items-center gap-3 rounded-[10px] border border-transparent px-3 py-2 text-left transition-colors hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--cyan)]',
-      active && 'border-[rgba(56,217,245,0.22)] bg-[var(--surface-2)]',
+      'flex w-full items-center gap-3 rounded-[10px] border border-transparent text-left transition-colors hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--cyan)]',
+      active && 'border-[color-mix(in_srgb,var(--cyan)_34%,var(--border))] bg-[var(--surface-2)] shadow-[inset_2px_0_0_var(--cyan)]',
       className,
     )}
+    style={{ padding: '7px 10px', ...style }}
     {...props}
   />
 ))
