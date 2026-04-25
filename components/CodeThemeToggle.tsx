@@ -29,6 +29,7 @@ export default function CodeThemeToggle() {
         title="Code syntax theme"
         variant="outline"
         size="sm"
+        className="av-hover-control"
         style={{
           display: 'flex',
           alignItems: 'center',

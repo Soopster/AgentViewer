@@ -2523,6 +2523,7 @@ export default function MessageView({ messages, loading, session, projectView, o
             title="Session analytics"
             variant="outline"
             size="sm"
+            className="av-hover-control"
             style={{
               flexShrink: 0,
               height: 26,
@@ -2568,6 +2569,7 @@ export default function MessageView({ messages, loading, session, projectView, o
             title="Fork this session into a new branch"
             variant="outline"
             size="sm"
+            className="av-hover-control"
             style={{
               flexShrink: 0,
               height: 26,
@@ -2609,6 +2611,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                 title="Share OpenCode session"
                 variant="outline"
                 size="sm"
+                className="av-hover-control"
                 style={{
                   flexShrink: 0,
                   height: 26,
@@ -2634,6 +2637,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                 title="Unshare OpenCode session"
                 variant="outline"
                 size="sm"
+                className="av-hover-control"
                 style={{
                   flexShrink: 0,
                   height: 26,
@@ -2659,6 +2663,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                 title="Summarize OpenCode session"
                 variant="outline"
                 size="sm"
+                className="av-hover-control"
                 style={{
                   flexShrink: 0,
                   height: 26,
@@ -2684,6 +2689,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                 title="Restore reverted OpenCode changes"
                 variant="outline"
                 size="sm"
+                className="av-hover-control"
                 style={{
                   flexShrink: 0,
                   height: 26,
@@ -2713,6 +2719,7 @@ export default function MessageView({ messages, loading, session, projectView, o
             title="Export session to HTML"
             variant="outline"
             size="sm"
+            className="av-hover-control"
             style={{
               flexShrink: 0,
               height: 26,
@@ -2752,6 +2759,7 @@ export default function MessageView({ messages, loading, session, projectView, o
             title="Delete session"
             variant="outline"
             size="sm"
+            className="av-hover-control"
             style={{
               flexShrink: 0,
               height: 26,
@@ -2777,6 +2785,7 @@ export default function MessageView({ messages, loading, session, projectView, o
             title="Show session diagnostics"
             variant="outline"
             size="sm"
+            className="av-hover-control"
             style={{
               flexShrink: 0,
               height: 26,
@@ -2800,6 +2809,7 @@ export default function MessageView({ messages, loading, session, projectView, o
           title={showTools ? 'Hide tool calls' : 'Show tool calls'}
           variant="outline"
           size="sm"
+          className="av-hover-control"
           style={{
             flexShrink: 0,
             height: 26,
@@ -2822,6 +2832,7 @@ export default function MessageView({ messages, loading, session, projectView, o
           title={`Density: ${density} — click to cycle`}
           variant="outline"
           size="sm"
+          className="av-hover-control"
           style={{
             flexShrink: 0,
             height: 26,
@@ -2879,6 +2890,7 @@ export default function MessageView({ messages, loading, session, projectView, o
             title={autoFollow ? 'Pause live follow' : 'Follow new messages live'}
             variant="outline"
             size="sm"
+            className="av-hover-control"
             style={{
               flexShrink: 0,
               height: 26,

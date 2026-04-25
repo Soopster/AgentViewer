@@ -34,7 +34,7 @@ import ThemeToggle from './ThemeToggle'
 
 const providerNativeSelectClassName = cn(
   nativeSelectBaseClassName,
-  'h-9 rounded-[9px] border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--surface-2)] px-3 text-[11px] font-medium tracking-[0.04em] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+  'av-hover-control h-9 rounded-[9px] border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--surface-2)] px-3 text-[11px] font-medium tracking-[0.04em] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
 )
 
 const collapsedIconButtonBaseStyle: React.CSSProperties = {
@@ -863,6 +863,7 @@ export default function SessionList({
               onClick={() => setOpen(true)}
               aria-label="Expand sidebar"
               title="Expand sidebar"
+              className="av-hover-control"
               style={{
                 width: 24,
                 height: 24,
@@ -886,6 +887,7 @@ export default function SessionList({
               onClick={() => handleCollapsedAction('sessions')}
               aria-label="Show sessions"
               title="Show sessions"
+              className="av-hover-control"
               style={collapsedPrimaryButtonStyle}
             >
               <ListTree size={22} strokeWidth={2.3} />
@@ -897,6 +899,7 @@ export default function SessionList({
                 onClick={() => handleCollapsedAction('provider')}
                 aria-label="Provider controls"
                 title="Provider"
+                className="av-hover-control"
                 style={collapsedIconButtonStyle(collapsedPanel === 'provider')}
               >
                 <Bot size={20} strokeWidth={2.2} />
@@ -906,6 +909,7 @@ export default function SessionList({
                 onClick={() => handleCollapsedAction('search')}
                 aria-label="Search"
                 title="Search"
+                className="av-hover-control"
                 style={collapsedIconButtonStyle(collapsedPanel === 'search')}
               >
                 <Search size={20} strokeWidth={2.2} />
@@ -915,6 +919,7 @@ export default function SessionList({
                 onClick={() => handleCollapsedAction('project')}
                 aria-label="Project scope"
                 title="Projects"
+                className="av-hover-control"
                 style={collapsedIconButtonStyle(collapsedPanel === 'project')}
               >
                 <LayoutDashboard size={20} strokeWidth={2.2} />
@@ -924,6 +929,7 @@ export default function SessionList({
                 onClick={() => handleCollapsedAction('filters')}
                 aria-label="Filters"
                 title="Filters"
+                className="av-hover-control"
                 style={collapsedIconButtonStyle(collapsedPanel === 'filters')}
               >
                 <SlidersHorizontal size={20} strokeWidth={2.2} />
@@ -933,6 +939,7 @@ export default function SessionList({
                 onClick={() => handleCollapsedAction('overview')}
                 aria-label="Overview"
                 title="Overview"
+                className="av-hover-control"
                 style={collapsedIconButtonStyle(collapsedPanel === 'overview')}
               >
                 <BookOpen size={20} strokeWidth={2.2} />
@@ -993,6 +1000,7 @@ export default function SessionList({
                 <button
                   type="button"
                   onClick={() => setCollapsedPanel(null)}
+                  className="av-hover-control"
                   style={{
                     border: '1px solid var(--border)',
                     background: 'var(--surface)',
@@ -1180,6 +1188,7 @@ export default function SessionList({
                         value={searchText}
                         onChange={(e) => setSearchText(e.target.value)}
                         placeholder="Search title, tags, path, prompt…"
+                        className="av-hover-control"
                         style={{
                           flex: 1,
                           height: 34,
@@ -1201,6 +1210,7 @@ export default function SessionList({
                           }}
                           variant="outline"
                           size="sm"
+                          className="av-hover-control"
                           style={{
                             height: 34,
                             padding: '0 10px',
@@ -1231,7 +1241,7 @@ export default function SessionList({
                         onClick={() => setSortMode('project')}
                         variant="outline"
                         size="sm"
-                        className={sortMode === 'project' ? 'av-control-btn av-active' : 'av-control-btn'}
+                        className={sortMode === 'project' ? 'av-control-btn av-hover-control av-active' : 'av-control-btn av-hover-control'}
                         style={{
                           flex: 1,
                           height: 32,
@@ -1247,7 +1257,7 @@ export default function SessionList({
                         onClick={() => setSortMode('time')}
                         variant="outline"
                         size="sm"
-                        className={sortMode === 'time' ? 'av-control-btn av-active' : 'av-control-btn'}
+                        className={sortMode === 'time' ? 'av-control-btn av-hover-control av-active' : 'av-control-btn av-hover-control'}
                         style={{
                           flex: 1,
                           height: 32,
@@ -1265,7 +1275,7 @@ export default function SessionList({
                         onClick={() => onChangeScope('all')}
                         variant="outline"
                         size="sm"
-                        className={scopeMode === 'all' ? 'av-control-btn av-active' : 'av-control-btn'}
+                        className={scopeMode === 'all' ? 'av-control-btn av-hover-control av-active' : 'av-control-btn av-hover-control'}
                         style={{
                           flex: 1,
                           height: 32,
@@ -1283,7 +1293,7 @@ export default function SessionList({
                         title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
                         variant="outline"
                         size="sm"
-                        className={scopeMode === 'project' ? 'av-control-btn av-active' : 'av-control-btn'}
+                        className={scopeMode === 'project' ? 'av-control-btn av-hover-control av-active' : 'av-control-btn av-hover-control'}
                         style={{
                           flex: 1,
                           height: 32,
@@ -1342,6 +1352,7 @@ export default function SessionList({
                               onClick={() => setActiveTag((prev) => prev?.toLowerCase() === tag.toLowerCase() ? null : tag)}
                               variant="outline"
                               size="sm"
+                              className="av-hover-control"
                               style={{
                                 height: 26,
                                 padding: '0 8px',
@@ -1396,6 +1407,7 @@ export default function SessionList({
                       onClick={() => setOpen(true)}
                       variant="outline"
                       size="sm"
+                      className="av-hover-control"
                       style={{
                         height: 34,
                         borderRadius: 8,
@@ -1516,6 +1528,7 @@ export default function SessionList({
                   variant="outline"
                   size="sm"
                   title="Open command palette"
+                  className="av-hover-control"
                   style={{
                     height: 24,
                     padding: '0 8px',
@@ -1537,6 +1550,7 @@ export default function SessionList({
                   variant="outline"
                   size="sm"
                   title={canOpenGit ? 'Open git status' : 'Select a session or project to open git status'}
+                  className="av-hover-control"
                   style={{
                     height: 24,
                     padding: '0 8px',
@@ -1606,6 +1620,7 @@ export default function SessionList({
                     value={searchText}
                     onChange={(e) => setSearchText(e.target.value)}
                     placeholder="Search title, tags, path, prompt…"
+                    className="av-hover-control"
                     style={{
                       flex: 1,
                       height: 30,
@@ -1627,6 +1642,7 @@ export default function SessionList({
                       }}
                       variant="outline"
                       size="sm"
+                      className="av-hover-control"
                       style={{
                         height: 30,
                         padding: '0 10px',
@@ -1654,6 +1670,7 @@ export default function SessionList({
                           onClick={() => setActiveTag((prev) => prev?.toLowerCase() === tag.toLowerCase() ? null : tag)}
                           variant="outline"
                           size="sm"
+                          className="av-hover-control"
                           style={{
                             height: 24,
                             padding: '0 8px',
@@ -1679,6 +1696,7 @@ export default function SessionList({
                     onClick={() => setSortMode('project')}
                     variant="outline"
                     size="sm"
+                    className="av-hover-control"
                     style={{
                       flex: 1,
                       height: 28,
@@ -1699,6 +1717,7 @@ export default function SessionList({
                     onClick={() => setSortMode('time')}
                     variant="outline"
                     size="sm"
+                    className="av-hover-control"
                     style={{
                       flex: 1,
                       height: 28,
@@ -1721,6 +1740,7 @@ export default function SessionList({
                     onClick={() => onChangeScope('all')}
                     variant="outline"
                     size="sm"
+                    className="av-hover-control"
                     style={{
                       flex: 1,
                       height: 28,
@@ -1742,6 +1762,7 @@ export default function SessionList({
                     title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
                     variant="outline"
                     size="sm"
+                    className="av-hover-control"
                     style={{
                       flex: 1,
                       height: 28,

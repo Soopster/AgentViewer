@@ -881,6 +881,35 @@ body {
   --tool-header-opacity: 0.14;
 }
 
+/* ── Shared control hover affordance ────────────────────────────────────── */
+.av-hover-control {
+  transition-property: background, color, border-color, box-shadow, filter, transform, opacity;
+  transition-duration: 140ms;
+  transition-timing-function: ease;
+}
+
+.av-hover-control:not(:disabled):hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--violet) 18%, transparent),
+    0 8px 18px color-mix(in srgb, var(--violet) 13%, transparent);
+}
+
+.av-hover-control:not(:disabled):active {
+  transform: translateY(0);
+  filter: brightness(1.04);
+}
+
+.av-session-tab:not(:disabled):hover {
+  background-color: var(--surface-3) !important;
+  color: var(--text) !important;
+}
+
+.av-session-tab.av-active:not(:disabled):hover {
+  color: var(--cyan) !important;
+}
+
 /* ── Segment control buttons (sort/scope toggles) ───────────────────────── */
 /* Colors live here so CSS :hover can override them without fighting inline styles */
 .av-control-btn {

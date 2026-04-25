@@ -9,6 +9,7 @@ export default function ThemeToggle() {
   const [open, setOpen]     = useState(false)
   const [hovered, setHovered] = useState<Theme | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const selectedThemeRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -18,6 +19,13 @@ export default function ThemeToggle() {
     document.addEventListener('mousedown', handleOutside)
     return () => document.removeEventListener('mousedown', handleOutside)
   }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    requestAnimationFrame(() => {
+      selectedThemeRef.current?.scrollIntoView({ block: 'center' })
+    })
+  }, [open, theme])
 
   function select(t: Theme) {
     applyTheme(t)
@@ -32,6 +40,7 @@ export default function ThemeToggle() {
         onClick={() => setOpen(v => !v)}
         variant="outline"
         size="sm"
+        className="av-hover-control"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -61,6 +70,8 @@ export default function ThemeToggle() {
 
       {open && (
         <div
+          role="listbox"
+          aria-label="Theme"
           style={{
             position: 'absolute',
             top: 'calc(100% + 6px)',
@@ -105,6 +116,9 @@ export default function ThemeToggle() {
                 return (
                   <div
                     key={t}
+                    ref={isActive ? selectedThemeRef : undefined}
+                    role="option"
+                    aria-selected={isActive}
                     onClick={() => select(t)}
                     onMouseEnter={() => setHovered(t)}
                     onMouseLeave={() => setHovered(null)}
@@ -114,8 +128,12 @@ export default function ThemeToggle() {
                       gap: 9,
                       padding: '6px 14px',
                       cursor: 'pointer',
-                      background: isHov ? 'var(--surface-3)' : 'transparent',
-                      transition: 'background 0.1s ease',
+                      background: isActive
+                        ? 'color-mix(in srgb, var(--violet) 14%, var(--surface-3))'
+                        : isHov
+                        ? 'var(--surface-3)'
+                        : 'transparent',
+                      transition: 'background 0.1s ease, color 0.1s ease',
                     }}
                   >
                     <span style={{ fontSize: 13, lineHeight: 1, width: 16, textAlign: 'center' }}>{m.icon}</span>

@@ -50,6 +50,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
           <button
             onClick={() => onSelect(session)}
             title={title}
+            className={isActive ? 'av-session-tab av-hover-control av-active' : 'av-session-tab av-hover-control'}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -71,7 +72,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
               whiteSpace: 'nowrap',
               flexShrink: 0,
               outline: 'none',
-              transition: 'background-color 0.1s',
+              transition: 'background-color 0.1s, color 0.1s, border-color 0.1s, box-shadow 0.14s ease, filter 0.14s ease, transform 0.14s ease',
             }}
           >
             <span

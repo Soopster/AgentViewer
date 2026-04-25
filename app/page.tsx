@@ -583,6 +583,7 @@ export default function Home() {
             <button
               onClick={toggleMessagePane}
               title="Expand message pane"
+              className="av-hover-control"
               style={{
                 background: 'none',
                 border: 'none',
@@ -603,6 +604,7 @@ export default function Home() {
               <button
                 onClick={toggleMessagePane}
                 title="Collapse message pane"
+                className="av-hover-control"
                 style={{
                   position: 'absolute',
                   top: 6,
