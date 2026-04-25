@@ -91,6 +91,14 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
                 e.stopPropagation()
                 onClose(sessionTabKey(session))
               }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(255,255,255,0.1)'
+                e.currentTarget.style.color = 'var(--text)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent'
+                e.currentTarget.style.color = 'var(--text-3)'
+              }}
               style={{
                 color: 'var(--text-3)',
                 fontSize: 15,
@@ -99,6 +107,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
                 borderRadius: 3,
                 cursor: 'pointer',
                 flexShrink: 0,
+                transition: 'background 0.1s, color 0.1s',
               }}
             >
               ×

@@ -26,6 +26,7 @@ type Props = {
 
 export default function AnalyticsPopover({ open, onClose, input }: Props) {
   const [pane, setPane] = useState<PaneId>(0)
+  const [hoveredPane, setHoveredPane] = useState<PaneId | null>(null)
   const analytics = useMemo(() => computeAnalytics(open ? input : null), [open, input])
 
   useEffect(() => {
@@ -99,16 +100,19 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
             <button
               key={p}
               onClick={() => setPane(p)}
+              onMouseEnter={() => setHoveredPane(p)}
+              onMouseLeave={() => setHoveredPane(null)}
               style={{
                 padding: '5px 10px',
                 fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 11,
                 letterSpacing: '0.08em',
-                color: pane === p ? 'var(--surface)' : 'var(--text-2)',
-                background: pane === p ? 'var(--cyan, #5eead4)' : 'transparent',
-                border: '1px solid ' + (pane === p ? 'transparent' : 'var(--border)'),
+                color: pane === p ? 'var(--surface)' : (hoveredPane === p ? 'var(--text)' : 'var(--text-2)'),
+                background: pane === p ? 'var(--cyan, #5eead4)' : (hoveredPane === p ? 'var(--surface-3)' : 'transparent'),
+                border: '1px solid ' + (pane === p ? 'transparent' : (hoveredPane === p ? 'var(--border-2)' : 'var(--border)')),
                 borderRadius: 5,
                 cursor: 'pointer',
+                transition: 'background 0.1s, color 0.1s, border-color 0.1s',
               }}
             >
               [{p}] {PANE_TITLES[p]}
@@ -120,6 +124,16 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
           </span>
           <button
             onClick={onClose}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'var(--surface-3)'
+              e.currentTarget.style.color = 'var(--text)'
+              e.currentTarget.style.borderColor = 'var(--border-2)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent'
+              e.currentTarget.style.color = 'var(--text-2)'
+              e.currentTarget.style.borderColor = 'var(--border)'
+            }}
             style={{
               background: 'transparent',
               border: '1px solid var(--border)',
@@ -129,6 +143,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
               borderRadius: 5,
               fontFamily: "'IBM Plex Mono', monospace",
               fontSize: 11,
+              transition: 'background 0.1s, color 0.1s, border-color 0.1s',
             }}
           >
             ✕ CLOSE
