@@ -13,22 +13,41 @@ type CommandDialogProps = React.PropsWithChildren<{
 
 const CommandDialog = React.forwardRef<HTMLDivElement, CommandDialogProps>(
   ({ open, onOpenChange, className, children }, ref) => {
+    const isOpenRef = React.useRef(open)
+
+    React.useEffect(() => {
+      isOpenRef.current = open
+    }, [open])
+
     React.useEffect(() => {
       if (!open) return
       const onKeyDown = (event: KeyboardEvent) => {
-        if (event.key === 'Escape') onOpenChange(false)
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          onOpenChange(false)
+        }
       }
       window.addEventListener('keydown', onKeyDown)
       return () => window.removeEventListener('keydown', onKeyDown)
     }, [onOpenChange, open])
 
+    const handleBackdropClick = React.useCallback(() => {
+      if (isOpenRef.current) {
+        onOpenChange(false)
+      }
+    }, [onOpenChange])
+
     if (!open) return null
 
     return (
       <div
-        className="fixed inset-0 z-50 flex items-start justify-center bg-[color-mix(in_srgb,var(--bg)_72%,rgba(0,0,0,0.55))] backdrop-blur-[3px]"
-        style={{ padding: '28px 32px 32px' }}
-        onMouseDown={() => onOpenChange(false)}
+        className="fixed inset-0 z-50 flex items-start justify-center"
+        style={{
+          padding: '28px 32px 32px',
+          background: 'rgba(0, 0, 0, 0.4)',
+          backdropFilter: 'none'
+        }}
+        onMouseDown={handleBackdropClick}
         role="presentation"
       >
         <div

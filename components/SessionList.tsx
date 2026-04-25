@@ -310,27 +310,19 @@ const SessionRow = memo(function SessionRow({
       onClick={() => !editing && onSelect(session)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      className={`av-session-row ${selected ? 'av-selected' : ''}`}
       style={{
         padding: '10px 16px 10px 24px',
         borderBottom: '1px solid var(--border)',
-        borderLeft: `2px solid ${selected ? 'var(--violet)' : hovered ? 'var(--border-2)' : 'transparent'}`,
-        background: selected
-          ? 'linear-gradient(to right, rgba(139,128,240,0.13) 0%, transparent 65%)'
-          : hovered
-          ? 'var(--surface-2)'
-          : 'transparent',
-        cursor: 'pointer',
-        transition: 'background 0.14s ease, border-left-color 0.14s ease',
       }}
     >
       {/* Session ID */}
       <div
+        className="av-session-id"
         style={{
           fontFamily: "'IBM Plex Mono', monospace",
           fontSize: 12,
-          color: selected ? 'var(--violet)' : hovered ? 'var(--text)' : 'var(--text-2)',
           letterSpacing: '0.04em',
-          transition: 'color 0.14s ease',
         }}
       >
         {shortId}
@@ -364,12 +356,12 @@ const SessionRow = memo(function SessionRow({
           <div
             onDoubleClick={startEdit('title', sessionTitle)}
             title="Double-click to rename title"
+            className="av-session-title"
             style={{
               fontFamily: "'Oxanium', monospace",
               fontSize: 12,
               fontWeight: 600,
               letterSpacing: '0.04em',
-              color: selected ? 'var(--text)' : hovered ? 'var(--text)' : 'var(--text-2)',
               cursor: 'text',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -405,7 +397,7 @@ const SessionRow = memo(function SessionRow({
             marginTop: 4,
             fontFamily: "'IBM Plex Mono', monospace",
             fontSize: 11,
-            color: selected ? 'var(--text-2)' : 'var(--text-3)',
+            color: 'var(--text-3)',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -553,6 +545,7 @@ const ProjectGroup = memo(function ProjectGroup({
       <div
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
+        className={`av-project-header ${isProjectSelected ? 'av-selected' : ''}`}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -561,13 +554,8 @@ const ProjectGroup = memo(function ProjectGroup({
           userSelect: 'none',
           position: 'sticky',
           top: 0,
-          background: isProjectSelected
-            ? 'linear-gradient(to right, rgba(139,128,240,0.12) 0%, var(--surface-2) 70%)'
-            : hovered ? 'var(--surface-3)' : 'var(--surface-2)',
           borderBottom: '1px solid var(--border)',
-          borderLeft: `2px solid ${isProjectSelected ? 'var(--violet)' : 'transparent'}`,
           zIndex: 1,
-          transition: 'background 0.14s ease, border-left-color 0.14s ease',
         }}
       >
         {/* Chevron: collapses/expands */}
@@ -580,19 +568,18 @@ const ProjectGroup = memo(function ProjectGroup({
         {/* Name: loads project consolidated view */}
         <span
           onClick={() => onSelectProject(projectKey, name, sessions)}
+          className="av-project-name"
           style={{
             fontFamily: "'Oxanium', monospace",
             fontSize: 12,
             fontWeight: 600,
             letterSpacing: '0.08em',
             textTransform: 'uppercase',
-            color: hasSelected ? 'var(--violet)' : hovered ? 'var(--text-2)' : 'var(--text-3)',
             flex: 1,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
             cursor: 'pointer',
-            transition: 'color 0.14s ease',
           }}
         >
           {name}
@@ -1085,28 +1072,24 @@ export default function SessionList({
                             <div
                               key={entry.key}
                               onClick={() => onSelectProject(entry.projectDir, entry.projectName, entry.projectSessions)}
+                              className={`av-project-header ${isProjectSelected ? 'av-selected' : ''}`}
                               style={{
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: 7,
                                 padding: '8px 12px 8px 14px',
                                 userSelect: 'none',
-                                background: isProjectSelected
-                                  ? 'linear-gradient(to right, rgba(139,128,240,0.12) 0%, var(--surface-2) 70%)'
-                                  : 'var(--surface-2)',
                                 borderBottom: '1px solid var(--border)',
-                                borderLeft: `2px solid ${isProjectSelected ? 'var(--violet)' : 'transparent'}`,
-                                cursor: 'pointer',
                               }}
                             >
                               <span
+                                className="av-project-name"
                                 style={{
                                   fontFamily: "'Oxanium', monospace",
                                   fontSize: 12,
                                   fontWeight: 600,
                                   letterSpacing: '0.08em',
                                   textTransform: 'uppercase',
-                                  color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
                                   flex: 1,
                                   overflow: 'hidden',
                                   textOverflow: 'ellipsis',
@@ -1798,20 +1781,19 @@ export default function SessionList({
       </SidebarHeader>
       {!collapsed && (
         <SidebarContent>
-          <div style={{ overflow: 'auto', flex: 1 }}>
-            {error && (
-              <div
-                style={{
-                  padding: '12px 18px',
-                  fontSize: 12,
-                  color: 'var(--red)',
-                  borderBottom: '1px solid var(--border)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                }}
-              >
-                {error}
-              </div>
-            )}
+          {error && (
+            <div
+              style={{
+                padding: '12px 18px',
+                fontSize: 12,
+                color: 'var(--red)',
+                borderBottom: '1px solid var(--border)',
+                fontFamily: "'IBM Plex Mono', monospace",
+              }}
+            >
+              {error}
+            </div>
+          )}
 
             {!loading && !error && sortMode === 'project' && groups.map(({ projectDir, projectName, sessions: groupSessions }) => (
               <ProjectGroup
@@ -1834,28 +1816,24 @@ export default function SessionList({
                   <div
                     key={entry.key}
                     onClick={() => onSelectProject(entry.projectDir, entry.projectName, entry.projectSessions)}
+                    className={`av-project-header ${isProjectSelected ? 'av-selected' : ''}`}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
                       gap: 7,
                       padding: '8px 14px 8px 16px',
                       userSelect: 'none',
-                      background: isProjectSelected
-                        ? 'linear-gradient(to right, rgba(139,128,240,0.12) 0%, var(--surface-2) 70%)'
-                        : 'var(--surface-2)',
                       borderBottom: '1px solid var(--border)',
-                      borderLeft: `2px solid ${isProjectSelected ? 'var(--violet)' : 'transparent'}`,
-                      cursor: 'pointer',
                     }}
                   >
                     <span
+                      className="av-project-name"
                       style={{
                         fontFamily: "'Oxanium', monospace",
                         fontSize: 12,
                         fontWeight: 600,
                         letterSpacing: '0.08em',
                         textTransform: 'uppercase',
-                        color: isProjectSelected ? 'var(--violet)' : 'var(--text-3)',
                         flex: 1,
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -1892,20 +1870,19 @@ export default function SessionList({
                 />
               )
             })}
-            {!loading && !error && filteredSessions.length === 0 && (
-              <div
-                style={{
-                  padding: '18px',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  color: 'var(--text-3)',
-                  lineHeight: 1.6,
-                }}
-              >
-                No sessions match the current search/filter.
-              </div>
-            )}
-          </div>
+          {!loading && !error && filteredSessions.length === 0 && (
+            <div
+              style={{
+                padding: '18px',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                color: 'var(--text-3)',
+                lineHeight: 1.6,
+              }}
+            >
+              No sessions match the current search/filter.
+            </div>
+          )}
         </SidebarContent>
       )}
       {!collapsed && (

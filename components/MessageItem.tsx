@@ -485,12 +485,12 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
           onClick={() => setOpen(v => !v)}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
+          className="av-tool-header"
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
-            cursor: 'pointer', userSelect: 'none',
-            transition: 'background 0.15s ease',
+            userSelect: 'none',
           }}
         >
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>EDIT</span>
@@ -534,12 +534,12 @@ function WriteToolCard({ thread }: { thread: ToolThread }) {
           onClick={() => setOpen(v => !v)}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
+          className="av-tool-header"
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
-            cursor: 'pointer', userSelect: 'none',
-            transition: 'background 0.15s ease',
+            userSelect: 'none',
           }}
         >
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>WRITE</span>
@@ -590,12 +590,12 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
           onClick={() => setOpen(v => !v)}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
+          className="av-tool-header"
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
-            cursor: 'pointer', userSelect: 'none',
-            transition: 'background 0.15s ease',
+            userSelect: 'none',
           }}
         >
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
@@ -692,12 +692,12 @@ function GenericToolCard({ thread }: { thread: ToolThread }) {
           onClick={() => setOpen(v => !v)}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
+          className="av-tool-header"
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
-            cursor: 'pointer', userSelect: 'none',
-            transition: 'background 0.15s ease',
+            userSelect: 'none',
           }}
         >
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
@@ -1390,12 +1390,12 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
           onClick={() => setOpen(v => !v)}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
+          className="av-tool-header"
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '8px 14px',
             background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
-            cursor: 'pointer', userSelect: 'none',
-            transition: 'background 0.15s ease',
+            userSelect: 'none',
           }}
         >
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>

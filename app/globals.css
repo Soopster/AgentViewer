@@ -758,3 +758,100 @@ body {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+
+/* ── Command dialog optimization ──────────────────────────────────────────── */
+
+[role="presentation"] {
+  will-change: opacity;
+  backface-visibility: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Interactive hover states ──────────────────────────────────────────────── */
+
+/* Session row hover effects */
+.av-session-row {
+  background: transparent;
+  border-left: 2px solid transparent;
+  transition: background 0.14s ease, border-left-color 0.14s ease;
+  cursor: pointer;
+}
+
+.av-session-row:hover:not(.av-selected) {
+  background: var(--surface-2);
+  border-left-color: var(--border-2);
+}
+
+.av-session-row.av-selected {
+  background: linear-gradient(to right, rgba(139,128,240,0.13) 0%, transparent 65%);
+  border-left-color: var(--violet);
+}
+
+.av-session-id {
+  color: var(--text-2);
+  transition: color 0.14s ease;
+}
+
+.av-session-row:hover .av-session-id {
+  color: var(--text);
+}
+
+.av-session-row.av-selected .av-session-id {
+  color: var(--violet);
+}
+
+.av-session-title {
+  color: var(--text-2);
+}
+
+.av-session-row:hover .av-session-title {
+  color: var(--text);
+}
+
+.av-session-row.av-selected .av-session-title {
+  color: var(--text);
+}
+
+/* Project group header hover effects */
+.av-project-header {
+  background: var(--surface-2);
+  border-left: 2px solid transparent;
+  transition: background 0.14s ease, border-left-color 0.14s ease;
+  cursor: pointer;
+}
+
+.av-project-header:hover:not(.av-selected) {
+  background: var(--surface-3);
+}
+
+.av-project-header.av-selected {
+  background: linear-gradient(to right, rgba(139,128,240,0.12) 0%, var(--surface-2) 70%);
+  border-left-color: var(--violet);
+}
+
+.av-project-name {
+  color: var(--text-3);
+  transition: color 0.14s ease;
+}
+
+.av-project-header:hover .av-project-name {
+  color: var(--text-2);
+}
+
+.av-project-header.av-selected .av-project-name {
+  color: var(--violet);
+}
+
+/* Tool/message card header hover effects */
+.av-tool-header {
+  transition: background 0.15s ease;
+  cursor: pointer;
+}
+
+.av-tool-header:hover {
+  --tool-header-opacity: 0.22;
+}
+
+.av-tool-header {
+  --tool-header-opacity: 0.14;
+}

@@ -360,7 +360,7 @@ export default function Home() {
     return () => clearInterval(id)
   }, [fetchProjectMessageBatches, provider, selectedProject])
 
-  async function selectSession(session: Session) {
+  const selectSession = useCallback(async (session: Session) => {
     const nextProvider = session.provider ?? 'claude'
     const nextScopeMode: SessionScopeMode = 'all'
     if (nextProvider !== provider) {
@@ -389,7 +389,7 @@ export default function Home() {
     } finally {
       setLoadingMessages(false)
     }
-  }
+  }, [provider, loadSessionsForProvider])
 
   function closeTab(sessionKey: string) {
     const idx = openTabSessions.findIndex((s) => projectSessionKey(s) === sessionKey)
@@ -406,7 +406,7 @@ export default function Home() {
     }
   }
 
-  async function selectProject(projectDir: string, projectName: string, projectSessions: Session[]) {
+  const selectProject = useCallback(async (projectDir: string, projectName: string, projectSessions: Session[]) => {
     setSelectedProject({ key: projectName, dir: projectDir, sessions: projectSessions })
     setSelectedTabKey(null)
     setLoadingMessages(true)
@@ -429,7 +429,7 @@ export default function Home() {
     } finally {
       setLoadingMessages(false)
     }
-  }
+  }, [provider])
 
   // Optimistically update the session title shown by listSessions().
   const handleRename = useCallback((sessionId: string, title: string) => {
@@ -632,9 +632,9 @@ export default function Home() {
                 scopeProjectName={activeProjectName}
                 includeWorktrees={includeWorktrees}
                 messagePaneCollapsed={messagePaneCollapsed}
-                onSelectSession={(session) => void selectSession(session)}
-                onSelectProject={(projectDir, projectName, projectSessions) => void selectProject(projectDir, projectName, projectSessions)}
-                onChangeProvider={(nextProvider) => void handleChangeProvider(nextProvider)}
+                onSelectSession={selectSession}
+                onSelectProject={selectProject}
+                onChangeProvider={handleChangeProvider}
                 onChangeScope={setSessionScope}
                 onToggleWorktrees={setIncludeWorktrees}
                 onToggleMessagePane={toggleMessagePane}
