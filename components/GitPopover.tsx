@@ -1,10 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { parsePatch } from 'diff'
 import type { StructuredPatch } from 'diff'
-import { ChevronDown, ChevronRight, Clock3, FileText, Folder, FolderOpen, GitBranch, Info, ListTree, RefreshCw, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Clock3, FileText, Folder, FolderOpen, GitBranch, Info, ListTree, Maximize2, PanelLeftClose, PanelLeftOpen, RefreshCw, X } from 'lucide-react'
 import type { GitData, GitStatusEntry } from '@/lib/gitProvider'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -15,6 +15,13 @@ type TreeNode =
 
 type PaneId = 1 | 2 | 3 | 4
 type DiffViewMode = 'rich' | 'plain'
+type LeftPaneMode = 'normal' | 'expanded' | 'hidden'
+
+const LEFT_PANE_MIN_WIDTH = 280
+const LEFT_PANE_DEFAULT_WIDTH = 440
+const LEFT_PANE_EXPANDED_WIDTH = 680
+const LEFT_PANE_MAX_WIDTH_RATIO = 0.58
+const LEFT_PANE_RESIZE_STEP = 36
 
 // ─── Tree helpers ─────────────────────────────────────────────────────────────
 
@@ -199,11 +206,14 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
   const [commitIndex, setCommitIndex] = useState(0)
   const [rightContent, setRightContent] = useState('')
   const [diffViewMode, setDiffViewMode] = useState<DiffViewMode>('rich')
+  const [leftPaneMode, setLeftPaneMode] = useState<LeftPaneMode>('normal')
+  const [leftPaneWidth, setLeftPaneWidth] = useState(LEFT_PANE_DEFAULT_WIDTH)
   const [contentLoading, setContentLoading] = useState(false)
   const [hoveredRow, setHoveredRow] = useState<string | null>(null)
 
   const rightContentRequestRef = useRef(0)
   const rightContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const shellRef = useRef<HTMLDivElement>(null)
   const rightPanelRef = useRef<HTMLDivElement>(null)
   const treeListRef = useRef<HTMLDivElement>(null)
   const branchListRef = useRef<HTMLDivElement>(null)
@@ -232,6 +242,8 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
   }, [visibleNodes, treeCursor])
   const richDiffPatches = useMemo(() => parseDiffPatches(rightContent), [rightContent])
   const richDiffAvailable = pane === 2 && richDiffPatches.length > 0
+  const leftPaneHidden = leftPaneMode === 'hidden'
+  const leftPaneExpanded = leftPaneMode === 'expanded'
 
   // Fetch git data when popover opens
   useEffect(() => {
@@ -312,12 +324,23 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
 
       if (e.key === 'Tab') {
         e.preventDefault()
-        setFocusSide((s) => (s === 'left' ? 'right' : 'left'))
+        setFocusSide((s) => (leftPaneHidden || s === 'left' ? 'right' : 'left'))
         return
       }
 
       if (e.key >= '1' && e.key <= '4') {
         setPane(parseInt(e.key, 10) as PaneId)
+        return
+      }
+
+      if (e.key === '[' || e.key === ']') {
+        e.preventDefault()
+        if (leftPaneHidden) setLeftPaneMode('normal')
+        setLeftPaneWidth((current) => {
+          const nextWidth = clampLeftPaneWidth(current + (e.key === ']' ? LEFT_PANE_RESIZE_STEP : -LEFT_PANE_RESIZE_STEP))
+          setLeftPaneMode(nextWidth >= LEFT_PANE_EXPANDED_WIDTH - 24 ? 'expanded' : 'normal')
+          return nextWidth
+        })
         return
       }
 
@@ -398,7 +421,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
         return
       }
     },
-    [cwd, data, expandedDirs, focusSide, onClose, pane, treeCursor, visibleNodes],
+    [cwd, data, expandedDirs, focusSide, leftPaneHidden, onClose, pane, treeCursor, visibleNodes],
   )
 
   useEffect(() => {
@@ -406,6 +429,10 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
   }, [open, handleKey])
+
+  useEffect(() => {
+    if (leftPaneHidden && focusSide === 'left') setFocusSide('right')
+  }, [focusSide, leftPaneHidden])
 
   if (!open) return null
 
@@ -433,6 +460,48 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
     return 'transparent'
   }
 
+  function clampLeftPaneWidth(width: number): number {
+    const shellWidth = shellRef.current?.getBoundingClientRect().width ?? window.innerWidth
+    const maxWidth = Math.max(
+      LEFT_PANE_MIN_WIDTH,
+      Math.min(LEFT_PANE_EXPANDED_WIDTH, Math.floor(shellWidth * LEFT_PANE_MAX_WIDTH_RATIO)),
+    )
+    return Math.max(LEFT_PANE_MIN_WIDTH, Math.min(width, maxWidth))
+  }
+
+  function setPresetLeftPaneWidth(mode: Exclude<LeftPaneMode, 'hidden'>) {
+    setLeftPaneMode(mode)
+    setLeftPaneWidth(clampLeftPaneWidth(mode === 'expanded' ? LEFT_PANE_EXPANDED_WIDTH : LEFT_PANE_DEFAULT_WIDTH))
+  }
+
+  function startLeftPaneResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = leftPaneWidth
+    const previousUserSelect = document.body.style.userSelect
+    const previousCursor = document.body.style.cursor
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      const nextWidth = clampLeftPaneWidth(startWidth + moveEvent.clientX - startX)
+      setLeftPaneWidth(nextWidth)
+      setLeftPaneMode(nextWidth >= LEFT_PANE_EXPANDED_WIDTH - 24 ? 'expanded' : 'normal')
+    }
+
+    function handlePointerUp() {
+      document.body.style.userSelect = previousUserSelect
+      document.body.style.cursor = previousCursor
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+      window.removeEventListener('pointercancel', handlePointerUp)
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    window.addEventListener('pointercancel', handlePointerUp)
+  }
+
   return (
     <div
       onClick={onClose}
@@ -448,6 +517,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
       }}
     >
       <div
+        ref={shellRef}
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(1680px, calc(100vw - 16px))',
@@ -636,24 +706,110 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
             </button>
           ))}
           <span style={{ flex: 1 }} />
+          {leftPaneHidden ? (
+            <button
+              onClick={() => {
+                setPresetLeftPaneWidth('normal')
+                setFocusSide('left')
+              }}
+              title="Show file pane"
+              style={{
+                height: 34,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 7,
+                padding: '0 11px',
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'var(--surface)',
+                color: 'var(--text-2)',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              <PanelLeftOpen size={15} />
+              Show Files
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => setPresetLeftPaneWidth(leftPaneExpanded ? 'normal' : 'expanded')}
+                title={leftPaneExpanded ? 'Restore file pane width' : 'Expand file pane'}
+                style={{
+                  height: 34,
+                  width: 34,
+                  borderRadius: 8,
+                  border: `1px solid ${leftPaneExpanded ? 'color-mix(in srgb, var(--cyan) 42%, var(--border))' : 'var(--border)'}`,
+                  background: leftPaneExpanded ? 'color-mix(in srgb, var(--cyan) 13%, var(--surface-2))' : 'var(--surface)',
+                  color: leftPaneExpanded ? 'var(--cyan)' : 'var(--text-2)',
+                  display: 'grid',
+                  placeItems: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                <Maximize2 size={15} />
+              </button>
+              <button
+                onClick={() => setLeftPaneMode('hidden')}
+                title="Hide file pane"
+                style={{
+                  height: 34,
+                  width: 34,
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  color: 'var(--text-2)',
+                  display: 'grid',
+                  placeItems: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                <PanelLeftClose size={15} />
+              </button>
+            </>
+          )}
           <span style={{ color: 'var(--text-3)', fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>
             Ctrl+G opens · Esc closes
           </span>
         </div>
 
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-          <div
-            style={{
-              width: 'min(440px, 34vw)',
-              flexShrink: 0,
-              borderRight: '1px solid var(--border)',
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden',
-              background: 'var(--surface)',
-            }}
-          >
+          {!leftPaneHidden && (
             <div
+              style={{
+                width: leftPaneWidth,
+                flexShrink: 0,
+                borderRight: '1px solid var(--border)',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+                background: 'var(--surface)',
+                position: 'relative',
+                transition: 'width 0.08s ease',
+              }}
+            >
+              <button
+                type="button"
+                aria-label="Resize file pane"
+                title="Drag to resize file pane"
+                onPointerDown={startLeftPaneResize}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  right: -4,
+                  bottom: 0,
+                  width: 8,
+                  zIndex: 3,
+                  border: 'none',
+                  padding: 0,
+                  background: 'transparent',
+                  cursor: 'col-resize',
+                }}
+              />
+              <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -845,7 +1001,8 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                 })}
               </div>
             )}
-          </div>
+            </div>
+          )}
 
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
             <div
@@ -866,8 +1023,8 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                 </div>
                 <div style={{ marginTop: 2, color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>
                   {focusSide === 'right'
-                    ? 'j/k scroll · d/u page · tab focus list'
-                    : 'click rows to inspect · arrows and j/k also work'}
+                    ? 'j/k scroll · d/u page · [/] resize files · tab focus list'
+                    : 'click rows to inspect · [/] resize files · arrows and j/k also work'}
                 </div>
               </div>
               {pane === 2 && selectedNode?.kind === 'file' ? (
