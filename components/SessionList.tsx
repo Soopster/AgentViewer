@@ -1231,13 +1231,9 @@ export default function SessionList({
                           flex: 1,
                           height: 32,
                           borderRadius: 8,
-                          border: `1px solid ${sortMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                          background: sortMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                          color: sortMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
                           fontFamily: "'IBM Plex Mono', monospace",
                           fontSize: 11,
                           letterSpacing: '0.06em',
-                          cursor: 'pointer',
                         }}
                       >
                         BY PROJECT
@@ -1251,13 +1247,9 @@ export default function SessionList({
                           flex: 1,
                           height: 32,
                           borderRadius: 8,
-                          border: `1px solid ${sortMode === 'time' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                          background: sortMode === 'time' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                          color: sortMode === 'time' ? 'var(--violet)' : 'var(--text-3)',
                           fontFamily: "'IBM Plex Mono', monospace",
                           fontSize: 11,
                           letterSpacing: '0.06em',
-                          cursor: 'pointer',
                         }}
                       >
                         BY TIME
@@ -1273,13 +1265,9 @@ export default function SessionList({
                           flex: 1,
                           height: 32,
                           borderRadius: 8,
-                          border: `1px solid ${scopeMode === 'all' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                          background: scopeMode === 'all' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                          color: scopeMode === 'all' ? 'var(--violet)' : 'var(--text-3)',
                           fontFamily: "'IBM Plex Mono', monospace",
                           fontSize: 11,
                           letterSpacing: '0.06em',
-                          cursor: 'pointer',
                         }}
                       >
                         ALL PROJECTS
@@ -1295,13 +1283,9 @@ export default function SessionList({
                           flex: 1,
                           height: 32,
                           borderRadius: 8,
-                          border: `1px solid ${scopeMode === 'project' ? 'rgba(139,128,240,0.32)' : 'var(--border)'}`,
-                          background: scopeMode === 'project' ? 'rgba(139,128,240,0.12)' : 'var(--surface-2)',
-                          color: scopeMode === 'project' ? 'var(--violet)' : 'var(--text-3)',
                           fontFamily: "'IBM Plex Mono', monospace",
                           fontSize: 11,
                           letterSpacing: '0.06em',
-                          cursor: canScopeToProject ? 'pointer' : 'not-allowed',
                           opacity: canScopeToProject ? 1 : 0.45,
                         }}
                       >

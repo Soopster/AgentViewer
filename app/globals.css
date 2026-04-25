@@ -857,13 +857,22 @@ body {
 }
 
 /* ── Segment control buttons (sort/scope toggles) ───────────────────────── */
+/* Colors live here so CSS :hover can override them without fighting inline styles */
 .av-control-btn {
-  transition: background 0.1s, color 0.1s, border-color 0.1s !important;
+  background: var(--surface-2);
+  color: var(--text-3);
+  border-color: var(--border);
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.av-control-btn.av-active {
+  background: rgba(139, 128, 240, 0.12);
+  color: var(--violet);
+  border-color: rgba(139, 128, 240, 0.32);
 }
 .av-control-btn:not(.av-active):not([disabled]):hover {
-  background: var(--surface-3) !important;
-  color: var(--text-2) !important;
-  border-color: var(--border-2) !important;
+  background: var(--surface-3);
+  color: var(--text-2);
+  border-color: var(--border-2);
 }
 
 /* ── View Transitions ───────────────────────────────────────────────────── */
