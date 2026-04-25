@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Bot, FolderOpen, Layers3, PanelLeftOpen, PanelRightOpen, Search, SlidersHorizontal } from 'lucide-react'
+import { Bot, FolderOpen, GitBranch, Layers3, PanelLeftOpen, PanelRightOpen, Search, SlidersHorizontal } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -26,12 +26,14 @@ type CommandPaletteProps = {
   scopeProjectName: string | null
   includeWorktrees: boolean
   messagePaneCollapsed: boolean
+  canOpenGit: boolean
   onSelectSession: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onChangeProvider: (provider: ProviderSelection) => void
   onChangeScope: (mode: 'all' | 'project') => void
   onToggleWorktrees: (include: boolean) => void
   onToggleMessagePane: () => void
+  onOpenGit: () => void
 }
 
 type PaletteItem = {
@@ -186,12 +188,14 @@ export default function CommandPalette({
   scopeProjectName,
   includeWorktrees,
   messagePaneCollapsed,
+  canOpenGit,
   onSelectSession,
   onSelectProject,
   onChangeProvider,
   onChangeScope,
   onToggleWorktrees,
   onToggleMessagePane,
+  onOpenGit,
 }: CommandPaletteProps) {
   const { state: sidebarState, toggleSidebar } = useSidebar()
   const [query, setQuery] = useState('')
@@ -259,6 +263,17 @@ export default function CommandPalette({
         run: onToggleMessagePane,
       },
       {
+        id: 'open-git',
+        label: 'Open Git status',
+        description: canOpenGit ? 'Show working tree, branches, and commits for the active project' : 'Select a session or project first',
+        icon: <GitBranch size={16} />,
+        shortcut: 'Ctrl G',
+        group: 'actions',
+        keywords: ['git', 'status', 'diff', 'branch', 'commit', 'working tree'],
+        score: 0,
+        run: onOpenGit,
+      },
+      {
         id: 'scope-all',
         label: 'Show all projects',
         description: 'Clear the project scope filter',
@@ -311,7 +326,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [includeWorktrees, messagePaneCollapsed, onChangeProvider, onChangeScope, onToggleMessagePane, onToggleWorktrees, provider, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenGit, includeWorktrees, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onToggleMessagePane, onToggleWorktrees, provider, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

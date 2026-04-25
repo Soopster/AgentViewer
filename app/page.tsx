@@ -11,6 +11,7 @@ import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
+const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
 type ProjectSelection = {
@@ -132,6 +133,7 @@ export default function Home() {
   const [sessionScope, setSessionScope] = useState<SessionScopeMode>('all')
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
   // Tracks how many messages we've already loaded so polling can fetch only new ones
   const msgCountRef = useRef(0)
   const projectMessageCountsRef = useRef<Map<string, number>>(new Map())
@@ -153,6 +155,11 @@ export default function Home() {
       return next
     })
   }, [])
+
+  const openGitPopover = useCallback(() => {
+    if (!activeProjectDir) return
+    setGitPopoverOpen(true)
+  }, [activeProjectDir])
 
   const fetchProjectSessions = useCallback(async (dir: string, selection: ProviderSelection) => {
     const params = new URLSearchParams()
@@ -252,6 +259,18 @@ export default function Home() {
       })
     return () => { cancelled = true }
   }, [fetchProvider, loadSessionsForProvider])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+      if (event.key.toLowerCase() !== 'g') return
+      if (!activeProjectDir) return
+      event.preventDefault()
+      setGitPopoverOpen(true)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeProjectDir])
 
   // Poll sessions list silently every 5 s
   useEffect(() => {
@@ -542,6 +561,8 @@ export default function Home() {
             onChangeScope={setSessionScope}
             onToggleWorktrees={setIncludeWorktrees}
             onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+            canOpenGit={!!activeProjectDir}
+            onOpenGit={openGitPopover}
           />
         </Sidebar>
         {messagePaneCollapsed ? (
@@ -624,16 +645,25 @@ export default function Home() {
                 scopeProjectName={activeProjectName}
                 includeWorktrees={includeWorktrees}
                 messagePaneCollapsed={messagePaneCollapsed}
+                canOpenGit={!!activeProjectDir}
                 onSelectSession={selectSession}
                 onSelectProject={selectProject}
                 onChangeProvider={handleChangeProvider}
                 onChangeScope={setSessionScope}
                 onToggleWorktrees={setIncludeWorktrees}
                 onToggleMessagePane={toggleMessagePane}
+                onOpenGit={openGitPopover}
               />
             </div>
           </SidebarInset>
         )}
+        {activeProjectDir ? (
+          <GitPopover
+            open={gitPopoverOpen}
+            onClose={() => setGitPopoverOpen(false)}
+            cwd={activeProjectDir}
+          />
+        ) : null}
       </div>
     </SidebarProvider>
     </CodeThemeProvider>

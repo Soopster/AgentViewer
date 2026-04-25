@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils'
 import {
   BookOpen,
   Bot,
+  GitBranch,
   LayoutDashboard,
   ListTree,
   PanelLeftOpen,
@@ -89,6 +90,8 @@ type Props = {
   onChangeScope: (mode: 'all' | 'project') => void
   onToggleWorktrees: (include: boolean) => void
   onOpenCommandPalette: () => void
+  canOpenGit: boolean
+  onOpenGit: () => void
 }
 
 function timeAgo(value?: string | number): string {
@@ -636,6 +639,8 @@ export default function SessionList({
   onChangeScope,
   onToggleWorktrees,
   onOpenCommandPalette,
+  canOpenGit,
+  onOpenGit,
 }: Props) {
   const { state: sidebarState, width: sidebarWidth, setWidth: setSidebarWidth, applyWidth, setOpen } = useSidebar()
   const collapsed = sidebarState === 'collapsed'
@@ -1525,6 +1530,32 @@ export default function SessionList({
                   }}
                 >
                   ⌘K
+                </Button>
+                <Button
+                  onClick={onOpenGit}
+                  disabled={!canOpenGit}
+                  variant="outline"
+                  size="sm"
+                  title={canOpenGit ? 'Open git status' : 'Select a session or project to open git status'}
+                  style={{
+                    height: 24,
+                    padding: '0 8px',
+                    borderRadius: 6,
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface-2)',
+                    color: canOpenGit ? 'var(--text-3)' : 'var(--text-4, var(--text-3))',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    letterSpacing: '0.06em',
+                    cursor: canOpenGit ? 'pointer' : 'not-allowed',
+                    opacity: canOpenGit ? 1 : 0.45,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                  }}
+                >
+                  <GitBranch size={12} strokeWidth={2.2} />
+                  ^G
                 </Button>
                 <ThemeToggle />
               </div>

@@ -1,34 +1,13 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { execFile } from 'child_process'
 import { extname } from 'node:path'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
+import { fetchGitData, fetchGitPaneContent, type GitData, type GitStatusEntry } from '../../lib/gitProvider'
+import { runGitCommand } from '../../lib/gitNodeProvider'
 
 // ---------------------------------------------------------------------------
 // Git data types
-// ---------------------------------------------------------------------------
-
-type GitData = {
-  branch: string
-  upstream: string | null
-  ahead: number
-  behind: number
-  status: GitStatusEntry[]
-  unstaged: string
-  staged: string
-  branches: string[]
-  commits: string[]
-}
-
-type GitStatusEntry = {
-  x: string
-  y: string
-  path: string
-}
-
-// ---------------------------------------------------------------------------
-// File tree
 // ---------------------------------------------------------------------------
 
 type TreeNode =
@@ -142,69 +121,6 @@ type Props = {
   onKeyHandlerReady: (handler: (key: GitKeyEvent) => void) => void
 }
 
-function execGit(cwd: string, args: string[]): Promise<string> {
-  return new Promise((resolve) => {
-    execFile('git', args, {
-      cwd,
-      encoding: 'utf-8',
-      maxBuffer: 10 * 1024 * 1024,
-    }, (err, stdout) => {
-      if (!err) {
-        resolve(String(stdout).trimEnd())
-        return
-      }
-
-      // git diff exits with code 1 when differences exist — stdout is in the error.
-      if (typeof err === 'object' && err && 'stdout' in err) {
-        const out = (err as { stdout?: unknown }).stdout
-        if (!out) {
-          resolve('')
-          return
-        }
-        resolve(Buffer.isBuffer(out) ? out.toString('utf-8').trimEnd() : String(out).trimEnd())
-        return
-      }
-
-      resolve('')
-    })
-  })
-}
-
-async function fetchGitData(cwd: string): Promise<GitData> {
-  // Full working-tree diffs are deferred to the per-pane loader — on Windows,
-  // `git diff` on a large repo adds seconds to popover open.
-  const [branch, upstreamRaw, statusRaw, branchesRaw, commitsRaw] = await Promise.all([
-    execGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
-    execGit(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
-    execGit(cwd, ['status', '--porcelain', '-u']),
-    execGit(cwd, ['branch', '-a', '--format=%(refname:short)']),
-    execGit(cwd, ['log', '--oneline', '-30']),
-  ])
-  const unstaged = ''
-  const staged = ''
-
-  const upstream = upstreamRaw.startsWith('fatal') ? null : upstreamRaw || null
-  const aheadBehindRaw = upstream
-    ? await execGit(cwd, ['rev-list', '--left-right', '--count', `${upstream}...HEAD`])
-    : ''
-  const [behindStr, aheadStr] = aheadBehindRaw.split('\t')
-  const ahead = parseInt(aheadStr ?? '0', 10) || 0
-  const behind = parseInt(behindStr ?? '0', 10) || 0
-
-  const status: GitStatusEntry[] = statusRaw
-    ? statusRaw.split('\n').filter(Boolean).map((line) => ({
-        x: line[0] ?? ' ',
-        y: line[1] ?? ' ',
-        path: line.slice(3),
-      }))
-    : []
-
-  const branches = branchesRaw ? branchesRaw.split('\n').filter(Boolean) : []
-  const commits = commitsRaw ? commitsRaw.split('\n').filter(Boolean) : []
-
-  return { branch: branch || 'HEAD', upstream, ahead, behind, status, unstaged, staged, branches, commits }
-}
-
 export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerReady }: Props) {
   const repoCwd = cwd || process.cwd()
   const [data, setData] = useState<GitData | null>(null)
@@ -229,7 +145,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     let cancelled = false
     setLoading(true)
     setData(null)
-    void fetchGitData(repoCwd)
+    void fetchGitData(repoCwd, runGitCommand)
       .then((next) => {
         if (!cancelled) setData(next)
       })
@@ -346,57 +262,15 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     rightContentTimerRef.current = setTimeout(() => {
       const activeRequestId = rightContentRequestRef.current
       void (async () => {
-        let content = ''
-        switch (pane) {
-          case 0: {
-            const [unstaged, staged] = await Promise.all([
-              execGit(repoCwd, ['diff']),
-              execGit(repoCwd, ['diff', '--cached']),
-            ])
-            content = unstaged || (staged
-              ? '(no unstaged changes)\n\n' + staged
-              : '(working tree clean)')
-            break
-          }
-          case 1: {
-            const parts = [`Branch:   ${data.branch}`]
-            parts.push(data.upstream
-              ? `Upstream: ${data.upstream}  ↑${data.ahead}  ↓${data.behind}`
-              : 'No upstream configured')
-            content = parts.join('\n')
-            break
-          }
-          case 2: {
-            if (!selectedFilePath) {
-              content = data.status.length === 0 ? '(working tree clean)' : '(select a file)'
-              break
-            }
-            const entry = data.status.find((e) => e.path === selectedFilePath)
-            const isUntracked = entry?.x === '?' && entry?.y === '?'
-            if (isUntracked) {
-              content = await execGit(repoCwd, ['diff', '--no-index', '/dev/null', selectedFilePath]) || '(empty file)'
-            } else {
-              content = await execGit(repoCwd, ['diff', 'HEAD', '--', selectedFilePath])
-                || await execGit(repoCwd, ['diff', '--cached', '--', selectedFilePath])
-                || '(no changes)'
-            }
-            break
-          }
-          case 3: {
-            const b = data.branches[branchIndex]
-            content = b ? (await execGit(repoCwd, ['log', '--oneline', '-20', b]) || b) : '(no branches)'
-            break
-          }
-          case 4: {
-            const commit = data.commits[commitIndex]
-            if (!commit) { content = '(no commits)'; break }
-            const hash = commit.split(' ')[0]
-            content = hash ? await execGit(repoCwd, ['show', '--stat', hash]) : commit
-            break
-          }
-          default:
-            content = ''
-        }
+        const content = await fetchGitPaneContent({
+          cwd: repoCwd,
+          runGit: runGitCommand,
+          data,
+          pane,
+          selectedFilePath,
+          branchIndex,
+          commitIndex,
+        })
 
         if (rightContentRequestRef.current !== activeRequestId) return
         setRightContent(content)
@@ -501,7 +375,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     if (key.name === 'u') { diffScrollRef.current?.scrollBy(-10); return }
     if (key.name === 'r') {
       setLoading(true)
-      void fetchGitData(repoCwd)
+      void fetchGitData(repoCwd, runGitCommand)
         .then((next) => setData(next))
         .finally(() => setLoading(false))
       return
