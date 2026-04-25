@@ -1,7 +1,10 @@
 import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
-  experimental: { viewTransition: true },
+  experimental: {
+    viewTransition: true,
+    optimizePackageImports: ['lucide-react', 'recharts'],
+  },
   devIndicators: false,
   // Keep the Agent SDK as a server-side external — it uses Node.js APIs
   // (filesystem, process spawning) that can't be bundled for the browser

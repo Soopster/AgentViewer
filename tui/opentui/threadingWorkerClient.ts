@@ -1,6 +1,11 @@
 import type { ThreadedMessage } from '../../lib/threading'
 import type { Session, SessionMessage } from '../../lib/types'
 
+type ThreadingClientCache = {
+  messages: SessionMessage[]
+  threadedMessages: ThreadedMessage[]
+}
+
 type Pending = {
   resolve: (threadedMessages: ThreadedMessage[]) => void
   reject: (error: Error) => void
@@ -13,6 +18,30 @@ type WorkerResponse =
 let worker: Worker | null = null
 let requestCounter = 0
 const pending = new Map<number, Pending>()
+const THREADING_CACHE_LIMIT = 8
+const threadingCacheByKey = new Map<string, ThreadingClientCache>()
+
+function threadingCacheKey(session: Session): string {
+  return `${session.provider ?? 'claude'}:${session.sessionId}`
+}
+
+function touchThreadingCache(key: string, cache: ThreadingClientCache): void {
+  if (threadingCacheByKey.has(key)) threadingCacheByKey.delete(key)
+  threadingCacheByKey.set(key, cache)
+  while (threadingCacheByKey.size > THREADING_CACHE_LIMIT) {
+    const oldestKey = threadingCacheByKey.keys().next().value
+    if (oldestKey === undefined) break
+    threadingCacheByKey.delete(oldestKey)
+  }
+}
+
+function sameMessageSequence(messages: SessionMessage[], prevMessages: SessionMessage[]): boolean {
+  if (messages.length !== prevMessages.length) return false
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i]?.uuid !== prevMessages[i]?.uuid) return false
+  }
+  return true
+}
 
 function ensureWorker(): Worker {
   if (worker) return worker
@@ -41,10 +70,23 @@ function ensureWorker(): Worker {
 }
 
 export function buildThreadedMessagesAsync(session: Session, messages: SessionMessage[]): Promise<ThreadedMessage[]> {
+  const key = threadingCacheKey(session)
+  const cached = threadingCacheByKey.get(key)
+  if (cached && sameMessageSequence(messages, cached.messages)) {
+    touchThreadingCache(key, cached)
+    return Promise.resolve(cached.threadedMessages)
+  }
+
   const id = ++requestCounter
   const w = ensureWorker()
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject })
+    pending.set(id, {
+      resolve: (threadedMessages) => {
+        touchThreadingCache(key, { messages, threadedMessages })
+        resolve(threadedMessages)
+      },
+      reject,
+    })
     w.postMessage({ id, session, messages })
   })
 }

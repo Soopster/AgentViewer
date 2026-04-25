@@ -3020,8 +3020,9 @@ function densityConfig(d: MessageDensity): DensityConfig {
 const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanced'))
 
 export function MessageDensityProvider({ density, children }: { density: MessageDensity; children: React.ReactNode }) {
+  const value = useMemo(() => densityConfig(density), [density])
   return (
-    <MessageDensityContext.Provider value={densityConfig(density)}>
+    <MessageDensityContext.Provider value={value}>
       {children}
     </MessageDensityContext.Provider>
   )

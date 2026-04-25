@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
+import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
 import type {
   SessionMessage,
   Session,
@@ -952,7 +952,7 @@ function estimateTimelineRowHeight(row: TimelineRow): number {
   return Math.max(estimated, message.role === 'system' ? 120 : ESTIMATED_TIMELINE_ROW_HEIGHT)
 }
 
-function TimelineMessageRow({
+const TimelineMessageRow = memo(function TimelineMessageRow({
   row,
   onForkFromMessage,
   onToggleResume,
@@ -1062,20 +1062,22 @@ function TimelineMessageRow({
       <MessageItem message={row.message} showSession={row.showSession} />
     </div>
   )
-}
+})
 
-function VirtualTimelineRow({
+const VirtualTimelineRow = memo(function VirtualTimelineRow({
   row,
   top,
+  isLast,
   onMeasure,
-  onRowRef,
+  onLastRowRef,
   onForkFromMessage,
   onToggleResume,
 }: {
   row: TimelineRow
   top: number
+  isLast: boolean
   onMeasure: (key: string, height: number) => void
-  onRowRef?: (node: HTMLDivElement | null) => void
+  onLastRowRef: (node: HTMLDivElement | null) => void
   onForkFromMessage: (messageId: string) => void
   onToggleResume: (messageId: string) => void
 }) {
@@ -1094,9 +1096,10 @@ function VirtualTimelineRow({
   }, [onMeasure, row.key])
 
   useEffect(() => {
-    onRowRef?.(rowRef.current)
-    return () => onRowRef?.(null)
-  }, [onRowRef, row.key])
+    if (!isLast) return
+    onLastRowRef(rowRef.current)
+    return () => onLastRowRef(null)
+  }, [isLast, onLastRowRef, row.key])
 
   return (
     <div
@@ -1112,7 +1115,7 @@ function VirtualTimelineRow({
       <TimelineMessageRow row={row} onForkFromMessage={onForkFromMessage} onToggleResume={onToggleResume} />
     </div>
   )
-}
+})
 
 export default function MessageView({ messages, loading, session, projectView, onFork, onDelete, openTabs, selectedTabId, onSelectTab, onCloseTab }: Props) {
   const [inputText, setInputText] = useState('')
@@ -2063,6 +2066,10 @@ export default function MessageView({ messages, loading, session, projectView, o
     }
     if (changed) setRowMeasurementVersion((version) => version + 1)
   }, [timelineRows])
+
+  const setLastTimelineRow = useCallback((node: HTMLDivElement | null) => {
+    lastTimelineRowRef.current = node
+  }, [])
 
   const handleTimelineRowMeasure = useCallback((key: string, height: number) => {
     const nextHeight = Math.max(1, Math.ceil(height))
@@ -3015,17 +3022,21 @@ export default function MessageView({ messages, loading, session, projectView, o
               style={{ position: 'relative', minHeight: virtualTimeline.totalHeight, height: virtualTimeline.totalHeight }}
             >
               <MessageDensityProvider density={density}>
-                {virtualTimeline.visibleRows.map(({ row, top }) => (
-                  <VirtualTimelineRow
-                    key={row.key}
-                    row={row}
-                    top={top}
-                    onMeasure={handleTimelineRowMeasure}
-                    onRowRef={row.key === timelineRows.at(-1)?.key ? (node) => { lastTimelineRowRef.current = node } : undefined}
-                    onForkFromMessage={handleForkFromMessage}
-                    onToggleResume={toggleResumeFromMessage}
-                  />
-                ))}
+                {(() => {
+                  const lastRowKey = timelineRows.at(-1)?.key
+                  return virtualTimeline.visibleRows.map(({ row, top }) => (
+                    <VirtualTimelineRow
+                      key={row.key}
+                      row={row}
+                      top={top}
+                      isLast={row.key === lastRowKey}
+                      onMeasure={handleTimelineRowMeasure}
+                      onLastRowRef={setLastTimelineRow}
+                      onForkFromMessage={handleForkFromMessage}
+                      onToggleResume={toggleResumeFromMessage}
+                    />
+                  ))
+                })()}
               </MessageDensityProvider>
             </div>
           </div>

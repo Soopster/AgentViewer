@@ -163,10 +163,21 @@ export async function readTuiSessions(provider: ProviderSelection): Promise<Sess
   })
 }
 
+const THREADING_CACHE_LIMIT = 8
 const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
 
 function threadingCacheKey(session: Session): string {
   return `${session.provider ?? 'claude'}:${session.sessionId}`
+}
+
+function touchThreadingCache(key: string, cache: IncrementalThreadingCache): void {
+  if (threadingCacheByKey.has(key)) threadingCacheByKey.delete(key)
+  threadingCacheByKey.set(key, cache)
+  while (threadingCacheByKey.size > THREADING_CACHE_LIMIT) {
+    const oldestKey = threadingCacheByKey.keys().next().value
+    if (oldestKey === undefined) break
+    threadingCacheByKey.delete(oldestKey)
+  }
 }
 
 function threadMessages(session: Session, messages: SessionMessage[]): ThreadedMessage[] {
@@ -174,9 +185,9 @@ function threadMessages(session: Session, messages: SessionMessage[]): ThreadedM
   const cached = threadingCacheByKey.get(key)
   let threaded: ThreadedMessage[] | null = null
   if (cached) threaded = buildThreadedMessagesIncremental(messages, cached)
-  if (!threaded) threaded = buildThreadedMessages(messages)
-  threadingCacheByKey.set(key, { messages, threaded })
-  return threaded
+  const nextThreaded = threaded ?? buildThreadedMessages(messages)
+  touchThreadingCache(key, { messages, threaded: nextThreaded })
+  return nextThreaded
 }
 
 export async function readTuiSessionDetailSource(session: Session): Promise<{
