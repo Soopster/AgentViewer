@@ -27,7 +27,7 @@ import { NativeSelect, NativeSelectOption, nativeSelectBaseClassName } from '@/c
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import MessageItem from './MessageItem'
+import MessageItem, { MessageDensityProvider, type MessageDensity } from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
 import AnalyticsPopover from './AnalyticsPopover'
 
@@ -1142,6 +1142,16 @@ export default function MessageView({ messages, loading, session, projectView, o
     if (typeof window === 'undefined') return
     window.localStorage.setItem('agentViewer:showTools', showTools ? 'true' : 'false')
   }, [showTools])
+  const [density, setDensity] = useState<MessageDensity>(() => {
+    if (typeof window === 'undefined') return 'balanced'
+    const stored = window.localStorage.getItem('agentViewer:density')
+    return (stored === 'comfortable' || stored === 'dense') ? stored : 'balanced'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('agentViewer:density', density)
+    rowHeightsRef.current.clear()
+  }, [density])
   const [composerCollapsed, setComposerCollapsed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem('agentViewer:composerCollapsed') === 'true'
@@ -2805,6 +2815,28 @@ export default function MessageView({ messages, loading, session, projectView, o
           {showTools ? 'TOOLS ON' : 'TOOLS OFF'}
         </Button>
 
+        <Button
+          onClick={() => setDensity((d) => d === 'comfortable' ? 'balanced' : d === 'balanced' ? 'dense' : 'comfortable')}
+          title={`Density: ${density} — click to cycle`}
+          variant="outline"
+          size="sm"
+          style={{
+            flexShrink: 0,
+            height: 26,
+            padding: '0 10px',
+            background: density === 'comfortable' ? 'rgba(56,217,245,0.08)' : density === 'dense' ? 'rgba(251,191,36,0.08)' : 'rgba(56,217,245,0.04)',
+            border: density === 'comfortable' ? '1px solid rgba(56,217,245,0.28)' : density === 'dense' ? '1px solid rgba(251,191,36,0.28)' : '1px solid rgba(56,217,245,0.16)',
+            borderRadius: 5,
+            cursor: 'pointer',
+            color: density === 'comfortable' ? 'var(--cyan)' : density === 'dense' ? 'var(--amber)' : 'var(--text-3)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            letterSpacing: '0.08em',
+          }}
+        >
+          {density === 'comfortable' ? 'COMFY' : density === 'dense' ? 'DENSE' : 'BALANCED'}
+        </Button>
+
         {/* Live pill */}
         <div
           style={{
@@ -2954,17 +2986,19 @@ export default function MessageView({ messages, loading, session, projectView, o
               ref={timelineContentRef}
               style={{ position: 'relative', minHeight: virtualTimeline.totalHeight, height: virtualTimeline.totalHeight }}
             >
-              {virtualTimeline.visibleRows.map(({ row, top }) => (
-                <VirtualTimelineRow
-                  key={row.key}
-                  row={row}
-                  top={top}
-                  onMeasure={handleTimelineRowMeasure}
-                  onRowRef={row.key === timelineRows.at(-1)?.key ? (node) => { lastTimelineRowRef.current = node } : undefined}
-                  onForkFromMessage={handleForkFromMessage}
-                  onToggleResume={toggleResumeFromMessage}
-                />
-              ))}
+              <MessageDensityProvider density={density}>
+                {virtualTimeline.visibleRows.map(({ row, top }) => (
+                  <VirtualTimelineRow
+                    key={row.key}
+                    row={row}
+                    top={top}
+                    onMeasure={handleTimelineRowMeasure}
+                    onRowRef={row.key === timelineRows.at(-1)?.key ? (node) => { lastTimelineRowRef.current = node } : undefined}
+                    onForkFromMessage={handleForkFromMessage}
+                    onToggleResume={toggleResumeFromMessage}
+                  />
+                ))}
+              </MessageDensityProvider>
             </div>
           </div>
         )}

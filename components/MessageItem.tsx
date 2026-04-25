@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState, createContext, useContext } from 'react'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -3005,8 +3005,31 @@ const ROLE_STYLE = {
   system:    { dot: 'var(--yellow)', glow: 'rgba(251,191,36,0.18)', label: 'SYSTEM', labelColor: 'var(--yellow)' },
 } as const
 
+export type MessageDensity = 'comfortable' | 'balanced' | 'dense'
+
+type DensityConfig = { msgGap: number; blockGap: number; labelGap: number; dotGap: number }
+
+function densityConfig(d: MessageDensity): DensityConfig {
+  switch (d) {
+    case 'comfortable': return { msgGap: 52, blockGap: 12, labelGap: 12, dotGap: 22 }
+    case 'dense':       return { msgGap: 12, blockGap: 5,  labelGap: 6,  dotGap: 14 }
+    default:            return { msgGap: 36, blockGap: 8,  labelGap: 10, dotGap: 18 }
+  }
+}
+
+const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanced'))
+
+export function MessageDensityProvider({ density, children }: { density: MessageDensity; children: React.ReactNode }) {
+  return (
+    <MessageDensityContext.Provider value={densityConfig(density)}>
+      {children}
+    </MessageDensityContext.Provider>
+  )
+}
+
 function MessageItemInner({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {
   const [hydrated, setHydrated] = useState(false)
+  const dc = useContext(MessageDensityContext)
   const style = ROLE_STYLE[message.role]
   const roleLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
@@ -3017,7 +3040,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   }, [])
 
   return (
-    <div className={`msg msg--${message.role}`} style={{ display: 'flex', gap: 18, marginBottom: 36 }}>
+    <div className={`msg msg--${message.role}`} style={{ display: 'flex', gap: dc.dotGap, marginBottom: dc.msgGap }}>
       {/* Left column: dot */}
       <div className="msg-dot" style={{ width: 20, flexShrink: 0, paddingTop: 3 }}>
         <div
@@ -3035,7 +3058,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
       {/* Right column */}
       <div className="msg-body" style={{ flex: 1, minWidth: 0 }}>
         {/* Label row */}
-        <div className="msg-label" style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
+        <div className="msg-label" style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: dc.labelGap }}>
           <span
             style={{
               fontFamily: "'Oxanium', monospace",
@@ -3149,7 +3172,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
         </div>
 
         {/* Content blocks */}
-        <div className="msg-blocks" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="msg-blocks" style={{ display: 'flex', flexDirection: 'column', gap: dc.blockGap }}>
           {message.blocks.map((block, i) => renderBlock(block, i))}
         </div>
       </div>
