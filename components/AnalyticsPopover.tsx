@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts'
 import type { Analytics, AnalyticsInput, FileOps, TimelinePoint } from '@/lib/analytics'
 import { computeAnalytics, fmtCost, fmtDuration, fmtNum } from '@/lib/analytics'
@@ -310,10 +310,11 @@ function Sparkline({
   height: number
   colors: string[]
 }) {
+  const reactId = useId()
   if (values.length === 0) return <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no data)</div>
   const data = values.map((v, i) => ({ index: i, value: v }))
   const primaryColor = colors[0] ?? 'var(--cyan, #5eead4)'
-  const gradientId = `gradient-${Math.random().toString(36).substr(2, 9)}`
+  const gradientId = `gradient-${reactId.replace(/:/g, '_')}`
 
   return (
     <ResponsiveContainer width="100%" height={height}>

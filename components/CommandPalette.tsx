@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Bot, FolderOpen, GitBranch, Layers3, PanelLeftOpen, PanelRightOpen, Search, SlidersHorizontal } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
@@ -206,7 +206,8 @@ export default function CommandPalette({
   const activeIdRef = useRef<string | null>(null)
   const lastKeyboardMoveAtRef = useRef(0)
   const theme = useSyncExternalStore(subscribeTheme, getCurrentTheme, () => 'dark')
-  const normalizedQuery = query.trim().toLowerCase()
+  const deferredQuery = useDeferredValue(query)
+  const normalizedQuery = deferredQuery.trim().toLowerCase()
 
   useEffect(() => {
     if (!open) return

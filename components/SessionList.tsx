@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useState, useRef, useCallback, useEffect, useMemo, ViewTransition } from 'react'
+import { memo, useState, useRef, useCallback, useDeferredValue, useEffect, useMemo, ViewTransition } from 'react'
 import { normalizeProjectPath, pathBasename, pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
@@ -735,7 +735,8 @@ export default function SessionList({
     if (typeof window === 'undefined') return
     window.localStorage.setItem('agentViewer:sessionSort', sortMode)
   }, [sortMode])
-  const normalizedSearch = searchText.trim().toLowerCase()
+  const deferredSearchText = useDeferredValue(searchText)
+  const normalizedSearch = deferredSearchText.trim().toLowerCase()
   const indexedSessions = useMemo(() => sessions.map(indexSession), [sessions])
   const filteredSessions = useMemo(
     () => indexedSessions.filter((session) => matchesIndexedSessionSearch(session, normalizedSearch, activeTag)),
