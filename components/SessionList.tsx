@@ -1226,20 +1226,7 @@ export default function SessionList({
                         onClick={() => setSortMode('project')}
                         variant="outline"
                         size="sm"
-                        onMouseEnter={(e) => {
-                          if (sortMode !== 'project') {
-                            e.currentTarget.style.background = 'var(--surface-3)'
-                            e.currentTarget.style.color = 'var(--text-2)'
-                            e.currentTarget.style.borderColor = 'var(--border-2)'
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (sortMode !== 'project') {
-                            e.currentTarget.style.background = 'var(--surface-2)'
-                            e.currentTarget.style.color = 'var(--text-3)'
-                            e.currentTarget.style.borderColor = 'var(--border)'
-                          }
-                        }}
+                        className={sortMode === 'project' ? 'av-control-btn av-active' : 'av-control-btn'}
                         style={{
                           flex: 1,
                           height: 32,
@@ -1251,7 +1238,6 @@ export default function SessionList({
                           fontSize: 11,
                           letterSpacing: '0.06em',
                           cursor: 'pointer',
-                          transition: 'background 0.1s, color 0.1s, border-color 0.1s',
                         }}
                       >
                         BY PROJECT
@@ -1260,20 +1246,7 @@ export default function SessionList({
                         onClick={() => setSortMode('time')}
                         variant="outline"
                         size="sm"
-                        onMouseEnter={(e) => {
-                          if (sortMode !== 'time') {
-                            e.currentTarget.style.background = 'var(--surface-3)'
-                            e.currentTarget.style.color = 'var(--text-2)'
-                            e.currentTarget.style.borderColor = 'var(--border-2)'
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (sortMode !== 'time') {
-                            e.currentTarget.style.background = 'var(--surface-2)'
-                            e.currentTarget.style.color = 'var(--text-3)'
-                            e.currentTarget.style.borderColor = 'var(--border)'
-                          }
-                        }}
+                        className={sortMode === 'time' ? 'av-control-btn av-active' : 'av-control-btn'}
                         style={{
                           flex: 1,
                           height: 32,
@@ -1285,7 +1258,6 @@ export default function SessionList({
                           fontSize: 11,
                           letterSpacing: '0.06em',
                           cursor: 'pointer',
-                          transition: 'background 0.1s, color 0.1s, border-color 0.1s',
                         }}
                       >
                         BY TIME
@@ -1296,20 +1268,7 @@ export default function SessionList({
                         onClick={() => onChangeScope('all')}
                         variant="outline"
                         size="sm"
-                        onMouseEnter={(e) => {
-                          if (scopeMode !== 'all') {
-                            e.currentTarget.style.background = 'var(--surface-3)'
-                            e.currentTarget.style.color = 'var(--text-2)'
-                            e.currentTarget.style.borderColor = 'var(--border-2)'
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (scopeMode !== 'all') {
-                            e.currentTarget.style.background = 'var(--surface-2)'
-                            e.currentTarget.style.color = 'var(--text-3)'
-                            e.currentTarget.style.borderColor = 'var(--border)'
-                          }
-                        }}
+                        className={scopeMode === 'all' ? 'av-control-btn av-active' : 'av-control-btn'}
                         style={{
                           flex: 1,
                           height: 32,
@@ -1321,7 +1280,6 @@ export default function SessionList({
                           fontSize: 11,
                           letterSpacing: '0.06em',
                           cursor: 'pointer',
-                          transition: 'background 0.1s, color 0.1s, border-color 0.1s',
                         }}
                       >
                         ALL PROJECTS
@@ -1332,20 +1290,7 @@ export default function SessionList({
                         title={canScopeToProject ? 'Show only sessions for the current project' : 'Select a session or project first'}
                         variant="outline"
                         size="sm"
-                        onMouseEnter={(e) => {
-                          if (canScopeToProject && scopeMode !== 'project') {
-                            e.currentTarget.style.background = 'var(--surface-3)'
-                            e.currentTarget.style.color = 'var(--text-2)'
-                            e.currentTarget.style.borderColor = 'var(--border-2)'
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (canScopeToProject && scopeMode !== 'project') {
-                            e.currentTarget.style.background = 'var(--surface-2)'
-                            e.currentTarget.style.color = 'var(--text-3)'
-                            e.currentTarget.style.borderColor = 'var(--border)'
-                          }
-                        }}
+                        className={scopeMode === 'project' ? 'av-control-btn av-active' : 'av-control-btn'}
                         style={{
                           flex: 1,
                           height: 32,
@@ -1358,7 +1303,6 @@ export default function SessionList({
                           letterSpacing: '0.06em',
                           cursor: canScopeToProject ? 'pointer' : 'not-allowed',
                           opacity: canScopeToProject ? 1 : 0.45,
-                          transition: 'background 0.1s, color 0.1s, border-color 0.1s',
                         }}
                       >
                         THIS PROJECT

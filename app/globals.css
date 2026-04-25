@@ -856,6 +856,16 @@ body {
   --tool-header-opacity: 0.14;
 }
 
+/* ── Segment control buttons (sort/scope toggles) ───────────────────────── */
+.av-control-btn {
+  transition: background 0.1s, color 0.1s, border-color 0.1s !important;
+}
+.av-control-btn:not(.av-active):not([disabled]):hover {
+  background: var(--surface-3) !important;
+  color: var(--text-2) !important;
+  border-color: var(--border-2) !important;
+}
+
 /* ── View Transitions ───────────────────────────────────────────────────── */
 :root {
   --duration-exit: 120ms;
