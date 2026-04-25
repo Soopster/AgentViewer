@@ -21,7 +21,7 @@ import { getPrimarySessionTag } from '@/lib/sessionTags'
 import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '@/lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption, nativeSelectBaseClassName } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
@@ -3179,6 +3179,9 @@ export default function MessageView({ messages, loading, session, projectView, o
             boxShadow: '0 10px 24px var(--violet-glow)',
           }}
         >
+          <CardHeader className="sr-only">
+            <CardTitle>Message composer</CardTitle>
+          </CardHeader>
           <CardContent style={{ padding: '10px 12px' }}>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 176px', minWidth: 0 }}>
@@ -3572,10 +3575,12 @@ export default function MessageView({ messages, loading, session, projectView, o
               background: 'rgba(251,191,36,0.06)',
             }}
           >
-            <CardContent style={{ padding: '12px 14px' }}>
-              <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
+            <CardHeader style={{ padding: '12px 14px 0' }}>
+              <CardTitle style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
                 Rewind Preview
-              </div>
+              </CardTitle>
+            </CardHeader>
+            <CardContent style={{ padding: '6px 14px 0' }}>
               <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
                 {rewindPreview.contentPreview || 'Selected prompt'}
               </div>
@@ -3601,7 +3606,8 @@ export default function MessageView({ messages, loading, session, projectView, o
                   </div>
                 )}
               </div>
-              <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+            </CardContent>
+            <CardFooter style={{ padding: '10px 14px 12px', display: 'flex', gap: 8 }}>
                 <Button
                   onClick={handleApplyRewind}
                   disabled={applyingRewind}
@@ -3642,8 +3648,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                 >
                   CANCEL
                 </Button>
-              </div>
-            </CardContent>
+            </CardFooter>
           </Card>
         )}
         {rollbackPreview && (
@@ -3655,10 +3660,12 @@ export default function MessageView({ messages, loading, session, projectView, o
               background: 'rgba(251,191,36,0.06)',
             }}
           >
-            <CardContent style={{ padding: '12px 14px' }}>
-              <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
+            <CardHeader style={{ padding: '12px 14px 0' }}>
+              <CardTitle style={{ fontFamily: "'Oxanium', monospace", fontSize: 12, fontWeight: 600, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.08em' }}>
                 Rollback Preview
-              </div>
+              </CardTitle>
+            </CardHeader>
+            <CardContent style={{ padding: '6px 14px 0' }}>
               <div style={{ marginTop: 6, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)', lineHeight: 1.6 }}>
                 This removes the last {rollbackPreview.numTurns} turn{rollbackPreview.numTurns === 1 ? '' : 's'} from the Codex thread history. It does not revert files in the workspace.
               </div>
@@ -3680,7 +3687,8 @@ export default function MessageView({ messages, loading, session, projectView, o
                   </div>
                 ))}
               </div>
-              <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+            </CardContent>
+            <CardFooter style={{ padding: '10px 14px 12px', display: 'flex', gap: 8 }}>
                 <Button
                   onClick={handleApplyRollback}
                   disabled={applyingRewind}
@@ -3721,8 +3729,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                 >
                   CANCEL
                 </Button>
-              </div>
-            </CardContent>
+            </CardFooter>
           </Card>
         )}
       </div>}

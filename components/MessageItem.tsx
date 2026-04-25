@@ -38,6 +38,7 @@ import type { Components } from 'react-markdown'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, ClaudeSystemBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
 import { getAssistantLabel } from '@/lib/provider'
+import { Separator } from '@/components/ui/separator'
 import { useCodeTheme } from './CodeThemeContext'
 
 SyntaxHighlighter.registerLanguage('bash', bash)
@@ -215,7 +216,7 @@ const mdComponents: Components = {
   ul: ({ children }) => <ul style={{ margin: '6px 0 12px', paddingLeft: 22, color: 'var(--text)' }}>{children}</ul>,
   ol: ({ children }) => <ol style={{ margin: '6px 0 12px', paddingLeft: 22, color: 'var(--text)' }}>{children}</ol>,
   li: ({ children }) => <li style={{ marginBottom: 4, lineHeight: 1.7 }}>{children}</li>,
-  hr: () => <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '16px 0' }} />,
+  hr: () => <Separator className="my-4 bg-[var(--border)]" />,
   table: ({ children }) => (
     <div style={{ overflowX: 'auto', marginBottom: 12 }}>
       <table style={{ borderCollapse: 'collapse', fontSize: 14, color: 'var(--text)', width: '100%' }}>

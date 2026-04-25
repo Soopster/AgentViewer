@@ -5,7 +5,7 @@ import { normalizeProjectPath, pathBasename, pickCanonicalProjectPath, sameProje
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -1510,7 +1510,7 @@ export default function SessionList({
               )}
               <SidebarTrigger
                 title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                className="ml-auto h-7 w-7 shrink-0 rounded-md border-border bg-[var(--surface-2)] px-0 text-[var(--text-3)] shadow-none hover:bg-[var(--surface-3)] [&_svg]:size-4"
+                className="ml-auto size-7 shrink-0 rounded-md border-border bg-[var(--surface-2)] px-0 text-[var(--text-3)] shadow-none hover:bg-[var(--surface-3)]"
               />
             </div>
             {!collapsed && (
@@ -1586,6 +1586,9 @@ export default function SessionList({
               boxShadow: '0 10px 24px var(--violet-glow)',
             }}
           >
+            <CardHeader className="sr-only">
+              <CardTitle>Session filters</CardTitle>
+            </CardHeader>
             <CardContent style={{ padding: 12 }}>
               <div style={{ display: 'grid', gap: 5 }}>
                   <Label
