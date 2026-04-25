@@ -2116,34 +2116,48 @@ export default function MessageView({ messages, loading, session, projectView, o
     alignLastTimelineRowToViewportBottom()
   }, [alignLastTimelineRowToViewportBottom, autoFollow, hasLiveTimeline, loading, rowMeasurementVersion, scrollTimelineToBottom, timelineRows.length])
 
-  const virtualTimeline = useMemo(() => {
-    let offset = 0
-    const measuredRows = timelineRows.map((row) => {
-      const height = rowHeightsRef.current.get(row.key) ?? estimateTimelineRowHeight(row)
-      const top = offset
-      offset += height
-      return { row, top, height }
-    })
+  // Separate the expensive O(n) height accumulation from the scroll-reactive
+  // visibility window. rowLayout only recomputes when rows or measurements
+  // change; virtualTimeline re-runs on every scroll but only does a scan of
+  // the visible window — no new objects for off-screen rows.
+  const rowLayout = useMemo(() => {
+    const n = timelineRows.length
+    const tops = new Float64Array(n)
+    const heights = new Float64Array(n)
+    let totalHeight = 0
+    for (let i = 0; i < n; i++) {
+      tops[i] = totalHeight
+      const h = rowHeightsRef.current.get(timelineRows[i].key) ?? estimateTimelineRowHeight(timelineRows[i])
+      heights[i] = h
+      totalHeight += h
+    }
+    return { tops, heights, totalHeight }
+  }, [timelineRows, rowMeasurementVersion])
 
+  const virtualTimeline = useMemo(() => {
+    const { tops, heights, totalHeight } = rowLayout
+    const n = timelineRows.length
     const viewportHeight = timelineViewportHeight || 800
     const rangeStart = Math.max(0, timelineScrollTop - TIMELINE_OVERSCAN_PX)
     const rangeEnd = timelineScrollTop + viewportHeight + TIMELINE_OVERSCAN_PX
 
     let startIndex = 0
-    while (startIndex < measuredRows.length && measuredRows[startIndex].top + measuredRows[startIndex].height < rangeStart) {
+    while (startIndex < n && tops[startIndex] + heights[startIndex] < rangeStart) {
       startIndex += 1
     }
-
     let endIndex = startIndex
-    while (endIndex < measuredRows.length && measuredRows[endIndex].top < rangeEnd) {
+    while (endIndex < n && tops[endIndex] < rangeEnd) {
       endIndex += 1
     }
+    endIndex = Math.max(endIndex, startIndex + 1)
 
-    return {
-      totalHeight: offset,
-      visibleRows: measuredRows.slice(startIndex, Math.max(endIndex, startIndex + 1)),
+    const visibleRows: Array<{ row: TimelineRow; top: number; height: number }> = []
+    for (let i = startIndex; i < Math.min(endIndex, n); i++) {
+      visibleRows.push({ row: timelineRows[i], top: tops[i], height: heights[i] })
     }
-  }, [timelineRows, timelineScrollTop, timelineViewportHeight, rowMeasurementVersion])
+
+    return { totalHeight, visibleRows }
+  }, [rowLayout, timelineRows, timelineScrollTop, timelineViewportHeight])
 
   useEffect(() => {
     autoFollowRef.current = autoFollow

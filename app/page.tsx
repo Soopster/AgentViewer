@@ -52,6 +52,10 @@ function projectSessionKey(session: Pick<Session, 'sessionId' | 'provider'>): st
   return `${session.provider ?? 'claude'}:${session.sessionId}`
 }
 
+function sessionsFingerprint(sessions: Session[]): string {
+  return sessions.map((s) => `${s.provider ?? 'claude'}:${s.sessionId}:${s.lastModified ?? s.createdAt ?? ''}`).join('|')
+}
+
 function apiMessageSignature(message: SessionMessage): string {
   const originKind = message.origin?.kind ?? ''
   const turnId = message.turnId ?? ''
@@ -88,23 +92,25 @@ function mergeSortedMessages(existing: SessionMessage[], incoming: SessionMessag
 function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): SessionMessage[] {
   if (incoming.length === 0) return existing
 
-  const existingByKey = new Map(existing.map((message) => [sessionMessageKey(message), message] as const))
   const latestIncomingByKey = new Map<string, SessionMessage>()
   for (const message of incoming) latestIncomingByKey.set(sessionMessageKey(message), message)
 
   let changed = false
   const appended: SessionMessage[] = []
+  const matchedKeys = new Set<string>()
+
   const mergedExisting = existing.map((message) => {
     const key = sessionMessageKey(message)
     const replacement = latestIncomingByKey.get(key)
     if (!replacement) return message
+    matchedKeys.add(key)
     if (apiMessageSignature(message) === apiMessageSignature(replacement)) return message
     changed = true
     return replacement
   })
 
   for (const [key, message] of latestIncomingByKey) {
-    if (existingByKey.has(key)) continue
+    if (matchedKeys.has(key)) continue
     appended.push(message)
     changed = true
   }
@@ -140,6 +146,7 @@ export default function Home() {
   // Guards to prevent concurrent poll ticks from overlapping when a fetch takes > interval
   const pollInFlightRef = useRef(false)
   const projectPollInFlightRef = useRef(false)
+  const sessionsFingerprintRef = useRef('')
   const selectedSession =
     openTabSessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
     sessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
@@ -187,7 +194,11 @@ export default function Home() {
   ) => {
     if (scopeMode === 'project' && projectDir) {
       const loaded = await fetchProjectSessions(projectDir, selection)
-      startTransition(() => { setSessions(loaded) })
+      const fp = sessionsFingerprint(loaded)
+      if (fp !== sessionsFingerprintRef.current) {
+        sessionsFingerprintRef.current = fp
+        startTransition(() => { setSessions(loaded) })
+      }
       return
     }
 
@@ -198,7 +209,12 @@ export default function Home() {
     const r = await fetch(`/api/sessions${suffix}`)
     const data = await r.json()
     if (data.error) throw new Error(data.error)
-    startTransition(() => { setSessions((data.sessions ?? []) as Session[]) })
+    const loaded = (data.sessions ?? []) as Session[]
+    const fp = sessionsFingerprint(loaded)
+    if (fp !== sessionsFingerprintRef.current) {
+      sessionsFingerprintRef.current = fp
+      startTransition(() => { setSessions(loaded) })
+    }
   }, [activeProjectDir, fetchProjectSessions, sessionScope])
 
   const fetchSessions = useCallback(async () => {
@@ -218,7 +234,7 @@ export default function Home() {
         includeWorktrees,
         provider: selection,
         offsets,
-        initialLimit: 2000,
+        initialLimit: 300,
         incrementalLimit: 200,
       }),
     })

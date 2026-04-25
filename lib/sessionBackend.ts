@@ -1,4 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
+
+async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
+  return results
+}
 import { readFile } from 'node:fs/promises'
 import { basename, extname, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -136,6 +149,27 @@ import { normalizeClaudeHistoryMessages } from './claudeMapper'
 
 export const maxDuration = 300
 
+// Session info rarely changes between polls — cache for 20 s to avoid repeating
+// filesystem I/O on every 5-second session list refresh.
+const SESSION_INFO_TTL = 20_000
+type SessionInfoCacheEntry = { result: Awaited<ReturnType<typeof getSessionInfo>>; ts: number }
+const sessionInfoCache = new Map<string, SessionInfoCacheEntry>()
+
+function pruneSessionInfoCache() {
+  const deadline = Date.now() - SESSION_INFO_TTL * 3
+  for (const [key, entry] of sessionInfoCache) {
+    if (entry.ts < deadline) sessionInfoCache.delete(key)
+  }
+}
+
+async function getCachedSessionInfo(sessionId: string, dir: string | undefined): Promise<Awaited<ReturnType<typeof getSessionInfo>>> {
+  const cached = sessionInfoCache.get(sessionId)
+  if (cached && Date.now() - cached.ts < SESSION_INFO_TTL) return cached.result
+  const result = await getSessionInfo(sessionId, dir ? { dir } : undefined)
+  sessionInfoCache.set(sessionId, { result, ts: Date.now() })
+  return result
+}
+
 const OPENCODE_OPTIONS = {
   responseStyle: 'data' as const,
   throwOnError: true as const,
@@ -200,17 +234,14 @@ const REASONING_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'max
 const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
 
 function sortMessagesChronologically(messages: SessionMessage[]): SessionMessage[] {
-  return messages
-    .map((message, index) => ({ message, index }))
-    .sort((a, b) => {
-      const aTimestamp = a.message.timestamp ? Date.parse(a.message.timestamp) : Number.NaN
-      const bTimestamp = b.message.timestamp ? Date.parse(b.message.timestamp) : Number.NaN
-      if (!Number.isNaN(aTimestamp) && !Number.isNaN(bTimestamp) && aTimestamp !== bTimestamp) {
-        return aTimestamp - bTimestamp
-      }
-      return a.index - b.index
-    })
-    .map(({ message }) => message)
+  return [...messages].sort((a, b) => {
+    const aTimestamp = a.timestamp ? Date.parse(a.timestamp) : Number.NaN
+    const bTimestamp = b.timestamp ? Date.parse(b.timestamp) : Number.NaN
+    if (!Number.isNaN(aTimestamp) && !Number.isNaN(bTimestamp) && aTimestamp !== bTimestamp) {
+      return aTimestamp - bTimestamp
+    }
+    return 0
+  })
 }
 
 function withOriginKind(messages: SessionMessage[], originKind: string): SessionMessage[] {
@@ -594,31 +625,29 @@ async function listCodexSessions({ limit, offset, dir }: ListParams): Promise<Se
 }
 
 async function listClaudeSessions({ limit, offset, dir, includeWorktrees }: ListParams): Promise<Session[]> {
+  pruneSessionInfoCache()
   const sessions = await listSessions({
     limit,
     offset,
     dir,
     includeWorktrees: dir ? includeWorktrees : undefined,
   })
-  const normalized = await Promise.all(
-    sessions.map(async (session) => {
-      try {
-        const info = await getSessionInfo(session.sessionId, {
-          dir: typeof session.cwd === 'string' && session.cwd ? session.cwd : dir,
-        })
-        if (!info) return session
-        return {
-          ...session,
-          ...info,
-          // Keep the list-level working directory when the single-session lookup
-          // can't resolve one, but prefer the stable per-session metadata.
-          cwd: info.cwd ?? session.cwd,
-        }
-      } catch {
-        return session
+  const normalized = await mapConcurrent(sessions, 20, async (session) => {
+    try {
+      const sessionDir = typeof session.cwd === 'string' && session.cwd ? session.cwd : dir
+      const info = await getCachedSessionInfo(session.sessionId, sessionDir)
+      if (!info) return session
+      return {
+        ...session,
+        ...info,
+        // Keep the list-level working directory when the single-session lookup
+        // can't resolve one, but prefer the stable per-session metadata.
+        cwd: info.cwd ?? session.cwd,
       }
-    }),
-  )
+    } catch {
+      return session
+    }
+  })
 
   return normalized.map((session) => ({
     ...session,
@@ -983,24 +1012,22 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
     provider: params.provider,
   })
 
-  const batches = await Promise.all(
-    sessions.map(async (session) => {
-      const key = `${session.provider ?? 'claude'}:${session.sessionId}`
-      const offset = Math.max(0, params.offsets[key] ?? 0)
-      const limit = offset === 0 ? params.initialLimit : params.incrementalLimit
-      const messages = limit > 0
-        ? await listViewSessionMessages(session.sessionId, { offset, limit }, session.provider)
-        : []
+  const batches = await mapConcurrent(sessions, 10, async (session) => {
+    const key = `${session.provider ?? 'claude'}:${session.sessionId}`
+    const offset = Math.max(0, params.offsets[key] ?? 0)
+    const limit = offset === 0 ? params.initialLimit : params.incrementalLimit
+    const messages = limit > 0
+      ? await listViewSessionMessages(session.sessionId, { offset, limit }, session.provider)
+      : []
 
-      return {
-        key,
-        sessionId: session.sessionId,
-        provider: session.provider,
-        offset,
-        messages,
-      }
-    }),
-  )
+    return {
+      key,
+      sessionId: session.sessionId,
+      provider: session.provider,
+      offset,
+      messages,
+    }
+  })
 
   return { sessions, batches }
 }
