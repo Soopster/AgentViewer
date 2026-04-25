@@ -98,6 +98,34 @@ const PANE_TITLES: Record<PaneId, string> = {
 }
 
 // ---------------------------------------------------------------------------
+// Panel scrollbar
+// ---------------------------------------------------------------------------
+
+function PanelScrollbar({ total, viewportH, scrollTop, theme }: {
+  total: number
+  viewportH: number
+  scrollTop: number
+  theme: TuiThemePalette
+}) {
+  if (total <= viewportH) return null
+  const thumbH = Math.max(1, Math.round((viewportH / total) * viewportH))
+  const maxTop = Math.max(1, total - viewportH)
+  const thumbTop = Math.round((scrollTop / maxTop) * (viewportH - thumbH))
+  return (
+    <box width={1} flexDirection="column">
+      {Array.from({ length: viewportH }, (_, i) => {
+        const isThumb = i >= thumbTop && i < thumbTop + thumbH
+        return (
+          <box key={i} width={1}>
+            <text fg={isThumb ? theme.muted : theme.dim}>{isThumb ? '█' : '▏'}</text>
+          </box>
+        )
+      })}
+    </box>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // GitPopover component
 // ---------------------------------------------------------------------------
 
@@ -189,6 +217,9 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [branchIndex, setBranchIndex] = useState(0)
   const [commitIndex, setCommitIndex] = useState(0)
+  const [fileScrollTop, setFileScrollTop] = useState(0)
+  const [branchScrollTop, setBranchScrollTop] = useState(0)
+  const [commitScrollTop, setCommitScrollTop] = useState(0)
   const diffScrollRef = useRef<ScrollBoxRenderable>(null)
   const rightContentRequestRef = useRef(0)
   const rightContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -221,6 +252,9 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     const nodes = buildVisibleNodes(data.status, dirs)
     const firstFile = nodes.findIndex((n) => n.kind === 'file')
     setTreeCursor(firstFile >= 0 ? firstFile : 0)
+    setFileScrollTop(0)
+    setBranchScrollTop(0)
+    setCommitScrollTop(0)
   }, [data])
 
   // Visible tree nodes (recomputed when data or expanded state changes)
@@ -252,6 +286,38 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     }
     return pos
   }, [visibleNodes, treeCursor])
+
+  // Auto-scroll left panes to keep cursors visible
+  useEffect(() => {
+    const viewportH = Math.max(1, Math.max(5, Math.min(14, visibleNodes.length + 3)) - 2)
+    setFileScrollTop((top) => {
+      if (treeCursor < top) return treeCursor
+      if (treeCursor >= top + viewportH) return treeCursor - viewportH + 1
+      return top
+    })
+  }, [treeCursor, visibleNodes.length])
+
+  useEffect(() => {
+    const viewportH = Math.max(1, Math.max(4, Math.min(8, (data?.branches.length ?? 0) + 3)) - 2)
+    setBranchScrollTop((top) => {
+      if (branchIndex < top) return branchIndex
+      if (branchIndex >= top + viewportH) return branchIndex - viewportH + 1
+      return top
+    })
+  }, [branchIndex, data?.branches.length])
+
+  useEffect(() => {
+    const popH = Math.min(height - 4, 60)
+    const treeH = Math.max(5, Math.min(14, visibleNodes.length + 3))
+    const branchesH = Math.max(4, Math.min(8, (data?.branches.length ?? 0) + 3))
+    const commitsH = Math.max(popH - 2 - 4 - treeH - branchesH, 4)
+    const viewportH = Math.max(1, commitsH - 1)
+    setCommitScrollTop((top) => {
+      if (commitIndex < top) return commitIndex
+      if (commitIndex >= top + viewportH) return commitIndex - viewportH + 1
+      return top
+    })
+  }, [commitIndex, data?.branches.length, height, visibleNodes.length])
 
   // Right-panel content is loaded in an effect so git commands do not block render.
   const [rightContent, setRightContent] = useState('Loading…')
@@ -401,6 +467,36 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       return
     }
 
+    // h / left: collapse expanded dir, or jump to parent dir
+    if ((key.name === 'h' || key.name === 'left') && pane === 2 && focusSide === 'left') {
+      const node = visibleNodes[treeCursor]
+      if (!node) return
+      if (node.kind === 'dir' && expandedDirs.has(node.path)) {
+        setExpandedDirs((prev) => { const next = new Set(prev); next.delete(node.path); return next })
+      } else if (node.depth > 0) {
+        for (let i = treeCursor - 1; i >= 0; i--) {
+          const candidate = visibleNodes[i]
+          if (candidate?.kind === 'dir' && candidate.depth === node.depth - 1) {
+            setTreeCursor(i)
+            break
+          }
+        }
+      }
+      return
+    }
+
+    // l / right: expand collapsed dir, or enter first child
+    if ((key.name === 'l' || key.name === 'right') && pane === 2 && focusSide === 'left') {
+      const node = visibleNodes[treeCursor]
+      if (!node) return
+      if (node.kind === 'dir' && !expandedDirs.has(node.path)) {
+        setExpandedDirs((prev) => { const next = new Set(prev); next.add(node.path); return next })
+      } else if (visibleNodes[treeCursor + 1]) {
+        setTreeCursor(treeCursor + 1)
+      }
+      return
+    }
+
     if (key.name === 'd') { diffScrollRef.current?.scrollBy(10); return }
     if (key.name === 'u') { diffScrollRef.current?.scrollBy(-10); return }
     if (key.name === 'r') {
@@ -414,7 +510,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       setFileDiffMode((mode) => (mode === 'text' ? 'viewer' : 'text'))
       return
     }
-  }, [data, focusSide, onClose, pane, repoCwd, treeCursor, visibleNodes])
+  }, [data, expandedDirs, focusSide, onClose, pane, repoCwd, treeCursor, visibleNodes])
 
   // Register key handler with parent
   useEffect(() => {
@@ -508,33 +604,38 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
             ) : null}
           </box>
 
-          {visibleNodes.slice(0, treeH - 2).map((node, i) => {
-            const isCursor = i === treeCursor && pane === 2
-            const indent = '  '.repeat(node.depth)
-            let label: string
-            let labelColor: string
-            if (node.kind === 'dir') {
-              label = `${indent}${node.expanded ? '▼' : '▶'} ${node.name}`
-              labelColor = isCursor ? theme.text : theme.muted
-            } else {
-              const flags = `${node.x.trim() || node.y.trim() ? (node.x.trim() || node.y) : '??'}`
-              label = `${indent}${flags} ${node.name}`
-              labelColor = isCursor ? theme.text : statusColor(node.x, node.y)
-            }
-            return (
-              <box
-                key={node.path}
-                paddingX={1}
-                backgroundColor={isCursor ? theme.surface3 : 'transparent'}
-              >
-                <text fg={labelColor} wrapMode="none">{label}</text>
-              </box>
-            )
-          })}
-
-          {(!data || data.status.length === 0) ? (
-            <box paddingX={1}><text fg={theme.dim}>clean</text></box>
-          ) : null}
+          <box flexDirection="row">
+            <box flexGrow={1} flexDirection="column">
+              {visibleNodes.slice(fileScrollTop, fileScrollTop + (treeH - 2)).map((node, i) => {
+                const absoluteIdx = fileScrollTop + i
+                const isCursor = absoluteIdx === treeCursor && pane === 2
+                const indent = '  '.repeat(node.depth)
+                let label: string
+                let labelColor: string
+                if (node.kind === 'dir') {
+                  label = `${indent}${node.expanded ? '▼' : '▶'} ${node.name}`
+                  labelColor = isCursor ? theme.text : theme.muted
+                } else {
+                  const flags = `${node.x.trim() || node.y.trim() ? (node.x.trim() || node.y) : '??'}`
+                  label = `${indent}${flags} ${node.name}`
+                  labelColor = isCursor ? theme.text : statusColor(node.x, node.y)
+                }
+                return (
+                  <box
+                    key={node.path}
+                    paddingX={1}
+                    backgroundColor={isCursor ? theme.surface3 : 'transparent'}
+                  >
+                    <text fg={labelColor} wrapMode="none">{label}</text>
+                  </box>
+                )
+              })}
+              {(!data || data.status.length === 0) ? (
+                <box paddingX={1}><text fg={theme.dim}>clean</text></box>
+              ) : null}
+            </box>
+            <PanelScrollbar total={visibleNodes.length} viewportH={treeH - 2} scrollTop={fileScrollTop} theme={theme} />
+          </box>
         </box>
 
         {/* [3] Branches */}
@@ -548,17 +649,22 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           <box paddingX={1} width={leftW - 2} backgroundColor={pane === 3 ? theme.cyan : 'transparent'}>
             <text fg={pane === 3 ? theme.surface : theme.muted}>[3] Branches</text>
           </box>
-          {(data?.branches ?? []).slice(0, branchesH - 2).map((b, i) => {
-            const isCurrent = b === data?.branch
-            const isSel = i === branchIndex && pane === 3
-            return (
-              <box key={b} paddingX={1} backgroundColor={isSel ? theme.surface3 : 'transparent'}>
-                <text fg={isCurrent ? theme.green : isSel ? theme.text : theme.muted} wrapMode="none">
-                  {isCurrent ? `* ${b}` : `  ${b}`}
-                </text>
-              </box>
-            )
-          })}
+          <box flexDirection="row">
+            <box flexGrow={1} flexDirection="column">
+              {(data?.branches ?? []).slice(branchScrollTop, branchScrollTop + (branchesH - 2)).map((b, i) => {
+                const isCurrent = b === data?.branch
+                const isSel = (branchScrollTop + i) === branchIndex && pane === 3
+                return (
+                  <box key={b} paddingX={1} backgroundColor={isSel ? theme.surface3 : 'transparent'}>
+                    <text fg={isCurrent ? theme.green : isSel ? theme.text : theme.muted} wrapMode="none">
+                      {isCurrent ? `* ${b}` : `  ${b}`}
+                    </text>
+                  </box>
+                )
+              })}
+            </box>
+            <PanelScrollbar total={data?.branches.length ?? 0} viewportH={branchesH - 2} scrollTop={branchScrollTop} theme={theme} />
+          </box>
         </box>
 
         {/* [4] Commits */}
@@ -566,27 +672,32 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           <box paddingX={1} width={leftW - 2} backgroundColor={pane === 4 ? theme.cyan : 'transparent'}>
             <text fg={pane === 4 ? theme.surface : theme.muted}>[4] Commits</text>
           </box>
-          {(data?.commits ?? []).slice(0, commitsH - 1).map((c, i) => {
-            const isSel = i === commitIndex && pane === 4
-            const spaceIdx = c.indexOf(' ')
-            const hash = spaceIdx > 0 ? c.slice(0, spaceIdx) : c
-            const msg = spaceIdx > 0 ? c.slice(spaceIdx + 1) : ''
-            return (
-              <box key={c} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'}>
-                <text fg={theme.amber} wrapMode="none">{hash} </text>
-                <text fg={isSel ? theme.text : theme.dim} wrapMode="none">
-                  {msg.slice(0, leftW - hash.length - 4)}
-                </text>
-              </box>
-            )
-          })}
+          <box flexDirection="row">
+            <box flexGrow={1} flexDirection="column">
+              {(data?.commits ?? []).slice(commitScrollTop, commitScrollTop + (commitsH - 1)).map((c, i) => {
+                const isSel = (commitScrollTop + i) === commitIndex && pane === 4
+                const spaceIdx = c.indexOf(' ')
+                const hash = spaceIdx > 0 ? c.slice(0, spaceIdx) : c
+                const msg = spaceIdx > 0 ? c.slice(spaceIdx + 1) : ''
+                return (
+                  <box key={c} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'}>
+                    <text fg={theme.amber} wrapMode="none">{hash} </text>
+                    <text fg={isSel ? theme.text : theme.dim} wrapMode="none">
+                      {msg.slice(0, leftW - hash.length - 5)}
+                    </text>
+                  </box>
+                )
+              })}
+            </box>
+            <PanelScrollbar total={data?.commits.length ?? 0} viewportH={commitsH - 1} scrollTop={commitScrollTop} theme={theme} />
+          </box>
         </box>
       </box>
 
       {/* ── Right column ────────────────────────────────── */}
       <box flexGrow={1} flexDirection="column">
         <box paddingX={1}>
-          <text fg={theme.cyan}>{`${focusLabel}  ·  ${PANE_TITLES[pane]}  ·  1-4 sections  ·  ${fileDiffLabel}  ·  j/k move or scroll  ·  enter toggle  ·  r refresh  ·  esc close`}</text>
+          <text fg={theme.cyan}>{`${focusLabel}  ·  ${PANE_TITLES[pane]}  ·  1-4 sections  ·  ${fileDiffLabel}  ·  j/k move  ·  h/l collapse/expand  ·  enter toggle  ·  r refresh  ·  esc close`}</text>
         </box>
         <scrollbox
           ref={diffScrollRef}
