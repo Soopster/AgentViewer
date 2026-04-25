@@ -1028,6 +1028,106 @@ function buildInsights(a: Analytics): Insight[] {
       detail: `${fmtCost(a.costPerLineChanged)} per line touched across ${(ops.linesAdded + ops.linesRemoved).toLocaleString()} lines.` })
   }
 
+  // Multiple models
+  if (a.models.length > 1) {
+    const names = a.models.slice(0, 3).map((m) => m.model.split('-').slice(-2).join('-')).join(', ')
+    out.push({ severity: 'info', icon: '🔀', title: `${a.models.length} models used`,
+      detail: `Session switched between models: ${names}${a.models.length > 3 ? ` + ${a.models.length - 3} more` : ''}.` })
+  }
+
+  // Cost acceleration — second half costs more than 1.5× first half
+  if (a.cumulativeCost.length >= 6 && a.cost > 0) {
+    const mid = Math.floor(a.cumulativeCost.length / 2)
+    const firstHalf = a.cumulativeCost[mid - 1]!
+    const secondHalf = a.cost - firstHalf
+    if (firstHalf > 0 && secondHalf > firstHalf * 1.8) {
+      out.push({ severity: 'warn', icon: '📉', title: 'Cost accelerating',
+        detail: `Second half of the session cost ${(secondHalf / firstHalf).toFixed(1)}× more than the first — context growing rapidly.` })
+    }
+  }
+
+  // Context growth — message sizes trending up
+  if (a.messageSizes.length >= 9) {
+    const third = Math.floor(a.messageSizes.length / 3)
+    const early = [...a.messageSizes.slice(0, third)].sort((a, b) => a - b)
+    const late = [...a.messageSizes.slice(-third)].sort((a, b) => a - b)
+    const medEarly = early[Math.floor(early.length / 2)]!
+    const medLate = late[Math.floor(late.length / 2)]!
+    if (medEarly > 0 && medLate > medEarly * 2) {
+      out.push({ severity: 'warn', icon: '📦', title: 'Context inflation',
+        detail: `Median message size grew ${(medLate / medEarly).toFixed(1)}× from early to late in the session (${fmtNum(medEarly)} → ${fmtNum(medLate)} tokens).` })
+    }
+  }
+
+  // Research-heavy session
+  if (a.ops.webFetches >= 5) {
+    const share = a.ops.webFetches / Math.max(1, a.ops.webFetches + a.ops.searches + a.ops.reads)
+    out.push({ severity: 'info', icon: '🌐', title: 'Research-heavy session',
+      detail: `${a.ops.webFetches} web fetches — ${(share * 100).toFixed(0)}% of all lookup operations were external.` })
+  }
+
+  // Tool error concentration
+  if (a.toolErrors >= 3) {
+    const mostErrored = [...a.tools].sort((x, y) => y.errors - x.errors)[0]
+    if (mostErrored && mostErrored.errors >= 2 && mostErrored.errors / a.toolErrors >= 0.5) {
+      out.push({ severity: 'warn', icon: '🎯', title: `${mostErrored.name} error-prone`,
+        detail: `${mostErrored.name} caused ${mostErrored.errors} of ${a.toolErrors} tool errors (${((mostErrored.errors / a.toolErrors) * 100).toFixed(0)}%).` })
+    }
+  }
+
+  // Recovery pattern — repair-oriented bash verbs
+  if (ops.bashByVerb.size > 0) {
+    const repairVerbs = ['git', 'npm', 'pip', 'pip3', 'bundle', 'yarn', 'pnpm', 'cargo', 'brew', 'apt', 'apt-get']
+    const repairCount = repairVerbs.reduce((sum, v) => sum + (ops.bashByVerb.get(v) ?? 0), 0)
+    if (repairCount >= 4 && repairCount > ops.bashCommands * 0.3) {
+      out.push({ severity: 'tip', icon: '🔧', title: 'Dependency/recovery work',
+        detail: `${repairCount} of ${ops.bashCommands} shell commands used package or version-control tools — may indicate environment repair.` })
+    }
+  }
+
+  // Low read discipline — writing without reading
+  if ((ops.edits + ops.writes) >= 5 && ops.reads < (ops.edits + ops.writes) / 3) {
+    out.push({ severity: 'tip', icon: '✍️', title: 'Editing without reading',
+      detail: `${ops.edits + ops.writes} edits/writes but only ${ops.reads} reads — agent may be modifying files it hasn't fully inspected.` })
+  }
+
+  // User verbosity
+  if (a.userMessages >= 4 && a.userTextChars > 0) {
+    const avgCharsPerMsg = a.userTextChars / a.userMessages
+    if (avgCharsPerMsg < 25) {
+      out.push({ severity: 'info', icon: '⚡', title: 'Terse user prompts',
+        detail: `Average ${Math.round(avgCharsPerMsg)} chars per user message — short commands driving the session.` })
+    } else if (avgCharsPerMsg > 600) {
+      out.push({ severity: 'info', icon: '📝', title: 'Detailed user prompts',
+        detail: `Average ${Math.round(avgCharsPerMsg)} chars per user message — rich context being provided each turn.` })
+    }
+  }
+
+  // Latency trend — later responses slower than early
+  if (a.timeline.length >= 8) {
+    const latencies = a.timeline
+      .map((p) => p.latencyMs)
+      .filter((v): v is number => v !== null && v >= 0)
+    if (latencies.length >= 6) {
+      const third = Math.floor(latencies.length / 3)
+      const earlyMed = [...latencies.slice(0, third)].sort((a, b) => a - b)[Math.floor(third / 2)]!
+      const lateMed = [...latencies.slice(-third)].sort((a, b) => a - b)[Math.floor(third / 2)]!
+      if (earlyMed > 0 && lateMed > earlyMed * 2 && lateMed > 10_000) {
+        out.push({ severity: 'warn', icon: '🐌', title: 'Responses slowing down',
+          detail: `Later turns took ${(lateMed / earlyMed).toFixed(1)}× longer than early turns (${fmtDuration(earlyMed)} → ${fmtDuration(lateMed)} median).` })
+      }
+    }
+  }
+
+  // Zero-output assistant turns (possible cancellations or interruptions)
+  if (a.assistantMessages > 0) {
+    const zeroOutputTurns = a.timeline.filter((p) => p.role === 'assistant' && p.outputTokens === 0).length
+    if (zeroOutputTurns >= 2 && zeroOutputTurns / a.assistantMessages > 0.15) {
+      out.push({ severity: 'info', icon: '⏹', title: `${zeroOutputTurns} interrupted turns`,
+        detail: `${zeroOutputTurns} assistant turns had zero output tokens — likely cancelled or interrupted mid-response.` })
+    }
+  }
+
   // Fallback: no signal
   if (out.length === 0) {
     out.push({ severity: 'info', icon: 'ℹ', title: 'Not much to highlight yet',
