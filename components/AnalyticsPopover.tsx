@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts'
 import type { Analytics, AnalyticsInput, FileOps, TimelinePoint } from '@/lib/analytics'
 import { computeAnalytics, fmtCost, fmtDuration, fmtNum } from '@/lib/analytics'
 
@@ -295,28 +296,22 @@ function Sparkline({
   colors: string[]
 }) {
   if (values.length === 0) return <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no data)</div>
-  const max = Math.max(1, ...values)
-  const cols = values.length
+  const data = values.map((v, i) => ({ index: i, value: v }))
+  const primaryColor = colors[0] ?? 'var(--cyan, #5eead4)'
+  const gradientId = `gradient-${Math.random().toString(36).substr(2, 9)}`
+
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', height, gap: 1, background: 'var(--surface-2)', padding: 2, borderRadius: 3 }}>
-      {values.map((v, i) => {
-        const pct = (v / max) * 100
-        const color = colors[Math.floor((v / max) * (colors.length - 1)) || 0] ?? colors[0]!
-        return (
-          <span
-            key={i}
-            title={`#${i + 1}: ${fmtNum(v)}`}
-            style={{
-              flex: '1 1 0',
-              minWidth: cols > 200 ? 1 : 2,
-              height: `${Math.max(2, pct)}%`,
-              background: color,
-              borderRadius: 1,
-            }}
-          />
-        )
-      })}
-    </div>
+    <ResponsiveContainer width="100%" height={height}>
+      <AreaChart data={data} margin={{ top: 2, right: 2, left: 0, bottom: 0 }}>
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor={primaryColor} stopOpacity={0.3}/>
+            <stop offset="95%" stopColor={primaryColor} stopOpacity={0}/>
+          </linearGradient>
+        </defs>
+        <Area type="monotone" dataKey="value" stroke={primaryColor} fill={`url(#${gradientId})`} strokeWidth={1.5} dot={false} />
+      </AreaChart>
+    </ResponsiveContainer>
   )
 }
 
