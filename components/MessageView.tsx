@@ -88,6 +88,11 @@ type FailedSend = {
   attachments: SendAttachment[]
 }
 
+type ComposerDraft = {
+  text: string
+  attachments: SendAttachment[]
+}
+
 type TimelineRow = {
   key: string
   message: ThreadedMessage
@@ -107,6 +112,8 @@ const TIMELINE_OVERSCAN_PX = 1200
 const ESTIMATED_CHARS_PER_LINE = 92
 const TIMELINE_BOTTOM_GUTTER_PX = 72
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
+const COMPOSER_DRAFT_STORAGE_PREFIX = 'agentViewer:composerDraft:v1:'
+const SEND_ATTACHMENT_TYPES = new Set<SendAttachment['type']>(['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob'])
 
 function normalizeSelectValue(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
@@ -154,6 +161,53 @@ function attachmentDisplayName(attachment: SendAttachment): string {
   if (attachment.displayName) return attachment.displayName
   const path = attachment.path ?? attachment.filePath ?? attachment.type
   return path.split('/').filter(Boolean).at(-1) ?? path
+}
+
+function composerDraftStorageKey(session: Session | null): string | null {
+  if (!session) return null
+  return `${COMPOSER_DRAFT_STORAGE_PREFIX}${session.provider ?? 'claude'}:${session.sessionId}`
+}
+
+function normalizeDraftAttachments(value: unknown): SendAttachment[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((attachment) => {
+    if (!attachment || typeof attachment !== 'object') return []
+    const record = attachment as Partial<SendAttachment>
+    if (!record.type || typeof record.type !== 'string' || !SEND_ATTACHMENT_TYPES.has(record.type as SendAttachment['type'])) return []
+    return [{
+      ...record,
+      id: typeof record.id === 'string' ? record.id : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      type: record.type as SendAttachment['type'],
+    } as SendAttachment]
+  })
+}
+
+function readComposerDraft(storageKey: string | null): ComposerDraft {
+  if (!storageKey || typeof window === 'undefined') return { text: '', attachments: [] }
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) return { text: '', attachments: [] }
+    const parsed = JSON.parse(raw) as Partial<ComposerDraft>
+    return {
+      text: typeof parsed.text === 'string' ? parsed.text : '',
+      attachments: normalizeDraftAttachments(parsed.attachments),
+    }
+  } catch {
+    return { text: '', attachments: [] }
+  }
+}
+
+function writeComposerDraft(storageKey: string | null, draft: ComposerDraft) {
+  if (!storageKey || typeof window === 'undefined') return
+  try {
+    if (!draft.text.trim() && draft.attachments.length === 0) {
+      window.localStorage.removeItem(storageKey)
+      return
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(draft))
+  } catch {
+    /* localStorage may be unavailable or full */
+  }
 }
 
 function extractOpenCodePermission(payload: unknown): PendingPermission | null {
@@ -1171,6 +1225,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const lastTimelineRowRef = useRef<HTMLDivElement | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const inputTextRef = useRef(inputText)
+  const suppressDraftSaveRef = useRef(false)
   const sendInFlightRef = useRef(false)
   const awaitingPersistedTurnRef = useRef(false)
   const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; lastFingerprint: string | null; sessionId: string } | null>(null)
@@ -1213,6 +1268,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     if (activeProvider === 'pi') return ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
     return ['low', 'medium', 'high']
   }, [activeProvider, selectedModelInfo])
+  const composerDraftKey = useMemo(() => composerDraftStorageKey(session), [session])
 
   useEffect(() => {
     inputTextRef.current = inputText
@@ -1314,6 +1370,27 @@ export default function MessageView({ messages, loading, session, projectView, o
     liveToolIndexesRef.current.clear()
     initialScrollDoneRef.current = false
   }, [session?.sessionId])
+
+  useEffect(() => {
+    suppressDraftSaveRef.current = true
+    const draft = readComposerDraft(composerDraftKey)
+    setInputText(draft.text)
+    inputTextRef.current = draft.text
+    setAttachments(draft.attachments)
+
+    window.requestAnimationFrame(() => {
+      suppressDraftSaveRef.current = false
+      resizeComposer()
+    })
+  }, [composerDraftKey, resizeComposer])
+
+  useEffect(() => {
+    if (suppressDraftSaveRef.current) return
+    writeComposerDraft(composerDraftKey, {
+      text: inputText,
+      attachments,
+    })
+  }, [attachments, composerDraftKey, inputText])
 
   useEffect(() => () => {
     if (measurementFrameRef.current != null) {
@@ -1939,6 +2016,18 @@ export default function MessageView({ messages, loading, session, projectView, o
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
   const sendBusy = sendState === 'sending' || awaitingPersistedTurn
   const canSubmitMessage = Boolean(session && inputText.trim() && !sendBusy)
+  const composerStatus = sendState === 'error'
+    ? 'Failed'
+    : sendState === 'sending'
+    ? 'Sending...'
+    : awaitingPersistedTurn
+    ? 'Waiting for saved response...'
+    : 'Ready'
+  const composerStatusColor = sendState === 'error'
+    ? 'var(--red, #f87171)'
+    : sendState === 'sending' || awaitingPersistedTurn
+    ? 'var(--cyan)'
+    : 'var(--text-3)'
   const liveUserMessage: ThreadedMessage | null = !isProject && optimisticUserText
     ? {
         role: 'user',
@@ -3648,6 +3737,18 @@ export default function MessageView({ messages, loading, session, projectView, o
                   <SendHorizontal data-icon="inline-start" />
                 </Button>
               )}
+            </div>
+            <div
+              aria-live="polite"
+              style={{
+                marginTop: 6,
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                color: composerStatusColor,
+                letterSpacing: '0.04em',
+              }}
+            >
+              {composerStatus}
             </div>
           </CardContent>
         </Card>
