@@ -28,6 +28,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
+import { RotateCcw, SendHorizontal, Square } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, type MessageDensity } from './MessageItem'
 import CodeThemeToggle from './CodeThemeToggle'
 import TabBar from './TabBar'
@@ -80,6 +81,11 @@ type PendingPermission = {
   id: string
   title: string
   detail?: string
+}
+
+type FailedSend = {
+  text: string
+  attachments: SendAttachment[]
 }
 
 type TimelineRow = {
@@ -1104,6 +1110,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [attachments, setAttachments] = useState<SendAttachment[]>([])
   const [attachmentType, setAttachmentType] = useState<SendAttachment['type']>('file')
   const [attachmentPath, setAttachmentPath] = useState('')
+  const [failedSend, setFailedSend] = useState<FailedSend | null>(null)
   const [rewindTargetId, setRewindTargetId] = useState('')
   const [rollbackTurns, setRollbackTurns] = useState(1)
   const [resumeFromMessageId, setResumeFromMessageId] = useState<string | null>(null)
@@ -1163,6 +1170,9 @@ export default function MessageView({ messages, loading, session, projectView, o
   const timelineContentRef = useRef<HTMLDivElement | null>(null)
   const lastTimelineRowRef = useRef<HTMLDivElement | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const inputTextRef = useRef(inputText)
+  const sendInFlightRef = useRef(false)
+  const awaitingPersistedTurnRef = useRef(false)
   const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; lastFingerprint: string | null; sessionId: string } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const rowHeightsRef = useRef<Map<string, number>>(new Map())
@@ -1203,6 +1213,25 @@ export default function MessageView({ messages, loading, session, projectView, o
     if (activeProvider === 'pi') return ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
     return ['low', 'medium', 'high']
   }, [activeProvider, selectedModelInfo])
+
+  useEffect(() => {
+    inputTextRef.current = inputText
+  }, [inputText])
+
+  useEffect(() => {
+    awaitingPersistedTurnRef.current = awaitingPersistedTurn
+  }, [awaitingPersistedTurn])
+
+  const resizeComposer = useCallback(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 140)}px`
+  }, [])
+
+  useLayoutEffect(() => {
+    resizeComposer()
+  }, [inputText, resizeComposer])
 
   // Load session info (git branch, summary, etc.) when session changes
   useEffect(() => {
@@ -1245,6 +1274,10 @@ export default function MessageView({ messages, loading, session, projectView, o
 
   // Reset context usage when switching sessions
   useEffect(() => {
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+    sendInFlightRef.current = false
+    awaitingPersistedTurnRef.current = false
     setContextUsage(null)
     setSessionActionError(null)
     setSessionActionNotice(null)
@@ -1262,6 +1295,9 @@ export default function MessageView({ messages, loading, session, projectView, o
     setLiveToolActivities([])
     setLiveThreadedMessages([])
     setAwaitingPersistedTurn(false)
+    setSendState('idle')
+    setSendError(null)
+    setFailedSend(null)
     setAutoFollow(false)
     setTimelineScrollTop(0)
     setTimelineViewportHeight(0)
@@ -1371,6 +1407,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       setLiveAssistantText('')
       setLiveToolActivities([])
       setLiveThreadedMessages([])
+      awaitingPersistedTurnRef.current = false
       setAwaitingPersistedTurn(false)
       pendingMessageBaselineRef.current = null
       liveToolIndexesRef.current.clear()
@@ -1393,6 +1430,8 @@ export default function MessageView({ messages, loading, session, projectView, o
     }
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
+    sendInFlightRef.current = false
+    awaitingPersistedTurnRef.current = false
     setSendState('idle')
     setSendError(null)
     setOptimisticUserText(null)
@@ -1406,18 +1445,24 @@ export default function MessageView({ messages, loading, session, projectView, o
   }, [optimisticUserText, session])
 
   const sendMessage = useCallback(async () => {
-    if (!session || !inputText.trim() || sendState === 'sending') return
+    if (!session || sendInFlightRef.current || awaitingPersistedTurnRef.current) return
 
-    const text = inputText.trim()
+    const text = (textareaRef.current?.value ?? inputTextRef.current).trim()
+    if (!text) return
+
+    sendInFlightRef.current = true
     const sendAttachments = attachments
     const effort = selectedEffort === 'auto' ? undefined : selectedEffort
     setInputText('')
+    inputTextRef.current = ''
     setSendState('sending')
     setSendError(null)
+    setFailedSend(null)
     setOptimisticUserText(text)
     setLiveAssistantText('')
     setLiveToolActivities([])
     setLiveThreadedMessages([])
+    awaitingPersistedTurnRef.current = false
     setAwaitingPersistedTurn(false)
     setAutoFollow(true)
     pendingMessageBaselineRef.current = {
@@ -1428,9 +1473,7 @@ export default function MessageView({ messages, loading, session, projectView, o
     }
     liveToolIndexesRef.current.clear()
 
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
+    window.requestAnimationFrame(resizeComposer)
 
     const controller = new AbortController()
     abortControllerRef.current = controller
@@ -1456,7 +1499,9 @@ export default function MessageView({ messages, loading, session, projectView, o
         throw new Error(json.error ?? `HTTP ${res.status}`)
       }
 
-      const reader = res.body!.getReader()
+      if (!res.body) throw new Error('No response stream returned')
+
+      const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let sseBuffer = ''
       while (true) {
@@ -1596,6 +1641,7 @@ export default function MessageView({ messages, loading, session, projectView, o
           }
         }
       }
+      sseBuffer += decoder.decode()
 
       if (sseBuffer.trim()) {
         const { frames } = extractSseFrames(`${sseBuffer}\n\n`)
@@ -1621,6 +1667,7 @@ export default function MessageView({ messages, loading, session, projectView, o
               blocks: [{ type: 'text', text: 'Waiting for saved response…' }],
             }])
       }
+      awaitingPersistedTurnRef.current = true
       setAwaitingPersistedTurn(true)
       setResumeFromMessageId(null)
       textareaRef.current?.focus()
@@ -1631,21 +1678,30 @@ export default function MessageView({ messages, loading, session, projectView, o
       }
       setSendState('error')
       setSendError(err instanceof Error ? err.message : 'Failed to send message')
-      setInputText(text)
+      setFailedSend({ text, attachments: sendAttachments })
+      setInputText((current) => {
+        if (current.trim()) return current
+        inputTextRef.current = text
+        return text
+      })
       setOptimisticUserText(null)
       setLiveAssistantText('')
       setLiveToolActivities([])
       setLiveThreadedMessages([])
+      awaitingPersistedTurnRef.current = false
       setAwaitingPersistedTurn(false)
       pendingMessageBaselineRef.current = null
       liveToolIndexesRef.current.clear()
+      textareaRef.current?.focus()
     } finally {
       abortControllerRef.current = null
+      sendInFlightRef.current = false
     }
-  }, [attachments, inputText, messages, onFork, resumeFromMessageId, selectedEffort, selectedModel, sendState, session])
+  }, [attachments, messages, onFork, resizeComposer, resumeFromMessageId, selectedEffort, selectedModel, session])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+    if (e.metaKey || e.ctrlKey || !e.altKey) {
       e.preventDefault()
       sendMessage()
     }
@@ -1702,6 +1758,19 @@ export default function MessageView({ messages, loading, session, projectView, o
       id ? attachment.id !== id : attachmentIndex !== index
     )))
   }, [])
+
+  const restoreFailedSend = useCallback(() => {
+    if (!failedSend || sendInFlightRef.current || awaitingPersistedTurnRef.current) return
+    setInputText(failedSend.text)
+    inputTextRef.current = failedSend.text
+    setAttachments(failedSend.attachments)
+    setFailedSend(null)
+    setSendError(null)
+    window.requestAnimationFrame(() => {
+      resizeComposer()
+      textareaRef.current?.focus()
+    })
+  }, [failedSend, resizeComposer])
 
   const handleDeleteSession = useCallback(async () => {
     if (!session || deleting || !sessionCapabilities?.deleteSession) return
@@ -1868,6 +1937,8 @@ export default function MessageView({ messages, loading, session, projectView, o
   const isProject = !!projectView
   const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
+  const sendBusy = sendState === 'sending' || awaitingPersistedTurn
+  const canSubmitMessage = Boolean(session && inputText.trim() && !sendBusy)
   const liveUserMessage: ThreadedMessage | null = !isProject && optimisticUserText
     ? {
         role: 'user',
@@ -3128,13 +3199,40 @@ export default function MessageView({ messages, loading, session, projectView, o
         </button>
         {sendError && (
           <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
             fontFamily: "'IBM Plex Mono', monospace",
             fontSize: 11,
             color: 'var(--red, #f87171)',
             marginBottom: 8,
             letterSpacing: '0.03em',
           }}>
-            {sendError}
+            <span>{sendError}</span>
+            {failedSend && (
+              <Button
+                type="button"
+                onClick={restoreFailedSend}
+                disabled={sendBusy}
+                variant="outline"
+                size="sm"
+                style={{
+                  height: 24,
+                  padding: '0 8px',
+                  borderRadius: 5,
+                  border: '1px solid rgba(248,113,113,0.28)',
+                  background: 'rgba(248,113,113,0.08)',
+                  color: 'var(--red, #f87171)',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 9,
+                  letterSpacing: '0.06em',
+                }}
+              >
+                <RotateCcw data-icon="inline-start" />
+                RETRY
+              </Button>
+            )}
           </div>
         )}
         {(sessionActionError || sessionActionNotice) && (
@@ -3397,7 +3495,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                     addAttachment()
                   }
                 }}
-                disabled={sendState === 'sending'}
+                disabled={sendBusy}
                 placeholder="Attach path or URL"
                 style={{
                   flex: '1 1 220px',
@@ -3414,7 +3512,7 @@ export default function MessageView({ messages, loading, session, projectView, o
               />
               <Button
                 onClick={addAttachment}
-                disabled={!attachmentPath.trim() || sendState === 'sending'}
+                disabled={!attachmentPath.trim() || sendBusy}
                 variant="outline"
                 size="sm"
                 style={{
@@ -3427,8 +3525,8 @@ export default function MessageView({ messages, loading, session, projectView, o
                   fontFamily: "'IBM Plex Mono', monospace",
                   fontSize: 10,
                   letterSpacing: '0.06em',
-                  cursor: !attachmentPath.trim() || sendState === 'sending' ? 'not-allowed' : 'pointer',
-                  opacity: !attachmentPath.trim() || sendState === 'sending' ? 0.5 : 1,
+                  cursor: !attachmentPath.trim() || sendBusy ? 'not-allowed' : 'pointer',
+                  opacity: !attachmentPath.trim() || sendBusy ? 0.5 : 1,
                 }}
               >
                 ADD
@@ -3438,7 +3536,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                   key={attachment.id ?? `${attachment.type}-${index}`}
                   type="button"
                   onClick={() => removeAttachment(attachment.id, index)}
-                  disabled={sendState === 'sending'}
+                  disabled={sendBusy}
                   title={attachment.path ?? attachment.filePath ?? attachmentDisplayName(attachment)}
                   style={{
                     height: 24,
@@ -3450,7 +3548,7 @@ export default function MessageView({ messages, loading, session, projectView, o
                     fontFamily: "'IBM Plex Mono', monospace",
                     fontSize: 10,
                     padding: '0 7px',
-                    cursor: sendState === 'sending' ? 'not-allowed' : 'pointer',
+                    cursor: sendBusy ? 'not-allowed' : 'pointer',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -3466,14 +3564,17 @@ export default function MessageView({ messages, loading, session, projectView, o
                 value={inputText}
                 onChange={e => {
                   setInputText(e.target.value)
-                  if (sendError) setSendError(null)
-                  // Auto-resize
-                  e.target.style.height = 'auto'
-                  e.target.style.height = `${Math.min(e.target.scrollHeight, 80)}px`
+                  if (sendError && !failedSend) {
+                    setSendError(null)
+                    setSendState('idle')
+                  }
                 }}
                 onKeyDown={handleKeyDown}
-                disabled={sendState === 'sending'}
-                placeholder={activeToolCount > 0 ? `${assistantName} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…` : 'Send a message… (⌘↩ to send)'}
+                placeholder={sendBusy
+                  ? 'Draft your next message…'
+                  : activeToolCount > 0
+                  ? `${assistantName} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
+                  : `Message ${assistantName}…`}
                 rows={1}
                 style={{
                   flex: 1,
@@ -3488,18 +3589,21 @@ export default function MessageView({ messages, loading, session, projectView, o
                   lineHeight: 1.4,
                   outline: 'none',
                   overflow: 'hidden',
-                  opacity: sendState === 'sending' ? 0.5 : 1,
                   transition: 'border-color 0.15s, opacity 0.15s',
                 }}
               />
               {sendState === 'sending' ? (
                 <Button
+                  type="button"
                   onClick={cancelSend}
                   variant="outline"
+                  aria-label="Cancel send"
+                  title="Cancel send"
                   style={{
                     flexShrink: 0,
-                    height: 32,
-                    padding: '0 12px',
+                    width: 34,
+                    height: 34,
+                    padding: 0,
                     background: 'rgba(248,113,113,0.1)',
                     border: '1px solid rgba(248,113,113,0.3)',
                     borderRadius: 6,
@@ -3513,16 +3617,20 @@ export default function MessageView({ messages, loading, session, projectView, o
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  CANCEL
+                  <Square data-icon="inline-start" />
                 </Button>
               ) : (
                 <Button
+                  type="button"
                   onClick={sendMessage}
-                  disabled={!inputText.trim()}
+                  disabled={!canSubmitMessage}
+                  aria-label={awaitingPersistedTurn ? 'Waiting for turn to finish' : 'Send message'}
+                  title={awaitingPersistedTurn ? 'Waiting for turn to finish' : 'Send message'}
                   style={{
                     flexShrink: 0,
-                    height: 32,
-                    padding: '0 12px',
+                    width: 34,
+                    height: 34,
+                    padding: 0,
                     background: 'rgba(139,128,240,0.18)',
                     border: '1px solid rgba(139,128,240,0.3)',
                     borderRadius: 6,
@@ -3531,13 +3639,13 @@ export default function MessageView({ messages, loading, session, projectView, o
                     fontSize: 10,
                     fontWeight: 600,
                     letterSpacing: '0.1em',
-                    cursor: !inputText.trim() ? 'not-allowed' : 'pointer',
+                    cursor: !canSubmitMessage ? 'not-allowed' : 'pointer',
                     transition: 'background 0.15s, color 0.15s',
                     whiteSpace: 'nowrap',
-                    opacity: !inputText.trim() ? 0.55 : 1,
+                    opacity: !canSubmitMessage ? 0.55 : 1,
                   }}
                 >
-                  SEND
+                  <SendHorizontal data-icon="inline-start" />
                 </Button>
               )}
             </div>
