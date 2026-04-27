@@ -1,4 +1,4 @@
-import type { AgentProvider, RunningSessionRef } from './types'
+import type { AgentProvider } from './types'
 
 type RunningSession = {
   provider: AgentProvider
@@ -17,11 +17,4 @@ export function getRunningSession(sessionId: string): RunningSession | undefined
 
 export function clearRunningSession(sessionId: string): void {
   runningSessions.delete(sessionId)
-}
-
-export function listRunningSessions(): RunningSessionRef[] {
-  return [...runningSessions.entries()].map(([sessionId, session]) => ({
-    sessionId,
-    provider: session.provider,
-  }))
 }

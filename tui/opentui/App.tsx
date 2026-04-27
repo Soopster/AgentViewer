@@ -117,7 +117,6 @@ const THEME_GROUPS: Array<{ label: string; themes: TuiThemeMode[] }> = [
 const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
 const DETAIL_REFRESH_MS = 2000
-const RUNNING_SESSION_REFRESH_MS = 1500
 const DEFAULT_SIDEBAR_WIDTH = 32
 const SIDEBAR_RESIZE_STEP = 2
 const MIN_SIDEBAR_WIDTH = 28
@@ -564,15 +563,6 @@ function sessionsShallowEqual(a: Session[], b: Session[]): boolean {
       || prev.cwd !== next.cwd
       || prev.tag !== next.tag
     ) return false
-  }
-  return true
-}
-
-function runningSessionsEqual(a: RunningSessionRef[], b: RunningSessionRef[]): boolean {
-  if (a === b) return true
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    if (a[i].sessionId !== b[i].sessionId || a[i].provider !== b[i].provider) return false
   }
   return true
 }
@@ -2012,27 +2002,18 @@ export default function OpenTuiApp() {
     }
   }, [])
 
-  const refreshRunningSessions = useCallback(async () => {
-    try {
-      const res = await fetch(buildApiUrl('/api/runtime/running'))
-      if (!res.ok) return
-      const json = await res.json().catch(() => ({}))
-      const nextRunning = Array.isArray(json.sessions)
-        ? json.sessions
-          .filter((session: unknown): session is RunningSessionRef => {
-            if (!session || typeof session !== 'object') return false
-            const record = session as Record<string, unknown>
-            return typeof record.sessionId === 'string' && typeof record.provider === 'string'
-          })
-          .map((session: RunningSessionRef) => ({
-            sessionId: session.sessionId,
-            provider: session.provider,
-          }))
-        : []
-      startTransition(() => setRunningSessions((prev) => runningSessionsEqual(prev, nextRunning) ? prev : nextRunning))
-    } catch {
-      // Ignore runtime discovery errors; composer falls back to selected session.
-    }
+  const markSessionRunning = useCallback((ref: RunningSessionRef) => {
+    setRunningSessions((prev) => {
+      if (prev.some((entry) => entry.sessionId === ref.sessionId && entry.provider === ref.provider)) return prev
+      return [...prev, ref]
+    })
+  }, [])
+
+  const clearSessionRunning = useCallback((ref: RunningSessionRef) => {
+    setRunningSessions((prev) => {
+      const next = prev.filter((entry) => !(entry.sessionId === ref.sessionId && entry.provider === ref.provider))
+      return next.length === prev.length ? prev : next
+    })
   }, [])
 
   const refreshSessionMetadata = useCallback((
@@ -2590,6 +2571,11 @@ export default function OpenTuiApp() {
     setComposerError(null)
     // no longer track awaiting state separately
     setComposerLiveText('')
+    const runningRef: RunningSessionRef = {
+      sessionId: targetSession.sessionId,
+      provider: targetSession.provider ?? 'claude',
+    }
+    markSessionRunning(runningRef)
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
 
@@ -2680,6 +2666,7 @@ export default function OpenTuiApp() {
       void reader?.cancel()
       composerAbortRef.current = null
       setComposerLiveText('')
+      clearSessionRunning(runningRef)
     }
   }, [
     composerTargetSession,
@@ -2688,6 +2675,8 @@ export default function OpenTuiApp() {
     provider,
     refreshSessions,
     refreshSelectedSessionDetail,
+    markSessionRunning,
+    clearSessionRunning,
   ])
 
   useEffect(() => {
@@ -2731,10 +2720,7 @@ export default function OpenTuiApp() {
         setSidebarWidthPreference(configuredSidebarWidth)
         setShowToolCalls(configuredShowToolCalls)
         if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
-        await Promise.all([
-          refreshSessions(configuredProvider, false, true),
-          refreshRunningSessions(),
-        ])
+        await refreshSessions(configuredProvider, false, true)
       } catch (err) {
         if (cancelled) return
         setError(err instanceof Error ? err.message : 'Failed to initialize OpenTUI')
@@ -2747,7 +2733,7 @@ export default function OpenTuiApp() {
     return () => {
       cancelled = true
     }
-  }, [refreshRunningSessions, refreshSessions])
+  }, [refreshSessions])
 
   useEffect(() => {
     if (!bootstrapped) return
@@ -2813,19 +2799,6 @@ export default function OpenTuiApp() {
       clearInterval(interval)
     }
   }, [bootstrapped, openTabSessions.length, refreshSessionMetadata, tabsEnabled])
-
-  useEffect(() => {
-    if (!bootstrapped) return undefined
-    let active = true
-    const interval = setInterval(() => {
-      if (!active) return
-      void refreshRunningSessions()
-    }, RUNNING_SESSION_REFRESH_MS)
-    return () => {
-      active = false
-      clearInterval(interval)
-    }
-  }, [bootstrapped, refreshRunningSessions])
 
   useEffect(() => {
     let cancelled = false

@@ -46,7 +46,7 @@ Routes live under `app/api/`:
 - `provider/route.ts` — GET/POST active provider
 - `sessions/route.ts` — list for active provider; `sessions/project/messages/route.ts` for cross-session project feed
 - `sessions/[sessionId]/{route,messages,diagnostics,fork,interrupt,models,rewind,actions}/route.ts` — per-session reads + control actions
-- `runtime/running/route.ts`, `git/route.ts`
+- `git/route.ts`
 
 `proxy.ts` (Next 16's middleware replacement, lives at project root) blocks cross-origin mutation requests against `/api/*` to prevent drive-by CSRF — keep it.
 
