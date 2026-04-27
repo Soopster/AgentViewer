@@ -14,6 +14,9 @@ export type TuiThemeMode =
   | 'tokyo-night-day'
   | 'quiet-light'
   | 'horizon-light'
+  | 'flexoki-light'
+  | 'nord-light'
+  | 'vitesse-light'
   | 'imessage'
   | 'dark'
   | 'solarized-dark'
@@ -33,6 +36,9 @@ export type TuiThemeMode =
   | 'synthwave'
   | 'palenight'
   | 'night-owl'
+  | 'flexoki-dark'
+  | 'cobalt'
+  | 'vitesse-dark'
   | 'cyber'
 export type TuiDensity = 'comfortable' | 'balanced' | 'dense'
 export type TuiTranscriptView = 'conversation' | 'full'
@@ -785,6 +791,138 @@ export const NIGHT_OWL_THEME: TuiThemePalette = {
   userBg: '#1f3b5c',
 } as const
 
+export const FLEXOKI_LIGHT_THEME: TuiThemePalette = {
+  bg: '#fffcf0',
+  surface: '#f9f5e7',
+  surface2: '#f2eecf',
+  surface3: '#e6dfbf',
+  diffAddBg: '#e2ecd0',
+  diffRemoveBg: '#f4d8d3',
+  diffMetaBg: '#dfe9ee',
+  border: '#d8d0bf',
+  border2: '#100f0f',
+  text: '#100f0f',
+  muted: '#6f6e69',
+  dim: '#b7b5ac',
+  violet: '#5e409d',
+  cyan: '#24837b',
+  green: '#66800b',
+  red: '#af3029',
+  amber: '#ad8301',
+  pink: '#ce5d97',
+  userBg: '#e6dfbf',
+} as const
+
+export const NORD_LIGHT_THEME: TuiThemePalette = {
+  bg: '#eceff4',
+  surface: '#f8fafc',
+  surface2: '#e5e9f0',
+  surface3: '#d8dee9',
+  diffAddBg: '#dfead8',
+  diffRemoveBg: '#efdadd',
+  diffMetaBg: '#dce8f1',
+  border: '#c8d0dc',
+  border2: '#4c566a',
+  text: '#2e3440',
+  muted: '#4c566a',
+  dim: '#7b8798',
+  violet: '#5e81ac',
+  cyan: '#5e99a8',
+  green: '#4f7f4f',
+  red: '#bf616a',
+  amber: '#b7791f',
+  pink: '#b45d8f',
+  userBg: '#d8dee9',
+} as const
+
+export const VITESSE_LIGHT_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#f8f8f8',
+  surface2: '#eeeeee',
+  surface3: '#e4e4e4',
+  diffAddBg: '#e1ecd9',
+  diffRemoveBg: '#f2dddd',
+  diffMetaBg: '#dfe8ee',
+  border: '#d7d7d7',
+  border2: '#393a34',
+  text: '#393a34',
+  muted: '#62645a',
+  dim: '#a0a39a',
+  violet: '#9b4d96',
+  cyan: '#1c6b77',
+  green: '#59873a',
+  red: '#ab5959',
+  amber: '#b07d48',
+  pink: '#a65e2b',
+  userBg: '#e4e4e4',
+} as const
+
+export const FLEXOKI_DARK_THEME: TuiThemePalette = {
+  bg: '#100f0f',
+  surface: '#1c1b1a',
+  surface2: '#282726',
+  surface3: '#343331',
+  diffAddBg: '#26351e',
+  diffRemoveBg: '#3d211f',
+  diffMetaBg: '#1f2d34',
+  border: '#403e3c',
+  border2: '#cecdc3',
+  text: '#cecdc3',
+  muted: '#878580',
+  dim: '#575653',
+  violet: '#a699d0',
+  cyan: '#3aa99f',
+  green: '#879a39',
+  red: '#d14d41',
+  amber: '#d0a215',
+  pink: '#ce5d97',
+  userBg: '#24312f',
+} as const
+
+export const COBALT_THEME: TuiThemePalette = {
+  bg: '#002240',
+  surface: '#002b4f',
+  surface2: '#053761',
+  surface3: '#124568',
+  diffAddBg: '#124728',
+  diffRemoveBg: '#5a2234',
+  diffMetaBg: '#0a416e',
+  border: '#1b557c',
+  border2: '#ffc600',
+  text: '#ffffff',
+  muted: '#b7d4ea',
+  dim: '#6f9fc1',
+  violet: '#ff9d00',
+  cyan: '#00c8ff',
+  green: '#3ad900',
+  red: '#ff628c',
+  amber: '#ffc600',
+  pink: '#ff80e1',
+  userBg: '#0a416e',
+} as const
+
+export const VITESSE_DARK_THEME: TuiThemePalette = {
+  bg: '#121212',
+  surface: '#1b1b1b',
+  surface2: '#222222',
+  surface3: '#2f2f2f',
+  diffAddBg: '#263623',
+  diffRemoveBg: '#3e2525',
+  diffMetaBg: '#263334',
+  border: '#393939',
+  border2: '#dbd7ca',
+  text: '#dbd7ca',
+  muted: '#b8b4a8',
+  dim: '#73706a',
+  violet: '#bd976a',
+  cyan: '#4d9375',
+  green: '#80a665',
+  red: '#cb7676',
+  amber: '#c98a7d',
+  pink: '#d4976c',
+  userBg: '#24312f',
+} as const
+
 export let THEME: TuiThemePalette = LIGHT_THEME
 
 export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
@@ -815,12 +953,18 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'tokyo-night-day': return TOKYO_NIGHT_DAY_THEME
     case 'quiet-light': return QUIET_LIGHT_THEME
     case 'horizon-light': return HORIZON_LIGHT_THEME
+    case 'flexoki-light': return FLEXOKI_LIGHT_THEME
+    case 'nord-light': return NORD_LIGHT_THEME
+    case 'vitesse-light': return VITESSE_LIGHT_THEME
     case 'github-dark': return GITHUB_DARK_THEME
     case 'ayu-dark': return AYU_DARK_THEME
     case 'rose-pine': return ROSE_PINE_THEME
     case 'synthwave': return SYNTHWAVE_THEME
     case 'palenight': return PALENIGHT_THEME
     case 'night-owl': return NIGHT_OWL_THEME
+    case 'flexoki-dark': return FLEXOKI_DARK_THEME
+    case 'cobalt': return COBALT_THEME
+    case 'vitesse-dark': return VITESSE_DARK_THEME
     default: return LIGHT_THEME
   }
 }

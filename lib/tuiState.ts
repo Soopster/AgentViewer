@@ -18,6 +18,9 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'tokyo-night-day',
   'quiet-light',
   'horizon-light',
+  'flexoki-light',
+  'nord-light',
+  'vitesse-light',
   'imessage',
   'dark',
   'solarized-dark',
@@ -37,6 +40,9 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'synthwave',
   'palenight',
   'night-owl',
+  'flexoki-dark',
+  'cobalt',
+  'vitesse-dark',
   'cyber',
 ]
 

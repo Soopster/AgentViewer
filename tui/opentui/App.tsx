@@ -86,6 +86,9 @@ const LIGHT_MODES: TuiThemeMode[] = [
   'tokyo-night-day',
   'quiet-light',
   'horizon-light',
+  'flexoki-light',
+  'nord-light',
+  'vitesse-light',
   'imessage',
 ]
 const DARK_MODES: TuiThemeMode[] = [
@@ -106,6 +109,9 @@ const DARK_MODES: TuiThemeMode[] = [
   'rose-pine',
   'palenight',
   'night-owl',
+  'flexoki-dark',
+  'cobalt',
+  'vitesse-dark',
   'synthwave',
   'cyber',
 ]
@@ -929,6 +935,9 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   'tokyo-night-day': 'Tokyo Night daylight',
   'quiet-light': 'Subdued VS Code quiet',
   'horizon-light': 'Horizon warm pastel',
+  'flexoki-light': 'Flexoki warm paper',
+  'nord-light': 'Nord frosted light',
+  'vitesse-light': 'Vitesse low-contrast light',
   imessage: 'iOS Messages bubbles',
   dark: 'Deep navy background',
   'solarized-dark': 'Solarized teal',
@@ -948,6 +957,9 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   synthwave: 'Synthwave neon nights',
   palenight: 'Material Palenight',
   'night-owl': 'Night Owl deep teal',
+  'flexoki-dark': 'Flexoki warm ink',
+  cobalt: 'Cobalt blue console',
+  'vitesse-dark': 'Vitesse low-contrast dark',
   cyber: 'Neon accents',
 }
 
@@ -965,6 +977,9 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   'tokyo-night-day': 'TOKYO NIGHT DAY',
   'quiet-light': 'QUIET LIGHT',
   'horizon-light': 'HORIZON LIGHT',
+  'flexoki-light': 'FLEXOKI LIGHT',
+  'nord-light': 'NORD LIGHT',
+  'vitesse-light': 'VITESSE LIGHT',
   imessage: 'iMESSAGE',
   dark: 'DARK',
   'solarized-dark': 'SOLARIZED DARK',
@@ -984,6 +999,9 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   synthwave: 'SYNTHWAVE',
   palenight: 'PALENIGHT',
   'night-owl': 'NIGHT OWL',
+  'flexoki-dark': 'FLEXOKI DARK',
+  cobalt: 'COBALT',
+  'vitesse-dark': 'VITESSE DARK',
   cyber: 'CYBER',
 }
 

@@ -12,6 +12,9 @@ export type Theme =
   | 'tokyo-night-day'
   | 'quiet-light'
   | 'horizon-light'
+  | 'flexoki-light'
+  | 'nord-light'
+  | 'vitesse-light'
   | 'imessage'
   | 'dark'
   | 'terminal'
@@ -32,6 +35,9 @@ export type Theme =
   | 'synthwave'
   | 'palenight'
   | 'night-owl'
+  | 'flexoki-dark'
+  | 'cobalt'
+  | 'vitesse-dark'
   | 'cyber'
 
 export type ThemeCategory = 'dark' | 'light'
@@ -50,6 +56,9 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   'tokyo-night-day':  { category: 'light', icon: '☀', label: 'Tokyo Night Day' },
   'quiet-light':      { category: 'light', icon: '☀', label: 'Quiet Light' },
   'horizon-light':    { category: 'light', icon: '☀', label: 'Horizon Light' },
+  'flexoki-light':    { category: 'light', icon: '☀', label: 'Flexoki Light' },
+  'nord-light':       { category: 'light', icon: '☀', label: 'Nord Light' },
+  'vitesse-light':    { category: 'light', icon: '☀', label: 'Vitesse Light' },
   imessage:           { category: 'light', icon: '💬', label: 'iMessage' },
   dark:               { category: 'dark',  icon: '☾', label: 'Dark' },
   terminal:           { category: 'dark',  icon: '⌨', label: 'Terminal' },
@@ -70,6 +79,9 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   synthwave:          { category: 'dark',  icon: '✦', label: 'Synthwave' },
   palenight:          { category: 'dark',  icon: '☾', label: 'Palenight' },
   'night-owl':        { category: 'dark',  icon: '☾', label: 'Night Owl' },
+  'flexoki-dark':     { category: 'dark',  icon: '☾', label: 'Flexoki Dark' },
+  cobalt:             { category: 'dark',  icon: '☾', label: 'Cobalt' },
+  'vitesse-dark':     { category: 'dark',  icon: '☾', label: 'Vitesse Dark' },
   cyber:              { category: 'dark',  icon: '✦', label: 'Cyber' },
 }
 
