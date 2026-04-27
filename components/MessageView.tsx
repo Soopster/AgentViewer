@@ -2987,8 +2987,10 @@ export default function MessageView({ messages, loading, session, projectView, o
                 left: 9,
                 top: 10,
                 height: Math.max(virtualTimeline.totalHeight - 10, 0),
-                width: 1,
-                background: 'linear-gradient(to bottom, var(--border-2) 0%, var(--border) 60%, transparent 100%)',
+                width: 2,
+                borderRadius: 999,
+                background: 'linear-gradient(to bottom, color-mix(in srgb, var(--border-2) 92%, var(--text-2)) 0%, var(--border-2) 70%, transparent 100%)',
+                boxShadow: '0 0 0 1px color-mix(in srgb, var(--bg) 72%, transparent), 0 0 10px color-mix(in srgb, var(--border-2) 38%, transparent)',
                 pointerEvents: 'none',
               }}
             />
