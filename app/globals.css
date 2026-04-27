@@ -648,21 +648,34 @@ body {
 [data-theme="imessage"] .timeline-line { display: none !important; }
 
 .timeline-row {
-  border-radius: 8px;
-  transition: background 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+  border-radius: 10px;
+  transition: background 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
 }
 
 .timeline-row:hover,
 .timeline-row:focus-within {
-  background: color-mix(in srgb, var(--surface-2) 58%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-2) 42%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-2) 58%, transparent);
 }
 
 .timeline-row-actions {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-2) 55%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--surface) 40%, transparent);
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-1px);
-  transition: opacity 0.12s ease, transform 0.12s ease;
+  transform: translateY(-2px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 5;
 }
 
 .timeline-row:hover .timeline-row-actions,
@@ -670,6 +683,47 @@ body {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
+}
+
+.timeline-row-action {
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.timeline-row-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+  color: var(--text);
+}
+
+.timeline-row-action--fork:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--violet) 38%, transparent);
+  color: var(--violet);
+}
+
+.timeline-row-action--resume:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cyan) 40%, transparent);
+  color: var(--cyan);
+}
+
+.timeline-row-action--resume-active {
+  background: color-mix(in srgb, var(--cyan) 14%, transparent);
+  border-color: color-mix(in srgb, var(--cyan) 45%, transparent);
+  color: var(--cyan);
+}
+
+.timeline-row-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* Message row: stack dot-free, align to bottom for bubble tails */

@@ -1011,51 +1011,26 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           ))}
         </div>
       )}
-      {row.showForkControls && (
-        <div className="timeline-row-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, margin: '0 0 8px 0' }}>
+      {row.showForkControls && (row.allowFork || row.allowResume) && (
+        <div className="timeline-row-actions">
           {row.allowFork && (
-            <Button
+            <button
+              type="button"
+              className="timeline-row-action timeline-row-action--fork"
               onClick={() => onForkFromMessage(row.message.uuid)}
               disabled={row.forkingMessageId === row.message.uuid}
-              variant="outline"
-              size="sm"
-              style={{
-                height: 22,
-                padding: '0 8px',
-                borderRadius: 4,
-                border: '1px solid rgba(139,128,240,0.18)',
-                background: 'rgba(139,128,240,0.07)',
-                color: 'var(--text-3)',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 10,
-                letterSpacing: '0.06em',
-                cursor: row.forkingMessageId === row.message.uuid ? 'not-allowed' : 'pointer',
-                opacity: row.forkingMessageId === row.message.uuid ? 0.5 : 1,
-              }}
             >
               {row.forkingMessageId === row.message.uuid ? 'FORKING…' : 'FORK HERE'}
-            </Button>
+            </button>
           )}
           {row.allowResume && (
-            <Button
+            <button
+              type="button"
+              className={`timeline-row-action timeline-row-action--resume${row.resumeFromMessageId === row.message.uuid ? ' timeline-row-action--resume-active' : ''}`}
               onClick={() => onToggleResume(row.message.uuid)}
-              variant="outline"
-              size="sm"
-              style={{
-                height: 22,
-                padding: '0 8px',
-                borderRadius: 4,
-                border: `1px solid ${row.resumeFromMessageId === row.message.uuid ? 'rgba(56,217,245,0.35)' : 'rgba(56,217,245,0.18)'}`,
-                background: row.resumeFromMessageId === row.message.uuid ? 'rgba(56,217,245,0.14)' : 'rgba(56,217,245,0.07)',
-                color: row.resumeFromMessageId === row.message.uuid ? 'var(--cyan)' : 'var(--text-3)',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 10,
-                letterSpacing: '0.06em',
-                cursor: 'pointer',
-              }}
             >
               {row.resumeFromMessageId === row.message.uuid ? 'RESUME TARGET' : 'RESUME HERE'}
-            </Button>
+            </button>
           )}
         </div>
       )}
