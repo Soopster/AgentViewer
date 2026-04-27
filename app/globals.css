@@ -660,12 +660,12 @@ body {
 
 .timeline-row-actions {
   position: absolute;
-  top: 6px;
-  right: 10px;
+  top: 0;
+  right: 8px;
   display: flex;
-  gap: 4px;
-  padding: 3px;
-  border-radius: 8px;
+  gap: 3px;
+  padding: 1px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--surface) 78%, transparent);
   border: 1px solid color-mix(in srgb, var(--border-2) 55%, transparent);
   backdrop-filter: blur(10px);
@@ -686,15 +686,15 @@ body {
 }
 
 .timeline-row-action {
-  height: 22px;
-  padding: 0 9px;
-  border-radius: 5px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-2);
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 10px;
-  letter-spacing: 0.06em;
+  font-size: 9px;
+  letter-spacing: 0.05em;
   line-height: 1;
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
