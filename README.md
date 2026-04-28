@@ -21,7 +21,7 @@ It provides a single UI for session browsing, project-level views, message inspe
 - Rewind or rollback where supported by the underlying provider
 - Inspect provider diagnostics and available models
 - Open a command palette with `Ctrl/⌘K` to jump to sessions, projects, providers, and view actions
-- Use the command palette to switch themes or collapse the sidebar without touching the mouse
+- Use the command palette to switch themes, collapse the sidebar, or search indexed message text without touching the mouse
 
 ## Requirements
 
@@ -157,6 +157,14 @@ This directory is intentionally ignored from git. It is used for state such as:
 
 - selected provider
 - locally stored tags or title overrides for providers that do not support native metadata edits
+- lightweight session/message index data for cross-session search and aggregate stats
+
+The index is refreshed opportunistically when sessions and transcripts are read. It can be queried through:
+
+- `GET /api/session-index/search?q=term&provider=all`
+- `GET /api/session-index/stats?provider=all`
+
+Set `AGENT_VIEWER_DISABLE_SESSION_INDEX=1` to disable the local index.
 
 ## Scripts
 

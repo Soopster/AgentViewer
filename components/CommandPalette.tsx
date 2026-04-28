@@ -7,6 +7,7 @@ import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, Comma
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import { applyTheme, getCurrentTheme, subscribeTheme, THEME_GROUPS, THEME_META, type Theme } from '@/lib/themes'
+import type { PersistedSearchResult, PersistedSessionRecord } from '@/lib/sessionPersistence'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 
 type ProjectSelection = {
@@ -43,10 +44,16 @@ type PaletteItem = {
   icon: React.ReactNode
   shortcut?: string
   active?: boolean
-  group: 'actions' | 'projects' | 'sessions' | 'themes'
+  group: 'actions' | 'projects' | 'sessions' | 'messages' | 'themes'
   keywords: string[]
   score: number
   run: () => void
+}
+
+type IndexedSearchResponse = {
+  query: string
+  total: number
+  results: PersistedSearchResult[]
 }
 
 const PROVIDER_ITEMS: Array<{ provider: ProviderSelection; label: string; description: string }> = [
@@ -89,6 +96,20 @@ function getSessionSortMs(session: Session): number {
   if (value == null) return 0
   const ms = new Date(value).getTime()
   return Number.isNaN(ms) ? 0 : ms
+}
+
+function sessionFromPersistedRecord(record: PersistedSessionRecord): Session {
+  return {
+    sessionId: record.sessionId,
+    provider: record.provider,
+    summary: record.summary ?? record.title,
+    customTitle: record.customTitle,
+    firstPrompt: record.firstPrompt,
+    cwd: record.cwd,
+    tag: record.tag,
+    createdAt: record.createdAt,
+    lastModified: record.lastModified,
+  }
 }
 
 function scoreMatch(text: string, query: string): number {
@@ -208,6 +229,50 @@ export default function CommandPalette({
   const theme = useSyncExternalStore(subscribeTheme, getCurrentTheme, () => 'dark')
   const deferredQuery = useDeferredValue(query)
   const normalizedQuery = deferredQuery.trim().toLowerCase()
+  const [indexedResults, setIndexedResults] = useState<PersistedSearchResult[]>([])
+  const [indexedLoading, setIndexedLoading] = useState(false)
+
+  useEffect(() => {
+    if (!open || normalizedQuery.length < 2) {
+      setIndexedResults([])
+      setIndexedLoading(false)
+      return
+    }
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(async () => {
+      const params = new URLSearchParams()
+      params.set('q', deferredQuery.trim())
+      params.set('limit', '8')
+      params.set('provider', provider)
+      params.set('includeWorktrees', String(includeWorktrees))
+      const searchDir = scopeMode === 'project'
+        ? selectedProject?.dir ?? selectedSession?.cwd
+        : undefined
+      if (searchDir) params.set('dir', searchDir)
+
+      setIndexedLoading(true)
+      try {
+        const response = await fetch(`/api/session-index/search?${params.toString()}`, {
+          signal: controller.signal,
+        })
+        const data = await response.json() as IndexedSearchResponse & { error?: string }
+        if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
+        setIndexedResults(data.results ?? [])
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === 'AbortError')) {
+          setIndexedResults([])
+        }
+      } finally {
+        if (!controller.signal.aborted) setIndexedLoading(false)
+      }
+    }, 160)
+
+    return () => {
+      controller.abort()
+      window.clearTimeout(timer)
+    }
+  }, [deferredQuery, includeWorktrees, normalizedQuery.length, open, provider, scopeMode, selectedProject?.dir, selectedSession?.cwd])
 
   useEffect(() => {
     if (!open) return
@@ -410,6 +475,27 @@ export default function CommandPalette({
       .slice(0, 12)
   }, [onSelectSession, normalizedQuery, selectedSession, sessions])
 
+  const indexedMessageItems = useMemo(() => {
+    if (normalizedQuery.length < 2) return []
+    return indexedResults.map((result) => {
+      const session = sessionFromPersistedRecord(result.session)
+      const match = result.matches[0]
+      const project = result.session.cwd ? pathBasename(result.session.cwd) || result.session.cwd : 'No project'
+      return {
+        id: `message:${result.session.key}:${match?.uuid ?? 'metadata'}`,
+        label: result.session.title,
+        description: match?.snippet ?? result.session.cwd ?? result.session.sessionId,
+        icon: <Search size={16} />,
+        shortcut: `${result.matches.length || 1}`,
+        active: sessionTabKey(session) === sessionTabKey(selectedSession ?? { sessionId: '', provider: 'claude' }),
+        group: 'messages' as const,
+        keywords: [result.session.title, result.session.cwd ?? '', project, match?.snippet ?? ''],
+        score: result.score,
+        run: () => onSelectSession(session),
+      }
+    })
+  }, [indexedResults, normalizedQuery.length, onSelectSession, selectedSession])
+
   const themeItems = useMemo(() => THEME_GROUPS.map((group) => {
     const items = group.themes
       .map((themeName) => {
@@ -445,7 +531,10 @@ export default function CommandPalette({
 
   const themeFlatItems = useMemo(() => themeItems.flatMap((group) => group.items), [themeItems])
 
-  const visibleItems = useMemo(() => [...filteredActions, ...projectItems, ...sessionItems, ...themeFlatItems], [filteredActions, projectItems, sessionItems, themeFlatItems])
+  const visibleItems = useMemo(
+    () => [...filteredActions, ...projectItems, ...sessionItems, ...indexedMessageItems, ...themeFlatItems],
+    [filteredActions, indexedMessageItems, projectItems, sessionItems, themeFlatItems],
+  )
 
   useEffect(() => {
     if (!open) {
@@ -542,7 +631,7 @@ export default function CommandPalette({
               Command Palette
             </div>
             <div className="mt-1 truncate font-mono text-[11px] text-[var(--text-3)]">
-              Search sessions, projects, providers, and view controls.
+              Search sessions, projects, message text, providers, and view controls.
             </div>
           </div>
           <div className="shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-[var(--text-3)]">
@@ -578,7 +667,7 @@ export default function CommandPalette({
         />
         <CommandList ref={listRef}>
           {!hasResults && normalizedQuery ? (
-            <CommandEmpty>No matches found.</CommandEmpty>
+            <CommandEmpty>{indexedLoading ? 'Searching indexed messages...' : 'No matches found.'}</CommandEmpty>
           ) : null}
 
           {filteredActions.length > 0 && (
@@ -667,6 +756,42 @@ export default function CommandPalette({
                         <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description} · {provider}</span>
                       </span>
                       <PaletteMetaChip title={item.shortcut}>{item.shortcut}</PaletteMetaChip>
+                    </CommandItem>
+                  )
+                })}
+              </CommandGroup>
+            </>
+          )}
+
+          {indexedMessageItems.length > 0 && (
+            <>
+              <CommandSeparator />
+              <CommandGroup heading="Indexed message matches">
+                {indexedMessageItems.map((item) => {
+                  const provider = indexedResults.find((result) => item.id.startsWith(`message:${result.session.key}:`))?.session.provider ?? 'claude'
+                  const style = providerStyle(provider)
+                  return (
+                    <CommandItem
+                      ref={captureItemRef(item.id)}
+                      key={item.id}
+                      active={item.id === activeId}
+                      onPointerEnter={(event) => activateFromPointer(item.id, event)}
+                      onPointerMove={(event) => activateFromPointer(item.id, event)}
+                      onClick={() => runItem(item)}
+                      title={item.description}
+                    >
+                      <span
+                        className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border font-mono text-[9px] font-semibold uppercase tracking-[-0.02em]"
+                        style={{ color: style.color, background: style.background, borderColor: style.border }}
+                        title={provider}
+                      >
+                        {providerIconLabel(provider)}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium text-[13px] text-[var(--text)]">{item.label}</span>
+                        <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description}</span>
+                      </span>
+                      <PaletteMetaChip title="Indexed message matches">{item.shortcut}</PaletteMetaChip>
                     </CommandItem>
                   )
                 })}

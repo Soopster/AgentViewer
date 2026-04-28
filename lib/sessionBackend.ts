@@ -146,6 +146,7 @@ import {
   setPiStoredTitle,
 } from './piMetadata'
 import { normalizeClaudeHistoryMessages } from './claudeMapper'
+import { syncPersistedSessionMessages, syncPersistedSessions } from './sessionPersistence'
 
 export const maxDuration = 300
 
@@ -711,6 +712,26 @@ async function resolveProvider(provider?: AgentProvider): Promise<AgentProvider>
   return resolved
 }
 
+async function syncSessionsBestEffort(sessions: Session[]): Promise<void> {
+  try {
+    await syncPersistedSessions(sessions)
+  } catch {
+    // The viewer should keep working if the local analytics index is unreadable.
+  }
+}
+
+async function syncMessagesBestEffort(
+  provider: AgentProvider,
+  sessionId: string,
+  messages: SessionMessage[],
+): Promise<void> {
+  try {
+    await syncPersistedSessionMessages(provider, sessionId, messages)
+  } catch {
+    // Persistence is opportunistic and must not break live provider reads.
+  }
+}
+
 async function readCodexThread(sessionId: string, includeTurns: boolean) {
   const client = getCodexClient()
   const response = await client.request<CodexThreadReadResponse>('thread/read', {
@@ -771,6 +792,7 @@ async function listPiSessionsForView({ limit, offset, dir }: ListParams): Promis
 
 export async function listViewSessions(params: ListParams): Promise<Session[]> {
   const provider = params.provider ?? await getConfiguredProvider()
+  let sessions: Session[]
   if (provider === 'all') {
     const combinedLimit = Math.max(params.limit + params.offset, 500)
     const [claude, codex, opencode, copilot, pi] = await Promise.all([
@@ -780,28 +802,39 @@ export async function listViewSessions(params: ListParams): Promise<Session[]> {
       listCopilotSessions({ ...params, provider: 'copilot', limit: combinedLimit, offset: 0 }),
       listPiSessionsForView({ ...params, provider: 'pi', limit: combinedLimit, offset: 0 }),
     ])
-    return [...claude, ...codex, ...opencode, ...copilot, ...pi]
+    sessions = [...claude, ...codex, ...opencode, ...copilot, ...pi]
       .sort((a, b) => {
         const aTime = Number(a.lastModified ?? a.createdAt ?? 0)
         const bTime = Number(b.lastModified ?? b.createdAt ?? 0)
         return bTime - aTime
       })
       .slice(params.offset, params.offset + params.limit)
+    await syncSessionsBestEffort(sessions)
+    return sessions
   }
   if (provider === 'codex') {
-    return listCodexSessions(params)
+    sessions = await listCodexSessions(params)
+    await syncSessionsBestEffort(sessions)
+    return sessions
   }
   if (provider === 'opencode') {
-    const sessions = await listOpenCodeSessions(params)
-    return sessions.slice(params.offset, params.offset + params.limit)
+    sessions = (await listOpenCodeSessions(params)).slice(params.offset, params.offset + params.limit)
+    await syncSessionsBestEffort(sessions)
+    return sessions
   }
   if (provider === 'copilot') {
-    return listCopilotSessions(params)
+    sessions = await listCopilotSessions(params)
+    await syncSessionsBestEffort(sessions)
+    return sessions
   }
   if (provider === 'pi') {
-    return listPiSessionsForView(params)
+    sessions = await listPiSessionsForView(params)
+    await syncSessionsBestEffort(sessions)
+    return sessions
   }
-  return listClaudeSessions(params)
+  sessions = await listClaudeSessions(params)
+  await syncSessionsBestEffort(sessions)
+  return sessions
 }
 
 export async function readViewSessionInfo(sessionId: string, providerOverride?: AgentProvider): Promise<SessionInfo | null> {
@@ -1056,19 +1089,30 @@ function readPiMessagesAll(sessionId: string): SessionMessage[] {
 
 export async function listViewSessionMessages(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessage[]> {
   const provider = await resolveProvider(providerOverride)
+  let messages: SessionMessage[]
   if (provider === 'codex') {
-    return sliceForParams(await readCodexMessagesAll(sessionId), params)
+    messages = await readCodexMessagesAll(sessionId)
+    await syncMessagesBestEffort(provider, sessionId, messages)
+    return sliceForParams(messages, params)
   }
   if (provider === 'opencode') {
-    return sliceForParams(await readOpenCodeMessagesAll(sessionId), params)
+    messages = await readOpenCodeMessagesAll(sessionId)
+    await syncMessagesBestEffort(provider, sessionId, messages)
+    return sliceForParams(messages, params)
   }
   if (provider === 'copilot') {
-    return sliceForParams(await readCopilotMessagesAll(sessionId), params)
+    messages = await readCopilotMessagesAll(sessionId)
+    await syncMessagesBestEffort(provider, sessionId, messages)
+    return sliceForParams(messages, params)
   }
   if (provider === 'pi') {
-    return sliceForParams(readPiMessagesAll(sessionId), params)
+    messages = readPiMessagesAll(sessionId)
+    await syncMessagesBestEffort(provider, sessionId, messages)
+    return sliceForParams(messages, params)
   }
-  return sliceForParams(await readClaudeSessionMessages(sessionId), params)
+  messages = await readClaudeSessionMessages(sessionId)
+  await syncMessagesBestEffort(provider, sessionId, messages)
+  return sliceForParams(messages, params)
 }
 
 export async function listProjectSessionMessageBatches(params: ProjectMessageBatchParams): Promise<{
