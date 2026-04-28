@@ -472,6 +472,11 @@ function TokensPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette;
             )
           })}
       </box>
+
+      <box marginTop={1} flexDirection="column">
+        <text fg={theme.muted}>Message size distribution (tokens)</text>
+        <SizeHistogram values={a.messageSizes} theme={theme} width={width - 2} />
+      </box>
     </box>
   )
 }
