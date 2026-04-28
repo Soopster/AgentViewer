@@ -943,6 +943,17 @@ function buildInsights(a: Analytics): Insight[] {
     }
   }
 
+  // Active time ratio
+  if (a.durationMs !== null && a.durationMs > 0) {
+    const activeRatio = a.activeMs / a.durationMs
+    if (activeRatio > 0.8 && a.durationMs > 10 * 60_000)
+      out.push({ severity: 'good', icon: '🎯', title: 'Sustained focus',
+        detail: `${(activeRatio * 100).toFixed(0)}% of the session was active time — consistently engaged throughout.` })
+    else if (activeRatio < 0.25 && a.durationMs > 30 * 60_000)
+      out.push({ severity: 'info', icon: '⏳', title: 'Interrupted session',
+        detail: `Only ${(activeRatio * 100).toFixed(0)}% active time across ${fmtDuration(a.durationMs)} — session was frequently paused.` })
+  }
+
   // Error rate
   if (a.toolUses > 5) {
     if (a.errorRate > 0.15) {
@@ -988,6 +999,18 @@ function buildInsights(a: Analytics): Insight[] {
       detail: `${a.messages} messages for only ${fmtCost(a.cost)} — cache kept this cheap.` })
   }
 
+  // Cost category breakdown
+  if (a.cost > 0) {
+    const outputShare = a.costByCategory.output / a.cost
+    const cacheShare = (a.costByCategory.cacheRead + a.costByCategory.cacheWrite) / a.cost
+    if (outputShare > 0.6)
+      out.push({ severity: 'info', icon: '🧾', title: 'Output-driven spend',
+        detail: `${(outputShare * 100).toFixed(0)}% of cost came from model output tokens.` })
+    else if (cacheShare > 0.35 && a.cacheHitRate > 0.4)
+      out.push({ severity: 'good', icon: '♻', title: 'Cache-heavy workload',
+        detail: `${(cacheShare * 100).toFixed(0)}% of spend was cache-related, with ${(a.cacheHitRate * 100).toFixed(0)}% cache hit rate.` })
+  }
+
   // Thinking share
   if (a.thinkingBlocks > 0 && a.assistantTextChars > 0) {
     const thinkShare = a.thinkingChars / (a.thinkingChars + a.assistantTextChars)
@@ -996,6 +1019,11 @@ function buildInsights(a: Analytics): Insight[] {
         detail: `${(thinkShare * 100).toFixed(0)}% of assistant output was extended thinking — ${a.thinkingBlocks} blocks, ${fmtNum(a.thinkingChars)} chars.` })
     }
   }
+
+  // Multi-reply chains
+  if (a.turns > 0 && a.avgAssistantChain > 1.5)
+    out.push({ severity: 'info', icon: '🪃', title: 'Multi-reply assistant chains',
+      detail: `${a.avgAssistantChain.toFixed(1)} assistant messages per turn on average.` })
 
   // Agent depth
   if (a.toolsPerTurn > 8) {
@@ -1025,6 +1053,16 @@ function buildInsights(a: Analytics): Insight[] {
     }
   }
 
+  // Top file extension
+  if (a.fileExtensions.length > 0) {
+    const topExt = a.fileExtensions[0]!
+    const totalExtTouches = a.fileExtensions.reduce((sum, [, c]) => sum + c, 0)
+    const share = totalExtTouches > 0 ? topExt[1] / totalExtTouches : 0
+    if (share > 0.55 && topExt[0] !== '(no ext)')
+      out.push({ severity: 'tip', icon: '📁', title: `Mostly ${topExt[0]} work`,
+        detail: `${topExt[0]} accounted for ${(share * 100).toFixed(0)}% of touched file types.` })
+  }
+
   // Shell patterns
   if (ops.bashByVerb.size > 0) {
     const topVerb = [...ops.bashByVerb.entries()].sort((a, b) => b[1] - a[1])[0]!
@@ -1044,6 +1082,19 @@ function buildInsights(a: Analytics): Insight[] {
         out.push({ severity: 'info', icon: '🕒', title: `Peak activity around ${peakHour}:00`,
           detail: `${maxCount} of ${a.messages} messages (${(share * 100).toFixed(0)}%) landed in that single hour.` })
       }
+    }
+  }
+
+  // Peak day of week
+  if (a.messages > 0) {
+    const maxDay = Math.max(...a.dayOfWeekActivity)
+    if (maxDay > 0) {
+      const peakDay = a.dayOfWeekActivity.indexOf(maxDay)
+      const share = maxDay / a.messages
+      const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+      if (share > 0.35)
+        out.push({ severity: 'tip', icon: '📅', title: `Most activity on ${dayLabels[peakDay]}`,
+          detail: `${maxDay} of ${a.messages} messages (${(share * 100).toFixed(0)}%) landed on that day.` })
     }
   }
 
