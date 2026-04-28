@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useId, useMemo, useState } from 'react'
-import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts'
+import { AreaChart, Area, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, ReferenceLine, Cell, LabelList } from 'recharts'
 import type { Analytics, AnalyticsInput, FileOps, TimelinePoint } from '@/lib/analytics'
 import { computeAnalytics, fmtCost, fmtDuration, fmtNum } from '@/lib/analytics'
 
@@ -201,6 +201,30 @@ const LABEL_STYLE: React.CSSProperties = {
   marginBottom: 8,
 }
 
+function ChartTooltip({ active, payload, label, formatter }: {
+  active?: boolean
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  payload?: any[]
+  label?: unknown
+  formatter?: (v: number) => string
+}) {
+  if (!active || !payload?.length) return null
+  return (
+    <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border-2)', padding: '4px 8px', fontSize: 10, borderRadius: 3, color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace" }}>
+      {label != null && String(label) !== '' && (
+        <div style={{ color: 'var(--text-3)', marginBottom: 2, fontSize: 9 }}>{String(label)}</div>
+      )}
+      {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+      {payload.map((p: any, i: number) => (
+        <div key={i} style={{ color: p.color ?? p.fill ?? 'var(--text)' }}>
+          {payload.length > 1 && <span style={{ color: 'var(--text-3)' }}>{p.name}: </span>}
+          {formatter ? formatter(Number(p.value)) : Number(p.value).toLocaleString()}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function Kpi({
   label, value, sub, accent,
 }: {
@@ -284,24 +308,6 @@ function CompositionBar({
   )
 }
 
-function HBar({
-  label, count, max, color, width,
-}: {
-  label: string; count: number; max: number; color: string; width?: number
-}) {
-  const pct = max > 0 ? (count / max) * 100 : 0
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '2px 0', fontSize: 11 }}>
-      <span style={{ width: width ?? 140, color: 'var(--text-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {label}
-      </span>
-      <span style={{ width: 50, color, textAlign: 'right' }}>{count}</span>
-      <span style={{ flex: 1, height: 10, background: 'var(--surface-2)', borderRadius: 2, overflow: 'hidden' }}>
-        <span style={{ display: 'block', width: `${pct}%`, height: '100%', background: color }} />
-      </span>
-    </div>
-  )
-}
 
 function Sparkline({
   values, height, colors,
@@ -315,17 +321,22 @@ function Sparkline({
   const data = values.map((v, i) => ({ index: i, value: v }))
   const primaryColor = colors[0] ?? 'var(--cyan, #5eead4)'
   const gradientId = `gradient-${reactId.replace(/:/g, '_')}`
+  const med = median(values)
 
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <AreaChart data={data} margin={{ top: 2, right: 2, left: 0, bottom: 0 }}>
+      <AreaChart data={data} margin={{ top: 4, right: 2, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor={primaryColor} stopOpacity={0.3}/>
             <stop offset="95%" stopColor={primaryColor} stopOpacity={0}/>
           </linearGradient>
         </defs>
+        {med !== null && (
+          <ReferenceLine y={med} stroke="var(--text-3)" strokeDasharray="3 3" strokeWidth={1} />
+        )}
         <Area type="monotone" dataKey="value" stroke={primaryColor} fill={`url(#${gradientId})`} strokeWidth={1.5} dot={false} />
+        <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
       </AreaChart>
     </ResponsiveContainer>
   )
@@ -483,7 +494,10 @@ function TokensPane({ a }: { a: Analytics }) {
   const cacheSeries  = a.timeline.map((p) => p.cacheReadTokens)
   let sum = 0
   const cumulative = a.timeline.map((p) => (sum += p.outputTokens))
-  const maxOut = Math.max(1, ...outputSeries)
+  const topTurnsData = [...a.timeline]
+    .sort((x, y) => y.outputTokens - x.outputTokens)
+    .slice(0, 10)
+    .map((p) => ({ label: p.ts ? new Date(p.ts).toLocaleTimeString() : `#${p.index + 1}`, tokens: p.outputTokens }))
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -518,20 +532,17 @@ function TokensPane({ a }: { a: Analytics }) {
 
       <div>
         <SectionLabel>Top token-producing turns</SectionLabel>
-        <div>
-          {[...a.timeline]
-            .sort((x, y) => y.outputTokens - x.outputTokens)
-            .slice(0, 10)
-            .map((p) => (
-              <HBar
-                key={p.index}
-                label={`#${p.index + 1}${p.ts ? '  ' + new Date(p.ts).toLocaleTimeString() : ''}`}
-                count={p.outputTokens}
-                max={maxOut}
-                color="var(--violet)"
-              />
-            ))}
-        </div>
+        <ResponsiveContainer width="100%" height={topTurnsData.length * 26 + 24}>
+          <BarChart data={topTurnsData} layout="vertical" margin={{ top: 0, right: 56, left: 0, bottom: 0 }}>
+            <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} tickFormatter={(v: number) => fmtNum(v)} />
+            <YAxis type="category" dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} width={90} />
+            <Tooltip content={(props) => <ChartTooltip {...(props as any)} formatter={fmtNum} />} />
+            <Bar dataKey="tokens" name="tokens" fill="var(--violet)" radius={[0, 2, 2, 0]}>
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+              <LabelList dataKey="tokens" position="right" style={{ fontSize: 10, fill: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace" }} formatter={(v: any) => fmtNum(Number(v ?? 0))} />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
       </div>
     </div>
   )
@@ -545,28 +556,25 @@ function ToolsPane({ a }: { a: Analytics }) {
   if (a.tools.length === 0) {
     return <div style={{ color: 'var(--text-3)' }}>(no tool calls in this session)</div>
   }
-  const max = a.tools[0]!.count
+  const data = a.tools.map((t) => ({ name: t.name, success: t.count - t.errors, errors: t.errors }))
+  const height = data.length * 28 + 24
 
   return (
     <div>
       <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10 }}>
         {a.toolUses} total tool calls · {a.toolErrors} errors · {a.tools.length} distinct
       </div>
-      {a.tools.map((t) => {
-        const color = t.errors > 0 ? 'var(--amber, #fbbf24)' : 'var(--cyan, #5eead4)'
-        return (
-          <div key={t.name} style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '3px 0', fontSize: 12 }}>
-            <span style={{ width: 180, color: 'var(--text)' }}>{t.name}</span>
-            <span style={{ width: 60, color: 'var(--violet)', textAlign: 'right' }}>{t.count}</span>
-            <span style={{ flex: 1, height: 10, background: 'var(--surface-2)', borderRadius: 2, overflow: 'hidden' }}>
-              <span style={{ display: 'block', width: `${(t.count / max) * 100}%`, height: '100%', background: color }} />
-            </span>
-            {t.errors > 0 && (
-              <span style={{ width: 80, color: 'var(--red, #f87171)', fontSize: 11 }}>{t.errors} err</span>
-            )}
-          </div>
-        )
-      })}
+      <ResponsiveContainer width="100%" height={height}>
+        <BarChart data={data} layout="vertical" margin={{ top: 0, right: 44, left: 0, bottom: 0 }}>
+          <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
+          <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} width={160} />
+          <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
+          <Bar dataKey="success" name="calls" stackId="a" fill="var(--cyan, #5eead4)" radius={[0, 0, 0, 0]}>
+            <LabelList dataKey="success" position="right" style={{ fontSize: 10, fill: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace" }} />
+          </Bar>
+          <Bar dataKey="errors" name="errors" stackId="a" fill="var(--amber, #fbbf24)" radius={[0, 2, 2, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
     </div>
   )
 }
@@ -586,7 +594,6 @@ function ActivityPane({ a }: { a: Analytics }) {
     { label: 'Searches',      count: ops.searches,     color: 'var(--pink, #f472b6)' },
     { label: 'Web calls',     count: ops.webFetches,   color: 'var(--cyan, #5eead4)' },
   ]
-  const max = Math.max(1, ...rows.map((r) => r.count))
   const netLines = ops.linesAdded - ops.linesRemoved
 
   const latencies = a.timeline
@@ -618,9 +625,17 @@ function ActivityPane({ a }: { a: Analytics }) {
 
       <div>
         <SectionLabel>Operations breakdown</SectionLabel>
-        {rows.map((r) => (
-          <HBar key={r.label} label={r.label} count={r.count} max={max} color={r.color} />
-        ))}
+        <ResponsiveContainer width="100%" height={120}>
+          <BarChart data={rows} margin={{ top: 4, right: 4, left: -24, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+            <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
+            <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
+            <Bar dataKey="count" radius={[2, 2, 0, 0]}>
+              {rows.map((r, i) => <Cell key={i} fill={r.color} />)}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
       </div>
 
       {(ops.linesAdded + ops.linesRemoved) > 0 && (
@@ -684,14 +699,22 @@ function ActivityPane({ a }: { a: Analytics }) {
 
 function RankedBars({ entries, color }: { entries: [string, number][]; color: string }) {
   if (entries.length === 0) return null
-  const max = Math.max(1, ...entries.map(([, v]) => v))
+  const data = entries.map(([key, count]) => ({
+    label: key.length > 36 ? '…' + key.slice(-35) : key,
+    count,
+  }))
+  const height = data.length * 26 + 24
   return (
-    <div>
-      {entries.map(([key, count]) => {
-        const trimmed = key.length > 50 ? '…' + key.slice(-49) : key
-        return <HBar key={key} label={trimmed} count={count} max={max} color={color} width={320} />
-      })}
-    </div>
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={data} layout="vertical" margin={{ top: 0, right: 44, left: 0, bottom: 0 }}>
+        <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
+        <YAxis type="category" dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} width={220} />
+        <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
+        <Bar dataKey="count" fill={color} radius={[0, 2, 2, 0]}>
+          <LabelList dataKey="count" position="right" style={{ fontSize: 10, fill: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace" }} />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
   )
 }
 
@@ -711,13 +734,16 @@ function SizeHistogram({ values }: { values: number[] }) {
       if (v < b.max) { b.count += 1; break }
     }
   }
-  const max = Math.max(1, ...buckets.map((b) => b.count))
   return (
-    <div>
-      {buckets.map((b) => (
-        <HBar key={b.label} label={b.label} count={b.count} max={max} color="var(--violet)" width={80} />
-      ))}
-    </div>
+    <ResponsiveContainer width="100%" height={120}>
+      <BarChart data={buckets} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+        <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
+        <YAxis tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
+        <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
+        <Bar dataKey="count" fill="var(--violet)" radius={[2, 2, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
   )
 }
 
@@ -736,13 +762,16 @@ function LatencyHistogram({ latencies }: { latencies: number[] }) {
       if (l < b.max) { b.count += 1; break }
     }
   }
-  const max = Math.max(1, ...buckets.map((b) => b.count))
   return (
-    <div>
-      {buckets.map((b) => (
-        <HBar key={b.label} label={b.label} count={b.count} max={max} color="var(--cyan, #5eead4)" width={80} />
-      ))}
-    </div>
+    <ResponsiveContainer width="100%" height={120}>
+      <BarChart data={buckets} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+        <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
+        <YAxis tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
+        <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
+        <Bar dataKey="count" fill="var(--cyan, #5eead4)" radius={[2, 2, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
   )
 }
 
@@ -776,13 +805,18 @@ function TimelinePane({ a }: { a: Analytics }) {
       </div>
 
       <div>
-        <SectionLabel>Messages per bucket</SectionLabel>
-        <Sparkline values={msgCounts} height={80} colors={['var(--cyan, #5eead4)', 'var(--violet)']} />
-      </div>
-
-      <div>
-        <SectionLabel>Output tokens per bucket</SectionLabel>
-        <Sparkline values={outTokens} height={80} colors={['var(--green, #4ade80)', 'var(--amber, #fbbf24)', 'var(--pink, #f472b6)']} />
+        <SectionLabel>Activity per time bucket — messages (bars) · output tokens (line)</SectionLabel>
+        <ResponsiveContainer width="100%" height={120}>
+          <ComposedChart data={msgCounts.map((m, i) => ({ i, messages: m, tokens: outTokens[i] }))} margin={{ top: 4, right: 36, left: -24, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+            <XAxis dataKey="i" tick={false} axisLine={false} tickLine={false} />
+            <YAxis yAxisId="msg" orientation="left" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
+            <YAxis yAxisId="tok" orientation="right" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} tickFormatter={(v: number) => fmtNum(v)} />
+            <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
+            <Bar yAxisId="msg" dataKey="messages" name="msgs" fill="var(--cyan, #5eead4)" opacity={0.8} />
+            <Line yAxisId="tok" dataKey="tokens" name="tokens" type="monotone" stroke="var(--amber, #fbbf24)" strokeWidth={1.5} dot={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
       </div>
 
       <div>
@@ -804,32 +838,17 @@ function TimelinePane({ a }: { a: Analytics }) {
 }
 
 function DayOfWeekBar({ counts }: { counts: number[] }) {
-  const labels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-  const max = Math.max(1, ...counts)
+  const data = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label, i) => ({ label, value: counts[i] ?? 0 }))
   return (
-    <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
-        {counts.map((c, d) => {
-          const pct = (c / max) * 100
-          return (
-            <div key={d} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-              <div style={{ width: '100%', height: 60, background: 'var(--surface-2)', borderRadius: 3, position: 'relative' }}>
-                <div style={{
-                  position: 'absolute',
-                  bottom: 0,
-                  width: '100%',
-                  height: `${pct}%`,
-                  background: c === 0 ? 'var(--surface-2)' : 'var(--violet)',
-                  borderRadius: 3,
-                }} />
-              </div>
-              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{labels[d]}</span>
-              <span style={{ fontSize: 10, color: 'var(--text-2)' }}>{c}</span>
-            </div>
-          )
-        })}
-      </div>
-    </div>
+    <ResponsiveContainer width="100%" height={110}>
+      <BarChart data={data} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+        <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} />
+        <YAxis tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
+        <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
+        <Bar dataKey="value" fill="var(--violet)" radius={[2, 2, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
   )
 }
 
