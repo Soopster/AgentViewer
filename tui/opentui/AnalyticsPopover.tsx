@@ -321,6 +321,19 @@ function SummaryPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette
         { label: 'cache write',value: a.cacheWriteTokens,  color: theme.amber },
       ]} />
 
+      {/* Cost composition */}
+      {a.cost > 0 ? (
+        <box marginTop={1} flexDirection="column">
+          <text fg={theme.muted}>Cost composition</text>
+          <CompositionBar theme={theme} width={width - 2} segments={[
+            { label: `input ${fmtCost(a.costByCategory.input)}`,         value: a.costByCategory.input,      color: theme.cyan },
+            { label: `output ${fmtCost(a.costByCategory.output)}`,       value: a.costByCategory.output,     color: theme.violet },
+            { label: `cache-read ${fmtCost(a.costByCategory.cacheRead)}`, value: a.costByCategory.cacheRead,  color: theme.green },
+            { label: `cache-write ${fmtCost(a.costByCategory.cacheWrite)}`,value: a.costByCategory.cacheWrite, color: theme.amber },
+          ]} />
+        </box>
+      ) : null}
+
       {/* Rates */}
       {rateInPerMin !== null ? (
         <box marginTop={1} flexDirection="column">
@@ -447,6 +460,14 @@ function TokensPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette;
       <box marginTop={1}><text fg={theme.muted}>Cache read tokens per message</text></box>
       <Sparkline values={cacheSeries} width={chartW} height={chartH / 2} theme={theme}
                  colors={[theme.green]} />
+
+      {a.cost > 0 ? (
+        <box marginTop={1} flexDirection="column">
+          <text fg={theme.muted}>{`Cumulative cost (${fmtCost(a.cost)} total)`}</text>
+          <Sparkline values={a.cumulativeCost} width={chartW} height={chartH / 2} theme={theme}
+                     colors={[theme.green, theme.amber]} />
+        </box>
+      ) : null}
 
       <box marginTop={1} flexDirection="column">
         <text fg={theme.muted}>Top token-producing turns</text>
