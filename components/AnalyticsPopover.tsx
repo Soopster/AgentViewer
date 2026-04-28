@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useId, useMemo, useState } from 'react'
-import { AreaChart, Area, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, ReferenceLine, Cell, LabelList } from 'recharts'
+import { AreaChart, Area, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, ReferenceLine, Cell, LabelList, Legend, Brush } from 'recharts'
 import type { Analytics, AnalyticsInput, FileOps, TimelinePoint } from '@/lib/analytics'
 import { computeAnalytics, fmtCost, fmtDuration, fmtNum } from '@/lib/analytics'
 
@@ -805,14 +805,16 @@ function TimelinePane({ a }: { a: Analytics }) {
       </div>
 
       <div>
-        <SectionLabel>Activity per time bucket — messages (bars) · output tokens (line)</SectionLabel>
-        <ResponsiveContainer width="100%" height={120}>
-          <ComposedChart data={msgCounts.map((m, i) => ({ i, messages: m, tokens: outTokens[i] }))} margin={{ top: 4, right: 36, left: -24, bottom: 0 }}>
+        <SectionLabel>Activity per time bucket</SectionLabel>
+        <ResponsiveContainer width="100%" height={180}>
+          <ComposedChart data={msgCounts.map((m, i) => ({ i, messages: m, tokens: outTokens[i] }))} margin={{ top: 4, right: 36, left: -24, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis dataKey="i" tick={false} axisLine={false} tickLine={false} />
             <YAxis yAxisId="msg" orientation="left" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} allowDecimals={false} />
             <YAxis yAxisId="tok" orientation="right" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace" }} axisLine={false} tickLine={false} tickFormatter={(v: number) => fmtNum(v)} />
             <Tooltip content={(props) => <ChartTooltip {...(props as any)} />} />
+            <Legend wrapperStyle={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", paddingTop: 4 }} formatter={(value) => <span style={{ color: 'var(--text-2)' }}>{value}</span>} />
+            <Brush dataKey="i" height={22} stroke="var(--border-2)" fill="var(--surface-2)" travellerWidth={6} />
             <Bar yAxisId="msg" dataKey="messages" name="msgs" fill="var(--cyan, #5eead4)" opacity={0.8} />
             <Line yAxisId="tok" dataKey="tokens" name="tokens" type="monotone" stroke="var(--amber, #fbbf24)" strokeWidth={1.5} dot={false} />
           </ComposedChart>
