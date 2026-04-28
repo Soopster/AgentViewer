@@ -617,6 +617,28 @@ function ActivityPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
         </box>
       ) : null}
 
+      {/* File extensions */}
+      {a.fileExtensions.length > 0 ? (
+        <box flexDirection="column" width={width} marginTop={1}>
+          <text fg={theme.muted}>File extensions touched</text>
+          <RankedBars theme={theme} width={width - 2}
+            entries={a.fileExtensions.slice(0, 12)}
+            color={theme.pink} />
+        </box>
+      ) : null}
+
+      {/* Block types */}
+      <box flexDirection="column" width={width} marginTop={1}>
+        <text fg={theme.muted}>Block types</text>
+        <CompositionBar theme={theme} width={width - 2} segments={[
+          { label: `text (${a.blockTypes.text})`,              value: a.blockTypes.text,       color: theme.cyan },
+          { label: `thinking (${a.blockTypes.thinking})`,      value: a.blockTypes.thinking,   color: theme.amber },
+          { label: `tool use (${a.blockTypes.toolUse})`,       value: a.blockTypes.toolUse,    color: theme.violet },
+          { label: `tool result (${a.blockTypes.toolResult})`, value: a.blockTypes.toolResult, color: theme.green },
+          { label: `other (${a.blockTypes.other})`,            value: a.blockTypes.other,      color: theme.dim },
+        ]} />
+      </box>
+
       {/* Latency histogram */}
       {latencies.length > 0 ? (
         <box flexDirection="column" width={width} marginTop={1}>
