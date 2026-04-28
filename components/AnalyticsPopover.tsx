@@ -4,7 +4,7 @@ import { useEffect, useId, useMemo, useState } from 'react'
 import { AreaChart, Area, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, ReferenceLine, Cell, LabelList, Legend, Brush } from 'recharts'
 import type { Analytics, AnalyticsInput, FileOps, TimelinePoint } from '@/lib/analytics'
 import { computeAnalytics, fmtCost, fmtDuration, fmtNum } from '@/lib/analytics'
-import { type Insight, type InsightSeverity, buildInsights, median, percentile } from '@/lib/analyticsInsights'
+import { type Insight, type InsightSeverity, buildInsights, median, percentile, sortInsights, summarizeActivity, summarizeCache, summarizePace, summarizeRisk } from '@/lib/analyticsInsights'
 
 type PaneId = 0 | 1 | 2 | 3 | 4 | 5 | 6
 
@@ -897,11 +897,49 @@ const SEVERITY_COLORS: Record<InsightSeverity, { fg: string; bg: string; border:
 
 function InsightsPane({ a }: { a: Analytics }) {
   const insights = useMemo(() => buildInsights(a), [a])
+  const topTakeaways = useMemo(() => sortInsights(insights).slice(0, 3), [insights])
+  const risk     = useMemo(() => summarizeRisk(a),     [a])
+  const pace     = useMemo(() => summarizePace(a),     [a])
+  const activity = useMemo(() => summarizeActivity(a), [a])
+  const cache    = useMemo(() => summarizeCache(a),    [a])
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>
+      {/* Digest KPI row */}
+      <KpiRow>
+        <Kpi label="Cost"     value={fmtCost(a.cost)}    accent={risk.accent}     sub={a.turns > 0 ? `${fmtCost(a.costPerTurn)}/turn` : 'no turns'} />
+        <Kpi label="Risk"     value={risk.label}         accent={risk.accent}     sub={risk.detail} />
+        <Kpi label="Pace"     value={pace.label}         accent={pace.accent}     sub={pace.detail} />
+      </KpiRow>
+      <KpiRow>
+        <Kpi label="Activity" value={activity.label}     accent={activity.accent} sub={activity.detail} />
+        <Kpi label="Cache"    value={cache.label}        accent={cache.accent}    sub={cache.detail} />
+        <Kpi label="Turns"    value={String(a.turns)}    accent="var(--violet)"   sub={a.turns > 0 ? `${a.assistantMessages} assistant replies` : 'no turns'} />
+      </KpiRow>
+
+      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
         {insights.length} observation{insights.length === 1 ? '' : 's'} from this session
       </div>
+
+      {/* Top takeaways */}
+      {topTakeaways.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-2)', letterSpacing: '0.06em' }}>Top takeaways</div>
+          {topTakeaways.map((ins, i) => {
+            const c = SEVERITY_COLORS[ins.severity]
+            return (
+              <div key={ins.title} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <span style={{ fontSize: 11, color: c.fg, flexShrink: 0, width: 18 }}>{i + 1}.</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                  <span style={{ fontSize: 12, color: c.fg, fontWeight: 500 }}>{ins.icon} {ins.title}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>{ins.detail}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       {insights.map((ins, i) => {
         const c = SEVERITY_COLORS[ins.severity]
         return (
