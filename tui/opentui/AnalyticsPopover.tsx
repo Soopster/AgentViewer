@@ -743,6 +743,11 @@ function TimelinePane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
         <text fg={theme.muted}>Activity by hour of day (local)</text>
         <HourHeatmap counts={a.hourActivity} theme={theme} width={Math.max(48, width - 4)} />
       </box>
+
+      <box marginTop={1} flexDirection="column">
+        <text fg={theme.muted}>Activity by day of week (local)</text>
+        <DayOfWeekBar counts={a.dayOfWeekActivity} theme={theme} width={Math.max(28, width - 4)} />
+      </box>
     </box>
   )
 }
