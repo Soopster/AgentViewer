@@ -1435,6 +1435,79 @@ function buildInsights(a: Analytics): Insight[] {
     }
   }
 
+  // Context window pressure
+  if (a.messageSizes.length > 0) {
+    const lastSize = a.messageSizes[a.messageSizes.length - 1]!
+    if (lastSize > 180_000) {
+      out.push({
+        severity: 'warn',
+        icon: '!!',
+        title: 'Context window near limit',
+        detail: `Latest message is ${fmtNum(lastSize)} tokens - approaching the 200k limit. Consider compressing context or starting a new session.`,
+      })
+    } else if (lastSize > 130_000) {
+      out.push({
+        severity: 'warn',
+        icon: '▲',
+        title: 'Context window filling up',
+        detail: `Latest message is ${fmtNum(lastSize)} tokens. Over half the context window is consumed - latency and cost will keep rising.`,
+      })
+    }
+  }
+
+  // Cache primed but not reused
+  if (a.cacheWriteTokens > 10_000 && a.cacheReadTokens < 1_000 && a.turns > 1) {
+    out.push({
+      severity: 'tip',
+      icon: '⊘',
+      title: 'Cache primed but not reused',
+      detail: `${fmtNum(a.cacheWriteTokens)} tokens written to cache but only ${fmtNum(a.cacheReadTokens)} read back across ${a.turns} turns. Cache expires after 5 min - shorter gaps between turns leverage it best.`,
+    })
+  }
+
+  // Code changed without running it
+  if (editTotal >= 8 && ops.bashCommands === 0 && ops.linesAdded + ops.linesRemoved > 50) {
+    out.push({
+      severity: 'tip',
+      icon: '○',
+      title: 'Code changed without running it',
+      detail: `${editTotal} edits across ${ops.filesTouched.size} file${ops.filesTouched.size === 1 ? '' : 's'} but no shell commands - changes weren't verified by running or testing during this session.`,
+    })
+  }
+
+  // Fully autonomous single-prompt run
+  if (a.userMessages <= 1 && a.assistantMessages >= 5 && a.toolUses >= 3) {
+    out.push({
+      severity: 'info',
+      icon: '◉',
+      title: 'Fully autonomous run',
+      detail: `${a.assistantMessages} assistant turns and ${a.toolUses} tool calls driven by a single prompt - largely uninterrupted agentic execution.`,
+    })
+  }
+
+  // Context-heavy / skewed I/O ratio
+  if (a.outputTokens > 0 && a.inputTokens / a.outputTokens > 20 && a.inputTokens > 100_000) {
+    out.push({
+      severity: 'tip',
+      icon: '⇣',
+      title: 'Context-heavy session',
+      detail: `${fmtNum(a.inputTokens)} input vs ${fmtNum(a.outputTokens)} output tokens (${(a.inputTokens / a.outputTokens).toFixed(0)}:1 ratio) - a large prompt is re-sent every turn, driving most of the cost.`,
+    })
+  }
+
+  // Night owl
+  if (a.messages > 5) {
+    const nightMsgs = [0, 1, 2, 3, 4].reduce((s, h) => s + (a.hourActivity[h] ?? 0), 0)
+    if (nightMsgs / a.messages > 0.5) {
+      out.push({
+        severity: 'info',
+        icon: '●',
+        title: 'Night owl session',
+        detail: `${Math.round((nightMsgs / a.messages) * 100)}% of messages sent between midnight and 5am local time.`,
+      })
+    }
+  }
+
   if (out.length === 0) {
     out.push({
       severity: 'info',
