@@ -1315,9 +1315,35 @@ function TodoWriteCard({ thread }: { thread: ToolThread }) {
 
 // ── Agent card ────────────────────────────────────────────────────────────────
 
+type SubagentMessage = {
+  type: string
+  uuid: string
+  message: { role: string; content: string | Array<{ type: string; text?: string; name?: string }> }
+  timestamp?: string
+}
+
+function extractTextContent(content: SubagentMessage['message']['content']): string {
+  if (typeof content === 'string') return content
+  return content
+    .filter((b) => b.type === 'text' && b.text)
+    .map((b) => b.text ?? '')
+    .join('\n')
+    .trim()
+}
+
+function extractToolNames(content: SubagentMessage['message']['content']): string[] {
+  if (typeof content === 'string') return []
+  return content.filter((b) => b.type === 'tool_use' && b.name).map((b) => b.name ?? '')
+}
+
 function AgentCard({ thread }: { thread: ToolThread }) {
+  const sessionId = use(SessionContext)
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const [transcriptOpen, setTranscriptOpen] = useState(false)
+  const [transcriptMessages, setTranscriptMessages] = useState<SubagentMessage[] | null>(null)
+  const [transcriptLoading, setTranscriptLoading] = useState(false)
+
   const input = thread.toolUse.input as {
     description?: string; prompt?: string; subagent_type?: string
     model?: string; run_in_background?: boolean; max_turns?: number
@@ -1336,13 +1362,35 @@ function AgentCard({ thread }: { thread: ToolThread }) {
   const statusLabels: Record<string, string> = {
     completed: 'done', async_launched: 'launched', sub_agent_entered: 'entered',
   }
-  const resultText = (parsed?.content as Array<{ text?: string }>)?.[0]?.text
-    ?? (parsed?.message as string)
-    ?? ''
+  const resultText       = (parsed?.content as Array<{ text?: string }>)?.[0]?.text ?? (parsed?.message as string) ?? ''
   const totalTokens       = parsed?.totalTokens        as number | undefined
   const totalToolUseCount = parsed?.totalToolUseCount   as number | undefined
   const totalDurationMs   = parsed?.totalDurationMs     as number | undefined
   const outputFile        = parsed?.outputFile          as string | undefined
+  const agentId           = parsed?.agentId             as string | undefined
+  const toolStats         = parsed?.toolStats           as { readCount?: number; searchCount?: number; bashCount?: number; editFileCount?: number; linesAdded?: number; linesRemoved?: number } | undefined
+
+  const canViewTranscript = !!agentId && !!sessionId && (status === 'completed' || status === 'async_launched')
+
+  const loadTranscript = async () => {
+    if (transcriptMessages || !agentId || !sessionId) return
+    setTranscriptLoading(true)
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/subagents/${agentId}/messages`)
+      const data = await res.json() as { messages?: SubagentMessage[] }
+      setTranscriptMessages(data.messages ?? [])
+    } catch {
+      setTranscriptMessages([])
+    } finally {
+      setTranscriptLoading(false)
+    }
+  }
+
+  const handleTranscriptToggle = () => {
+    const next = !transcriptOpen
+    setTranscriptOpen(next)
+    if (next) loadTranscript()
+  }
 
   return (
     <div style={{ border: '1px solid var(--border)', borderLeft: `2px solid ${c}`, borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
@@ -1379,11 +1427,17 @@ function AgentCard({ thread }: { thread: ToolThread }) {
 
       {/* Stats row for completed synchronous agents */}
       {status === 'completed' && (totalTokens != null || totalToolUseCount != null || totalDurationMs != null) && (
-        <div style={{ display: 'flex', gap: 16, padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
-          {totalTokens    != null && <span>⬡ {totalTokens.toLocaleString()} tok</span>}
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+          {totalTokens       != null && <span>⬡ {totalTokens.toLocaleString()} tok</span>}
           {totalToolUseCount != null && <span>⚙ {totalToolUseCount} tools</span>}
           {totalDurationMs   != null && <span>⏱ {(totalDurationMs / 1000).toFixed(1)}s</span>}
           {input.model && <span>{input.model}</span>}
+          {toolStats && toolStats.bashCount != null && toolStats.bashCount > 0 && <span style={{ color: 'var(--t-bash)' }}>bash×{toolStats.bashCount}</span>}
+          {toolStats && toolStats.editFileCount != null && toolStats.editFileCount > 0 && <span style={{ color: 'var(--t-edit)' }}>edit×{toolStats.editFileCount}</span>}
+          {toolStats && toolStats.readCount != null && toolStats.readCount > 0 && <span style={{ color: 'var(--t-read)' }}>read×{toolStats.readCount}</span>}
+          {toolStats && toolStats.searchCount != null && toolStats.searchCount > 0 && <span style={{ color: 'var(--t-grep)' }}>search×{toolStats.searchCount}</span>}
+          {toolStats && toolStats.linesAdded != null && toolStats.linesAdded > 0 && <span style={{ color: 'var(--t-edit)' }}>+{toolStats.linesAdded}</span>}
+          {toolStats && toolStats.linesRemoved != null && toolStats.linesRemoved > 0 && <span style={{ color: 'var(--red)' }}>-{toolStats.linesRemoved}</span>}
         </div>
       )}
 
@@ -1391,6 +1445,60 @@ function AgentCard({ thread }: { thread: ToolThread }) {
       {status === 'async_launched' && outputFile && (
         <div style={{ padding: '3px 12px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
           {outputFile}
+        </div>
+      )}
+
+      {/* Subagent transcript toggle */}
+      {canViewTranscript && (
+        <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
+          <button
+            onClick={handleTranscriptToggle}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              width: '100%', padding: '4px 12px',
+              background: 'none', border: 'none', cursor: 'pointer',
+              fontFamily: "'IBM Plex Mono', monospace", fontSize: 11,
+              color: transcriptOpen ? c : 'var(--text-3)',
+              textAlign: 'left',
+            }}
+          >
+            <span style={{ opacity: 0.7 }}>↪</span>
+            <span>{transcriptOpen ? 'HIDE TRANSCRIPT' : 'VIEW TRANSCRIPT'}</span>
+            {transcriptLoading && <span style={{ opacity: 0.5 }}>…</span>}
+            {!transcriptLoading && transcriptMessages && <span style={{ opacity: 0.5 }}>({transcriptMessages.length} msgs)</span>}
+          </button>
+          {transcriptOpen && transcriptMessages && (
+            <div style={{ borderTop: '1px solid var(--border)', maxHeight: 420, overflowY: 'auto', background: 'var(--bg)' }}>
+              {transcriptMessages.length === 0
+                ? <div style={{ padding: '10px 14px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>No messages</div>
+                : transcriptMessages.map((msg) => {
+                    const text  = extractTextContent(msg.message.content)
+                    const tools = extractToolNames(msg.message.content)
+                    const isAssistant = msg.message.role === 'assistant'
+                    if (!text && tools.length === 0) return null
+                    return (
+                      <div key={msg.uuid} style={{ borderBottom: '1px solid var(--border)', padding: '6px 14px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: isAssistant ? c : 'var(--text-3)', letterSpacing: '0.06em' }}>
+                            {isAssistant ? 'CLAUDE' : 'USER'}
+                          </span>
+                          {tools.length > 0 && (
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+                              {tools.join(', ')}
+                            </span>
+                          )}
+                        </div>
+                        {text && (
+                          <div style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 12, color: 'var(--text-2)', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto' }}>
+                            {text.length > 500 ? text.slice(0, 500) + '…' : text}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })
+              }
+            </div>
+          )}
         </div>
       )}
 
@@ -3122,6 +3230,7 @@ function densityConfig(d: MessageDensity): DensityConfig {
 }
 
 const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanced'))
+const SessionContext = createContext<string | undefined>(undefined)
 
 export function MessageDensityProvider({ density, children }: { density: MessageDensity; children: React.ReactNode }) {
   const value = useMemo(() => densityConfig(density), [density])
@@ -3145,6 +3254,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   }, [])
 
   return (
+    <SessionContext.Provider value={message.sessionId}>
     <div className={`msg msg--${message.role}`} style={{ display: 'flex', gap: dc.dotGap, marginBottom: dc.msgGap }}>
       {/* Left column: dot */}
       <div className="msg-dot" style={{ width: 20, flexShrink: 0, paddingTop: 3 }}>
@@ -3206,23 +3316,18 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
               )}
             </span>
           )}
-          {message.origin?.kind && message.origin.kind !== 'task-notification' && (
-            <span
-              style={{
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 10,
-                fontWeight: 600,
-                letterSpacing: '0.1em',
-                color: 'var(--t-other)',
-                background: 'rgba(139,128,240,0.08)',
-                border: '1px solid rgba(139,128,240,0.2)',
-                borderRadius: 3,
-                padding: '1px 5px',
-              }}
-            >
-              {message.origin.kind.toUpperCase()}
-            </span>
-          )}
+          {message.origin?.kind && message.origin.kind !== 'task-notification' && (() => {
+            const isSubagent = message.origin.kind.startsWith('subagent:')
+            const label = isSubagent ? '↪ SUBAGENT' : message.origin.kind.toUpperCase()
+            const color = isSubagent ? 'var(--t-agent)' : 'var(--t-other)'
+            const bg    = isSubagent ? 'rgba(244,114,182,0.08)' : 'rgba(139,128,240,0.08)'
+            const bdr   = isSubagent ? '1px solid rgba(244,114,182,0.22)' : '1px solid rgba(139,128,240,0.2)'
+            return (
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', color, background: bg, border: bdr, borderRadius: 3, padding: '1px 5px' }}>
+                {label}
+              </span>
+            )
+          })()}
           {showSession && message.provider && (
             <span
               style={{
@@ -3282,6 +3387,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
         </div>
       </div>
     </div>
+    </SessionContext.Provider>
   )
 }
 

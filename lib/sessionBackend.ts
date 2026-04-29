@@ -1148,6 +1148,17 @@ export async function listViewSessionMessages(sessionId: string, params: Message
   return sliceForParams(messages, params)
 }
 
+export async function getViewSubagentMessages(
+  sessionId: string,
+  agentId: string,
+  providerOverride?: AgentProvider,
+): Promise<SessionMessage[]> {
+  const provider = await resolveProvider(providerOverride)
+  if (provider !== 'claude') return []
+  const raw = await getSubagentMessages(sessionId, agentId).catch(() => [] as SessionMessage[])
+  return withOriginKind(normalizeClaudeHistoryMessages(raw as unknown[]), `subagent:${agentId}`)
+}
+
 async function listProviderSessionsForIndex(params: {
   provider: AgentProvider
   dir?: string
