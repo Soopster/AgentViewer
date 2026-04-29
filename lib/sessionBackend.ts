@@ -149,6 +149,7 @@ import { normalizeClaudeHistoryMessages } from './claudeMapper'
 import {
   clearPersistedSessionIndex,
   readPersistedIndexStats,
+  removePersistedSession,
   syncPersistedSessionMessages,
   syncPersistedSessions,
   type PersistedIndexStats,
@@ -765,6 +766,14 @@ async function syncMessagesBestEffort(
   }
 }
 
+async function removePersistedSessionBestEffort(provider: AgentProvider, sessionId: string): Promise<void> {
+  try {
+    await removePersistedSession(provider, sessionId)
+  } catch {
+    // Local index cleanup is opportunistic and should not mask provider deletes.
+  }
+}
+
 async function readCodexThread(sessionId: string, includeTurns: boolean) {
   const client = getCodexClient()
   const response = await client.request<CodexThreadReadResponse>('thread/read', {
@@ -1010,15 +1019,18 @@ export async function deleteViewSession(sessionId: string, providerOverride?: Ag
       ...OPENCODE_OPTIONS,
       path: { id: sessionId },
     })
+    await removePersistedSessionBestEffort(provider, sessionId)
     return
   }
   if (provider === 'copilot') {
     const client = await getCopilotClient()
     await client.deleteSession(sessionId)
+    await removePersistedSessionBestEffort(provider, sessionId)
     return
   }
   if (provider === 'claude') {
     await deleteClaudeSession(sessionId)
+    await removePersistedSessionBestEffort(provider, sessionId)
     return
   }
   throw new Error(`Delete is not supported for ${provider} sessions`)

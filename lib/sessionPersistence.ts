@@ -178,7 +178,22 @@ type MessageAggregate = Pick<
 >
 
 let sessionStoreQueue: Promise<void> = Promise.resolve()
+let jsonWriteCounter = 0
 const messageSignatureCache = new Map<string, string>()
+const INDEX_READ_CONCURRENCY = 24
+
+async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
+  return results
+}
 
 function persistenceDisabled(): boolean {
   return process.env.AGENT_VIEWER_DISABLE_SESSION_INDEX === '1'
@@ -198,7 +213,7 @@ async function ensureIndexDirs(): Promise<void> {
 
 async function writeJsonFile(filePath: string, data: unknown): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true })
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${jsonWriteCounter++}.tmp`
   await writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8')
   await rename(tmpPath, filePath)
 }
@@ -347,6 +362,21 @@ export async function clearPersistedSessionIndex(): Promise<void> {
     await ensureIndexDirs()
     const emptyStore: SessionStore = { version: STORE_VERSION, sessions: {} }
     await writeJsonFile(SESSIONS_FILE, emptyStore)
+  })
+  sessionStoreQueue = run.catch(() => {})
+  await run
+}
+
+export async function removePersistedSession(provider: AgentProvider, sessionId: string): Promise<void> {
+  if (persistenceDisabled()) return
+  const sessionKey = persistedSessionKey(provider, sessionId)
+  const run = sessionStoreQueue.then(async () => {
+    messageSignatureCache.delete(sessionKey)
+    await rm(messageFilePath(sessionKey), { force: true })
+    const store = await readSessionStore()
+    if (!store.sessions[sessionKey]) return
+    delete store.sessions[sessionKey]
+    await writeJsonFile(SESSIONS_FILE, store)
   })
   sessionStoreQueue = run.catch(() => {})
   await run
@@ -744,8 +774,7 @@ export async function searchPersistedSessions(params: PersistedSearchParams): Pr
   const sessions = Object.values(sessionStore.sessions).filter((session) => matchesFilters(session, params))
   const messagesOnly = params.messagesOnly === true
 
-  const results: PersistedSearchResult[] = []
-  await Promise.all(sessions.map(async (session) => {
+  const results = await mapConcurrent(sessions, INDEX_READ_CONCURRENCY, async (session): Promise<PersistedSearchResult | null> => {
     let score = messagesOnly ? -1 : scoreText(metadataText(session), normalizedQuery, terms)
     const matches: PersistedSearchMatch[] = []
     const messageStore = await readMessageStore(session.key)
@@ -769,18 +798,20 @@ export async function searchPersistedSessions(params: PersistedSearchParams): Pr
       }
     }
 
-    if (messagesOnly && matches.length === 0) return
-    if (score < 0 && matches.length === 0) return
+    if (messagesOnly && matches.length === 0) return null
+    if (score < 0 && matches.length === 0) return null
     const sortedMatches = matches
       .sort((a, b) => b.score - a.score || (b.timestampMs ?? 0) - (a.timestampMs ?? 0))
-    results.push({
+    return {
       session,
       score: Math.max(score, 0) + matches.length * 15,
       matches: sortedMatches.slice(0, 5),
-    })
-  }))
+    }
+  })
 
-  const sorted = results.sort((a, b) => b.score - a.score || (b.session.lastMessageAt ?? 0) - (a.session.lastMessageAt ?? 0))
+  const sorted = results
+    .filter((result): result is PersistedSearchResult => result !== null)
+    .sort((a, b) => b.score - a.score || (b.session.lastMessageAt ?? 0) - (a.session.lastMessageAt ?? 0))
   return {
     query,
     total: sorted.length,
@@ -813,7 +844,7 @@ export async function readPersistedIndexStats(filters: PersistedIndexFilters = {
     stats.lastIndexedAt = stats.lastIndexedAt === null ? session.indexedAt : Math.max(stats.lastIndexedAt, session.indexedAt)
   }
 
-  const stores = await Promise.all(sessions.map((session) => readMessageStore(session.key)))
+  const stores = await mapConcurrent(sessions, INDEX_READ_CONCURRENCY, (session) => readMessageStore(session.key))
   for (const store of stores) {
     if (!store) continue
     const session = sessionStore.sessions[store.sessionKey]
