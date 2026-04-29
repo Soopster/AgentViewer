@@ -660,6 +660,28 @@
   --t-grep: #ff6b81; --t-glob: #ff8ad6; --t-agent: #ff8ad6; --t-other: #d0c3a8;
 }
 
+/* ── Color scheme for native browser widgets (select, scrollbars, etc.) ─── */
+:root,
+[data-theme="dark"], [data-theme="terminal"], [data-theme="solarized-dark"],
+[data-theme="nord"], [data-theme="gruvbox-dark"], [data-theme="dracula"],
+[data-theme="tokyo-night"], [data-theme="catppuccin-mocha"], [data-theme="one-dark"],
+[data-theme="monokai"], [data-theme="kanagawa"], [data-theme="everforest-dark"],
+[data-theme="obsidian"], [data-theme="github-dark"], [data-theme="ayu-dark"],
+[data-theme="rose-pine"], [data-theme="synthwave"], [data-theme="palenight"],
+[data-theme="night-owl"], [data-theme="flexoki-dark"], [data-theme="cobalt"],
+[data-theme="vitesse-dark"], [data-theme="cyber"] {
+  color-scheme: dark;
+}
+
+[data-theme="light"], [data-theme="imessage"], [data-theme="paper"],
+[data-theme="solarized-light"], [data-theme="github-light"], [data-theme="gruvbox-light"],
+[data-theme="catppuccin-latte"], [data-theme="rose-pine-dawn"], [data-theme="ayu-light"],
+[data-theme="one-light"], [data-theme="everforest-light"], [data-theme="tokyo-night-day"],
+[data-theme="quiet-light"], [data-theme="horizon-light"], [data-theme="flexoki-light"],
+[data-theme="nord-light"], [data-theme="vitesse-light"] {
+  color-scheme: light;
+}
+
 /* ── Reset ───────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; overflow: hidden; }
