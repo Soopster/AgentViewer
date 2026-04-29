@@ -671,6 +671,7 @@
 [data-theme="night-owl"], [data-theme="flexoki-dark"], [data-theme="cobalt"],
 [data-theme="vitesse-dark"], [data-theme="cyber"] {
   color-scheme: dark;
+  --native-color-scheme: dark;
 }
 
 [data-theme="light"], [data-theme="imessage"], [data-theme="paper"],
@@ -680,6 +681,21 @@
 [data-theme="quiet-light"], [data-theme="horizon-light"], [data-theme="flexoki-light"],
 [data-theme="nord-light"], [data-theme="vitesse-light"] {
   color-scheme: light;
+  --native-color-scheme: light;
+}
+
+/* ── Native select theme awareness ─────────────────────────────────────── */
+[data-slot="native-select"] {
+  color-scheme: var(--native-color-scheme);
+  background-color: var(--surface-2);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+[data-slot="native-select"] option,
+[data-slot="native-select"] optgroup {
+  background-color: var(--surface-2);
+  color: var(--text);
 }
 
 /* ── Reset ───────────────────────────────────────────────────────────────── */
