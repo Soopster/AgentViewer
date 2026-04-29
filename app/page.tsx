@@ -25,6 +25,11 @@ type MessageTarget = {
   requestId: number
 }
 
+type SessionListScrollRequest = {
+  sessionKey: string
+  requestId: number
+}
+
 type ProjectMessageBatch = {
   key: string
   sessionId: string
@@ -136,6 +141,7 @@ export default function Home() {
   const [selectedTabKey, setSelectedTabKey] = useState<string | null>(null)
   const [selectedProject, setSelectedProject] = useState<ProjectSelection | null>(null)
   const [targetMessage, setTargetMessage] = useState<MessageTarget | null>(null)
+  const [sessionListScrollRequest, setSessionListScrollRequest] = useState<SessionListScrollRequest | null>(null)
   const [messages, setMessages] = useState<SessionMessage[]>([])
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -154,6 +160,7 @@ export default function Home() {
   const projectPollInFlightRef = useRef(false)
   const sessionsFingerprintRef = useRef('')
   const targetMessageRequestRef = useRef(0)
+  const sessionListScrollRequestRef = useRef(0)
   const selectedSession =
     openTabSessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
     sessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
@@ -438,6 +445,23 @@ export default function Home() {
     }
   }, [fetchSessionMessages, provider, loadSessionsForProvider])
 
+  const scrollSessionListToSession = useCallback((session: Session) => {
+    setSessionListScrollRequest({
+      sessionKey: projectSessionKey(session),
+      requestId: ++sessionListScrollRequestRef.current,
+    })
+  }, [])
+
+  const selectOpenTab = useCallback((session: Session) => {
+    scrollSessionListToSession(session)
+    void selectSession(session)
+  }, [scrollSessionListToSession, selectSession])
+
+  const selectCommandPaletteSession = useCallback((session: Session, nextTargetMessageId?: string) => {
+    scrollSessionListToSession(session)
+    void selectSession(session, nextTargetMessageId)
+  }, [scrollSessionListToSession, selectSession])
+
   function closeTab(sessionKey: string) {
     const idx = openTabSessions.findIndex((s) => projectSessionKey(s) === sessionKey)
     const next = openTabSessions.filter((s) => projectSessionKey(s) !== sessionKey)
@@ -583,6 +607,7 @@ export default function Home() {
             switchingProvider={switchingProvider}
             selectedId={selectedTabKey}
             selectedProject={selectedProject?.dir ?? null}
+            scrollToSessionRequest={sessionListScrollRequest}
             onSelect={selectSession}
             onSelectProject={selectProject}
             onRename={handleRename}
@@ -668,7 +693,7 @@ export default function Home() {
                   onDelete={handleDelete}
                   openTabs={openTabSessions}
                   selectedTabId={selectedTabKey}
-                  onSelectTab={(s) => void selectSession(s)}
+                  onSelectTab={selectOpenTab}
                   onCloseTab={closeTab}
                 />
               </ViewTransition>
@@ -684,7 +709,7 @@ export default function Home() {
                 includeWorktrees={includeWorktrees}
                 messagePaneCollapsed={messagePaneCollapsed}
                 canOpenGit={!!activeProjectDir}
-                onSelectSession={selectSession}
+                onSelectSession={selectCommandPaletteSession}
                 onSelectProject={selectProject}
                 onChangeProvider={handleChangeProvider}
                 onChangeScope={setSessionScope}

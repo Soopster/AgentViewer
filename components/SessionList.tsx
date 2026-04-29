@@ -78,6 +78,7 @@ type Props = {
   switchingProvider: boolean
   selectedId: string | null
   selectedProject: string | null
+  scrollToSessionRequest?: { sessionKey: string; requestId: number } | null
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onRename: (sessionId: string, title: string) => void
@@ -314,6 +315,7 @@ const SessionRow = memo(function SessionRow({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       className={`av-session-row ${selected ? 'av-selected' : ''}`}
+      data-session-key={sessionTabKey(session)}
       style={{
         padding: '10px 16px 10px 24px',
         borderBottom: '1px solid var(--border)',
@@ -522,6 +524,7 @@ const ProjectGroup = memo(function ProjectGroup({
   sessions,
   selectedId,
   selectedProject,
+  scrollToSessionKey,
   onSelect,
   onSelectProject,
   onRename,
@@ -532,6 +535,7 @@ const ProjectGroup = memo(function ProjectGroup({
   sessions: Session[]
   selectedId: string | null
   selectedProject: string | null
+  scrollToSessionKey?: string | null
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onRename: (sessionId: string, title: string) => void
@@ -541,6 +545,13 @@ const ProjectGroup = memo(function ProjectGroup({
   const [hovered, setHovered] = useState(false)
   const isProjectSelected = sameProjectPath(selectedProject, projectKey)
   const hasSelected = isProjectSelected || sessions.some((s) => sessionTabKey(s) === selectedId)
+
+  useEffect(() => {
+    if (!scrollToSessionKey) return
+    if (sessions.some((session) => sessionTabKey(session) === scrollToSessionKey)) {
+      setCollapsed(false)
+    }
+  }, [scrollToSessionKey, sessions])
 
   return (
     <div>
@@ -627,6 +638,7 @@ export default function SessionList({
   switchingProvider,
   selectedId,
   selectedProject,
+  scrollToSessionRequest,
   onSelect,
   onSelectProject,
   onRename,
@@ -650,6 +662,7 @@ export default function SessionList({
   const resizeWidthRef = useRef(sidebarWidth)
   const providerSelectRef = useRef<HTMLSelectElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     resizeWidthRef.current = sidebarWidth
   }, [sidebarWidth])
@@ -812,6 +825,49 @@ export default function SessionList({
     if (tagCounts.has(activeTag)) return
     setActiveTag(null)
   }, [activeTag, tagCounts])
+
+  useEffect(() => {
+    if (!scrollToSessionRequest) return
+    const targetExists = sessions.some((session) => sessionTabKey(session) === scrollToSessionRequest.sessionKey)
+    if (!targetExists) return
+    const targetVisible = filteredSessions.some((indexed) => sessionTabKey(indexed.session) === scrollToSessionRequest.sessionKey)
+    if (targetVisible) return
+    setSearchText('')
+    setActiveTag(null)
+  }, [filteredSessions, scrollToSessionRequest, sessions])
+
+  useEffect(() => {
+    if (!scrollToSessionRequest || collapsed || loading) return
+
+    let frameId: number | null = null
+    let attempts = 0
+    const scrollToRow = () => {
+      const root = rootRef.current
+      const row = root
+        ? Array.from(root.querySelectorAll<HTMLElement>('[data-session-key]'))
+            .find((candidate) => candidate.dataset.sessionKey === scrollToSessionRequest.sessionKey)
+        : null
+
+      if (row) {
+        row.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+        return
+      }
+
+      attempts += 1
+      if (attempts <= 12) frameId = window.requestAnimationFrame(scrollToRow)
+    }
+
+    frameId = window.requestAnimationFrame(scrollToRow)
+    return () => {
+      if (frameId != null) window.cancelAnimationFrame(frameId)
+    }
+  }, [
+    collapsed,
+    filteredSessions,
+    loading,
+    scrollToSessionRequest,
+    sortMode,
+  ])
   const summaryText = loading
     ? 'syncing…'
     : sortMode === 'time'
@@ -825,6 +881,7 @@ export default function SessionList({
   if (collapsed) {
     return (
       <div
+        ref={rootRef}
         style={{
           width: '100%',
           minWidth: 0,
@@ -1435,6 +1492,7 @@ export default function SessionList({
 
   return (
     <div
+      ref={rootRef}
       style={{
         width: '100%',
         minWidth: 0,
@@ -1849,6 +1907,7 @@ export default function SessionList({
                 sessions={groupSessions}
                 selectedId={selectedId}
                 selectedProject={selectedProject}
+                scrollToSessionKey={scrollToSessionRequest?.sessionKey ?? null}
                 onSelect={onSelect}
                 onSelectProject={onSelectProject}
                 onRename={onRename}
