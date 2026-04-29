@@ -1,6 +1,5 @@
 import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { isAgentProvider } from './provider'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from './projectPaths'
 import type { AgentProvider, ApiMessage, ContentBlock, Session, SessionMessage, SystemMessagePayload } from './types'
@@ -180,7 +179,7 @@ type MessageAggregate = Pick<
   | 'indexedAt'
 >
 
-type SqliteDatabase = DatabaseSync
+type SqliteDatabase = any // DatabaseSync from 'node:sqlite' — imported inside openDatabase() to avoid loading on TUI
 type Row = Record<string, unknown>
 
 let database: SqliteDatabase | null = null
@@ -301,6 +300,7 @@ function initializeSchema(db: SqliteDatabase): void {
 }
 
 async function openDatabase(): Promise<SqliteDatabase> {
+  const { DatabaseSync } = await import('node:sqlite')
   await ensureIndexDirs()
   const db = new DatabaseSync(DB_FILE)
   try {
