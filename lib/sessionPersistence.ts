@@ -275,26 +275,6 @@ function initializeSchema(db: SqliteDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS message_tools_session_name_idx ON message_tools(session_key, name);
-
-    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-      text,
-      content='messages',
-      content_rowid='rowid',
-      tokenize='unicode61'
-    );
-
-    CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-      INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-      INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.rowid, old.text);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-      INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.rowid, old.text);
-      INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
-    END;
   `)
   setMeta(db, 'schema_version', String(SCHEMA_VERSION))
 }
@@ -1226,16 +1206,6 @@ function rowToMessageRecord(row: Row): PersistedMessageRecord | null {
   }
 }
 
-function escapeFtsTerm(term: string): string {
-  return `"${term.replace(/"/g, '""')}"`
-}
-
-function ftsQueryForTerms(terms: string[]): string | null {
-  const uniqueTerms = [...new Set(terms)].filter(Boolean)
-  if (uniqueTerms.length === 0) return null
-  return uniqueTerms.map(escapeFtsTerm).join(' OR ')
-}
-
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`)
 }
@@ -1250,37 +1220,25 @@ function selectMessageCandidates(
   db: SqliteDatabase,
   sessionKeys: string[],
   normalizedQuery: string,
-  terms: string[],
+  _terms: string[],
   role?: SessionMessage['type'],
 ): PersistedMessageRecord[] {
-  if (sessionKeys.length === 0) return []
+  if (sessionKeys.length === 0 || !normalizedQuery) return []
   const candidates: PersistedMessageRecord[] = []
-  const ftsQuery = ftsQueryForTerms(terms)
   const chunks = chunkArray(sessionKeys, 500)
 
   for (const chunk of chunks) {
     const placeholders = chunk.map(() => '?').join(', ')
     const roleClause = role ? 'AND m.type = ?' : ''
     const roleParams = role ? [role] : []
-    let rows: Row[] = []
-    if (ftsQuery) {
-      rows = db.prepare(`
-        SELECT m.*
-        FROM messages_fts
-        JOIN messages m ON m.rowid = messages_fts.rowid
-        WHERE messages_fts MATCH ?
-          AND m.session_key IN (${placeholders})
-          ${roleClause}
-      `).all(ftsQuery, ...chunk, ...roleParams) as Row[]
-    } else if (normalizedQuery) {
-      rows = db.prepare(`
-        SELECT m.*
-        FROM messages m
-        WHERE m.session_key IN (${placeholders})
-          ${roleClause}
-          AND lower(m.text) LIKE ? ESCAPE '\\'
-      `).all(...chunk, ...roleParams, `%${escapeLike(normalizedQuery)}%`) as Row[]
-    }
+    const rows = db.prepare(`
+      SELECT m.*
+      FROM messages m
+      WHERE m.session_key IN (${placeholders})
+        ${roleClause}
+        AND lower(m.text) LIKE ? ESCAPE '\\'
+    `).all(...chunk, ...roleParams, `%${escapeLike(normalizedQuery)}%`) as Row[]
+
     for (const row of rows) {
       const message = rowToMessageRecord(row)
       if (message) candidates.push(message)
