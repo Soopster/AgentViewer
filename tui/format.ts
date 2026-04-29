@@ -251,6 +251,31 @@ function extractAgentResultText(content: string | ContentBlock[] | null | undefi
   return parts.length > 0 ? parts.join('\n\n') : null
 }
 
+function parseAgentResultJson(content: string | ContentBlock[] | null | undefined): Record<string, unknown> | null {
+  const raw = extractAgentResultText(content)
+  if (!raw) return null
+  try { return JSON.parse(raw) } catch { return null }
+}
+
+function formatAgentStatsSummary(parsed: Record<string, unknown> | null): string {
+  if (!parsed) return ''
+  const parts: string[] = []
+  const ms = parsed.totalDurationMs as number | undefined
+  const tok = parsed.totalTokens as number | undefined
+  const tools = parsed.totalToolUseCount as number | undefined
+  const stats = parsed.toolStats as Record<string, number> | undefined
+  if (ms != null) parts.push(`${(ms / 1000).toFixed(1)}s`)
+  if (tok != null) parts.push(`${tok >= 1000 ? `${(tok / 1000).toFixed(1)}k` : tok} tok`)
+  if (tools != null) parts.push(`${tools} tools`)
+  if (stats) {
+    if (stats.bashCount) parts.push(`bash×${stats.bashCount}`)
+    if (stats.editFileCount) parts.push(`edit×${stats.editFileCount}`)
+    if (stats.readCount) parts.push(`read×${stats.readCount}`)
+    if (stats.linesAdded || stats.linesRemoved) parts.push(`+${stats.linesAdded ?? 0}/-${stats.linesRemoved ?? 0}`)
+  }
+  return parts.join('  ')
+}
+
 function previewTool(thread: ToolThread): TuiTranscriptCardLine[] {
   if (thread.toolUse.name === 'FileChange') {
     return previewFileChange(thread)
@@ -263,14 +288,18 @@ function previewTool(thread: ToolThread): TuiTranscriptCardLine[] {
     const description = typeof input.description === 'string' ? input.description : 'agent'
     const subagentType = typeof input.subagent_type === 'string' ? input.subagent_type : ''
     const isError = thread.result?.is_error === true
+    const parsed = parseAgentResultJson(thread.result?.content)
     const resultText = extractAgentResultText(thread.result?.content)
     const previewText = resultText
       ? truncateLine(resultText.split('\n').find((l) => l.trim()) ?? resultText)
       : thread.result ? 'done' : 'running…'
-    return [
+    const stats = formatAgentStatsSummary(parsed)
+    const lines: TuiTranscriptCardLine[] = [
       line(`agent ${description}${subagentType ? ` [${subagentType}]` : ''}`, 'tool'),
       line(`${isError ? '✗' : '✓'} ${previewText}`, isError ? 'result_error' : 'result_ok'),
     ]
+    if (stats) lines.push(line(stats, 'dim'))
+    return lines
   }
 
   if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write') {
@@ -560,9 +589,10 @@ function synthesizeEditDiff(message: ThreadedMessage): string | undefined {
 }
 
 export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensity = 'balanced'): TuiTranscriptCard {
-  const label = message.role === 'assistant'
+  const baseLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
     : message.role.toUpperCase()
+  const label = message.origin?.kind?.startsWith('subagent:') ? `${baseLabel} ↪ sub` : baseLabel
   const previewLines = message.blocks.flatMap(formatBlock)
   const { processedLines: expandedLines, codeBlocks, hasMermaidDiagrams } = extractCodeBlocksFromBlocks(message.blocks)
   const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
@@ -744,16 +774,18 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
         const description = typeof input.description === 'string' ? input.description : 'agent'
         const subagentType = typeof input.subagent_type === 'string' ? input.subagent_type : ''
         const isError = block.result?.is_error === true
+        const parsed = parseAgentResultJson(block.result?.content)
         const resultText = extractAgentResultText(block.result?.content)
+        const stats = formatAgentStatsSummary(parsed)
         const header = line(`agent ${description}${subagentType ? ` [${subagentType}]` : ''}`, 'tool')
         if (!block.result) return [header, line('running…', 'dim')]
-        if (!resultText) return [header, line(isError ? '✗ ERROR' : '✓ done', isError ? 'result_error' : 'result_ok')]
+        const resultLines = resultText
+          ? sanitizeLine(resultText).split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0).map((l) => line(l, 'agent'))
+          : [line(isError ? '✗ ERROR' : '✓ done', isError ? 'result_error' : 'result_ok')]
         return [
           header,
-          ...sanitizeLine(resultText).split('\n')
-            .map((l) => l.trimEnd())
-            .filter((l) => l.length > 0)
-            .map((l) => line(l, 'agent')),
+          ...resultLines,
+          ...(stats ? [line(stats, 'dim')] : []),
         ]
       }
 
