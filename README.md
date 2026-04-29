@@ -157,9 +157,9 @@ This directory is intentionally ignored from git. It is used for state such as:
 
 - selected provider
 - locally stored tags or title overrides for providers that do not support native metadata edits
-- lightweight session/message index data for cross-session search and aggregate stats
+- SQLite/FTS session/message index data for cross-session search and aggregate stats
 
-The index is refreshed opportunistically when sessions and transcripts are read. It can be queried through:
+The SQLite index is refreshed opportunistically when sessions and transcripts are read. Existing JSON index files are migrated automatically on first use. It can be queried through:
 
 - `GET /api/session-index/search?q=term&provider=all`
 - `GET /api/session-index/stats?provider=all`

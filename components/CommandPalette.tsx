@@ -334,7 +334,7 @@ export default function CommandPalette({
       const params = new URLSearchParams()
       params.set('q', deferredQuery.trim())
       params.set('limit', String(MESSAGE_SEARCH_SESSION_LIMIT))
-      params.set('provider', provider)
+      params.set('provider', 'all')
       params.set('includeWorktrees', String(includeWorktrees))
       params.set('messagesOnly', '1')
       const searchDir = scopeMode === 'project'
@@ -362,7 +362,7 @@ export default function CommandPalette({
       controller.abort()
       window.clearTimeout(timer)
     }
-  }, [deferredQuery, includeWorktrees, normalizedQuery.length, open, provider, scopeMode, selectedProject?.dir, selectedSession?.cwd])
+  }, [deferredQuery, includeWorktrees, normalizedQuery.length, open, scopeMode, selectedProject?.dir, selectedSession?.cwd])
 
   useEffect(() => {
     if (!open) return

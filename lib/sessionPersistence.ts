@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { isAgentProvider } from './provider'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from './projectPaths'
 import type { AgentProvider, ApiMessage, ContentBlock, Session, SessionMessage, SystemMessagePayload } from './types'
@@ -8,7 +9,9 @@ const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data')
 const INDEX_DIR = path.join(DATA_DIR, 'session-index')
 const MESSAGE_DIR = path.join(INDEX_DIR, 'messages')
 const SESSIONS_FILE = path.join(INDEX_DIR, 'sessions.json')
+const DB_FILE = path.join(INDEX_DIR, 'index.sqlite')
 const STORE_VERSION = 1
+const SCHEMA_VERSION = 1
 const MAX_INDEX_TEXT_CHARS = 32_000
 const MAX_FIELD_TEXT_CHARS = 2_000
 const MAX_SNIPPET_CHARS = 260
@@ -177,23 +180,13 @@ type MessageAggregate = Pick<
   | 'indexedAt'
 >
 
-let sessionStoreQueue: Promise<void> = Promise.resolve()
-let jsonWriteCounter = 0
-const messageSignatureCache = new Map<string, string>()
-const INDEX_READ_CONCURRENCY = 24
+type SqliteDatabase = DatabaseSync
+type Row = Record<string, unknown>
 
-async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length)
-  let next = 0
-  async function worker() {
-    while (next < items.length) {
-      const i = next++
-      results[i] = await fn(items[i])
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
-  return results
-}
+let database: SqliteDatabase | null = null
+let databaseOpenPromise: Promise<SqliteDatabase> | null = null
+let persistenceWriteQueue: Promise<void> = Promise.resolve()
+const messageSignatureCache = new Map<string, string>()
 
 function persistenceDisabled(): boolean {
   return process.env.AGENT_VIEWER_DISABLE_SESSION_INDEX === '1'
@@ -203,37 +196,238 @@ export function persistedSessionKey(provider: AgentProvider | undefined, session
   return `${provider ?? 'claude'}:${sessionId}`
 }
 
-function messageFilePath(key: string): string {
-  return path.join(MESSAGE_DIR, `${Buffer.from(key).toString('base64url')}.json`)
-}
-
 async function ensureIndexDirs(): Promise<void> {
-  await mkdir(MESSAGE_DIR, { recursive: true })
+  await mkdir(INDEX_DIR, { recursive: true })
 }
 
-async function writeJsonFile(filePath: string, data: unknown): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true })
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${jsonWriteCounter++}.tmp`
-  await writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8')
-  await rename(tmpPath, filePath)
+function configureDatabase(db: SqliteDatabase): void {
+  db.exec(`
+    PRAGMA foreign_keys = ON;
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+  `)
 }
 
-async function readSessionStore(): Promise<SessionStore> {
+function initializeSchema(db: SqliteDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      key TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT,
+      custom_title TEXT,
+      first_prompt TEXT,
+      cwd TEXT,
+      tag_json TEXT,
+      created_at_json TEXT,
+      last_modified REAL,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      user_messages INTEGER NOT NULL DEFAULT 0,
+      assistant_messages INTEGER NOT NULL DEFAULT 0,
+      system_messages INTEGER NOT NULL DEFAULT 0,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      first_message_at REAL,
+      last_message_at REAL,
+      indexed_at REAL NOT NULL DEFAULT 0,
+      message_signature TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS sessions_provider_idx ON sessions(provider);
+    CREATE INDEX IF NOT EXISTS sessions_cwd_idx ON sessions(cwd);
+    CREATE INDEX IF NOT EXISTS sessions_last_message_at_idx ON sessions(last_message_at DESC);
+
+    CREATE TABLE IF NOT EXISTS messages (
+      key TEXT PRIMARY KEY,
+      session_key TEXT NOT NULL REFERENCES sessions(key) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      uuid TEXT NOT NULL,
+      type TEXT NOT NULL,
+      timestamp TEXT,
+      timestamp_ms REAL,
+      turn_id TEXT,
+      origin_kind TEXT,
+      text TEXT NOT NULL,
+      tool_names_json TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS messages_session_key_idx ON messages(session_key);
+    CREATE INDEX IF NOT EXISTS messages_type_idx ON messages(type);
+    CREATE INDEX IF NOT EXISTS messages_timestamp_ms_idx ON messages(timestamp_ms);
+
+    CREATE TABLE IF NOT EXISTS message_tools (
+      message_key TEXT NOT NULL REFERENCES messages(key) ON DELETE CASCADE,
+      session_key TEXT NOT NULL,
+      name TEXT NOT NULL,
+      PRIMARY KEY (message_key, name)
+    );
+
+    CREATE INDEX IF NOT EXISTS message_tools_session_name_idx ON message_tools(session_key, name);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+      text,
+      content='messages',
+      content_rowid='rowid',
+      tokenize='unicode61'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+      INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.rowid, old.text);
+      INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
+    END;
+  `)
+  setMeta(db, 'schema_version', String(SCHEMA_VERSION))
+}
+
+async function openDatabase(): Promise<SqliteDatabase> {
+  await ensureIndexDirs()
+  const db = new DatabaseSync(DB_FILE)
   try {
-    const raw = await readFile(SESSIONS_FILE, 'utf8')
-    const parsed = JSON.parse(raw) as Partial<SessionStore>
-    if (parsed.version !== STORE_VERSION || !parsed.sessions || typeof parsed.sessions !== 'object') {
-      return { version: STORE_VERSION, sessions: {} }
-    }
-    const sessions: Record<string, PersistedSessionRecord> = {}
-    for (const [key, value] of Object.entries(parsed.sessions)) {
-      const record = normalizeStoredSession(value)
-      if (record) sessions[key] = record
-    }
-    return { version: STORE_VERSION, sessions }
-  } catch {
-    return { version: STORE_VERSION, sessions: {} }
+    configureDatabase(db)
+    initializeSchema(db)
+    await migrateLegacyJsonIfNeeded(db)
+    return db
+  } catch (err) {
+    db.close()
+    throw err
   }
+}
+
+async function getDatabase(): Promise<SqliteDatabase> {
+  if (database) return database
+  if (!databaseOpenPromise) {
+    databaseOpenPromise = openDatabase()
+      .then((db) => {
+        database = db
+        return db
+      })
+      .catch((err) => {
+        databaseOpenPromise = null
+        throw err
+      })
+  }
+  return databaseOpenPromise
+}
+
+async function closeDatabase(): Promise<void> {
+  if (databaseOpenPromise) {
+    await databaseOpenPromise.catch(() => null)
+  }
+  if (database) {
+    database.close()
+  }
+  database = null
+  databaseOpenPromise = null
+}
+
+async function runPersistenceWrite(fn: (db: SqliteDatabase) => void): Promise<void> {
+  const run = persistenceWriteQueue.then(async () => {
+    const db = await getDatabase()
+    fn(db)
+  })
+  persistenceWriteQueue = run.catch(() => {})
+  await run
+}
+
+function withTransaction<T>(db: SqliteDatabase, fn: () => T): T {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const result = fn()
+    db.exec('COMMIT')
+    return result
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
+}
+
+function getMeta(db: SqliteDatabase, key: string): string | null {
+  const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as Row | undefined
+  return typeof row?.value === 'string' ? row.value : null
+}
+
+function setMeta(db: SqliteDatabase, key: string, value: string): void {
+  db.prepare(`
+    INSERT INTO meta(key, value)
+    VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(key, value)
+}
+
+function encodeJsonField(value: unknown): string | null {
+  return value === undefined ? null : JSON.stringify(value)
+}
+
+function decodeCreatedAt(value: unknown): string | number | undefined {
+  if (typeof value !== 'string') return undefined
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return typeof parsed === 'string' || typeof parsed === 'number' ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function decodeTag(value: unknown): string | null | undefined {
+  if (typeof value !== 'string') return undefined
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return typeof parsed === 'string' ? parsed : parsed === null ? null : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function toFiniteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function toNullableTimestamp(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
+function timestampMs(value: string | undefined): number | null {
+  if (!value) return null
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function messageType(value: unknown): SessionMessage['type'] | null {
+  return value === 'user' || value === 'assistant' || value === 'system' ? value : null
+}
+
+function sessionTitle(session: Session): string {
+  return (
+    session.customTitle ??
+    session.summary ??
+    (typeof session.firstPrompt === 'string' ? session.firstPrompt.slice(0, 120) : undefined) ??
+    session.sessionId
+  )
 }
 
 function normalizeStoredSession(value: unknown): PersistedSessionRecord | null {
@@ -269,39 +463,6 @@ function normalizeStoredSession(value: unknown): PersistedSessionRecord | null {
   }
 }
 
-async function updateSessionStore(fn: (store: SessionStore) => boolean): Promise<void> {
-  const run = sessionStoreQueue.then(async () => {
-    const store = await readSessionStore()
-    if (!fn(store)) return
-    await writeJsonFile(SESSIONS_FILE, store)
-  })
-  sessionStoreQueue = run.catch(() => {})
-  await run
-}
-
-function toFiniteNumber(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0
-}
-
-function toNullableTimestamp(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-function timestampMs(value: string | undefined): number | null {
-  if (!value) return null
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
-function sessionTitle(session: Session): string {
-  return (
-    session.customTitle ??
-    session.summary ??
-    (typeof session.firstPrompt === 'string' ? session.firstPrompt.slice(0, 120) : undefined) ??
-    session.sessionId
-  )
-}
-
 function normalizeSession(session: Session, existing?: PersistedSessionRecord): PersistedSessionRecord {
   const provider = session.provider ?? 'claude'
   const key = persistedSessionKey(provider, session.sessionId)
@@ -331,55 +492,309 @@ function normalizeSession(session: Session, existing?: PersistedSessionRecord): 
   }
 }
 
+function rowToSessionRecord(row: Row | undefined): PersistedSessionRecord | null {
+  if (!row) return null
+  const provider = isAgentProvider(row.provider) ? row.provider : null
+  const sessionId = optionalString(row.session_id)
+  const key = optionalString(row.key)
+  if (!provider || !sessionId || !key) return null
+  return {
+    key,
+    provider,
+    sessionId,
+    title: optionalString(row.title) ?? sessionId,
+    summary: optionalString(row.summary),
+    customTitle: optionalString(row.custom_title),
+    firstPrompt: optionalString(row.first_prompt),
+    cwd: optionalString(row.cwd),
+    tag: decodeTag(row.tag_json),
+    createdAt: decodeCreatedAt(row.created_at_json),
+    lastModified: typeof row.last_modified === 'number' ? row.last_modified : undefined,
+    messageCount: toFiniteNumber(row.message_count),
+    userMessages: toFiniteNumber(row.user_messages),
+    assistantMessages: toFiniteNumber(row.assistant_messages),
+    systemMessages: toFiniteNumber(row.system_messages),
+    inputTokens: toFiniteNumber(row.input_tokens),
+    outputTokens: toFiniteNumber(row.output_tokens),
+    cacheReadTokens: toFiniteNumber(row.cache_read_tokens),
+    cacheWriteTokens: toFiniteNumber(row.cache_write_tokens),
+    firstMessageAt: toNullableTimestamp(row.first_message_at),
+    lastMessageAt: toNullableTimestamp(row.last_message_at),
+    indexedAt: toFiniteNumber(row.indexed_at),
+  }
+}
+
+function selectSessionByKey(db: SqliteDatabase, key: string): PersistedSessionRecord | undefined {
+  const row = db.prepare('SELECT * FROM sessions WHERE key = ?').get(key) as Row | undefined
+  return rowToSessionRecord(row) ?? undefined
+}
+
+function selectAllSessions(db: SqliteDatabase): PersistedSessionRecord[] {
+  const rows = db.prepare('SELECT * FROM sessions').all() as Row[]
+  return rows.flatMap((row) => {
+    const session = rowToSessionRecord(row)
+    return session ? [session] : []
+  })
+}
+
+function readSessionSignature(db: SqliteDatabase, sessionKey: string): string | null {
+  const row = db.prepare('SELECT message_signature FROM sessions WHERE key = ?').get(sessionKey) as Row | undefined
+  return typeof row?.message_signature === 'string' ? row.message_signature : null
+}
+
+function upsertSessionRecord(db: SqliteDatabase, record: PersistedSessionRecord, messageSignature: string | null = null): void {
+  db.prepare(`
+    INSERT INTO sessions(
+      key,
+      provider,
+      session_id,
+      title,
+      summary,
+      custom_title,
+      first_prompt,
+      cwd,
+      tag_json,
+      created_at_json,
+      last_modified,
+      message_count,
+      user_messages,
+      assistant_messages,
+      system_messages,
+      input_tokens,
+      output_tokens,
+      cache_read_tokens,
+      cache_write_tokens,
+      first_message_at,
+      last_message_at,
+      indexed_at,
+      message_signature
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      provider = excluded.provider,
+      session_id = excluded.session_id,
+      title = excluded.title,
+      summary = excluded.summary,
+      custom_title = excluded.custom_title,
+      first_prompt = excluded.first_prompt,
+      cwd = excluded.cwd,
+      tag_json = excluded.tag_json,
+      created_at_json = excluded.created_at_json,
+      last_modified = excluded.last_modified,
+      message_count = excluded.message_count,
+      user_messages = excluded.user_messages,
+      assistant_messages = excluded.assistant_messages,
+      system_messages = excluded.system_messages,
+      input_tokens = excluded.input_tokens,
+      output_tokens = excluded.output_tokens,
+      cache_read_tokens = excluded.cache_read_tokens,
+      cache_write_tokens = excluded.cache_write_tokens,
+      first_message_at = excluded.first_message_at,
+      last_message_at = excluded.last_message_at,
+      indexed_at = excluded.indexed_at,
+      message_signature = COALESCE(excluded.message_signature, sessions.message_signature)
+  `).run(
+    record.key,
+    record.provider,
+    record.sessionId,
+    record.title,
+    record.summary ?? null,
+    record.customTitle ?? null,
+    record.firstPrompt ?? null,
+    record.cwd ?? null,
+    encodeJsonField(record.tag),
+    encodeJsonField(record.createdAt),
+    record.lastModified ?? null,
+    record.messageCount,
+    record.userMessages,
+    record.assistantMessages,
+    record.systemMessages,
+    record.inputTokens,
+    record.outputTokens,
+    record.cacheReadTokens,
+    record.cacheWriteTokens,
+    record.firstMessageAt,
+    record.lastMessageAt,
+    record.indexedAt,
+    messageSignature,
+  )
+}
+
 function recordsEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+async function readLegacySessionStore(): Promise<SessionStore> {
+  try {
+    const raw = await readFile(SESSIONS_FILE, 'utf8')
+    const parsed = JSON.parse(raw) as Partial<SessionStore>
+    if (parsed.version !== STORE_VERSION || !parsed.sessions || typeof parsed.sessions !== 'object') {
+      return { version: STORE_VERSION, sessions: {} }
+    }
+    const sessions: Record<string, PersistedSessionRecord> = {}
+    for (const [key, value] of Object.entries(parsed.sessions)) {
+      const record = normalizeStoredSession(value)
+      if (record) sessions[key] = record
+    }
+    return { version: STORE_VERSION, sessions }
+  } catch {
+    return { version: STORE_VERSION, sessions: {} }
+  }
+}
+
+async function cleanupLegacyJsonIndex(): Promise<void> {
+  await Promise.all([
+    rm(SESSIONS_FILE, { force: true }).catch(() => {}),
+    rm(MESSAGE_DIR, { recursive: true, force: true }).catch(() => {}),
+  ])
+}
+
+function normalizeStoredMessage(value: unknown, fallback: { sessionKey: string; provider: AgentProvider; sessionId: string }): PersistedMessageRecord | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const type = messageType(record.type)
+  const uuid = optionalString(record.uuid)
+  if (!type || !uuid) return null
+  const timestamp = optionalString(record.timestamp)
+  const toolNames = Array.isArray(record.toolNames)
+    ? [...new Set(record.toolNames.filter((name): name is string => typeof name === 'string' && name.length > 0))]
+      .sort((a, b) => a.localeCompare(b))
+    : []
+  const sessionKey = optionalString(record.sessionKey) ?? fallback.sessionKey
+  return {
+    key: optionalString(record.key) ?? `${sessionKey}:${uuid}`,
+    sessionKey,
+    provider: isAgentProvider(record.provider) ? record.provider : fallback.provider,
+    sessionId: optionalString(record.sessionId) ?? fallback.sessionId,
+    uuid,
+    type,
+    timestamp,
+    timestampMs: toNullableTimestamp(record.timestampMs) ?? timestampMs(timestamp),
+    turnId: optionalString(record.turnId),
+    originKind: optionalString(record.originKind),
+    text: optionalString(record.text) ?? '',
+    toolNames,
+    inputTokens: toFiniteNumber(record.inputTokens),
+    outputTokens: toFiniteNumber(record.outputTokens),
+    cacheReadTokens: toFiniteNumber(record.cacheReadTokens),
+    cacheWriteTokens: toFiniteNumber(record.cacheWriteTokens),
+  }
+}
+
+async function readLegacyMessageStore(filePath: string): Promise<MessageStore | null> {
+  try {
+    const raw = await readFile(filePath, 'utf8')
+    const parsed = JSON.parse(raw) as Partial<MessageStore>
+    if (parsed.version !== STORE_VERSION || !Array.isArray(parsed.messages)) return null
+    if (!parsed.sessionKey || !isAgentProvider(parsed.provider) || !parsed.sessionId) return null
+    const fallback = { sessionKey: parsed.sessionKey, provider: parsed.provider, sessionId: parsed.sessionId }
+    return {
+      version: STORE_VERSION,
+      sessionKey: parsed.sessionKey,
+      provider: parsed.provider,
+      sessionId: parsed.sessionId,
+      signature: typeof parsed.signature === 'string' ? parsed.signature : '',
+      indexedAt: toFiniteNumber(parsed.indexedAt) || Date.now(),
+      messages: parsed.messages.flatMap((message) => {
+        const normalized = normalizeStoredMessage(message, fallback)
+        return normalized ? [normalized] : []
+      }),
+    }
+  } catch {
+    return null
+  }
+}
+
+async function migrateLegacyJsonIfNeeded(db: SqliteDatabase): Promise<void> {
+  if (getMeta(db, 'legacy_json_migrated') === '1') {
+    await cleanupLegacyJsonIndex()
+    return
+  }
+
+  const legacySessions = await readLegacySessionStore()
+  withTransaction(db, () => {
+    for (const session of Object.values(legacySessions.sessions)) {
+      upsertSessionRecord(db, session)
+    }
+  })
+
+  let files: string[] = []
+  try {
+    files = await readdir(MESSAGE_DIR)
+  } catch {
+    files = []
+  }
+
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue
+    const store = await readLegacyMessageStore(path.join(MESSAGE_DIR, file))
+    if (!store) continue
+    const aggregate = aggregateMessages(store.messages, store.indexedAt)
+    withTransaction(db, () => {
+      const existing = selectSessionByKey(db, store.sessionKey)
+      const session: PersistedSessionRecord = {
+        key: store.sessionKey,
+        provider: store.provider,
+        sessionId: store.sessionId,
+        title: existing?.title ?? store.sessionId,
+        summary: existing?.summary,
+        customTitle: existing?.customTitle,
+        firstPrompt: existing?.firstPrompt,
+        cwd: existing?.cwd,
+        tag: existing?.tag,
+        createdAt: existing?.createdAt,
+        lastModified: existing?.lastModified,
+        ...aggregate,
+      }
+      upsertSessionRecord(db, session, store.signature)
+      replaceMessagesForSession(db, store.sessionKey, store.messages)
+    })
+    if (store.signature) messageSignatureCache.set(store.sessionKey, store.signature)
+  }
+
+  withTransaction(db, () => {
+    setMeta(db, 'legacy_json_migrated', '1')
+  })
+  await cleanupLegacyJsonIndex()
+}
+
 export async function syncPersistedSessions(sessions: Session[]): Promise<void> {
   if (persistenceDisabled() || sessions.length === 0) return
-  await ensureIndexDirs()
-  await updateSessionStore((store) => {
-    let changed = false
-    for (const session of sessions) {
-      const provider = session.provider ?? 'claude'
-      const key = persistedSessionKey(provider, session.sessionId)
-      const next = normalizeSession(session, store.sessions[key])
-      if (!recordsEqual(store.sessions[key], next)) {
-        next.indexedAt = Date.now()
-        store.sessions[key] = next
-        changed = true
+  await runPersistenceWrite((db) => {
+    withTransaction(db, () => {
+      for (const session of sessions) {
+        const provider = session.provider ?? 'claude'
+        const key = persistedSessionKey(provider, session.sessionId)
+        const next = normalizeSession(session, selectSessionByKey(db, key))
+        if (!recordsEqual(selectSessionByKey(db, key), next)) {
+          next.indexedAt = Date.now()
+          upsertSessionRecord(db, next)
+        }
       }
-    }
-    return changed
+    })
   })
 }
 
 export async function clearPersistedSessionIndex(): Promise<void> {
   if (persistenceDisabled()) return
-  const run = sessionStoreQueue.then(async () => {
+  const run = persistenceWriteQueue.then(async () => {
     messageSignatureCache.clear()
+    await closeDatabase()
     await rm(INDEX_DIR, { recursive: true, force: true })
-    await ensureIndexDirs()
-    const emptyStore: SessionStore = { version: STORE_VERSION, sessions: {} }
-    await writeJsonFile(SESSIONS_FILE, emptyStore)
   })
-  sessionStoreQueue = run.catch(() => {})
+  persistenceWriteQueue = run.catch(() => {})
   await run
 }
 
 export async function removePersistedSession(provider: AgentProvider, sessionId: string): Promise<void> {
   if (persistenceDisabled()) return
   const sessionKey = persistedSessionKey(provider, sessionId)
-  const run = sessionStoreQueue.then(async () => {
-    messageSignatureCache.delete(sessionKey)
-    await rm(messageFilePath(sessionKey), { force: true })
-    const store = await readSessionStore()
-    if (!store.sessions[sessionKey]) return
-    delete store.sessions[sessionKey]
-    await writeJsonFile(SESSIONS_FILE, store)
+  await runPersistenceWrite((db) => {
+    withTransaction(db, () => {
+      messageSignatureCache.delete(sessionKey)
+      db.prepare('DELETE FROM sessions WHERE key = ?').run(sessionKey)
+    })
   })
-  sessionStoreQueue = run.catch(() => {})
-  await run
 }
 
 function truncateText(value: string, maxLength: number): string {
@@ -499,12 +914,17 @@ function messageSignature(provider: AgentProvider, messages: SessionMessage[]): 
 
 function mapPersistedMessages(provider: AgentProvider, sessionId: string, messages: SessionMessage[]): PersistedMessageRecord[] {
   const sessionKey = persistedSessionKey(provider, sessionId)
+  const usedKeys = new Map<string, number>()
   return messages.map((message) => {
     const extracted = extractMessageText(message)
     const usage = usageFromMessage(message)
     const uuid = message.uuid || `${message.type}:${message.timestamp ?? ''}`
+    const baseKey = `${sessionKey}:${uuid}`
+    const used = usedKeys.get(baseKey) ?? 0
+    usedKeys.set(baseKey, used + 1)
+    const key = used === 0 ? baseKey : `${baseKey}:${used + 1}`
     return {
-      key: `${sessionKey}:${uuid}`,
+      key,
       sessionKey,
       provider,
       sessionId,
@@ -559,6 +979,58 @@ function aggregateMessages(messages: PersistedMessageRecord[], indexedAt: number
   return aggregate
 }
 
+function replaceMessagesForSession(db: SqliteDatabase, sessionKey: string, messages: PersistedMessageRecord[]): void {
+  db.prepare('DELETE FROM messages WHERE session_key = ?').run(sessionKey)
+  const insertMessage = db.prepare(`
+    INSERT INTO messages(
+      key,
+      session_key,
+      provider,
+      session_id,
+      uuid,
+      type,
+      timestamp,
+      timestamp_ms,
+      turn_id,
+      origin_kind,
+      text,
+      tool_names_json,
+      input_tokens,
+      output_tokens,
+      cache_read_tokens,
+      cache_write_tokens
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  const insertTool = db.prepare(`
+    INSERT OR IGNORE INTO message_tools(message_key, session_key, name)
+    VALUES (?, ?, ?)
+  `)
+  for (const message of messages) {
+    insertMessage.run(
+      message.key,
+      message.sessionKey,
+      message.provider,
+      message.sessionId,
+      message.uuid,
+      message.type,
+      message.timestamp ?? null,
+      message.timestampMs,
+      message.turnId ?? null,
+      message.originKind ?? null,
+      message.text,
+      JSON.stringify(message.toolNames),
+      message.inputTokens,
+      message.outputTokens,
+      message.cacheReadTokens,
+      message.cacheWriteTokens,
+    )
+    for (const toolName of message.toolNames) {
+      insertTool.run(message.key, message.sessionKey, toolName)
+    }
+  }
+}
+
 export async function syncPersistedSessionMessages(
   provider: AgentProvider,
   sessionId: string,
@@ -569,67 +1041,37 @@ export async function syncPersistedSessionMessages(
   const signature = messageSignature(provider, messages)
   if (messageSignatureCache.get(sessionKey) === signature) return
 
-  await ensureIndexDirs()
-  const filePath = messageFilePath(sessionKey)
-  try {
-    const raw = await readFile(filePath, 'utf8')
-    const existing = JSON.parse(raw) as Partial<MessageStore>
-    if (existing.signature === signature) {
+  await runPersistenceWrite((db) => {
+    const existingSignature = readSessionSignature(db, sessionKey)
+    if (existingSignature === signature) {
       messageSignatureCache.set(sessionKey, signature)
       return
     }
-  } catch {
-    // Missing or unreadable message files are rebuilt below.
-  }
 
-  const indexedAt = Date.now()
-  const persistedMessages = mapPersistedMessages(provider, sessionId, messages)
-  const aggregate = aggregateMessages(persistedMessages, indexedAt)
-  const store: MessageStore = {
-    version: STORE_VERSION,
-    sessionKey,
-    provider,
-    sessionId,
-    signature,
-    indexedAt,
-    messages: persistedMessages,
-  }
-
-  await writeJsonFile(filePath, store)
-  messageSignatureCache.set(sessionKey, signature)
-
-  await updateSessionStore((sessionStore) => {
-    const existing = sessionStore.sessions[sessionKey]
-    const next: PersistedSessionRecord = {
-      key: sessionKey,
-      provider,
-      sessionId,
-      title: existing?.title ?? sessionId,
-      summary: existing?.summary,
-      customTitle: existing?.customTitle,
-      firstPrompt: existing?.firstPrompt,
-      cwd: existing?.cwd,
-      tag: existing?.tag,
-      createdAt: existing?.createdAt,
-      lastModified: existing?.lastModified,
-      ...aggregate,
-    }
-    if (recordsEqual(existing, next)) return false
-    sessionStore.sessions[sessionKey] = next
-    return true
+    const indexedAt = Date.now()
+    const persistedMessages = mapPersistedMessages(provider, sessionId, messages)
+    const aggregate = aggregateMessages(persistedMessages, indexedAt)
+    withTransaction(db, () => {
+      const existing = selectSessionByKey(db, sessionKey)
+      const next: PersistedSessionRecord = {
+        key: sessionKey,
+        provider,
+        sessionId,
+        title: existing?.title ?? sessionId,
+        summary: existing?.summary,
+        customTitle: existing?.customTitle,
+        firstPrompt: existing?.firstPrompt,
+        cwd: existing?.cwd,
+        tag: existing?.tag,
+        createdAt: existing?.createdAt,
+        lastModified: existing?.lastModified,
+        ...aggregate,
+      }
+      upsertSessionRecord(db, next, signature)
+      replaceMessagesForSession(db, sessionKey, persistedMessages)
+    })
+    messageSignatureCache.set(sessionKey, signature)
   })
-}
-
-async function readMessageStore(sessionKey: string): Promise<MessageStore | null> {
-  try {
-    const raw = await readFile(messageFilePath(sessionKey), 'utf8')
-    const parsed = JSON.parse(raw) as Partial<MessageStore>
-    if (parsed.version !== STORE_VERSION || !Array.isArray(parsed.messages)) return null
-    if (!parsed.sessionKey || !isAgentProvider(parsed.provider) || !parsed.sessionId) return null
-    return parsed as MessageStore
-  } catch {
-    return null
-  }
 }
 
 function matchesFilters(session: PersistedSessionRecord, filters: PersistedIndexFilters): boolean {
@@ -747,6 +1189,107 @@ function snippetForText(text: string, normalizedQuery: string, terms: string[]):
   return `${prefix}${collapsed.slice(start, end)}${suffix}`
 }
 
+function rowToMessageRecord(row: Row): PersistedMessageRecord | null {
+  const provider = isAgentProvider(row.provider) ? row.provider : null
+  const type = messageType(row.type)
+  const key = optionalString(row.key)
+  const sessionKey = optionalString(row.session_key)
+  const sessionId = optionalString(row.session_id)
+  const uuid = optionalString(row.uuid)
+  if (!provider || !type || !key || !sessionKey || !sessionId || !uuid) return null
+  let toolNames: string[] = []
+  if (typeof row.tool_names_json === 'string') {
+    try {
+      const parsed = JSON.parse(row.tool_names_json) as unknown
+      if (Array.isArray(parsed)) toolNames = parsed.filter((name): name is string => typeof name === 'string')
+    } catch {
+      toolNames = []
+    }
+  }
+  return {
+    key,
+    sessionKey,
+    provider,
+    sessionId,
+    uuid,
+    type,
+    timestamp: optionalString(row.timestamp),
+    timestampMs: toNullableTimestamp(row.timestamp_ms),
+    turnId: optionalString(row.turn_id),
+    originKind: optionalString(row.origin_kind),
+    text: optionalString(row.text) ?? '',
+    toolNames,
+    inputTokens: toFiniteNumber(row.input_tokens),
+    outputTokens: toFiniteNumber(row.output_tokens),
+    cacheReadTokens: toFiniteNumber(row.cache_read_tokens),
+    cacheWriteTokens: toFiniteNumber(row.cache_write_tokens),
+  }
+}
+
+function escapeFtsTerm(term: string): string {
+  return `"${term.replace(/"/g, '""')}"`
+}
+
+function ftsQueryForTerms(terms: string[]): string | null {
+  const uniqueTerms = [...new Set(terms)].filter(Boolean)
+  if (uniqueTerms.length === 0) return null
+  return uniqueTerms.map(escapeFtsTerm).join(' OR ')
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`)
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+function selectMessageCandidates(
+  db: SqliteDatabase,
+  sessionKeys: string[],
+  normalizedQuery: string,
+  terms: string[],
+  role?: SessionMessage['type'],
+): PersistedMessageRecord[] {
+  if (sessionKeys.length === 0) return []
+  const candidates: PersistedMessageRecord[] = []
+  const ftsQuery = ftsQueryForTerms(terms)
+  const chunks = chunkArray(sessionKeys, 500)
+
+  for (const chunk of chunks) {
+    const placeholders = chunk.map(() => '?').join(', ')
+    const roleClause = role ? 'AND m.type = ?' : ''
+    const roleParams = role ? [role] : []
+    let rows: Row[] = []
+    if (ftsQuery) {
+      rows = db.prepare(`
+        SELECT m.*
+        FROM messages_fts
+        JOIN messages m ON m.rowid = messages_fts.rowid
+        WHERE messages_fts MATCH ?
+          AND m.session_key IN (${placeholders})
+          ${roleClause}
+      `).all(ftsQuery, ...chunk, ...roleParams) as Row[]
+    } else if (normalizedQuery) {
+      rows = db.prepare(`
+        SELECT m.*
+        FROM messages m
+        WHERE m.session_key IN (${placeholders})
+          ${roleClause}
+          AND lower(m.text) LIKE ? ESCAPE '\\'
+      `).all(...chunk, ...roleParams, `%${escapeLike(normalizedQuery)}%`) as Row[]
+    }
+    for (const row of rows) {
+      const message = rowToMessageRecord(row)
+      if (message) candidates.push(message)
+    }
+  }
+
+  return candidates
+}
+
 function emptyStats(): PersistedIndexStats {
   return {
     sessions: 0,
@@ -770,48 +1313,53 @@ export async function searchPersistedSessions(params: PersistedSearchParams): Pr
   const limit = Math.max(1, Math.min(params.limit ?? 25, 100))
   const normalizedQuery = query.toLowerCase()
   const terms = tokenizeQuery(query)
-  const sessionStore = await readSessionStore()
-  const sessions = Object.values(sessionStore.sessions).filter((session) => matchesFilters(session, params))
+  const db = await getDatabase()
+  const sessions = selectAllSessions(db).filter((session) => matchesFilters(session, params))
+  const sessionByKey = new Map(sessions.map((session) => [session.key, session]))
   const messagesOnly = params.messagesOnly === true
+  const resultsBySession = new Map<string, PersistedSearchResult>()
 
-  const results = await mapConcurrent(sessions, INDEX_READ_CONCURRENCY, async (session): Promise<PersistedSearchResult | null> => {
-    let score = messagesOnly ? -1 : scoreText(metadataText(session), normalizedQuery, terms)
-    const matches: PersistedSearchMatch[] = []
-    const messageStore = await readMessageStore(session.key)
-
-    if (messageStore) {
-      for (const message of messageStore.messages) {
-        if (params.role && message.type !== params.role) continue
-        const messageScore = scoreText(message.text, normalizedQuery, terms)
-        if (messageScore < 0) continue
-        matches.push({
-          messageKey: message.key,
-          uuid: message.uuid,
-          type: message.type,
-          timestamp: message.timestamp,
-          timestampMs: message.timestampMs,
-          snippet: snippetForText(message.text, normalizedQuery, terms),
-          toolNames: message.toolNames,
-          score: messageScore,
-        })
-        score = Math.max(score, messageScore)
-      }
+  if (!messagesOnly) {
+    for (const session of sessions) {
+      const score = scoreText(metadataText(session), normalizedQuery, terms)
+      if (score >= 0) resultsBySession.set(session.key, { session, score, matches: [] })
     }
+  }
 
-    if (messagesOnly && matches.length === 0) return null
-    if (score < 0 && matches.length === 0) return null
-    const sortedMatches = matches
-      .sort((a, b) => b.score - a.score || (b.timestampMs ?? 0) - (a.timestampMs ?? 0))
-    return {
-      session,
-      score: Math.max(score, 0) + matches.length * 15,
-      matches: sortedMatches.slice(0, 5),
-    }
-  })
+  for (const message of selectMessageCandidates(db, sessions.map((session) => session.key), normalizedQuery, terms, params.role)) {
+    const session = sessionByKey.get(message.sessionKey)
+    if (!session) continue
+    const messageScore = scoreText(message.text, normalizedQuery, terms)
+    if (messageScore < 0) continue
+    const existing = resultsBySession.get(session.key) ?? { session, score: -1, matches: [] }
+    existing.score = Math.max(existing.score, messageScore)
+    existing.matches.push({
+      messageKey: message.key,
+      uuid: message.uuid,
+      type: message.type,
+      timestamp: message.timestamp,
+      timestampMs: message.timestampMs,
+      snippet: snippetForText(message.text, normalizedQuery, terms),
+      toolNames: message.toolNames,
+      score: messageScore,
+    })
+    resultsBySession.set(session.key, existing)
+  }
 
-  const sorted = results
-    .filter((result): result is PersistedSearchResult => result !== null)
+  const sorted = [...resultsBySession.values()]
+    .filter((result) => {
+      if (messagesOnly) return result.matches.length > 0
+      return result.score >= 0 || result.matches.length > 0
+    })
+    .map((result) => ({
+      ...result,
+      score: Math.max(result.score, 0) + result.matches.length * 15,
+      matches: result.matches
+        .sort((a, b) => b.score - a.score || (b.timestampMs ?? 0) - (a.timestampMs ?? 0))
+        .slice(0, 5),
+    }))
     .sort((a, b) => b.score - a.score || (b.session.lastMessageAt ?? 0) - (a.session.lastMessageAt ?? 0))
+
   return {
     query,
     total: sorted.length,
@@ -821,8 +1369,8 @@ export async function searchPersistedSessions(params: PersistedSearchParams): Pr
 
 export async function readPersistedIndexStats(filters: PersistedIndexFilters = {}): Promise<PersistedIndexStats> {
   if (persistenceDisabled()) return emptyStats()
-  const sessionStore = await readSessionStore()
-  const sessions = Object.values(sessionStore.sessions).filter((session) => matchesFilters(session, filters))
+  const db = await getDatabase()
+  const sessions = selectAllSessions(db).filter((session) => matchesFilters(session, filters))
   if (sessions.length === 0) return emptyStats()
 
   const stats = emptyStats()
@@ -834,42 +1382,44 @@ export async function readPersistedIndexStats(filters: PersistedIndexFilters = {
   for (const session of sessions) {
     const providerBucket = providerCounts.get(session.provider) ?? { provider: session.provider, sessions: 0, messages: 0 }
     providerBucket.sessions += 1
+    providerBucket.messages += session.messageCount
     providerCounts.set(session.provider, providerBucket)
 
     const cwd = normalizeProjectPath(session.cwd) || '(unknown)'
     const projectBucket = projectCounts.get(cwd) ?? { cwd, name: pathBasename(cwd) || cwd, sessions: 0, messages: 0 }
     projectBucket.sessions += 1
+    projectBucket.messages += session.messageCount
     projectCounts.set(cwd, projectBucket)
 
+    stats.messages += session.messageCount
+    stats.roles.user += session.userMessages
+    stats.roles.assistant += session.assistantMessages
+    stats.roles.system += session.systemMessages
+    stats.tokens.input += session.inputTokens
+    stats.tokens.output += session.outputTokens
+    stats.tokens.cacheRead += session.cacheReadTokens
+    stats.tokens.cacheWrite += session.cacheWriteTokens
+    if (session.firstMessageAt !== null) {
+      stats.firstMessageAt = stats.firstMessageAt === null ? session.firstMessageAt : Math.min(stats.firstMessageAt, session.firstMessageAt)
+    }
+    if (session.lastMessageAt !== null) {
+      stats.lastMessageAt = stats.lastMessageAt === null ? session.lastMessageAt : Math.max(stats.lastMessageAt, session.lastMessageAt)
+    }
     stats.lastIndexedAt = stats.lastIndexedAt === null ? session.indexedAt : Math.max(stats.lastIndexedAt, session.indexedAt)
   }
 
-  const stores = await mapConcurrent(sessions, INDEX_READ_CONCURRENCY, (session) => readMessageStore(session.key))
-  for (const store of stores) {
-    if (!store) continue
-    const session = sessionStore.sessions[store.sessionKey]
-    if (!session) continue
-
-    const providerBucket = providerCounts.get(session.provider)
-    const cwd = normalizeProjectPath(session.cwd) || '(unknown)'
-    const projectBucket = projectCounts.get(cwd)
-    if (providerBucket) providerBucket.messages += store.messages.length
-    if (projectBucket) projectBucket.messages += store.messages.length
-
-    for (const message of store.messages) {
-      stats.messages += 1
-      stats.roles[message.type] += 1
-      stats.tokens.input += message.inputTokens
-      stats.tokens.output += message.outputTokens
-      stats.tokens.cacheRead += message.cacheReadTokens
-      stats.tokens.cacheWrite += message.cacheWriteTokens
-      if (message.timestampMs !== null) {
-        stats.firstMessageAt = stats.firstMessageAt === null ? message.timestampMs : Math.min(stats.firstMessageAt, message.timestampMs)
-        stats.lastMessageAt = stats.lastMessageAt === null ? message.timestampMs : Math.max(stats.lastMessageAt, message.timestampMs)
-      }
-      for (const toolName of message.toolNames) {
-        toolCounts.set(toolName, (toolCounts.get(toolName) ?? 0) + 1)
-      }
+  for (const chunk of chunkArray(sessions.map((session) => session.key), 500)) {
+    const placeholders = chunk.map(() => '?').join(', ')
+    const rows = db.prepare(`
+      SELECT name, COUNT(*) AS count
+      FROM message_tools
+      WHERE session_key IN (${placeholders})
+      GROUP BY name
+    `).all(...chunk) as Row[]
+    for (const row of rows) {
+      const name = optionalString(row.name)
+      if (!name) continue
+      toolCounts.set(name, (toolCounts.get(name) ?? 0) + toFiniteNumber(row.count))
     }
   }
 
