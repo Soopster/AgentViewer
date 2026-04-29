@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 import { RotateCcw, SendHorizontal, Square } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, type MessageDensity } from './MessageItem'
+import { getContinueInCliCommand } from '@/lib/cliContinue'
 import CodeThemeToggle from './CodeThemeToggle'
 import TabBar from './TabBar'
 
@@ -1271,6 +1272,8 @@ export default function MessageView({
   const [diagnosticSections, setDiagnosticSections] = useState<SessionDiagnosticSection[]>([])
   const [exporting, setExporting] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [cliPopoverOpen, setCliPopoverOpen] = useState(false)
+  const cliPopoverRef = useRef<HTMLDivElement>(null)
   const [sessionActionLoading, setSessionActionLoading] = useState<string | null>(null)
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
@@ -1310,6 +1313,14 @@ export default function MessageView({
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
   const assistantName = assistantDisplayName(sessionInfo?.provider ?? session?.provider)
   const activeProvider = sessionInfo?.provider ?? session?.provider
+  const cliCommand = useMemo(() => {
+    if (!session) return null
+    return getContinueInCliCommand(
+      activeProvider ?? 'claude',
+      session.sessionId,
+      sessionInfo?.cwd ?? session.cwd,
+    )
+  }, [session, activeProvider, sessionInfo])
   const modelOptions = useMemo(() => {
     const filtered = availableModels.filter((model) => normalizeSelectValue(model.value))
     if (filtered.length > 0) return filtered
@@ -1344,6 +1355,16 @@ export default function MessageView({
   useEffect(() => {
     awaitingPersistedTurnRef.current = awaitingPersistedTurn
   }, [awaitingPersistedTurn])
+
+  useEffect(() => {
+    if (!cliPopoverOpen) return
+    function onDown(e: MouseEvent) {
+      if (cliPopoverRef.current && !cliPopoverRef.current.contains(e.target as Node))
+        setCliPopoverOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [cliPopoverOpen])
 
   const resizeComposer = useCallback(() => {
     const textarea = textareaRef.current
@@ -2902,6 +2923,90 @@ export default function MessageView({
           >
             {forking ? 'FORKING…' : 'FORK'}
           </Button>
+        )}
+
+        {/* CLI continue button */}
+        {!isProject && cliCommand && (
+          <div ref={cliPopoverRef} style={{ position: 'relative', flexShrink: 0 }}>
+            <button
+              onClick={() => setCliPopoverOpen(v => !v)}
+              title="Get CLI command to resume this session"
+              className="av-hover-control"
+              style={{
+                height: 26,
+                padding: '0 10px',
+                background: cliPopoverOpen ? 'rgba(56,217,245,0.13)' : 'rgba(56,217,245,0.07)',
+                border: '1px solid rgba(56,217,245,0.18)',
+                borderRadius: 5,
+                cursor: 'pointer',
+                color: cliPopoverOpen ? 'var(--cyan)' : 'var(--text-3)',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                letterSpacing: '0.08em',
+                transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+              }}
+              onMouseEnter={e => {
+                if (!cliPopoverOpen) {
+                  e.currentTarget.style.background = 'rgba(56,217,245,0.13)'
+                  e.currentTarget.style.color = 'var(--cyan)'
+                  e.currentTarget.style.borderColor = 'rgba(56,217,245,0.35)'
+                }
+              }}
+              onMouseLeave={e => {
+                if (!cliPopoverOpen) {
+                  e.currentTarget.style.background = 'rgba(56,217,245,0.07)'
+                  e.currentTarget.style.color = 'var(--text-3)'
+                  e.currentTarget.style.borderColor = 'rgba(56,217,245,0.18)'
+                }
+              }}
+            >CLI</button>
+            {cliPopoverOpen && (
+              <div style={{
+                position: 'absolute',
+                top: 32,
+                right: 0,
+                zIndex: 50,
+                background: 'var(--surface-2, #1e1e2e)',
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                padding: '10px 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                minWidth: 320,
+                boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
+              }}>
+                <code style={{
+                  fontSize: 11,
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  color: 'var(--cyan)',
+                  wordBreak: 'break-all',
+                  userSelect: 'all',
+                }}>
+                  {cliCommand}
+                </code>
+                <button
+                  style={{
+                    alignSelf: 'flex-end',
+                    height: 24,
+                    fontSize: 11,
+                    padding: '0 10px',
+                    cursor: 'pointer',
+                    background: 'rgba(56,217,245,0.07)',
+                    border: '1px solid rgba(56,217,245,0.25)',
+                    borderRadius: 4,
+                    color: 'var(--cyan)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    letterSpacing: '0.08em',
+                  }}
+                  onClick={() => {
+                    void navigator.clipboard.writeText(cliCommand)
+                    setCliPopoverOpen(false)
+                  }}
+                >COPY</button>
+              </div>
+            )}
+          </div>
         )}
 
         {!isProject && activeProvider === 'opencode' && (

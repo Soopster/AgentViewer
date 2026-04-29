@@ -59,6 +59,7 @@ import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
 import { readTuiSessionDetailAsync } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { ProviderSelection, RunningSessionRef, SendState, Session } from '../../lib/types'
+import { getContinueInCliCommand } from '../../lib/cliContinue'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 
@@ -1022,6 +1023,7 @@ const COMMANDS: PaletteCommand[] = [
   // Session
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
   { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
+  { id: 'cli',        label: 'Copy CLI resume command', key: 'C',  category: 'Session'    },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
   { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
@@ -3188,6 +3190,20 @@ export default function OpenTuiApp() {
     }
   }, [cursorIndex, showNotice, transcriptCards])
 
+  const copyCliCommand = useCallback(async () => {
+    const session = selectedSession
+    if (!session) { showNotice('error', 'No session selected'); return }
+    const cwd = sessionDetail?.info?.cwd ?? session.cwd
+    const cmd = getContinueInCliCommand(session.provider ?? 'claude', session.sessionId, cwd)
+    if (!cmd) { showNotice('error', `No CLI resume command for ${session.provider}`); return }
+    try {
+      await writeClipboard(cmd)
+      showNotice('info', `Copied: ${cmd}`)
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Failed to copy')
+    }
+  }, [selectedSession, sessionDetail, showNotice])
+
   const executeCommandPalette = useCallback((id: string) => {
     closeCommandPalette()
     switch (id) {
@@ -3310,6 +3326,9 @@ export default function OpenTuiApp() {
           setRenameDraft(formatSessionTitle(selectedSession))
         }
         break
+      case 'cli':
+        void copyCliCommand()
+        break
       case 'sort': {
         const next: TuiSidebarSort = sidebarSort === 'project' ? 'time' : 'project'
         setSidebarSort(next)
@@ -3325,7 +3344,7 @@ export default function OpenTuiApp() {
         process.exit(0)
     }
   }, [
-    activeTabIndex, closeCommandPalette, copySelectedMessage, density, focusMode, focusedPane, jumpToResumeMarker,
+    activeTabIndex, closeCommandPalette, copyCliCommand, copySelectedMessage, density, focusMode, focusedPane, jumpToResumeMarker,
     tabsEnabled, sidebarSort,
     jumpToTranscriptTail, jumpToUnreadBoundary, openTabSessions, provider, railVisible,
     refreshSessions, refreshSelectedSessionDetail, renderer, selectTabSession, selectedSessionKey,
