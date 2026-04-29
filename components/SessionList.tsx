@@ -663,6 +663,7 @@ export default function SessionList({
   const providerSelectRef = useRef<HTMLSelectElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  const previousProviderRef = useRef(provider)
   useEffect(() => {
     resizeWidthRef.current = sidebarWidth
   }, [sidebarWidth])
@@ -825,6 +826,16 @@ export default function SessionList({
     if (tagCounts.has(activeTag)) return
     setActiveTag(null)
   }, [activeTag, tagCounts])
+
+  useEffect(() => {
+    if (previousProviderRef.current === provider) return
+    previousProviderRef.current = provider
+    const frameId = window.requestAnimationFrame(() => {
+      const content = rootRef.current?.querySelector<HTMLElement>('[data-slot="sidebar-content"]')
+      if (content) content.scrollTop = 0
+    })
+    return () => window.cancelAnimationFrame(frameId)
+  }, [provider])
 
   useEffect(() => {
     if (!scrollToSessionRequest) return

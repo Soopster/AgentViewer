@@ -6,8 +6,8 @@ import { Bot, Database, FolderOpen, GitBranch, Layers3, PanelLeftOpen, PanelRigh
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from '@/lib/projectPaths'
-import { applyTheme, getCurrentTheme, subscribeTheme, THEME_GROUPS, THEME_META, type Theme } from '@/lib/themes'
-import type { PersistedSearchResult, PersistedSessionRecord } from '@/lib/sessionPersistence'
+import { applyTheme, getCurrentTheme, subscribeTheme, THEME_GROUPS, THEME_META } from '@/lib/themes'
+import type { PersistedSearchMatch, PersistedSearchResult, PersistedSessionRecord } from '@/lib/sessionPersistence'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 
 type ProjectSelection = {
@@ -67,6 +67,22 @@ type IndexRebuildState = {
   status: 'idle' | 'running' | 'done' | 'error'
   message?: string
 }
+
+type HighlightPart = {
+  text: string
+  highlight: boolean
+}
+
+type IndexedMessageItem = PaletteItem & {
+  provider: AgentProvider
+  meta: string
+  matchCount: number
+  snippetParts: HighlightPart[]
+  timestampMs: number | null
+}
+
+const MESSAGE_SEARCH_SESSION_LIMIT = 32
+const MESSAGE_SEARCH_RESULT_LIMIT = 12
 
 const PROVIDER_ITEMS: Array<{ provider: ProviderSelection; label: string; description: string }> = [
   { provider: 'claude', label: 'Claude', description: 'Use the Claude provider' },
@@ -210,6 +226,65 @@ function ShortcutChip({ value }: { value: string }) {
   return <PaletteMetaChip title={value}>{compact}</PaletteMetaChip>
 }
 
+function messageTypeLabel(type: PersistedSearchMatch['type']): string {
+  return type.charAt(0).toUpperCase() + type.slice(1)
+}
+
+function formatMessageMatchTime(timestampMs: number | null): string | null {
+  if (timestampMs == null) return null
+  const date = new Date(timestampMs)
+  if (Number.isNaN(date.getTime())) return null
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function highlightTermsForQuery(query: string): string[] {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return []
+  const terms = [
+    normalized,
+    ...normalized.split(/[^a-z0-9_./-]+/),
+  ]
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 2)
+
+  return [...new Set(terms)].sort((a, b) => b.length - a.length || a.localeCompare(b))
+}
+
+function highlightedSnippetParts(snippet: string, terms: string[]): HighlightPart[] {
+  if (terms.length === 0 || !snippet) return [{ text: snippet, highlight: false }]
+
+  const lowerSnippet = snippet.toLowerCase()
+  const parts: HighlightPart[] = []
+  let cursor = 0
+
+  while (cursor < snippet.length) {
+    let matchIndex = -1
+    let matchTerm = ''
+
+    for (const term of terms) {
+      const index = lowerSnippet.indexOf(term, cursor)
+      if (index < 0) continue
+      if (matchIndex < 0 || index < matchIndex || (index === matchIndex && term.length > matchTerm.length)) {
+        matchIndex = index
+        matchTerm = term
+      }
+    }
+
+    if (matchIndex < 0) break
+    if (matchIndex > cursor) parts.push({ text: snippet.slice(cursor, matchIndex), highlight: false })
+    parts.push({ text: snippet.slice(matchIndex, matchIndex + matchTerm.length), highlight: true })
+    cursor = matchIndex + matchTerm.length
+  }
+
+  if (cursor < snippet.length) parts.push({ text: snippet.slice(cursor), highlight: false })
+  return parts.length > 0 ? parts : [{ text: snippet, highlight: false }]
+}
+
 export default function CommandPalette({
   open,
   onOpenChange,
@@ -253,18 +328,20 @@ export default function CommandPalette({
     }
 
     const controller = new AbortController()
+    setIndexedLoading(true)
+    setIndexedResults([])
     const timer = window.setTimeout(async () => {
       const params = new URLSearchParams()
       params.set('q', deferredQuery.trim())
-      params.set('limit', '8')
+      params.set('limit', String(MESSAGE_SEARCH_SESSION_LIMIT))
       params.set('provider', provider)
       params.set('includeWorktrees', String(includeWorktrees))
+      params.set('messagesOnly', '1')
       const searchDir = scopeMode === 'project'
         ? selectedProject?.dir ?? selectedSession?.cwd
         : undefined
       if (searchDir) params.set('dir', searchDir)
 
-      setIndexedLoading(true)
       try {
         const response = await fetch(`/api/session-index/search?${params.toString()}`, {
           signal: controller.signal,
@@ -526,30 +603,41 @@ export default function CommandPalette({
       .slice(0, 12)
   }, [onSelectSession, normalizedQuery, selectedSession, sessions])
 
-  const indexedMessageItems = useMemo(() => {
+  const indexedMessageItems = useMemo((): IndexedMessageItem[] => {
     if (normalizedQuery.length < 2) return []
+    const highlightTerms = highlightTermsForQuery(deferredQuery)
     return indexedResults
       .filter((result) => result.matches.length > 0)
-      .map((result) => {
+      .flatMap((result) => {
         const session = sessionFromPersistedRecord(result.session)
-        const match = result.matches[0]
-        if (!match) return null
         const project = result.session.cwd ? pathBasename(result.session.cwd) || result.session.cwd : 'No project'
-        return {
-          id: `message:${result.session.key}:${match.uuid}`,
-          label: result.session.title,
-          description: match.snippet,
-          icon: <Search size={16} />,
-          shortcut: `${result.matches.length}`,
-          active: sessionTabKey(session) === sessionTabKey(selectedSession ?? { sessionId: '', provider: 'claude' }),
-          group: 'messages' as const,
-          keywords: [result.session.title, result.session.cwd ?? '', project, match.snippet],
-          score: result.score,
-          run: () => onSelectSession(session, match.uuid),
-        }
+        return result.matches.map((match, matchIndex) => {
+          const matchTime = formatMessageMatchTime(match.timestampMs)
+          const metaParts = [messageTypeLabel(match.type), project, matchTime]
+            .filter((part): part is string => Boolean(part))
+          const meta = metaParts.join(' · ')
+          return {
+            id: `message:${result.session.key}:${match.messageKey}`,
+            label: result.session.title,
+            description: match.snippet,
+            icon: <Search size={16} />,
+            shortcut: result.matches.length > 1 ? `${result.matches.length}` : undefined,
+            active: sessionTabKey(session) === sessionTabKey(selectedSession ?? { sessionId: '', provider: 'claude' }),
+            group: 'messages' as const,
+            keywords: [result.session.title, result.session.cwd ?? '', project, meta, match.snippet],
+            score: match.score + result.score / 1000 - matchIndex / 100,
+            provider: result.session.provider,
+            meta,
+            matchCount: result.matches.length,
+            snippetParts: highlightedSnippetParts(match.snippet, highlightTerms),
+            timestampMs: match.timestampMs,
+            run: () => onSelectSession(session, match.uuid),
+          }
+        })
       })
-      .filter((item): item is NonNullable<typeof item> => item !== null)
-  }, [indexedResults, normalizedQuery.length, onSelectSession, selectedSession])
+      .sort((a, b) => b.score - a.score || (b.timestampMs ?? 0) - (a.timestampMs ?? 0) || a.label.localeCompare(b.label))
+      .slice(0, MESSAGE_SEARCH_RESULT_LIMIT)
+  }, [deferredQuery, indexedResults, normalizedQuery.length, onSelectSession, selectedSession])
 
   const themeItems = useMemo(() => THEME_GROUPS.map((group) => {
     const items = group.themes
@@ -673,6 +761,7 @@ export default function CommandPalette({
   }
 
   const hasResults = visibleItems.length > 0
+  const showIndexedLoading = indexedLoading && normalizedQuery.length >= 2 && indexedMessageItems.length === 0
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} className="max-w-[760px]">
@@ -718,10 +807,10 @@ export default function CommandPalette({
               onOpenChange(false)
             }
           }}
-          placeholder="Type a command, session title, project path, or provider..."
+          placeholder="Search messages, sessions, projects, commands, or providers..."
         />
         <CommandList ref={listRef}>
-          {!hasResults && normalizedQuery ? (
+          {!hasResults && normalizedQuery && !showIndexedLoading ? (
             <CommandEmpty>{indexedLoading ? 'Searching indexed messages...' : 'No matches found.'}</CommandEmpty>
           ) : null}
 
@@ -818,13 +907,23 @@ export default function CommandPalette({
             </>
           )}
 
+          {showIndexedLoading && (
+            <>
+              <CommandSeparator />
+              <CommandGroup heading="Messages">
+                <div className="px-3 py-3 font-mono text-[11px] tracking-[0.04em] text-[var(--text-3)]">
+                  Searching indexed messages...
+                </div>
+              </CommandGroup>
+            </>
+          )}
+
           {indexedMessageItems.length > 0 && (
             <>
               <CommandSeparator />
-              <CommandGroup heading="Indexed message matches">
+              <CommandGroup heading="Messages">
                 {indexedMessageItems.map((item) => {
-                  const provider = indexedResults.find((result) => item.id.startsWith(`message:${result.session.key}:`))?.session.provider ?? 'claude'
-                  const style = providerStyle(provider)
+                  const style = providerStyle(item.provider)
                   return (
                     <CommandItem
                       ref={captureItemRef(item.id)}
@@ -833,20 +932,45 @@ export default function CommandPalette({
                       onPointerEnter={(event) => activateFromPointer(item.id, event)}
                       onPointerMove={(event) => activateFromPointer(item.id, event)}
                       onClick={() => runItem(item)}
-                      title={item.description}
+                      title={`${item.label} · ${item.meta}\n${item.description}`}
                     >
                       <span
                         className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border font-mono text-[9px] font-semibold uppercase tracking-[-0.02em]"
                         style={{ color: style.color, background: style.background, borderColor: style.border }}
-                        title={provider}
+                        title={item.provider}
                       >
-                        {providerIconLabel(provider)}
+                        {providerIconLabel(item.provider)}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium text-[13px] text-[var(--text)]">{item.label}</span>
-                        <span className="block truncate font-mono text-[11px] text-[var(--text-3)]">{item.description}</span>
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="truncate font-medium text-[13px] text-[var(--text)]">{item.label}</span>
+                          <span className="max-w-[45%] shrink-0 truncate font-mono text-[10px] uppercase tracking-[0.06em] text-[var(--text-3)]">
+                            {item.meta}
+                          </span>
+                        </span>
+                        <span
+                          className="mt-0.5 block font-mono text-[11px] leading-[1.45] text-[var(--text-3)]"
+                          style={{
+                            display: '-webkit-box',
+                            overflow: 'hidden',
+                            WebkitBoxOrient: 'vertical',
+                            WebkitLineClamp: 2,
+                          }}
+                        >
+                          {item.snippetParts.map((part, index) => part.highlight ? (
+                            <mark
+                              key={`${item.id}:hit:${index}`}
+                              className="rounded-[3px] px-0.5 text-[var(--text)]"
+                              style={{ background: 'color-mix(in_srgb,var(--cyan)_24%,transparent)' }}
+                            >
+                              {part.text}
+                            </mark>
+                          ) : (
+                            <span key={`${item.id}:text:${index}`}>{part.text}</span>
+                          ))}
+                        </span>
                       </span>
-                      <PaletteMetaChip title="Indexed message matches">{item.shortcut}</PaletteMetaChip>
+                      <PaletteMetaChip title={`${item.matchCount} matches in this session`}>{item.matchCount}</PaletteMetaChip>
                     </CommandItem>
                   )
                 })}

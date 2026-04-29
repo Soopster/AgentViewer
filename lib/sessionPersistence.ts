@@ -144,6 +144,7 @@ export type PersistedSearchParams = PersistedIndexFilters & {
   query: string
   limit?: number
   role?: SessionMessage['type']
+  messagesOnly?: boolean
 }
 
 type SessionStore = {
@@ -741,10 +742,11 @@ export async function searchPersistedSessions(params: PersistedSearchParams): Pr
   const terms = tokenizeQuery(query)
   const sessionStore = await readSessionStore()
   const sessions = Object.values(sessionStore.sessions).filter((session) => matchesFilters(session, params))
+  const messagesOnly = params.messagesOnly === true
 
   const results: PersistedSearchResult[] = []
   await Promise.all(sessions.map(async (session) => {
-    let score = scoreText(metadataText(session), normalizedQuery, terms)
+    let score = messagesOnly ? -1 : scoreText(metadataText(session), normalizedQuery, terms)
     const matches: PersistedSearchMatch[] = []
     const messageStore = await readMessageStore(session.key)
 
@@ -767,11 +769,14 @@ export async function searchPersistedSessions(params: PersistedSearchParams): Pr
       }
     }
 
+    if (messagesOnly && matches.length === 0) return
     if (score < 0 && matches.length === 0) return
+    const sortedMatches = matches
+      .sort((a, b) => b.score - a.score || (b.timestampMs ?? 0) - (a.timestampMs ?? 0))
     results.push({
       session,
       score: Math.max(score, 0) + matches.length * 15,
-      matches: matches.sort((a, b) => b.score - a.score || (b.timestampMs ?? 0) - (a.timestampMs ?? 0)).slice(0, 5),
+      matches: sortedMatches.slice(0, 5),
     })
   }))
 

@@ -19,6 +19,7 @@ export async function GET(request: Request) {
   const dir = normalizeProjectPath(searchParams.get('dir')) || undefined
   const includeWorktrees = searchParams.get('includeWorktrees') !== 'false'
   const role = parseRole(searchParams.get('role'))
+  const messagesOnly = searchParams.get('messagesOnly') === '1' || searchParams.get('messagesOnly') === 'true'
 
   try {
     const results = await searchPersistedSessions({
@@ -28,6 +29,7 @@ export async function GET(request: Request) {
       dir,
       includeWorktrees,
       role,
+      messagesOnly,
     })
     return NextResponse.json(results)
   } catch (err) {

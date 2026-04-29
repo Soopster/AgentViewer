@@ -582,6 +582,7 @@ export default function Home() {
       setSelectedTabKey(null)
       setSelectedProject(null)
       setTargetMessage(null)
+      setSessionListScrollRequest(null)
       setMessages([])
       setLoadingMessages(false)
       setLoadingSessions(true)
