@@ -948,7 +948,7 @@ export default function SessionList({
                 marginBottom: 8,
               }}
             >
-              <SidebarGlyph size={15} strokeWidth={2} />
+              <SidebarGlyph size={15} strokeWidth={2} style={{ transform: 'scaleX(-1)' }} />
             </button>
 
             <button

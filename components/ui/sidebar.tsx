@@ -233,7 +233,7 @@ function SidebarTrigger({
       )}
       {...props}
     >
-      {children ?? <SidebarGlyph size={16} />}
+      {children ?? <SidebarGlyph size={16} style={{ transform: state === 'collapsed' ? 'scaleX(-1)' : undefined }} />}
     </button>
   )
 }
