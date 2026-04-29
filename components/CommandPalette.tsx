@@ -1,7 +1,7 @@
 'use client'
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Bot, FolderOpen, GitBranch, Layers3, PanelLeftOpen, PanelRightOpen, Search, SlidersHorizontal } from 'lucide-react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Bot, Database, FolderOpen, GitBranch, Layers3, PanelLeftOpen, PanelRightOpen, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -28,7 +28,7 @@ type CommandPaletteProps = {
   includeWorktrees: boolean
   messagePaneCollapsed: boolean
   canOpenGit: boolean
-  onSelectSession: (session: Session) => void
+  onSelectSession: (session: Session, targetMessageId?: string) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onChangeProvider: (provider: ProviderSelection) => void
   onChangeScope: (mode: 'all' | 'project') => void
@@ -47,13 +47,25 @@ type PaletteItem = {
   group: 'actions' | 'projects' | 'sessions' | 'messages' | 'themes'
   keywords: string[]
   score: number
-  run: () => void
+  closeOnRun?: boolean
+  run: () => void | Promise<void>
 }
 
 type IndexedSearchResponse = {
   query: string
   total: number
   results: PersistedSearchResult[]
+}
+
+type IndexRebuildResponse = {
+  sessions: number
+  messages: number
+  errors: Array<{ provider: AgentProvider; sessionId?: string; message: string }>
+}
+
+type IndexRebuildState = {
+  status: 'idle' | 'running' | 'done' | 'error'
+  message?: string
 }
 
 const PROVIDER_ITEMS: Array<{ provider: ProviderSelection; label: string; description: string }> = [
@@ -231,6 +243,7 @@ export default function CommandPalette({
   const normalizedQuery = deferredQuery.trim().toLowerCase()
   const [indexedResults, setIndexedResults] = useState<PersistedSearchResult[]>([])
   const [indexedLoading, setIndexedLoading] = useState(false)
+  const [indexRebuild, setIndexRebuild] = useState<IndexRebuildState>({ status: 'idle' })
 
   useEffect(() => {
     if (!open || normalizedQuery.length < 2) {
@@ -305,8 +318,46 @@ export default function CommandPalette({
         icon: <SidebarGlyph size={16} />,
       }
 
+  const rebuildSearchIndex = useCallback(async () => {
+    if (indexRebuild.status === 'running') return
+    setIndexRebuild({ status: 'running', message: 'Scanning all providers...' })
+    try {
+      const response = await fetch('/api/session-index/rebuild', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'all', includeWorktrees: true }),
+      })
+      const data = await response.json() as IndexRebuildResponse & { error?: string }
+      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
+      const errorCount = data.errors?.length ?? 0
+      setIndexedResults([])
+      setIndexRebuild({
+        status: errorCount > 0 ? 'error' : 'done',
+        message: `${data.sessions} sessions · ${data.messages} messages${errorCount > 0 ? ` · ${errorCount} errors` : ''}`,
+      })
+    } catch (err) {
+      setIndexRebuild({
+        status: 'error',
+        message: err instanceof Error ? err.message : 'Failed to rebuild index',
+      })
+    }
+  }, [indexRebuild.status])
+
   const actions = useMemo(() => {
     const items: PaletteItem[] = [
+      {
+        id: 'rebuild-search-index',
+        label: indexRebuild.status === 'running' ? 'Rebuilding search index' : 'Rebuild search index',
+        description: indexRebuild.message ?? 'Clear and rebuild indexed message search from all available sessions',
+        icon: indexRebuild.status === 'running' ? <RefreshCw size={16} /> : <Database size={16} />,
+        shortcut: indexRebuild.status === 'done' ? 'Done' : indexRebuild.status === 'error' ? 'Error' : undefined,
+        active: indexRebuild.status === 'running',
+        group: 'actions',
+        keywords: ['search', 'index', 'cache', 'rebuild', 'refresh', 'analytics', 'messages', 'sessions'],
+        score: 0,
+        closeOnRun: false,
+        run: () => { void rebuildSearchIndex() },
+      },
       {
         id: sidebarAction.id,
         label: sidebarAction.label,
@@ -392,7 +443,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenGit, includeWorktrees, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onToggleMessagePane, onToggleWorktrees, provider, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenGit, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {
@@ -477,23 +528,27 @@ export default function CommandPalette({
 
   const indexedMessageItems = useMemo(() => {
     if (normalizedQuery.length < 2) return []
-    return indexedResults.map((result) => {
-      const session = sessionFromPersistedRecord(result.session)
-      const match = result.matches[0]
-      const project = result.session.cwd ? pathBasename(result.session.cwd) || result.session.cwd : 'No project'
-      return {
-        id: `message:${result.session.key}:${match?.uuid ?? 'metadata'}`,
-        label: result.session.title,
-        description: match?.snippet ?? result.session.cwd ?? result.session.sessionId,
-        icon: <Search size={16} />,
-        shortcut: `${result.matches.length || 1}`,
-        active: sessionTabKey(session) === sessionTabKey(selectedSession ?? { sessionId: '', provider: 'claude' }),
-        group: 'messages' as const,
-        keywords: [result.session.title, result.session.cwd ?? '', project, match?.snippet ?? ''],
-        score: result.score,
-        run: () => onSelectSession(session),
-      }
-    })
+    return indexedResults
+      .filter((result) => result.matches.length > 0)
+      .map((result) => {
+        const session = sessionFromPersistedRecord(result.session)
+        const match = result.matches[0]
+        if (!match) return null
+        const project = result.session.cwd ? pathBasename(result.session.cwd) || result.session.cwd : 'No project'
+        return {
+          id: `message:${result.session.key}:${match.uuid}`,
+          label: result.session.title,
+          description: match.snippet,
+          icon: <Search size={16} />,
+          shortcut: `${result.matches.length}`,
+          active: sessionTabKey(session) === sessionTabKey(selectedSession ?? { sessionId: '', provider: 'claude' }),
+          group: 'messages' as const,
+          keywords: [result.session.title, result.session.cwd ?? '', project, match.snippet],
+          score: result.score,
+          run: () => onSelectSession(session, match.uuid),
+        }
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null)
   }, [indexedResults, normalizedQuery.length, onSelectSession, selectedSession])
 
   const themeItems = useMemo(() => THEME_GROUPS.map((group) => {
@@ -600,8 +655,8 @@ export default function CommandPalette({
   }
 
   function runItem(item: PaletteItem) {
-    item.run()
-    onOpenChange(false)
+    void item.run()
+    if (item.closeOnRun !== false) onOpenChange(false)
   }
 
   function captureItemRef(id: string) {

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isAgentProvider } from './provider'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from './projectPaths'
@@ -12,6 +12,41 @@ const STORE_VERSION = 1
 const MAX_INDEX_TEXT_CHARS = 32_000
 const MAX_FIELD_TEXT_CHARS = 2_000
 const MAX_SNIPPET_CHARS = 260
+const SHORT_QUERY_TERM_WINDOW = 180
+const LONG_QUERY_TERM_WINDOW = 500
+const SEARCH_STOP_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'but',
+  'by',
+  'can',
+  'for',
+  'from',
+  'how',
+  'i',
+  'if',
+  'in',
+  'is',
+  'it',
+  'of',
+  'on',
+  'or',
+  'that',
+  'the',
+  'this',
+  'to',
+  'was',
+  'were',
+  'what',
+  'when',
+  'with',
+  'you',
+])
 
 export type PersistedSessionRecord = {
   key: string
@@ -303,6 +338,19 @@ export async function syncPersistedSessions(sessions: Session[]): Promise<void> 
   })
 }
 
+export async function clearPersistedSessionIndex(): Promise<void> {
+  if (persistenceDisabled()) return
+  const run = sessionStoreQueue.then(async () => {
+    messageSignatureCache.clear()
+    await rm(INDEX_DIR, { recursive: true, force: true })
+    await ensureIndexDirs()
+    const emptyStore: SessionStore = { version: STORE_VERSION, sessions: {} }
+    await writeJsonFile(SESSIONS_FILE, emptyStore)
+  })
+  sessionStoreQueue = run.catch(() => {})
+  await run
+}
+
 function truncateText(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value
   return `${value.slice(0, maxLength)}...`
@@ -565,9 +613,56 @@ function matchesFilters(session: PersistedSessionRecord, filters: PersistedIndex
 function tokenizeQuery(query: string): string[] {
   return query
     .toLowerCase()
-    .split(/\s+/)
+    .split(/[^a-z0-9_./-]+/)
     .map((term) => term.trim())
     .filter(Boolean)
+}
+
+function meaningfulTerms(terms: string[]): string[] {
+  const out: string[] = []
+  for (const term of terms) {
+    if (term.length <= 2) continue
+    if (SEARCH_STOP_WORDS.has(term)) continue
+    if (!out.includes(term)) out.push(term)
+  }
+  return out
+}
+
+function termPositions(text: string, term: string): number[] {
+  const positions: number[] = []
+  let cursor = 0
+  while (positions.length < 30) {
+    const index = text.indexOf(term, cursor)
+    if (index < 0) break
+    positions.push(index)
+    cursor = index + term.length
+  }
+  return positions
+}
+
+function compactTermWindow(text: string, terms: string[]): number | null {
+  const positionsByTerm = terms.map((term) => termPositions(text, term))
+  if (positionsByTerm.some((positions) => positions.length === 0)) return null
+
+  let best: number | null = null
+  for (const starts of positionsByTerm) {
+    for (const start of starts) {
+      let end = start
+      let valid = true
+      for (const positions of positionsByTerm) {
+        const next = positions.find((position) => position >= start)
+        if (next === undefined) {
+          valid = false
+          break
+        }
+        end = Math.max(end, next)
+      }
+      if (!valid) continue
+      const span = end - start
+      best = best === null ? span : Math.min(best, span)
+    }
+  }
+  return best
 }
 
 function metadataText(session: PersistedSessionRecord): string {
@@ -587,6 +682,18 @@ function scoreText(text: string, normalizedQuery: string, terms: string[]): numb
   const lower = text.toLowerCase()
   const phraseIndex = normalizedQuery ? lower.indexOf(normalizedQuery) : -1
   if (phraseIndex >= 0) return 1000 - Math.min(phraseIndex, 500)
+  const usefulTerms = meaningfulTerms(terms)
+  if (usefulTerms.length >= 2) {
+    const maxWindow = terms.length >= 5 ? LONG_QUERY_TERM_WINDOW : SHORT_QUERY_TERM_WINDOW
+    const span = compactTermWindow(lower, usefulTerms)
+    if (span === null || span > maxWindow) return -1
+    return 760 - Math.min(span, maxWindow)
+  }
+  if (terms.length >= 5) {
+    const span = compactTermWindow(lower, terms)
+    if (span === null || span > LONG_QUERY_TERM_WINDOW) return -1
+    return 760 - Math.min(span, LONG_QUERY_TERM_WINDOW)
+  }
   if (terms.length > 1 && terms.every((term) => lower.includes(term))) return 600
   const matchedTerms = terms.filter((term) => lower.includes(term)).length
   return matchedTerms > 0 ? 120 * matchedTerms : -1

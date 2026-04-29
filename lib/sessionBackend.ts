@@ -146,7 +146,13 @@ import {
   setPiStoredTitle,
 } from './piMetadata'
 import { normalizeClaudeHistoryMessages } from './claudeMapper'
-import { syncPersistedSessionMessages, syncPersistedSessions } from './sessionPersistence'
+import {
+  clearPersistedSessionIndex,
+  readPersistedIndexStats,
+  syncPersistedSessionMessages,
+  syncPersistedSessions,
+  type PersistedIndexStats,
+} from './sessionPersistence'
 
 export const maxDuration = 300
 
@@ -272,8 +278,35 @@ type SessionActionParams = {
   provider?: AgentProvider
 }
 
+type RebuildSessionIndexParams = {
+  provider?: AgentProvider | 'all'
+  dir?: string
+  includeWorktrees?: boolean
+}
+
+export type SessionIndexRebuildError = {
+  provider: AgentProvider
+  sessionId?: string
+  message: string
+}
+
+export type SessionIndexRebuildResult = {
+  startedAt: string
+  finishedAt: string
+  provider: AgentProvider | 'all'
+  scannedProviders: AgentProvider[]
+  sessions: number
+  messages: number
+  errors: SessionIndexRebuildError[]
+  stats: PersistedIndexStats
+}
+
 const REASONING_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'max', 'xhigh'] as const
 const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
+const INDEX_REBUILD_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+const INDEX_REBUILD_PAGE_SIZE = 500
+const INDEX_REBUILD_MESSAGE_LIMIT = 100_000
+const INDEX_REBUILD_MESSAGE_CONCURRENCY = 4
 
 function sortMessagesChronologically(messages: SessionMessage[]): SessionMessage[] {
   return [...messages].sort((a, b) => {
@@ -1113,6 +1146,109 @@ export async function listViewSessionMessages(sessionId: string, params: Message
   messages = await readClaudeSessionMessages(sessionId)
   await syncMessagesBestEffort(provider, sessionId, messages)
   return sliceForParams(messages, params)
+}
+
+async function listProviderSessionsForIndex(params: {
+  provider: AgentProvider
+  dir?: string
+  includeWorktrees: boolean
+}): Promise<Session[]> {
+  const byKey = new Map<string, Session>()
+  let offset = 0
+
+  while (true) {
+    const page = await listViewSessions({
+      limit: INDEX_REBUILD_PAGE_SIZE,
+      offset,
+      dir: params.dir,
+      includeWorktrees: params.includeWorktrees,
+      provider: params.provider,
+    })
+
+    for (const session of page) {
+      byKey.set(`${session.provider ?? params.provider}:${session.sessionId}`, {
+        ...session,
+        provider: session.provider ?? params.provider,
+      })
+    }
+
+    if (page.length < INDEX_REBUILD_PAGE_SIZE) break
+    offset += page.length
+  }
+
+  return [...byKey.values()]
+}
+
+export async function rebuildViewSessionIndex(params: RebuildSessionIndexParams = {}): Promise<SessionIndexRebuildResult> {
+  const provider = params.provider ?? 'all'
+  const includeWorktrees = params.includeWorktrees !== false
+  const scannedProviders = provider === 'all' ? INDEX_REBUILD_PROVIDERS : [provider]
+  const startedAt = new Date().toISOString()
+  const errors: SessionIndexRebuildError[] = []
+  let sessionCount = 0
+  let messageCount = 0
+
+  await clearPersistedSessionIndex()
+
+  for (const currentProvider of scannedProviders) {
+    let sessions: Session[]
+    try {
+      sessions = await listProviderSessionsForIndex({
+        provider: currentProvider,
+        dir: params.dir,
+        includeWorktrees,
+      })
+      sessionCount += sessions.length
+    } catch (err) {
+      errors.push({
+        provider: currentProvider,
+        message: err instanceof Error ? err.message : String(err),
+      })
+      continue
+    }
+
+    const results = await mapConcurrent(sessions, INDEX_REBUILD_MESSAGE_CONCURRENCY, async (session) => {
+      try {
+        const messages = await listViewSessionMessages(
+          session.sessionId,
+          { limit: INDEX_REBUILD_MESSAGE_LIMIT, offset: 0 },
+          session.provider ?? currentProvider,
+        )
+        return { ok: true as const, count: messages.length }
+      } catch (err) {
+        return {
+          ok: false as const,
+          provider: session.provider ?? currentProvider,
+          sessionId: session.sessionId,
+          message: err instanceof Error ? err.message : String(err),
+        }
+      }
+    })
+
+    for (const result of results) {
+      if (result.ok) {
+        messageCount += result.count
+      } else {
+        errors.push({
+          provider: result.provider,
+          sessionId: result.sessionId,
+          message: result.message,
+        })
+      }
+    }
+  }
+
+  const stats = await readPersistedIndexStats({ provider, dir: params.dir, includeWorktrees })
+  return {
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    provider,
+    scannedProviders,
+    sessions: sessionCount,
+    messages: messageCount,
+    errors,
+    stats,
+  }
 }
 
 export async function listProjectSessionMessageBatches(params: ProjectMessageBatchParams): Promise<{

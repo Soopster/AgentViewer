@@ -10,6 +10,7 @@ import type {
   SessionModelInfo,
   SessionDiagnosticSection,
   ToolUseBlock,
+  ToolResultBlock,
   ContentBlock,
   SendAttachment,
   ReasoningEffortLevel,
@@ -44,6 +45,8 @@ type Props = {
   messages: SessionMessage[]
   loading: boolean
   session: Session | null
+  targetMessageId?: string | null
+  targetMessageRequestId?: number
   projectView?: { key: string; sessionCount: number; providerMode: 'current' | 'all' }
   onFork?: (newSessionId: string) => void
   onDelete?: (sessionId: string, provider?: Session['provider']) => void
@@ -103,6 +106,7 @@ type TimelineRow = {
   showForkControls?: boolean
   allowFork?: boolean
   allowResume?: boolean
+  highlighted?: boolean
   forkingMessageId?: string | null
   resumeFromMessageId?: string | null
 }
@@ -111,6 +115,7 @@ const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
 const TIMELINE_OVERSCAN_PX = 1200
 const ESTIMATED_CHARS_PER_LINE = 92
 const TIMELINE_BOTTOM_GUTTER_PX = 72
+const TIMELINE_TARGET_TOP_GUTTER_PX = 72
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 const COMPOSER_DRAFT_STORAGE_PREFIX = 'agentViewer:composerDraft:v1:'
 const SEND_ATTACHMENT_TYPES = new Set<SendAttachment['type']>(['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob'])
@@ -1012,6 +1017,42 @@ function estimateTimelineRowHeight(row: TimelineRow): number {
   return Math.max(estimated, message.role === 'system' ? 120 : ESTIMATED_TIMELINE_ROW_HEIGHT)
 }
 
+function messageContentBlocksForTarget(message: SessionMessage): ContentBlock[] {
+  if (message.type === 'system') return []
+  const content = message.message.content
+  if (typeof content === 'string') return content ? [{ type: 'text', text: content }] : []
+  return (content ?? []) as ContentBlock[]
+}
+
+function isToolResultBlock(block: ContentBlock): block is ToolResultBlock {
+  return block.type === 'tool_result' && typeof (block as ToolResultBlock).tool_use_id === 'string'
+}
+
+function resolveTimelineTargetMessageId(
+  targetMessageId: string | null | undefined,
+  messages: SessionMessage[],
+  timelineRows: TimelineRow[],
+): string | null {
+  if (!targetMessageId) return null
+  if (timelineRows.some((row) => row.message.uuid === targetMessageId)) return targetMessageId
+
+  const rawTarget = messages.find((message) => message.uuid === targetMessageId)
+  if (!rawTarget) return targetMessageId
+
+  const targetToolUseIds = messageContentBlocksForTarget(rawTarget)
+    .filter(isToolResultBlock)
+    .map((block) => block.tool_use_id)
+    .filter(Boolean)
+
+  if (targetToolUseIds.length === 0) return targetMessageId
+  const targetToolUseIdSet = new Set(targetToolUseIds)
+  const owningRow = timelineRows.find((row) => row.message.blocks.some((block) => (
+    block.type === 'tool_thread' &&
+    (targetToolUseIdSet.has(block.toolUse.id) || (block.result?.tool_use_id ? targetToolUseIdSet.has(block.result.tool_use_id) : false))
+  )))
+  return owningRow?.message.uuid ?? targetMessageId
+}
+
 const TimelineMessageRow = memo(function TimelineMessageRow({
   row,
   onForkFromMessage,
@@ -1022,7 +1063,17 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   onToggleResume: (messageId: string) => void
 }) {
   return (
-    <div style={{ opacity: row.dimmed ? 0.92 : 1 }}>
+    <div
+      style={{
+        opacity: row.dimmed ? 0.92 : 1,
+        borderRadius: 10,
+        boxShadow: row.highlighted
+          ? '0 0 0 2px rgba(56,217,245,0.55), 0 0 36px rgba(56,217,245,0.18)'
+          : 'none',
+        background: row.highlighted ? 'rgba(56,217,245,0.06)' : 'transparent',
+        transition: 'box-shadow 180ms ease, background 180ms ease',
+      }}
+    >
       {row.previewBadge && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '0 0 8px 0' }}>
           <span style={{
@@ -1140,6 +1191,7 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
     <div
       className="timeline-row"
       ref={rowRef}
+      data-message-id={row.message.uuid}
       style={{
         position: 'absolute',
         top,
@@ -1152,7 +1204,20 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   )
 })
 
-export default function MessageView({ messages, loading, session, projectView, onFork, onDelete, openTabs, selectedTabId, onSelectTab, onCloseTab }: Props) {
+export default function MessageView({
+  messages,
+  loading,
+  session,
+  targetMessageId,
+  targetMessageRequestId = 0,
+  projectView,
+  onFork,
+  onDelete,
+  openTabs,
+  selectedTabId,
+  onSelectTab,
+  onCloseTab,
+}: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
   const [sendError, setSendError] = useState<string | null>(null)
@@ -1219,6 +1284,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const [timelineScrollTop, setTimelineScrollTop] = useState(0)
   const [timelineViewportHeight, setTimelineViewportHeight] = useState(0)
   const [rowMeasurementVersion, setRowMeasurementVersion] = useState(0)
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
   const timelineContentRef = useRef<HTMLDivElement | null>(null)
@@ -1239,6 +1305,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   const suppressFollowEvalUntilRef = useRef<number>(0)
   const autoFollowRef = useRef(false)
   const timelineRowsRef = useRef<TimelineRow[]>([])
+  const handledTargetMessageRequestRef = useRef(0)
   const initialScrollDoneRef = useRef(false)
   const sessionCapabilities = sessionInfo?.capabilities ?? session?.capabilities
   const assistantName = assistantDisplayName(sessionInfo?.provider ?? session?.provider)
@@ -1463,6 +1530,32 @@ export default function MessageView({ messages, loading, session, projectView, o
       const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
       setAutoFollow(distanceFromBottom <= TIMELINE_BOTTOM_GUTTER_PX + 16)
     })
+  }, [])
+
+  const scrollMountedTimelineRowIntoView = useCallback((messageId: string): boolean => {
+    const node = timelineRef.current
+    if (!node) return false
+
+    let rowNode: HTMLElement | null = null
+    for (const candidate of Array.from(node.querySelectorAll<HTMLElement>('.timeline-row[data-message-id]'))) {
+      if (candidate.dataset.messageId === messageId) {
+        rowNode = candidate
+        break
+      }
+    }
+    if (!rowNode) return false
+
+    const nodeRect = node.getBoundingClientRect()
+    const rowRect = rowNode.getBoundingClientRect()
+    const targetTop = Math.max(node.scrollTop + rowRect.top - nodeRect.top - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
+    suppressFollowEvalUntilRef.current = performance.now() + 300
+    autoFollowRef.current = false
+    setAutoFollow(false)
+    if (Math.abs(node.scrollTop - targetTop) > 1) {
+      node.scrollTop = targetTop
+      setTimelineScrollTop(targetTop)
+    }
+    return true
   }, [])
 
   useEffect(() => {
@@ -2090,6 +2183,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       showForkControls: !isProject && (sessionCapabilities?.messageFork || (msg.role === 'assistant' && sessionCapabilities?.resumeAtMessage)),
       allowFork: !!sessionCapabilities?.messageFork,
       allowResume: msg.role === 'assistant' && !!sessionCapabilities?.resumeAtMessage,
+      highlighted: highlightedMessageId === msg.uuid,
       forkingMessageId,
       resumeFromMessageId,
     }))
@@ -2129,6 +2223,7 @@ export default function MessageView({ messages, loading, session, projectView, o
   }, [
     awaitingPersistedTurn,
     forkingMessageId,
+    highlightedMessageId,
     isProject,
     liveAssistantMessage,
     liveThreadedMessages,
@@ -2141,6 +2236,10 @@ export default function MessageView({ messages, loading, session, projectView, o
     showTools,
     threaded,
   ])
+  const timelineTargetMessageId = useMemo(
+    () => resolveTimelineTargetMessageId(targetMessageId, messages, timelineRows),
+    [messages, targetMessageId, timelineRows],
+  )
   const hasLiveTimeline = timelineRows.length > 0
 
   // On the first completed load for a session, wait for rows to exist and then force the
@@ -2154,6 +2253,13 @@ export default function MessageView({ messages, loading, session, projectView, o
         initialScrollDoneRef.current = true
         setAutoFollow(true)
       }
+      return
+    }
+
+    if (targetMessageId) {
+      initialScrollDoneRef.current = true
+      autoFollowRef.current = false
+      setAutoFollow(false)
       return
     }
 
@@ -2185,7 +2291,7 @@ export default function MessageView({ messages, loading, session, projectView, o
       cancelled = true
       if (frameId != null) window.cancelAnimationFrame(frameId)
     }
-  }, [alignLastTimelineRowToViewportBottom, hasLiveTimeline, loading, messages.length, scrollTimelineToBottom, session?.sessionId])
+  }, [alignLastTimelineRowToViewportBottom, hasLiveTimeline, loading, messages.length, scrollTimelineToBottom, session?.sessionId, targetMessageId])
 
   useEffect(() => {
     timelineRowsRef.current = timelineRows
@@ -2276,6 +2382,33 @@ export default function MessageView({ messages, loading, session, projectView, o
     return { tops, heights, totalHeight }
   }, [timelineRows, rowMeasurementVersion])
 
+  useLayoutEffect(() => {
+    if (!timelineTargetMessageId || loading) return
+    if (targetMessageRequestId && handledTargetMessageRequestRef.current === targetMessageRequestId) return
+    const node = timelineRef.current
+    if (!node) return
+
+    const rowIndex = timelineRows.findIndex((row) => row.message.uuid === timelineTargetMessageId)
+    if (rowIndex < 0) return
+
+    handledTargetMessageRequestRef.current = targetMessageRequestId
+    const targetTop = Math.max(rowLayout.tops[rowIndex] - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
+    suppressFollowEvalUntilRef.current = performance.now() + 300
+    autoFollowRef.current = false
+    setAutoFollow(false)
+    setTimelineScrollTop(targetTop)
+    node.scrollTop = targetTop
+    setHighlightedMessageId(timelineTargetMessageId)
+  }, [loading, rowLayout, targetMessageRequestId, timelineRows, timelineTargetMessageId])
+
+  useEffect(() => {
+    if (!highlightedMessageId) return
+    const timeout = window.setTimeout(() => {
+      setHighlightedMessageId((current) => current === highlightedMessageId ? null : current)
+    }, 3500)
+    return () => window.clearTimeout(timeout)
+  }, [highlightedMessageId])
+
   const virtualTimeline = useMemo(() => {
     const { tops, heights, totalHeight } = rowLayout
     const n = timelineRows.length
@@ -2300,6 +2433,19 @@ export default function MessageView({ messages, loading, session, projectView, o
 
     return { totalHeight, visibleRows }
   }, [rowLayout, timelineRows, timelineScrollTop, timelineViewportHeight])
+
+  useLayoutEffect(() => {
+    if (!timelineTargetMessageId || highlightedMessageId !== timelineTargetMessageId || loading) return
+    scrollMountedTimelineRowIntoView(timelineTargetMessageId)
+  }, [
+    highlightedMessageId,
+    loading,
+    rowMeasurementVersion,
+    scrollMountedTimelineRowIntoView,
+    timelineScrollTop,
+    timelineTargetMessageId,
+    virtualTimeline.visibleRows.length,
+  ])
 
   useEffect(() => {
     autoFollowRef.current = autoFollow

@@ -163,6 +163,7 @@ The index is refreshed opportunistically when sessions and transcripts are read.
 
 - `GET /api/session-index/search?q=term&provider=all`
 - `GET /api/session-index/stats?provider=all`
+- `POST /api/session-index/rebuild` to clear and rebuild the index from all available sessions/messages
 
 Set `AGENT_VIEWER_DISABLE_SESSION_INDEX=1` to disable the local index.
 

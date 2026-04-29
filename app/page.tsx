@@ -20,6 +20,11 @@ type ProjectSelection = {
   sessions: Session[]
 }
 
+type MessageTarget = {
+  messageId: string
+  requestId: number
+}
+
 type ProjectMessageBatch = {
   key: string
   sessionId: string
@@ -130,6 +135,7 @@ export default function Home() {
   const [openTabSessions, setOpenTabSessions] = useState<Session[]>([])
   const [selectedTabKey, setSelectedTabKey] = useState<string | null>(null)
   const [selectedProject, setSelectedProject] = useState<ProjectSelection | null>(null)
+  const [targetMessage, setTargetMessage] = useState<MessageTarget | null>(null)
   const [messages, setMessages] = useState<SessionMessage[]>([])
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -147,6 +153,7 @@ export default function Home() {
   const pollInFlightRef = useRef(false)
   const projectPollInFlightRef = useRef(false)
   const sessionsFingerprintRef = useRef('')
+  const targetMessageRequestRef = useRef(0)
   const selectedSession =
     openTabSessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
     sessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
@@ -180,8 +187,11 @@ export default function Home() {
     return (data.sessions ?? []) as Session[]
   }, [includeWorktrees])
 
-  const fetchSessionMessages = useCallback(async (session: Session) => {
-    const response = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?limit=2000&tail=1`, session.provider))
+  const fetchSessionMessages = useCallback(async (session: Session, targetMessageId?: string) => {
+    const query = targetMessageId
+      ? 'limit=100000&all=1'
+      : 'limit=2000&tail=1'
+    const response = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?${query}`, session.provider))
     const data = await response.json()
     if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
     return (data.messages ?? []) as SessionMessage[]
@@ -391,7 +401,7 @@ export default function Home() {
     return () => clearInterval(id)
   }, [fetchProjectMessageBatches, provider, selectedProject])
 
-  const selectSession = useCallback(async (session: Session) => {
+  const selectSession = useCallback(async (session: Session, nextTargetMessageId?: string) => {
     const nextProvider = session.provider ?? 'claude'
     const nextScopeMode: SessionScopeMode = 'all'
     if (nextProvider !== provider) {
@@ -410,19 +420,23 @@ export default function Home() {
       })
       setSelectedTabKey(projectSessionKey(session))
       setSelectedProject(null)
+      setTargetMessage(nextTargetMessageId
+        ? { messageId: nextTargetMessageId, requestId: ++targetMessageRequestRef.current }
+        : null
+      )
     })
     projectMessageCountsRef.current.clear()
     setLoadingMessages(true)
     setMessages([])
     try {
-      const loadedMessages = await fetchSessionMessages(session)
+      const loadedMessages = await fetchSessionMessages(session, nextTargetMessageId)
       setMessages(loadedMessages)
     } catch (err) {
       console.error('Failed to load messages:', err)
     } finally {
       setLoadingMessages(false)
     }
-  }, [provider, loadSessionsForProvider])
+  }, [fetchSessionMessages, provider, loadSessionsForProvider])
 
   function closeTab(sessionKey: string) {
     const idx = openTabSessions.findIndex((s) => projectSessionKey(s) === sessionKey)
@@ -435,6 +449,7 @@ export default function Home() {
       } else {
         startTransition(() => {
           setSelectedTabKey(null)
+          setTargetMessage(null)
           setMessages([])
         })
       }
@@ -445,6 +460,7 @@ export default function Home() {
     startTransition(() => {
       setSelectedProject({ key: projectName, dir: projectDir, sessions: projectSessions })
       setSelectedTabKey(null)
+      setTargetMessage(null)
     })
     setLoadingMessages(true)
     setMessages([])
@@ -518,6 +534,7 @@ export default function Home() {
     )
     if (selectedTabKey && (deletedTabKey ? selectedTabKey === deletedTabKey : openTabSessions.some((session) => session.sessionId === sessionId))) {
       setSelectedTabKey(null)
+      setTargetMessage(null)
       setMessages([])
     }
   }, [openTabSessions, selectedTabKey])
@@ -540,6 +557,7 @@ export default function Home() {
       setProvider(nextProvider)
       setSelectedTabKey(null)
       setSelectedProject(null)
+      setTargetMessage(null)
       setMessages([])
       setLoadingMessages(false)
       setLoadingSessions(true)
@@ -643,6 +661,8 @@ export default function Home() {
                   messages={messages}
                   loading={loadingMessages}
                   session={selectedSession}
+                  targetMessageId={targetMessage?.messageId ?? null}
+                  targetMessageRequestId={targetMessage?.requestId ?? 0}
                   projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
                   onFork={handleFork}
                   onDelete={handleDelete}
