@@ -105,6 +105,11 @@ function normalizeTimestamp(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
+function asOrigin(value: unknown): { kind: string } | undefined {
+  const record = asObject(value)
+  return typeof record.kind === 'string' ? { kind: record.kind } : undefined
+}
+
 export function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | null {
   const record = asObject(value)
   const type = record.type
@@ -119,6 +124,7 @@ export function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | 
     parent_tool_use_id: null,
     provider: 'claude',
     timestamp: normalizeTimestamp(record.timestamp),
+    origin: asOrigin(record.origin),
     message: type === 'system'
       ? normalizeSystemMessage(record.message, typeof payload.subtype === 'string' ? payload.subtype : 'system')
       : normalizeApiMessage(type, record.message, record.tool_use_result),

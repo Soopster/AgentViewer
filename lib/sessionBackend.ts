@@ -124,6 +124,7 @@ import type {
 import { normalizeProjectPath, sameProjectPath } from './projectPaths'
 import {
   forkPiSession,
+  getPiSessionEntries,
   getPiSessionMessages,
   listPiSessions,
   openPiAgentSession,
@@ -2211,18 +2212,24 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
     }
   }
   if (provider === 'pi') {
-    const messages = getPiSessionMessages(sessionId)
+    const entries = getPiSessionEntries(sessionId)
     let currentModel: string | undefined
     let thinkingLevel: string | undefined
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i] as { role: string; model?: string; thinking?: boolean }
-      if (msg.role === 'assistant') {
-        currentModel ??= msg.model
-        if (thinkingLevel === undefined && msg.thinking !== undefined) {
-          thinkingLevel = msg.thinking ? 'enabled' : 'off'
-        }
-        if (currentModel && thinkingLevel !== undefined) break
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i]
+      if (entry.type === 'thinking_level_change') {
+        thinkingLevel ??= (entry as { thinkingLevel: string }).thinkingLevel
       }
+      if (entry.type === 'message') {
+        const msg = (entry as { message: { role: string; model?: string; thinking?: boolean } }).message
+        if (msg.role === 'assistant') {
+          currentModel ??= msg.model
+          if (thinkingLevel === undefined && msg.thinking !== undefined) {
+            thinkingLevel = msg.thinking ? 'enabled' : 'off'
+          }
+        }
+      }
+      if (currentModel && thinkingLevel !== undefined) break
     }
 
     const sm = openPiSessionManager(sessionId)
