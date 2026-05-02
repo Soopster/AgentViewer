@@ -20,6 +20,8 @@ export async function GET(request: Request) {
   const includeWorktrees = searchParams.get('includeWorktrees') !== 'false'
   const role = parseRole(searchParams.get('role'))
   const messagesOnly = searchParams.get('messagesOnly') === '1' || searchParams.get('messagesOnly') === 'true'
+  const toolNameRaw = searchParams.get('toolName')?.trim() ?? ''
+  const toolName = toolNameRaw ? toolNameRaw : undefined
 
   try {
     const results = await searchPersistedSessions({
@@ -30,6 +32,7 @@ export async function GET(request: Request) {
       includeWorktrees,
       role,
       messagesOnly,
+      toolName,
     })
     return NextResponse.json(results)
   } catch (err) {

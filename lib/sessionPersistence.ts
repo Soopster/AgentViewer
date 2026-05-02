@@ -147,6 +147,7 @@ export type PersistedSearchParams = PersistedIndexFilters & {
   limit?: number
   role?: SessionMessage['type']
   messagesOnly?: boolean
+  toolName?: string
 }
 
 type SessionStore = {
@@ -204,6 +205,9 @@ function configureDatabase(db: SqliteDatabase): void {
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
+    PRAGMA cache_size = -65536;
+    PRAGMA temp_store = MEMORY;
+    PRAGMA mmap_size = 268435456;
   `)
 }
 
@@ -522,6 +526,35 @@ function selectAllSessions(db: SqliteDatabase): PersistedSessionRecord[] {
     const session = rowToSessionRecord(row)
     return session ? [session] : []
   })
+}
+
+// Pre-narrows the sessions table in SQL using indexed columns when possible,
+// then re-applies matchesFilters() in JS for cases SQL can't express
+// (sameProjectPath's basename-suffix branch when includeWorktrees=true).
+function selectFilteredSessions(db: SqliteDatabase, filters: PersistedIndexFilters): PersistedSessionRecord[] {
+  const where: string[] = []
+  const params: unknown[] = []
+  if (filters.provider && filters.provider !== 'all') {
+    where.push('provider = ?')
+    params.push(filters.provider)
+  }
+  const dir = normalizeProjectPath(filters.dir)
+  if (dir && filters.includeWorktrees === false) {
+    where.push('cwd = ?')
+    params.push(dir)
+  }
+  const sql = where.length === 0
+    ? 'SELECT * FROM sessions'
+    : `SELECT * FROM sessions WHERE ${where.join(' AND ')}`
+  const rows = db.prepare(sql).all(...params) as Row[]
+  const records: PersistedSessionRecord[] = []
+  for (const row of rows) {
+    const session = rowToSessionRecord(row)
+    if (session) records.push(session)
+  }
+  // Re-check via matchesFilters for the worktree/basename case which is
+  // expensive to express purely in SQL.
+  return records.filter((session) => matchesFilters(session, filters))
 }
 
 function readSessionSignature(db: SqliteDatabase, sessionKey: string): string | null {
@@ -1169,11 +1202,10 @@ function metadataText(session: PersistedSessionRecord): string {
   ].filter(Boolean).join('\n')
 }
 
-function scoreText(text: string, normalizedQuery: string, terms: string[]): number {
+function scoreText(text: string, normalizedQuery: string, terms: string[], usefulTerms: string[]): number {
   const lower = text.toLowerCase()
   const phraseIndex = normalizedQuery ? lower.indexOf(normalizedQuery) : -1
   if (phraseIndex >= 0) return 1000 - Math.min(phraseIndex, 500)
-  const usefulTerms = meaningfulTerms(terms)
   if (usefulTerms.length >= 2) {
     const maxWindow = terms.length >= 5 ? LONG_QUERY_TERM_WINDOW : SHORT_QUERY_TERM_WINDOW
     const span = compactTermWindow(lower, usefulTerms)
@@ -1191,19 +1223,35 @@ function scoreText(text: string, normalizedQuery: string, terms: string[]): numb
 }
 
 function snippetForText(text: string, normalizedQuery: string, terms: string[]): string {
-  const collapsed = text.replace(/\s+/g, ' ').trim()
-  const lower = collapsed.toLowerCase()
-  let index = normalizedQuery ? lower.indexOf(normalizedQuery) : -1
+  // Find the match index in the raw text first so we don't pay to collapse
+  // whitespace across the entire (possibly very large) message body. Then
+  // slice a generous window around it and only collapse within that window.
+  const lowerRaw = text.toLowerCase()
+  let index = normalizedQuery ? lowerRaw.indexOf(normalizedQuery) : -1
   if (index < 0) {
     index = terms
+      .map((term) => lowerRaw.indexOf(term))
+      .filter((value) => value >= 0)
+      .sort((a, b) => a - b)[0] ?? 0
+  }
+  // Generous raw window — collapsing whitespace below may shorten this further.
+  const rawWindowChars = MAX_SNIPPET_CHARS * 4
+  const rawStart = Math.max(0, index - Math.floor(rawWindowChars / 3))
+  const rawEnd = Math.min(text.length, rawStart + rawWindowChars)
+  const window = text.slice(rawStart, rawEnd)
+  const collapsed = window.replace(/\s+/g, ' ').trim()
+  const lower = collapsed.toLowerCase()
+  let snippetIndex = normalizedQuery ? lower.indexOf(normalizedQuery) : -1
+  if (snippetIndex < 0) {
+    snippetIndex = terms
       .map((term) => lower.indexOf(term))
       .filter((value) => value >= 0)
       .sort((a, b) => a - b)[0] ?? 0
   }
-  const start = Math.max(0, index - Math.floor(MAX_SNIPPET_CHARS / 3))
+  const start = Math.max(0, snippetIndex - Math.floor(MAX_SNIPPET_CHARS / 3))
   const end = Math.min(collapsed.length, start + MAX_SNIPPET_CHARS)
-  const prefix = start > 0 ? '...' : ''
-  const suffix = end < collapsed.length ? '...' : ''
+  const prefix = rawStart > 0 || start > 0 ? '...' : ''
+  const suffix = rawEnd < text.length || end < collapsed.length ? '...' : ''
   return `${prefix}${collapsed.slice(start, end)}${suffix}`
 }
 
@@ -1254,33 +1302,108 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   return out
 }
 
+// Hard cap on candidate rows pulled from SQL across all chunks. The final
+// response only keeps a handful per session, but the score+snippet pass walks
+// every row, so a runaway LIKE on common terms shouldn't pull megabytes.
+const MESSAGE_CANDIDATE_GLOBAL_LIMIT = 4000
+
+// Fetches specific session rows by primary key — used by the messagesOnly
+// fast path so we only hydrate sessions referenced by matched messages.
+function selectSessionsByKeys(db: SqliteDatabase, keys: string[]): PersistedSessionRecord[] {
+  if (keys.length === 0) return []
+  const records: PersistedSessionRecord[] = []
+  for (const chunk of chunkArray(keys, 500)) {
+    const placeholders = chunk.map(() => '?').join(', ')
+    const rows = db.prepare(`SELECT * FROM sessions WHERE key IN (${placeholders})`).all(...chunk) as Row[]
+    for (const row of rows) {
+      const session = rowToSessionRecord(row)
+      if (session) records.push(session)
+    }
+  }
+  return records
+}
+
+// Variant of selectMessageCandidates that doesn't constrain to a session list.
+// Used when messagesOnly is set and no session filter narrows the search,
+// avoiding a hydrate-every-session-then-IN round trip.
+function selectMessageCandidatesGlobal(
+  db: SqliteDatabase,
+  normalizedQuery: string,
+  role?: SessionMessage['type'],
+  toolName?: string,
+): PersistedMessageRecord[] {
+  if (!normalizedQuery) return []
+  const clauses: string[] = []
+  const queryParams: unknown[] = []
+  if (role) {
+    clauses.push('m.type = ?')
+    queryParams.push(role)
+  }
+  if (toolName) {
+    clauses.push('EXISTS (SELECT 1 FROM message_tools mt WHERE mt.message_key = m.key AND mt.name = ?)')
+    queryParams.push(toolName)
+  }
+  clauses.push("m.text LIKE ? ESCAPE '\\' COLLATE NOCASE")
+  queryParams.push(`%${escapeLike(normalizedQuery)}%`)
+  queryParams.push(MESSAGE_CANDIDATE_GLOBAL_LIMIT)
+  const where = clauses.length === 0 ? '' : `WHERE ${clauses.join(' AND ')}`
+  const rows = db.prepare(`
+    SELECT m.*
+    FROM messages m
+    ${where}
+    ORDER BY m.timestamp_ms DESC
+    LIMIT ?
+  `).all(...queryParams) as Row[]
+  const records: PersistedMessageRecord[] = []
+  for (const row of rows) {
+    const message = rowToMessageRecord(row)
+    if (message) records.push(message)
+  }
+  return records
+}
+
 function selectMessageCandidates(
   db: SqliteDatabase,
   sessionKeys: string[],
   normalizedQuery: string,
   _terms: string[],
   role?: SessionMessage['type'],
+  toolName?: string,
 ): PersistedMessageRecord[] {
   if (sessionKeys.length === 0 || !normalizedQuery) return []
   const candidates: PersistedMessageRecord[] = []
   const chunks = chunkArray(sessionKeys, 500)
+  let remaining = MESSAGE_CANDIDATE_GLOBAL_LIMIT
 
   for (const chunk of chunks) {
+    if (remaining <= 0) break
     const placeholders = chunk.map(() => '?').join(', ')
-    const roleClause = role ? 'AND m.type = ?' : ''
-    const roleParams = role ? [role] : []
+    const clauses: string[] = [`m.session_key IN (${placeholders})`]
+    const queryParams: unknown[] = [...chunk]
+    if (role) {
+      clauses.push('m.type = ?')
+      queryParams.push(role)
+    }
+    if (toolName) {
+      clauses.push('EXISTS (SELECT 1 FROM message_tools mt WHERE mt.message_key = m.key AND mt.name = ?)')
+      queryParams.push(toolName)
+    }
+    clauses.push("m.text LIKE ? ESCAPE '\\' COLLATE NOCASE")
+    queryParams.push(`%${escapeLike(normalizedQuery)}%`)
+    queryParams.push(remaining)
     const rows = db.prepare(`
       SELECT m.*
       FROM messages m
-      WHERE m.session_key IN (${placeholders})
-        ${roleClause}
-        AND lower(m.text) LIKE ? ESCAPE '\\'
-    `).all(...chunk, ...roleParams, `%${escapeLike(normalizedQuery)}%`) as Row[]
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY m.timestamp_ms DESC
+      LIMIT ?
+    `).all(...queryParams) as Row[]
 
     for (const row of rows) {
       const message = rowToMessageRecord(row)
       if (message) candidates.push(message)
     }
+    remaining -= rows.length
   }
 
   return candidates
@@ -1309,23 +1432,38 @@ export async function searchPersistedSessions(params: PersistedSearchParams): Pr
   const limit = Math.max(1, Math.min(params.limit ?? 25, 100))
   const normalizedQuery = query.toLowerCase()
   const terms = tokenizeQuery(query)
+  const usefulTerms = meaningfulTerms(terms)
   const db = await getDatabase()
-  const sessions = selectAllSessions(db).filter((session) => matchesFilters(session, params))
-  const sessionByKey = new Map(sessions.map((session) => [session.key, session]))
   const messagesOnly = params.messagesOnly === true
+  const hasSessionFilter = (params.provider && params.provider !== 'all') || Boolean(normalizeProjectPath(params.dir))
+
+  // Fast path: messagesOnly with no session-narrowing filter — query messages
+  // directly, then hydrate only the sessions referenced by matched candidates.
+  // Skips loading every session row up front.
+  let sessions: PersistedSessionRecord[]
+  let candidates: PersistedMessageRecord[]
+  if (messagesOnly && !hasSessionFilter) {
+    candidates = selectMessageCandidatesGlobal(db, normalizedQuery, params.role, params.toolName)
+    const candidateSessionKeys = [...new Set(candidates.map((message) => message.sessionKey))]
+    sessions = selectSessionsByKeys(db, candidateSessionKeys)
+  } else {
+    sessions = selectFilteredSessions(db, params)
+    candidates = selectMessageCandidates(db, sessions.map((session) => session.key), normalizedQuery, terms, params.role, params.toolName)
+  }
+  const sessionByKey = new Map(sessions.map((session) => [session.key, session]))
   const resultsBySession = new Map<string, PersistedSearchResult>()
 
   if (!messagesOnly) {
     for (const session of sessions) {
-      const score = scoreText(metadataText(session), normalizedQuery, terms)
+      const score = scoreText(metadataText(session), normalizedQuery, terms, usefulTerms)
       if (score >= 0) resultsBySession.set(session.key, { session, score, matches: [] })
     }
   }
 
-  for (const message of selectMessageCandidates(db, sessions.map((session) => session.key), normalizedQuery, terms, params.role)) {
+  for (const message of candidates) {
     const session = sessionByKey.get(message.sessionKey)
     if (!session) continue
-    const messageScore = scoreText(message.text, normalizedQuery, terms)
+    const messageScore = scoreText(message.text, normalizedQuery, terms, usefulTerms)
     if (messageScore < 0) continue
     const existing = resultsBySession.get(session.key) ?? { session, score: -1, matches: [] }
     existing.score = Math.max(existing.score, messageScore)
@@ -1366,7 +1504,7 @@ export async function searchPersistedSessions(params: PersistedSearchParams): Pr
 export async function readPersistedIndexStats(filters: PersistedIndexFilters = {}): Promise<PersistedIndexStats> {
   if (persistenceDisabled()) return emptyStats()
   const db = await getDatabase()
-  const sessions = selectAllSessions(db).filter((session) => matchesFilters(session, filters))
+  const sessions = selectFilteredSessions(db, filters)
   if (sessions.length === 0) return emptyStats()
 
   const stats = emptyStats()
