@@ -69,10 +69,24 @@ export type ThreadedMessage = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+const XML_TAG_RE_CACHE = new Map<string, RegExp>()
+function xmlTagRegex(tag: string): RegExp {
+  let re = XML_TAG_RE_CACHE.get(tag)
+  if (!re) {
+    re = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`)
+    XML_TAG_RE_CACHE.set(tag, re)
+  }
+  return re
+}
+
 function xmlTag(xml: string, tag: string): string {
-  const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))
+  const m = xml.match(xmlTagRegex(tag))
   return m ? m[1].trim() : ''
 }
+
+const SYSTEM_REMINDER_RE = /<system-reminder>([\s\S]*?)<\/system-reminder>/g
+const LOCAL_COMMAND_STDOUT_RE = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/g
+const COMMAND_NAME_RE = /<command-name>([\s\S]*?)<\/command-name>/g
 
 function parseTaskNotification(content: string): TaskNotificationBlock | null {
   if (!content.trimStart().startsWith('<task-notification>')) return null
@@ -115,17 +129,17 @@ function findSpecialRegions(text: string): SpecialRegion[] {
   const regions: SpecialRegion[] = []
 
   // system-reminder
-  for (const m of text.matchAll(/<system-reminder>([\s\S]*?)<\/system-reminder>/g)) {
+  for (const m of text.matchAll(SYSTEM_REMINDER_RE)) {
     regions.push({ kind: 'system_reminder', start: m.index!, end: m.index! + m[0].length, content: m[1].trim() })
   }
 
   // local-command-stdout
-  for (const m of text.matchAll(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/g)) {
+  for (const m of text.matchAll(LOCAL_COMMAND_STDOUT_RE)) {
     regions.push({ kind: 'local_command_stdout', start: m.index!, end: m.index! + m[0].length, stdout: m[1].trim() })
   }
 
   // slash-command cluster: starts at <command-name>, ends at </command-args> (or </command-message> or </command-name>)
-  for (const m of text.matchAll(/<command-name>([\s\S]*?)<\/command-name>/g)) {
+  for (const m of text.matchAll(COMMAND_NAME_RE)) {
     const start = m.index!
     // Try to extend to the end of the cluster (command-args or command-message)
     const argsEnd  = text.indexOf('</command-args>',    start)

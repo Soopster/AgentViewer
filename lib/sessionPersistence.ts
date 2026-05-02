@@ -959,8 +959,8 @@ function aggregateMessages(messages: PersistedMessageRecord[], indexedAt: number
   return aggregate
 }
 
-function replaceMessagesForSession(db: SqliteDatabase, sessionKey: string, messages: PersistedMessageRecord[]): void {
-  db.prepare('DELETE FROM messages WHERE session_key = ?').run(sessionKey)
+function insertMessages(db: SqliteDatabase, messages: PersistedMessageRecord[]): void {
+  if (messages.length === 0) return
   const insertMessage = db.prepare(`
     INSERT INTO messages(
       key,
@@ -1011,6 +1011,35 @@ function replaceMessagesForSession(db: SqliteDatabase, sessionKey: string, messa
   }
 }
 
+function replaceMessagesForSession(db: SqliteDatabase, sessionKey: string, messages: PersistedMessageRecord[]): void {
+  db.prepare('DELETE FROM messages WHERE session_key = ?').run(sessionKey)
+  insertMessages(db, messages)
+}
+
+// Returns true if the persisted message rows are an exact prefix of `next`,
+// allowing us to append only the new tail instead of rewriting the whole set.
+function tryAppendMessagesForSession(
+  db: SqliteDatabase,
+  sessionKey: string,
+  next: PersistedMessageRecord[],
+): boolean {
+  const countRow = db
+    .prepare('SELECT COUNT(*) AS c FROM messages WHERE session_key = ?')
+    .get(sessionKey) as { c?: number } | undefined
+  const existingCount = typeof countRow?.c === 'number' ? countRow.c : 0
+  if (existingCount === 0 || existingCount >= next.length) return false
+
+  const lastRow = db
+    .prepare('SELECT key FROM messages WHERE session_key = ? ORDER BY rowid DESC LIMIT 1')
+    .get(sessionKey) as { key?: string } | undefined
+  const existingLastKey = typeof lastRow?.key === 'string' ? lastRow.key : null
+  const expectedLastKey = next[existingCount - 1]?.key
+  if (!existingLastKey || !expectedLastKey || existingLastKey !== expectedLastKey) return false
+
+  insertMessages(db, next.slice(existingCount))
+  return true
+}
+
 export async function syncPersistedSessionMessages(
   provider: AgentProvider,
   sessionId: string,
@@ -1048,7 +1077,9 @@ export async function syncPersistedSessionMessages(
         ...aggregate,
       }
       upsertSessionRecord(db, next, signature)
-      replaceMessagesForSession(db, sessionKey, persistedMessages)
+      if (!tryAppendMessagesForSession(db, sessionKey, persistedMessages)) {
+        replaceMessagesForSession(db, sessionKey, persistedMessages)
+      }
     })
     messageSignatureCache.set(sessionKey, signature)
   })

@@ -23,21 +23,10 @@ function parseOffset(value: string | null): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
 }
 
-function apiMessageSignature(message: SessionMessage): string {
-  const originKind = message.origin?.kind ?? ''
-  const turnId = message.turnId ?? ''
-  const timestamp = message.timestamp ?? ''
-  let payload = ''
-  try {
-    payload = JSON.stringify(message.message)
-  } catch {
-    payload = String(message.message)
-  }
-  return [message.uuid, message.type, timestamp, originKind, turnId, payload].join('|')
-}
-
 function messageWindowSignature(offset: number, messages: SessionMessage[]): string {
-  return `${offset}:${messages.length}:${messages.map(apiMessageSignature).join('\n')}`
+  if (messages.length === 0) return `${offset}:0:`
+  const tail = messages[messages.length - 1]
+  return `${offset}:${messages.length}:${tail.uuid}:${tail.type}:${tail.timestamp ?? ''}:${tail.turnId ?? ''}:${tail.origin?.kind ?? ''}`
 }
 
 function wait(ms: number, signal: AbortSignal): Promise<boolean> {

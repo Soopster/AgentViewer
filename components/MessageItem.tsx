@@ -602,6 +602,10 @@ function GenericToolCard({ thread }: { thread: ToolThread }) {
   const c = toolColor(toolUse.name)
   const firstVal = Object.values(toolUse.input)[0]
   const preview  = firstVal !== undefined ? String(firstVal).slice(0, 90) : null
+  const inputJson = useMemo(
+    () => (open ? JSON.stringify(toolUse.input, null, 2) : ''),
+    [open, toolUse.input],
+  )
 
   return (
     <CardShell color={c} result={result} toolName={toolUse.name}
@@ -636,7 +640,7 @@ function GenericToolCard({ thread }: { thread: ToolThread }) {
           background: 'var(--surface)', overflowX: 'auto', maxHeight: 280, overflowY: 'auto',
           borderTop: '1px solid var(--border)', lineHeight: 1.6,
         }}>
-          {JSON.stringify(toolUse.input, null, 2)}
+          {inputJson}
         </pre>
       ) : undefined}
     />
@@ -1008,8 +1012,11 @@ function GrepCard({ thread }: { thread: ToolThread }) {
   const pattern  = input.pattern ?? ''
   const location = input.glob ?? input.path ?? ''
   const c        = toolColor('Grep')
-  const raw      = thread.result && !thread.result.is_error ? resultToString(thread.result.content) : ''
-  const lineCount = raw ? raw.split('\n').filter(l => l.trim()).length : null
+  const raw      = useMemo(
+    () => (thread.result && !thread.result.is_error ? resultToString(thread.result.content) : ''),
+    [thread.result],
+  )
+  const lineCount = useMemo(() => (raw ? raw.split('\n').filter(l => l.trim()).length : null), [raw])
   const countLabel = lineCount !== null
     ? (input.output_mode === 'files_with_matches' || !input.output_mode)
       ? `${lineCount} file${lineCount !== 1 ? 's' : ''}`
@@ -1055,8 +1062,11 @@ function GlobCard({ thread }: { thread: ToolThread }) {
   const pattern = input.pattern ?? ''
   const path    = input.path ?? ''
   const c       = toolColor('Glob')
-  const raw     = thread.result && !thread.result.is_error ? resultToString(thread.result.content) : ''
-  const fileCount = raw ? raw.split('\n').filter(l => l.trim()).length : null
+  const raw     = useMemo(
+    () => (thread.result && !thread.result.is_error ? resultToString(thread.result.content) : ''),
+    [thread.result],
+  )
+  const fileCount = useMemo(() => (raw ? raw.split('\n').filter(l => l.trim()).length : null), [raw])
   return (
     <CardShell color={c} result={thread.result} toolName="Glob"
       header={
@@ -2233,22 +2243,24 @@ function GenericResultSection({ raw, isError = false, note }: { raw: string; isE
   const [expanded, setExpanded] = useState(false)
   const LIMIT = 20
 
-  const parts = splitResultParts(raw)
-  const hasReminders = parts.some(p => p.kind === 'system_reminder')
+  const { parts, hasReminders, partLines, totalTextLines } = useMemo(() => {
+    const parts = splitResultParts(raw)
+    const hasReminders = parts.some(p => p.kind === 'system_reminder')
+    const partLines = parts.map(p => (p.kind === 'system_reminder' ? null : p.text.split('\n')))
+    const totalTextLines = partLines.reduce<number>((n, lines) => n + (lines ? lines.length : 0), 0)
+    return { parts, hasReminders, partLines, totalTextLines }
+  }, [raw])
 
   // Pre-compute visible lines across text parts (system-reminder parts don't count toward limit)
   let budget = expanded ? Infinity : LIMIT
-  const processedParts = parts.map(part => {
+  const processedParts = parts.map((part, i) => {
     if (part.kind === 'system_reminder') return { ...part, visibleLines: [] as string[] }
-    const lines = part.text.split('\n')
+    const lines = partLines[i]!
     const visibleLines = budget > 0 ? lines.slice(0, budget) : []
     budget = Math.max(0, budget - lines.length)
     return { ...part, visibleLines }
   })
 
-  const totalTextLines = parts
-    .filter((p): p is { kind: 'text'; text: string } => p.kind === 'text')
-    .reduce((n, p) => n + p.text.split('\n').length, 0)
   const hidden = Math.max(0, totalTextLines - LIMIT)
 
   const preStyle: React.CSSProperties = {

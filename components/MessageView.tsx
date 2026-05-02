@@ -4211,11 +4211,13 @@ export default function MessageView({
           </Card>
         )}
       </div>}
-      <AnalyticsPopover
-        open={analyticsOpen}
-        onClose={() => setAnalyticsOpen(false)}
-        input={{ info: sessionInfo, threadedMessages: threadedFull, rawMessages: messages }}
-      />
+      {analyticsOpen ? (
+        <AnalyticsPopover
+          open={analyticsOpen}
+          onClose={() => setAnalyticsOpen(false)}
+          input={{ info: sessionInfo, threadedMessages: threadedFull, rawMessages: messages }}
+        />
+      ) : null}
     </div>
   )
 }
