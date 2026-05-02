@@ -1018,6 +1018,40 @@ function estimateTimelineRowHeight(row: TimelineRow): number {
   return Math.max(estimated, message.role === 'system' ? 120 : ESTIMATED_TIMELINE_ROW_HEIGHT)
 }
 
+type TimelineRowLayout = {
+  tops: Float64Array
+  heights: Float64Array
+  totalHeight: number
+  indexByKey: Map<string, number>
+}
+
+function buildTimelineRowLayout(timelineRows: TimelineRow[], measuredHeights: Map<string, number>): TimelineRowLayout {
+  const n = timelineRows.length
+  const tops = new Float64Array(n)
+  const heights = new Float64Array(n)
+  const indexByKey = new Map<string, number>()
+  let totalHeight = 0
+  for (let i = 0; i < n; i++) {
+    const row = timelineRows[i]
+    tops[i] = totalHeight
+    heights[i] = measuredHeights.get(row.key) ?? estimateTimelineRowHeight(row)
+    indexByKey.set(row.key, i)
+    totalHeight += heights[i]
+  }
+  return { tops, heights, totalHeight, indexByKey }
+}
+
+function upperBound(values: Float64Array, length: number, target: number): number {
+  let low = 0
+  let high = length
+  while (low < high) {
+    const mid = (low + high) >>> 1
+    if (values[mid] <= target) low = mid + 1
+    else high = mid
+  }
+  return low
+}
+
 function messageContentBlocksForTarget(message: SessionMessage): ContentBlock[] {
   if (message.type === 'system') return []
   const content = message.message.content
@@ -1300,6 +1334,7 @@ export default function MessageView({
   const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; lastFingerprint: string | null; sessionId: string } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const rowHeightsRef = useRef<Map<string, number>>(new Map())
+  const rowLayoutRef = useRef<TimelineRowLayout>(buildTimelineRowLayout([], new Map()))
   const threadedCacheRef = useRef<Map<string, ThreadedMessage>>(new Map())
   const prevThreadingRef = useRef<IncrementalThreadingCache | null>(null)
   const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
@@ -2142,7 +2177,7 @@ export default function MessageView({
     : sendState === 'sending' || awaitingPersistedTurn
     ? 'var(--cyan)'
     : 'var(--text-3)'
-  const liveUserMessage: ThreadedMessage | null = !isProject && optimisticUserText
+  const liveUserMessage = useMemo<ThreadedMessage | null>(() => (!isProject && optimisticUserText
     ? {
         role: 'user',
         uuid: 'live-user',
@@ -2150,8 +2185,8 @@ export default function MessageView({
         provider: session?.provider,
         blocks: [{ type: 'text', text: optimisticUserText }],
       }
-    : null
-  const liveAssistantMessage: ThreadedMessage | null = !isProject && session?.provider !== 'claude' && (sendState === 'sending' || awaitingPersistedTurn)
+    : null), [isProject, optimisticUserText, session?.provider, session?.sessionId])
+  const liveAssistantMessage = useMemo<ThreadedMessage | null>(() => (!isProject && session?.provider !== 'claude' && (sendState === 'sending' || awaitingPersistedTurn)
     ? {
         role: 'assistant',
         uuid: 'live-assistant',
@@ -2167,7 +2202,15 @@ export default function MessageView({
               : 'Waiting for saved response…'),
         }],
       }
-    : null
+    : null), [
+      activeToolCount,
+      awaitingPersistedTurn,
+      isProject,
+      liveAssistantText,
+      sendState,
+      session?.provider,
+      session?.sessionId,
+    ])
   const rewindCandidates = useMemo(() =>
     (sessionCapabilities?.fileRewind ? messages : [])
       .filter((msg) =>
@@ -2196,8 +2239,8 @@ export default function MessageView({
     }
     return Array.from(turns.values())
   }, [messages, sessionCapabilities?.rollback])
-  const timelineRows = useMemo<TimelineRow[]>(() => {
-    const rows: TimelineRow[] = threaded.map((msg) => ({
+  const persistedTimelineRows = useMemo<TimelineRow[]>(() =>
+    threaded.map((msg) => ({
       key: `persisted:${threadedMessageKey(msg)}`,
       message: msg,
       showSession: isProject,
@@ -2208,7 +2251,22 @@ export default function MessageView({
       forkingMessageId,
       resumeFromMessageId,
     }))
+  , [
+    forkingMessageId,
+    highlightedMessageId,
+    isProject,
+    resumeFromMessageId,
+    sessionCapabilities?.messageFork,
+    sessionCapabilities?.resumeAtMessage,
+    threaded,
+  ])
 
+  const liveThreadedVisible = useMemo(
+    () => (showTools ? liveThreadedMessages : stripToolCallBlocks(liveThreadedMessages)),
+    [liveThreadedMessages, showTools],
+  )
+  const liveTimelineRows = useMemo<TimelineRow[]>(() => {
+    const rows: TimelineRow[] = []
     if (liveUserMessage) {
       rows.push({
         key: 'live:user',
@@ -2229,7 +2287,6 @@ export default function MessageView({
       })
     }
 
-    const liveThreadedVisible = showTools ? liveThreadedMessages : stripToolCallBlocks(liveThreadedMessages)
     liveThreadedVisible.forEach((msg, index) => {
       rows.push({
         key: `live:threaded:${msg.provider ?? 'claude'}:${msg.uuid}`,
@@ -2243,20 +2300,17 @@ export default function MessageView({
     return rows
   }, [
     awaitingPersistedTurn,
-    forkingMessageId,
-    highlightedMessageId,
-    isProject,
     liveAssistantMessage,
-    liveThreadedMessages,
     liveToolActivities,
+    liveThreadedVisible,
     liveUserMessage,
-    resumeFromMessageId,
     session?.provider,
-    sessionCapabilities?.messageFork,
-    sessionCapabilities?.resumeAtMessage,
-    showTools,
-    threaded,
   ])
+  const timelineRows = useMemo<TimelineRow[]>(() => {
+    if (persistedTimelineRows.length === 0) return liveTimelineRows
+    if (liveTimelineRows.length === 0) return persistedTimelineRows
+    return [...persistedTimelineRows, ...liveTimelineRows]
+  }, [liveTimelineRows, persistedTimelineRows])
   const timelineTargetMessageId = useMemo(
     () => resolveTimelineTargetMessageId(targetMessageId, messages, timelineRows),
     [messages, targetMessageId, timelineRows],
@@ -2344,25 +2398,24 @@ export default function MessageView({
       if (pending.size === 0) return
 
       const node = timelineRef.current
+      const layout = rowLayoutRef.current
       const isFollowing = autoFollowRef.current
-      let offset = 0
       let scrollDelta = 0
       let changed = false
 
-      for (const row of timelineRowsRef.current) {
-        const previousHeight = rowHeightsRef.current.get(row.key) ?? estimateTimelineRowHeight(row)
-        const nextMeasuredHeight = pending.get(row.key)
-        const nextHeightForLayout = nextMeasuredHeight ?? previousHeight
+      for (const [key, nextMeasuredHeight] of pending) {
+        const index = layout.indexByKey.get(key)
+        if (index == null) continue
+        const row = timelineRowsRef.current[index]
+        if (!row) continue
+        const previousHeight = rowHeightsRef.current.get(key) ?? estimateTimelineRowHeight(row)
+        if (nextMeasuredHeight === previousHeight) continue
 
-        if (nextMeasuredHeight != null && nextMeasuredHeight !== previousHeight) {
-          rowHeightsRef.current.set(row.key, nextMeasuredHeight)
-          changed = true
-          if (!isFollowing && node && offset < node.scrollTop) {
-            scrollDelta += nextMeasuredHeight - previousHeight
-          }
+        rowHeightsRef.current.set(key, nextMeasuredHeight)
+        changed = true
+        if (!isFollowing && node && layout.tops[index] < node.scrollTop) {
+          scrollDelta += nextMeasuredHeight - previousHeight
         }
-
-        offset += nextHeightForLayout
       }
 
       pending.clear()
@@ -2390,18 +2443,9 @@ export default function MessageView({
   // change; virtualTimeline re-runs on every scroll but only does a scan of
   // the visible window — no new objects for off-screen rows.
   const rowLayout = useMemo(() => {
-    const n = timelineRows.length
-    const tops = new Float64Array(n)
-    const heights = new Float64Array(n)
-    let totalHeight = 0
-    for (let i = 0; i < n; i++) {
-      tops[i] = totalHeight
-      const h = rowHeightsRef.current.get(timelineRows[i].key) ?? estimateTimelineRowHeight(timelineRows[i])
-      heights[i] = h
-      totalHeight += h
-    }
-    return { tops, heights, totalHeight }
+    return buildTimelineRowLayout(timelineRows, rowHeightsRef.current)
   }, [timelineRows, rowMeasurementVersion])
+  rowLayoutRef.current = rowLayout
 
   useLayoutEffect(() => {
     if (!timelineTargetMessageId || loading) return
@@ -2437,14 +2481,11 @@ export default function MessageView({
     const rangeStart = Math.max(0, timelineScrollTop - TIMELINE_OVERSCAN_PX)
     const rangeEnd = timelineScrollTop + viewportHeight + TIMELINE_OVERSCAN_PX
 
-    let startIndex = 0
-    while (startIndex < n && tops[startIndex] + heights[startIndex] < rangeStart) {
-      startIndex += 1
+    let startIndex = Math.max(0, upperBound(tops, n, rangeStart) - 1)
+    while (startIndex > 0 && tops[startIndex - 1] + heights[startIndex - 1] >= rangeStart) {
+      startIndex -= 1
     }
-    let endIndex = startIndex
-    while (endIndex < n && tops[endIndex] < rangeEnd) {
-      endIndex += 1
-    }
+    let endIndex = upperBound(tops, n, rangeEnd)
     endIndex = Math.max(endIndex, startIndex + 1)
 
     const visibleRows: Array<{ row: TimelineRow; top: number; height: number }> = []

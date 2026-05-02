@@ -1,92 +1,14 @@
 'use client'
 
-import { memo, use, useEffect, useMemo, useState, createContext } from 'react'
+import { lazy, memo, Suspense, use, useEffect, useMemo, useState, createContext } from 'react'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { diffLines } from 'diff'
-import { renderMermaidSVG } from 'beautiful-mermaid'
-import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
-import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
-import c from 'react-syntax-highlighter/dist/esm/languages/prism/c'
-import cpp from 'react-syntax-highlighter/dist/esm/languages/prism/cpp'
-import csharp from 'react-syntax-highlighter/dist/esm/languages/prism/csharp'
-import css from 'react-syntax-highlighter/dist/esm/languages/prism/css'
-import dart from 'react-syntax-highlighter/dist/esm/languages/prism/dart'
-import diff from 'react-syntax-highlighter/dist/esm/languages/prism/diff'
-import docker from 'react-syntax-highlighter/dist/esm/languages/prism/docker'
-import go from 'react-syntax-highlighter/dist/esm/languages/prism/go'
-import ini from 'react-syntax-highlighter/dist/esm/languages/prism/ini'
-import java from 'react-syntax-highlighter/dist/esm/languages/prism/java'
-import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript'
-import json from 'react-syntax-highlighter/dist/esm/languages/prism/json'
-import jsx from 'react-syntax-highlighter/dist/esm/languages/prism/jsx'
-import kotlin from 'react-syntax-highlighter/dist/esm/languages/prism/kotlin'
-import markdown from 'react-syntax-highlighter/dist/esm/languages/prism/markdown'
-import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup'
-import php from 'react-syntax-highlighter/dist/esm/languages/prism/php'
-import powershell from 'react-syntax-highlighter/dist/esm/languages/prism/powershell'
-import python from 'react-syntax-highlighter/dist/esm/languages/prism/python'
-import ruby from 'react-syntax-highlighter/dist/esm/languages/prism/ruby'
-import rust from 'react-syntax-highlighter/dist/esm/languages/prism/rust'
-import scss from 'react-syntax-highlighter/dist/esm/languages/prism/scss'
-import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql'
-import swift from 'react-syntax-highlighter/dist/esm/languages/prism/swift'
-import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx'
-import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
-import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import type { Components } from 'react-markdown'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, ClaudeSystemBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
 import { getAssistantLabel } from '@/lib/provider'
 import { Separator } from '@/components/ui/separator'
-import { useCodeTheme } from './CodeThemeContext'
-
-SyntaxHighlighter.registerLanguage('bash', bash)
-SyntaxHighlighter.registerLanguage('sh', bash)
-SyntaxHighlighter.registerLanguage('zsh', bash)
-SyntaxHighlighter.registerLanguage('shell', bash)
-SyntaxHighlighter.registerLanguage('c', c)
-SyntaxHighlighter.registerLanguage('cpp', cpp)
-SyntaxHighlighter.registerLanguage('csharp', csharp)
-SyntaxHighlighter.registerLanguage('cs', csharp)
-SyntaxHighlighter.registerLanguage('css', css)
-SyntaxHighlighter.registerLanguage('dart', dart)
-SyntaxHighlighter.registerLanguage('scss', scss)
-SyntaxHighlighter.registerLanguage('diff', diff)
-SyntaxHighlighter.registerLanguage('dockerfile', docker)
-SyntaxHighlighter.registerLanguage('docker', docker)
-SyntaxHighlighter.registerLanguage('go', go)
-SyntaxHighlighter.registerLanguage('java', java)
-SyntaxHighlighter.registerLanguage('ini', ini)
-SyntaxHighlighter.registerLanguage('toml', ini)
-SyntaxHighlighter.registerLanguage('javascript', javascript)
-SyntaxHighlighter.registerLanguage('js', javascript)
-SyntaxHighlighter.registerLanguage('json', json)
-SyntaxHighlighter.registerLanguage('jsx', jsx)
-SyntaxHighlighter.registerLanguage('kotlin', kotlin)
-SyntaxHighlighter.registerLanguage('kt', kotlin)
-SyntaxHighlighter.registerLanguage('markdown', markdown)
-SyntaxHighlighter.registerLanguage('md', markdown)
-SyntaxHighlighter.registerLanguage('html', markup)
-SyntaxHighlighter.registerLanguage('xml', markup)
-SyntaxHighlighter.registerLanguage('svg', markup)
-SyntaxHighlighter.registerLanguage('php', php)
-SyntaxHighlighter.registerLanguage('powershell', powershell)
-SyntaxHighlighter.registerLanguage('ps1', powershell)
-SyntaxHighlighter.registerLanguage('python', python)
-SyntaxHighlighter.registerLanguage('py', python)
-SyntaxHighlighter.registerLanguage('ruby', ruby)
-SyntaxHighlighter.registerLanguage('rb', ruby)
-SyntaxHighlighter.registerLanguage('rust', rust)
-SyntaxHighlighter.registerLanguage('rs', rust)
-SyntaxHighlighter.registerLanguage('sql', sql)
-SyntaxHighlighter.registerLanguage('swift', swift)
-SyntaxHighlighter.registerLanguage('tsx', tsx)
-SyntaxHighlighter.registerLanguage('typescript', typescript)
-SyntaxHighlighter.registerLanguage('ts', typescript)
-SyntaxHighlighter.registerLanguage('yaml', yaml)
-SyntaxHighlighter.registerLanguage('yml', yaml)
 
 // ── Tool color palette ────────────────────────────────────────────────────────
 
@@ -127,134 +49,88 @@ function formatLocalMessageTime(value?: string): string {
 
 // ── Markdown components ───────────────────────────────────────────────────────
 
-function FencedCodeBlock({
-  language,
-  codeString,
-  margin = '10px 0',
-}: {
+type FencedCodeBlockProps = {
   language: string
   codeString: string
   margin?: string | number
-}) {
-  const { style: codeStyle } = useCodeTheme()
+}
 
+type CodeViewerProps = {
+  code: string
+  filePath?: string
+  language?: string
+  maxHeight?: number
+  showLineNumbers?: boolean
+  startingLineNumber?: number
+}
+
+const LazyFencedCodeBlock = lazy(() => import('./CodeRenderers').then((mod) => ({ default: mod.FencedCodeBlock })))
+const LazyMermaidDiagram = lazy(() => import('./CodeRenderers').then((mod) => ({ default: mod.MermaidDiagram })))
+const LazyCodeViewer = lazy(() => import('./CodeRenderers').then((mod) => ({ default: mod.CodeViewer })))
+const LazyDiffView = lazy(() => import('./CodeRenderers').then((mod) => ({ default: mod.DiffView })))
+
+function normalizeCode(code: string): string {
+  return code.endsWith('\n') ? code.slice(0, -1) : code
+}
+
+function PlainCodeBlock({
+  code,
+  language,
+  margin = 0,
+  maxHeight,
+}: {
+  code: string
+  language?: string
+  margin?: string | number
+  maxHeight?: number
+}) {
   return (
-    <div style={{ margin, borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
+    <div style={{ margin, borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)', background: 'var(--surface)' }}>
       {language && (
         <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+          display: 'flex',
+          justifyContent: 'flex-end',
           padding: '3px 12px',
           background: 'var(--surface-2)',
           borderBottom: '1px solid var(--border)',
           fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 10, color: 'var(--text-3)',
+          fontSize: 10,
+          color: 'var(--text-3)',
           letterSpacing: '0.06em',
         }}>
           {language}
         </div>
       )}
-      <SyntaxHighlighter
-        language={language || undefined}
-        style={codeStyle}
-        customStyle={{
-          margin: 0,
-          padding: '12px 16px',
-          fontSize: 13,
-          lineHeight: 1.65,
-          overflowX: 'auto',
-        }}
-      >
-        {codeString}
-      </SyntaxHighlighter>
+      <pre style={{
+        margin: 0,
+        padding: '10px 14px',
+        maxHeight,
+        overflow: 'auto',
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 13,
+        lineHeight: 1.6,
+        color: 'var(--text-2)',
+        whiteSpace: 'pre',
+      }}>
+        {normalizeCode(code)}
+      </pre>
     </div>
   )
 }
 
-function MermaidDiagram({ codeString }: { codeString: string }) {
-  const rendered = useMemo(() => {
-    try {
-      return {
-        svg: renderMermaidSVG(codeString, {
-          bg: 'var(--surface)',
-          fg: 'var(--text)',
-          line: 'var(--text-3)',
-          accent: 'var(--violet)',
-          muted: 'var(--text-3)',
-          surface: 'var(--surface-2)',
-          border: 'var(--border-2)',
-          font: "'IBM Plex Sans', sans-serif",
-          transparent: true,
-        }),
-        error: '',
-      }
-    } catch (err) {
-      return {
-        svg: '',
-        error: err instanceof Error ? err.message : 'Unable to render Mermaid diagram.',
-      }
-    }
-  }, [codeString])
-
-  if (rendered.error) {
-    return (
-      <div>
-        <div style={{
-          margin: '10px 0 0',
-          padding: '8px 10px',
-          border: '1px solid rgba(248,113,113,0.26)',
-          borderRadius: '6px 6px 0 0',
-          background: 'rgba(248,113,113,0.08)',
-          color: 'var(--red, #f87171)',
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 11,
-          lineHeight: 1.5,
-        }}>
-          Mermaid render failed: {rendered.error}
-        </div>
-        <FencedCodeBlock language="mermaid" codeString={codeString} />
-      </div>
-    )
-  }
-
+function FencedCodeBlock(props: FencedCodeBlockProps) {
   return (
-    <div style={{ margin: '10px 0' }}>
-      <div
-        style={{
-          padding: 12,
-          borderRadius: 6,
-          border: '1px solid var(--border)',
-          background: 'var(--surface)',
-          overflowX: 'auto',
-        }}
-      >
-        <div
-          className="agent-viewer-mermaid"
-          style={{ minWidth: 0 }}
-          dangerouslySetInnerHTML={{ __html: rendered.svg }}
-        />
-      </div>
-      <details style={{
-        marginTop: 6,
-        borderRadius: 6,
-        border: '1px solid var(--border)',
-        background: 'var(--surface-2)',
-      }}>
-        <summary style={{
-          cursor: 'pointer',
-          padding: '6px 10px',
-          color: 'var(--text-3)',
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 11,
-          letterSpacing: '0.05em',
-          userSelect: 'none',
-        }}>
-          Mermaid source
-        </summary>
-        <div style={{ borderTop: '1px solid var(--border)' }}>
-          <FencedCodeBlock language="mermaid" codeString={codeString} margin={0} />
-        </div>
-      </details>
-    </div>
+    <Suspense fallback={<PlainCodeBlock code={props.codeString} language={props.language} margin={props.margin ?? '10px 0'} />}>
+      <LazyFencedCodeBlock {...props} />
+    </Suspense>
+  )
+}
+
+function MermaidDiagram({ codeString }: { codeString: string }) {
+  return (
+    <Suspense fallback={<PlainCodeBlock code={codeString} language="mermaid" margin="10px 0" />}>
+      <LazyMermaidDiagram codeString={codeString} />
+    </Suspense>
   )
 }
 
@@ -405,10 +281,6 @@ function detectLanguageFromPath(filePath?: string): string {
   return LANGUAGE_BY_EXTENSION[name.slice(dot + 1).toLowerCase()] ?? ''
 }
 
-function normalizeCode(code: string): string {
-  return code.endsWith('\n') ? code.slice(0, -1) : code
-}
-
 function inferStartingLineNumber(lines: Array<{ num: string }>): number | undefined {
   const first = lines.find(line => /^\d+$/.test(line.num))
   return first ? Number(first.num) : undefined
@@ -419,50 +291,39 @@ function shouldShowLineNumbers(lines: Array<{ num: string }>): boolean {
   return numbered.length > 0 && numbered.every(line => /^\d+$/.test(line.num))
 }
 
-function CodeViewer({
-  code,
-  filePath,
-  language,
-  maxHeight,
-  showLineNumbers = false,
-  startingLineNumber,
-}: {
-  code: string
-  filePath?: string
-  language?: string
-  maxHeight?: number
-  showLineNumbers?: boolean
-  startingLineNumber?: number
-}) {
-  const { style: codeStyle } = useCodeTheme()
-  const resolvedLanguage = language ?? detectLanguageFromPath(filePath)
+const LARGE_DIFF_LINE_THRESHOLD = 200
+const LARGE_DIFF_CHAR_THRESHOLD = 8_000
 
+function countLines(value: string): number {
+  if (!value) return 0
+  let lines = 1
+  for (let i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) === 10) lines += 1
+  }
+  return lines
+}
+
+function isLargeTextList(values: Iterable<string>): boolean {
+  let chars = 0
+  let lines = 0
+  for (const value of values) {
+    chars += value.length
+    lines += countLines(value)
+    if (chars > LARGE_DIFF_CHAR_THRESHOLD || lines > LARGE_DIFF_LINE_THRESHOLD) return true
+  }
+  return false
+}
+
+function isLargeTextPayload(...values: string[]): boolean {
+  return isLargeTextList(values)
+}
+
+function CodeViewer(props: CodeViewerProps) {
+  const fallbackLanguage = props.language ?? detectLanguageFromPath(props.filePath)
   return (
-    <SyntaxHighlighter
-      language={resolvedLanguage || undefined}
-      style={codeStyle}
-      showLineNumbers={showLineNumbers}
-      startingLineNumber={startingLineNumber}
-      wrapLongLines={false}
-      customStyle={{
-        margin: 0,
-        padding: '10px 14px',
-        fontSize: 13,
-        lineHeight: 1.6,
-        overflowX: 'auto',
-        overflowY: maxHeight ? 'auto' : undefined,
-        maxHeight,
-      }}
-      codeTagProps={{ style: { fontFamily: "'IBM Plex Mono', monospace" } }}
-      lineNumberStyle={{
-        minWidth: '2.6em',
-        paddingRight: '0.9em',
-        color: 'var(--text-3)',
-        userSelect: 'none',
-      }}
-    >
-      {normalizeCode(code)}
-    </SyntaxHighlighter>
+    <Suspense fallback={<PlainCodeBlock code={props.code} language={fallbackLanguage} maxHeight={props.maxHeight} />}>
+      <LazyCodeViewer {...props} />
+    </Suspense>
   )
 }
 
@@ -501,84 +362,26 @@ function CardShell({
 
 // ── Diff view ─────────────────────────────────────────────────────────────────
 
-function DiffView({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath?: string }) {
-  const { style: codeStyle } = useCodeTheme()
-  const language = detectLanguageFromPath(filePath)
-  const changes = useMemo(() => diffLines(oldStr, newStr), [oldStr, newStr])
-
+function DiffView(props: { oldStr: string; newStr: string; filePath?: string }) {
   return (
-    <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto', borderTop: '1px solid var(--border)' }}>
-      {changes.map((change, ci) => {
-        const chunkLines = change.value.split('\n')
-        if (chunkLines[chunkLines.length - 1] === '') chunkLines.pop()
-        if (chunkLines.length === 0) return null
-
-        const isAdd = change.added
-        const isDel = change.removed
-        const sign      = isAdd ? '+' : isDel ? '−' : ' '
-        const signColor = isAdd ? 'var(--green)' : isDel ? 'var(--red)' : 'var(--text-3)'
-        const bgTint    = isAdd ? 'rgba(45,212,160,0.10)' : isDel ? 'rgba(240,96,96,0.10)' : 'transparent'
-        const gutterBg  = isAdd ? 'rgba(45,212,160,0.18)' : isDel ? 'rgba(240,96,96,0.18)' : 'var(--surface-2)'
-        const borderL   = isAdd ? '2px solid rgba(45,212,160,0.45)' : isDel ? '2px solid rgba(240,96,96,0.45)' : '2px solid transparent'
-
-        return (
-          <div key={ci} style={{ display: 'flex', borderLeft: borderL }}>
-            {/* +/− gutter */}
-            <div style={{
-              flexShrink: 0, width: 22,
-              background: gutterBg,
-              borderRight: '1px solid var(--border)',
-              display: 'flex', flexDirection: 'column', alignItems: 'center',
-              paddingTop: 1,
-            }}>
-              {chunkLines.map((_, li) => (
-                <span key={li} style={{
-                  display: 'block',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11, lineHeight: '1.6em',
-                  color: signColor, userSelect: 'none',
-                }}>
-                  {sign}
-                </span>
-              ))}
-            </div>
-            {/* Highlighted code */}
-            <div style={{ flex: 1, minWidth: 0, background: bgTint }}>
-              <SyntaxHighlighter
-                language={language || undefined}
-                style={codeStyle}
-                wrapLongLines={false}
-                customStyle={{
-                  margin: 0, padding: '0 10px',
-                  // Transparent only for tinted chunks so bgTint shows through;
-                  // context chunks let the Prism theme control its own background.
-                  ...(isAdd || isDel ? { background: 'transparent' } : {}),
-                  fontSize: 13, lineHeight: 1.6,
-                  overflowX: 'visible',
-                }}
-                codeTagProps={{ style: { fontFamily: "'IBM Plex Mono', monospace" } }}
-              >
-                {chunkLines.join('\n')}
-              </SyntaxHighlighter>
-            </div>
-          </div>
-        )
-      })}
-    </div>
+    <Suspense fallback={<PlainCodeBlock code={props.newStr || props.oldStr} language={detectLanguageFromPath(props.filePath)} maxHeight={500} />}>
+      <LazyDiffView {...props} />
+    </Suspense>
   )
 }
 
 // ── Edit tool card ────────────────────────────────────────────────────────────
 
 function EditToolCard({ thread }: { thread: ToolThread }) {
-  const [open, setOpen] = useState(true)
-  const [hovered, setHovered] = useState(false)
   const { toolUse, result } = thread
   const input = toolUse.input as { file_path?: string; old_string?: string; new_string?: string }
   const filePath = input.file_path ?? ''
   const oldStr   = input.old_string ?? ''
   const newStr   = input.new_string ?? ''
-  const delta    = newStr.split('\n').length - oldStr.split('\n').length
+  const largeDiff = isLargeTextPayload(oldStr, newStr)
+  const [open, setOpen] = useState(() => !largeDiff)
+  const [hovered, setHovered] = useState(false)
+  const delta    = countLines(newStr) - countLines(oldStr)
   const sign     = delta > 0 ? `+${delta}` : String(delta)
   const c        = toolColor(toolUse.name)
 
@@ -604,6 +407,11 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--text-3)', flexShrink: 0 }}>
             {sign}
           </span>
+          {largeDiff && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--amber)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
+              LARGE
+            </span>
+          )}
           <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
         </div>
       }
@@ -671,14 +479,15 @@ function WriteToolCard({ thread }: { thread: ToolThread }) {
 }
 
 function FileChangeCard({ thread }: { thread: ToolThread }) {
-  const [open, setOpen] = useState(true)
-  const [hovered, setHovered] = useState(false)
   const { toolUse, result } = thread
   const input = toolUse.input as {
     status?: string
     changes?: Array<{ path?: string; kind?: unknown; diff?: string }>
   }
   const changes = input.changes ?? []
+  const largeDiff = isLargeTextList(changes.map((change) => change.diff ?? ''))
+  const [open, setOpen] = useState(() => !largeDiff)
+  const [hovered, setHovered] = useState(false)
   const c = toolColor('FileChange')
   const preview = changes.length === 1
     ? basename(changes[0]?.path ?? '')
@@ -711,6 +520,11 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
           {typeof input.status === 'string' && (
             <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
               {input.status}
+            </span>
+          )}
+          {largeDiff && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--amber)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
+              LARGE
             </span>
           )}
           <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
@@ -1576,8 +1390,6 @@ function SkillCard({ thread }: { thread: ToolThread }) {
 // ── MultiEdit card ────────────────────────────────────────────────────────────
 
 function MultiEditCard({ thread }: { thread: ToolThread }) {
-  const [open, setOpen] = useState(true)
-  const [hovered, setHovered] = useState(false)
   const { toolUse, result } = thread
   const input = toolUse.input as {
     file_path?: string
@@ -1585,11 +1397,14 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
   }
   const filePath = input.file_path ?? ''
   const edits = input.edits ?? []
+  const largeDiff = isLargeTextList(edits.flatMap((edit) => [edit.old_string ?? '', edit.new_string ?? '']))
+  const [open, setOpen] = useState(() => !largeDiff)
+  const [hovered, setHovered] = useState(false)
   const c = toolColor('MultiEdit')
 
   const totalDelta = edits.reduce((acc, e) => {
-    const oldLines = (e.old_string ?? '').split('\n').length
-    const newLines = (e.new_string ?? '').split('\n').length
+    const oldLines = countLines(e.old_string ?? '')
+    const newLines = countLines(e.new_string ?? '')
     return acc + (newLines - oldLines)
   }, 0)
   const deltaLabel = totalDelta > 0 ? `+${totalDelta}` : totalDelta < 0 ? String(totalDelta) : '±0'
@@ -1622,6 +1437,11 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: deltaColor, flexShrink: 0 }}>
             {deltaLabel}
           </span>
+          {largeDiff && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--amber)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
+              LARGE
+            </span>
+          )}
           <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
         </div>
       }
