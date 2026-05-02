@@ -280,7 +280,14 @@ function initializeSchema(db: SqliteDatabase): void {
 }
 
 async function openDatabase(): Promise<SqliteDatabase> {
-  const { DatabaseSync } = await import('node:sqlite')
+  // Hide the dynamic import behind eval so Next.js 16's Turbopack can't
+  // statically analyze it. A bare `await import('node:sqlite')` gets
+  // externalized via a require() shim that is undefined inside ESM route
+  // handlers ("Failed to load external module node:sqlite: ReferenceError:
+  // require is not defined"). eval bypasses bundler analysis and the import
+  // goes straight to Node's runtime ESM loader, which knows node:sqlite.
+  const sqliteMod = await (0, eval)('import("node:sqlite")') as typeof import('node:sqlite')
+  const { DatabaseSync } = sqliteMod
   await ensureIndexDirs()
   const db = new DatabaseSync(DB_FILE)
   try {
