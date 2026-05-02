@@ -3223,9 +3223,20 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   )
 }
 
+// Reference equality is the fast path (incremental threading preserves refs
+// for the stable prefix). When a poll triggers a full rebuild — or a provider
+// re-creates SessionMessage objects per fetch — fall back to value-equal on
+// uuid + timestamp + block count so unchanged cards stop re-rendering.
 const MessageItem = memo(MessageItemInner, (prev, next) =>
   prev.showSession === next.showSession
-  && prev.message === next.message
+  && (
+    prev.message === next.message
+    || (
+      prev.message.uuid === next.message.uuid
+      && prev.message.timestamp === next.message.timestamp
+      && prev.message.blocks.length === next.message.blocks.length
+    )
+  )
 )
 
 export default MessageItem
