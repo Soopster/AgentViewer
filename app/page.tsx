@@ -39,11 +39,29 @@ type ProjectMessageBatch = {
 }
 
 const MESSAGE_POLL_BACKFILL = 20
+const MESSAGE_STREAM_LIMIT = 200 + MESSAGE_POLL_BACKFILL
+const MESSAGE_POLL_FALLBACK_MS = 2000
+const MESSAGE_STREAM_RETRY_INITIAL_MS = 2000
+const MESSAGE_STREAM_RETRY_MAX_MS = 30000
+
+type MessageStreamPayload = {
+  offset?: number
+  messages?: SessionMessage[]
+}
 
 function withProviderQuery(path: string, provider?: AgentProvider | 'all'): string {
   if (!provider) return path
   const separator = path.includes('?') ? '&' : '?'
   return `${path}${separator}provider=${provider}`
+}
+
+function messageEventsPath(session: Session, offset: number): string {
+  const params = new URLSearchParams()
+  params.set('offset', String(offset))
+  params.set('limit', String(MESSAGE_STREAM_LIMIT))
+  params.set('backfill', String(MESSAGE_POLL_BACKFILL))
+  if (session.provider) params.set('provider', session.provider)
+  return `/api/sessions/${encodeURIComponent(session.sessionId)}/messages/events?${params.toString()}`
 }
 
 function messageTimestampMs(message: SessionMessage): number {
@@ -272,6 +290,21 @@ export default function Home() {
     return nextProvider
   }, [])
 
+  const pollSelectedSessionMessages = useCallback(async (session: Session) => {
+    if (pollInFlightRef.current) return
+    pollInFlightRef.current = true
+    const offset = Math.max(0, msgCountRef.current - MESSAGE_POLL_BACKFILL)
+    try {
+      const r = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?offset=${offset}&limit=${MESSAGE_STREAM_LIMIT}`, session.provider))
+      const data = await r.json()
+      if (!data.error && data.messages?.length > 0) {
+        setMessages((prev) => mergeMessages(prev, data.messages as SessionMessage[]))
+      }
+    } catch { /* ignore transient errors */ } finally {
+      pollInFlightRef.current = false
+    }
+  }, [])
+
   // Keep ref in sync with state (avoids stale closures inside setInterval)
   useEffect(() => { msgCountRef.current = messages.length }, [messages.length])
 
@@ -352,25 +385,91 @@ export default function Home() {
     projectMessageCountsRef.current.clear()
   }, [selectedProject])
 
-  // Poll active single session for new messages every 2 s (incremental via offset)
+  // Stream active single-session updates; fall back to the old poll loop if SSE drops.
   useEffect(() => {
-    if (!selectedSession || loadingMessages) return
-    const id = setInterval(async () => {
-      if (pollInFlightRef.current) return
-      pollInFlightRef.current = true
-      const offset = Math.max(0, msgCountRef.current - MESSAGE_POLL_BACKFILL)
-      try {
-        const r = await fetch(withProviderQuery(`/api/sessions/${selectedSession.sessionId}/messages?offset=${offset}&limit=${200 + MESSAGE_POLL_BACKFILL}`, selectedSession.provider))
-        const data = await r.json()
-        if (!data.error && data.messages?.length > 0) {
-          setMessages((prev) => mergeMessages(prev, data.messages as SessionMessage[]))
-        }
-      } catch { /* ignore transient errors */ } finally {
-        pollInFlightRef.current = false
+    if (!selectedSession || selectedProject || loadingMessages) return
+
+    const session = selectedSession
+    let cancelled = false
+    let eventSource: EventSource | null = null
+    let fallbackInterval: number | null = null
+    let retryTimeout: number | null = null
+    let retryDelay = MESSAGE_STREAM_RETRY_INITIAL_MS
+
+    const stopFallbackPolling = () => {
+      if (fallbackInterval == null) return
+      window.clearInterval(fallbackInterval)
+      fallbackInterval = null
+    }
+
+    const startFallbackPolling = () => {
+      if (fallbackInterval != null) return
+      void pollSelectedSessionMessages(session)
+      fallbackInterval = window.setInterval(() => {
+        void pollSelectedSessionMessages(session)
+      }, MESSAGE_POLL_FALLBACK_MS)
+    }
+
+    const scheduleReconnect = (connect: () => void) => {
+      if (retryTimeout != null) return
+      retryTimeout = window.setTimeout(() => {
+        retryTimeout = null
+        connect()
+      }, retryDelay)
+      retryDelay = Math.min(retryDelay * 2, MESSAGE_STREAM_RETRY_MAX_MS)
+    }
+
+    const connect = () => {
+      if (cancelled) return
+      if (typeof EventSource === 'undefined') {
+        startFallbackPolling()
+        return
       }
-    }, 2000)
-    return () => clearInterval(id)
-  }, [loadingMessages, selectedSession])
+
+      const offset = Math.max(0, msgCountRef.current - MESSAGE_POLL_BACKFILL)
+      const source = new EventSource(messageEventsPath(session, offset))
+      eventSource = source
+
+      source.onopen = () => {
+        retryDelay = MESSAGE_STREAM_RETRY_INITIAL_MS
+        stopFallbackPolling()
+      }
+
+      source.addEventListener('messages', (event) => {
+        try {
+          const payload = JSON.parse((event as MessageEvent<string>).data) as MessageStreamPayload
+          if (payload.messages && payload.messages.length > 0) {
+            setMessages((prev) => mergeMessages(prev, payload.messages as SessionMessage[]))
+          }
+        } catch { /* ignore malformed stream payloads */ }
+      })
+
+      source.onerror = () => {
+        if (cancelled) return
+        source.close()
+        if (eventSource === source) eventSource = null
+        startFallbackPolling()
+        scheduleReconnect(connect)
+      }
+    }
+
+    connect()
+
+    return () => {
+      cancelled = true
+      eventSource?.close()
+      stopFallbackPolling()
+      if (retryTimeout != null) {
+        window.clearTimeout(retryTimeout)
+      }
+    }
+  }, [
+    loadingMessages,
+    pollSelectedSessionMessages,
+    selectedProject,
+    selectedSession?.provider,
+    selectedSession?.sessionId,
+  ])
 
   // Poll project view every 2 s using per-session incremental fetches.
   useEffect(() => {
