@@ -755,13 +755,28 @@ async function syncSessionsBestEffort(sessions: Session[]): Promise<void> {
   }
 }
 
+// Tracks the last signature we successfully persisted for each session, so that
+// repeated polls (SSE pump @ 1.5 s, GET fallback @ 2 s) don't open a SQLite write
+// transaction every tick when nothing has actually changed.
+const persistedMessagesSignature = new Map<string, string>()
+
+function messagesPersistSignature(messages: SessionMessage[]): string {
+  if (messages.length === 0) return '0::'
+  const last = messages[messages.length - 1]
+  return `${messages.length}:${last.uuid ?? ''}:${last.timestamp ?? ''}`
+}
+
 async function syncMessagesBestEffort(
   provider: AgentProvider,
   sessionId: string,
   messages: SessionMessage[],
 ): Promise<void> {
+  const key = `${provider}:${sessionId}`
+  const signature = messagesPersistSignature(messages)
+  if (persistedMessagesSignature.get(key) === signature) return
   try {
     await syncPersistedSessionMessages(provider, sessionId, messages)
+    persistedMessagesSignature.set(key, signature)
   } catch {
     // Persistence is opportunistic and must not break live provider reads.
   }
@@ -837,7 +852,7 @@ export async function listViewSessions(params: ListParams): Promise<Session[]> {
   const provider = params.provider ?? await getConfiguredProvider()
   let sessions: Session[]
   if (provider === 'all') {
-    const combinedLimit = Math.max(params.limit + params.offset, 500)
+    const combinedLimit = params.limit + params.offset
     const [claude, codex, opencode, copilot, pi] = await Promise.all([
       listClaudeSessions({ ...params, provider: 'claude', limit: combinedLimit, offset: 0 }),
       listCodexSessions({ ...params, provider: 'codex', limit: combinedLimit, offset: 0 }),
@@ -1275,6 +1290,20 @@ export async function rebuildViewSessionIndex(params: RebuildSessionIndexParams 
   }
 }
 
+// Project-view sessions list rarely changes between 2 s polls. Cache the
+// list scan briefly so the per-poll fan-out into per-session message reads
+// doesn't also re-list every provider every tick.
+const PROJECT_SESSIONS_TTL = 5_000
+type ProjectSessionsCacheEntry = { sessions: Session[]; ts: number }
+const projectSessionsCache = new Map<string, ProjectSessionsCacheEntry>()
+
+function pruneProjectSessionsCache() {
+  const deadline = Date.now() - PROJECT_SESSIONS_TTL * 3
+  for (const [key, entry] of projectSessionsCache) {
+    if (entry.ts < deadline) projectSessionsCache.delete(key)
+  }
+}
+
 export async function listProjectSessionMessageBatches(params: ProjectMessageBatchParams): Promise<{
   sessions: Session[]
   batches: Array<{
@@ -1285,13 +1314,22 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
     messages: SessionMessage[]
   }>
 }> {
-  const sessions = await listViewSessions({
-    limit: 500,
-    offset: 0,
-    dir: params.dir,
-    includeWorktrees: params.includeWorktrees,
-    provider: params.provider,
-  })
+  const cacheKey = `${params.provider ?? ''}:${params.includeWorktrees ? '1' : '0'}:${params.dir}`
+  const cached = projectSessionsCache.get(cacheKey)
+  let sessions: Session[]
+  if (cached && Date.now() - cached.ts < PROJECT_SESSIONS_TTL) {
+    sessions = cached.sessions
+  } else {
+    sessions = await listViewSessions({
+      limit: 500,
+      offset: 0,
+      dir: params.dir,
+      includeWorktrees: params.includeWorktrees,
+      provider: params.provider,
+    })
+    pruneProjectSessionsCache()
+    projectSessionsCache.set(cacheKey, { sessions, ts: Date.now() })
+  }
 
   const batches = await mapConcurrent(sessions, 10, async (session) => {
     const key = `${session.provider ?? 'claude'}:${session.sessionId}`

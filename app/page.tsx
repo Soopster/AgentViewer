@@ -150,6 +150,18 @@ function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): 
   return mergeSortedMessages(mergedExisting, additions)
 }
 
+function useDocumentVisible(): boolean {
+  const [visible, setVisible] = useState(() =>
+    typeof document === 'undefined' ? true : document.visibilityState !== 'hidden',
+  )
+  useEffect(() => {
+    const onChange = () => setVisible(document.visibilityState !== 'hidden')
+    document.addEventListener('visibilitychange', onChange)
+    return () => document.removeEventListener('visibilitychange', onChange)
+  }, [])
+  return visible
+}
+
 export default function Home() {
   const [messagePaneCollapsed, setMessagePaneCollapsed] = useState(
     () => typeof document !== 'undefined' && document.documentElement.dataset.msgPane === 'collapsed'
@@ -170,6 +182,7 @@ export default function Home() {
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
+  const documentVisible = useDocumentVisible()
   // Tracks how many messages we've already loaded so polling can fetch only new ones
   const msgCountRef = useRef(0)
   const projectMessageCountsRef = useRef<Map<string, number>>(new Map())
@@ -179,6 +192,8 @@ export default function Home() {
   const sessionsFingerprintRef = useRef('')
   const targetMessageRequestRef = useRef(0)
   const sessionListScrollRequestRef = useRef(0)
+  // Cancels the previous session-switch fetch so a slow A response can't overwrite B's messages
+  const sessionLoadAbortRef = useRef<AbortController | null>(null)
   const selectedSession =
     openTabSessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
     sessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
@@ -212,11 +227,14 @@ export default function Home() {
     return (data.sessions ?? []) as Session[]
   }, [includeWorktrees])
 
-  const fetchSessionMessages = useCallback(async (session: Session, targetMessageId?: string) => {
+  const fetchSessionMessages = useCallback(async (session: Session, targetMessageId?: string, signal?: AbortSignal) => {
     const query = targetMessageId
       ? 'limit=100000&all=1'
       : 'limit=2000&tail=1'
-    const response = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?${query}`, session.provider))
+    const response = await fetch(
+      withProviderQuery(`/api/sessions/${session.sessionId}/messages?${query}`, session.provider),
+      { signal },
+    )
     const data = await response.json()
     if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
     return (data.messages ?? []) as SessionMessage[]
@@ -338,14 +356,15 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [activeProjectDir])
 
-  // Poll sessions list silently every 5 s
+  // Poll sessions list silently every 5 s while the tab is visible.
   useEffect(() => {
+    if (!documentVisible) return
     const id = setInterval(() => {
       fetchSessions()
         .catch(() => {})
     }, 5000)
     return () => clearInterval(id)
-  }, [fetchSessions])
+  }, [fetchSessions, documentVisible])
 
   // Keep open tab metadata (title, tag, etc.) in sync with polled sessions
   useEffect(() => {
@@ -388,6 +407,7 @@ export default function Home() {
   // Stream active single-session updates; fall back to the old poll loop if SSE drops.
   useEffect(() => {
     if (!selectedSession || selectedProject || loadingMessages) return
+    if (!documentVisible) return
 
     const session = selectedSession
     let cancelled = false
@@ -469,11 +489,13 @@ export default function Home() {
     selectedProject,
     selectedSession?.provider,
     selectedSession?.sessionId,
+    documentVisible,
   ])
 
   // Poll project view every 2 s using per-session incremental fetches.
   useEffect(() => {
     if (!selectedProject) return
+    if (!documentVisible) return
     const id = setInterval(async () => {
       if (projectPollInFlightRef.current) return
       projectPollInFlightRef.current = true
@@ -505,7 +527,7 @@ export default function Home() {
       }
     }, 2000)
     return () => clearInterval(id)
-  }, [fetchProjectMessageBatches, provider, selectedProject])
+  }, [fetchProjectMessageBatches, provider, selectedProject, documentVisible])
 
   const selectSession = useCallback(async (session: Session, nextTargetMessageId?: string) => {
     const nextProvider = session.provider ?? 'claude'
@@ -534,13 +556,21 @@ export default function Home() {
     projectMessageCountsRef.current.clear()
     setLoadingMessages(true)
     setMessages([])
+    sessionLoadAbortRef.current?.abort()
+    const abortController = new AbortController()
+    sessionLoadAbortRef.current = abortController
     try {
-      const loadedMessages = await fetchSessionMessages(session, nextTargetMessageId)
+      const loadedMessages = await fetchSessionMessages(session, nextTargetMessageId, abortController.signal)
+      if (abortController.signal.aborted) return
       setMessages(loadedMessages)
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
       console.error('Failed to load messages:', err)
     } finally {
-      setLoadingMessages(false)
+      if (sessionLoadAbortRef.current === abortController) {
+        sessionLoadAbortRef.current = null
+      }
+      if (!abortController.signal.aborted) setLoadingMessages(false)
     }
   }, [fetchSessionMessages, provider, loadSessionsForProvider])
 
@@ -797,30 +827,32 @@ export default function Home() {
                   onCloseTab={closeTab}
                 />
               </ViewTransition>
-              <CommandPalette
-                open={commandPaletteOpen}
-                onOpenChange={setCommandPaletteOpen}
-                sessions={sessions}
-                selectedSession={selectedSession}
-                selectedProject={selectedProject}
-                provider={provider}
-                scopeMode={sessionScope}
-                scopeProjectName={activeProjectName}
-                includeWorktrees={includeWorktrees}
-                messagePaneCollapsed={messagePaneCollapsed}
-                canOpenGit={!!activeProjectDir}
-                onSelectSession={selectCommandPaletteSession}
-                onSelectProject={selectProject}
-                onChangeProvider={handleChangeProvider}
-                onChangeScope={setSessionScope}
-                onToggleWorktrees={setIncludeWorktrees}
-                onToggleMessagePane={toggleMessagePane}
-                onOpenGit={openGitPopover}
-              />
+              {commandPaletteOpen ? (
+                <CommandPalette
+                  open={commandPaletteOpen}
+                  onOpenChange={setCommandPaletteOpen}
+                  sessions={sessions}
+                  selectedSession={selectedSession}
+                  selectedProject={selectedProject}
+                  provider={provider}
+                  scopeMode={sessionScope}
+                  scopeProjectName={activeProjectName}
+                  includeWorktrees={includeWorktrees}
+                  messagePaneCollapsed={messagePaneCollapsed}
+                  canOpenGit={!!activeProjectDir}
+                  onSelectSession={selectCommandPaletteSession}
+                  onSelectProject={selectProject}
+                  onChangeProvider={handleChangeProvider}
+                  onChangeScope={setSessionScope}
+                  onToggleWorktrees={setIncludeWorktrees}
+                  onToggleMessagePane={toggleMessagePane}
+                  onOpenGit={openGitPopover}
+                />
+              ) : null}
             </div>
           </SidebarInset>
         )}
-        {activeProjectDir ? (
+        {activeProjectDir && gitPopoverOpen ? (
           <GitPopover
             open={gitPopoverOpen}
             onClose={() => setGitPopoverOpen(false)}

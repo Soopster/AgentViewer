@@ -21,7 +21,9 @@ export async function GET(
 
   try {
     const messages = await listViewSessionMessages(sessionId, { limit, offset, tail }, provider)
-    return NextResponse.json({ messages })
+    return NextResponse.json({ messages }, {
+      headers: { 'Cache-Control': 'private, max-age=2, stale-while-revalidate=8' },
+    })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: 500 })

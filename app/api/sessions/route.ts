@@ -16,7 +16,9 @@ export async function GET(request: Request) {
 
   try {
     const sessions = await listViewSessions({ limit, offset, dir, includeWorktrees, provider })
-    return NextResponse.json({ sessions })
+    return NextResponse.json({ sessions }, {
+      headers: { 'Cache-Control': 'private, max-age=2, stale-while-revalidate=8' },
+    })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: 500 })

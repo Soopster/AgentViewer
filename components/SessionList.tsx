@@ -60,6 +60,15 @@ const collapsedPrimaryButtonStyle: React.CSSProperties = {
   boxShadow: '0 8px 24px var(--violet-glow)',
 }
 
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebounced(value), delayMs)
+    return () => window.clearTimeout(id)
+  }, [value, delayMs])
+  return debounced
+}
+
 function collapsedIconButtonStyle(active = false): React.CSSProperties {
   return {
     ...collapsedIconButtonBaseStyle,
@@ -749,7 +758,8 @@ export default function SessionList({
     if (typeof window === 'undefined') return
     window.localStorage.setItem('agentViewer:sessionSort', sortMode)
   }, [sortMode])
-  const deferredSearchText = useDeferredValue(searchText)
+  const debouncedSearchText = useDebouncedValue(searchText, 120)
+  const deferredSearchText = useDeferredValue(debouncedSearchText)
   const normalizedSearch = deferredSearchText.trim().toLowerCase()
   const indexedSessions = useMemo(() => sessions.map(indexSession), [sessions])
   const filteredSessions = useMemo(
