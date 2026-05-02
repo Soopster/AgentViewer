@@ -356,6 +356,17 @@ export default function Home() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [activeProjectDir])
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey)) return
+      if (event.key.toLowerCase() !== 'k') return
+      event.preventDefault()
+      setCommandPaletteOpen((prev) => !prev)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   // Poll sessions list silently every 5 s while the tab is visible.
   useEffect(() => {
     if (!documentVisible) return

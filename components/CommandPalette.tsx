@@ -370,17 +370,6 @@ export default function CommandPalette({
     requestAnimationFrame(() => inputRef.current?.focus())
   }, [open])
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault()
-        onOpenChange(!open)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onOpenChange, open])
-
   const sidebarAction = sidebarState === 'expanded'
     ? {
         id: 'toggle-sidebar',
