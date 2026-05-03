@@ -1,7 +1,7 @@
 import type { ThreadedBlock, ThreadedMessage } from './threading'
 import type { AgentProvider, SessionInfo, SessionMessage } from './types'
 
-type Price = { in: number; out: number; cacheRead?: number; cacheWrite?: number }
+export type Price = { in: number; out: number; cacheRead?: number; cacheWrite?: number }
 
 const MODEL_PRICING: { match: RegExp; price: Price }[] = [
   { match: /opus-4|claude-opus-4/i,            price: { in: 15,    out: 75,   cacheRead: 1.5,  cacheWrite: 18.75 } },
@@ -21,7 +21,7 @@ const MODEL_PRICING: { match: RegExp; price: Price }[] = [
   { match: /gemini/i,                          price: { in: 0.3,   out: 2.5 } },
 ]
 
-function priceForModel(model: string | undefined | null): Price {
+export function priceForModel(model: string | undefined | null): Price {
   if (!model) return { in: 3, out: 15 }
   for (const p of MODEL_PRICING) if (p.match.test(model)) return p.price
   return { in: 3, out: 15 }

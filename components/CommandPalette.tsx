@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Bot, Database, FolderOpen, GitBranch, Layers3, PanelLeftOpen, PanelRightOpen, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
+import { BarChart3, Bot, Database, FolderOpen, GitBranch, Layers3, PanelLeftOpen, PanelRightOpen, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -423,6 +423,18 @@ export default function CommandPalette({
         score: 0,
         closeOnRun: false,
         run: () => { void rebuildSearchIndex() },
+      },
+      {
+        id: 'open-cross-session-analytics',
+        label: 'Open cross-session analytics',
+        description: 'Aggregate metrics across every persisted session',
+        icon: <BarChart3 size={16} />,
+        group: 'actions',
+        keywords: ['analytics', 'stats', 'cost', 'tokens', 'dashboard', 'metrics', 'history', 'all sessions'],
+        score: 0,
+        run: () => {
+          if (typeof window !== 'undefined') window.location.href = '/analytics'
+        },
       },
       {
         id: sidebarAction.id,

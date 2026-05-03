@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
 import type {
   SessionMessage,
@@ -2879,6 +2880,30 @@ export default function MessageView({
             </div>
           </div>
         )}
+
+        {/* All-session analytics */}
+        <Link
+          href="/analytics"
+          title="Cross-session analytics"
+          className="av-hover-control"
+          style={{
+            flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            height: 26,
+            padding: '0 10px',
+            background: 'transparent',
+            border: '1px solid var(--border)',
+            borderRadius: 5,
+            color: 'var(--text-2)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            letterSpacing: '0.08em',
+            textDecoration: 'none',
+          }}
+        >
+          📈 ALL SESSIONS
+        </Link>
 
         {/* Analytics */}
         {!isProject && (

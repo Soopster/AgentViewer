@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
+import { priceForModel } from './analytics'
 import { isAgentProvider } from './provider'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from './projectPaths'
 import type { AgentProvider, ApiMessage, ContentBlock, Session, SessionMessage, SystemMessagePayload } from './types'
@@ -10,7 +11,7 @@ const MESSAGE_DIR = path.join(INDEX_DIR, 'messages')
 const SESSIONS_FILE = path.join(INDEX_DIR, 'sessions.json')
 const DB_FILE = path.join(INDEX_DIR, 'index.sqlite')
 const STORE_VERSION = 1
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 const MAX_INDEX_TEXT_CHARS = 32_000
 const MAX_FIELD_TEXT_CHARS = 2_000
 const MAX_SNIPPET_CHARS = 260
@@ -92,6 +93,7 @@ export type PersistedMessageRecord = {
   outputTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number
+  model?: string | null
 }
 
 export type PersistedSearchMatch = {
@@ -186,6 +188,7 @@ type Row = Record<string, unknown>
 let database: SqliteDatabase | null = null
 let databaseOpenPromise: Promise<SqliteDatabase> | null = null
 let persistenceWriteQueue: Promise<void> = Promise.resolve()
+let migrationsApplied = false
 const messageSignatureCache = new Map<string, string>()
 
 function persistenceDisabled(): boolean {
@@ -264,12 +267,14 @@ function initializeSchema(db: SqliteDatabase): void {
       input_tokens INTEGER NOT NULL DEFAULT 0,
       output_tokens INTEGER NOT NULL DEFAULT 0,
       cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-      cache_write_tokens INTEGER NOT NULL DEFAULT 0
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      model TEXT
     );
 
     CREATE INDEX IF NOT EXISTS messages_session_key_idx ON messages(session_key);
     CREATE INDEX IF NOT EXISTS messages_type_idx ON messages(type);
     CREATE INDEX IF NOT EXISTS messages_timestamp_ms_idx ON messages(timestamp_ms);
+    CREATE INDEX IF NOT EXISTS messages_model_idx ON messages(model);
 
     CREATE TABLE IF NOT EXISTS message_tools (
       message_key TEXT NOT NULL REFERENCES messages(key) ON DELETE CASCADE,
@@ -280,7 +285,23 @@ function initializeSchema(db: SqliteDatabase): void {
 
     CREATE INDEX IF NOT EXISTS message_tools_session_name_idx ON message_tools(session_key, name);
   `)
+  applySchemaMigrations(db)
   setMeta(db, 'schema_version', String(SCHEMA_VERSION))
+}
+
+function applySchemaMigrations(db: SqliteDatabase): void {
+  const current = Number(getMeta(db, 'schema_version') ?? '1')
+  if (current < 2) {
+    const cols = db.prepare("PRAGMA table_info('messages')").all() as Row[]
+    const hasModel = cols.some((c) => c.name === 'model')
+    if (!hasModel) {
+      db.exec("ALTER TABLE messages ADD COLUMN model TEXT")
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS messages_model_idx ON messages(model)")
+    // Force re-sync so assistant rows pick up the new model column on next visit.
+    messageSignatureCache.clear()
+    db.prepare("UPDATE sessions SET message_signature = NULL").run()
+  }
 }
 
 async function openDatabase(): Promise<SqliteDatabase> {
@@ -306,11 +327,19 @@ async function openDatabase(): Promise<SqliteDatabase> {
 }
 
 async function getDatabase(): Promise<SqliteDatabase> {
-  if (database) return database
+  if (database) {
+    if (!migrationsApplied) {
+      applySchemaMigrations(database)
+      setMeta(database, 'schema_version', String(SCHEMA_VERSION))
+      migrationsApplied = true
+    }
+    return database
+  }
   if (!databaseOpenPromise) {
     databaseOpenPromise = openDatabase()
       .then((db) => {
         database = db
+        migrationsApplied = true
         return db
       })
       .catch((err) => {
@@ -932,6 +961,12 @@ function messageSignature(provider: AgentProvider, messages: SessionMessage[]): 
   ].join(':')
 }
 
+function modelFromMessage(message: SessionMessage): string | null {
+  if (message.type !== 'assistant') return null
+  const payload = message.message as Partial<ApiMessage> & { model?: unknown }
+  return typeof payload.model === 'string' && payload.model.length > 0 ? payload.model : null
+}
+
 function mapPersistedMessages(provider: AgentProvider, sessionId: string, messages: SessionMessage[]): PersistedMessageRecord[] {
   const sessionKey = persistedSessionKey(provider, sessionId)
   const usedKeys = new Map<string, number>()
@@ -956,6 +991,7 @@ function mapPersistedMessages(provider: AgentProvider, sessionId: string, messag
       originKind: message.origin?.kind,
       text: extracted.text,
       toolNames: extracted.toolNames,
+      model: modelFromMessage(message),
       ...usage,
     }
   })
@@ -1018,9 +1054,10 @@ function insertMessages(db: SqliteDatabase, messages: PersistedMessageRecord[]):
       input_tokens,
       output_tokens,
       cache_read_tokens,
-      cache_write_tokens
+      cache_write_tokens,
+      model
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const insertTool = db.prepare(`
     INSERT OR IGNORE INTO message_tools(message_key, session_key, name)
@@ -1044,6 +1081,7 @@ function insertMessages(db: SqliteDatabase, messages: PersistedMessageRecord[]):
       message.outputTokens,
       message.cacheReadTokens,
       message.cacheWriteTokens,
+      message.model ?? null,
     )
     for (const toolName of message.toolNames) {
       insertTool.run(message.key, message.sessionKey, toolName)
@@ -1289,6 +1327,7 @@ function rowToMessageRecord(row: Row): PersistedMessageRecord | null {
     outputTokens: toFiniteNumber(row.output_tokens),
     cacheReadTokens: toFiniteNumber(row.cache_read_tokens),
     cacheWriteTokens: toFiniteNumber(row.cache_write_tokens),
+    model: optionalString(row.model) ?? null,
   }
 }
 
@@ -1566,4 +1605,405 @@ export async function readPersistedIndexStats(filters: PersistedIndexFilters = {
     .slice(0, 20)
 
   return stats
+}
+
+export type PersistedAnalyticsFilters = PersistedIndexFilters & {
+  from?: number
+  to?: number
+}
+
+export type CrossSessionAnalytics = {
+  range: { from: number | null; to: number | null }
+  totals: {
+    sessions: number
+    messages: number
+    activeDays: number
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    totalTokens: number
+    estCost: number
+    cacheHitRate: number
+    cacheSavings: number
+    avgMessagesPerSession: number
+    avgTokensPerSession: number
+    avgCostPerSession: number
+  }
+  daily: Array<{ day: string; messages: number; tokens: number; cost: number; cumulativeCost: number }>
+  sessionsPerDay: Array<{ day: string; sessions: number }>
+  hourHeatmap: Array<{ dow: number; hour: number; messages: number }>
+  providers: Array<{ provider: AgentProvider; sessions: number; messages: number; tokens: number; cost: number }>
+  projects: Array<{ cwd: string; name: string; sessions: number; messages: number; tokens: number; cost: number }>
+  tools: Array<{ name: string; count: number }>
+  models: Array<{ model: string; messages: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number }>
+  topSessions: Array<{
+    key: string
+    provider: AgentProvider
+    sessionId: string
+    title: string
+    cwd: string | null
+    messages: number
+    tokens: number
+    cost: number
+    lastMessageAt: number | null
+  }>
+}
+
+function emptyCrossSessionAnalytics(): CrossSessionAnalytics {
+  return {
+    range: { from: null, to: null },
+    totals: {
+      sessions: 0,
+      messages: 0,
+      activeDays: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 0,
+      estCost: 0,
+      cacheHitRate: 0,
+      cacheSavings: 0,
+      avgMessagesPerSession: 0,
+      avgTokensPerSession: 0,
+      avgCostPerSession: 0,
+    },
+    daily: [],
+    sessionsPerDay: [],
+    hourHeatmap: [],
+    providers: [],
+    projects: [],
+    tools: [],
+    models: [],
+    topSessions: [],
+  }
+}
+
+function costFor(model: string | null, i: number, o: number, cr: number, cw: number): number {
+  const p = priceForModel(model)
+  return (i * p.in + o * p.out + cr * (p.cacheRead ?? p.in) + cw * (p.cacheWrite ?? p.in)) / 1_000_000
+}
+
+export async function readCrossSessionAnalytics(
+  filters: PersistedAnalyticsFilters = {},
+): Promise<CrossSessionAnalytics> {
+  if (persistenceDisabled()) return emptyCrossSessionAnalytics()
+  const db = await getDatabase()
+  const sessions = selectFilteredSessions(db, filters)
+  if (sessions.length === 0) {
+    const empty = emptyCrossSessionAnalytics()
+    empty.range = { from: filters.from ?? null, to: filters.to ?? null }
+    return empty
+  }
+
+  const sessionKeys = sessions.map((s) => s.key)
+  const sessionByKey = new Map<string, PersistedSessionRecord>()
+  for (const s of sessions) sessionByKey.set(s.key, s)
+
+  const fromMs = typeof filters.from === 'number' && Number.isFinite(filters.from) ? filters.from : 0
+  const toMs = typeof filters.to === 'number' && Number.isFinite(filters.to) ? filters.to : Number.MAX_SAFE_INTEGER
+
+  type Row = Record<string, unknown>
+
+  // Aggregate messages by (day, model, provider, cwd) in a single pass.
+  type AggRow = {
+    day: string
+    model: string | null
+    provider: AgentProvider
+    cwd: string
+    messages: number
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+  }
+  const aggregateRows: AggRow[] = []
+  for (const chunk of chunkArray(sessionKeys, 500)) {
+    const placeholders = chunk.map(() => '?').join(', ')
+    const rows = db.prepare(`
+      SELECT
+        strftime('%Y-%m-%d', m.timestamp_ms/1000.0, 'unixepoch') AS day,
+        m.model AS model,
+        s.provider AS provider,
+        s.cwd AS cwd,
+        COUNT(*) AS messages,
+        SUM(m.input_tokens) AS i,
+        SUM(m.output_tokens) AS o,
+        SUM(m.cache_read_tokens) AS cr,
+        SUM(m.cache_write_tokens) AS cw
+      FROM messages m
+      JOIN sessions s ON s.key = m.session_key
+      WHERE m.session_key IN (${placeholders})
+        AND m.timestamp_ms IS NOT NULL
+        AND m.timestamp_ms BETWEEN ? AND ?
+      GROUP BY day, m.model, s.provider, s.cwd
+    `).all(...chunk, fromMs, toMs) as Row[]
+    for (const row of rows) {
+      const day = optionalString(row.day)
+      if (!day) continue
+      const provider = isAgentProvider(row.provider) ? row.provider : null
+      if (!provider) continue
+      aggregateRows.push({
+        day,
+        model: optionalString(row.model) ?? null,
+        provider,
+        cwd: normalizeProjectPath(optionalString(row.cwd)) || '(unknown)',
+        messages: toFiniteNumber(row.messages),
+        inputTokens: toFiniteNumber(row.i),
+        outputTokens: toFiniteNumber(row.o),
+        cacheReadTokens: toFiniteNumber(row.cr),
+        cacheWriteTokens: toFiniteNumber(row.cw),
+      })
+    }
+  }
+
+  const dailyMap = new Map<string, { messages: number; tokens: number; cost: number }>()
+  const providerMap = new Map<AgentProvider, { provider: AgentProvider; sessions: number; messages: number; tokens: number; cost: number }>()
+  const projectMap = new Map<string, { cwd: string; name: string; sessions: number; messages: number; tokens: number; cost: number }>()
+  const modelMap = new Map<string, CrossSessionAnalytics['models'][number]>()
+
+  let totalMessages = 0
+  let totalInput = 0
+  let totalOutput = 0
+  let totalCacheRead = 0
+  let totalCacheWrite = 0
+  let totalCost = 0
+
+  for (const row of aggregateRows) {
+    const tokens = row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheWriteTokens
+    const cost = costFor(row.model, row.inputTokens, row.outputTokens, row.cacheReadTokens, row.cacheWriteTokens)
+
+    totalMessages += row.messages
+    totalInput += row.inputTokens
+    totalOutput += row.outputTokens
+    totalCacheRead += row.cacheReadTokens
+    totalCacheWrite += row.cacheWriteTokens
+    totalCost += cost
+
+    const dayBucket = dailyMap.get(row.day) ?? { messages: 0, tokens: 0, cost: 0 }
+    dayBucket.messages += row.messages
+    dayBucket.tokens += tokens
+    dayBucket.cost += cost
+    dailyMap.set(row.day, dayBucket)
+
+    const providerBucket = providerMap.get(row.provider) ?? { provider: row.provider, sessions: 0, messages: 0, tokens: 0, cost: 0 }
+    providerBucket.messages += row.messages
+    providerBucket.tokens += tokens
+    providerBucket.cost += cost
+    providerMap.set(row.provider, providerBucket)
+
+    const projectBucket = projectMap.get(row.cwd) ?? { cwd: row.cwd, name: pathBasename(row.cwd) || row.cwd, sessions: 0, messages: 0, tokens: 0, cost: 0 }
+    projectBucket.messages += row.messages
+    projectBucket.tokens += tokens
+    projectBucket.cost += cost
+    projectMap.set(row.cwd, projectBucket)
+
+    const modelKey = row.model ?? '(unknown)'
+    const modelBucket = modelMap.get(modelKey) ?? {
+      model: modelKey,
+      messages: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cost: 0,
+    }
+    modelBucket.messages += row.messages
+    modelBucket.inputTokens += row.inputTokens
+    modelBucket.outputTokens += row.outputTokens
+    modelBucket.cacheReadTokens += row.cacheReadTokens
+    modelBucket.cacheWriteTokens += row.cacheWriteTokens
+    modelBucket.cost += cost
+    modelMap.set(modelKey, modelBucket)
+  }
+
+  // Session counts per provider / cwd come from the filtered session list,
+  // not the message aggregate (a session with zero messages in range still counts).
+  for (const session of sessions) {
+    const providerBucket = providerMap.get(session.provider)
+    if (providerBucket) providerBucket.sessions += 1
+    const cwd = normalizeProjectPath(session.cwd) || '(unknown)'
+    const projectBucket = projectMap.get(cwd)
+    if (projectBucket) projectBucket.sessions += 1
+  }
+
+  // Hour-of-day x day-of-week heatmap.
+  const heatmap: Array<{ dow: number; hour: number; messages: number }> = []
+  for (const chunk of chunkArray(sessionKeys, 500)) {
+    const placeholders = chunk.map(() => '?').join(', ')
+    const rows = db.prepare(`
+      SELECT
+        CAST(strftime('%w', m.timestamp_ms/1000.0, 'unixepoch') AS INTEGER) AS dow,
+        CAST(strftime('%H', m.timestamp_ms/1000.0, 'unixepoch') AS INTEGER) AS hour,
+        COUNT(*) AS messages
+      FROM messages m
+      WHERE m.session_key IN (${placeholders})
+        AND m.timestamp_ms IS NOT NULL
+        AND m.timestamp_ms BETWEEN ? AND ?
+      GROUP BY dow, hour
+    `).all(...chunk, fromMs, toMs) as Row[]
+    for (const row of rows) {
+      const dow = toFiniteNumber(row.dow)
+      const hour = toFiniteNumber(row.hour)
+      heatmap.push({ dow, hour, messages: toFiniteNumber(row.messages) })
+    }
+  }
+  // Fold duplicate (dow, hour) entries that come from chunked queries.
+  const heatmapFold = new Map<string, number>()
+  for (const cell of heatmap) {
+    const k = `${cell.dow}:${cell.hour}`
+    heatmapFold.set(k, (heatmapFold.get(k) ?? 0) + cell.messages)
+  }
+  const hourHeatmap = [...heatmapFold.entries()].map(([k, messages]) => {
+    const [dow, hour] = k.split(':').map(Number)
+    return { dow, hour, messages }
+  })
+
+  // Tool usage within date range.
+  const toolMap = new Map<string, number>()
+  for (const chunk of chunkArray(sessionKeys, 500)) {
+    const placeholders = chunk.map(() => '?').join(', ')
+    const rows = db.prepare(`
+      SELECT mt.name AS name, COUNT(*) AS count
+      FROM message_tools mt
+      JOIN messages m ON m.key = mt.message_key
+      WHERE mt.session_key IN (${placeholders})
+        AND m.timestamp_ms IS NOT NULL
+        AND m.timestamp_ms BETWEEN ? AND ?
+      GROUP BY mt.name
+    `).all(...chunk, fromMs, toMs) as Row[]
+    for (const row of rows) {
+      const name = optionalString(row.name)
+      if (!name) continue
+      toolMap.set(name, (toolMap.get(name) ?? 0) + toFiniteNumber(row.count))
+    }
+  }
+
+  const cacheHitRate = totalInput + totalCacheRead > 0
+    ? totalCacheRead / (totalInput + totalCacheRead)
+    : 0
+
+  // Cache savings: what cache reads would have cost at full input price minus the cache-read price.
+  let cacheSavings = 0
+  for (const m of modelMap.values()) {
+    const p = priceForModel(m.model === '(unknown)' ? null : m.model)
+    const cacheRate = p.cacheRead ?? p.in
+    cacheSavings += (m.cacheReadTokens * (p.in - cacheRate)) / 1_000_000
+  }
+
+  // Sessions started per day (derived from session.firstMessageAt).
+  const sessionsPerDayMap = new Map<string, number>()
+  for (const s of sessions) {
+    if (s.firstMessageAt === null) continue
+    if (s.firstMessageAt < fromMs || s.firstMessageAt > toMs) continue
+    const day = new Date(s.firstMessageAt).toISOString().slice(0, 10)
+    sessionsPerDayMap.set(day, (sessionsPerDayMap.get(day) ?? 0) + 1)
+  }
+
+  // Top sessions by cost within the date range (per-session token rollup joined with model for pricing).
+  type SessionAgg = { tokens: number; cost: number; messages: number }
+  const sessionAgg = new Map<string, SessionAgg>()
+  for (const chunk of chunkArray(sessionKeys, 500)) {
+    const placeholders = chunk.map(() => '?').join(', ')
+    const rows = db.prepare(`
+      SELECT
+        m.session_key AS session_key,
+        m.model AS model,
+        COUNT(*) AS messages,
+        SUM(m.input_tokens) AS i,
+        SUM(m.output_tokens) AS o,
+        SUM(m.cache_read_tokens) AS cr,
+        SUM(m.cache_write_tokens) AS cw
+      FROM messages m
+      WHERE m.session_key IN (${placeholders})
+        AND m.timestamp_ms IS NOT NULL
+        AND m.timestamp_ms BETWEEN ? AND ?
+      GROUP BY m.session_key, m.model
+    `).all(...chunk, fromMs, toMs) as Row[]
+    for (const row of rows) {
+      const key = optionalString(row.session_key)
+      if (!key) continue
+      const i = toFiniteNumber(row.i)
+      const o = toFiniteNumber(row.o)
+      const cr = toFiniteNumber(row.cr)
+      const cw = toFiniteNumber(row.cw)
+      const messages = toFiniteNumber(row.messages)
+      const cost = costFor(optionalString(row.model) ?? null, i, o, cr, cw)
+      const agg = sessionAgg.get(key) ?? { tokens: 0, cost: 0, messages: 0 }
+      agg.tokens += i + o + cr + cw
+      agg.cost += cost
+      agg.messages += messages
+      sessionAgg.set(key, agg)
+    }
+  }
+
+  const topSessions = [...sessionAgg.entries()]
+    .map(([key, agg]) => {
+      const session = sessionByKey.get(key)
+      if (!session) return null
+      return {
+        key,
+        provider: session.provider,
+        sessionId: session.sessionId,
+        title: session.title,
+        cwd: session.cwd ?? null,
+        messages: agg.messages,
+        tokens: agg.tokens,
+        cost: agg.cost,
+        lastMessageAt: session.lastMessageAt,
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((a, b) => b.cost - a.cost || b.tokens - a.tokens)
+    .slice(0, 15)
+
+  // Build daily array with running cumulative cost.
+  const dailySorted = [...dailyMap.entries()]
+    .map(([day, bucket]) => ({ day, ...bucket }))
+    .sort((a, b) => a.day.localeCompare(b.day))
+  let running = 0
+  const daily = dailySorted.map((d) => {
+    running += d.cost
+    return { ...d, cumulativeCost: running }
+  })
+
+  const sessionCount = sessions.length
+  const avgMessagesPerSession = sessionCount > 0 ? totalMessages / sessionCount : 0
+  const totalTokens = totalInput + totalOutput + totalCacheRead + totalCacheWrite
+  const avgTokensPerSession = sessionCount > 0 ? totalTokens / sessionCount : 0
+  const avgCostPerSession = sessionCount > 0 ? totalCost / sessionCount : 0
+
+  return {
+    range: { from: filters.from ?? null, to: filters.to ?? null },
+    totals: {
+      sessions: sessionCount,
+      messages: totalMessages,
+      activeDays: dailyMap.size,
+      inputTokens: totalInput,
+      outputTokens: totalOutput,
+      cacheReadTokens: totalCacheRead,
+      cacheWriteTokens: totalCacheWrite,
+      totalTokens,
+      estCost: totalCost,
+      cacheHitRate,
+      cacheSavings,
+      avgMessagesPerSession,
+      avgTokensPerSession,
+      avgCostPerSession,
+    },
+    daily,
+    sessionsPerDay: [...sessionsPerDayMap.entries()]
+      .map(([day, sessions]) => ({ day, sessions }))
+      .sort((a, b) => a.day.localeCompare(b.day)),
+    hourHeatmap,
+    providers: [...providerMap.values()].sort((a, b) => b.messages - a.messages),
+    projects: [...projectMap.values()].sort((a, b) => b.messages - a.messages).slice(0, 25),
+    tools: [...toolMap.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+      .slice(0, 25),
+    models: [...modelMap.values()].sort((a, b) => b.cost - a.cost || b.messages - a.messages),
+    topSessions,
+  }
 }
