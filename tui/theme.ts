@@ -17,6 +17,9 @@ export type TuiThemeMode =
   | 'flexoki-light'
   | 'nord-light'
   | 'vitesse-light'
+  | 'iceberg-light'
+  | 'material-lighter'
+  | 'min-light'
   | 'imessage'
   | 'dark'
   | 'solarized-dark'
@@ -39,6 +42,9 @@ export type TuiThemeMode =
   | 'flexoki-dark'
   | 'cobalt'
   | 'vitesse-dark'
+  | 'iceberg'
+  | 'zenburn'
+  | 'material-darker'
   | 'cyber'
 export type TuiDensity = 'comfortable' | 'balanced' | 'dense'
 export type TuiTranscriptView = 'conversation' | 'full'
@@ -923,6 +929,138 @@ export const VITESSE_DARK_THEME: TuiThemePalette = {
   userBg: '#24312f',
 } as const
 
+export const ICEBERG_THEME: TuiThemePalette = {
+  bg: '#161821',
+  surface: '#1e2132',
+  surface2: '#232634',
+  surface3: '#2e313f',
+  diffAddBg: '#2a3a2e',
+  diffRemoveBg: '#4a2a30',
+  diffMetaBg: '#233048',
+  border: '#2e313f',
+  border2: '#84a0c6',
+  text: '#c6c8d1',
+  muted: '#9aa1b3',
+  dim: '#6b7089',
+  violet: '#a093c7',
+  cyan: '#89b8c2',
+  green: '#b4be82',
+  red: '#e27878',
+  amber: '#e2a478',
+  pink: '#d2869c',
+  userBg: '#2c3a52',
+} as const
+
+export const ICEBERG_LIGHT_THEME: TuiThemePalette = {
+  bg: '#e8e9ec',
+  surface: '#dcdfe7',
+  surface2: '#d2d5e0',
+  surface3: '#c6cad3',
+  diffAddBg: '#d8e5cf',
+  diffRemoveBg: '#f0d4d4',
+  diffMetaBg: '#d2dceb',
+  border: '#c6cad3',
+  border2: '#33374c',
+  text: '#33374c',
+  muted: '#555a78',
+  dim: '#8389a3',
+  violet: '#7759b4',
+  cyan: '#3f83a6',
+  green: '#668e3d',
+  red: '#cc517a',
+  amber: '#c57339',
+  pink: '#cc517a',
+  userBg: '#cad0de',
+} as const
+
+export const ZENBURN_THEME: TuiThemePalette = {
+  bg: '#3f3f3f',
+  surface: '#2b2b2b',
+  surface2: '#4f4f4f',
+  surface3: '#5e5e5e',
+  diffAddBg: '#475a3f',
+  diffRemoveBg: '#5a3838',
+  diffMetaBg: '#3a4858',
+  border: '#5e5e5e',
+  border2: '#dcdccc',
+  text: '#dcdccc',
+  muted: '#c0c0a0',
+  dim: '#7f9f7f',
+  violet: '#dc8cc3',
+  cyan: '#93e0e3',
+  green: '#afd787',
+  red: '#cc9393',
+  amber: '#f0dfaf',
+  pink: '#dc8cc3',
+  userBg: '#5e7560',
+} as const
+
+export const MATERIAL_DARKER_THEME: TuiThemePalette = {
+  bg: '#212121',
+  surface: '#1a1a1a',
+  surface2: '#2a2a2a',
+  surface3: '#353535',
+  diffAddBg: '#2c4632',
+  diffRemoveBg: '#4a2a32',
+  diffMetaBg: '#2c3142',
+  border: '#353535',
+  border2: '#c792ea',
+  text: '#eeffff',
+  muted: '#b2ccd6',
+  dim: '#545454',
+  violet: '#c792ea',
+  cyan: '#89ddff',
+  green: '#c3e88d',
+  red: '#ff5370',
+  amber: '#ffcb6b',
+  pink: '#f07178',
+  userBg: '#2c3142',
+} as const
+
+export const MATERIAL_LIGHTER_THEME: TuiThemePalette = {
+  bg: '#fafafa',
+  surface: '#ffffff',
+  surface2: '#f5f5f5',
+  surface3: '#eeeeee',
+  diffAddBg: '#dceec0',
+  diffRemoveBg: '#f5d6d4',
+  diffMetaBg: '#e1ecf6',
+  border: '#e5e5e5',
+  border2: '#4a5c69',
+  text: '#4a5c69',
+  muted: '#7c8a98',
+  dim: '#aabfc9',
+  violet: '#7c4dff',
+  cyan: '#39adb5',
+  green: '#91b859',
+  red: '#e53935',
+  amber: '#f6a434',
+  pink: '#d81b60',
+  userBg: '#d3e1e8',
+} as const
+
+export const MIN_LIGHT_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#ffffff',
+  surface2: '#f7f7f7',
+  surface3: '#ededed',
+  diffAddBg: '#e2eed5',
+  diffRemoveBg: '#f5d4d4',
+  diffMetaBg: '#dde7f5',
+  border: '#e5e5e5',
+  border2: '#2d2d2d',
+  text: '#2d2d2d',
+  muted: '#777777',
+  dim: '#aaaaaa',
+  violet: '#a626a4',
+  cyan: '#0184bc',
+  green: '#50a14f',
+  red: '#e45649',
+  amber: '#c18401',
+  pink: '#a626a4',
+  userBg: '#f0f0f0',
+} as const
+
 export let THEME: TuiThemePalette = LIGHT_THEME
 
 export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
@@ -965,6 +1103,12 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'flexoki-dark': return FLEXOKI_DARK_THEME
     case 'cobalt': return COBALT_THEME
     case 'vitesse-dark': return VITESSE_DARK_THEME
+    case 'iceberg': return ICEBERG_THEME
+    case 'iceberg-light': return ICEBERG_LIGHT_THEME
+    case 'zenburn': return ZENBURN_THEME
+    case 'material-darker': return MATERIAL_DARKER_THEME
+    case 'material-lighter': return MATERIAL_LIGHTER_THEME
+    case 'min-light': return MIN_LIGHT_THEME
     default: return LIGHT_THEME
   }
 }

@@ -21,6 +21,9 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'flexoki-light',
   'nord-light',
   'vitesse-light',
+  'iceberg-light',
+  'material-lighter',
+  'min-light',
   'imessage',
   'dark',
   'solarized-dark',
@@ -43,6 +46,9 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'flexoki-dark',
   'cobalt',
   'vitesse-dark',
+  'iceberg',
+  'zenburn',
+  'material-darker',
   'cyber',
 ]
 

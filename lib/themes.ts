@@ -15,6 +15,9 @@ export type Theme =
   | 'flexoki-light'
   | 'nord-light'
   | 'vitesse-light'
+  | 'iceberg-light'
+  | 'material-lighter'
+  | 'min-light'
   | 'imessage'
   | 'dark'
   | 'terminal'
@@ -38,6 +41,9 @@ export type Theme =
   | 'flexoki-dark'
   | 'cobalt'
   | 'vitesse-dark'
+  | 'iceberg'
+  | 'zenburn'
+  | 'material-darker'
   | 'cyber'
 
 export type ThemeCategory = 'dark' | 'light'
@@ -59,6 +65,9 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   'flexoki-light':    { category: 'light', icon: '☀', label: 'Flexoki Light' },
   'nord-light':       { category: 'light', icon: '☀', label: 'Nord Light' },
   'vitesse-light':    { category: 'light', icon: '☀', label: 'Vitesse Light' },
+  'iceberg-light':    { category: 'light', icon: '☀', label: 'Iceberg Light' },
+  'material-lighter': { category: 'light', icon: '☀', label: 'Material Lighter' },
+  'min-light':        { category: 'light', icon: '☀', label: 'Min Light' },
   imessage:           { category: 'light', icon: '💬', label: 'iMessage' },
   dark:               { category: 'dark',  icon: '☾', label: 'Dark' },
   terminal:           { category: 'dark',  icon: '⌨', label: 'Terminal' },
@@ -82,6 +91,9 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   'flexoki-dark':     { category: 'dark',  icon: '☾', label: 'Flexoki Dark' },
   cobalt:             { category: 'dark',  icon: '☾', label: 'Cobalt' },
   'vitesse-dark':     { category: 'dark',  icon: '☾', label: 'Vitesse Dark' },
+  iceberg:            { category: 'dark',  icon: '☾', label: 'Iceberg' },
+  zenburn:            { category: 'dark',  icon: '☾', label: 'Zenburn' },
+  'material-darker':  { category: 'dark',  icon: '☾', label: 'Material Darker' },
   cyber:              { category: 'dark',  icon: '✦', label: 'Cyber' },
 }
 

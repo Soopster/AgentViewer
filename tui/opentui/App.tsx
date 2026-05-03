@@ -939,6 +939,9 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   'flexoki-light': 'Flexoki warm paper',
   'nord-light': 'Nord frosted light',
   'vitesse-light': 'Vitesse low-contrast light',
+  'iceberg-light': 'Iceberg cool cream',
+  'material-lighter': 'Material Theme lighter',
+  'min-light': 'Atom Min minimalist',
   imessage: 'iOS Messages bubbles',
   dark: 'Deep navy background',
   'solarized-dark': 'Solarized teal',
@@ -961,6 +964,9 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   'flexoki-dark': 'Flexoki warm ink',
   cobalt: 'Cobalt blue console',
   'vitesse-dark': 'Vitesse low-contrast dark',
+  iceberg: 'Iceberg cool blue-grey',
+  zenburn: 'Zenburn earthy classic',
+  'material-darker': 'Material Theme darker',
   cyber: 'Neon accents',
 }
 
@@ -981,6 +987,9 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   'flexoki-light': 'FLEXOKI LIGHT',
   'nord-light': 'NORD LIGHT',
   'vitesse-light': 'VITESSE LIGHT',
+  'iceberg-light': 'ICEBERG LIGHT',
+  'material-lighter': 'MATERIAL LIGHTER',
+  'min-light': 'MIN LIGHT',
   imessage: 'iMESSAGE',
   dark: 'DARK',
   'solarized-dark': 'SOLARIZED DARK',
@@ -1003,6 +1012,9 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   'flexoki-dark': 'FLEXOKI DARK',
   cobalt: 'COBALT',
   'vitesse-dark': 'VITESSE DARK',
+  iceberg: 'ICEBERG',
+  zenburn: 'ZENBURN',
+  'material-darker': 'MATERIAL DARKER',
   cyber: 'CYBER',
 }
 
