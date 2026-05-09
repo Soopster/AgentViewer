@@ -720,6 +720,318 @@
   --t-grep: #ff5370; --t-glob: #c792ea; --t-agent: #f07178; --t-other: #b2ccd6;
 }
 
+/* ── Design tokens ── stripe (light, indigo) ─────────────────────────────── */
+[data-theme="stripe"] {
+  --bg: #ffffff; --surface: #f6f9fc; --surface-2: #eef2f7; --surface-3: #dde6f0;
+  --border: #e3e8ee; --border-2: #a8c3de;
+  --text: #0d253d; --text-2: #273951; --text-3: #64748d;
+  --violet: #533afd; --violet-glow: color-mix(in srgb, #533afd 14%, transparent);
+  --cyan: #003770; --cyan-glow: color-mix(in srgb, #003770 12%, transparent);
+  --green: #00875a; --red: #ea2261; --amber: #9b6829;
+  --t-bash: #533afd; --t-edit: #00875a; --t-write: #f96bee; --t-read: #533afd;
+  --t-grep: #ea2261; --t-glob: #003770; --t-agent: #ea2261; --t-other: #64748d;
+}
+
+/* ── Design tokens ── claude-cream (light, terracotta) ───────────────────── */
+[data-theme="claude-cream"] {
+  --bg: #faf9f5; --surface: #f5f0e8; --surface-2: #efe9de; --surface-3: #e8e0d2;
+  --border: #e6dfd8; --border-2: #cc785c;
+  --text: #141413; --text-2: #3d3d3a; --text-3: #6c6a64;
+  --violet: #cc785c; --violet-glow: color-mix(in srgb, #cc785c 16%, transparent);
+  --cyan: #5db8a6; --cyan-glow: color-mix(in srgb, #5db8a6 14%, transparent);
+  --green: #5db872; --red: #c64545; --amber: #d4a017;
+  --t-bash: #d4a017; --t-edit: #5db872; --t-write: #5db8a6; --t-read: #cc785c;
+  --t-grep: #c64545; --t-glob: #e8a55a; --t-agent: #c64545; --t-other: #6c6a64;
+}
+
+/* ── Design tokens ── supabase (light, brand green) ──────────────────────── */
+[data-theme="supabase"] {
+  --bg: #ffffff; --surface: #fafafa; --surface-2: #ededed; --surface-3: #d4d4d4;
+  --border: #dfdfdf; --border-2: #c7c7c7;
+  --text: #171717; --text-2: #707070; --text-3: #9a9a9a;
+  --violet: #6b01c2; --violet-glow: color-mix(in srgb, #6b01c2 14%, transparent);
+  --cyan: #054cff; --cyan-glow: color-mix(in srgb, #054cff 12%, transparent);
+  --green: #3ecf8e; --red: #ff2201; --amber: #d99500;
+  --t-bash: #d99500; --t-edit: #3ecf8e; --t-write: #054cff; --t-read: #6b01c2;
+  --t-grep: #ff2201; --t-glob: #c7007e; --t-agent: #c7007e; --t-other: #707070;
+}
+
+/* ── Design tokens ── posthog (light, hedgehog gold) ─────────────────────── */
+[data-theme="posthog"] {
+  --bg: #eeefe9; --surface: #fcfcfa; --surface-2: #ffffff; --surface-3: #e5e7e0;
+  --border: #bfc1b7; --border-2: #6c6e63;
+  --text: #23251d; --text-2: #4d4f46; --text-3: #6c6e63;
+  --violet: #7c44a6; --violet-glow: color-mix(in srgb, #7c44a6 14%, transparent);
+  --cyan: #1078a3; --cyan-glow: color-mix(in srgb, #1078a3 12%, transparent);
+  --green: #2c8c66; --red: #cd4239; --amber: #f7a501;
+  --t-bash: #f7a501; --t-edit: #2c8c66; --t-write: #2c84e0; --t-read: #7c44a6;
+  --t-grep: #cd4239; --t-glob: #7c44a6; --t-agent: #cd4239; --t-other: #6c6e63;
+}
+
+/* ── Design tokens ── replicate (light, bone + crimson) ──────────────────── */
+[data-theme="replicate"] {
+  --bg: #f9f7f3; --surface: #f3f0e8; --surface-2: #ffffff; --surface-3: #ebe6df;
+  --border: #d6d2c8; --border-2: #202020;
+  --text: #202020; --text-2: #3a3a3a; --text-3: #646464;
+  --violet: #ea2804; --violet-glow: color-mix(in srgb, #ea2804 14%, transparent);
+  --cyan: #ff6a3d; --cyan-glow: color-mix(in srgb, #ff6a3d 14%, transparent);
+  --green: #2b9a66; --red: #ea2804; --amber: #ff6a3d;
+  --t-bash: #ff6a3d; --t-edit: #2b9a66; --t-write: #ea2804; --t-read: #ea2804;
+  --t-grep: #c01f00; --t-glob: #f4a8a0; --t-agent: #c01f00; --t-other: #646464;
+}
+
+/* ── Design tokens ── notion (light, soft purple) ────────────────────────── */
+[data-theme="notion"] {
+  --bg: #ffffff; --surface: #fafaf9; --surface-2: #f6f5f4; --surface-3: #f0eeec;
+  --border: #e5e3df; --border-2: #c8c4be;
+  --text: #1a1a1a; --text-2: #37352f; --text-3: #5d5b54;
+  --violet: #5645d4; --violet-glow: color-mix(in srgb, #5645d4 14%, transparent);
+  --cyan: #0075de; --cyan-glow: color-mix(in srgb, #0075de 12%, transparent);
+  --green: #1aae39; --red: #e03131; --amber: #dd5b00;
+  --t-bash: #dd5b00; --t-edit: #1aae39; --t-write: #0075de; --t-read: #5645d4;
+  --t-grep: #e03131; --t-glob: #7b3ff2; --t-agent: #ff64c8; --t-other: #5d5b54;
+}
+
+/* ── Design tokens ── figma (light, color blocks) ────────────────────────── */
+[data-theme="figma"] {
+  --bg: #ffffff; --surface: #f7f7f5; --surface-2: #f1f1f1; --surface-3: #e6e6e6;
+  --border: #e6e6e6; --border-2: #1f1d3d;
+  --text: #000000; --text-2: #1f1d3d; --text-3: #666666;
+  --violet: #c5b0f4; --violet-glow: color-mix(in srgb, #c5b0f4 22%, transparent);
+  --cyan: #1f1d3d; --cyan-glow: color-mix(in srgb, #1f1d3d 12%, transparent);
+  --green: #1ea64a; --red: #ff3d8b; --amber: #f5a623;
+  --t-bash: #f3c9b6; --t-edit: #1ea64a; --t-write: #1f1d3d; --t-read: #c5b0f4;
+  --t-grep: #ff3d8b; --t-glob: #c5b0f4; --t-agent: #ff3d8b; --t-other: #666666;
+}
+
+/* ── Design tokens ── miro (light, sunshine yellow) ──────────────────────── */
+[data-theme="miro"] {
+  --bg: #ffffff; --surface: #fafbfc; --surface-2: #f7f8fa; --surface-3: #fff8e0;
+  --border: #e0e2e8; --border-2: #c7cad5;
+  --text: #1c1c1e; --text-2: #555a6a; --text-3: #6b6f7e;
+  --violet: #4262ff; --violet-glow: color-mix(in srgb, #4262ff 14%, transparent);
+  --cyan: #0fbcb0; --cyan-glow: color-mix(in srgb, #0fbcb0 14%, transparent);
+  --green: #00b473; --red: #ff9999; --amber: #ffd02f;
+  --t-bash: #ffd02f; --t-edit: #00b473; --t-write: #4262ff; --t-read: #0fbcb0;
+  --t-grep: #ff9999; --t-glob: #ffd8f4; --t-agent: #fcb900; --t-other: #6b6f7e;
+}
+
+/* ── Design tokens ── apple (light, gallery white) ───────────────────────── */
+[data-theme="apple"] {
+  --bg: #ffffff; --surface: #fafafc; --surface-2: #f5f5f7; --surface-3: #f0f0f0;
+  --border: #e0e0e0; --border-2: #d2d2d7;
+  --text: #1d1d1f; --text-2: #333333; --text-3: #7a7a7a;
+  --violet: #0066cc; --violet-glow: color-mix(in srgb, #0066cc 12%, transparent);
+  --cyan: #0071e3; --cyan-glow: color-mix(in srgb, #0071e3 12%, transparent);
+  --green: #34c759; --red: #ff3b30; --amber: #ff9500;
+  --t-bash: #ff9500; --t-edit: #34c759; --t-write: #0071e3; --t-read: #0066cc;
+  --t-grep: #ff3b30; --t-glob: #af52de; --t-agent: #ff2d55; --t-other: #7a7a7a;
+}
+
+/* ── Design tokens ── nike (light, sport black + sale red) ───────────────── */
+[data-theme="nike"] {
+  --bg: #ffffff; --surface: #f5f5f5; --surface-2: #ebebeb; --surface-3: #cacacb;
+  --border: #cacacb; --border-2: #111111;
+  --text: #111111; --text-2: #39393b; --text-3: #707072;
+  --violet: #1151ff; --violet-glow: color-mix(in srgb, #1151ff 12%, transparent);
+  --cyan: #0a7281; --cyan-glow: color-mix(in srgb, #0a7281 12%, transparent);
+  --green: #007d48; --red: #d30005; --amber: #f5a623;
+  --t-bash: #f5a623; --t-edit: #007d48; --t-write: #1151ff; --t-read: #beaffd;
+  --t-grep: #d30005; --t-glob: #ed1aa0; --t-agent: #780700; --t-other: #707072;
+}
+
+/* ── Design tokens ── pinterest (light, brand red) ───────────────────────── */
+[data-theme="pinterest"] {
+  --bg: #ffffff; --surface: #fbfbf9; --surface-2: #f6f6f3; --surface-3: #e5e5e0;
+  --border: #dadad3; --border-2: #c8c8c1;
+  --text: #000000; --text-2: #33332e; --text-3: #62625b;
+  --violet: #7e238b; --violet-glow: color-mix(in srgb, #7e238b 14%, transparent);
+  --cyan: #435ee5; --cyan-glow: color-mix(in srgb, #435ee5 12%, transparent);
+  --green: #2b9a66; --red: #e60023; --amber: #f5a623;
+  --t-bash: #f5a623; --t-edit: #2b9a66; --t-write: #435ee5; --t-read: #7e238b;
+  --t-grep: #e60023; --t-glob: #6845ab; --t-agent: #9e0a0a; --t-other: #62625b;
+}
+
+/* ── Design tokens ── playstation (light, console blue) ──────────────────── */
+[data-theme="playstation"] {
+  --bg: #ffffff; --surface: #f5f7fa; --surface-2: #f3f3f3; --surface-3: #e9eef4;
+  --border: #e1e6ee; --border-2: #0070d1;
+  --text: #000000; --text-2: #1f2024; --text-3: #6b6b6b;
+  --violet: #0070d1; --violet-glow: color-mix(in srgb, #0070d1 14%, transparent);
+  --cyan: #53b1ff; --cyan-glow: color-mix(in srgb, #53b1ff 12%, transparent);
+  --green: #2b9a66; --red: #c81b3a; --amber: #ffce21;
+  --t-bash: #ffce21; --t-edit: #2b9a66; --t-write: #0070d1; --t-read: #53b1ff;
+  --t-grep: #c81b3a; --t-glob: #d53b00; --t-agent: #c81b3a; --t-other: #6b6b6b;
+}
+
+/* ── Design tokens ── nvidia (light, brand green) ────────────────────────── */
+[data-theme="nvidia"] {
+  --bg: #ffffff; --surface: #f7f7f7; --surface-2: #efefef; --surface-3: #cccccc;
+  --border: #cccccc; --border-2: #5e5e5e;
+  --text: #000000; --text-2: #1a1a1a; --text-3: #757575;
+  --violet: #952fc6; --violet-glow: color-mix(in srgb, #952fc6 14%, transparent);
+  --cyan: #0046a4; --cyan-glow: color-mix(in srgb, #0046a4 12%, transparent);
+  --green: #76b900; --red: #e52020; --amber: #df6500;
+  --t-bash: #df6500; --t-edit: #76b900; --t-write: #0046a4; --t-read: #952fc6;
+  --t-grep: #e52020; --t-glob: #4d1368; --t-agent: #e52020; --t-other: #757575;
+}
+
+/* ── Design tokens ── mongodb (light, leaf green) ────────────────────────── */
+[data-theme="mongodb"] {
+  --bg: #ffffff; --surface: #f9fbfa; --surface-2: #f4f7f6; --surface-3: #e3fcef;
+  --border: #e1e5e8; --border-2: #c1ccd6;
+  --text: #001e2b; --text-2: #3d4f5b; --text-3: #5c6c7a;
+  --violet: #7b3ff2; --violet-glow: color-mix(in srgb, #7b3ff2 14%, transparent);
+  --cyan: #3d4f9f; --cyan-glow: color-mix(in srgb, #3d4f9f 12%, transparent);
+  --green: #00684a; --red: #d63a30; --amber: #946f3f;
+  --t-bash: #946f3f; --t-edit: #00ed64; --t-write: #3d4f9f; --t-read: #7b3ff2;
+  --t-grep: #d63a30; --t-glob: #f06bb8; --t-agent: #fa6e39; --t-other: #5c6c7a;
+}
+
+/* ── Design tokens ── slack (light, aubergine) ───────────────────────────── */
+[data-theme="slack"] {
+  --bg: #ffffff; --surface: #f4ede4; --surface-2: #f9f0ff; --surface-3: #f0e6f5;
+  --border: #e6e6e6; --border-2: #4a154b;
+  --text: #1d1d1d; --text-2: #4a154b; --text-3: #696969;
+  --violet: #4a154b; --violet-glow: color-mix(in srgb, #4a154b 14%, transparent);
+  --cyan: #1264a3; --cyan-glow: color-mix(in srgb, #1264a3 12%, transparent);
+  --green: #007a5a; --red: #cc4117; --amber: #ecb22e;
+  --t-bash: #ecb22e; --t-edit: #007a5a; --t-write: #1264a3; --t-read: #4a154b;
+  --t-grep: #cc4117; --t-glob: #36c5f0; --t-agent: #e01e5a; --t-other: #696969;
+}
+
+/* ── Design tokens ── cohere (light, coral) ──────────────────────────────── */
+[data-theme="cohere"] {
+  --bg: #ffffff; --surface: #eeece7; --surface-2: #edfce9; --surface-3: #f1f5ff;
+  --border: #d9d9dd; --border-2: #75758a;
+  --text: #212121; --text-2: #616161; --text-3: #93939f;
+  --violet: #ff7759; --violet-glow: color-mix(in srgb, #ff7759 16%, transparent);
+  --cyan: #1863dc; --cyan-glow: color-mix(in srgb, #1863dc 12%, transparent);
+  --green: #003c33; --red: #b30000; --amber: #ffad9b;
+  --t-bash: #ffad9b; --t-edit: #003c33; --t-write: #1863dc; --t-read: #ff7759;
+  --t-grep: #b30000; --t-glob: #9b60aa; --t-agent: #b30000; --t-other: #616161;
+}
+
+/* ── Design tokens ── mistral (light, sunshine) ──────────────────────────── */
+[data-theme="mistral"] {
+  --bg: #ffffff; --surface: #fafafa; --surface-2: #fff8e0; --surface-3: #fffaeb;
+  --border: #e5e5e5; --border-2: #c7c7c7;
+  --text: #1f1f1f; --text-2: #4a4a4a; --text-3: #6a6a6a;
+  --violet: #fa520f; --violet-glow: color-mix(in srgb, #fa520f 14%, transparent);
+  --cyan: #ffb83e; --cyan-glow: color-mix(in srgb, #ffb83e 14%, transparent);
+  --green: #2b9a66; --red: #cc3a05; --amber: #ff8105;
+  --t-bash: #ff8105; --t-edit: #2b9a66; --t-write: #fa520f; --t-read: #fa520f;
+  --t-grep: #cc3a05; --t-glob: #ffd06a; --t-agent: #cc3a05; --t-other: #6a6a6a;
+}
+
+/* ── Design tokens ── cursor (light, warm canvas) ────────────────────────── */
+[data-theme="cursor"] {
+  --bg: #f7f7f4; --surface: #fafaf7; --surface-2: #ffffff; --surface-3: #e6e5e0;
+  --border: #e6e5e0; --border-2: #cfcdc4;
+  --text: #26251e; --text-2: #5a5852; --text-3: #807d72;
+  --violet: #c0a8dd; --violet-glow: color-mix(in srgb, #c0a8dd 22%, transparent);
+  --cyan: #9fbbe0; --cyan-glow: color-mix(in srgb, #9fbbe0 22%, transparent);
+  --green: #1f8a65; --red: #cf2d56; --amber: #c08532;
+  --t-bash: #c08532; --t-edit: #c0a8dd; --t-write: #f54e00; --t-read: #9fbbe0;
+  --t-grep: #9fc9a2; --t-glob: #dfa88f; --t-agent: #f54e00; --t-other: #807d72;
+}
+
+/* ── Design tokens ── airbnb (light, coral) ──────────────────────────────── */
+[data-theme="airbnb"] {
+  --bg: #ffffff; --surface: #f7f7f7; --surface-2: #f2f2f2; --surface-3: #ebebeb;
+  --border: #dddddd; --border-2: #c1c1c1;
+  --text: #222222; --text-2: #3f3f3f; --text-3: #6a6a6a;
+  --violet: #460479; --violet-glow: color-mix(in srgb, #460479 14%, transparent);
+  --cyan: #428bff; --cyan-glow: color-mix(in srgb, #428bff 12%, transparent);
+  --green: #2b9a66; --red: #ff385c; --amber: #f5a623;
+  --t-bash: #f5a623; --t-edit: #2b9a66; --t-write: #428bff; --t-read: #460479;
+  --t-grep: #ff385c; --t-glob: #92174d; --t-agent: #c13515; --t-other: #6a6a6a;
+}
+
+/* ── Design tokens ── intercom (light, warm cream) ───────────────────────── */
+[data-theme="intercom"] {
+  --bg: #f5f1ec; --surface: #ffffff; --surface-2: #ebe7e1; --surface-3: #d3cec6;
+  --border: #d3cec6; --border-2: #111111;
+  --text: #111111; --text-2: #626260; --text-3: #7b7b78;
+  --violet: #0007cb; --violet-glow: color-mix(in srgb, #0007cb 12%, transparent);
+  --cyan: #03b2cb; --cyan-glow: color-mix(in srgb, #03b2cb 14%, transparent);
+  --green: #0bdf50; --red: #c41c1c; --amber: #fe4c02;
+  --t-bash: #fe4c02; --t-edit: #0bdf50; --t-write: #65b5ff; --t-read: #0007cb;
+  --t-grep: #c41c1c; --t-glob: #b3e01c; --t-agent: #ff2067; --t-other: #626260;
+}
+
+/* ── Design tokens ── linear (dark, lavender) ────────────────────────────── */
+[data-theme="linear"] {
+  --bg: #010102; --surface: #0f1011; --surface-2: #141516; --surface-3: #18191a;
+  --border: #23252a; --border-2: #34343a;
+  --text: #f7f8f8; --text-2: #d0d6e0; --text-3: #8a8f98;
+  --violet: #5e6ad2; --violet-glow: color-mix(in srgb, #5e6ad2 16%, transparent);
+  --cyan: #828fff; --cyan-glow: color-mix(in srgb, #828fff 14%, transparent);
+  --green: #27a644; --red: #ff4f64; --amber: #f5a623;
+  --t-bash: #f5a623; --t-edit: #27a644; --t-write: #828fff; --t-read: #5e6ad2;
+  --t-grep: #ff4f64; --t-glob: #7a7fad; --t-agent: #ff4f64; --t-other: #d0d6e0;
+}
+
+/* ── Design tokens ── sentry (dark, deep violet) ─────────────────────────── */
+[data-theme="sentry"] {
+  --bg: #150f23; --surface: #1f1633; --surface-2: #2a1f44; --surface-3: #362d59;
+  --border: #362d59; --border-2: #6a5fc1;
+  --text: #ffffff; --text-2: #bdb8c0; --text-3: #79628c;
+  --violet: #6a5fc1; --violet-glow: color-mix(in srgb, #6a5fc1 18%, transparent);
+  --cyan: #9dc1f5; --cyan-glow: color-mix(in srgb, #9dc1f5 14%, transparent);
+  --green: #c2ef4e; --red: #ff5c8a; --amber: #f5a623;
+  --t-bash: #c2ef4e; --t-edit: #c2ef4e; --t-write: #6a5fc1; --t-read: #9dc1f5;
+  --t-grep: #fa7faa; --t-glob: #fa7faa; --t-agent: #ff5c8a; --t-other: #bdb8c0;
+}
+
+/* ── Design tokens ── raycast (dark, near-black) ─────────────────────────── */
+[data-theme="raycast"] {
+  --bg: #07080a; --surface: #0d0d0d; --surface-2: #101111; --surface-3: #121212;
+  --border: #242728; --border-2: #434345;
+  --text: #f4f4f6; --text-2: #cdcdcd; --text-3: #9c9c9d;
+  --violet: #57c1ff; --violet-glow: color-mix(in srgb, #57c1ff 16%, transparent);
+  --cyan: #57c1ff; --cyan-glow: color-mix(in srgb, #57c1ff 12%, transparent);
+  --green: #59d499; --red: #ff6161; --amber: #ffc533;
+  --t-bash: #ffc533; --t-edit: #59d499; --t-write: #57c1ff; --t-read: #ffc533;
+  --t-grep: #ff6161; --t-glob: #ff6161; --t-agent: #ff5757; --t-other: #cdcdcd;
+}
+
+/* ── Design tokens ── framer (dark, gradient blue) ───────────────────────── */
+[data-theme="framer"] {
+  --bg: #090909; --surface: #141414; --surface-2: #1c1c1c; --surface-3: #262626;
+  --border: #262626; --border-2: #6a4cf5;
+  --text: #ffffff; --text-2: #cbcbcb; --text-3: #999999;
+  --violet: #6a4cf5; --violet-glow: color-mix(in srgb, #6a4cf5 18%, transparent);
+  --cyan: #0099ff; --cyan-glow: color-mix(in srgb, #0099ff 14%, transparent);
+  --green: #22c55e; --red: #ff5577; --amber: #ff7a3d;
+  --t-bash: #ff7a3d; --t-edit: #22c55e; --t-write: #0099ff; --t-read: #6a4cf5;
+  --t-grep: #ff5577; --t-glob: #d44df0; --t-agent: #d44df0; --t-other: #999999;
+}
+
+/* ── Design tokens ── ferrari (dark, racing red) ─────────────────────────── */
+[data-theme="ferrari"] {
+  --bg: #181818; --surface: #303030; --surface-2: #3a3a3a; --surface-3: #424242;
+  --border: #303030; --border-2: #da291c;
+  --text: #ffffff; --text-2: #969696; --text-3: #666666;
+  --violet: #da291c; --violet-glow: color-mix(in srgb, #da291c 18%, transparent);
+  --cyan: #4c98b9; --cyan-glow: color-mix(in srgb, #4c98b9 14%, transparent);
+  --green: #03904a; --red: #f13a2c; --amber: #f6e500;
+  --t-bash: #f6e500; --t-edit: #03904a; --t-write: #4c98b9; --t-read: #da291c;
+  --t-grep: #f13a2c; --t-glob: #fff200; --t-agent: #f13a2c; --t-other: #969696;
+}
+
+/* ── Design tokens ── resend (dark, neon glow) ───────────────────────────── */
+[data-theme="resend"] {
+  --bg: #000000; --surface: #06060a; --surface-2: #0a0a0c; --surface-3: #101012;
+  --border: #1a1a1e; --border-2: #2c2c2e;
+  --text: #fcfdff; --text-2: #a1a4a5; --text-3: #888e90;
+  --violet: #ff801f; --violet-glow: color-mix(in srgb, #ff801f 18%, transparent);
+  --cyan: #3b9eff; --cyan-glow: color-mix(in srgb, #3b9eff 18%, transparent);
+  --green: #11ff99; --red: #ff2047; --amber: #ffc53d;
+  --t-bash: #ffc53d; --t-edit: #11ff99; --t-write: #3b9eff; --t-read: #ff801f;
+  --t-grep: #ff2047; --t-glob: #3b9eff; --t-agent: #ff2047; --t-other: #a1a4a5;
+}
+
 /* ── Design tokens ── cyber ──────────────────────────────────────────────── */
 [data-theme="cyber"] {
   --bg: #191532; --surface: #211c43; --surface-2: #2a2550; --surface-3: #352f63;
@@ -742,7 +1054,9 @@
 [data-theme="rose-pine"], [data-theme="synthwave"], [data-theme="palenight"],
 [data-theme="night-owl"], [data-theme="flexoki-dark"], [data-theme="cobalt"],
 [data-theme="vitesse-dark"], [data-theme="iceberg"], [data-theme="zenburn"],
-[data-theme="material-darker"], [data-theme="cyber"] {
+[data-theme="material-darker"], [data-theme="linear"], [data-theme="sentry"],
+[data-theme="raycast"], [data-theme="framer"], [data-theme="ferrari"],
+[data-theme="resend"], [data-theme="cyber"] {
   color-scheme: dark;
   --native-color-scheme: dark;
 }
@@ -753,7 +1067,14 @@
 [data-theme="one-light"], [data-theme="everforest-light"], [data-theme="tokyo-night-day"],
 [data-theme="quiet-light"], [data-theme="horizon-light"], [data-theme="flexoki-light"],
 [data-theme="nord-light"], [data-theme="vitesse-light"], [data-theme="iceberg-light"],
-[data-theme="material-lighter"], [data-theme="min-light"] {
+[data-theme="material-lighter"], [data-theme="min-light"], [data-theme="stripe"],
+[data-theme="claude-cream"], [data-theme="supabase"], [data-theme="posthog"],
+[data-theme="replicate"], [data-theme="notion"], [data-theme="figma"],
+[data-theme="miro"], [data-theme="apple"], [data-theme="nike"],
+[data-theme="pinterest"], [data-theme="playstation"], [data-theme="nvidia"],
+[data-theme="mongodb"], [data-theme="slack"], [data-theme="cohere"],
+[data-theme="mistral"], [data-theme="cursor"], [data-theme="airbnb"],
+[data-theme="intercom"] {
   color-scheme: light;
   --native-color-scheme: light;
 }

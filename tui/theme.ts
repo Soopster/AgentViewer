@@ -55,6 +55,32 @@ export type TuiThemeMode =
   | 'ristretto'
   | 'vantablack'
   | 'white'
+  | 'stripe'
+  | 'claude-cream'
+  | 'supabase'
+  | 'posthog'
+  | 'replicate'
+  | 'notion'
+  | 'figma'
+  | 'miro'
+  | 'apple'
+  | 'nike'
+  | 'pinterest'
+  | 'playstation'
+  | 'nvidia'
+  | 'mongodb'
+  | 'slack'
+  | 'cohere'
+  | 'mistral'
+  | 'cursor'
+  | 'airbnb'
+  | 'intercom'
+  | 'linear'
+  | 'sentry'
+  | 'raycast'
+  | 'framer'
+  | 'ferrari'
+  | 'resend'
   | 'cyber'
 export type TuiDensity = 'comfortable' | 'balanced' | 'dense'
 export type TuiTranscriptView = 'conversation' | 'full'
@@ -1291,6 +1317,578 @@ export const WHITE_THEME: TuiThemePalette = {
   userBg: '#f0f0f0',
 } as const
 
+export const STRIPE_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#f6f9fc',
+  surface2: '#eef2f7',
+  surface3: '#dde6f0',
+  diffAddBg: '#dceee2',
+  diffRemoveBg: '#fbdce5',
+  diffMetaBg: '#dde7f6',
+  border: '#e3e8ee',
+  border2: '#a8c3de',
+  text: '#0d253d',
+  muted: '#273951',
+  dim: '#64748d',
+  violet: '#533afd',
+  cyan: '#003770',
+  green: '#00875a',
+  red: '#ea2261',
+  amber: '#9b6829',
+  pink: '#f96bee',
+  userBg: '#dde6f0',
+} as const
+
+export const CLAUDE_CREAM_THEME: TuiThemePalette = {
+  bg: '#faf9f5',
+  surface: '#f5f0e8',
+  surface2: '#efe9de',
+  surface3: '#e8e0d2',
+  diffAddBg: '#dde9d4',
+  diffRemoveBg: '#f0d6d2',
+  diffMetaBg: '#e0e3e8',
+  border: '#e6dfd8',
+  border2: '#cc785c',
+  text: '#141413',
+  muted: '#3d3d3a',
+  dim: '#6c6a64',
+  violet: '#cc785c',
+  cyan: '#5db8a6',
+  green: '#5db872',
+  red: '#c64545',
+  amber: '#d4a017',
+  pink: '#e8a55a',
+  userBg: '#e8e0d2',
+} as const
+
+export const SUPABASE_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#fafafa',
+  surface2: '#ededed',
+  surface3: '#d4d4d4',
+  diffAddBg: '#d8efe2',
+  diffRemoveBg: '#fcd8d4',
+  diffMetaBg: '#dde3f4',
+  border: '#dfdfdf',
+  border2: '#c7c7c7',
+  text: '#171717',
+  muted: '#707070',
+  dim: '#9a9a9a',
+  violet: '#6b01c2',
+  cyan: '#054cff',
+  green: '#3ecf8e',
+  red: '#ff2201',
+  amber: '#d99500',
+  pink: '#c7007e',
+  userBg: '#eddbf9',
+} as const
+
+export const POSTHOG_THEME: TuiThemePalette = {
+  bg: '#eeefe9',
+  surface: '#fcfcfa',
+  surface2: '#ffffff',
+  surface3: '#e5e7e0',
+  diffAddBg: '#d9eddf',
+  diffRemoveBg: '#f7d6d3',
+  diffMetaBg: '#dde7f4',
+  border: '#bfc1b7',
+  border2: '#6c6e63',
+  text: '#23251d',
+  muted: '#4d4f46',
+  dim: '#6c6e63',
+  violet: '#7c44a6',
+  cyan: '#1078a3',
+  green: '#2c8c66',
+  red: '#cd4239',
+  amber: '#f7a501',
+  pink: '#dceaf6',
+  userBg: '#dceaf6',
+} as const
+
+export const REPLICATE_THEME: TuiThemePalette = {
+  bg: '#f9f7f3',
+  surface: '#f3f0e8',
+  surface2: '#ffffff',
+  surface3: '#ebe6df',
+  diffAddBg: '#dde9d4',
+  diffRemoveBg: '#f5d4cc',
+  diffMetaBg: '#e0e3e8',
+  border: '#d6d2c8',
+  border2: '#202020',
+  text: '#202020',
+  muted: '#3a3a3a',
+  dim: '#646464',
+  violet: '#ea2804',
+  cyan: '#ff6a3d',
+  green: '#2b9a66',
+  red: '#ea2804',
+  amber: '#ff6a3d',
+  pink: '#f4a8a0',
+  userBg: '#ebe6df',
+} as const
+
+export const NOTION_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#fafaf9',
+  surface2: '#f6f5f4',
+  surface3: '#f0eeec',
+  diffAddBg: '#d9f3e1',
+  diffRemoveBg: '#fde0ec',
+  diffMetaBg: '#dcecfa',
+  border: '#e5e3df',
+  border2: '#c8c4be',
+  text: '#1a1a1a',
+  muted: '#37352f',
+  dim: '#5d5b54',
+  violet: '#5645d4',
+  cyan: '#0075de',
+  green: '#1aae39',
+  red: '#e03131',
+  amber: '#dd5b00',
+  pink: '#ff64c8',
+  userBg: '#e6e0f5',
+} as const
+
+export const FIGMA_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#f7f7f5',
+  surface2: '#f1f1f1',
+  surface3: '#e6e6e6',
+  diffAddBg: '#dceeb1',
+  diffRemoveBg: '#efd4d4',
+  diffMetaBg: '#dde1f0',
+  border: '#e6e6e6',
+  border2: '#1f1d3d',
+  text: '#000000',
+  muted: '#1f1d3d',
+  dim: '#666666',
+  violet: '#c5b0f4',
+  cyan: '#1f1d3d',
+  green: '#1ea64a',
+  red: '#ff3d8b',
+  amber: '#f5a623',
+  pink: '#efd4d4',
+  userBg: '#e0d6f5',
+} as const
+
+export const MIRO_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#fafbfc',
+  surface2: '#f7f8fa',
+  surface3: '#fff8e0',
+  diffAddBg: '#d4eede',
+  diffRemoveBg: '#fbd4d4',
+  diffMetaBg: '#dee5fa',
+  border: '#e0e2e8',
+  border2: '#c7cad5',
+  text: '#1c1c1e',
+  muted: '#555a6a',
+  dim: '#6b6f7e',
+  violet: '#4262ff',
+  cyan: '#0fbcb0',
+  green: '#00b473',
+  red: '#ff9999',
+  amber: '#ffd02f',
+  pink: '#ffd8f4',
+  userBg: '#e1e8f5',
+} as const
+
+export const APPLE_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#fafafc',
+  surface2: '#f5f5f7',
+  surface3: '#f0f0f0',
+  diffAddBg: '#daf3e0',
+  diffRemoveBg: '#ffd9d6',
+  diffMetaBg: '#dde9fa',
+  border: '#e0e0e0',
+  border2: '#d2d2d7',
+  text: '#1d1d1f',
+  muted: '#333333',
+  dim: '#7a7a7a',
+  violet: '#0066cc',
+  cyan: '#0071e3',
+  green: '#34c759',
+  red: '#ff3b30',
+  amber: '#ff9500',
+  pink: '#ff2d55',
+  userBg: '#e6f0fc',
+} as const
+
+export const NIKE_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#f5f5f5',
+  surface2: '#ebebeb',
+  surface3: '#cacacb',
+  diffAddBg: '#d4ecdc',
+  diffRemoveBg: '#fbd0d2',
+  diffMetaBg: '#dce5fa',
+  border: '#cacacb',
+  border2: '#111111',
+  text: '#111111',
+  muted: '#39393b',
+  dim: '#707072',
+  violet: '#1151ff',
+  cyan: '#0a7281',
+  green: '#007d48',
+  red: '#d30005',
+  amber: '#f5a623',
+  pink: '#ed1aa0',
+  userBg: '#dee6fa',
+} as const
+
+export const PINTEREST_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#fbfbf9',
+  surface2: '#f6f6f3',
+  surface3: '#e5e5e0',
+  diffAddBg: '#c7f0da',
+  diffRemoveBg: '#fbd0d6',
+  diffMetaBg: '#dee3fa',
+  border: '#dadad3',
+  border2: '#c8c8c1',
+  text: '#000000',
+  muted: '#33332e',
+  dim: '#62625b',
+  violet: '#7e238b',
+  cyan: '#435ee5',
+  green: '#2b9a66',
+  red: '#e60023',
+  amber: '#f5a623',
+  pink: '#c7f0da',
+  userBg: '#f0e3f3',
+} as const
+
+export const PLAYSTATION_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#f5f7fa',
+  surface2: '#f3f3f3',
+  surface3: '#e9eef4',
+  diffAddBg: '#d4ecdc',
+  diffRemoveBg: '#fbd0d8',
+  diffMetaBg: '#dde9f5',
+  border: '#e1e6ee',
+  border2: '#0070d1',
+  text: '#000000',
+  muted: '#1f2024',
+  dim: '#6b6b6b',
+  violet: '#0070d1',
+  cyan: '#53b1ff',
+  green: '#2b9a66',
+  red: '#c81b3a',
+  amber: '#ffce21',
+  pink: '#d53b00',
+  userBg: '#dceaf6',
+} as const
+
+export const NVIDIA_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#f7f7f7',
+  surface2: '#efefef',
+  surface3: '#cccccc',
+  diffAddBg: '#dceea0',
+  diffRemoveBg: '#fbd0d0',
+  diffMetaBg: '#dce0ed',
+  border: '#cccccc',
+  border2: '#5e5e5e',
+  text: '#000000',
+  muted: '#1a1a1a',
+  dim: '#757575',
+  violet: '#952fc6',
+  cyan: '#0046a4',
+  green: '#76b900',
+  red: '#e52020',
+  amber: '#df6500',
+  pink: '#f9d4ff',
+  userBg: '#dcedb8',
+} as const
+
+export const MONGODB_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#f9fbfa',
+  surface2: '#f4f7f6',
+  surface3: '#e3fcef',
+  diffAddBg: '#c3f0d2',
+  diffRemoveBg: '#f6d6d2',
+  diffMetaBg: '#dee0ee',
+  border: '#e1e5e8',
+  border2: '#c1ccd6',
+  text: '#001e2b',
+  muted: '#3d4f5b',
+  dim: '#5c6c7a',
+  violet: '#7b3ff2',
+  cyan: '#3d4f9f',
+  green: '#00684a',
+  red: '#d63a30',
+  amber: '#946f3f',
+  pink: '#f06bb8',
+  userBg: '#c3f0d2',
+} as const
+
+export const SLACK_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#f4ede4',
+  surface2: '#f9f0ff',
+  surface3: '#f0e6f5',
+  diffAddBg: '#d4eedc',
+  diffRemoveBg: '#fbd5cc',
+  diffMetaBg: '#dee3f0',
+  border: '#e6e6e6',
+  border2: '#4a154b',
+  text: '#1d1d1d',
+  muted: '#4a154b',
+  dim: '#696969',
+  violet: '#4a154b',
+  cyan: '#1264a3',
+  green: '#007a5a',
+  red: '#cc4117',
+  amber: '#ecb22e',
+  pink: '#e01e5a',
+  userBg: '#f9f0ff',
+} as const
+
+export const COHERE_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#eeece7',
+  surface2: '#edfce9',
+  surface3: '#f1f5ff',
+  diffAddBg: '#d9eedf',
+  diffRemoveBg: '#f7d4d4',
+  diffMetaBg: '#dde5f5',
+  border: '#d9d9dd',
+  border2: '#75758a',
+  text: '#212121',
+  muted: '#616161',
+  dim: '#93939f',
+  violet: '#ff7759',
+  cyan: '#1863dc',
+  green: '#003c33',
+  red: '#b30000',
+  amber: '#ffad9b',
+  pink: '#9b60aa',
+  userBg: '#f1f5ff',
+} as const
+
+export const MISTRAL_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#fafafa',
+  surface2: '#fff8e0',
+  surface3: '#fffaeb',
+  diffAddBg: '#dceec0',
+  diffRemoveBg: '#fbd4cc',
+  diffMetaBg: '#dde2f0',
+  border: '#e5e5e5',
+  border2: '#c7c7c7',
+  text: '#1f1f1f',
+  muted: '#4a4a4a',
+  dim: '#6a6a6a',
+  violet: '#fa520f',
+  cyan: '#ffb83e',
+  green: '#2b9a66',
+  red: '#cc3a05',
+  amber: '#ff8105',
+  pink: '#ffd06a',
+  userBg: '#fff0c2',
+} as const
+
+export const CURSOR_THEME: TuiThemePalette = {
+  bg: '#f7f7f4',
+  surface: '#fafaf7',
+  surface2: '#ffffff',
+  surface3: '#e6e5e0',
+  diffAddBg: '#dde9d4',
+  diffRemoveBg: '#f5d4d8',
+  diffMetaBg: '#dde3eb',
+  border: '#e6e5e0',
+  border2: '#cfcdc4',
+  text: '#26251e',
+  muted: '#5a5852',
+  dim: '#807d72',
+  violet: '#c0a8dd',
+  cyan: '#9fbbe0',
+  green: '#1f8a65',
+  red: '#cf2d56',
+  amber: '#c08532',
+  pink: '#dfa88f',
+  userBg: '#e6e5e0',
+} as const
+
+export const AIRBNB_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#f7f7f7',
+  surface2: '#f2f2f2',
+  surface3: '#ebebeb',
+  diffAddBg: '#d4ecdc',
+  diffRemoveBg: '#ffe0e6',
+  diffMetaBg: '#dde7fa',
+  border: '#dddddd',
+  border2: '#c1c1c1',
+  text: '#222222',
+  muted: '#3f3f3f',
+  dim: '#6a6a6a',
+  violet: '#460479',
+  cyan: '#428bff',
+  green: '#2b9a66',
+  red: '#ff385c',
+  amber: '#f5a623',
+  pink: '#92174d',
+  userBg: '#ebe5f0',
+} as const
+
+export const INTERCOM_THEME: TuiThemePalette = {
+  bg: '#f5f1ec',
+  surface: '#ffffff',
+  surface2: '#ebe7e1',
+  surface3: '#d3cec6',
+  diffAddBg: '#d4ecdc',
+  diffRemoveBg: '#fbd6d6',
+  diffMetaBg: '#dde0fa',
+  border: '#d3cec6',
+  border2: '#111111',
+  text: '#111111',
+  muted: '#626260',
+  dim: '#7b7b78',
+  violet: '#0007cb',
+  cyan: '#03b2cb',
+  green: '#0bdf50',
+  red: '#c41c1c',
+  amber: '#fe4c02',
+  pink: '#ff2067',
+  userBg: '#dde0fa',
+} as const
+
+export const LINEAR_THEME: TuiThemePalette = {
+  bg: '#010102',
+  surface: '#0f1011',
+  surface2: '#141516',
+  surface3: '#18191a',
+  diffAddBg: '#0f2a18',
+  diffRemoveBg: '#2a1218',
+  diffMetaBg: '#15193a',
+  border: '#23252a',
+  border2: '#34343a',
+  text: '#f7f8f8',
+  muted: '#d0d6e0',
+  dim: '#8a8f98',
+  violet: '#5e6ad2',
+  cyan: '#828fff',
+  green: '#27a644',
+  red: '#ff4f64',
+  amber: '#f5a623',
+  pink: '#7a7fad',
+  userBg: '#1c2040',
+} as const
+
+export const SENTRY_THEME: TuiThemePalette = {
+  bg: '#150f23',
+  surface: '#1f1633',
+  surface2: '#2a1f44',
+  surface3: '#362d59',
+  diffAddBg: '#1f3325',
+  diffRemoveBg: '#3a1e2c',
+  diffMetaBg: '#2a234d',
+  border: '#362d59',
+  border2: '#6a5fc1',
+  text: '#ffffff',
+  muted: '#bdb8c0',
+  dim: '#79628c',
+  violet: '#6a5fc1',
+  cyan: '#9dc1f5',
+  green: '#c2ef4e',
+  red: '#ff5c8a',
+  amber: '#f5a623',
+  pink: '#fa7faa',
+  userBg: '#2c2058',
+} as const
+
+export const RAYCAST_THEME: TuiThemePalette = {
+  bg: '#07080a',
+  surface: '#0d0d0d',
+  surface2: '#101111',
+  surface3: '#121212',
+  diffAddBg: '#1a3325',
+  diffRemoveBg: '#3a1f1f',
+  diffMetaBg: '#1a2538',
+  border: '#242728',
+  border2: '#434345',
+  text: '#f4f4f6',
+  muted: '#cdcdcd',
+  dim: '#9c9c9d',
+  violet: '#57c1ff',
+  cyan: '#57c1ff',
+  green: '#59d499',
+  red: '#ff6161',
+  amber: '#ffc533',
+  pink: '#ff5757',
+  userBg: '#1a2a3a',
+} as const
+
+export const FRAMER_THEME: TuiThemePalette = {
+  bg: '#090909',
+  surface: '#141414',
+  surface2: '#1c1c1c',
+  surface3: '#262626',
+  diffAddBg: '#163025',
+  diffRemoveBg: '#3a1f28',
+  diffMetaBg: '#1d1d3a',
+  border: '#262626',
+  border2: '#6a4cf5',
+  text: '#ffffff',
+  muted: '#cbcbcb',
+  dim: '#999999',
+  violet: '#6a4cf5',
+  cyan: '#0099ff',
+  green: '#22c55e',
+  red: '#ff5577',
+  amber: '#ff7a3d',
+  pink: '#d44df0',
+  userBg: '#1f1840',
+} as const
+
+export const FERRARI_THEME: TuiThemePalette = {
+  bg: '#181818',
+  surface: '#303030',
+  surface2: '#3a3a3a',
+  surface3: '#424242',
+  diffAddBg: '#1f3a25',
+  diffRemoveBg: '#3a1e1e',
+  diffMetaBg: '#1f2c3a',
+  border: '#303030',
+  border2: '#da291c',
+  text: '#ffffff',
+  muted: '#969696',
+  dim: '#666666',
+  violet: '#da291c',
+  cyan: '#4c98b9',
+  green: '#03904a',
+  red: '#f13a2c',
+  amber: '#f6e500',
+  pink: '#fff200',
+  userBg: '#3a1c1c',
+} as const
+
+export const RESEND_THEME: TuiThemePalette = {
+  bg: '#000000',
+  surface: '#06060a',
+  surface2: '#0a0a0c',
+  surface3: '#101012',
+  diffAddBg: '#0e2a1a',
+  diffRemoveBg: '#2a1018',
+  diffMetaBg: '#15203a',
+  border: '#1a1a1e',
+  border2: '#2c2c2e',
+  text: '#fcfdff',
+  muted: '#a1a4a5',
+  dim: '#888e90',
+  violet: '#ff801f',
+  cyan: '#3b9eff',
+  green: '#11ff99',
+  red: '#ff2047',
+  amber: '#ffc53d',
+  pink: '#ff801f',
+  userBg: '#1a1a2a',
+} as const
+
 export let THEME: TuiThemePalette = LIGHT_THEME
 
 export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
@@ -1349,6 +1947,32 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'ristretto': return RISTRETTO_THEME
     case 'vantablack': return VANTABLACK_THEME
     case 'white': return WHITE_THEME
+    case 'stripe': return STRIPE_THEME
+    case 'claude-cream': return CLAUDE_CREAM_THEME
+    case 'supabase': return SUPABASE_THEME
+    case 'posthog': return POSTHOG_THEME
+    case 'replicate': return REPLICATE_THEME
+    case 'notion': return NOTION_THEME
+    case 'figma': return FIGMA_THEME
+    case 'miro': return MIRO_THEME
+    case 'apple': return APPLE_THEME
+    case 'nike': return NIKE_THEME
+    case 'pinterest': return PINTEREST_THEME
+    case 'playstation': return PLAYSTATION_THEME
+    case 'nvidia': return NVIDIA_THEME
+    case 'mongodb': return MONGODB_THEME
+    case 'slack': return SLACK_THEME
+    case 'cohere': return COHERE_THEME
+    case 'mistral': return MISTRAL_THEME
+    case 'cursor': return CURSOR_THEME
+    case 'airbnb': return AIRBNB_THEME
+    case 'intercom': return INTERCOM_THEME
+    case 'linear': return LINEAR_THEME
+    case 'sentry': return SENTRY_THEME
+    case 'raycast': return RAYCAST_THEME
+    case 'framer': return FRAMER_THEME
+    case 'ferrari': return FERRARI_THEME
+    case 'resend': return RESEND_THEME
     default: return LIGHT_THEME
   }
 }

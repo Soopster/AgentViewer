@@ -44,6 +44,32 @@ export type Theme =
   | 'iceberg'
   | 'zenburn'
   | 'material-darker'
+  | 'stripe'
+  | 'claude-cream'
+  | 'supabase'
+  | 'posthog'
+  | 'replicate'
+  | 'notion'
+  | 'figma'
+  | 'miro'
+  | 'apple'
+  | 'nike'
+  | 'pinterest'
+  | 'playstation'
+  | 'nvidia'
+  | 'mongodb'
+  | 'slack'
+  | 'cohere'
+  | 'mistral'
+  | 'cursor'
+  | 'airbnb'
+  | 'intercom'
+  | 'linear'
+  | 'sentry'
+  | 'raycast'
+  | 'framer'
+  | 'ferrari'
+  | 'resend'
   | 'cyber'
 
 export type ThemeCategory = 'dark' | 'light'
@@ -68,6 +94,26 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   'iceberg-light':    { category: 'light', icon: '☀', label: 'Iceberg Light' },
   'material-lighter': { category: 'light', icon: '☀', label: 'Material Lighter' },
   'min-light':        { category: 'light', icon: '☀', label: 'Min Light' },
+  stripe:             { category: 'light', icon: '☀', label: 'Stripe' },
+  'claude-cream':     { category: 'light', icon: '☀', label: 'Claude Cream' },
+  supabase:           { category: 'light', icon: '☀', label: 'Supabase' },
+  posthog:            { category: 'light', icon: '☀', label: 'PostHog' },
+  replicate:          { category: 'light', icon: '☀', label: 'Replicate' },
+  notion:             { category: 'light', icon: '☀', label: 'Notion' },
+  figma:              { category: 'light', icon: '☀', label: 'Figma' },
+  miro:               { category: 'light', icon: '☀', label: 'Miro' },
+  apple:              { category: 'light', icon: '☀', label: 'Apple' },
+  nike:               { category: 'light', icon: '☀', label: 'Nike' },
+  pinterest:          { category: 'light', icon: '☀', label: 'Pinterest' },
+  playstation:        { category: 'light', icon: '☀', label: 'PlayStation' },
+  nvidia:             { category: 'light', icon: '☀', label: 'NVIDIA' },
+  mongodb:            { category: 'light', icon: '☀', label: 'MongoDB' },
+  slack:              { category: 'light', icon: '☀', label: 'Slack' },
+  cohere:             { category: 'light', icon: '☀', label: 'Cohere' },
+  mistral:            { category: 'light', icon: '☀', label: 'Mistral' },
+  cursor:             { category: 'light', icon: '☀', label: 'Cursor' },
+  airbnb:             { category: 'light', icon: '☀', label: 'Airbnb' },
+  intercom:           { category: 'light', icon: '☀', label: 'Intercom' },
   imessage:           { category: 'light', icon: '💬', label: 'iMessage' },
   dark:               { category: 'dark',  icon: '☾', label: 'Dark' },
   terminal:           { category: 'dark',  icon: '⌨', label: 'Terminal' },
@@ -94,6 +140,12 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   iceberg:            { category: 'dark',  icon: '☾', label: 'Iceberg' },
   zenburn:            { category: 'dark',  icon: '☾', label: 'Zenburn' },
   'material-darker':  { category: 'dark',  icon: '☾', label: 'Material Darker' },
+  linear:             { category: 'dark',  icon: '☾', label: 'Linear' },
+  sentry:             { category: 'dark',  icon: '☾', label: 'Sentry' },
+  raycast:            { category: 'dark',  icon: '☾', label: 'Raycast' },
+  framer:             { category: 'dark',  icon: '☾', label: 'Framer' },
+  ferrari:            { category: 'dark',  icon: '☾', label: 'Ferrari' },
+  resend:             { category: 'dark',  icon: '☾', label: 'Resend' },
   cyber:              { category: 'dark',  icon: '✦', label: 'Cyber' },
 }
 
