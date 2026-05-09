@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Area,
   AreaChart,
@@ -250,6 +250,486 @@ function Row({ day, cells, max }: { day: string; cells: number[]; max: number })
   )
 }
 
+const MODEL_COLORS = [
+  'var(--cyan, #5eead4)',
+  'var(--violet, #a78bfa)',
+  'var(--green, #4ade80)',
+  'var(--orange, #fb923c)',
+  'var(--yellow, #facc15)',
+  'var(--pink, #f472b6)',
+  '#60a5fa',
+  '#f87171',
+  '#34d399',
+  '#c084fc',
+]
+
+function fmtLatency(ms: number): string {
+  if (ms <= 0) return '—'
+  if (ms < 1000) return `${Math.round(ms)} ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`
+  return `${(ms / 60_000).toFixed(1)} m`
+}
+
+type InsightTone = 'good' | 'warn' | 'neutral'
+type Insight = { icon: string; tone: InsightTone; label: string; detail?: string }
+
+function toneColor(tone: InsightTone): string {
+  if (tone === 'good') return 'var(--green, #4ade80)'
+  if (tone === 'warn') return 'var(--orange, #fb923c)'
+  return 'var(--cyan, #5eead4)'
+}
+
+function computeInsights(data: CrossSessionAnalytics): Insight[] {
+  const out: Insight[] = []
+
+  // 1. Activity headline.
+  if (data.totals.messages > 0) {
+    out.push({
+      icon: '◆',
+      tone: 'neutral',
+      label: `${fmtNum(data.totals.messages)} messages across ${fmtNum(data.totals.sessions)} sessions on ${fmtNum(data.totals.activeDays)} active days`,
+      detail: data.totals.estCost > 0 ? `${fmtCost(data.totals.estCost)} estimated spend` : undefined,
+    })
+  }
+
+  // 2. Most active day.
+  if (data.daily.length > 0) {
+    const peak = data.daily.reduce((acc, d) => (d.messages > acc.messages ? d : acc), data.daily[0])
+    if (peak.messages > 0) {
+      out.push({
+        icon: '▲',
+        tone: 'neutral',
+        label: `Most active day: ${peak.day}`,
+        detail: `${fmtNum(peak.messages)} messages${peak.cost > 0 ? ` · ${fmtCost(peak.cost)}` : ''}`,
+      })
+    }
+  }
+
+  // 3. Streak.
+  if (data.streak.current > 1) {
+    out.push({
+      icon: '✦',
+      tone: 'good',
+      label: `On a ${fmtNum(data.streak.current)}-day streak`,
+      detail: data.streak.longest > data.streak.current ? `longest in range was ${fmtNum(data.streak.longest)} days` : 'longest in range',
+    })
+  } else if (data.streak.longest >= 3) {
+    out.push({
+      icon: '✦',
+      tone: 'neutral',
+      label: `Longest stretch: ${fmtNum(data.streak.longest)} consecutive active days`,
+    })
+  }
+
+  // 4. Latency trend — split the daily series into early/late halves and compare median p50.
+  // Only include days with at least 10 paired samples so single-message outliers don't dominate.
+  const meaningfulLatency = data.latency.filter((d) => d.samples >= 10)
+  if (meaningfulLatency.length >= 4) {
+    const half = Math.floor(meaningfulLatency.length / 2)
+    const early = meaningfulLatency.slice(0, half)
+    const late = meaningfulLatency.slice(-half)
+    const median = (rows: typeof meaningfulLatency) => {
+      const sorted = rows.map((r) => r.p50).sort((a, b) => a - b)
+      return sorted[Math.floor(sorted.length / 2)] ?? 0
+    }
+    const earlyMed = median(early)
+    const lateMed = median(late)
+    if (earlyMed > 0 && lateMed > 0) {
+      const ratio = lateMed / earlyMed
+      if (ratio >= 1.5) {
+        out.push({
+          icon: '↑',
+          tone: 'warn',
+          label: `Response latency up ${ratio.toFixed(1)}× recently`,
+          detail: `median p50: ${fmtLatency(earlyMed)} → ${fmtLatency(lateMed)}`,
+        })
+      } else if (ratio <= 0.7) {
+        out.push({
+          icon: '↓',
+          tone: 'good',
+          label: `Response latency down ${(1 / ratio).toFixed(1)}× recently`,
+          detail: `median p50: ${fmtLatency(earlyMed)} → ${fmtLatency(lateMed)}`,
+        })
+      }
+    }
+  }
+
+  // 5. Cost-per-message trend over the same halves.
+  if (data.daily.length >= 4) {
+    const half = Math.floor(data.daily.length / 2)
+    const sumCost = (rows: typeof data.daily) => rows.reduce((a, d) => a + d.cost, 0)
+    const sumMsgs = (rows: typeof data.daily) => rows.reduce((a, d) => a + d.messages, 0)
+    const early = data.daily.slice(0, half)
+    const late = data.daily.slice(-half)
+    const earlyCpm = sumMsgs(early) > 0 ? sumCost(early) / sumMsgs(early) : 0
+    const lateCpm = sumMsgs(late) > 0 ? sumCost(late) / sumMsgs(late) : 0
+    if (earlyCpm > 0 && lateCpm > 0) {
+      const ratio = lateCpm / earlyCpm
+      if (ratio >= 1.4) {
+        out.push({
+          icon: '↑',
+          tone: 'warn',
+          label: `Cost per message up ${ratio.toFixed(1)}× recently`,
+          detail: `${fmtCost(earlyCpm)} → ${fmtCost(lateCpm)} per message`,
+        })
+      } else if (ratio <= 0.7) {
+        out.push({
+          icon: '↓',
+          tone: 'good',
+          label: `Cost per message down ${(1 / ratio).toFixed(1)}× recently`,
+          detail: `${fmtCost(earlyCpm)} → ${fmtCost(lateCpm)} per message`,
+        })
+      }
+    }
+  }
+
+  // 6. Tool reliability.
+  if (data.toolErrors.length > 0) {
+    const worstByCount = data.toolErrors[0]
+    const worstByRate = [...data.toolErrors].sort((a, b) => b.rate - a.rate)[0]
+    if (worstByCount.errors > 0) {
+      out.push({
+        icon: '!',
+        tone: 'warn',
+        label: `${worstByCount.name} errored ${fmtNum(worstByCount.errors)} times`,
+        detail: `${(worstByCount.rate * 100).toFixed(1)}% of ${fmtNum(worstByCount.total)} calls${worstByRate.name !== worstByCount.name ? ` · highest rate: ${worstByRate.name} (${(worstByRate.rate * 100).toFixed(1)}%)` : ''}`,
+      })
+    }
+  } else if (data.tools.length > 0) {
+    out.push({
+      icon: '✓',
+      tone: 'good',
+      label: 'No tool errors recorded',
+      detail: `${fmtNum(data.tools.reduce((a, t) => a + t.count, 0))} tool calls clean`,
+    })
+  }
+
+  // 7. Most-used tool.
+  if (data.tools.length > 0) {
+    const t = data.tools[0]
+    const totalCalls = data.tools.reduce((a, x) => a + x.count, 0)
+    const share = totalCalls > 0 ? (t.count / totalCalls) * 100 : 0
+    out.push({
+      icon: '◇',
+      tone: 'neutral',
+      label: `Most-used tool: ${t.name} (${fmtNum(t.count)} calls)`,
+      detail: share >= 10 ? `${share.toFixed(0)}% of all tool use` : undefined,
+    })
+  }
+
+  // 8. Cache savings.
+  if (data.totals.cacheSavings >= 1) {
+    out.push({
+      icon: '$',
+      tone: 'good',
+      label: `Cache saved ${fmtCost(data.totals.cacheSavings)}`,
+      detail: `${(data.totals.cacheHitRate * 100).toFixed(1)}% hit rate · ${fmtNum(data.totals.cacheReadTokens)} cached tokens`,
+    })
+  }
+
+  // 9. Cost concentration in top session.
+  if (data.topSessions.length > 0 && data.totals.estCost > 0) {
+    const top = data.topSessions[0]
+    const share = (top.cost / data.totals.estCost) * 100
+    if (share >= 25) {
+      out.push({
+        icon: '●',
+        tone: share >= 50 ? 'warn' : 'neutral',
+        label: `Top session is ${share.toFixed(0)}% of total spend`,
+        detail: `${fmtCost(top.cost)} on "${top.title.length > 50 ? `${top.title.slice(0, 50)}…` : top.title}"`,
+      })
+    }
+  }
+
+  // 10. Provider mix.
+  if (data.providers.length > 1) {
+    const totalMsgs = data.providers.reduce((a, p) => a + p.messages, 0)
+    const lead = data.providers[0]
+    const leadShare = totalMsgs > 0 ? (lead.messages / totalMsgs) * 100 : 0
+    if (leadShare < 95 && data.providers.length >= 2) {
+      const second = data.providers[1]
+      const secondShare = totalMsgs > 0 ? (second.messages / totalMsgs) * 100 : 0
+      out.push({
+        icon: '◑',
+        tone: 'neutral',
+        label: `${data.providers.length}-provider mix`,
+        detail: `${lead.provider} ${leadShare.toFixed(0)}% · ${second.provider} ${secondShare.toFixed(0)}%`,
+      })
+    }
+  }
+
+  // 11. Slash-command share (origin breakdown — sum non-empty + non-'(none)' kinds).
+  if (data.origins.length > 0 && data.totals.messages > 0) {
+    const slash = data.origins.find((o) => o.kind === 'slash_command')
+    if (slash && slash.count > 0) {
+      const pct = (slash.count / data.totals.messages) * 100
+      if (pct >= 5) {
+        out.push({
+          icon: '/',
+          tone: 'neutral',
+          label: `${pct.toFixed(0)}% of messages came from slash commands`,
+          detail: `${fmtNum(slash.count)} slash invocations`,
+        })
+      }
+    }
+  }
+
+  // 12. Peak hour from heatmap (local time).
+  if (data.hourHeatmap.length > 0) {
+    const byHour = new Map<number, number>()
+    for (const c of data.hourHeatmap) byHour.set(c.hour, (byHour.get(c.hour) ?? 0) + c.messages)
+    const peak = [...byHour.entries()].sort((a, b) => b[1] - a[1])[0]
+    if (peak && peak[1] > 0) {
+      const totalMsgs = [...byHour.values()].reduce((a, v) => a + v, 0)
+      const pct = totalMsgs > 0 ? (peak[1] / totalMsgs) * 100 : 0
+      if (pct >= 15) {
+        const hh = String(peak[0]).padStart(2, '0')
+        out.push({
+          icon: '◴',
+          tone: 'neutral',
+          label: `Peak hour: ${hh}:00 (${pct.toFixed(0)}% of activity)`,
+          detail: `${fmtNum(peak[1])} messages`,
+        })
+      }
+    }
+  }
+
+  // 13. Session-duration profile.
+  if (data.durationBuckets.some((b) => b.sessions > 0)) {
+    const totalSessions = data.durationBuckets.reduce((a, b) => a + b.sessions, 0)
+    const shortBuckets = ['<1m', '1-5m']
+    const longBuckets = ['1-3h', '3-12h', '>12h']
+    const shortCount = data.durationBuckets.filter((b) => shortBuckets.includes(b.bucket)).reduce((a, b) => a + b.sessions, 0)
+    const longCount = data.durationBuckets.filter((b) => longBuckets.includes(b.bucket)).reduce((a, b) => a + b.sessions, 0)
+    if (totalSessions > 0) {
+      const shortPct = (shortCount / totalSessions) * 100
+      const longPct = (longCount / totalSessions) * 100
+      if (shortPct >= 50) {
+        out.push({
+          icon: '⌁',
+          tone: 'neutral',
+          label: `${shortPct.toFixed(0)}% of sessions wrap in under 5 min`,
+          detail: 'short, focused interactions dominate',
+        })
+      } else if (longPct >= 25) {
+        out.push({
+          icon: '⌁',
+          tone: 'neutral',
+          label: `${longPct.toFixed(0)}% of sessions run over 1 hour`,
+          detail: 'long-form work patterns',
+        })
+      }
+    }
+  }
+
+  return out
+}
+
+function InsightsPanel({ data }: { data: CrossSessionAnalytics }) {
+  const insights = useMemo(() => computeInsights(data), [data])
+  if (insights.length === 0) {
+    return (
+      <div style={{ ...SECTION_BOX }}>
+        <div style={LABEL_STYLE}>Insights</div>
+        <div style={{ color: 'var(--text-3)', fontSize: 11 }}>
+          (not enough data in range to surface anything noteworthy)
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div style={SECTION_BOX}>
+      <div style={LABEL_STYLE}>Insights</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 8 }}>
+        {insights.map((ins, i) => {
+          const color = toneColor(ins.tone)
+          return (
+            <div
+              key={i}
+              style={{
+                display: 'flex',
+                gap: 10,
+                alignItems: 'flex-start',
+                padding: '8px 10px',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
+                borderLeft: `3px solid ${color}`,
+                borderRadius: 4,
+                minWidth: 0,
+              }}
+            >
+              <span style={{ color, fontSize: 14, lineHeight: 1.2, flexShrink: 0 }} aria-hidden="true">
+                {ins.icon}
+              </span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+                <span style={{ fontSize: 12, color: 'var(--text)', lineHeight: 1.35 }}>{ins.label}</span>
+                {ins.detail && (
+                  <span style={{ fontSize: 10, color: 'var(--text-3)', lineHeight: 1.3 }}>{ins.detail}</span>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function SubHeader({ label }: { label: string }) {
+  return (
+    <div
+      style={{
+        gridColumn: '1 / -1',
+        fontSize: 11,
+        letterSpacing: '0.18em',
+        textTransform: 'uppercase',
+        color: 'var(--text-2)',
+        marginTop: 8,
+        paddingBottom: 4,
+        borderBottom: '1px solid var(--border)',
+      }}
+    >
+      {label}
+    </div>
+  )
+}
+
+function RoleMixBar({ mix }: { mix: CrossSessionAnalytics['roleMix'] }) {
+  const total = mix.user + mix.assistant + mix.system
+  if (total === 0) return <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no data)</div>
+  const segments: Array<{ key: keyof CrossSessionAnalytics['roleMix']; label: string; color: string }> = [
+    { key: 'user', label: 'user', color: 'var(--cyan, #5eead4)' },
+    { key: 'assistant', label: 'assistant', color: 'var(--violet, #a78bfa)' },
+    { key: 'system', label: 'system', color: 'var(--text-3)' },
+  ]
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', height: 18, borderRadius: 4, overflow: 'hidden', border: '1px solid var(--border)' }}>
+        {segments.map((s) => {
+          const pct = (mix[s.key] / total) * 100
+          if (pct <= 0) return null
+          return (
+            <div
+              key={s.key}
+              title={`${s.label}: ${fmtNum(mix[s.key])} (${pct.toFixed(1)}%)`}
+              style={{ width: `${pct}%`, background: s.color }}
+            />
+          )
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 12, fontSize: 10, color: 'var(--text-3)', flexWrap: 'wrap' }}>
+        {segments.map((s) => (
+          <span key={s.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, background: s.color, borderRadius: 2 }} />
+            {s.label} · {fmtNum(mix[s.key])} ({total > 0 ? ((mix[s.key] / total) * 100).toFixed(1) : '0'}%)
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ContributionCalendar({
+  daily,
+  range,
+}: {
+  daily: CrossSessionAnalytics['daily']
+  range: { from: number | null; to: number | null }
+}) {
+  const counts = new Map(daily.map((d) => [d.day, d.messages]))
+  const max = daily.reduce((acc, d) => Math.max(acc, d.messages), 0)
+  if (max === 0) return <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no data)</div>
+
+  const now = Date.now()
+  const start = range.from ?? now - 365 * 86_400_000
+  const end = range.to ?? now
+  // Round start to a Sunday for a tidy grid.
+  const startDate = new Date(start)
+  startDate.setHours(0, 0, 0, 0)
+  startDate.setDate(startDate.getDate() - startDate.getDay())
+  const endDate = new Date(end)
+  endDate.setHours(23, 59, 59, 999)
+  const totalDays = Math.max(7, Math.ceil((endDate.getTime() - startDate.getTime()) / 86_400_000))
+  const totalCols = Math.ceil(totalDays / 7)
+
+  type Cell = { dayKey: string; date: Date; value: number; inRange: boolean }
+  const cols: Cell[][] = Array.from({ length: totalCols }, () => [])
+  for (let i = 0; i < totalCols * 7; i += 1) {
+    const date = new Date(startDate.getTime() + i * 86_400_000)
+    const yyyy = date.getUTCFullYear()
+    const mm = String(date.getUTCMonth() + 1).padStart(2, '0')
+    const dd = String(date.getUTCDate()).padStart(2, '0')
+    const dayKey = `${yyyy}-${mm}-${dd}`
+    const value = counts.get(dayKey) ?? 0
+    const ms = date.getTime()
+    const inRange = ms >= start && ms <= end
+    cols[Math.floor(i / 7)].push({ dayKey, date, value, inRange })
+  }
+
+  const monthLabels: Array<{ col: number; label: string }> = []
+  let lastMonth = -1
+  cols.forEach((col, ci) => {
+    const first = col[0]
+    if (!first) return
+    const m = first.date.getUTCMonth()
+    if (m !== lastMonth) {
+      monthLabels.push({ col: ci, label: first.date.toLocaleString('default', { month: 'short' }) })
+      lastMonth = m
+    }
+  })
+
+  const dayLabels = ['', 'Mon', '', 'Wed', '', 'Fri', '']
+  const cellSize = 11
+  const gap = 2
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: `28px repeat(${totalCols}, ${cellSize}px)`,
+          gap,
+          fontFamily: FONT_MONO,
+          fontSize: 9,
+        }}
+      >
+        <div />
+        {cols.map((_, ci) => {
+          const label = monthLabels.find((m) => m.col === ci)
+          return (
+            <div key={`mh-${ci}`} style={{ color: 'var(--text-3)', height: 12, lineHeight: '12px' }}>
+              {label ? label.label : ''}
+            </div>
+          )
+        })}
+        {dayLabels.map((label, dow) => (
+          <Fragment key={`row-${dow}`}>
+            <div style={{ color: 'var(--text-3)', alignSelf: 'center', textAlign: 'right', paddingRight: 4, height: cellSize }}>{label}</div>
+            {cols.map((col, ci) => {
+              const cell = col[dow]
+              if (!cell) return <div key={`c-${ci}-${dow}`} style={{ width: cellSize, height: cellSize }} />
+              const opacity = !cell.inRange ? 0.04 : cell.value === 0 ? 0.08 : Math.max(0.18, cell.value / max)
+              return (
+                <div
+                  key={`c-${ci}-${dow}`}
+                  title={`${cell.dayKey} — ${fmtNum(cell.value)} messages`}
+                  style={{
+                    width: cellSize,
+                    height: cellSize,
+                    borderRadius: 2,
+                    background: 'var(--green, #4ade80)',
+                    opacity,
+                  }}
+                />
+              )
+            })}
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function AnalyticsPage() {
   const [provider, setProvider] = useState<ProviderSelection>('all')
   const [dir, setDir] = useState<string>('all')
@@ -298,15 +778,18 @@ export default function AnalyticsPage() {
     void fetchData()
   }, [fetchData])
 
-  // One-time backfill so existing message rows pick up the model column.
+  // One-time backfill so existing message rows pick up new derived columns
+  // (model on schema v2, is_error on schema v3). The key is versioned so each
+  // schema bump retriggers a single rebuild per browser.
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (window.localStorage.getItem('analytics:backfilled') === '1') return
+    const BACKFILL_KEY = 'analytics:backfilled:v3'
+    if (window.localStorage.getItem(BACKFILL_KEY) === '1') return
     if (backfillState !== 'idle') return
     setBackfillState('running')
     fetch('/api/session-index/rebuild', { method: 'POST' })
       .then(() => {
-        window.localStorage.setItem('analytics:backfilled', '1')
+        window.localStorage.setItem(BACKFILL_KEY, '1')
         setBackfillState('done')
         void fetchData()
       })
@@ -482,8 +965,37 @@ export default function AnalyticsPage() {
                 accent="var(--orange, #fb923c)"
               />
             </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+              <Kpi
+                label="Current streak"
+                value={`${fmtNum(data.streak.current)} ${data.streak.current === 1 ? 'day' : 'days'}`}
+                sub={data.streak.current > 0 ? 'consecutive active days' : 'no recent activity'}
+                accent="var(--green, #4ade80)"
+              />
+              <Kpi
+                label="Longest streak"
+                value={`${fmtNum(data.streak.longest)} ${data.streak.longest === 1 ? 'day' : 'days'}`}
+                sub="in the selected range"
+                accent="var(--pink, #f472b6)"
+              />
+              <Kpi
+                label="User → assistant"
+                value={`${fmtNum(data.roleMix.user)} / ${fmtNum(data.roleMix.assistant)}`}
+                sub={data.roleMix.user > 0 ? `${(data.roleMix.assistant / data.roleMix.user).toFixed(1)} assistant per user msg` : 'no user messages'}
+                accent="var(--cyan, #5eead4)"
+              />
+              <Kpi
+                label="Tool errors"
+                value={fmtNum(data.toolErrors.reduce((acc, t) => acc + t.errors, 0))}
+                sub={data.toolErrors.length > 0 ? `across ${data.toolErrors.length} tool${data.toolErrors.length === 1 ? '' : 's'}` : 'no errors recorded'}
+                accent="var(--orange, #fb923c)"
+              />
+            </div>
           </>
         )}
+
+        {/* Insights — auto-derived takeaways. Sits above the charts so the headline reads first. */}
+        {data && <InsightsPanel data={data} />}
 
         {/* Daily activity */}
         {data && (
@@ -697,6 +1209,219 @@ export default function AnalyticsPage() {
           <div style={SECTION_BOX}>
             <div style={LABEL_STYLE}>Activity heatmap (day × hour, local time)</div>
             <HourHeatmap cells={data.hourHeatmap} />
+          </div>
+        )}
+
+        {/* === RELIABILITY & EFFICIENCY === */}
+        {data && <SubHeader label="Reliability & efficiency" />}
+
+        {data && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div style={SECTION_BOX}>
+              <div style={LABEL_STYLE}>Tools with errors</div>
+              {data.toolErrors.length === 0 ? (
+                <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no tool errors recorded in range)</div>
+              ) : (
+                <RankedBars
+                  color="var(--orange, #fb923c)"
+                  entries={data.toolErrors.map((t) => ({
+                    label: `${t.name} · ${t.errors}/${t.total} (${(t.rate * 100).toFixed(1)}%)`,
+                    value: t.errors,
+                  }))}
+                />
+              )}
+            </div>
+            <div style={SECTION_BOX}>
+              <div style={LABEL_STYLE}>Cache hit rate trend</div>
+              {data.daily.length === 0 ? (
+                <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no data in range)</div>
+              ) : (
+                <ResponsiveContainer width="100%" height={180}>
+                  <ComposedChart data={data.daily} margin={{ top: 8, right: 16, left: -12, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                    <XAxis dataKey="day" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: FONT_MONO }} axisLine={false} tickLine={false} />
+                    <YAxis
+                      tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: FONT_MONO }}
+                      axisLine={false}
+                      tickLine={false}
+                      domain={[0, 1]}
+                      tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
+                    />
+                    <Tooltip content={(props) => <ChartTooltip {...(props as unknown as Parameters<typeof ChartTooltip>[0])} formatter={(v) => `${(v * 100).toFixed(1)}%`} />} />
+                    <Line type="monotone" dataKey="cacheHitRate" stroke="var(--yellow, #facc15)" strokeWidth={2} dot={false} name="cache hit" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+        )}
+
+        {data && (
+          <div style={SECTION_BOX}>
+            <div style={LABEL_STYLE}>Assistant response latency (median + p95)</div>
+            {data.latency.length === 0 ? (
+              <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(not enough paired messages in range)</div>
+            ) : (
+              <ResponsiveContainer width="100%" height={200}>
+                <ComposedChart data={data.latency} margin={{ top: 8, right: 16, left: -8, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="day" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: FONT_MONO }} axisLine={false} tickLine={false} />
+                  <YAxis
+                    tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: FONT_MONO }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v: number) => fmtLatency(v)}
+                  />
+                  <Tooltip content={(props) => <ChartTooltip {...(props as unknown as Parameters<typeof ChartTooltip>[0])} formatter={fmtLatency} />} />
+                  <Line type="monotone" dataKey="p50" stroke="var(--cyan, #5eead4)" strokeWidth={2} dot={false} name="p50" />
+                  <Line type="monotone" dataKey="p95" stroke="var(--violet, #a78bfa)" strokeWidth={2} dot={false} name="p95" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            )}
+            <div style={{ display: 'flex', gap: 12, fontSize: 10, color: 'var(--text-3)', marginTop: 6 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 8, height: 8, background: 'var(--cyan, #5eead4)', borderRadius: 2 }} /> p50
+              </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 8, height: 8, background: 'var(--violet, #a78bfa)', borderRadius: 2 }} /> p95
+              </span>
+              <span>capped at 10 min · paired user→assistant gaps only</span>
+            </div>
+          </div>
+        )}
+
+        {/* === WORKFLOW SHAPE === */}
+        {data && <SubHeader label="Workflow shape" />}
+
+        {data && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div style={SECTION_BOX}>
+              <div style={LABEL_STYLE}>Session duration</div>
+              {data.durationBuckets.every((b) => b.sessions === 0) ? (
+                <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no completed sessions in range)</div>
+              ) : (
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={data.durationBuckets} margin={{ top: 8, right: 16, left: -16, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                    <XAxis dataKey="bucket" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: FONT_MONO }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: FONT_MONO }} axisLine={false} tickLine={false} allowDecimals={false} />
+                    <Tooltip content={(props) => <ChartTooltip {...(props as unknown as Parameters<typeof ChartTooltip>[0])} />} />
+                    <Bar dataKey="sessions" fill="var(--violet, #a78bfa)" radius={[2, 2, 0, 0]} name="sessions" />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+            <div style={SECTION_BOX}>
+              <div style={LABEL_STYLE}>Origin breakdown</div>
+              {data.origins.length === 0 ? (
+                <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no origin data)</div>
+              ) : (
+                <RankedBars
+                  color="var(--cyan, #5eead4)"
+                  entries={data.origins.slice(0, 12).map((o) => ({ label: o.kind, value: o.count }))}
+                />
+              )}
+            </div>
+          </div>
+        )}
+
+        {data && (
+          <div style={SECTION_BOX}>
+            <div style={LABEL_STYLE}>Message role mix</div>
+            <RoleMixBar mix={data.roleMix} />
+          </div>
+        )}
+
+        {/* === MODEL & COST DYNAMICS === */}
+        {data && <SubHeader label="Model & cost dynamics" />}
+
+        {data && (
+          <div style={SECTION_BOX}>
+            <div style={LABEL_STYLE}>Tokens by model over time</div>
+            {data.dailyByModel.length === 0 || data.modelKeys.length === 0 ? (
+              <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no model data in range)</div>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={220}>
+                  <AreaChart data={data.dailyByModel} margin={{ top: 8, right: 16, left: -8, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                    <XAxis dataKey="day" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: FONT_MONO }} axisLine={false} tickLine={false} />
+                    <YAxis
+                      tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: FONT_MONO }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(v: number) => fmtNum(v)}
+                    />
+                    <Tooltip content={(props) => <ChartTooltip {...(props as unknown as Parameters<typeof ChartTooltip>[0])} formatter={fmtNum} />} />
+                    {data.modelKeys.map((m, i) => (
+                      <Area
+                        key={m}
+                        type="monotone"
+                        dataKey={m}
+                        stackId="m"
+                        stroke={MODEL_COLORS[i % MODEL_COLORS.length]}
+                        fill={MODEL_COLORS[i % MODEL_COLORS.length]}
+                        fillOpacity={0.35}
+                        name={m}
+                      />
+                    ))}
+                  </AreaChart>
+                </ResponsiveContainer>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, fontSize: 10, color: 'var(--text-3)', marginTop: 6 }}>
+                  {data.modelKeys.map((m, i) => (
+                    <span key={m} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 8, height: 8, background: MODEL_COLORS[i % MODEL_COLORS.length], borderRadius: 2 }} />
+                      {m}
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {data && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div style={SECTION_BOX}>
+              <div style={LABEL_STYLE}>Cost by provider</div>
+              {data.providers.every((p) => p.cost === 0) ? (
+                <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no cost in range)</div>
+              ) : (
+                <RankedBars
+                  color="var(--orange, #fb923c)"
+                  formatter={fmtCost}
+                  entries={data.providers.map((p) => ({ label: `${p.provider} · ${fmtNum(p.messages)} msgs`, value: p.cost }))}
+                />
+              )}
+            </div>
+            <div style={SECTION_BOX}>
+              <div style={LABEL_STYLE}>Cost per message</div>
+              {data.daily.length === 0 ? (
+                <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no data in range)</div>
+              ) : (
+                <ResponsiveContainer width="100%" height={180}>
+                  <ComposedChart data={data.daily} margin={{ top: 8, right: 16, left: -8, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                    <XAxis dataKey="day" tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: FONT_MONO }} axisLine={false} tickLine={false} />
+                    <YAxis
+                      tick={{ fontSize: 9, fill: 'var(--text-3)', fontFamily: FONT_MONO }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(v: number) => fmtCost(v)}
+                    />
+                    <Tooltip content={(props) => <ChartTooltip {...(props as unknown as Parameters<typeof ChartTooltip>[0])} formatter={fmtCost} />} />
+                    <Line type="monotone" dataKey="costPerMessage" stroke="var(--orange, #fb923c)" strokeWidth={2} dot={false} name="cost / msg" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+        )}
+
+        {data && (
+          <div style={SECTION_BOX}>
+            <div style={LABEL_STYLE}>Contribution calendar</div>
+            <ContributionCalendar daily={data.daily} range={data.range} />
           </div>
         )}
 

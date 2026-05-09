@@ -11,7 +11,7 @@ const MESSAGE_DIR = path.join(INDEX_DIR, 'messages')
 const SESSIONS_FILE = path.join(INDEX_DIR, 'sessions.json')
 const DB_FILE = path.join(INDEX_DIR, 'index.sqlite')
 const STORE_VERSION = 1
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 const MAX_INDEX_TEXT_CHARS = 32_000
 const MAX_FIELD_TEXT_CHARS = 2_000
 const MAX_SNIPPET_CHARS = 260
@@ -89,6 +89,7 @@ export type PersistedMessageRecord = {
   originKind?: string
   text: string
   toolNames: string[]
+  errorTools: string[]
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
@@ -280,6 +281,7 @@ function initializeSchema(db: SqliteDatabase): void {
       message_key TEXT NOT NULL REFERENCES messages(key) ON DELETE CASCADE,
       session_key TEXT NOT NULL,
       name TEXT NOT NULL,
+      is_error INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (message_key, name)
     );
 
@@ -299,6 +301,20 @@ function applySchemaMigrations(db: SqliteDatabase): void {
     }
     db.exec("CREATE INDEX IF NOT EXISTS messages_model_idx ON messages(model)")
     // Force re-sync so assistant rows pick up the new model column on next visit.
+    messageSignatureCache.clear()
+    db.prepare("UPDATE sessions SET message_signature = NULL").run()
+  }
+  // is_error column on message_tools — version-3 migration. Column-presence-checked
+  // so it self-heals if schema_version was bumped without the ALTER applying (e.g. a
+  // dev-server hot-reload race where the meta write outran the schema change).
+  const toolCols = db.prepare("PRAGMA table_info('message_tools')").all() as Row[]
+  if (!toolCols.some((c) => c.name === 'is_error')) {
+    db.exec("ALTER TABLE message_tools ADD COLUMN is_error INTEGER NOT NULL DEFAULT 0")
+    messageSignatureCache.clear()
+    db.prepare("UPDATE sessions SET message_signature = NULL").run()
+  } else if (current < 3) {
+    // First time at version 3 with the column already present — still force a re-sync
+    // so existing rows backfill is_error from the message payloads.
     messageSignatureCache.clear()
     db.prepare("UPDATE sessions SET message_signature = NULL").run()
   }
@@ -723,6 +739,10 @@ function normalizeStoredMessage(value: unknown, fallback: { sessionKey: string; 
     originKind: optionalString(record.originKind),
     text: optionalString(record.text) ?? '',
     toolNames,
+    errorTools: Array.isArray(record.errorTools)
+      ? [...new Set(record.errorTools.filter((name): name is string => typeof name === 'string' && name.length > 0))]
+        .sort((a, b) => a.localeCompare(b))
+      : [],
     inputTokens: toFiniteNumber(record.inputTokens),
     outputTokens: toFiniteNumber(record.outputTokens),
     cacheReadTokens: toFiniteNumber(record.cacheReadTokens),
@@ -876,8 +896,22 @@ function collectToolInputText(input: unknown, depth = 0): string[] {
   return parts
 }
 
-function collectBlockText(blocks: ContentBlock[], toolNames: Set<string>): string[] {
-  const parts: string[] = []
+type MessageDetails = {
+  text: string
+  toolNames: string[]
+  // Per-message: tool_use_id -> name (only tool_use blocks emitted in this message).
+  toolUseIds: Map<string, string>
+  // Per-message: tool_use_id -> is_error (from tool_result blocks emitted in this message).
+  toolResultErrors: Map<string, boolean>
+}
+
+function collectBlockDetails(
+  blocks: ContentBlock[],
+  parts: string[],
+  toolNames: Set<string>,
+  toolUseIds: Map<string, string>,
+  toolResultErrors: Map<string, boolean>,
+): void {
   for (const block of blocks) {
     if (!block || typeof block !== 'object') continue
     if (block.type === 'text' && typeof block.text === 'string') {
@@ -889,14 +923,23 @@ function collectBlockText(blocks: ContentBlock[], toolNames: Set<string>): strin
       continue
     }
     if (block.type === 'tool_result') {
+      const id = (block as { tool_use_id?: unknown }).tool_use_id
+      if (typeof id === 'string' && id) {
+        const isError = (block as { is_error?: unknown }).is_error === true
+        const existing = toolResultErrors.get(id) === true
+        toolResultErrors.set(id, isError || existing)
+      }
       if (typeof block.content === 'string') parts.push(block.content)
-      else if (Array.isArray(block.content)) parts.push(...collectBlockText(block.content, toolNames))
+      else if (Array.isArray(block.content)) {
+        collectBlockDetails(block.content, parts, toolNames, toolUseIds, toolResultErrors)
+      }
       continue
     }
     if (block.type === 'tool_use') {
       if (typeof block.name === 'string' && block.name) {
         toolNames.add(block.name)
         parts.push(block.name)
+        if (typeof block.id === 'string' && block.id) toolUseIds.set(block.id, block.name)
       }
       parts.push(...collectToolInputText(block.input))
       continue
@@ -905,11 +948,12 @@ function collectBlockText(blocks: ContentBlock[], toolNames: Set<string>): strin
       parts.push(...collectToolInputText(block))
     }
   }
-  return parts
 }
 
-function extractMessageText(message: SessionMessage): { text: string; toolNames: string[] } {
+function extractMessageDetails(message: SessionMessage): MessageDetails {
   const toolNames = new Set<string>()
+  const toolUseIds = new Map<string, string>()
+  const toolResultErrors = new Map<string, boolean>()
   const payload = message.message
   const parts: string[] = []
 
@@ -922,13 +966,15 @@ function extractMessageText(message: SessionMessage): { text: string; toolNames:
     if (typeof api.content === 'string') {
       parts.push(api.content)
     } else if (Array.isArray(api.content)) {
-      parts.push(...collectBlockText(api.content, toolNames))
+      collectBlockDetails(api.content, parts, toolNames, toolUseIds, toolResultErrors)
     }
   }
 
   return {
     text: truncateText(parts.filter(Boolean).join('\n'), MAX_INDEX_TEXT_CHARS),
     toolNames: [...toolNames].sort((a, b) => a.localeCompare(b)),
+    toolUseIds,
+    toolResultErrors,
   }
 }
 
@@ -970,14 +1016,33 @@ function modelFromMessage(message: SessionMessage): string | null {
 function mapPersistedMessages(provider: AgentProvider, sessionId: string, messages: SessionMessage[]): PersistedMessageRecord[] {
   const sessionKey = persistedSessionKey(provider, sessionId)
   const usedKeys = new Map<string, number>()
-  return messages.map((message) => {
-    const extracted = extractMessageText(message)
+  const details = messages.map((message) => extractMessageDetails(message))
+
+  // Tool_result blocks usually arrive in a later (user) message than the originating tool_use.
+  // Build a session-wide tool_use_id -> isError map so we can attribute errors back to the
+  // assistant message that issued the tool call.
+  const errorById = new Map<string, boolean>()
+  for (const d of details) {
+    for (const [id, isError] of d.toolResultErrors) {
+      if (isError || errorById.get(id) === true) errorById.set(id, true)
+      else if (!errorById.has(id)) errorById.set(id, false)
+    }
+  }
+
+  return messages.map((message, i) => {
+    const d = details[i]
     const usage = usageFromMessage(message)
     const uuid = message.uuid || `${message.type}:${message.timestamp ?? ''}`
     const baseKey = `${sessionKey}:${uuid}`
     const used = usedKeys.get(baseKey) ?? 0
     usedKeys.set(baseKey, used + 1)
     const key = used === 0 ? baseKey : `${baseKey}:${used + 1}`
+
+    const errorTools = new Set<string>()
+    for (const [id, name] of d.toolUseIds) {
+      if (errorById.get(id) === true) errorTools.add(name)
+    }
+
     return {
       key,
       sessionKey,
@@ -989,8 +1054,9 @@ function mapPersistedMessages(provider: AgentProvider, sessionId: string, messag
       timestampMs: timestampMs(message.timestamp),
       turnId: message.turnId,
       originKind: message.origin?.kind,
-      text: extracted.text,
-      toolNames: extracted.toolNames,
+      text: d.text,
+      toolNames: d.toolNames,
+      errorTools: [...errorTools].sort((a, b) => a.localeCompare(b)),
       model: modelFromMessage(message),
       ...usage,
     }
@@ -1060,8 +1126,8 @@ function insertMessages(db: SqliteDatabase, messages: PersistedMessageRecord[]):
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const insertTool = db.prepare(`
-    INSERT OR IGNORE INTO message_tools(message_key, session_key, name)
-    VALUES (?, ?, ?)
+    INSERT OR IGNORE INTO message_tools(message_key, session_key, name, is_error)
+    VALUES (?, ?, ?, ?)
   `)
   for (const message of messages) {
     insertMessage.run(
@@ -1083,8 +1149,9 @@ function insertMessages(db: SqliteDatabase, messages: PersistedMessageRecord[]):
       message.cacheWriteTokens,
       message.model ?? null,
     )
+    const errorSet = new Set(message.errorTools ?? [])
     for (const toolName of message.toolNames) {
-      insertTool.run(message.key, message.sessionKey, toolName)
+      insertTool.run(message.key, message.sessionKey, toolName, errorSet.has(toolName) ? 1 : 0)
     }
   }
 }
@@ -1323,6 +1390,7 @@ function rowToMessageRecord(row: Row): PersistedMessageRecord | null {
     originKind: optionalString(row.origin_kind),
     text: optionalString(row.text) ?? '',
     toolNames,
+    errorTools: [],
     inputTokens: toFiniteNumber(row.input_tokens),
     outputTokens: toFiniteNumber(row.output_tokens),
     cacheReadTokens: toFiniteNumber(row.cache_read_tokens),
@@ -1630,13 +1698,29 @@ export type CrossSessionAnalytics = {
     avgTokensPerSession: number
     avgCostPerSession: number
   }
-  daily: Array<{ day: string; messages: number; tokens: number; cost: number; cumulativeCost: number }>
+  daily: Array<{
+    day: string
+    messages: number
+    tokens: number
+    cost: number
+    cumulativeCost: number
+    cacheHitRate: number
+    costPerMessage: number
+  }>
   sessionsPerDay: Array<{ day: string; sessions: number }>
   hourHeatmap: Array<{ dow: number; hour: number; messages: number }>
   providers: Array<{ provider: AgentProvider; sessions: number; messages: number; tokens: number; cost: number }>
   projects: Array<{ cwd: string; name: string; sessions: number; messages: number; tokens: number; cost: number }>
   tools: Array<{ name: string; count: number }>
+  toolErrors: Array<{ name: string; total: number; errors: number; rate: number }>
   models: Array<{ model: string; messages: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number }>
+  modelKeys: string[]
+  dailyByModel: Array<Record<string, string | number> & { day: string }>
+  latency: Array<{ day: string; samples: number; p50: number; p95: number }>
+  origins: Array<{ kind: string; count: number }>
+  roleMix: { user: number; assistant: number; system: number }
+  durationBuckets: Array<{ bucket: string; sessions: number }>
+  streak: { current: number; longest: number }
   topSessions: Array<{
     key: string
     provider: AgentProvider
@@ -1675,7 +1759,15 @@ function emptyCrossSessionAnalytics(): CrossSessionAnalytics {
     providers: [],
     projects: [],
     tools: [],
+    toolErrors: [],
     models: [],
+    modelKeys: [],
+    dailyByModel: [],
+    latency: [],
+    origins: [],
+    roleMix: { user: 0, assistant: 0, system: 0 },
+    durationBuckets: [],
+    streak: { current: 0, longest: 0 },
     topSessions: [],
   }
 }
@@ -1758,7 +1850,14 @@ export async function readCrossSessionAnalytics(
     }
   }
 
-  const dailyMap = new Map<string, { messages: number; tokens: number; cost: number }>()
+  const dailyMap = new Map<string, {
+    messages: number
+    tokens: number
+    cost: number
+    inputTokens: number
+    cacheReadTokens: number
+  }>()
+  const dailyByModelMap = new Map<string, Map<string, number>>()
   const providerMap = new Map<AgentProvider, { provider: AgentProvider; sessions: number; messages: number; tokens: number; cost: number }>()
   const projectMap = new Map<string, { cwd: string; name: string; sessions: number; messages: number; tokens: number; cost: number }>()
   const modelMap = new Map<string, CrossSessionAnalytics['models'][number]>()
@@ -1781,11 +1880,27 @@ export async function readCrossSessionAnalytics(
     totalCacheWrite += row.cacheWriteTokens
     totalCost += cost
 
-    const dayBucket = dailyMap.get(row.day) ?? { messages: 0, tokens: 0, cost: 0 }
+    const dayBucket = dailyMap.get(row.day) ?? {
+      messages: 0,
+      tokens: 0,
+      cost: 0,
+      inputTokens: 0,
+      cacheReadTokens: 0,
+    }
     dayBucket.messages += row.messages
     dayBucket.tokens += tokens
     dayBucket.cost += cost
+    dayBucket.inputTokens += row.inputTokens
+    dayBucket.cacheReadTokens += row.cacheReadTokens
     dailyMap.set(row.day, dayBucket)
+
+    const modelLabel = row.model ?? '(unknown)'
+    let perModel = dailyByModelMap.get(row.day)
+    if (!perModel) {
+      perModel = new Map<string, number>()
+      dailyByModelMap.set(row.day, perModel)
+    }
+    perModel.set(modelLabel, (perModel.get(modelLabel) ?? 0) + tokens)
 
     const providerBucket = providerMap.get(row.provider) ?? { provider: row.provider, sessions: 0, messages: 0, tokens: 0, cost: 0 }
     providerBucket.messages += row.messages
@@ -1860,12 +1975,12 @@ export async function readCrossSessionAnalytics(
     return { dow, hour, messages }
   })
 
-  // Tool usage within date range.
-  const toolMap = new Map<string, number>()
+  // Tool usage + error counts within date range.
+  const toolMap = new Map<string, { count: number; errors: number }>()
   for (const chunk of chunkArray(sessionKeys, 500)) {
     const placeholders = chunk.map(() => '?').join(', ')
     const rows = db.prepare(`
-      SELECT mt.name AS name, COUNT(*) AS count
+      SELECT mt.name AS name, COUNT(*) AS count, SUM(mt.is_error) AS errors
       FROM message_tools mt
       JOIN messages m ON m.key = mt.message_key
       WHERE mt.session_key IN (${placeholders})
@@ -1876,9 +1991,68 @@ export async function readCrossSessionAnalytics(
     for (const row of rows) {
       const name = optionalString(row.name)
       if (!name) continue
-      toolMap.set(name, (toolMap.get(name) ?? 0) + toFiniteNumber(row.count))
+      const bucket = toolMap.get(name) ?? { count: 0, errors: 0 }
+      bucket.count += toFiniteNumber(row.count)
+      bucket.errors += toFiniteNumber(row.errors)
+      toolMap.set(name, bucket)
     }
   }
+
+  // Origin breakdown (origin_kind on messages — e.g. 'user', 'slash_command', 'system').
+  const originMap = new Map<string, number>()
+  for (const chunk of chunkArray(sessionKeys, 500)) {
+    const placeholders = chunk.map(() => '?').join(', ')
+    const rows = db.prepare(`
+      SELECT m.origin_kind AS kind, COUNT(*) AS count
+      FROM messages m
+      WHERE m.session_key IN (${placeholders})
+        AND m.timestamp_ms IS NOT NULL
+        AND m.timestamp_ms BETWEEN ? AND ?
+      GROUP BY m.origin_kind
+    `).all(...chunk, fromMs, toMs) as Row[]
+    for (const row of rows) {
+      const kind = optionalString(row.kind) ?? '(none)'
+      originMap.set(kind, (originMap.get(kind) ?? 0) + toFiniteNumber(row.count))
+    }
+  }
+
+  // Assistant response latency: gap from preceding user-message timestamp within the same session.
+  // Cap at 10 minutes — anything longer is almost certainly an idle/abandoned conversation.
+  const LATENCY_CAP_MS = 10 * 60 * 1000
+  const latencyByDay = new Map<string, number[]>()
+  for (const chunk of chunkArray(sessionKeys, 500)) {
+    const placeholders = chunk.map(() => '?').join(', ')
+    const rows = db.prepare(`
+      SELECT day, latency_ms FROM (
+        SELECT
+          strftime('%Y-%m-%d', m.timestamp_ms/1000.0, 'unixepoch') AS day,
+          m.type AS type,
+          LAG(m.type) OVER (PARTITION BY m.session_key ORDER BY m.timestamp_ms) AS prev_type,
+          m.timestamp_ms - LAG(m.timestamp_ms) OVER (PARTITION BY m.session_key ORDER BY m.timestamp_ms) AS latency_ms
+        FROM messages m
+        WHERE m.session_key IN (${placeholders})
+          AND m.timestamp_ms IS NOT NULL
+          AND m.timestamp_ms BETWEEN ? AND ?
+      )
+      WHERE type = 'assistant' AND prev_type = 'user' AND latency_ms IS NOT NULL AND latency_ms > 0 AND latency_ms <= ?
+    `).all(...chunk, fromMs, toMs, LATENCY_CAP_MS) as Row[]
+    for (const row of rows) {
+      const day = optionalString(row.day)
+      const ms = toFiniteNumber(row.latency_ms)
+      if (!day || ms <= 0) continue
+      const list = latencyByDay.get(day)
+      if (list) list.push(ms)
+      else latencyByDay.set(day, [ms])
+    }
+  }
+  const latency: CrossSessionAnalytics['latency'] = [...latencyByDay.entries()]
+    .map(([day, samples]) => {
+      const sorted = samples.slice().sort((a, b) => a - b)
+      const p50 = sorted[Math.floor((sorted.length - 1) * 0.5)] ?? 0
+      const p95 = sorted[Math.floor((sorted.length - 1) * 0.95)] ?? 0
+      return { day, samples: sorted.length, p50, p95 }
+    })
+    .sort((a, b) => a.day.localeCompare(b.day))
 
   const cacheHitRate = totalInput + totalCacheRead > 0
     ? totalCacheRead / (totalInput + totalCacheRead)
@@ -1958,15 +2132,106 @@ export async function readCrossSessionAnalytics(
     .sort((a, b) => b.cost - a.cost || b.tokens - a.tokens)
     .slice(0, 15)
 
-  // Build daily array with running cumulative cost.
+  // Build daily array with running cumulative cost, per-day cache hit rate, and cost-per-message.
   const dailySorted = [...dailyMap.entries()]
     .map(([day, bucket]) => ({ day, ...bucket }))
     .sort((a, b) => a.day.localeCompare(b.day))
   let running = 0
   const daily = dailySorted.map((d) => {
     running += d.cost
-    return { ...d, cumulativeCost: running }
+    const cacheBase = d.inputTokens + d.cacheReadTokens
+    const cacheHitRate = cacheBase > 0 ? d.cacheReadTokens / cacheBase : 0
+    const costPerMessage = d.messages > 0 ? d.cost / d.messages : 0
+    return {
+      day: d.day,
+      messages: d.messages,
+      tokens: d.tokens,
+      cost: d.cost,
+      cumulativeCost: running,
+      cacheHitRate,
+      costPerMessage,
+    }
   })
+
+  // Pivot per-(day, model) tokens into a wide row format for stacked area charts.
+  const modelKeys = [...new Set([...dailyByModelMap.values()].flatMap((m) => [...m.keys()]))]
+    .sort((a, b) => a.localeCompare(b))
+  const dailyByModel = [...dailyByModelMap.entries()]
+    .map(([day, perModel]) => {
+      const row: Record<string, string | number> & { day: string } = { day }
+      for (const key of modelKeys) row[key] = perModel.get(key) ?? 0
+      return row
+    })
+    .sort((a, b) => a.day.localeCompare(b.day))
+
+  // Role mix: sum the per-session aggregates from the filtered session list.
+  const roleMix = sessions.reduce(
+    (acc, s) => {
+      acc.user += s.userMessages
+      acc.assistant += s.assistantMessages
+      acc.system += s.systemMessages
+      return acc
+    },
+    { user: 0, assistant: 0, system: 0 },
+  )
+
+  // Session duration buckets (last_message_at - first_message_at).
+  const durationBucketDefs: Array<{ bucket: string; max: number }> = [
+    { bucket: '<1m', max: 60_000 },
+    { bucket: '1-5m', max: 5 * 60_000 },
+    { bucket: '5-15m', max: 15 * 60_000 },
+    { bucket: '15-60m', max: 60 * 60_000 },
+    { bucket: '1-3h', max: 3 * 60 * 60_000 },
+    { bucket: '3-12h', max: 12 * 60 * 60_000 },
+    { bucket: '>12h', max: Number.POSITIVE_INFINITY },
+  ]
+  const durationCounts = new Map<string, number>(durationBucketDefs.map((d) => [d.bucket, 0]))
+  for (const s of sessions) {
+    if (s.firstMessageAt === null || s.lastMessageAt === null) continue
+    const duration = Math.max(0, s.lastMessageAt - s.firstMessageAt)
+    const def = durationBucketDefs.find((d) => duration < d.max) ?? durationBucketDefs[durationBucketDefs.length - 1]
+    durationCounts.set(def.bucket, (durationCounts.get(def.bucket) ?? 0) + 1)
+  }
+  const durationBuckets = durationBucketDefs.map((d) => ({ bucket: d.bucket, sessions: durationCounts.get(d.bucket) ?? 0 }))
+
+  // Streaks computed over UTC-day strings (matches dailyMap key format).
+  const activeDaysSorted = [...dailyMap.keys()].sort()
+  let longestStreak = 0
+  let currentRun = 0
+  let prevDate: Date | null = null
+  for (const dayStr of activeDaysSorted) {
+    const d = new Date(`${dayStr}T00:00:00Z`)
+    if (prevDate && d.getTime() - prevDate.getTime() === 86_400_000) currentRun += 1
+    else currentRun = 1
+    if (currentRun > longestStreak) longestStreak = currentRun
+    prevDate = d
+  }
+  // Current streak: run ending on today (UTC) or yesterday (still counts).
+  let endingStreak = 0
+  if (activeDaysSorted.length > 0) {
+    const today = new Date()
+    const todayStr = today.toISOString().slice(0, 10)
+    const yesterdayStr = new Date(today.getTime() - 86_400_000).toISOString().slice(0, 10)
+    let cursor = activeDaysSorted[activeDaysSorted.length - 1]
+    if (cursor === todayStr || cursor === yesterdayStr) {
+      endingStreak = 1
+      for (let i = activeDaysSorted.length - 2; i >= 0; i -= 1) {
+        const prev = new Date(`${activeDaysSorted[i]}T00:00:00Z`)
+        const next = new Date(`${cursor}T00:00:00Z`)
+        if (next.getTime() - prev.getTime() === 86_400_000) {
+          endingStreak += 1
+          cursor = activeDaysSorted[i]
+        } else break
+      }
+    }
+  }
+  const streak = { current: endingStreak, longest: longestStreak }
+
+  const toolErrors: CrossSessionAnalytics['toolErrors'] = [...toolMap.entries()]
+    .filter(([, v]) => v.errors > 0)
+    .map(([name, v]) => ({ name, total: v.count, errors: v.errors, rate: v.count > 0 ? v.errors / v.count : 0 }))
+    .sort((a, b) => b.errors - a.errors || b.rate - a.rate)
+    .slice(0, 25)
 
   const sessionCount = sessions.length
   const avgMessagesPerSession = sessionCount > 0 ? totalMessages / sessionCount : 0
@@ -2000,10 +2265,20 @@ export async function readCrossSessionAnalytics(
     providers: [...providerMap.values()].sort((a, b) => b.messages - a.messages),
     projects: [...projectMap.values()].sort((a, b) => b.messages - a.messages).slice(0, 25),
     tools: [...toolMap.entries()]
-      .map(([name, count]) => ({ name, count }))
+      .map(([name, v]) => ({ name, count: v.count }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
       .slice(0, 25),
+    toolErrors,
     models: [...modelMap.values()].sort((a, b) => b.cost - a.cost || b.messages - a.messages),
+    modelKeys,
+    dailyByModel,
+    latency,
+    origins: [...originMap.entries()]
+      .map(([kind, count]) => ({ kind, count }))
+      .sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind)),
+    roleMix,
+    durationBuckets,
+    streak,
     topSessions,
   }
 }
