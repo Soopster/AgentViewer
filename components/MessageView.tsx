@@ -1089,6 +1089,18 @@ function resolveTimelineTargetMessageId(
   return owningRow?.message.uuid ?? targetMessageId
 }
 
+function messageToCopyText(message: ThreadedMessage): string {
+  const parts: string[] = []
+  for (const block of message.blocks) {
+    if (block.type === 'text' && block.text) {
+      parts.push(block.text)
+    } else if (block.type === 'thinking' && block.thinking) {
+      parts.push(block.thinking)
+    }
+  }
+  return parts.join('\n\n').trim()
+}
+
 const TimelineMessageRow = memo(function TimelineMessageRow({
   row,
   onForkFromMessage,
@@ -1098,6 +1110,18 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   onForkFromMessage: (messageId: string) => void
   onToggleResume: (messageId: string) => void
 }) {
+  const [copied, setCopied] = useState(false)
+  const copyText = useMemo(() => messageToCopyText(row.message), [row.message])
+  const canCopy = copyText.length > 0
+  const showActions = canCopy || (row.showForkControls && (row.allowFork || row.allowResume))
+  const handleCopy = useCallback(() => {
+    if (!canCopy) return
+    void navigator.clipboard.writeText(copyText).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1200)
+    }).catch(() => {})
+  }, [canCopy, copyText])
+
   return (
     <div
       style={{
@@ -1158,9 +1182,9 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           ))}
         </div>
       )}
-      {row.showForkControls && (row.allowFork || row.allowResume) && (
+      {showActions && (
         <div className="timeline-row-actions">
-          {row.allowFork && (
+          {row.showForkControls && row.allowFork && (
             <button
               type="button"
               className="timeline-row-action timeline-row-action--fork"
@@ -1170,13 +1194,23 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
               {row.forkingMessageId === row.message.uuid ? 'FORKING…' : 'FORK HERE'}
             </button>
           )}
-          {row.allowResume && (
+          {row.showForkControls && row.allowResume && (
             <button
               type="button"
               className={`timeline-row-action timeline-row-action--resume${row.resumeFromMessageId === row.message.uuid ? ' timeline-row-action--resume-active' : ''}`}
               onClick={() => onToggleResume(row.message.uuid)}
             >
               {row.resumeFromMessageId === row.message.uuid ? 'RESUME TARGET' : 'RESUME HERE'}
+            </button>
+          )}
+          {canCopy && (
+            <button
+              type="button"
+              className={`timeline-row-action timeline-row-action--copy${copied ? ' timeline-row-action--copy-active' : ''}`}
+              onClick={handleCopy}
+              title="Copy message text"
+            >
+              {copied ? 'COPIED' : 'COPY'}
             </button>
           )}
         </div>
