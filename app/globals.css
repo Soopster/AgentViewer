@@ -996,10 +996,11 @@ body {
 }
 
 /* ── Scrollbars ──────────────────────────────────────────────────────────── */
+* { scrollbar-color: var(--border-2) transparent; }
 ::-webkit-scrollbar          { width: 3px; height: 3px; }
 ::-webkit-scrollbar-track    { background: transparent; }
 ::-webkit-scrollbar-thumb    { background: var(--border-2); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: #4a5f90; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-2); }
 
 /* ── Animations ──────────────────────────────────────────────────────────── */
 @keyframes live-pulse {

@@ -4,8 +4,8 @@ import {
   type SessionEntry,
   createAgentSession,
   type AgentSession,
-} from '@mariozechner/pi-coding-agent'
-import type { AgentMessage } from '@mariozechner/pi-agent-core'
+} from '@earendil-works/pi-coding-agent'
+import type { AgentMessage } from '@earendil-works/pi-agent-core'
 
 // Cache session ID → file path mappings (populated on list, refreshed on miss)
 const sessionPathCache = new Map<string, string>()

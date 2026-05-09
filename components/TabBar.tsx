@@ -29,6 +29,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
 
   return (
     <div
+      className="scrollbar-none"
       style={{
         display: 'flex',
         flexDirection: 'row',
@@ -38,7 +39,6 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
         height: 34,
         flexShrink: 0,
         overflowX: 'auto',
-        scrollbarWidth: 'none',
       }}
     >
       {tabs.map((session) => {

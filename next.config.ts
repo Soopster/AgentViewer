@@ -10,9 +10,9 @@ const nextConfig: NextConfig = {
   // (filesystem, process spawning) that can't be bundled for the browser
   serverExternalPackages: [
     '@anthropic-ai/claude-agent-sdk',
-    '@mariozechner/pi-coding-agent',
-    '@mariozechner/pi-agent-core',
-    '@mariozechner/pi-ai',
+    '@earendil-works/pi-coding-agent',
+    '@earendil-works/pi-agent-core',
+    '@earendil-works/pi-ai',
   ],
 }
 
