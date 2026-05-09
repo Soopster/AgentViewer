@@ -24,6 +24,7 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'iceberg-light',
   'material-lighter',
   'min-light',
+  'white',
   'imessage',
   'dark',
   'solarized-dark',
@@ -49,6 +50,15 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'iceberg',
   'zenburn',
   'material-darker',
+  'ethereal',
+  'hackerman',
+  'lumon',
+  'matte-black',
+  'miasma',
+  'osaka-jade',
+  'retro-82',
+  'ristretto',
+  'vantablack',
   'cyber',
 ]
 

@@ -90,6 +90,7 @@ const LIGHT_MODES: TuiThemeMode[] = [
   'flexoki-light',
   'nord-light',
   'vitesse-light',
+  'white',
   'imessage',
 ]
 const DARK_MODES: TuiThemeMode[] = [
@@ -114,6 +115,15 @@ const DARK_MODES: TuiThemeMode[] = [
   'cobalt',
   'vitesse-dark',
   'synthwave',
+  'ethereal',
+  'hackerman',
+  'lumon',
+  'matte-black',
+  'miasma',
+  'osaka-jade',
+  'retro-82',
+  'ristretto',
+  'vantablack',
   'cyber',
 ]
 const THEMES: TuiThemeMode[] = [...LIGHT_MODES, ...DARK_MODES]
@@ -942,6 +952,7 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   'iceberg-light': 'Iceberg cool cream',
   'material-lighter': 'Material Theme lighter',
   'min-light': 'Atom Min minimalist',
+  white: 'Pure white monochrome',
   imessage: 'iOS Messages bubbles',
   dark: 'Deep navy background',
   'solarized-dark': 'Solarized teal',
@@ -967,6 +978,15 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   iceberg: 'Iceberg cool blue-grey',
   zenburn: 'Zenburn earthy classic',
   'material-darker': 'Material Theme darker',
+  ethereal: 'Ethereal indigo dusk',
+  hackerman: 'Hackerman neon green',
+  lumon: 'Lumon Severance blue',
+  'matte-black': 'Matte black with amber',
+  miasma: 'Miasma olive haze',
+  'osaka-jade': 'Osaka jade temple',
+  'retro-82': 'Retro 82 neon arcade',
+  ristretto: 'Ristretto warm coffee',
+  vantablack: 'Vantablack pure dark',
   cyber: 'Neon accents',
 }
 
@@ -990,6 +1010,7 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   'iceberg-light': 'ICEBERG LIGHT',
   'material-lighter': 'MATERIAL LIGHTER',
   'min-light': 'MIN LIGHT',
+  white: 'WHITE',
   imessage: 'iMESSAGE',
   dark: 'DARK',
   'solarized-dark': 'SOLARIZED DARK',
@@ -1015,6 +1036,15 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   iceberg: 'ICEBERG',
   zenburn: 'ZENBURN',
   'material-darker': 'MATERIAL DARKER',
+  ethereal: 'ETHEREAL',
+  hackerman: 'HACKERMAN',
+  lumon: 'LUMON',
+  'matte-black': 'MATTE BLACK',
+  miasma: 'MIASMA',
+  'osaka-jade': 'OSAKA JADE',
+  'retro-82': 'RETRO 82',
+  ristretto: 'RISTRETTO',
+  vantablack: 'VANTABLACK',
   cyber: 'CYBER',
 }
 

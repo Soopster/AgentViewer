@@ -45,6 +45,16 @@ export type TuiThemeMode =
   | 'iceberg'
   | 'zenburn'
   | 'material-darker'
+  | 'ethereal'
+  | 'hackerman'
+  | 'lumon'
+  | 'matte-black'
+  | 'miasma'
+  | 'osaka-jade'
+  | 'retro-82'
+  | 'ristretto'
+  | 'vantablack'
+  | 'white'
   | 'cyber'
 export type TuiDensity = 'comfortable' | 'balanced' | 'dense'
 export type TuiTranscriptView = 'conversation' | 'full'
@@ -1061,6 +1071,226 @@ export const MIN_LIGHT_THEME: TuiThemePalette = {
   userBg: '#f0f0f0',
 } as const
 
+export const ETHEREAL_THEME: TuiThemePalette = {
+  bg: '#060B1E',
+  surface: '#0c1330',
+  surface2: '#162045',
+  surface3: '#1f2a58',
+  diffAddBg: '#1e3a2c',
+  diffRemoveBg: '#3e202a',
+  diffMetaBg: '#1f2a58',
+  border: '#3C486D',
+  border2: '#7d82d9',
+  text: '#ffcead',
+  muted: '#dfeaf0',
+  dim: '#6d7db6',
+  violet: '#c2c4f0',
+  cyan: '#a3bfd1',
+  green: '#92a593',
+  red: '#ED5B5A',
+  amber: '#E9BB4F',
+  pink: '#c89dc1',
+  userBg: '#1f2a58',
+} as const
+
+export const HACKERMAN_THEME: TuiThemePalette = {
+  bg: '#0B0C16',
+  surface: '#13142a',
+  surface2: '#1c1e3e',
+  surface3: '#272956',
+  diffAddBg: '#1a3a25',
+  diffRemoveBg: '#3a1f2a',
+  diffMetaBg: '#1f2a58',
+  border: '#3E4058',
+  border2: '#82FB9C',
+  text: '#ddf7ff',
+  muted: '#c4d2ed',
+  dim: '#6a6e95',
+  violet: '#cddbf4',
+  cyan: '#7cf8f7',
+  green: '#50f872',
+  red: '#ff5c8a',
+  amber: '#a4ffec',
+  pink: '#85ff9d',
+  userBg: '#272956',
+} as const
+
+export const LUMON_THEME: TuiThemePalette = {
+  bg: '#16242d',
+  surface: '#1c2f3a',
+  surface2: '#243b4a',
+  surface3: '#2d4860',
+  diffAddBg: '#1f3a2a',
+  diffRemoveBg: '#3a1f2a',
+  diffMetaBg: '#1f3a55',
+  border: '#1b2d40',
+  border2: '#f2fcff',
+  text: '#d6e2ee',
+  muted: '#b1d8ee',
+  dim: '#304860',
+  violet: '#73a6cb',
+  cyan: '#8bc9eb',
+  green: '#5e95bc',
+  red: '#d35f5f',
+  amber: '#6fa4c9',
+  pink: '#9dcae5',
+  userBg: '#2d4860',
+} as const
+
+export const MATTE_BLACK_THEME: TuiThemePalette = {
+  bg: '#121212',
+  surface: '#1a1a1a',
+  surface2: '#242424',
+  surface3: '#303030',
+  diffAddBg: '#1f3a25',
+  diffRemoveBg: '#3a1f1f',
+  diffMetaBg: '#1f2a3a',
+  border: '#333333',
+  border2: '#e68e0d',
+  text: '#bebebe',
+  muted: '#a0a0a0',
+  dim: '#8a8a8d',
+  violet: '#f59e0b',
+  cyan: '#bebebe',
+  green: '#FFC107',
+  red: '#D35F5F',
+  amber: '#e68e0d',
+  pink: '#B91C1C',
+  userBg: '#2a2a2a',
+} as const
+
+export const MIASMA_THEME: TuiThemePalette = {
+  bg: '#222222',
+  surface: '#2a2a2a',
+  surface2: '#333333',
+  surface3: '#3d3d3d',
+  diffAddBg: '#2a3a25',
+  diffRemoveBg: '#3a2a25',
+  diffMetaBg: '#2a2f3d',
+  border: '#000000',
+  border2: '#78824b',
+  text: '#c2c2b0',
+  muted: '#d7c483',
+  dim: '#666666',
+  violet: '#bb7744',
+  cyan: '#c9a554',
+  green: '#5f875f',
+  red: '#b06060',
+  amber: '#b36d43',
+  pink: '#bb7744',
+  userBg: '#383830',
+} as const
+
+export const OSAKA_JADE_THEME: TuiThemePalette = {
+  bg: '#111c18',
+  surface: '#192821',
+  surface2: '#23372B',
+  surface3: '#2d4538',
+  diffAddBg: '#244530',
+  diffRemoveBg: '#3a232a',
+  diffMetaBg: '#1f3540',
+  border: '#23372B',
+  border2: '#509475',
+  text: '#C1C497',
+  muted: '#97a587',
+  dim: '#53685B',
+  violet: '#75bbb3',
+  cyan: '#2DD5B7',
+  green: '#549e6a',
+  red: '#FF5345',
+  amber: '#E5C736',
+  pink: '#D2689C',
+  userBg: '#2d4538',
+} as const
+
+export const RETRO_82_THEME: TuiThemePalette = {
+  bg: '#05182e',
+  surface: '#0d2440',
+  surface2: '#163152',
+  surface3: '#1f3d62',
+  diffAddBg: '#1a3a30',
+  diffRemoveBg: '#3a2820',
+  diffMetaBg: '#1f3a55',
+  border: '#303442',
+  border2: '#faa968',
+  text: '#f6dcac',
+  muted: '#a7c9c6',
+  dim: '#134e5a',
+  violet: '#3f8f8a',
+  cyan: '#028391',
+  green: '#8cbfb8',
+  red: '#f85525',
+  amber: '#faa968',
+  pink: '#e97b3c',
+  userBg: '#1f3d62',
+} as const
+
+export const RISTRETTO_THEME: TuiThemePalette = {
+  bg: '#2c2525',
+  surface: '#352e2e',
+  surface2: '#403838',
+  surface3: '#4a4040',
+  diffAddBg: '#2f3a25',
+  diffRemoveBg: '#3a2a30',
+  diffMetaBg: '#2a2f4a',
+  border: '#72696a',
+  border2: '#f38d70',
+  text: '#e6d9db',
+  muted: '#c3b7b8',
+  dim: '#948a8b',
+  violet: '#a8a9eb',
+  cyan: '#85dacc',
+  green: '#adda78',
+  red: '#fd6883',
+  amber: '#f9cc6c',
+  pink: '#f38d70',
+  userBg: '#4a3838',
+} as const
+
+export const VANTABLACK_THEME: TuiThemePalette = {
+  bg: '#000000',
+  surface: '#050505',
+  surface2: '#0d0d0d',
+  surface3: '#1a1a1a',
+  diffAddBg: '#1a2a1a',
+  diffRemoveBg: '#2a1a1a',
+  diffMetaBg: '#1a1a2a',
+  border: '#2a2a2a',
+  border2: '#8d8d8d',
+  text: '#ffffff',
+  muted: '#cecece',
+  dim: '#5c5c5c',
+  violet: '#b0b0b0',
+  cyan: '#ececec',
+  green: '#b6b6b6',
+  red: '#a4a4a4',
+  amber: '#cecece',
+  pink: '#9b9b9b',
+  userBg: '#1a1a1a',
+} as const
+
+export const WHITE_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#fafafa',
+  surface2: '#f0f0f0',
+  surface3: '#e5e5e5',
+  diffAddBg: '#e5f0e0',
+  diffRemoveBg: '#f0e0e0',
+  diffMetaBg: '#e0e5f0',
+  border: '#c0c0c0',
+  border2: '#1a1a1a',
+  text: '#000000',
+  muted: '#3a3a3a',
+  dim: '#9a9a9a',
+  violet: '#1a1a1a',
+  cyan: '#3e3e3e',
+  green: '#3a3a3a',
+  red: '#2a2a2a',
+  amber: '#4a4a4a',
+  pink: '#2e2e2e',
+  userBg: '#f0f0f0',
+} as const
+
 export let THEME: TuiThemePalette = LIGHT_THEME
 
 export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
@@ -1109,6 +1339,16 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'material-darker': return MATERIAL_DARKER_THEME
     case 'material-lighter': return MATERIAL_LIGHTER_THEME
     case 'min-light': return MIN_LIGHT_THEME
+    case 'ethereal': return ETHEREAL_THEME
+    case 'hackerman': return HACKERMAN_THEME
+    case 'lumon': return LUMON_THEME
+    case 'matte-black': return MATTE_BLACK_THEME
+    case 'miasma': return MIASMA_THEME
+    case 'osaka-jade': return OSAKA_JADE_THEME
+    case 'retro-82': return RETRO_82_THEME
+    case 'ristretto': return RISTRETTO_THEME
+    case 'vantablack': return VANTABLACK_THEME
+    case 'white': return WHITE_THEME
     default: return LIGHT_THEME
   }
 }
