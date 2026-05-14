@@ -322,6 +322,10 @@ const DEFAULT_METADATA_REFRESH_MS = 60_000
 const CLAUDE_BACKGROUND_METADATA_REFRESH_MS = 30 * 60_000
 const DEFAULT_BACKGROUND_METADATA_REFRESH_MS = 5 * 60_000
 const METADATA_REQUEST_TIMEOUT_MS = 4_000
+// Fire an OSC 9 / OSC 99 desktop notification when a composer send takes at
+// least this long. Tuned high enough that quick replies don't bell the user.
+const NOTIFY_AFTER_MS = 8_000
+const NOTIFY_PREVIEW_CHARS = 140
 
 function buildApiUrl(path: string): string {
   return new URL(path, API_BASE_URL).toString()
@@ -1806,12 +1810,13 @@ export default function OpenTuiApp() {
     () => transcriptCards.filter((card) => card.autoFold && !resolvedExpandedKeys.has(card.key)).length,
     [resolvedExpandedKeys, transcriptCards],
   )
-  const shouldEnableSyntaxHighlighting = useMemo(() => (
-    transcriptCards.some((card) => {
+  const shouldEnableSyntaxHighlighting = useMemo(() => {
+    if (composerSendState === 'sending' && composerLiveText) return true
+    return transcriptCards.some((card) => {
       if (!resolvedExpandedKeys.has(card.key)) return false
       return Boolean(card.markdownContent || (card.codeBlocks && card.codeBlocks.length > 0))
     })
-  ), [resolvedExpandedKeys, transcriptCards])
+  }, [resolvedExpandedKeys, transcriptCards, composerSendState, composerLiveText])
   const syntaxStyle = useMemo(
     () => shouldEnableSyntaxHighlighting ? buildSyntaxStyle(theme) : null,
     [shouldEnableSyntaxHighlighting, theme],
@@ -2718,6 +2723,8 @@ export default function OpenTuiApp() {
     markSessionRunning(runningRef)
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    const sendStartedAt = Date.now()
+    let replyAccumulator = ''
 
     try {
       const res = await fetch(buildApiUrl(`/api/sessions/${targetSession.sessionId}/messages`), {
@@ -2762,7 +2769,9 @@ export default function OpenTuiApp() {
         if (!parsed) return
         const delta = extractStreamingAssistantText(parsed)
         if (!delta) return
-        setComposerLiveText((prev) => shouldReplaceLiveAssistantText(parsed) ? delta : `${prev}${delta}`)
+        const replace = shouldReplaceLiveAssistantText(parsed)
+        replyAccumulator = replace ? delta : `${replyAccumulator}${delta}`
+        setComposerLiveText((prev) => replace ? delta : `${prev}${delta}`)
       }
 
       while (true) {
@@ -2795,6 +2804,19 @@ export default function OpenTuiApp() {
       setSelectedSessionKey(sessionKey(targetSession))
       void refreshSessions(provider, true, false)
       void refreshSelectedSessionDetail(targetSession, false)
+
+      const elapsedMs = Date.now() - sendStartedAt
+      if (elapsedMs >= NOTIFY_AFTER_MS) {
+        const firstLine = replyAccumulator.split('\n').find((line) => line.trim().length > 0) ?? ''
+        const preview = firstLine.length > NOTIFY_PREVIEW_CHARS
+          ? `${firstLine.slice(0, NOTIFY_PREVIEW_CHARS - 1)}…`
+          : firstLine || 'Reply ready'
+        try {
+          renderer.triggerNotification(preview, `agent-viewer · ${formatSessionTitle(targetSession)}`)
+        } catch {
+          // terminal doesn't support OSC notifications — silently ignore
+        }
+      }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         return
@@ -2817,6 +2839,7 @@ export default function OpenTuiApp() {
     refreshSelectedSessionDetail,
     markSessionRunning,
     clearSessionRunning,
+    renderer,
   ])
 
   useEffect(() => {
@@ -4581,14 +4604,26 @@ export default function OpenTuiApp() {
       ) : null}
 
       {composerStatusMessage ? (
-        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
-          <text fg={composerError ? theme.red : theme.dim} wrapMode="none">
-            {fitText(
-              composerStatusMessage,
-              Math.max(width - 4, 20),
-            )}
-          </text>
-        </box>
+        composerSendState === 'sending' && composerLiveText && syntaxStyle && !composerError ? (
+          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1} height={4}>
+            <markdown
+              content={composerLiveText}
+              syntaxStyle={syntaxStyle}
+              fg={theme.dim}
+              streaming={true}
+              width={Math.max(width - 4, 20)}
+            />
+          </box>
+        ) : (
+          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+            <text fg={composerError ? theme.red : theme.dim} wrapMode="none">
+              {fitText(
+                composerStatusMessage,
+                Math.max(width - 4, 20),
+              )}
+            </text>
+          </box>
+        )
       ) : null}
 
       {composerTargetMessage ? (

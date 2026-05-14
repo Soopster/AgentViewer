@@ -7,6 +7,12 @@ import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, ClaudeSystemBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
+import type {
+  TaskCreateInput,
+  TaskGetInput,
+  TaskUpdateInput,
+  TaskListOutput,
+} from '@anthropic-ai/claude-agent-sdk/sdk-tools'
 import { getAssistantLabel } from '@/lib/provider'
 import { Separator } from '@/components/ui/separator'
 
@@ -1805,7 +1811,11 @@ function WorktreeCard({ thread }: { thread: ToolThread }) {
 
 // ── Task card ─────────────────────────────────────────────────────────────────
 
-type TaskRecord = { id?: string; subject?: string; status?: string; owner?: string; blockedBy?: string[] }
+// The TaskList tool reports an array (older agents) or `{ tasks: [...] }` (per
+// the SDK's TaskListOutput). We keep the rendered record loose since the
+// stop-tool variant (no SDK type) shares this shape.
+type TaskRecord = Partial<TaskListOutput['tasks'][number]>
+type TaskInput = Partial<TaskCreateInput & TaskGetInput & TaskUpdateInput & { _stopReason?: string }>
 
 const TASK_ICON: Record<string, string>  = { completed: '✓', in_progress: '◐', pending: '○' }
 const TASK_COLOR: Record<string, string> = { completed: 'var(--green)', in_progress: 'var(--amber)', pending: 'var(--text-3)' }
@@ -1815,16 +1825,18 @@ function TaskCard({ thread }: { thread: ToolThread }) {
   const { toolUse, result } = thread
   const name  = toolUse.name
   const c     = 'var(--amber)'
-  const input = toolUse.input as {
-    subject?: string; description?: string
-    taskId?: string; status?: string; owner?: string
-    addBlockedBy?: string[]; addBlocks?: string[]
-  }
+  const input = toolUse.input as TaskInput
   const raw = result ? resultToString(result.content) : ''
 
   let tasks: TaskRecord[] | null = null
   if (name === 'TaskList' && raw) {
-    try { const p = JSON.parse(raw); if (Array.isArray(p)) tasks = p as TaskRecord[] } catch { /* not JSON */ }
+    try {
+      const p = JSON.parse(raw)
+      if (Array.isArray(p)) tasks = p as TaskRecord[]
+      else if (p && typeof p === 'object' && Array.isArray((p as TaskListOutput).tasks)) {
+        tasks = (p as TaskListOutput).tasks
+      }
+    } catch { /* not JSON */ }
   }
 
   const headerContent = (

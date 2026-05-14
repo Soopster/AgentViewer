@@ -25,6 +25,12 @@ function wrapCopilotError(error: unknown): Error {
   return new Error(`GitHub Copilot provider unavailable. ${detail}`)
 }
 
+function isEnvFlagEnabled(value: string | undefined): boolean {
+  if (!value) return false
+  const normalized = value.trim().toLowerCase()
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
+}
+
 function createClientOptions(): CopilotClientOptions {
   const cliUrl = normalizedEnv(process.env.COPILOT_CLI_URL)
   const cliPath = normalizedEnv(process.env.COPILOT_CLI_PATH)
@@ -41,6 +47,12 @@ function createClientOptions(): CopilotClientOptions {
 
   if (cliPath) {
     options.cliPath = cliPath
+  }
+
+  // Opt in to Mission Control via env. Default off because agent-viewer is a
+  // local observer; remote sessions would surface in GitHub web/mobile.
+  if (isEnvFlagEnabled(process.env.COPILOT_REMOTE) && !cliUrl) {
+    options.remote = true
   }
 
   return options
@@ -81,6 +93,9 @@ export async function resumeCopilotSession(
     return await client.resumeSession(sessionId, {
       onPermissionRequest: approveAll,
       disableResume: true,
+      // We're a read-mostly observer; suppress duplicate telemetry events
+      // that would otherwise fire on every resume from session list polls.
+      enableSessionTelemetry: false,
       ...overrides,
     })
   } catch (error) {
