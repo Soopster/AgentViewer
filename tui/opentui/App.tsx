@@ -12,6 +12,7 @@ import {
   formatSessionTitle,
   formatTranscriptCard,
   type TuiTranscriptCard,
+  type TuiTranscriptCodeBlock,
   type TuiTranscriptCardLine,
 } from '../format'
 import { stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
@@ -193,6 +194,9 @@ type CardDisplayData = {
   diffText: string | null
   diffLineCount: number
   codeBlockLineCounts: number[]
+  // Query-independent header metadata. The match-tag is folded in at render
+  // time inside TranscriptCard so search-query changes don't invalidate
+  // this whole array (proposal 4).
   headerMeta: string
   isSearchHit: boolean
   accent: string
@@ -736,6 +740,11 @@ function buildSyntaxStyle(theme: TuiThemePalette): SyntaxStyle {
     number:      { fg: RGBA.fromHex(theme.amber) },
     function:    { fg: RGBA.fromHex(theme.cyan) },
     type:        { fg: RGBA.fromHex(theme.pink) },
+    variable:    { fg: RGBA.fromHex(theme.text) },
+    'variable.member': { fg: RGBA.fromHex(theme.cyan) },
+    property:    { fg: RGBA.fromHex(theme.cyan) },
+    constructor: { fg: RGBA.fromHex(theme.pink) },
+    constant:    { fg: RGBA.fromHex(theme.text) },
     operator:    { fg: RGBA.fromHex(theme.muted) },
     punctuation: { fg: RGBA.fromHex(theme.muted) },
     default:     { fg: RGBA.fromHex(theme.text) },
@@ -921,7 +930,17 @@ function cardDiffRows(card: TuiTranscriptCard, isExpanded: boolean, previewLimit
 function codeBlockRows(card: TuiTranscriptCard, isExpanded: boolean): number {
   if (!isExpanded || !card.codeBlocks?.length) return 0
   return card.codeBlocks.reduce((sum, cb) =>
-    sum + 1 + Math.min(cb.content.split('\n').length + 1, 20) + 1, 0)
+    sum + 1 + codeBlockHeight(cb, cb.content.split('\n').length) + 1, 0)
+}
+
+function codeBlockHeight(block: TuiTranscriptCodeBlock, lineCount: number): number {
+  if (block.maxVisibleLines != null) return Math.min(lineCount, block.maxVisibleLines)
+  return block.lineNumbers ? lineCount : Math.min(lineCount + 1, 20)
+}
+
+function codeBlockLabel(block: TuiTranscriptCodeBlock): string {
+  if (block.filePath) return `${block.lang} · ${block.filePath}`
+  return block.lang
 }
 
 function cardHeight(
@@ -1272,6 +1291,7 @@ type TranscriptCardProps = {
   isExpanded: boolean
   hasCursor: boolean
   isSelected: boolean
+  isSearchHit: boolean
   isActiveMatch: boolean
   thinkingMode: boolean
   imessageStyle: boolean
@@ -1287,6 +1307,7 @@ function TranscriptCardInner({
   isExpanded,
   hasCursor,
   isSelected,
+  isSearchHit,
   isActiveMatch,
   thinkingMode,
   imessageStyle,
@@ -1298,7 +1319,6 @@ function TranscriptCardInner({
     diffLineCount,
     codeBlockLineCounts,
     headerMeta,
-    isSearchHit,
     accent,
     isThinkingCard,
     categoryEmoji,
@@ -1332,6 +1352,7 @@ function TranscriptCardInner({
   const maxTitleWidth = Math.max(rightPaneWidth - 6, 20)
   const titleMeta = joinMeta([
     headerMeta,
+    isSearchHit ? 'match' : null,
     isSelected ? card.usageSummary ?? null : null,
   ])
   const cardTitleFull = `${marker} ${categoryEmoji}${card.label}${titleMeta ? `  ${titleMeta}` : ''}`
@@ -1413,27 +1434,61 @@ function TranscriptCardInner({
               ))}
 
               {isExpanded && card.codeBlocks && card.codeBlocks.length > 0 ? (
-                card.codeBlocks.map((cb, cbIndex) => (
-                  <box key={cb.key} paddingX={1} marginTop={1}>
-                    <text fg={theme.dim}>{cb.lang}</text>
-                    {syntaxStyle ? (
-                      <code
-                        content={cb.content}
-                        filetype={cb.lang}
-                        syntaxStyle={syntaxStyle}
-                        drawUnstyledText={true}
-                        style={{ height: Math.min((codeBlockLineCounts[cbIndex] ?? 0) + 1, 20) }}
-                        width={markdownWidth}
-                      />
-                    ) : (
-                      cb.content.split('\n').slice(0, 20).map((line, lineIndex) => (
-                        <text key={`${cb.key}:fallback:${lineIndex}`} fg={theme.text}>
-                          {fitText(line, markdownWidth)}
-                        </text>
-                      ))
-                    )}
-                  </box>
-                ))
+                card.codeBlocks.map((cb, cbIndex) => {
+                  const lineCount = codeBlockLineCounts[cbIndex] ?? cb.content.split('\n').length
+                  const renderHeight = codeBlockHeight(cb, lineCount)
+                  const lineNumbers = cb.lineNumbers?.slice(0, renderHeight)
+                  const gutterWidth = lineNumbers
+                    ? Math.max(...lineNumbers.map((num) => num.length), 1) + 1
+                    : 0
+                  const codeWidth = Math.max(markdownWidth - gutterWidth - (lineNumbers ? 1 : 0), 12)
+                  return (
+                    <box key={cb.key} paddingX={1} marginTop={1}>
+                      <text fg={theme.dim}>{fitText(codeBlockLabel(cb), markdownWidth)}</text>
+                      {syntaxStyle ? (
+                        lineNumbers ? (
+                          <box flexDirection="row">
+                            <box width={gutterWidth} flexDirection="column">
+                              {lineNumbers.map((num, lineIndex) => (
+                                <text key={`${cb.key}:gutter:${lineIndex}`} fg={theme.dim} wrapMode="none">
+                                  {fitText(num, gutterWidth)}
+                                </text>
+                              ))}
+                            </box>
+                            <code
+                              content={cb.content}
+                              filetype={cb.filetype}
+                              syntaxStyle={syntaxStyle}
+                              drawUnstyledText={true}
+                              style={{ height: renderHeight }}
+                              width={codeWidth}
+                            />
+                          </box>
+                        ) : (
+                          <code
+                            content={cb.content}
+                            filetype={cb.filetype}
+                            syntaxStyle={syntaxStyle}
+                            drawUnstyledText={true}
+                            style={{ height: renderHeight }}
+                            width={markdownWidth}
+                          />
+                        )
+                      ) : (
+                        cb.content.split('\n').slice(0, renderHeight).map((line, lineIndex) => (
+                          <box key={`${cb.key}:fallback:${lineIndex}`} flexDirection="row">
+                            {lineNumbers ? (
+                              <text fg={theme.dim}>{fitText(lineNumbers[lineIndex] ?? '', gutterWidth)}</text>
+                            ) : null}
+                            <text fg={theme.text}>
+                              {fitText(line, lineNumbers ? codeWidth : markdownWidth)}
+                            </text>
+                          </box>
+                        ))
+                      )}
+                    </box>
+                  )
+                })
               ) : null}
             </>
           )}
@@ -2029,7 +2084,6 @@ export default function OpenTuiApp() {
       const headerMeta = joinMeta([
         card.timestamp ?? null,
         isLatest ? 'latest' : null,
-        isSearchHit ? 'match' : null,
         isAutoFoldedTechnical ? 'folded' : null,
         `e ${isExpanded ? 'collapse' : 'expand'}`,
       ])
@@ -2108,6 +2162,7 @@ export default function OpenTuiApp() {
           isExpanded={isExpanded}
           hasCursor={hasCursor}
           isSelected={isSelected}
+          isSearchHit={display.isSearchHit}
           isActiveMatch={isActiveMatch}
           thinkingMode={thinkingMode}
           imessageStyle={imessageStyle}

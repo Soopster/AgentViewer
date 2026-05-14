@@ -31,6 +31,16 @@ export type TuiTranscriptCardLine = {
 
 export type TuiTranscriptCardCategory = 'conversation' | 'technical' | 'diff' | 'system' | 'insight'
 
+export type TuiTranscriptCodeBlock = {
+  key: string
+  lang: string
+  filetype?: string
+  content: string
+  filePath?: string
+  lineNumbers?: string[]
+  maxVisibleLines?: number
+}
+
 function countNonBlankLines(value: string): number {
   let count = 0
   let lineHasContent = false
@@ -307,6 +317,23 @@ function resultTextOf(thread: ToolThread): string | null {
       }
     }
     return parts.length > 0 ? parts.join('\n\n') : null
+  }
+  return null
+}
+
+function resultRawTextOf(thread: ToolThread): string | null {
+  const content = thread.result?.content
+  if (typeof content === 'string') return content || null
+  if (Array.isArray(content)) {
+    const parts: string[] = []
+    for (const block of content) {
+      const text = (block as { type?: string; text?: unknown }).text
+      if (block && (block as { type?: string }).type === 'text' && typeof text === 'string') {
+        parts.push(text)
+      }
+    }
+    const joined = parts.join('\n\n')
+    return joined || null
   }
   return null
 }
@@ -602,7 +629,7 @@ export type TuiTranscriptCard = {
   expandedLines: TuiTranscriptCardLine[]
   searchText: string
   searchHaystackLower: string
-  codeBlocks?: Array<{ key: string; lang: string; content: string }>
+  codeBlocks?: TuiTranscriptCodeBlock[]
   editDiff?: string
   markdownContent?: string
   hasMermaidDiagrams?: boolean
@@ -848,6 +875,88 @@ function extractMarkdownContent(blocks: ThreadedBlock[]): string | undefined {
 
 const CODE_FENCE_RE = /^```(\w*)\s*\n([\s\S]*?)^```[ \t]*$/gm
 const MERMAID_LANGS = new Set(['mermaid', 'mmd'])
+const TUI_CODE_FILETYPE_BY_EXTENSION: Record<string, string> = {
+  cjs: 'javascript',
+  js: 'javascript',
+  jsx: 'javascriptreact',
+  md: 'markdown',
+  markdown: 'markdown',
+  mdown: 'markdown',
+  mkd: 'markdown',
+  mjs: 'javascript',
+  cts: 'typescript',
+  mts: 'typescript',
+  ts: 'typescript',
+  ctsx: 'typescriptreact',
+  mtsx: 'typescriptreact',
+  tsx: 'typescriptreact',
+  zig: 'zig',
+  zon: 'zig',
+}
+
+function detectSupportedCodeFiletypeFromPath(filePath?: string): string | undefined {
+  if (!filePath) return undefined
+  const name = pathBasename(filePath)
+  const dot = name.lastIndexOf('.')
+  if (dot === -1) return undefined
+  return TUI_CODE_FILETYPE_BY_EXTENSION[name.slice(dot + 1).toLowerCase()]
+}
+
+function displayLanguageFromPath(filePath?: string): string {
+  if (!filePath) return 'text'
+  const name = pathBasename(filePath)
+  const dot = name.lastIndexOf('.')
+  if (dot === -1) return 'text'
+  return name.slice(dot + 1).toLowerCase() || 'text'
+}
+
+function normalizeSupportedCodeFiletype(language: string): string | undefined {
+  const lower = language.trim().toLowerCase()
+  if (!lower) return undefined
+  if (lower === 'ts' || lower === 'typescript') return 'typescript'
+  if (lower === 'cts' || lower === 'mts') return 'typescript'
+  if (lower === 'tsx' || lower === 'typescriptreact') return 'typescriptreact'
+  if (lower === 'ctsx' || lower === 'mtsx') return 'typescriptreact'
+  if (lower === 'js' || lower === 'javascript') return 'javascript'
+  if (lower === 'jsx' || lower === 'javascriptreact') return 'javascriptreact'
+  if (lower === 'md' || lower === 'markdown' || lower === 'mdown' || lower === 'mkd') return 'markdown'
+  if (lower === 'zig' || lower === 'zon') return 'zig'
+  return undefined
+}
+
+function parseReadResultLines(raw: string): Array<{ num: string; code: string }> {
+  const lines = raw.replace(ANSI_ESCAPE_PATTERN, '').replace(/\r/g, '').split('\n')
+  if (lines.length && lines[lines.length - 1] === '') lines.pop()
+  return lines.map((entry) => {
+    const tab = entry.indexOf('\t')
+    if (tab === -1) return { num: '', code: sanitizeLine(entry).trimEnd() }
+    return {
+      num: entry.slice(0, tab).trim(),
+      code: sanitizeLine(entry.slice(tab + 1)).trimEnd(),
+    }
+  })
+}
+
+function readCodeBlockFromTool(thread: ToolThread, key: string): TuiTranscriptCodeBlock | null {
+  if (!thread.result || thread.result.is_error) return null
+  const raw = resultRawTextOf(thread)
+  if (!raw) return null
+  const input = thread.toolUse.input as { file_path?: string }
+  const filePath = typeof input.file_path === 'string' ? input.file_path : undefined
+  const parsed = parseReadResultLines(raw)
+  const content = parsed.map((entry) => entry.code).join('\n')
+  if (!content.trim()) return null
+  const lineNumbers = parsed.map((entry) => entry.num)
+  const hasLineNumbers = lineNumbers.length > 0 && lineNumbers.every((num) => /^\d+$/.test(num))
+  return {
+    key,
+    lang: displayLanguageFromPath(filePath),
+    filetype: detectSupportedCodeFiletypeFromPath(filePath),
+    content,
+    filePath,
+    lineNumbers: hasLineNumbers ? lineNumbers : undefined,
+  }
+}
 
 function renderMermaidForTui(content: string): string {
   try {
@@ -879,15 +988,22 @@ function renderMermaidForTui(content: string): string {
 
 function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[]): {
   processedLines: TuiTranscriptCardLine[]
-  codeBlocks: Array<{ key: string; lang: string; content: string }>
+  codeBlocks: TuiTranscriptCodeBlock[]
   hasMermaidDiagrams: boolean
 } {
-  const all: Array<{ key: string; lang: string; content: string }> = []
+  const all: TuiTranscriptCodeBlock[] = []
   let n = 0
   const lines: TuiTranscriptCardLine[] = []
   let hasMermaidDiagrams = false
 
   for (const block of blocks) {
+    if (block.type === 'tool_thread' && block.toolUse.name === 'Read') {
+      const readBlock = readCodeBlockFromTool(block, `read${n++}`)
+      if (readBlock) all.push(readBlock)
+      lines.push(...formatBlockExpanded(block).filter((l) => l.text.trim()))
+      continue
+    }
+
     if (block.type !== 'text' || !block.text.trim()) {
       lines.push(...formatBlockExpanded(block).filter((l) => l.text.trim()))
       continue
@@ -901,7 +1017,7 @@ function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[]): {
         hasMermaidDiagrams = true
         replaced = replaced.replace(match[0], renderMermaidForTui(content))
       } else {
-        all.push({ key: `cb${n++}`, lang, content })
+        all.push({ key: `cb${n++}`, lang, filetype: normalizeSupportedCodeFiletype(lang), content })
         replaced = replaced.replace(match[0], `[code: ${lang}]`)
       }
     }
@@ -987,6 +1103,30 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
           line(`tool ${toolName}${filePath ? `: ${filePath}` : ''}`, 'tool'),
           line(isError ? '✗ ERROR' : '✓ OK', isError ? 'result_error' : 'result_ok'),
         ]
+      }
+
+      if (toolName === 'Read') {
+        const filePath = typeof input.file_path === 'string' ? input.file_path : ''
+        const isError = block.result?.is_error === true
+        const lines: TuiTranscriptCardLine[] = [
+          line(`tool Read${filePath ? `: ${filePath}` : ''}`, 'tool'),
+        ]
+        if (!block.result) return lines
+        lines.push(line(isError ? '✗ ERROR' : '✓ OK', isError ? 'result_error' : 'result_ok'))
+        if (isError) {
+          const content = resultRawTextOf(block)
+          if (content) {
+            lines.push(
+              ...sanitizeLine(content)
+                .trim()
+                .split('\n')
+                .map((l) => l.trimEnd())
+                .filter((l) => l.length > 0)
+                .map((l) => line(truncateLine(l), 'muted')),
+            )
+          }
+        }
+        return lines
       }
 
       const target = typeof input.file_path === 'string'
