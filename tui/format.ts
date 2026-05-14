@@ -297,7 +297,74 @@ function parseTaskListPayload(raw: string | null | undefined): TaskItem[] | null
 function resultTextOf(thread: ToolThread): string | null {
   const content = thread.result?.content
   if (typeof content === 'string') return content.trim() || null
+  if (Array.isArray(content)) {
+    const parts: string[] = []
+    for (const block of content) {
+      const text = (block as { type?: string; text?: unknown }).text
+      if (block && (block as { type?: string }).type === 'text' && typeof text === 'string') {
+        const trimmed = text.trim()
+        if (trimmed) parts.push(trimmed)
+      }
+    }
+    return parts.length > 0 ? parts.join('\n\n') : null
+  }
   return null
+}
+
+const TOOLSEARCH_NAME_PATTERN = /"name"\s*:\s*"([A-Za-z0-9_./:-]+)"/g
+
+type ToolSearchInput = { query?: string; max_results?: number }
+
+function formatToolSearchQuery(query: string): string {
+  const trimmed = query.trim()
+  if (!trimmed) return '(empty)'
+  if (trimmed.startsWith('select:')) {
+    const names = trimmed.slice('select:'.length).split(',').map((n) => n.trim()).filter(Boolean)
+    if (names.length === 0) return 'select (empty)'
+    if (names.length === 1) return `select ${names[0]}`
+    return `select ${names[0]} +${names.length - 1}`
+  }
+  return `"${truncateLine(trimmed, 80)}"`
+}
+
+function parseToolSearchNames(raw: string | null): string[] {
+  if (!raw) return []
+  const seen = new Set<string>()
+  let m: RegExpExecArray | null
+  TOOLSEARCH_NAME_PATTERN.lastIndex = 0
+  while ((m = TOOLSEARCH_NAME_PATTERN.exec(raw)) !== null) {
+    if (m[1]) seen.add(m[1])
+  }
+  return [...seen]
+}
+
+function formatToolSearchTool(thread: ToolThread, expanded: boolean): TuiTranscriptCardLine[] {
+  const input = thread.toolUse.input as ToolSearchInput
+  const queryLabel = formatToolSearchQuery(input.query ?? '')
+  const result = thread.result
+  const isError = result?.is_error === true
+  const raw = resultTextOf(thread)
+  const names = parseToolSearchNames(raw)
+
+  const lines: TuiTranscriptCardLine[] = [
+    line(`tool ToolSearch: ${queryLabel}`, 'tool'),
+  ]
+  if (!result) return lines
+  if (isError) {
+    lines.push(line('✗ ERROR', 'result_error'))
+    return lines
+  }
+  if (names.length === 0) {
+    lines.push(line('✓ no matches', 'result_ok'))
+    return lines
+  }
+  lines.push(line(`✓ ${names.length} tool${names.length === 1 ? '' : 's'} loaded`, 'result_ok'))
+  if (expanded) {
+    for (const name of names) {
+      lines.push(line(`• ${name}`, 'muted'))
+    }
+  }
+  return lines
 }
 
 function formatTaskTool(thread: ToolThread, expanded: boolean): TuiTranscriptCardLine[] {
@@ -387,6 +454,10 @@ function previewTool(thread: ToolThread): TuiTranscriptCardLine[] {
 
   if (TASK_TOOL_NAMES.has(thread.toolUse.name)) {
     return formatTaskTool(thread, false)
+  }
+
+  if (thread.toolUse.name === 'ToolSearch') {
+    return formatToolSearchTool(thread, false)
   }
 
   const input = thread.toolUse.input as Record<string, unknown>
@@ -862,6 +933,10 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
 
       if (TASK_TOOL_NAMES.has(toolName)) {
         return formatTaskTool(block, true)
+      }
+
+      if (toolName === 'ToolSearch') {
+        return formatToolSearchTool(block, true)
       }
 
       if (toolName === 'FileChange') {
