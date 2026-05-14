@@ -748,11 +748,48 @@ async function resolveProvider(provider?: AgentProvider): Promise<AgentProvider>
 }
 
 async function syncSessionsBestEffort(sessions: Session[]): Promise<void> {
+  if (sessions.length === 0) return
+
+  const listKey = sessions.map((session) => `${session.provider ?? 'claude'}:${session.sessionId}`).join('|')
+  const signature = sessionsPersistSignature(sessions)
+  const cached = persistedSessionListSignatures.get(listKey)
+  if (cached && cached.signature === signature && Date.now() - cached.ts < SESSION_LIST_PERSIST_TTL) return
+
   try {
     await syncPersistedSessions(sessions)
+    prunePersistedSessionListSignatures()
+    persistedSessionListSignatures.set(listKey, { signature, ts: Date.now() })
   } catch {
     // The viewer should keep working if the local analytics index is unreadable.
   }
+}
+
+// Session list polling usually returns the same metadata every few seconds.
+// Avoid opening the SQLite index for identical pages while keeping the cache
+// brief enough that different views still refresh opportunistically.
+const SESSION_LIST_PERSIST_TTL = 30_000
+type SessionListPersistCacheEntry = { signature: string; ts: number }
+const persistedSessionListSignatures = new Map<string, SessionListPersistCacheEntry>()
+
+function prunePersistedSessionListSignatures() {
+  const deadline = Date.now() - SESSION_LIST_PERSIST_TTL * 3
+  for (const [key, entry] of persistedSessionListSignatures) {
+    if (entry.ts < deadline) persistedSessionListSignatures.delete(key)
+  }
+}
+
+function sessionsPersistSignature(sessions: Session[]): string {
+  return JSON.stringify(sessions.map((session) => [
+    session.provider ?? 'claude',
+    session.sessionId,
+    session.summary ?? '',
+    session.customTitle ?? '',
+    session.firstPrompt ?? '',
+    session.cwd ?? '',
+    session.tag ?? '',
+    session.createdAt ?? '',
+    session.lastModified ?? '',
+  ]))
 }
 
 // Tracks the last signature we successfully persisted for each session, so that
@@ -1228,6 +1265,7 @@ export async function rebuildViewSessionIndex(params: RebuildSessionIndexParams 
   let messageCount = 0
 
   await clearPersistedSessionIndex()
+  persistedSessionListSignatures.clear()
 
   for (const currentProvider of scannedProviders) {
     let sessions: Session[]
@@ -1333,8 +1371,9 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
 
   const batches = await mapConcurrent(sessions, 10, async (session) => {
     const key = `${session.provider ?? 'claude'}:${session.sessionId}`
+    const hasKnownOffset = Object.prototype.hasOwnProperty.call(params.offsets, key)
     const offset = Math.max(0, params.offsets[key] ?? 0)
-    const limit = offset === 0 ? params.initialLimit : params.incrementalLimit
+    const limit = offset === 0 && !hasKnownOffset ? params.initialLimit : params.incrementalLimit
     const messages = limit > 0
       ? await listViewSessionMessages(session.sessionId, { offset, limit }, session.provider)
       : []
@@ -1348,7 +1387,12 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
     }
   })
 
-  return { sessions, batches }
+  return {
+    sessions,
+    batches: batches.filter((batch) =>
+      batch.messages.length > 0 || !Object.prototype.hasOwnProperty.call(params.offsets, batch.key),
+    ),
+  }
 }
 
 async function createClaudeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
