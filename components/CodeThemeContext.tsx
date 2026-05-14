@@ -1,19 +1,21 @@
 'use client'
 
-import { createContext, use, useEffect, useState } from 'react'
-import { CODE_THEMES, DEFAULT_CODE_THEME_ID, STORAGE_KEY, type CodeThemeId, type CodeThemeStyle } from '@/lib/codeThemes'
+import { createContext, use, useCallback, useEffect, useMemo, useState } from 'react'
+import { CODE_THEMES, DEFAULT_CODE_THEME_ID, STORAGE_KEY, type CodeThemeId } from '@/lib/codeThemes'
 
 type CodeThemeContextValue = {
   themeId: CodeThemeId
-  style: CodeThemeStyle
   setTheme: (id: CodeThemeId) => void
 }
 
-const defaultTheme = CODE_THEMES.find(t => t.id === DEFAULT_CODE_THEME_ID)!
+const codeThemeIds = new Set<CodeThemeId>(CODE_THEMES.map((theme) => theme.id))
+
+function isCodeThemeId(value: string | null): value is CodeThemeId {
+  return !!value && codeThemeIds.has(value as CodeThemeId)
+}
 
 const CodeThemeContext = createContext<CodeThemeContextValue>({
   themeId: DEFAULT_CODE_THEME_ID,
-  style: defaultTheme.style,
   setTheme: () => {},
 })
 
@@ -22,20 +24,20 @@ export function CodeThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved && CODE_THEMES.some(t => t.id === saved)) {
-      setThemeId(saved as CodeThemeId)
+    if (isCodeThemeId(saved)) {
+      setThemeId(saved)
     }
   }, [])
 
-  function setTheme(id: CodeThemeId) {
+  const setTheme = useCallback((id: CodeThemeId) => {
     setThemeId(id)
     localStorage.setItem(STORAGE_KEY, id)
-  }
+  }, [])
 
-  const style = CODE_THEMES.find(t => t.id === themeId)!.style
+  const value = useMemo(() => ({ themeId, setTheme }), [setTheme, themeId])
 
   return (
-    <CodeThemeContext.Provider value={{ themeId, style, setTheme }}>
+    <CodeThemeContext.Provider value={value}>
       {children}
     </CodeThemeContext.Provider>
   )

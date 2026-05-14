@@ -33,6 +33,7 @@ import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
 import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import { pathBasename as basename } from '@/lib/projectPaths'
+import { getCodeThemeStyle } from '@/lib/codeThemeStyles'
 import { useCodeTheme } from './CodeThemeContext'
 
 SyntaxHighlighter.registerLanguage('bash', bash)
@@ -149,6 +150,11 @@ function normalizeCode(code: string): string {
   return code.endsWith('\n') ? code.slice(0, -1) : code
 }
 
+function useCodeHighlighterStyle() {
+  const { themeId } = useCodeTheme()
+  return getCodeThemeStyle(themeId)
+}
+
 export function FencedCodeBlock({
   language,
   codeString,
@@ -158,7 +164,7 @@ export function FencedCodeBlock({
   codeString: string
   margin?: string | number
 }) {
-  const { style: codeStyle } = useCodeTheme()
+  const codeStyle = useCodeHighlighterStyle()
 
   return (
     <div style={{ margin, borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
@@ -295,7 +301,7 @@ export function CodeViewer({
   showLineNumbers?: boolean
   startingLineNumber?: number
 }) {
-  const { style: codeStyle } = useCodeTheme()
+  const codeStyle = useCodeHighlighterStyle()
   const resolvedLanguage = language ?? detectLanguageFromPath(filePath)
 
   return (
@@ -328,7 +334,7 @@ export function CodeViewer({
 }
 
 export function DiffView({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath?: string }) {
-  const { style: codeStyle } = useCodeTheme()
+  const codeStyle = useCodeHighlighterStyle()
   const language = detectLanguageFromPath(filePath)
   const changes = useMemo(() => diffLines(oldStr, newStr), [oldStr, newStr])
 
