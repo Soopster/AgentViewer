@@ -276,9 +276,117 @@ function formatAgentStatsSummary(parsed: Record<string, unknown> | null): string
   return parts.join('  ')
 }
 
+const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TaskStop'])
+const TASK_STATUS_ICON: Record<string, string> = { completed: '✓', in_progress: '◐', pending: '○', deleted: '✗' }
+
+type TaskItem = { id?: string; subject?: string; status?: string; owner?: string }
+type TaskToolInput = { taskId?: string; subject?: string; description?: string; status?: string; owner?: string }
+
+function parseTaskListPayload(raw: string | null | undefined): TaskItem[] | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed as TaskItem[]
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { tasks?: unknown }).tasks)) {
+      return (parsed as { tasks: TaskItem[] }).tasks
+    }
+  } catch { /* not JSON */ }
+  return null
+}
+
+function resultTextOf(thread: ToolThread): string | null {
+  const content = thread.result?.content
+  if (typeof content === 'string') return content.trim() || null
+  return null
+}
+
+function formatTaskTool(thread: ToolThread, expanded: boolean): TuiTranscriptCardLine[] {
+  const name = thread.toolUse.name
+  const input = thread.toolUse.input as TaskToolInput
+  const result = thread.result
+  const isError = result?.is_error === true
+  const raw = resultTextOf(thread)
+
+  if (name === 'TaskCreate') {
+    const subject = (input.subject ?? '').trim() || 'task'
+    const lines: TuiTranscriptCardLine[] = [
+      line(`tool TaskCreate: ${truncateLine(subject)}`, 'tool'),
+    ]
+    if (expanded && input.description && input.description.trim()) {
+      lines.push(line(truncateLine(input.description.trim()), 'muted'))
+    }
+    if (result) {
+      lines.push(line(isError ? '✗ ERROR' : '✓ created', isError ? 'result_error' : 'result_ok'))
+    }
+    return lines
+  }
+
+  if (name === 'TaskUpdate') {
+    const id = input.taskId ? `#${input.taskId}` : ''
+    const icon = input.status ? (TASK_STATUS_ICON[input.status] ?? '') : ''
+    const status = input.status ? ` → ${input.status}${icon ? ` ${icon}` : ''}` : ''
+    const lines: TuiTranscriptCardLine[] = [
+      line(`tool TaskUpdate ${id}${status}`.replace(/\s+/g, ' ').trim(), 'tool'),
+    ]
+    if (result && isError) lines.push(line('✗ ERROR', 'result_error'))
+    return lines
+  }
+
+  if (name === 'TaskGet') {
+    const id = input.taskId ? `#${input.taskId}` : ''
+    const lines: TuiTranscriptCardLine[] = [line(`tool TaskGet ${id}`.trim(), 'tool')]
+    if (result) {
+      lines.push(line(isError ? '✗ ERROR' : '✓ ok', isError ? 'result_error' : 'result_ok'))
+    }
+    return lines
+  }
+
+  if (name === 'TaskList') {
+    const tasks = parseTaskListPayload(raw)
+    const count = tasks?.length ?? 0
+    const lines: TuiTranscriptCardLine[] = [
+      line(`tool TaskList: ${count} task${count === 1 ? '' : 's'}`, 'tool'),
+    ]
+    if (isError) {
+      lines.push(line('✗ ERROR', 'result_error'))
+      return lines
+    }
+    if (tasks && tasks.length > 0) {
+      const limit = expanded ? tasks.length : Math.min(tasks.length, MAX_CARD_LINES - 1)
+      for (let i = 0; i < limit; i++) {
+        const t = tasks[i]
+        const icon = TASK_STATUS_ICON[t.status ?? 'pending'] ?? '○'
+        const tone: TuiTranscriptLineTone = t.status === 'completed' ? 'dim' : 'muted'
+        const idTag = t.id ? `#${t.id} ` : ''
+        const subject = (t.subject ?? '').trim() || '(no subject)'
+        lines.push(line(`${icon} ${idTag}${truncateLine(subject)}`, tone))
+      }
+      if (!expanded && tasks.length > limit) {
+        lines.push(line(`… ${tasks.length - limit} more`, 'dim'))
+      }
+    }
+    return lines
+  }
+
+  if (name === 'TaskStop') {
+    const id = input.taskId ? `#${input.taskId}` : ''
+    const lines: TuiTranscriptCardLine[] = [line(`tool TaskStop ${id}`.trim(), 'tool')]
+    if (result) {
+      lines.push(line(isError ? '✗ ERROR' : '✓ stopped', isError ? 'result_error' : 'result_ok'))
+    }
+    return lines
+  }
+
+  return []
+}
+
 function previewTool(thread: ToolThread): TuiTranscriptCardLine[] {
   if (thread.toolUse.name === 'FileChange') {
     return previewFileChange(thread)
+  }
+
+  if (TASK_TOOL_NAMES.has(thread.toolUse.name)) {
+    return formatTaskTool(thread, false)
   }
 
   const input = thread.toolUse.input as Record<string, unknown>
@@ -751,6 +859,10 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
     case 'tool_thread': {
       const input = block.toolUse.input as Record<string, unknown>
       const toolName = block.toolUse.name
+
+      if (TASK_TOOL_NAMES.has(toolName)) {
+        return formatTaskTool(block, true)
+      }
 
       if (toolName === 'FileChange') {
         const fcInput = block.toolUse.input as {
