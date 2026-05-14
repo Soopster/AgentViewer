@@ -15,6 +15,8 @@ npm run tui:check              # type-check OpenTUI surface (tsc --noEmit via ts
 npm run tui:ink                # legacy Ink TUI
 ```
 
+Three lockfiles coexist: `package-lock.json` (npm, primary), `bun.lock` (Bun, used by `npm run tui`), and `pnpm-lock.yaml` (pnpm, optional). `pnpm-workspace.yaml` only declares pnpm `allowBuilds` policy — this is **not** a workspace/monorepo. Keep all three lockfiles in sync when bumping dependencies.
+
 There is no test runner and no lint script. Type-checking is the verification step:
 
 - Web/Next.js: `npx tsc --noEmit` (uses `tsconfig.json`)
@@ -46,6 +48,8 @@ Routes live under `app/api/`:
 - `provider/route.ts` — GET/POST active provider
 - `sessions/route.ts` — list for active provider; `sessions/project/messages/route.ts` for cross-session project feed
 - `sessions/[sessionId]/{route,messages,diagnostics,fork,interrupt,models,rewind,actions}/route.ts` — per-session reads + control actions
+- `sessions/[sessionId]/subagents/[agentId]/messages/route.ts` — nested transcript for spawned subagents
+- `session-index/{search,rebuild,stats}/route.ts` — full-text search over the persistent SQLite index (see Persistent search index below)
 - `git/route.ts`
 
 `proxy.ts` (Next 16's middleware replacement, lives at project root) blocks cross-origin mutation requests against `/api/*` to prevent drive-by CSRF — keep it.
@@ -54,9 +58,15 @@ Routes live under `app/api/`:
 
 The page (`app/page.tsx`) drives polling: sessions list every 5s, active-session messages every 2s with an `offset` param for incremental delta. `MessageView.tsx` uses a custom absolute-positioning virtual scroll (`ResizeObserver` per-row + RAF batching), not `react-window`.
 
+### Persistent search index
+
+`lib/sessionPersistence.ts` mirrors session metadata + messages into a SQLite database at `.agent-viewer-data/session-index/index.sqlite`. The file is large (~1570 lines) and load-bearing — it backs `/api/session-index/{search,rebuild,stats}` and the in-app session search UI. Key entry points: `syncPersistedSessions`, `syncPersistedSessionMessages`, `searchPersistedSessions`, `readPersistedIndexStats`, `removePersistedSession`, `clearPersistedSessionIndex`.
+
+**`node:sqlite` import quirk** (load-bearing — see commit `5099252`): `node:sqlite` cannot be statically imported because Turbopack/Next bundling rewrites it and breaks the runtime. Use the existing `(0, eval)('import("node:sqlite")')` indirection inside `openDatabase()` to bypass the bundler — do not "clean up" this eval.
+
 ### Theming
 
-Five themes (`dark`, `light`, `terminal`, `iMessage`, `paper`) applied as `data-theme` on `<html>`; CSS vars in `app/globals.css`. Theme is restored before first paint by an inline script in `layout.tsx`. Tool colors use semantic CSS vars (`--t-bash`, `--t-edit`, …). Code-block syntax theme is independent, controlled via `CodeThemeContext`.
+~30 themes — the five originals (`dark`, `light`, `terminal`, `imessage`, `paper`) plus popular editor palettes (`solarized-*`, `gruvbox-*`, `nord*`, `tokyo-night*`, `catppuccin-*`, `dracula`, `monokai`, `kanagawa`, `ayu-*`, etc.). Web themes are registered in `lib/themes.ts` (`Theme` union + `THEMES`/`THEME_GROUPS`/`THEME_META`); each maps to a `[data-theme="…"]` block in `app/globals.css`. TUI themes are registered separately in `lib/tuiState.ts` (`VALID_TUI_THEMES`) with palette tables in `tui/theme.ts` — adding a theme means touching both registries. Theme is restored before first paint by an inline script in `layout.tsx`. Tool colors use semantic CSS vars (`--t-bash`, `--t-edit`, …). Code-block syntax theme is independent, controlled via `CodeThemeContext`.
 
 ### Two terminal UIs
 
@@ -92,17 +102,20 @@ A handful of files dominate the codebase. **Don't `Read` these without `offset`/
 
 | File | Lines | What lives there |
 |---|---:|---|
-| `tui/opentui/App.tsx` | ~4600 | OpenTUI root; entire reader, composer, key handling, `cardDisplayData` memo, scrollbox layout |
-| `components/MessageView.tsx` | ~3700 | Web virtual-scroll timeline, top bar, session controls, `VirtualTimelineRow`, `handleTimelineRowMeasure` |
-| `components/MessageItem.tsx` | ~3300 | Renderer for every threaded block — all tool cards (bash/edit/read/grep/glob/agent/etc.) live here |
-| `tui/App.tsx` | ~2400 | Legacy Ink TUI root |
-| `lib/sessionBackend.ts` | ~2200 | Per-provider switch for every backend op (list/get/messages/diagnostics/fork/rewind/models/send) |
-| `components/SessionList.tsx` | ~1900 | Sidebar: project grouping, search, tag filters, collapsible groups |
-| `components/GitPopover.tsx` | ~1400 | Git diff/branch popover |
-| `components/AnalyticsPopover.tsx` | ~1300 | Recharts analytics |
-| `app/globals.css` | ~1000 | All five themes' CSS vars + base styles |
-| `tui/format.ts` | ~880 | `formatTranscriptCards` / `formatMessageExpanded` (shared by both TUIs) |
-| `tui/theme.ts` | ~850 | LIGHT/DARK/CYBER palettes + `getProviderAccent` |
+| `tui/opentui/App.tsx` | ~4570 | OpenTUI root; entire reader, composer, key handling, `cardDisplayData` memo, scrollbox layout |
+| `components/MessageView.tsx` | ~4220 | Web virtual-scroll timeline, top bar, session controls, `VirtualTimelineRow`, `handleTimelineRowMeasure` |
+| `components/MessageItem.tsx` | ~3240 | Renderer for every threaded block — all tool cards (bash/edit/read/grep/glob/agent/etc.) live here |
+| `tui/App.tsx` | ~2450 | Legacy Ink TUI root |
+| `lib/sessionBackend.ts` | ~2430 | Per-provider switch for every backend op (list/get/messages/diagnostics/fork/rewind/models/send) |
+| `components/SessionList.tsx` | ~2050 | Sidebar: project grouping, search, tag filters, collapsible groups |
+| `lib/sessionPersistence.ts` | ~1570 | SQLite mirror of sessions+messages; powers `/api/session-index/*` search/rebuild/stats |
+| `components/GitPopover.tsx` | ~1370 | Git diff/branch popover |
+| `tui/opentui/AnalyticsPopover.tsx` | ~1150 | OpenTUI analytics overlay (separate impl from the web one) |
+| `components/AnalyticsPopover.tsx` | ~1050 | Recharts analytics |
+| `components/CommandPalette.tsx` | ~1010 | Web cmd-K palette: provider switch, theme, session actions, navigation — single registry of user-facing commands |
+| `app/globals.css` | ~1000 | All ~30 themes' CSS vars + base styles (each `[data-theme="…"]` block is contiguous) |
+| `tui/format.ts` | ~915 | `formatTranscriptCards` / `formatMessageExpanded` (shared by both TUIs) |
+| `tui/theme.ts` | ~990 | LIGHT/DARK/CYBER palettes + `getProviderAccent` |
 
 Recommended access patterns:
 
@@ -112,4 +125,19 @@ Recommended access patterns:
 - OpenTUI key handling, scrollbox, or memos → `Grep` for the keyword in `tui/opentui/App.tsx` (`useKeyboard`, `cardDisplayData`, `scrollbox`, `followTail`, `setSessionDetail`).
 - `Explore` agent is worth it for cross-file searches that would otherwise need 3+ Greps; for a single known symbol, just Grep directly.
 
-Also: never `Read` `package-lock.json` (~573 KB) or `bun.lock` (~248 KB) directly — `grep` them for the package name instead.
+Also: never `Read` `package-lock.json` (~573 KB), `pnpm-lock.yaml` (~360 KB), or `bun.lock` (~248 KB) directly — `grep` them for the package name instead.
+
+## Common changes — where to start
+
+Concrete recipes for typical asks. Each lists every file you usually need to touch.
+
+- **Add a new tool card** (e.g. a new SDK tool to render specially) → `components/MessageItem.tsx` for the web card; `tui/format.ts` for both TUIs (formats are shared); `lib/threading.ts` only if the tool needs new block-grouping logic. Tool color: add a `--t-<name>` var in each `[data-theme="…"]` block in `app/globals.css`.
+- **Add a provider** → new `lib/<provider>Client.ts` + `<provider>Mapper.ts`; extend the `AgentProvider` union and `isAgentProvider` in `lib/types.ts`/`lib/provider.ts`; add a `<PROVIDER>_CAPABILITIES` constant + branch in `getProviderCapabilities`; add provider branches throughout `lib/sessionBackend.ts` (every backend op switches on provider); add an entry to `PROVIDER_SELECT_OPTIONS` in `components/CommandPalette.tsx`.
+- **Add a theme** → web: extend the `Theme` union + `THEMES`/`THEME_GROUPS`/`THEME_META` in `lib/themes.ts`, then add a `[data-theme="<name>"] { … }` block in `app/globals.css`. TUI: add the name to `VALID_TUI_THEMES` in `lib/tuiState.ts` and a palette in `tui/theme.ts`. Both registries must agree.
+- **Add a command-palette entry** → `components/CommandPalette.tsx` (single registry of user-facing actions and keybindings).
+- **Change polling cadence** → `app/page.tsx` (5s sessions list, 2s active-session messages with `offset` delta).
+- **Add a session-level API action** → new folder under `app/api/sessions/[sessionId]/<action>/route.ts`; implement the backend method on `lib/sessionBackend.ts` (per-provider switch); reflect via a `SessionCapabilities` flag in `lib/provider.ts` if the UI gates it; thread it through `lib/tui/service.ts` if the TUIs need it too.
+- **Touch persistent search behavior** → `lib/sessionPersistence.ts` (SQL + aggregation), then the routes under `app/api/session-index/`. Don't import `node:sqlite` statically — use the existing `(0, eval)('import("node:sqlite")')` indirection.
+- **Add an OpenTUI keybinding or modal** → `tui/opentui/App.tsx`; grep for `useKeyboard`. Heavy work belongs in a new `tui/opentui/<thing>Worker.ts` + `<thing>WorkerClient.ts` pair, not on the render thread.
+
+Verification after a change: `npx tsc --noEmit` (web) and/or `npm run tui:check` (OpenTUI). There is no test runner.
