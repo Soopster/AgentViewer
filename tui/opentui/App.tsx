@@ -14,7 +14,7 @@ import {
   type TuiTranscriptCard,
   type TuiTranscriptCardLine,
 } from '../format'
-import type { ThreadedMessage } from '../../lib/threading'
+import { stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
 import {
   THEME,
   getProviderAccent,
@@ -56,7 +56,12 @@ import {
   type TuiSidebarSort,
 } from '../../lib/tui/service'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
-import { readTuiSessionDetailAsync } from './sessionDetailWorkerClient'
+import {
+  readTuiSessionDetailAsync,
+  formatTranscriptCardsAsync,
+  getTranscriptCardsSync,
+  transcriptCardsVariantKey,
+} from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { ProviderSelection, RunningSessionRef, SendState, Session } from '../../lib/types'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
@@ -1576,6 +1581,10 @@ export default function OpenTuiApp() {
   const tabsEnabledRef = useRef(true)
   const themeMenuOriginRef = useRef<TuiThemeMode | null>(null)
   const currentThemeRef = useRef<TuiThemeMode>('light')
+  const densityRef = useRef<TuiDensity>('balanced')
+  const showToolCallsRef = useRef(true)
+  useEffect(() => { densityRef.current = density }, [density])
+  useEffect(() => { showToolCallsRef.current = showToolCalls }, [showToolCalls])
   useEffect(() => {
     setActiveTheme(themeMode)
   }, [themeMode])
@@ -1694,47 +1703,63 @@ export default function OpenTuiApp() {
     ),
   )
 
-  // Preserve reference stability for partially-stripped messages so the
-  // per-message card cache below keeps hitting when only the tail changes.
-  const strippedCacheRef = useRef(new WeakMap<ThreadedMessage, ThreadedMessage>())
-  const transcriptCardCacheRef = useRef(new Map<string, { threaded: ThreadedMessage; density: TuiDensity; card: TuiTranscriptCard }>())
-  const transcriptCards = useMemo(() => {
-    if (!sessionDetail) return []
-    const source = sessionDetail.threadedMessages
-    let messages: ThreadedMessage[]
-    if (showToolCalls) {
-      messages = source
-    } else {
-      const cache = strippedCacheRef.current
-      messages = []
-      for (const msg of source) {
-        const cached = cache.get(msg)
-        if (cached) {
-          messages.push(cached)
-          continue
-        }
-        const kept = msg.blocks.filter((b) => b.type !== 'tool_thread')
-        if (kept.length === 0) continue
-        const stripped = kept.length === msg.blocks.length ? msg : { ...msg, blocks: kept }
-        cache.set(msg, stripped)
-        messages.push(stripped)
-      }
+  // Card formatting runs in the threading worker (proposal 1). The worker client
+  // keeps a per-(density, showToolCalls) cache (proposal 2) so density toggles
+  // between previously-seen variants are O(1) without a worker round-trip.
+  //
+  // Render path:
+  //   1. getTranscriptCardsSync hits the client cache for the current variant —
+  //      common case for steady-state polling and density flips back to a
+  //      visited value. Cold load also lands here because readTuiSessionDetail-
+  //      Async warmed the cache before sessionDetail was committed to state.
+  //   2. sessionDetail.transcriptCards has the matching variant tag — common
+  //      case when the threading-client cache was evicted (8-session LRU) but
+  //      the detail itself is still in sessionDetailCacheRef.
+  //   3. Synchronous main-thread format — rare. Only hits the first time the
+  //      user toggles to a never-seen variant; the effect below then warms
+  //      both caches so the next visit is instant.
+  const transcriptCards = useMemo<TuiTranscriptCard[]>(() => {
+    if (!sessionDetail || !selectedSessionTarget) return []
+    const cachedSync = getTranscriptCardsSync(
+      selectedSessionTarget,
+      sessionDetail.threadedMessages,
+      density,
+      showToolCalls,
+    )
+    if (cachedSync) return cachedSync
+    const wantedVariant = transcriptCardsVariantKey(density, showToolCalls)
+    if (
+      sessionDetail.transcriptCards
+      && sessionDetail.transcriptCardsVariant === wantedVariant
+    ) {
+      return sessionDetail.transcriptCards
     }
-    const prevCache = transcriptCardCacheRef.current
-    const nextCache = new Map<string, { threaded: ThreadedMessage; density: TuiDensity; card: TuiTranscriptCard }>()
-    const cards = messages.map((message) => {
-      const cached = prevCache.get(message.uuid)
-      if (cached && cached.threaded === message && cached.density === density) {
-        nextCache.set(message.uuid, cached)
-        return cached.card
-      }
-      const card = formatTranscriptCard(message, density)
-      nextCache.set(message.uuid, { threaded: message, density, card })
-      return card
-    })
-    transcriptCardCacheRef.current = nextCache
-    return cards
-  }, [density, sessionDetail, showToolCalls])
+    const filtered = showToolCalls
+      ? sessionDetail.threadedMessages
+      : stripToolCallBlocks(sessionDetail.threadedMessages)
+    return filtered.map((msg) => formatTranscriptCard(msg, density))
+  }, [density, sessionDetail, selectedSessionTarget, showToolCalls])
+
+  // Warm the worker + client caches when the user toggles density/showToolCalls
+  // to a variant that isn't yet cached. The synchronous fallback above keeps the
+  // UI responsive in the meantime; this effect just ensures subsequent toggles
+  // hit the cache instead of running a main-thread format every time.
+  useEffect(() => {
+    if (!sessionDetail || !selectedSessionTarget) return
+    const cachedSync = getTranscriptCardsSync(
+      selectedSessionTarget,
+      sessionDetail.threadedMessages,
+      density,
+      showToolCalls,
+    )
+    if (cachedSync) return
+    void formatTranscriptCardsAsync(
+      selectedSessionTarget,
+      sessionDetail.threadedMessages,
+      density,
+      showToolCalls,
+    ).catch(() => { /* worker errors surface elsewhere */ })
+  }, [density, sessionDetail, selectedSessionTarget, showToolCalls])
   const transcriptIndexByKey = useMemo(() => {
     const indexByKey = new Map<string, number>()
     transcriptCards.forEach((card, index) => {
@@ -1770,10 +1795,9 @@ export default function OpenTuiApp() {
   const deferredSearchQuery = useDeferredValue(normalizedSearchQuery)
   const searchMatches = useMemo(() => {
     if (!deferredSearchQuery) return []
-    return transcriptCards.flatMap((card, index) => {
-      const haystack = `${card.label}\n${card.searchText}`.toLowerCase()
-      return haystack.includes(deferredSearchQuery) ? [index] : []
-    })
+    return transcriptCards.flatMap((card, index) => (
+      card.searchHaystackLower.includes(deferredSearchQuery) ? [index] : []
+    ))
   }, [deferredSearchQuery, transcriptCards])
 
   const cursorIndex = useMemo(() => {
@@ -1976,7 +2000,7 @@ export default function OpenTuiApp() {
       const isExpanded = resolvedExpandedKeys.has(card.key)
       const isLatest = index === transcriptCards.length - 1
       const isSearchHit = deferredSearchQuery.length > 0
-        && `${card.label}\n${card.searchText}`.toLowerCase().includes(deferredSearchQuery)
+        && card.searchHaystackLower.includes(deferredSearchQuery)
       const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
       const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
       const stable = stableCardData[index] ?? {
@@ -2317,7 +2341,7 @@ export default function OpenTuiApp() {
     setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
 
     try {
-      const detail = await readTuiSessionDetailAsync(session)
+      const detail = await readTuiSessionDetailAsync(session, densityRef.current, showToolCallsRef.current)
       if (requestId !== detailRequestRef.current) return
       if (typeof session.lastModified === 'number') {
         sessionDetailMtimeRef.current.set(cacheKeyForGuards, session.lastModified)

@@ -601,6 +601,7 @@ export type TuiTranscriptCard = {
   lines: TuiTranscriptCardLine[]
   expandedLines: TuiTranscriptCardLine[]
   searchText: string
+  searchHaystackLower: string
   codeBlocks?: Array<{ key: string; lang: string; content: string }>
   editDiff?: string
   markdownContent?: string
@@ -785,6 +786,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     : compactCardLines(previewSourceLines, density)
   const compactSummary = collapsedLines.map((entry) => entry.text).join(' · ')
 
+  const searchText = expandedLines.map((entry) => entry.text).join('\n')
   return {
     key: message.uuid,
     role: message.role,
@@ -800,7 +802,8 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     dayLabel: formatDayLabel(message.timestamp),
     lines: collapsedLines,
     expandedLines,
-    searchText: expandedLines.map((entry) => entry.text).join('\n'),
+    searchText,
+    searchHaystackLower: `${label}\n${searchText}`.toLowerCase(),
     codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
     editDiff: synthesizeEditDiff(message),
     markdownContent: (category === 'conversation' || category === 'insight')

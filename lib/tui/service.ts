@@ -39,6 +39,7 @@ import {
 } from '../sessionBackend'
 import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
+import type { TuiTranscriptCard } from '../../tui/format'
 
 const DEFAULT_SESSION_LIMIT = 200
 const CLAUDE_MESSAGE_LIMIT = 400
@@ -49,6 +50,15 @@ export type TuiSessionDetail = {
   rawMessages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
   contextUsage: ContextUsage | null
+  // Populated by the OpenTUI worker pipeline (readTuiSessionDetailAsync). The
+  // synchronous readTuiSessionDetail path used by the legacy Ink TUI leaves
+  // this undefined; the Ink renderer formats its own cards lazily.
+  transcriptCards?: TuiTranscriptCard[]
+  // Tag identifying the (density, showToolCalls) pair the transcriptCards
+  // above were formatted with. The main thread uses this to recognise when a
+  // cached detail's cards are stale relative to the user's current settings
+  // (e.g. after a density toggle).
+  transcriptCardsVariant?: string
 }
 
 export type TuiSessionMetadata = {
