@@ -245,12 +245,14 @@ function providerChipStyle(provider: AgentProvider): { color: string; background
 const SessionRow = memo(function SessionRow({
   session,
   selected,
+  hydrated,
   onSelect,
   onRename,
   onTag,
 }: {
   session: Session
   selected: boolean
+  hydrated: boolean
   onSelect: (session: Session) => void
   onRename: (sessionId: string, title: string) => void
   onTag: (sessionId: string, tag: string | null) => void
@@ -258,7 +260,6 @@ const SessionRow = memo(function SessionRow({
   const [hovered, setHovered] = useState(false)
   const [editing, setEditing] = useState<'title' | 'tag' | null>(null)
   const [editValue, setEditValue] = useState('')
-  const [hydrated, setHydrated] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const shortId = session.sessionId.slice(-12)
   const sessionTitle = getSessionTitle(session)
@@ -266,10 +267,7 @@ const SessionRow = memo(function SessionRow({
   const sessionTags = parseStoredSessionTags(session.tag)
   const activityTime = session.lastModified ?? session.createdAt
   const activityTitle = hydrated ? formatTimestamp(activityTime) : formatStableTimestamp(activityTime)
-
-  useEffect(() => {
-    setHydrated(true)
-  }, [])
+  const providerStyle = session.provider ? providerChipStyle(session.provider) : null
 
   const startEdit = useCallback((kind: 'title' | 'tag', value: string) => (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -328,6 +326,8 @@ const SessionRow = memo(function SessionRow({
       style={{
         padding: '10px 16px 10px 24px',
         borderBottom: '1px solid var(--border)',
+        contentVisibility: 'auto',
+        containIntrinsicSize: '96px',
       }}
     >
       {/* Session ID */}
@@ -431,9 +431,9 @@ const SessionRow = memo(function SessionRow({
               padding: '1px 6px',
               borderRadius: 999,
               letterSpacing: '0.05em',
-              border: `1px solid ${providerChipStyle(session.provider).border}`,
-              background: providerChipStyle(session.provider).background,
-              color: providerChipStyle(session.provider).color,
+              border: `1px solid ${providerStyle?.border}`,
+              background: providerStyle?.background,
+              color: providerStyle?.color,
             }}
           >
             {session.provider.toUpperCase()}
@@ -533,6 +533,7 @@ const ProjectGroup = memo(function ProjectGroup({
   sessions,
   selectedId,
   selectedProject,
+  hydrated,
   scrollToSessionKey,
   onSelect,
   onSelectProject,
@@ -544,6 +545,7 @@ const ProjectGroup = memo(function ProjectGroup({
   sessions: Session[]
   selectedId: string | null
   selectedProject: string | null
+  hydrated: boolean
   scrollToSessionKey?: string | null
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
@@ -629,6 +631,7 @@ const ProjectGroup = memo(function ProjectGroup({
           <SessionRow
             session={session}
             selected={sessionTabKey(session) === selectedId}
+            hydrated={hydrated}
             onSelect={onSelect}
             onRename={onRename}
             onTag={onTag}
@@ -744,6 +747,10 @@ export default function SessionList({
   const [searchText, setSearchText] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
   const [sortMode, setSortMode] = useState<'project' | 'time'>('project')
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => {
+    setHydrated(true)
+  }, [])
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem('agentViewer:sessionSort')
@@ -1152,6 +1159,7 @@ export default function SessionList({
                           sessions={groupSessions}
                           selectedId={selectedId}
                           selectedProject={selectedProject}
+                          hydrated={hydrated}
                           onSelect={onSelect}
                           onSelectProject={onSelectProject}
                           onRename={onRename}
@@ -1213,6 +1221,7 @@ export default function SessionList({
                             <SessionRow
                               session={entry.session}
                               selected={sessionTabKey(entry.session) === selectedId}
+                              hydrated={hydrated}
                               onSelect={onSelect}
                               onRename={onRename}
                               onTag={onTag}
@@ -1928,6 +1937,7 @@ export default function SessionList({
                 sessions={groupSessions}
                 selectedId={selectedId}
                 selectedProject={selectedProject}
+                hydrated={hydrated}
                 scrollToSessionKey={scrollToSessionRequest?.sessionKey ?? null}
                 onSelect={onSelect}
                 onSelectProject={onSelectProject}
@@ -1990,6 +2000,7 @@ export default function SessionList({
                   key={entry.key}
                   session={entry.session}
                   selected={sessionTabKey(entry.session) === selectedId}
+                  hydrated={hydrated}
                   onSelect={onSelect}
                   onRename={onRename}
                   onTag={onTag}
