@@ -34,10 +34,12 @@ import {
   listViewSessionMessages,
   listViewSessions,
   patchViewSession,
+  readViewSessionDiagnostics,
   readViewSessionInfo,
   readViewSessionModels,
+  runViewSessionAction,
 } from '../sessionBackend'
-import type { ContextUsage, ProviderSelection, Session, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
+import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 import type { TuiTranscriptCard } from '../../tui/format'
 
@@ -239,4 +241,21 @@ export async function readTuiSessionMetadata(session: Session): Promise<TuiSessi
 
 export async function patchTuiSession(session: Session, body: Record<string, unknown>): Promise<void> {
   return patchViewSession(session.sessionId, body, session.provider)
+}
+
+export async function readTuiSessionDiagnostics(
+  session: Session,
+): Promise<{ sections: SessionDiagnosticSection[]; currentModel: string | null }> {
+  return readViewSessionDiagnostics(session.sessionId, session.provider as AgentProvider | undefined)
+}
+
+export async function runTuiSessionAction(
+  session: Session,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return runViewSessionAction({
+    sessionId: session.sessionId,
+    body,
+    provider: session.provider as AgentProvider | undefined,
+  })
 }

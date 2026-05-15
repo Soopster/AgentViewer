@@ -110,12 +110,23 @@ function asOrigin(value: unknown): { kind: string } | undefined {
   return typeof record.kind === 'string' ? { kind: record.kind } : undefined
 }
 
+function readString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string' && value.length > 0) return value
+  }
+  return undefined
+}
+
 export function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | null {
   const record = asObject(value)
   const type = record.type
   if (type !== 'user' && type !== 'assistant' && type !== 'system') return null
   if (typeof record.uuid !== 'string' || typeof record.session_id !== 'string') return null
   const payload = asObject(record.message)
+
+  const taskDescription = type === 'user' ? readString(record, 'task_description', 'taskDescription') : undefined
+  const requestId = type === 'assistant' ? readString(record, 'request_id', 'requestId') : undefined
 
   return {
     type,
@@ -125,6 +136,8 @@ export function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | 
     provider: 'claude',
     timestamp: normalizeTimestamp(record.timestamp),
     origin: asOrigin(record.origin),
+    taskDescription,
+    requestId,
     message: type === 'system'
       ? normalizeSystemMessage(record.message, typeof payload.subtype === 'string' ? payload.subtype : 'system')
       : normalizeApiMessage(type, record.message, record.tool_use_result),

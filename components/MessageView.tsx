@@ -31,7 +31,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 import { RotateCcw, SendHorizontal, Square } from 'lucide-react'
-import MessageItem, { MessageDensityProvider, type MessageDensity } from './MessageItem'
+import MessageItem, { LiveSubagentTextContext, MessageDensityProvider, type MessageDensity } from './MessageItem'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import CodeThemeToggle from './CodeThemeToggle'
 import TabBar from './TabBar'
@@ -348,6 +348,7 @@ function extractStreamingAssistantText(payload: unknown): string | null {
   }
 
   if (record.type === 'stream_event') {
+    if (typeof record.parent_tool_use_id === 'string' && record.parent_tool_use_id) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -1336,6 +1337,10 @@ export default function MessageView({
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
   const [sendError, setSendError] = useState<string | null>(null)
+  const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
+  const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | null>(null)
+  const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
+  const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null)
   const [availableModels, setAvailableModels] = useState<SessionModelInfo[]>([])
@@ -1768,6 +1773,9 @@ export default function MessageView({
     setLiveAssistantText('')
     setLiveToolActivities([])
     setLiveThreadedMessages([])
+    setLivePromptSuggestion(null)
+    setLiveStatus(null)
+    setLiveSubagentText({})
     awaitingPersistedTurnRef.current = false
     setAwaitingPersistedTurn(false)
     setAutoFollow(true)
@@ -1796,6 +1804,7 @@ export default function MessageView({
           resumeSessionAt: resumeFromMessageId ?? undefined,
           forkSession: Boolean(resumeFromMessageId),
           provider: session.provider,
+          taskBudgetTokens: taskBudgetTokens ?? undefined,
         }),
         signal: controller.signal,
       })
@@ -1843,6 +1852,29 @@ export default function MessageView({
 
           try {
             const parsed = JSON.parse(frame.data)
+            if (parsed?.type === 'prompt_suggestion' && typeof parsed.suggestion === 'string') {
+              setLivePromptSuggestion(parsed.suggestion)
+            }
+            if (parsed?.type === 'system' && parsed.subtype === 'status') {
+              const next = parsed.status === 'requesting' || parsed.status === 'compacting' ? parsed.status : null
+              setLiveStatus(next)
+            }
+            if (parsed?.type === 'stream_event' && typeof parsed.parent_tool_use_id === 'string' && parsed.parent_tool_use_id) {
+              const event = parsed.event
+              if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && typeof event.delta.text === 'string') {
+                const parentId = parsed.parent_tool_use_id
+                const delta = event.delta.text
+                setLiveSubagentText((prev) => ({ ...prev, [parentId]: (prev[parentId] ?? '') + delta }))
+              }
+            }
+            if (parsed?.type === 'user' && typeof parsed.parent_tool_use_id === 'string' && parsed.parent_tool_use_id) {
+              const parentId = parsed.parent_tool_use_id
+              setLiveSubagentText((prev) => {
+                if (!(parentId in prev)) return prev
+                const { [parentId]: _, ...rest } = prev
+                return rest
+              })
+            }
             const pendingPermission = extractOpenCodePermission(parsed)
             if (pendingPermission) {
               setPendingPermissions((prev) => [
@@ -1908,6 +1940,7 @@ export default function MessageView({
 
             const deltaText = extractStreamingAssistantText(parsed)
             if (deltaText) {
+              setLiveStatus(null)
               if (session.provider === 'claude') {
                 setLiveAssistantText((prev) => {
                   const nextText = shouldReplaceLiveAssistantText(parsed)
@@ -1961,6 +1994,7 @@ export default function MessageView({
       }
 
       setSendState('idle')
+      setLiveStatus(null)
       setAttachments([])
       if (session.provider === 'claude') {
         setLiveThreadedMessages((prev) => prev.length > 0
@@ -2201,6 +2235,46 @@ export default function MessageView({
     setSessionActionError(null)
     setSessionActionNotice(null)
   }, [sessionCapabilities?.resumeAtMessage])
+
+  const refreshDiagnostics = useCallback(async () => {
+    if (!session) return
+    setDiagnosticsLoading(true)
+    try {
+      const res = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/diagnostics`, session.provider))
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      setDiagnosticSections(data.sections ?? [])
+      const diagnosticsModel = normalizeSelectValue(data.currentModel)
+      if (diagnosticsModel && !selectedModelValue) setSelectedModel(diagnosticsModel)
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to refresh diagnostics')
+    } finally {
+      setDiagnosticsLoading(false)
+    }
+  }, [selectedModelValue, session])
+
+  const [claudeMcpBusy, setClaudeMcpBusy] = useState<string | null>(null)
+  const runClaudeSessionAction = useCallback(async (action: string, extra: Record<string, unknown>, busyKey: string, successNotice: string) => {
+    if (!session) return
+    setClaudeMcpBusy(busyKey)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, provider: session.provider, ...extra }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      setSessionActionNotice(successNotice)
+      await refreshDiagnostics()
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Action failed')
+    } finally {
+      setClaudeMcpBusy(null)
+    }
+  }, [refreshDiagnostics, session])
 
   const toggleDiagnostics = useCallback(async () => {
     if (!session) return
@@ -3492,8 +3566,32 @@ export default function MessageView({
               background: 'var(--surface-2)',
             }}
           >
-            <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 10 }}>
-              Session Diagnostics
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <div style={{ fontFamily: "'Oxanium', monospace", fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
+                Session Diagnostics
+              </div>
+              {session?.provider === 'claude' && (
+                <button
+                  type="button"
+                  onClick={() => runClaudeSessionAction('reloadPlugins', {}, 'reload-plugins', 'Plugins reloaded.')}
+                  disabled={claudeMcpBusy === 'reload-plugins'}
+                  title="Reload plugins from disk"
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    color: 'var(--cyan)',
+                    background: 'var(--surface)',
+                    border: '1px solid rgba(56,217,245,0.3)',
+                    borderRadius: 5,
+                    padding: '3px 9px',
+                    cursor: claudeMcpBusy === 'reload-plugins' ? 'not-allowed' : 'pointer',
+                    letterSpacing: '0.08em',
+                    opacity: claudeMcpBusy === 'reload-plugins' ? 0.6 : 1,
+                  }}
+                >
+                  {claudeMcpBusy === 'reload-plugins' ? 'RELOADING…' : 'RELOAD PLUGINS'}
+                </button>
+              )}
             </div>
             {diagnosticsLoading ? (
               <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
@@ -3507,11 +3605,87 @@ export default function MessageView({
                       {section.title}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {section.items.map((item, index) => (
-                        <div key={`${section.id}-${index}`} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>
-                          {item}
-                        </div>
-                      ))}
+                      {section.id === 'mcp' && session?.provider === 'claude' ? (
+                        section.items.map((item, index) => {
+                          if (item === 'None') {
+                            return <div key={`${section.id}-${index}`} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>None</div>
+                          }
+                          const [rawName, rawStatus] = item.split(' · ')
+                          const name = rawName?.trim() ?? ''
+                          const status = rawStatus?.trim() ?? ''
+                          const enabled = status !== 'disabled'
+                          const busyKey = `mcp:${name}`
+                          const busy = claudeMcpBusy === busyKey || claudeMcpBusy === `mcp:toggle:${name}`
+                          return (
+                            <div
+                              key={`${section.id}-${index}`}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 6,
+                                fontFamily: "'IBM Plex Mono', monospace",
+                                fontSize: 11,
+                                color: 'var(--text-2)',
+                              }}
+                            >
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }} title={item}>
+                                {name} <span style={{ color: enabled ? 'var(--green)' : 'var(--text-3)' }}>· {status}</span>
+                              </span>
+                              <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                                <button
+                                  type="button"
+                                  onClick={() => runClaudeSessionAction('reconnectMcpServer', { serverName: name }, busyKey, `Reconnected ${name}.`)}
+                                  disabled={busy}
+                                  title={`Reconnect ${name}`}
+                                  style={{
+                                    fontFamily: "'IBM Plex Mono', monospace",
+                                    fontSize: 9,
+                                    color: 'var(--cyan)',
+                                    background: 'transparent',
+                                    border: '1px solid rgba(56,217,245,0.3)',
+                                    borderRadius: 4,
+                                    padding: '0 5px',
+                                    height: 18,
+                                    cursor: busy ? 'not-allowed' : 'pointer',
+                                    letterSpacing: '0.06em',
+                                    opacity: busy ? 0.5 : 1,
+                                  }}
+                                >
+                                  RECONN
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => runClaudeSessionAction('toggleMcpServer', { serverName: name, enabled: !enabled }, `mcp:toggle:${name}`, `${enabled ? 'Disabled' : 'Enabled'} ${name}.`)}
+                                  disabled={busy}
+                                  title={`${enabled ? 'Disable' : 'Enable'} ${name}`}
+                                  style={{
+                                    fontFamily: "'IBM Plex Mono', monospace",
+                                    fontSize: 9,
+                                    color: enabled ? 'var(--yellow)' : 'var(--green)',
+                                    background: 'transparent',
+                                    border: enabled ? '1px solid rgba(251,191,36,0.3)' : '1px solid rgba(74,222,128,0.3)',
+                                    borderRadius: 4,
+                                    padding: '0 5px',
+                                    height: 18,
+                                    cursor: busy ? 'not-allowed' : 'pointer',
+                                    letterSpacing: '0.06em',
+                                    opacity: busy ? 0.5 : 1,
+                                  }}
+                                >
+                                  {enabled ? 'DISABLE' : 'ENABLE'}
+                                </button>
+                              </span>
+                            </div>
+                          )
+                        })
+                      ) : (
+                        section.items.map((item, index) => (
+                          <div key={`${section.id}-${index}`} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-2)' }}>
+                            {item}
+                          </div>
+                        ))
+                      )}
                     </div>
                   </div>
                 ))}
@@ -3555,21 +3729,23 @@ export default function MessageView({
               style={{ position: 'relative', minHeight: virtualTimeline.totalHeight, height: virtualTimeline.totalHeight }}
             >
               <MessageDensityProvider density={density}>
-                {(() => {
-                  const lastRowKey = timelineRows.at(-1)?.key
-                  return virtualTimeline.visibleRows.map(({ row, top }) => (
-                    <VirtualTimelineRow
-                      key={row.key}
-                      row={row}
-                      top={top}
-                      isLast={row.key === lastRowKey}
-                      onMeasure={handleTimelineRowMeasure}
-                      onLastRowRef={setLastTimelineRow}
-                      onForkFromMessage={handleForkFromMessage}
-                      onToggleResume={toggleResumeFromMessage}
-                    />
-                  ))
-                })()}
+                <LiveSubagentTextContext.Provider value={liveSubagentText}>
+                  {(() => {
+                    const lastRowKey = timelineRows.at(-1)?.key
+                    return virtualTimeline.visibleRows.map(({ row, top }) => (
+                      <VirtualTimelineRow
+                        key={row.key}
+                        row={row}
+                        top={top}
+                        isLast={row.key === lastRowKey}
+                        onMeasure={handleTimelineRowMeasure}
+                        onLastRowRef={setLastTimelineRow}
+                        onForkFromMessage={handleForkFromMessage}
+                        onToggleResume={toggleResumeFromMessage}
+                      />
+                    ))
+                  })()}
+                </LiveSubagentTextContext.Provider>
               </MessageDensityProvider>
             </div>
           </div>
@@ -3731,6 +3907,90 @@ export default function MessageView({
             {sessionActionError ?? sessionActionNotice}
           </div>
         )}
+        {liveStatus === 'requesting' && sendState === 'sending' && !liveAssistantText && (
+          <div style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            color: 'var(--text-3)',
+            marginBottom: 8,
+            letterSpacing: '0.04em',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%',
+              background: 'var(--cyan)',
+              boxShadow: '0 0 6px var(--cyan-glow)',
+              animation: 'pulse 1.2s ease-in-out infinite',
+            }} />
+            requesting…
+          </div>
+        )}
+        {livePromptSuggestion && sendState !== 'sending' && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 8,
+            flexWrap: 'wrap',
+          }}>
+            <span style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              color: 'var(--text-3)',
+              letterSpacing: '0.08em',
+            }}>
+              SUGGESTED
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setInputText(livePromptSuggestion)
+                inputTextRef.current = livePromptSuggestion
+                setLivePromptSuggestion(null)
+                window.requestAnimationFrame(() => {
+                  textareaRef.current?.focus()
+                  resizeComposer()
+                })
+              }}
+              title={livePromptSuggestion}
+              style={{
+                fontFamily: "'IBM Plex Sans', sans-serif",
+                fontSize: 12,
+                color: 'var(--text)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
+                borderRadius: 999,
+                padding: '3px 10px',
+                cursor: 'pointer',
+                textAlign: 'left',
+                maxWidth: '60ch',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {livePromptSuggestion}
+            </button>
+            <button
+              type="button"
+              onClick={() => setLivePromptSuggestion(null)}
+              title="Dismiss suggestion"
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                color: 'var(--text-3)',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '0 4px',
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        )}
         <Card
           style={{
             borderRadius: 10,
@@ -3793,6 +4053,46 @@ export default function MessageView({
                       </NativeSelectOption>
                     ))}
                   </NativeSelect>
+                </label>
+              )}
+              {session?.provider === 'claude' && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 140px', minWidth: 120 }}>
+                  <Label style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    color: 'var(--text-3)',
+                    letterSpacing: '0.05em',
+                  }}>
+                    BUDGET
+                  </Label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    step={1000}
+                    placeholder="—"
+                    title="Task token budget (tokens). The model paces itself toward this cap. Leave blank for no budget."
+                    value={taskBudgetTokens ?? ''}
+                    onChange={(event) => {
+                      const next = event.target.value.trim()
+                      if (!next) { setTaskBudgetTokens(null); return }
+                      const parsed = Number(next)
+                      setTaskBudgetTokens(Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null)
+                    }}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      height: 26,
+                      padding: '0 6px',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11,
+                      color: 'var(--text)',
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 5,
+                      letterSpacing: '0.04em',
+                    }}
+                  />
                 </label>
               )}
               {sessionCapabilities?.fileRewind && rewindCandidates.length > 0 && (

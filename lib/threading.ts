@@ -64,6 +64,8 @@ export type ThreadedMessage = {
   origin?: { kind: string }
   usage?: ApiMessage['usage']
   provider?: AgentProvider
+  taskDescription?: string
+  requestId?: string
   blocks: ThreadedBlock[]
 }
 
@@ -306,6 +308,8 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
         origin: msg.origin,
         usage: messageUsage(msg),
         provider: msg.provider,
+        taskDescription: msg.taskDescription,
+        requestId: msg.requestId,
         blocks: threadedBlocks,
       })
     }

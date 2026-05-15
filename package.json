@@ -12,6 +12,7 @@
     "bin",
     "components",
     "components.json",
+    "instrumentation.ts",
     "lib",
     "next-env.d.ts",
     "next.config.ts",
@@ -35,11 +36,11 @@
     "tui:ink:dev": "node --watch --import tsx ./tui/main.tsx"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.141",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.142",
     "@earendil-works/pi-coding-agent": "^0.74.0",
     "@github/copilot-sdk": "^1.0.0-beta.4",
     "@inkjs/ui": "^2.0.0",
-    "@opencode-ai/sdk": "^1.14.50",
+    "@opencode-ai/sdk": "^1.15.0",
     "@opentui/core": "^0.2.10",
     "@opentui/react": "^0.2.10",
     "@radix-ui/react-checkbox": "^1.3.3",
@@ -52,7 +53,7 @@
     "clsx": "^2.1.1",
     "diff": "^9.0.0",
     "ink": "^7.0.3",
-    "lucide-react": "^1.14.0",
+    "lucide-react": "^1.16.0",
     "marked": "^18.0.3",
     "next": "^16.2.6",
     "radix-ui": "^1.4.3",
@@ -67,13 +68,13 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.0",
-    "@types/node": "^25.7.0",
+    "@types/node": "^25.8.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "postcss": "^8.5.14",
     "shadcn": "^4.7.0",
     "tailwindcss": "^4.3.0",
-    "tsx": "^4.21.0",
+    "tsx": "^4.22.0",
     "typescript": "^6.0.3"
   }
 }

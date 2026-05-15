@@ -34,6 +34,7 @@ import {
   readTuiProvider,
   readTuiRailVisible,
   readTuiSessionDetail,
+  readTuiSessionDiagnostics,
   readTuiSessionReaderState,
   readTuiSessions,
   readTuiSidebarSort,
@@ -42,6 +43,7 @@ import {
   readTuiTabsEnabled,
   readTuiTheme,
   readTuiTranscriptView,
+  runTuiSessionAction,
   writeTuiDensity,
   writeTuiFocusMode,
   writeTuiProvider,
@@ -440,6 +442,7 @@ function extractStreamingAssistantText(payload: unknown): string | null {
   }
 
   if (record.type === 'stream_event') {
+    if (typeof record.parent_tool_use_id === 'string' && record.parent_tool_use_id) return null
     const event = record.event
     if (!event || typeof event !== 'object') return null
     const eventRecord = event as Record<string, unknown>
@@ -1259,6 +1262,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'cli',        label: 'Copy CLI resume command', key: 'C',  category: 'Session'    },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
+  { id: 'diagnostics', label: 'Session diagnostics',   key: 'D',  category: 'Session'    },
   { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
   { id: 'sort',       label: 'Toggle sidebar sort',    key: 'S',  category: 'Session'    },
   // Tabs
@@ -1657,6 +1661,12 @@ export default function OpenTuiApp() {
   const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const analyticsKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [diagnosticsSections, setDiagnosticsSections] = useState<import('../../lib/types').SessionDiagnosticSection[]>([])
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
+  const [diagnosticsBusy, setDiagnosticsBusy] = useState<string | null>(null)
+  const [diagnosticsMcpIndex, setDiagnosticsMcpIndex] = useState(0)
   const [searchMode, setSearchMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIndex, setSearchMatchIndex] = useState(0)
@@ -1690,6 +1700,10 @@ export default function OpenTuiApp() {
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
   const [composerError, setComposerError] = useState<string | null>(null)
   const [composerLiveText, setComposerLiveText] = useState('')
+  const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
+  const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | null>(null)
+  const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
+  const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
   const [sentHistory, setSentHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [draftBeforeHistory, setDraftBeforeHistory] = useState('')
@@ -2830,6 +2844,46 @@ export default function OpenTuiApp() {
     setSelectedSessionKey(sessionKey(session))
   }, [chooseProvider, provider])
 
+  const refreshDiagnostics = useCallback(async () => {
+    if (!selectedSession) return
+    setDiagnosticsLoading(true)
+    setDiagnosticsError(null)
+    try {
+      const data = await readTuiSessionDiagnostics(selectedSession)
+      setDiagnosticsSections(data.sections ?? [])
+    } catch (err) {
+      setDiagnosticsError(err instanceof Error ? err.message : 'Failed to load diagnostics')
+    } finally {
+      setDiagnosticsLoading(false)
+    }
+  }, [selectedSession])
+
+  const openDiagnostics = useCallback(() => {
+    setDiagnosticsOpen(true)
+    setDiagnosticsMcpIndex(0)
+    void refreshDiagnostics()
+  }, [refreshDiagnostics])
+
+  const closeDiagnostics = useCallback(() => {
+    setDiagnosticsOpen(false)
+    setDiagnosticsError(null)
+    setDiagnosticsBusy(null)
+  }, [])
+
+  const runDiagnosticsAction = useCallback(async (action: string, extra: Record<string, unknown>, busyKey: string) => {
+    if (!selectedSession || selectedSession.provider !== 'claude') return
+    setDiagnosticsBusy(busyKey)
+    setDiagnosticsError(null)
+    try {
+      await runTuiSessionAction(selectedSession, { action, ...extra })
+      await refreshDiagnostics()
+    } catch (err) {
+      setDiagnosticsError(err instanceof Error ? err.message : 'Action failed')
+    } finally {
+      setDiagnosticsBusy(null)
+    }
+  }, [refreshDiagnostics, selectedSession])
+
   const cancelComposerSend = useCallback(() => {
     if (composerAbortRef.current) {
       composerAbortRef.current.abort()
@@ -2837,6 +2891,8 @@ export default function OpenTuiApp() {
     composerAbortRef.current = null
     setComposerSendState('idle')
     setComposerLiveText('')
+    setLiveStatus(null)
+    setLiveSubagentText({})
   }, [])
 
   // Keep the ref in sync on every render so commitRename always reads the latest draft,
@@ -2903,6 +2959,9 @@ export default function OpenTuiApp() {
     setComposerError(null)
     // no longer track awaiting state separately
     setComposerLiveText('')
+    setLivePromptSuggestion(null)
+    setLiveStatus(null)
+    setLiveSubagentText({})
     const runningRef: RunningSessionRef = {
       sessionId: targetSession.sessionId,
       provider: targetSession.provider ?? 'claude',
@@ -2920,6 +2979,7 @@ export default function OpenTuiApp() {
         body: JSON.stringify({
           message: trimmed,
           provider: targetSession.provider,
+          taskBudgetTokens: taskBudgetTokens ?? undefined,
         }),
         signal: controller.signal,
       })
@@ -2954,8 +3014,38 @@ export default function OpenTuiApp() {
           return
         }
         if (!parsed) return
+        const parsedRecord = parsed as Record<string, unknown>
+
+        if (parsedRecord.type === 'prompt_suggestion' && typeof parsedRecord.suggestion === 'string') {
+          setLivePromptSuggestion(parsedRecord.suggestion)
+        }
+        if (parsedRecord.type === 'system' && parsedRecord.subtype === 'status') {
+          const status = parsedRecord.status === 'requesting' || parsedRecord.status === 'compacting' ? parsedRecord.status : null
+          setLiveStatus(status as 'requesting' | 'compacting' | null)
+        }
+        if (parsedRecord.type === 'stream_event' && typeof parsedRecord.parent_tool_use_id === 'string' && parsedRecord.parent_tool_use_id) {
+          const event = parsedRecord.event as Record<string, unknown> | undefined
+          if (event?.type === 'content_block_delta') {
+            const eventDelta = event.delta as Record<string, unknown> | undefined
+            if (eventDelta?.type === 'text_delta' && typeof eventDelta.text === 'string') {
+              const parentId = parsedRecord.parent_tool_use_id
+              const deltaText = eventDelta.text
+              setLiveSubagentText((prev) => ({ ...prev, [parentId]: (prev[parentId] ?? '') + deltaText }))
+            }
+          }
+        }
+        if (parsedRecord.type === 'user' && typeof parsedRecord.parent_tool_use_id === 'string' && parsedRecord.parent_tool_use_id) {
+          const parentId = parsedRecord.parent_tool_use_id
+          setLiveSubagentText((prev) => {
+            if (!(parentId in prev)) return prev
+            const { [parentId]: _, ...rest } = prev
+            return rest
+          })
+        }
+
         const delta = extractStreamingAssistantText(parsed)
         if (!delta) return
+        setLiveStatus(null)
         const replace = shouldReplaceLiveAssistantText(parsed)
         replyAccumulator = replace ? delta : `${replyAccumulator}${delta}`
         setComposerLiveText((prev) => replace ? delta : `${prev}${delta}`)
@@ -3011,10 +3101,13 @@ export default function OpenTuiApp() {
       setComposerSendState('error')
       setComposerError(err instanceof Error ? err.message : 'Failed to send message')
       setComposerLiveText('')
+      setLiveStatus(null)
     } finally {
       void reader?.cancel()
       composerAbortRef.current = null
       setComposerLiveText('')
+      setLiveStatus(null)
+      setLiveSubagentText({})
       clearSessionRunning(runningRef)
     }
   }, [
@@ -3027,6 +3120,7 @@ export default function OpenTuiApp() {
     markSessionRunning,
     clearSessionRunning,
     renderer,
+    taskBudgetTokens,
   ])
 
   useEffect(() => {
@@ -3656,6 +3750,9 @@ export default function OpenTuiApp() {
       case 'analytics':
         setAnalyticsOpen(true)
         break
+      case 'diagnostics':
+        openDiagnostics()
+        break
       case 'rename':
         if (selectedSession) {
           setRenameSessionKey(sessionKey(selectedSession))
@@ -3731,6 +3828,46 @@ export default function OpenTuiApp() {
 
     if (analyticsOpen) {
       handled(() => { analyticsKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (diagnosticsOpen) {
+      handled(() => {
+        if (key.name === 'escape' || isShifted('D') || isCtrl('c')) {
+          closeDiagnostics()
+          return
+        }
+        if (selectedSession?.provider !== 'claude') return
+        const mcpSection = diagnosticsSections.find((s) => s.id === 'mcp')
+        const mcpRows = mcpSection?.items.filter((i) => i !== 'None') ?? []
+        if (mcpRows.length === 0 && key.name !== 'p') return
+        if (key.name === 'up' || key.name === 'k') {
+          setDiagnosticsMcpIndex((i) => Math.max(0, i - 1))
+          return
+        }
+        if (key.name === 'down' || key.name === 'j') {
+          setDiagnosticsMcpIndex((i) => Math.min(mcpRows.length - 1, i + 1))
+          return
+        }
+        if (key.name === 'r' && mcpRows[diagnosticsMcpIndex]) {
+          const item = mcpRows[diagnosticsMcpIndex]
+          const name = item.split(' · ')[0]?.trim() ?? ''
+          if (name) void runDiagnosticsAction('reconnectMcpServer', { serverName: name }, `mcp:${name}`)
+          return
+        }
+        if (key.name === 't' && mcpRows[diagnosticsMcpIndex]) {
+          const item = mcpRows[diagnosticsMcpIndex]
+          const [rawName, rawStatus] = item.split(' · ')
+          const name = rawName?.trim() ?? ''
+          const status = rawStatus?.trim() ?? ''
+          if (name) void runDiagnosticsAction('toggleMcpServer', { serverName: name, enabled: status === 'disabled' }, `mcp:toggle:${name}`)
+          return
+        }
+        if (key.name === 'p') {
+          void runDiagnosticsAction('reloadPlugins', {}, 'reload-plugins')
+          return
+        }
+      })
       return
     }
 
@@ -3838,6 +3975,13 @@ export default function OpenTuiApp() {
         })
         return
       }
+      if (key.name === 'tab' && livePromptSuggestion && composerSendState !== 'sending') {
+        handled(() => {
+          setComposerDraft(livePromptSuggestion)
+          setLivePromptSuggestion(null)
+        })
+        return
+      }
       if (key.name === 'up') {
         handled(() => {
           if (sentHistory.length === 0) return
@@ -3892,6 +4036,12 @@ export default function OpenTuiApp() {
     // Global analytics popover
     if (isCtrl('a')) {
       handled(() => setAnalyticsOpen(true))
+      return
+    }
+
+    // Global diagnostics popover
+    if (isShifted('D') && selectedSession) {
+      handled(() => openDiagnostics())
       return
     }
 
@@ -4796,6 +4946,36 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
+      {composerSendState === 'sending' && liveStatus === 'requesting' && !composerLiveText ? (
+        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+          <text fg={theme.cyan} wrapMode="none">
+            {fitText('● requesting…', Math.max(width - 4, 20))}
+          </text>
+        </box>
+      ) : null}
+
+      {(() => {
+        const subagentEntries = Object.entries(liveSubagentText).filter(([, text]) => text.trim().length > 0)
+        if (subagentEntries.length === 0) return null
+        const [, latest] = subagentEntries[subagentEntries.length - 1]
+        const tail = latest.replace(/\s+/g, ' ').trim().slice(-80)
+        return (
+          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+            <text fg={theme.dim} wrapMode="none">
+              {fitText(`↪ subagent: ${tail}`, Math.max(width - 4, 20))}
+            </text>
+          </box>
+        )
+      })()}
+
+      {livePromptSuggestion && composerSendState !== 'sending' ? (
+        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+          <text fg={theme.cyan} wrapMode="none">
+            {fitText(`Tab → ${livePromptSuggestion}`, Math.max(width - 4, 20))}
+          </text>
+        </box>
+      ) : null}
+
       {composerStatusMessage ? (
         composerSendState === 'sending' && composerLiveText && syntaxStyle && !composerError ? (
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1} height={4}>
@@ -4909,6 +5089,85 @@ export default function OpenTuiApp() {
           onKeyHandlerReady={(handler) => { analyticsKeyHandlerRef.current = handler }}
         />
       ) : null}
+
+      {diagnosticsOpen ? (() => {
+        const overlayWidth = Math.min(76, Math.max(width - 4, 40))
+        const overlayHeight = Math.min(height - 2, 28)
+        const isClaude = selectedSession?.provider === 'claude'
+        const mcpSection = diagnosticsSections.find((s) => s.id === 'mcp')
+        const mcpRows = mcpSection?.items.filter((i) => i !== 'None') ?? []
+        return (
+          <box
+            position="absolute"
+            top={1}
+            left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
+            width={overlayWidth}
+            height={overlayHeight}
+            border
+            borderStyle="single"
+            borderColor={theme.border2}
+            backgroundColor={theme.surface}
+            zIndex={30}
+            flexDirection="column"
+          >
+            <box paddingX={1} paddingTop={1} flexDirection="row" gap={1}>
+              <text fg={theme.text}>DIAGNOSTICS</text>
+              {diagnosticsLoading ? <text fg={theme.dim}>· loading…</text> : null}
+              {diagnosticsBusy ? <text fg={theme.cyan}>· {diagnosticsBusy}</text> : null}
+            </box>
+            {diagnosticsError ? (
+              <box paddingX={1}>
+                <text fg={theme.red} wrapMode="none">{fitText(diagnosticsError, overlayWidth - 4)}</text>
+              </box>
+            ) : null}
+            <box flexGrow={1} paddingX={1} paddingBottom={1} flexDirection="column" overflow="hidden">
+              {diagnosticsSections.map((section) => (
+                <box key={section.id} flexDirection="column" marginTop={1} flexShrink={0}>
+                  <box flexShrink={0} height={1}><text fg={theme.dim}>{section.title}</text></box>
+                  {section.items.length === 0 || (section.items.length === 1 && section.items[0] === 'None') ? (
+                    <box flexShrink={0} height={1}><text fg={theme.muted}>  None</text></box>
+                  ) : section.id === 'mcp' && isClaude ? (
+                    section.items.map((item, idx) => {
+                      if (item === 'None') return <box key={idx} flexShrink={0} height={1}><text fg={theme.muted}>  None</text></box>
+                      const [, rawStatus] = item.split(' · ')
+                      const status = rawStatus?.trim() ?? ''
+                      const selected = idx === diagnosticsMcpIndex
+                      return (
+                        <box key={idx} flexShrink={0} height={1}>
+                          <text
+                            fg={selected ? theme.cyan : (status === 'disabled' ? theme.dim : theme.text)}
+                            wrapMode="none"
+                          >
+                            {fitText(`  ${selected ? '▶' : ' '} ${item}`, overlayWidth - 4)}
+                          </text>
+                        </box>
+                      )
+                    })
+                  ) : (
+                    section.items.slice(0, 10).map((item, idx) => (
+                      <box key={idx} flexShrink={0} height={1}>
+                        <text fg={theme.text} wrapMode="none">
+                          {fitText(`  ${item}`, overlayWidth - 4)}
+                        </text>
+                      </box>
+                    ))
+                  )}
+                </box>
+              ))}
+            </box>
+            <box paddingX={1} paddingBottom={1}>
+              <text fg={theme.dim} wrapMode="none">
+                {fitText(
+                  isClaude
+                    ? `${mcpRows.length > 0 ? '↑↓ select MCP · r reconnect · t toggle · ' : ''}p reload plugins · Esc close`
+                    : 'Esc close',
+                  overlayWidth - 4,
+                )}
+              </text>
+            </box>
+          </box>
+        )
+      })() : null}
     </box>
   )
 }

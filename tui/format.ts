@@ -585,11 +585,40 @@ function formatBlock(block: ThreadedBlock): TuiTranscriptCardLine[] {
         ? [line(`❯ ${truncateLine(block.stdout.trim().split('\n')[0])}`, 'dim')]
         : [line('❯', 'dim')]
     case 'claude_system': {
-      if (block.subtype === 'task_progress' || block.subtype === 'task_updated') {
+      const subagentType = typeof block.payload.subagent_type === 'string' ? block.payload.subagent_type : ''
+      const subagentPrefix = subagentType ? `[${subagentType}] ` : ''
+      if (block.subtype === 'task_started' || block.subtype === 'task_progress' || block.subtype === 'task_updated' || block.subtype === 'task_notification') {
         const text = typeof block.payload.summary === 'string' ? block.payload.summary
           : typeof block.payload.description === 'string' ? block.payload.description
           : 'task running'
-        return [line(`● ${truncateLine(text)}`, 'thinking')]
+        return [line(`● ${subagentPrefix}${truncateLine(text)}`, 'thinking')]
+      }
+      if (block.subtype === 'hook_started') {
+        const name = typeof block.payload.hook_name === 'string' ? block.payload.hook_name : 'hook'
+        const event = typeof block.payload.hook_event === 'string' ? block.payload.hook_event : ''
+        return [line(`hook ${name}${event ? ` ▸ ${event}` : ''}`, 'system')]
+      }
+      if (block.subtype === 'hook_progress') {
+        const name = typeof block.payload.hook_name === 'string' ? block.payload.hook_name : 'hook'
+        const output = typeof block.payload.output === 'string' && block.payload.output ? block.payload.output
+          : typeof block.payload.stdout === 'string' ? block.payload.stdout : ''
+        return [line(`hook ${name}${output ? ` · ${truncateLine(output)}` : ''}`, 'system')]
+      }
+      if (block.subtype === 'hook_response') {
+        const name = typeof block.payload.hook_name === 'string' ? block.payload.hook_name : 'hook'
+        const outcome = typeof block.payload.outcome === 'string' ? block.payload.outcome : ''
+        return [line(`hook ${name}${outcome ? ` ${outcome}` : ''}`, 'system')]
+      }
+      if (block.subtype === 'memory_recall') {
+        const memories = Array.isArray(block.payload.memories) ? block.payload.memories as Array<Record<string, unknown>> : []
+        const mode = typeof block.payload.mode === 'string' ? block.payload.mode : ''
+        const head = line(`memory ${mode || 'recall'}: ${memories.length} file${memories.length === 1 ? '' : 's'}`, 'system')
+        const previews = memories.slice(0, 2).map((m) => {
+          const path = typeof m.path === 'string' ? m.path : ''
+          const scope = typeof m.scope === 'string' ? m.scope : ''
+          return line(`  ${scope ? `[${scope}] ` : ''}${truncateLine(path)}`, 'muted')
+        })
+        return [head, ...previews]
       }
       return [line(`system ${block.subtype}`, 'system')]
     }
@@ -800,7 +829,15 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
   const baseLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
     : message.role.toUpperCase()
-  const label = message.origin?.kind?.startsWith('subagent:') ? `${baseLabel} ↪ sub` : baseLabel
+  const isSubagent = message.origin?.kind?.startsWith('subagent:') === true
+  const subagentLabel = isSubagent ? `${baseLabel} ↪ sub` : baseLabel
+  const taskSuffix = isSubagent && message.taskDescription
+    ? ` · task: ${truncateLine(message.taskDescription, 48)}`
+    : ''
+  const requestSuffix = message.requestId
+    ? ` · req:${message.requestId.slice(0, 10)}`
+    : ''
+  const label = `${subagentLabel}${taskSuffix}${requestSuffix}`
   const previewLines = message.blocks.flatMap(formatBlock)
   const { processedLines: expandedLines, codeBlocks, hasMermaidDiagrams } = extractCodeBlocksFromBlocks(message.blocks)
   const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null

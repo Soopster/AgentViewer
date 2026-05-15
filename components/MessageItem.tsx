@@ -1168,6 +1168,8 @@ function extractToolNames(content: SubagentMessage['message']['content']): strin
 
 function AgentCard({ thread }: { thread: ToolThread }) {
   const sessionId = use(SessionContext)
+  const liveSubagentText = use(LiveSubagentTextContext)
+  const liveText = liveSubagentText[thread.toolUse.id] ?? ''
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
   const [transcriptOpen, setTranscriptOpen] = useState(false)
@@ -1222,6 +1224,37 @@ function AgentCard({ thread }: { thread: ToolThread }) {
     if (next) loadTranscript()
   }
 
+  const lifecycle = useMemo(() => {
+    if (!transcriptMessages || transcriptMessages.length === 0) return null
+    const timestamped = transcriptMessages.filter((m) => typeof m.timestamp === 'string') as Array<SubagentMessage & { timestamp: string }>
+    const firstTs = timestamped[0]?.timestamp
+    const lastTs = timestamped.at(-1)?.timestamp
+    let startedAtMs: number | null = null
+    let endedAtMs: number | null = null
+    if (firstTs) { const t = new Date(firstTs).getTime(); if (Number.isFinite(t)) startedAtMs = t }
+    if (lastTs)  { const t = new Date(lastTs).getTime();  if (Number.isFinite(t)) endedAtMs = t }
+    const lastAssistant = [...transcriptMessages].reverse().find((m) => m.message.role === 'assistant')
+    const lastAssistantText = lastAssistant ? extractTextContent(lastAssistant.message.content) : ''
+    return { startedAtMs, endedAtMs, lastAssistantText }
+  }, [transcriptMessages])
+
+  const formatClockShort = (ms: number) => {
+    const d = new Date(ms)
+    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`
+  }
+  const formatDurationShort = (ms: number) => {
+    if (ms < 1000) return `${ms}ms`
+    if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+    if (ms < 3_600_000) {
+      const m = Math.floor(ms / 60_000)
+      const s = Math.floor((ms % 60_000) / 1000)
+      return `${m}m ${s}s`
+    }
+    const h = Math.floor(ms / 3_600_000)
+    const m = Math.floor((ms % 3_600_000) / 60_000)
+    return `${h}h ${m}m`
+  }
+
   return (
     <div style={{ border: '1px solid var(--border)', borderLeft: `2px solid ${c}`, borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
       {/* Header */}
@@ -1254,6 +1287,46 @@ function AgentCard({ thread }: { thread: ToolThread }) {
         )}
         {resultText && <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>}
       </div>
+
+      {/* Live streaming subagent text (forwardSubagentText) */}
+      {!thread.result && liveText.trim() && (
+        <div
+          style={{
+            padding: '8px 14px',
+            borderTop: '1px solid var(--border)',
+            background: 'var(--bg)',
+            fontFamily: "'IBM Plex Sans', sans-serif",
+            fontSize: 12,
+            color: 'var(--text-2)',
+            lineHeight: 1.55,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            maxHeight: 200,
+            overflowY: 'auto',
+            position: 'relative',
+          }}
+        >
+          <div style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 9,
+            color: c,
+            letterSpacing: '0.1em',
+            marginBottom: 4,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}>
+            <span style={{
+              width: 5, height: 5, borderRadius: '50%',
+              background: c,
+              boxShadow: `0 0 6px ${c}`,
+              animation: 'pulse 1.2s ease-in-out infinite',
+            }} />
+            LIVE
+          </div>
+          {liveText.length > 1200 ? `…${liveText.slice(-1200)}` : liveText}
+        </div>
+      )}
 
       {/* Stats row for completed synchronous agents */}
       {status === 'completed' && (totalTokens != null || totalToolUseCount != null || totalDurationMs != null) && (
@@ -1296,7 +1369,29 @@ function AgentCard({ thread }: { thread: ToolThread }) {
             <span>{transcriptOpen ? 'HIDE TRANSCRIPT' : 'VIEW TRANSCRIPT'}</span>
             {transcriptLoading && <span style={{ opacity: 0.5 }}>…</span>}
             {!transcriptLoading && transcriptMessages && <span style={{ opacity: 0.5 }}>({transcriptMessages.length} msgs)</span>}
+            {lifecycle && lifecycle.startedAtMs && lifecycle.endedAtMs && lifecycle.endedAtMs > lifecycle.startedAtMs && (
+              <span style={{ opacity: 0.5 }}>
+                · {formatClockShort(lifecycle.startedAtMs)} → {formatClockShort(lifecycle.endedAtMs)} ({formatDurationShort(lifecycle.endedAtMs - lifecycle.startedAtMs)})
+              </span>
+            )}
           </button>
+          {lifecycle && lifecycle.lastAssistantText && !transcriptOpen && (
+            <div
+              title={lifecycle.lastAssistantText}
+              style={{
+                padding: '0 12px 6px 24px',
+                fontFamily: "'IBM Plex Sans', sans-serif",
+                fontSize: 11,
+                color: 'var(--text-3)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                fontStyle: 'italic',
+              }}
+            >
+              ↳ {lifecycle.lastAssistantText.replace(/\s+/g, ' ').trim().slice(0, 200)}
+            </div>
+          )}
           {transcriptOpen && transcriptMessages && (
             <div style={{ borderTop: '1px solid var(--border)', maxHeight: 420, overflowY: 'auto', background: 'var(--bg)' }}>
               {transcriptMessages.length === 0
@@ -2857,9 +2952,34 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     }
     if (subtype === 'tool_use_summary' && typeof payload.summary === 'string') return payload.summary
     if (subtype === 'status' && typeof payload.status === 'string') return payload.status
+    if (subtype === 'hook_started') {
+      const hookName = typeof payload.hook_name === 'string' ? payload.hook_name : 'hook'
+      const event = typeof payload.hook_event === 'string' ? payload.hook_event : ''
+      return event ? `${hookName} ▸ ${event}` : hookName
+    }
+    if (subtype === 'hook_progress') {
+      const hookName = typeof payload.hook_name === 'string' ? payload.hook_name : 'hook'
+      const output = typeof payload.output === 'string' && payload.output ? payload.output
+        : typeof payload.stdout === 'string' ? payload.stdout : ''
+      return output ? `${hookName} · ${output.replace(/\s+/g, ' ').trim().slice(0, 120)}` : hookName
+    }
+    if (subtype === 'hook_response') {
+      const hookName = typeof payload.hook_name === 'string' ? payload.hook_name : 'hook'
+      const outcome = typeof payload.outcome === 'string' ? payload.outcome : ''
+      return outcome ? `${hookName} ${outcome}` : hookName
+    }
+    if (subtype === 'memory_recall') {
+      const memories = Array.isArray(payload.memories) ? payload.memories : []
+      const mode = typeof payload.mode === 'string' ? payload.mode : ''
+      const count = memories.length
+      return `${count} memor${count === 1 ? 'y' : 'ies'}${mode ? ` · ${mode}` : ''}`
+    }
     return 'Claude system event'
-  }, [content, payload.description, payload.elapsed_time_seconds, payload.level, payload.status, payload.summary, payload.tool_name, subtype])
+  }, [content, payload.description, payload.elapsed_time_seconds, payload.hook_event, payload.hook_name, payload.level, payload.memories, payload.mode, payload.outcome, payload.output, payload.status, payload.stdout, payload.summary, payload.tool_name, subtype])
+  const hookOutcome = typeof payload.outcome === 'string' ? payload.outcome : ''
   const tone = payload.level === 'warning'
+    ? 'var(--yellow)'
+    : subtype === 'hook_response' && (hookOutcome === 'error' || hookOutcome === 'cancelled')
     ? 'var(--yellow)'
     : subtype === 'compact_boundary'
     ? 'var(--violet)'
@@ -2869,6 +2989,8 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     ? 'var(--cyan)'
     : subtype === 'tool_progress' || subtype === 'tool_use_summary'
     ? 'var(--cyan)'
+    : subtype === 'memory_recall'
+    ? 'var(--cyan)'
     : 'var(--text-3)'
   const badges = useMemo(() => {
     const nextBadges: string[] = []
@@ -2877,14 +2999,19 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     if (typeof payload.tool_use_id === 'string') nextBadges.push(payload.tool_use_id.slice(0, 8))
     if (typeof payload.tool_name === 'string') nextBadges.push(payload.tool_name)
     if (typeof payload.hook_name === 'string') nextBadges.push(payload.hook_name)
+    if (typeof payload.hook_event === 'string') nextBadges.push(payload.hook_event)
+    if (typeof payload.outcome === 'string') nextBadges.push(payload.outcome)
     if (typeof payload.mcp_server_name === 'string') nextBadges.push(payload.mcp_server_name)
+    if (typeof payload.subagent_type === 'string') nextBadges.push(payload.subagent_type)
+    if (typeof payload.task_type === 'string' && payload.task_type !== payload.subagent_type) nextBadges.push(payload.task_type)
+    if (subtype === 'memory_recall' && typeof payload.mode === 'string') nextBadges.push(payload.mode)
     if (subtype === 'compact_boundary' && payload.compact_metadata && typeof payload.compact_metadata === 'object') {
       const compact = payload.compact_metadata as { trigger?: unknown; pre_tokens?: unknown }
       if (typeof compact.trigger === 'string') nextBadges.push(compact.trigger)
       if (typeof compact.pre_tokens === 'number') nextBadges.push(`${fmtTokens(compact.pre_tokens)} pre`)
     }
     return nextBadges
-  }, [payload.compact_metadata, payload.hook_name, payload.mcp_server_name, payload.status, payload.task_id, payload.tool_name, payload.tool_use_id, subtype])
+  }, [payload.compact_metadata, payload.hook_event, payload.hook_name, payload.mcp_server_name, payload.mode, payload.outcome, payload.status, payload.subagent_type, payload.task_id, payload.task_type, payload.tool_name, payload.tool_use_id, subtype])
 
   const body = useMemo(() => {
     if (subtype === 'task_notification') return content || (typeof payload.result === 'string' ? payload.result : '')
@@ -2902,11 +3029,22 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       ].filter(Boolean)
       return lines.join('\n')
     }
-    if (subtype === 'hook_response') {
+    if (subtype === 'hook_progress' || subtype === 'hook_response') {
       return [content, typeof payload.stdout === 'string' ? payload.stdout : '', typeof payload.stderr === 'string' ? payload.stderr : ''].filter(Boolean).join('\n\n')
     }
+    if (subtype === 'memory_recall') {
+      const memories = Array.isArray(payload.memories) ? payload.memories as Array<Record<string, unknown>> : []
+      const lines = memories.map((m) => {
+        const scope = typeof m.scope === 'string' ? m.scope : ''
+        const path = typeof m.path === 'string' ? m.path : ''
+        const memContent = typeof m.content === 'string' ? m.content : ''
+        const header = scope ? `[${scope}] ${path}` : path
+        return memContent ? `${header}\n${memContent}` : header
+      })
+      return lines.join('\n\n')
+    }
     return content
-  }, [content, payload.last_tool_name, payload.result, payload.stderr, payload.stdout, subtype])
+  }, [content, payload.last_tool_name, payload.memories, payload.result, payload.stderr, payload.stdout, subtype])
   const payloadJson = useMemo(() => safeJson(payload), [payload])
 
   return (
@@ -3075,6 +3213,7 @@ function densityConfig(d: MessageDensity): DensityConfig {
 
 const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanced'))
 const SessionContext = createContext<string | undefined>(undefined)
+export const LiveSubagentTextContext = createContext<Record<string, string>>({})
 
 export function MessageDensityProvider({ density, children }: { density: MessageDensity; children: React.ReactNode }) {
   const value = useMemo(() => densityConfig(density), [density])
@@ -3172,6 +3311,40 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
               </span>
             )
           })()}
+          {message.taskDescription && message.origin?.kind?.startsWith('subagent:') && (
+            <span
+              title={message.taskDescription}
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                color: 'var(--text-3)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                minWidth: 0,
+                maxWidth: '40ch',
+              }}
+            >
+              Task: {message.taskDescription}
+            </span>
+          )}
+          {message.requestId && (
+            <span
+              title={message.requestId}
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                color: 'var(--text-3)',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
+                borderRadius: 3,
+                padding: '1px 5px',
+                letterSpacing: '0.04em',
+              }}
+            >
+              req · {message.requestId.slice(0, 10)}
+            </span>
+          )}
           {showSession && message.provider && (
             <span
               style={{

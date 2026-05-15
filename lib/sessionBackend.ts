@@ -1139,6 +1139,47 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     }
   }
 
+  if (resolvedProvider === 'claude') {
+    if (action === 'reconnectMcpServer') {
+      const serverName = typeof body.serverName === 'string' ? body.serverName : ''
+      if (!serverName) throw new Error('serverName is required')
+      const q = createSessionControlQuery(sessionId)
+      try {
+        await q.reconnectMcpServer(serverName)
+        return { ok: true }
+      } finally {
+        q.close()
+      }
+    }
+    if (action === 'toggleMcpServer') {
+      const serverName = typeof body.serverName === 'string' ? body.serverName : ''
+      const enabled = typeof body.enabled === 'boolean' ? body.enabled : null
+      if (!serverName) throw new Error('serverName is required')
+      if (enabled === null) throw new Error('enabled (boolean) is required')
+      const q = createSessionControlQuery(sessionId)
+      try {
+        await q.toggleMcpServer(serverName, enabled)
+        return { ok: true }
+      } finally {
+        q.close()
+      }
+    }
+    if (action === 'reloadPlugins') {
+      const q = createSessionControlQuery(sessionId)
+      try {
+        const result = await q.reloadPlugins()
+        return {
+          plugins: result.plugins ?? [],
+          commands: result.commands?.length ?? 0,
+          agents: result.agents?.length ?? 0,
+          mcpServers: result.mcpServers?.length ?? 0,
+        }
+      } finally {
+        q.close()
+      }
+    }
+  }
+
   throw new Error(`Action ${action || '(missing)'} is not supported for ${resolvedProvider} sessions`)
 }
 
@@ -1413,6 +1454,9 @@ async function createClaudeStream(sessionId: string, request: NextRequest, body:
   const prompt = await buildClaudePrompt(userMessage, attachments)
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
   const forkSessionOnSend = Boolean(body.forkSession)
+  const taskBudgetTotal = typeof body.taskBudgetTokens === 'number' && body.taskBudgetTokens > 0
+    ? Math.floor(body.taskBudgetTokens)
+    : undefined
 
   const encoder = new TextEncoder()
   const abortController = new AbortController()
@@ -1437,6 +1481,11 @@ async function createClaudeStream(sessionId: string, request: NextRequest, body:
           forkSession: forkSessionOnSend,
           includePartialMessages: true,
           agentProgressSummaries: true,
+          includeHookEvents: true,
+          promptSuggestions: true,
+          forwardSubagentText: true,
+          systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true },
+          taskBudget: taskBudgetTotal ? { total: taskBudgetTotal } : undefined,
         },
       })
 
@@ -2346,7 +2395,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
 
   const q = createSessionControlQuery(sessionId)
   try {
-    await q.initializationResult()
+    const init = await q.initializationResult()
     const [commands, agents, mcpServers, contextUsage, subagents] = await Promise.all([
       q.supportedCommands(),
       q.supportedAgents(),
@@ -2354,6 +2403,10 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
       q.getContextUsage().catch(() => null),
       listSubagents(sessionId).catch(() => [] as string[]),
     ])
+    const accountItems: string[] = []
+    if (init.account?.email) accountItems.push(init.account.email)
+    if (init.account?.organization) accountItems.push(init.account.organization)
+    if (init.account?.subscriptionType) accountItems.push(init.account.subscriptionType)
     return {
       currentModel: contextUsage?.model ?? null,
       sections: [
@@ -2370,6 +2423,16 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
           id: 'subagents',
           title: 'SUBAGENTS',
           items: subagents.length > 0 ? subagents.slice(0, 20) : ['None'],
+        },
+        {
+          id: 'output-style',
+          title: 'OUTPUT STYLE',
+          items: init.output_style ? [init.output_style] : ['default'],
+        },
+        {
+          id: 'account',
+          title: 'ACCOUNT',
+          items: accountItems.length > 0 ? accountItems : ['Unknown'],
         },
       ],
     }

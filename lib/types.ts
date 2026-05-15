@@ -79,6 +79,8 @@ export type SessionMessage = {
   origin?: { kind: string }
   provider?: AgentProvider
   turnId?: string
+  taskDescription?: string
+  requestId?: string
 }
 
 export type Session = {
