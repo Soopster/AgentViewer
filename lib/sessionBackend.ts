@@ -1147,7 +1147,17 @@ async function readCodexMessagesAll(sessionId: string): Promise<SessionMessage[]
   const turns = thread.turns
   const lastTurn = turns.at(-1)
   const lastItem = lastTurn?.items.at(-1)
-  const signature = `${turns.length}:${lastTurn?.id ?? ''}:${lastTurn?.items.length ?? 0}:${lastItem?.id ?? ''}`
+  const lastItemSignature = lastItem ? JSON.stringify(lastItem) : ''
+  const signature = [
+    thread.updatedAt,
+    thread.status,
+    turns.length,
+    lastTurn?.id ?? '',
+    lastTurn?.status ?? '',
+    lastTurn?.error ?? '',
+    lastTurn?.items.length ?? 0,
+    lastItemSignature,
+  ].join(':')
   const cached = readMappedMessagesCache(`codex:${sessionId}`, signature)
   if (cached) return cached
   const messages = sortMessagesChronologically(mapCodexThreadToMessages(thread))

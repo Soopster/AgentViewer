@@ -2,6 +2,7 @@ import type { ThreadedMessage } from '../../lib/threading'
 import type { TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 import type { Session, SessionMessage } from '../../lib/types'
+import { sameSessionMessageContent } from './messageFingerprint'
 
 export type TranscriptPayload = {
   threadedMessages: ThreadedMessage[]
@@ -61,7 +62,7 @@ function touchThreadingCache(key: string, cache: ThreadingClientCache): void {
 function sameMessageSequence(messages: SessionMessage[], prevMessages: SessionMessage[]): boolean {
   if (messages.length !== prevMessages.length) return false
   for (let i = 0; i < messages.length; i++) {
-    if (messages[i]?.uuid !== prevMessages[i]?.uuid) return false
+    if (!sameSessionMessageContent(messages[i], prevMessages[i])) return false
   }
   return true
 }
@@ -145,7 +146,7 @@ export function buildAndFormatTranscriptAsync(
 /**
  * Re-format already-threaded messages with a new density / showToolCalls pair.
  * Used when the user toggles density or tool visibility — avoids re-reading
- * disk and re-threading; the worker hits its per-(uuid, density) card cache
+ * disk and re-threading; the worker hits its per-(message fingerprint, density) card cache
  * for previously-visited densities.
  */
 export function formatTranscriptCardsAsync(

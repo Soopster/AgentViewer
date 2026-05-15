@@ -8,6 +8,7 @@ import {
 import { formatTranscriptCard, type TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 import type { Session, SessionMessage } from '../../lib/types'
+import { sameSessionMessageContent, threadedMessageFingerprint } from './messageFingerprint'
 
 type ThreadRequest = {
   kind: 'thread'
@@ -40,9 +41,9 @@ declare const self: {
 const THREADING_CACHE_LIMIT = 8
 const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
 
-// Per-session card cache keyed by message uuid → density → card. Stable refs are
-// returned across calls so the main thread's render-time identity checks bail out
-// when density/showToolCalls flip back to a previously-seen value (proposal 2).
+// Per-session card cache keyed by message content fingerprint -> density -> card.
+// Stable refs are returned across calls so the main thread's render-time identity
+// checks bail out when density/showToolCalls flip back to a previously-seen value.
 type CardCache = Map<string, Map<TuiDensity, TuiTranscriptCard>>
 const cardCacheByKey = new Map<string, CardCache>()
 
@@ -64,7 +65,7 @@ function touchThreadingCache(key: string, cache: IncrementalThreadingCache): voi
 function sameMessageSequence(messages: SessionMessage[], prevMessages: SessionMessage[]): boolean {
   if (messages.length !== prevMessages.length) return false
   for (let i = 0; i < messages.length; i++) {
-    if (messages[i]?.uuid !== prevMessages[i]?.uuid) return false
+    if (!sameSessionMessageContent(messages[i], prevMessages[i])) return false
   }
   return true
 }
@@ -75,7 +76,7 @@ function reuseCachedPrefix(
 ): SessionMessage[] | null {
   if (messages.length <= prevMessages.length) return null
   for (let i = 0; i < prevMessages.length; i++) {
-    if (messages[i]?.uuid !== prevMessages[i]?.uuid) return null
+    if (!sameSessionMessageContent(messages[i], prevMessages[i])) return null
   }
 
   const aligned = messages.slice()
@@ -122,28 +123,30 @@ function formatCards(
   }
 
   const cards: TuiTranscriptCard[] = new Array(messages.length)
-  const seenUuids = new Set<string>()
+  const seenMessageKeys = new Set<string>()
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
-    seenUuids.add(msg.uuid)
-    let perUuid = perSession.get(msg.uuid)
-    if (!perUuid) {
-      perUuid = new Map()
-      perSession.set(msg.uuid, perUuid)
+    const messageKey = threadedMessageFingerprint(msg)
+    seenMessageKeys.add(messageKey)
+    let perMessage = perSession.get(messageKey)
+    if (!perMessage) {
+      perMessage = new Map()
+      perSession.set(messageKey, perMessage)
     }
-    let card = perUuid.get(density)
+    let card = perMessage.get(density)
     if (!card) {
       card = formatTranscriptCard(msg, density)
-      perUuid.set(density, card)
+      perMessage.set(density, card)
     }
     cards[i] = card
   }
 
-  // Prune entries for uuids that no longer exist in the active threaded set.
+  // Prune entries that no longer exist in the active threaded set. The key
+  // includes content, so in-place Codex item updates cannot reuse stale cards.
   // Bounded by message count and only runs in the worker thread.
-  if (perSession.size > seenUuids.size) {
-    for (const uuid of perSession.keys()) {
-      if (!seenUuids.has(uuid)) perSession.delete(uuid)
+  if (perSession.size > seenMessageKeys.size) {
+    for (const messageKey of perSession.keys()) {
+      if (!seenMessageKeys.has(messageKey)) perSession.delete(messageKey)
     }
   }
 
