@@ -337,6 +337,7 @@ const METADATA_REQUEST_TIMEOUT_MS = 4_000
 // least this long. Tuned high enough that quick replies don't bell the user.
 const NOTIFY_AFTER_MS = 8_000
 const NOTIFY_PREVIEW_CHARS = 140
+const MAX_CODE_BLOCK_RENDER_LINES = 240
 
 function buildApiUrl(path: string): string {
   return new URL(path, API_BASE_URL).toString()
@@ -979,13 +980,42 @@ function cardDiffRows(card: TuiTranscriptCard, isExpanded: boolean, previewLimit
 
 function codeBlockRows(card: TuiTranscriptCard, isExpanded: boolean): number {
   if (!isExpanded || !card.codeBlocks?.length) return 0
-  return card.codeBlocks.reduce((sum, cb) =>
-    sum + 1 + codeBlockHeight(cb, cb.content.split('\n').length) + 1, 0)
+  return card.codeBlocks.reduce((sum, cb) => {
+    const lineCount = countCodeBlockLines(cb.content)
+    const renderHeight = codeBlockHeight(cb, lineCount)
+    const footerRows = codeBlockHiddenLineCount(lineCount, renderHeight) > 0 ? 1 : 0
+    return sum + 1 + renderHeight + footerRows + 1
+  }, 0)
+}
+
+function countCodeBlockLines(content: string): number {
+  if (!content) return 0
+  let count = 1
+  for (let i = 0; i < content.length; i++) {
+    if (content.charCodeAt(i) === 10) count++
+  }
+  return count
 }
 
 function codeBlockHeight(block: TuiTranscriptCodeBlock, lineCount: number): number {
   if (block.maxVisibleLines != null) return Math.min(lineCount, block.maxVisibleLines)
-  return block.lineNumbers ? lineCount : Math.min(lineCount + 1, 20)
+  if (block.lineNumbers) return Math.min(lineCount, MAX_CODE_BLOCK_RENDER_LINES)
+  return Math.min(lineCount + 1, 20)
+}
+
+function codeBlockHiddenLineCount(lineCount: number, renderHeight: number): number {
+  return Math.max(lineCount - Math.min(lineCount, renderHeight), 0)
+}
+
+function sliceCodeBlockLines(content: string, maxLines: number): string {
+  if (maxLines <= 0 || !content) return ''
+  let lines = 1
+  for (let i = 0; i < content.length; i++) {
+    if (content.charCodeAt(i) !== 10) continue
+    if (lines >= maxLines) return content.slice(0, i)
+    lines++
+  }
+  return content
 }
 
 function codeBlockLabel(block: TuiTranscriptCodeBlock): string {
@@ -1485,8 +1515,10 @@ function TranscriptCardInner({
 
               {isExpanded && card.codeBlocks && card.codeBlocks.length > 0 ? (
                 card.codeBlocks.map((cb, cbIndex) => {
-                  const lineCount = codeBlockLineCounts[cbIndex] ?? cb.content.split('\n').length
+                  const lineCount = codeBlockLineCounts[cbIndex] ?? countCodeBlockLines(cb.content)
                   const renderHeight = codeBlockHeight(cb, lineCount)
+                  const visibleCode = sliceCodeBlockLines(cb.content, renderHeight)
+                  const hiddenLineCount = codeBlockHiddenLineCount(lineCount, renderHeight)
                   const lineNumbers = cb.lineNumbers?.slice(0, renderHeight)
                   const gutterWidth = lineNumbers
                     ? Math.max(...lineNumbers.map((num) => num.length), 1) + 1
@@ -1506,7 +1538,7 @@ function TranscriptCardInner({
                               ))}
                             </box>
                             <code
-                              content={cb.content}
+                              content={visibleCode}
                               filetype={cb.filetype}
                               syntaxStyle={syntaxStyle}
                               drawUnstyledText={true}
@@ -1516,7 +1548,7 @@ function TranscriptCardInner({
                           </box>
                         ) : (
                           <code
-                            content={cb.content}
+                            content={visibleCode}
                             filetype={cb.filetype}
                             syntaxStyle={syntaxStyle}
                             drawUnstyledText={true}
@@ -1525,7 +1557,7 @@ function TranscriptCardInner({
                           />
                         )
                       ) : (
-                        cb.content.split('\n').slice(0, renderHeight).map((line, lineIndex) => (
+                        visibleCode.split('\n').map((line, lineIndex) => (
                           <box key={`${cb.key}:fallback:${lineIndex}`} flexDirection="row">
                             {lineNumbers ? (
                               <text fg={theme.dim}>{fitText(lineNumbers[lineIndex] ?? '', gutterWidth)}</text>
@@ -1536,6 +1568,9 @@ function TranscriptCardInner({
                           </box>
                         ))
                       )}
+                      {hiddenLineCount > 0 ? (
+                        <text fg={theme.dim}>{fitText(`... ${hiddenLineCount} more lines`, markdownWidth)}</text>
+                      ) : null}
                     </box>
                   )
                 })
@@ -2075,7 +2110,7 @@ export default function OpenTuiApp() {
       const diffText = cardDiffText(card, isExpanded)
       const diffLineCount = diffText ? diffText.split('\n').length : 0
       const codeBlockLineCounts = (isExpanded && card.codeBlocks)
-        ? card.codeBlocks.map((cb) => cb.content.split('\n').length)
+        ? card.codeBlocks.map((cb) => countCodeBlockLines(cb.content))
         : []
       const value: StableCardData = { bodyLines, diffText, diffLineCount, codeBlockLineCounts }
       cache.set(card, { isExpanded, bodyLineLimit: densityState.bodyLines, thinkingFull, value })
