@@ -338,6 +338,7 @@ const METADATA_REQUEST_TIMEOUT_MS = 4_000
 const NOTIFY_AFTER_MS = 8_000
 const NOTIFY_PREVIEW_CHARS = 140
 const MAX_CODE_BLOCK_RENDER_LINES = 240
+const MAX_MARKDOWN_SYNTAX_CHARS = 80_000
 
 function buildApiUrl(path: string): string {
   return new URL(path, API_BASE_URL).toString()
@@ -1018,6 +1019,10 @@ function sliceCodeBlockLines(content: string, maxLines: number): string {
   return content
 }
 
+function canRenderMarkdownWithSyntax(content: string): boolean {
+  return content.length <= MAX_MARKDOWN_SYNTAX_CHARS
+}
+
 function codeBlockLabel(block: TuiTranscriptCodeBlock): string {
   if (block.filePath) return `${block.lang} · ${block.filePath}`
   return block.lang
@@ -1446,6 +1451,13 @@ function TranscriptCardInner({
   const bubbleTextColor = imessageUserBubble ? '#ffffff' : theme.text
   const bodyInnerWidth = Math.max((userBubbleWidth ?? rightPaneWidth) - densityState.bodyIndent - 8, 16)
   const markdownWidth = Math.max((userBubbleWidth ?? rightPaneWidth) - densityState.bodyIndent - 8, 20)
+  const shouldRenderSyntaxMarkdown = Boolean(
+    isExpanded
+    && card.markdownContent
+    && !card.hasMermaidDiagrams
+    && syntaxStyle
+    && canRenderMarkdownWithSyntax(card.markdownContent),
+  )
   const landmarkWidth = rightPaneWidth - 4
 
   return (
@@ -1480,7 +1492,7 @@ function TranscriptCardInner({
         title={cardTitle}
       >
         <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={1}>
-          {(isExpanded && card.markdownContent && !card.hasMermaidDiagrams && syntaxStyle) ? (
+          {shouldRenderSyntaxMarkdown && card.markdownContent && syntaxStyle ? (
             <box paddingX={1}>
               <markdown
                 content={card.markdownContent}
