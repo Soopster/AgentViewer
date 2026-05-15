@@ -201,7 +201,6 @@ type CardDisplayData = {
   // time inside TranscriptCard so search-query changes don't invalidate
   // this whole array (proposal 4).
   headerMeta: string
-  isSearchHit: boolean
   accent: string
   isThinkingCard: boolean
   categoryEmoji: string
@@ -1689,8 +1688,19 @@ export default function OpenTuiApp() {
   const currentThemeRef = useRef<TuiThemeMode>('light')
   const densityRef = useRef<TuiDensity>('balanced')
   const showToolCallsRef = useRef(true)
+  // Tracked for the detail-poll skip path (proposal 6): the 2s background
+  // refresh fires startTransition work that can interleave with keystroke
+  // handling during active typing or searching, causing visible stutter.
+  const composerActiveRef = useRef(false)
+  const composerDraftRef = useRef('')
+  const searchModeRef = useRef(false)
+  const sessionSearchModeRef = useRef(false)
   useEffect(() => { densityRef.current = density }, [density])
   useEffect(() => { showToolCallsRef.current = showToolCalls }, [showToolCalls])
+  useEffect(() => { composerActiveRef.current = composerActive }, [composerActive])
+  useEffect(() => { composerDraftRef.current = composerDraft }, [composerDraft])
+  useEffect(() => { searchModeRef.current = searchMode }, [searchMode])
+  useEffect(() => { sessionSearchModeRef.current = sessionSearchMode }, [sessionSearchMode])
   useEffect(() => {
     setActiveTheme(themeMode)
   }, [themeMode])
@@ -2090,7 +2100,6 @@ export default function OpenTuiApp() {
     inputs: {
       isExpanded: boolean
       isLatest: boolean
-      isSearchHit: boolean
       isAutoFoldedTechnical: boolean
       landmarks: CardLandmark[]
       stable: StableCardData
@@ -2105,8 +2114,6 @@ export default function OpenTuiApp() {
     return transcriptCards.map((card, index) => {
       const isExpanded = resolvedExpandedKeys.has(card.key)
       const isLatest = index === transcriptCards.length - 1
-      const isSearchHit = deferredSearchQuery.length > 0
-        && card.searchHaystackLower.includes(deferredSearchQuery)
       const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
       const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
       const stable = stableCardData[index] ?? {
@@ -2122,7 +2129,6 @@ export default function OpenTuiApp() {
         prev
         && prev.inputs.isExpanded === isExpanded
         && prev.inputs.isLatest === isLatest
-        && prev.inputs.isSearchHit === isSearchHit
         && prev.inputs.isAutoFoldedTechnical === isAutoFoldedTechnical
         && prev.inputs.landmarks === landmarks
         && prev.inputs.stable === stable
@@ -2155,7 +2161,6 @@ export default function OpenTuiApp() {
         diffLineCount: stable.diffLineCount,
         codeBlockLineCounts: stable.codeBlockLineCounts,
         headerMeta,
-        isSearchHit,
         accent,
         isThinkingCard,
         categoryEmoji,
@@ -2166,7 +2171,6 @@ export default function OpenTuiApp() {
         inputs: {
           isExpanded,
           isLatest,
-          isSearchHit,
           isAutoFoldedTechnical,
           landmarks,
           stable,
@@ -2182,7 +2186,6 @@ export default function OpenTuiApp() {
     stableCardData,
     transcriptCards,
     resolvedExpandedKeys,
-    deferredSearchQuery,
     transcriptView,
     provider,
     shouldEnableSyntaxHighlighting,
@@ -2193,6 +2196,12 @@ export default function OpenTuiApp() {
   // re-renders (composer input, notice banner, theme menu, status tick, etc.)
   // don't rebuild N elements + run N React.memo comparisons. Only deps that
   // actually change what a card displays belong here.
+  //
+  // isSearchHit is derived here from searchMatches (instead of living on
+  // CardDisplayData) so search-query changes don't invalidate cardDisplayData
+  // — they only re-run this memo, whose per-card work is cheap (Set lookup).
+  const searchMatchSet = useMemo(() => new Set(searchMatches), [searchMatches])
+  const activeMatchTargetIndex = searchMatches[searchMatchIndex] ?? -1
   const transcriptChildren = useMemo(() => (
     transcriptCards.map((card, index) => {
       const display = cardDisplayData[index]
@@ -2200,7 +2209,8 @@ export default function OpenTuiApp() {
       const isSelected = card.key === transcriptCursorKey
       const hasCursor = isSelected && effectiveFocus === 'messages'
       const isExpanded = resolvedExpandedKeys.has(card.key)
-      const isActiveMatch = display.isSearchHit && searchMatches[searchMatchIndex] === index
+      const isSearchHit = searchMatchSet.has(index)
+      const isActiveMatch = isSearchHit && activeMatchTargetIndex === index
       return (
         <TranscriptCard
           key={card.key}
@@ -2213,7 +2223,7 @@ export default function OpenTuiApp() {
           isExpanded={isExpanded}
           hasCursor={hasCursor}
           isSelected={isSelected}
-          isSearchHit={display.isSearchHit}
+          isSearchHit={isSearchHit}
           isActiveMatch={isActiveMatch}
           thinkingMode={thinkingMode}
           imessageStyle={imessageStyle}
@@ -2226,8 +2236,8 @@ export default function OpenTuiApp() {
     transcriptCursorKey,
     effectiveFocus,
     resolvedExpandedKeys,
-    searchMatches,
-    searchMatchIndex,
+    searchMatchSet,
+    activeMatchTargetIndex,
     theme,
     densityState,
     syntaxStyle,
@@ -3064,6 +3074,12 @@ export default function OpenTuiApp() {
     let active = true
     const interval = setInterval(() => {
       if (!active || providerSwitchRef.current) return
+      // Skip background polls during active typing/searching — the poll's
+      // startTransition can interleave with input handling and cause stutter.
+      // The next tick after the user stops typing picks up any new content
+      // (and a focused refresh on entering search-mode already fires).
+      if (composerActiveRef.current && composerDraftRef.current.length > 0) return
+      if (searchModeRef.current || sessionSearchModeRef.current) return
       void refreshSelectedSessionDetail(selectedSessionTarget, false)
     }, DETAIL_REFRESH_MS)
     return () => {
