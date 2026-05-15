@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { extname } from 'node:path'
 import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
+import { normalizeTuiCodeFiletype } from '../codeFiletypes'
 import { fetchGitData, fetchGitPaneContent, type GitData, type GitStatusEntry } from '../../lib/gitProvider'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 
@@ -196,7 +197,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const selectedFileType = useMemo(() => {
     if (!selectedFilePath) return undefined
     const ext = extname(selectedFilePath).slice(1)
-    return ext || undefined
+    return normalizeTuiCodeFiletype(ext) ?? (ext || undefined)
   }, [selectedFilePath])
 
   // File count for the N of M counter

@@ -14,6 +14,22 @@ import { DEFAULT_CODE_THEME_ID, type CodeThemeId } from './codeThemes'
 
 export type CodeThemeStyle = Record<string, CSSProperties>
 
+function withoutNoisyTokenUnderlines(style: CodeThemeStyle): CodeThemeStyle {
+  const classNameStyle = style['class-name']
+  if (!classNameStyle?.textDecoration && !classNameStyle?.textDecorationLine) return style
+
+  const {
+    textDecoration: _textDecoration,
+    textDecorationLine: _textDecorationLine,
+    ...restClassNameStyle
+  } = classNameStyle
+
+  return {
+    ...style,
+    'class-name': restClassNameStyle,
+  }
+}
+
 const CODE_THEME_STYLES: Record<CodeThemeId, CodeThemeStyle> = {
   'atom-dark': atomDark,
   'vsc-dark-plus': vscDarkPlus,
@@ -29,5 +45,5 @@ const CODE_THEME_STYLES: Record<CodeThemeId, CodeThemeStyle> = {
 }
 
 export function getCodeThemeStyle(themeId: CodeThemeId): CodeThemeStyle {
-  return CODE_THEME_STYLES[themeId] ?? CODE_THEME_STYLES[DEFAULT_CODE_THEME_ID]
+  return withoutNoisyTokenUnderlines(CODE_THEME_STYLES[themeId] ?? CODE_THEME_STYLES[DEFAULT_CODE_THEME_ID])
 }

@@ -1,6 +1,7 @@
 import { getAssistantLabel } from '../lib/provider'
 import { pathBasename } from '../lib/projectPaths'
 import { renderMermaidASCII } from 'beautiful-mermaid'
+import { detectTuiCodeFiletypeFromPath, normalizeTuiCodeFiletype } from './codeFiletypes'
 import type { ThreadedBlock, ThreadedMessage, ToolThread } from '../lib/threading'
 import type { ContentBlock, Session, SessionInfo } from '../lib/types'
 import type { TuiDensity } from './theme'
@@ -873,34 +874,8 @@ function extractMarkdownContent(blocks: ThreadedBlock[]): string | undefined {
   return chunks.length > 0 ? chunks.join('\n\n') : undefined
 }
 
-const CODE_FENCE_RE = /^```(\w*)\s*\n([\s\S]*?)^```[ \t]*$/gm
+const CODE_FENCE_RE = /^```([^\s`]*)[^\n]*\n([\s\S]*?)^```[ \t]*$/gm
 const MERMAID_LANGS = new Set(['mermaid', 'mmd'])
-const TUI_CODE_FILETYPE_BY_EXTENSION: Record<string, string> = {
-  cjs: 'javascript',
-  js: 'javascript',
-  jsx: 'javascriptreact',
-  md: 'markdown',
-  markdown: 'markdown',
-  mdown: 'markdown',
-  mkd: 'markdown',
-  mjs: 'javascript',
-  cts: 'typescript',
-  mts: 'typescript',
-  ts: 'typescript',
-  ctsx: 'typescriptreact',
-  mtsx: 'typescriptreact',
-  tsx: 'typescriptreact',
-  zig: 'zig',
-  zon: 'zig',
-}
-
-function detectSupportedCodeFiletypeFromPath(filePath?: string): string | undefined {
-  if (!filePath) return undefined
-  const name = pathBasename(filePath)
-  const dot = name.lastIndexOf('.')
-  if (dot === -1) return undefined
-  return TUI_CODE_FILETYPE_BY_EXTENSION[name.slice(dot + 1).toLowerCase()]
-}
 
 function displayLanguageFromPath(filePath?: string): string {
   if (!filePath) return 'text'
@@ -908,20 +883,6 @@ function displayLanguageFromPath(filePath?: string): string {
   const dot = name.lastIndexOf('.')
   if (dot === -1) return 'text'
   return name.slice(dot + 1).toLowerCase() || 'text'
-}
-
-function normalizeSupportedCodeFiletype(language: string): string | undefined {
-  const lower = language.trim().toLowerCase()
-  if (!lower) return undefined
-  if (lower === 'ts' || lower === 'typescript') return 'typescript'
-  if (lower === 'cts' || lower === 'mts') return 'typescript'
-  if (lower === 'tsx' || lower === 'typescriptreact') return 'typescriptreact'
-  if (lower === 'ctsx' || lower === 'mtsx') return 'typescriptreact'
-  if (lower === 'js' || lower === 'javascript') return 'javascript'
-  if (lower === 'jsx' || lower === 'javascriptreact') return 'javascriptreact'
-  if (lower === 'md' || lower === 'markdown' || lower === 'mdown' || lower === 'mkd') return 'markdown'
-  if (lower === 'zig' || lower === 'zon') return 'zig'
-  return undefined
 }
 
 function parseReadResultLines(raw: string): Array<{ num: string; code: string }> {
@@ -951,7 +912,7 @@ function readCodeBlockFromTool(thread: ToolThread, key: string): TuiTranscriptCo
   return {
     key,
     lang: displayLanguageFromPath(filePath),
-    filetype: detectSupportedCodeFiletypeFromPath(filePath),
+    filetype: detectTuiCodeFiletypeFromPath(filePath),
     content,
     filePath,
     lineNumbers: hasLineNumbers ? lineNumbers : undefined,
@@ -1017,7 +978,7 @@ function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[]): {
         hasMermaidDiagrams = true
         replaced = replaced.replace(match[0], renderMermaidForTui(content))
       } else {
-        all.push({ key: `cb${n++}`, lang, filetype: normalizeSupportedCodeFiletype(lang), content })
+        all.push({ key: `cb${n++}`, lang, filetype: normalizeTuiCodeFiletype(lang), content })
         replaced = replaced.replace(match[0], `[code: ${lang}]`)
       }
     }

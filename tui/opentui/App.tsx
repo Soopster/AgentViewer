@@ -3,6 +3,7 @@ import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMe
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
 import { AnalyticsPopover } from './AnalyticsPopover'
+import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
 import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable } from '@opentui/core'
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react'
@@ -68,6 +69,8 @@ import type { ProviderSelection, RunningSessionRef, SendState, Session } from '.
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
+
+registerExtraTreeSitterParsers()
 
 function Spinner({ label, fg }: { label: string; fg: string }) {
   const [frame, setFrame] = useState(0)
@@ -732,22 +735,70 @@ function densityConfig(density: TuiDensity): {
   }
 }
 
+function chooseSyntaxColor(theme: TuiThemePalette, preferred: string, fallbacks: string[]): string {
+  const lowSignal = new Set([
+    theme.text.toLowerCase(),
+    theme.muted.toLowerCase(),
+    theme.dim.toLowerCase(),
+  ])
+  if (!lowSignal.has(preferred.toLowerCase())) return preferred
+  return fallbacks.find((color) => !lowSignal.has(color.toLowerCase())) ?? preferred
+}
+
 function buildSyntaxStyle(theme: TuiThemePalette): SyntaxStyle {
+  const keywordColor = chooseSyntaxColor(theme, theme.violet, [theme.amber, theme.pink, theme.cyan])
+  const functionColor = chooseSyntaxColor(theme, theme.cyan, [theme.green, theme.amber, theme.violet])
+  const memberColor = chooseSyntaxColor(theme, theme.cyan, [theme.green, theme.amber, theme.violet])
+  const typeColor = chooseSyntaxColor(theme, theme.pink, [theme.violet, theme.amber, theme.cyan])
+  const builtinColor = chooseSyntaxColor(theme, theme.amber, [theme.pink, theme.violet, theme.green])
+
   return SyntaxStyle.fromStyles({
-    keyword:     { fg: RGBA.fromHex(theme.violet), bold: true },
-    string:      { fg: RGBA.fromHex(theme.green) },
-    comment:     { fg: RGBA.fromHex(theme.dim), italic: true, dim: true },
-    number:      { fg: RGBA.fromHex(theme.amber) },
-    function:    { fg: RGBA.fromHex(theme.cyan) },
-    type:        { fg: RGBA.fromHex(theme.pink) },
-    variable:    { fg: RGBA.fromHex(theme.text) },
-    'variable.member': { fg: RGBA.fromHex(theme.cyan) },
-    property:    { fg: RGBA.fromHex(theme.cyan) },
-    constructor: { fg: RGBA.fromHex(theme.pink) },
-    constant:    { fg: RGBA.fromHex(theme.text) },
-    operator:    { fg: RGBA.fromHex(theme.muted) },
+    keyword: { fg: RGBA.fromHex(keywordColor), bold: true },
+    string: { fg: RGBA.fromHex(theme.green) },
+    comment: { fg: RGBA.fromHex(theme.dim), italic: true, dim: true },
+    number: { fg: RGBA.fromHex(builtinColor) },
+    function: { fg: RGBA.fromHex(functionColor) },
+    'function.call': { fg: RGBA.fromHex(functionColor) },
+    'function.method': { fg: RGBA.fromHex(functionColor) },
+    'function.method.call': { fg: RGBA.fromHex(functionColor) },
+    'function.builtin': { fg: RGBA.fromHex(functionColor), bold: true },
+    type: { fg: RGBA.fromHex(typeColor), bold: true },
+    'type.builtin': { fg: RGBA.fromHex(builtinColor), bold: true },
+    'type.definition': { fg: RGBA.fromHex(typeColor), bold: true },
+    variable: { fg: RGBA.fromHex(theme.text) },
+    'variable.builtin': { fg: RGBA.fromHex(builtinColor) },
+    'variable.member': { fg: RGBA.fromHex(memberColor), bold: true },
+    'variable.parameter': { fg: RGBA.fromHex(theme.text) },
+    property: { fg: RGBA.fromHex(memberColor), bold: true },
+    constructor: { fg: RGBA.fromHex(typeColor), bold: true },
+    constant: { fg: RGBA.fromHex(theme.text) },
+    'constant.builtin': { fg: RGBA.fromHex(builtinColor), bold: true },
+    'constant.macro': { fg: RGBA.fromHex(builtinColor), bold: true },
+    boolean: { fg: RGBA.fromHex(builtinColor) },
+    character: { fg: RGBA.fromHex(theme.green) },
+    'character.special': { fg: RGBA.fromHex(builtinColor) },
+    tag: { fg: RGBA.fromHex(typeColor) },
+    attribute: { fg: RGBA.fromHex(builtinColor) },
+    module: { fg: RGBA.fromHex(functionColor) },
+    namespace: { fg: RGBA.fromHex(functionColor) },
+    label: { fg: RGBA.fromHex(typeColor) },
+    embedded: { fg: RGBA.fromHex(theme.text) },
+    escape: { fg: RGBA.fromHex(builtinColor), bold: true },
+    operator: { fg: RGBA.fromHex(theme.muted) },
+    'keyword.conditional': { fg: RGBA.fromHex(keywordColor), bold: true },
+    'keyword.directive': { fg: RGBA.fromHex(keywordColor), bold: true },
+    'keyword.function': { fg: RGBA.fromHex(keywordColor), bold: true },
+    'keyword.import': { fg: RGBA.fromHex(keywordColor), bold: true },
+    'keyword.modifier': { fg: RGBA.fromHex(keywordColor), bold: true },
+    'keyword.operator': { fg: RGBA.fromHex(keywordColor), bold: true },
+    'keyword.repeat': { fg: RGBA.fromHex(keywordColor), bold: true },
+    'keyword.return': { fg: RGBA.fromHex(keywordColor), bold: true },
+    'keyword.type': { fg: RGBA.fromHex(keywordColor), bold: true },
     punctuation: { fg: RGBA.fromHex(theme.muted) },
-    default:     { fg: RGBA.fromHex(theme.text) },
+    'punctuation.bracket': { fg: RGBA.fromHex(theme.muted) },
+    'punctuation.delimiter': { fg: RGBA.fromHex(theme.muted) },
+    'punctuation.special': { fg: RGBA.fromHex(builtinColor) },
+    default: { fg: RGBA.fromHex(theme.text) },
   })
 }
 
