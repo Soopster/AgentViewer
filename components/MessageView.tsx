@@ -1971,6 +1971,8 @@ export default function MessageView({
           forkSession: Boolean(resumeFromMessageId),
           provider: session.provider,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
+          isPendingSession: session.isPending === true ? true : undefined,
+          cwd: session.isPending && session.cwd ? session.cwd : undefined,
         }),
         signal: controller.signal,
       })
@@ -2004,6 +2006,9 @@ export default function MessageView({
               if (resumeFromMessageId && parsed.sessionId && parsed.sessionId !== session.sessionId) {
                 onFork?.(parsed.sessionId)
                 setSessionActionNotice('Forked a continuation from the selected point.')
+              } else if (session.isPending && parsed.sessionId && parsed.sessionId !== session.sessionId) {
+                onFork?.(parsed.sessionId)
+                setSessionActionNotice('New session created.')
               }
             } catch { /* ignore */ }
             continue

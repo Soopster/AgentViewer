@@ -72,7 +72,7 @@ import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '../../lib/slashCommands'
-import { readViewSessionSlashCommands } from '../../lib/sessionBackend'
+import { readViewSessionSlashCommands, createNewViewSession } from '../../lib/sessionBackend'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 
@@ -1295,6 +1295,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'copy',       label: 'Copy selected message',  key: 'y',  category: 'Transcript' },
   // Session
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
+  { id: 'new',        label: 'New agent session',      key: 'N',  category: 'Session'    },
   { id: 'reuse',      label: 'Reuse last prompt',      key: 'R',  category: 'Session'    },
   { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
   { id: 'cli',        label: 'Copy CLI resume command', key: 'C',  category: 'Session'    },
@@ -3156,6 +3157,8 @@ export default function OpenTuiApp() {
           message: trimmed,
           provider: targetSession.provider,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
+          isPendingSession: targetSession.isPending === true ? true : undefined,
+          cwd: targetSession.isPending && targetSession.cwd ? targetSession.cwd : undefined,
         }),
         signal: controller.signal,
       })
@@ -3187,6 +3190,18 @@ export default function OpenTuiApp() {
         }
         if (frame.event === 'context-usage' && parsed) {
           setContextUsage(parsed as import('../../lib/types').ContextUsage)
+          return
+        }
+        if (frame.event === 'session' && parsed) {
+          const evt = parsed as { sessionId?: unknown }
+          if (typeof evt.sessionId === 'string' && evt.sessionId && targetSession.isPending) {
+            const realId = evt.sessionId
+            const oldKey = sessionKey(targetSession)
+            const updated: Session = { ...targetSession, sessionId: realId, isPending: false }
+            const newKey = sessionKey(updated)
+            setOpenTabSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? updated : s))
+            if (selectedSessionKeyRef.current === oldKey) setSelectedSessionKey(newKey)
+          }
           return
         }
         if (!parsed) return
@@ -4534,6 +4549,40 @@ export default function OpenTuiApp() {
     if (sequence === 'c' && !composerActive) {
       handled(() => {
         setComposerActive(true)
+      })
+      return
+    }
+
+    if (sequence === 'N' && !composerActive) {
+      handled(() => {
+        const targetProvider = provider === 'all'
+          ? (selectedSession?.provider ?? 'claude')
+          : provider
+        const cwd = selectedSession?.cwd ?? process.cwd()
+        void (async () => {
+          try {
+            const result = await createNewViewSession({ provider: targetProvider, cwd })
+            const draft: Session = {
+              sessionId: result.sessionId,
+              provider: result.provider,
+              cwd: result.cwd,
+              createdAt: Date.now(),
+              lastModified: Date.now(),
+              summary: 'New session',
+              isPending: result.isPending,
+            }
+            setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
+            setSelectedSessionKey(sessionKey(draft))
+            await refreshSessions(provider, true, false)
+            setComposerActive(true)
+            setNotice({
+              tone: 'info',
+              text: result.isPending ? 'New Claude session ready — first message will create it.' : 'New session created.',
+            })
+          } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to create session')
+          }
+        })()
       })
       return
     }

@@ -703,6 +703,38 @@ export default function Home() {
     }
   }, [openTabSessions, selectedTabKey])
 
+  const [creatingNewSession, setCreatingNewSession] = useState(false)
+  const handleNewSession = useCallback(async () => {
+    if (creatingNewSession) return
+    const activeProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
+    setCreatingNewSession(true)
+    setSessionsError(null)
+    try {
+      const cwd = activeProjectDir ?? selectedSession?.cwd ?? undefined
+      const res = await fetch('/api/sessions/new', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: activeProvider, cwd }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const draft: Session = {
+        sessionId: data.sessionId,
+        provider: data.provider ?? activeProvider,
+        cwd: data.cwd,
+        createdAt: Date.now(),
+        lastModified: Date.now(),
+        summary: 'New session',
+        isPending: Boolean(data.isPending),
+      }
+      await selectSession(draft)
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : 'Failed to create session')
+    } finally {
+      setCreatingNewSession(false)
+    }
+  }, [activeProjectDir, creatingNewSession, provider, selectSession, selectedSession?.cwd, selectedSession?.provider])
+
   const handleChangeProvider = useCallback(async (nextProvider: ProviderSelection) => {
     if (nextProvider === provider || switchingProvider) return
     const nextScopeMode = sessionScope
@@ -763,6 +795,8 @@ export default function Home() {
             onOpenCommandPalette={() => setCommandPaletteOpen(true)}
             canOpenGit={!!activeProjectDir}
             onOpenGit={openGitPopover}
+            onNewSession={handleNewSession}
+            creatingSession={creatingNewSession}
           />
         </Sidebar>
         {messagePaneCollapsed ? (

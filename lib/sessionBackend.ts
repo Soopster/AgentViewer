@@ -1454,6 +1454,8 @@ async function createClaudeStream(sessionId: string, request: NextRequest, body:
   const prompt = await buildClaudePrompt(userMessage, attachments)
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
   const forkSessionOnSend = Boolean(body.forkSession)
+  const isPendingSession = Boolean(body.isPendingSession)
+  const cwdOverride = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined
   const taskBudgetTotal = typeof body.taskBudgetTokens === 'number' && body.taskBudgetTokens > 0
     ? Math.floor(body.taskBudgetTokens)
     : undefined
@@ -1467,7 +1469,8 @@ async function createClaudeStream(sessionId: string, request: NextRequest, body:
       const q = query({
         prompt,
         options: {
-          resume: sessionId,
+          ...(isPendingSession ? {} : { resume: sessionId }),
+          ...(cwdOverride ? { cwd: cwdOverride } : {}),
           model,
           effort: effort === 'off' || effort === 'minimal' ? undefined : effort,
           thinking: effort === 'off'
@@ -2117,6 +2120,65 @@ export async function forkViewSession({ sessionId, body, provider }: ForkParams)
     upToMessageId: typeof body.upToMessageId === 'string' ? body.upToMessageId : undefined,
   })
   return { sessionId: result.sessionId }
+}
+
+export async function createNewViewSession({
+  provider: providerOverride,
+  cwd,
+  title,
+}: {
+  provider?: AgentProvider
+  cwd?: string
+  title?: string
+}): Promise<{ sessionId: string; provider: AgentProvider; cwd: string; isPending: boolean }> {
+  const provider = await resolveProvider(providerOverride)
+  const resolvedCwd = (cwd && cwd.trim()) ? cwd : process.cwd()
+
+  if (provider === 'claude') {
+    const { randomUUID } = await import('node:crypto')
+    return { sessionId: randomUUID(), provider, cwd: resolvedCwd, isPending: true }
+  }
+
+  if (provider === 'codex') {
+    const client = getCodexClient()
+    const response = await client.request<{ thread: { id: string; cwd: string } }>('thread/start', {
+      cwd: resolvedCwd,
+    })
+    const newId = response.thread.id
+    if (title && title.trim()) {
+      await client.request('thread/name/set', { threadId: newId, name: title.trim() }).catch(() => {})
+    }
+    return { sessionId: newId, provider, cwd: response.thread.cwd ?? resolvedCwd, isPending: false }
+  }
+
+  if (provider === 'opencode') {
+    const client = await getOpenCodeClient()
+    const response = await client.session.create({
+      ...OPENCODE_OPTIONS,
+      query: { directory: resolvedCwd },
+      body: title && title.trim() ? { title: title.trim() } : undefined,
+    })
+    const session = openCodeData<OpenCodeSession>(response)
+    return { sessionId: session.id, provider, cwd: resolvedCwd, isPending: false }
+  }
+
+  if (provider === 'copilot') {
+    const client = await getCopilotClient()
+    const { approveAll } = await import('@github/copilot-sdk')
+    const session = await client.createSession({
+      workingDirectory: resolvedCwd,
+      onPermissionRequest: approveAll,
+    })
+    return { sessionId: session.sessionId, provider, cwd: resolvedCwd, isPending: false }
+  }
+
+  if (provider === 'pi') {
+    const { createPiAgentSession } = await import('./piClient')
+    const session = await createPiAgentSession(resolvedCwd)
+    return { sessionId: session.sessionId, provider, cwd: resolvedCwd, isPending: false }
+  }
+
+  throw new Error(`Create is not supported for ${provider} sessions`)
 }
 
 export async function interruptViewSession(sessionId: string): Promise<void> {

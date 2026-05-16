@@ -94,6 +94,12 @@ export type Session = {
   createdAt?: string | number
   provider?: AgentProvider
   capabilities?: SessionCapabilities
+  /**
+   * Client-only flag set when the session was just created via /api/sessions/new
+   * and the underlying provider hasn't materialised it yet (Claude). The first
+   * send must carry isPendingSession: true so the backend skips resume.
+   */
+  isPending?: boolean
   [key: string]: unknown
 }
 

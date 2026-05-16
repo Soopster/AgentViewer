@@ -102,6 +102,8 @@ type Props = {
   onOpenCommandPalette: () => void
   canOpenGit: boolean
   onOpenGit: () => void
+  onNewSession?: () => void
+  creatingSession?: boolean
 }
 
 function timeAgo(value?: string | number): string {
@@ -665,6 +667,8 @@ export default function SessionList({
   onOpenCommandPalette,
   canOpenGit,
   onOpenGit,
+  onNewSession,
+  creatingSession = false,
 }: Props) {
   const { state: sidebarState, width: sidebarWidth, setWidth: setSidebarWidth, applyWidth, setOpen } = useSidebar()
   const collapsed = sidebarState === 'collapsed'
@@ -1612,6 +1616,34 @@ export default function SessionList({
                   minWidth: 0,
                 }}
               >
+                {onNewSession && (
+                  <Button
+                    onClick={onNewSession}
+                    disabled={creatingSession}
+                    variant="outline"
+                    size="sm"
+                    title="Start a new agent session in the current project"
+                    className="av-hover-control"
+                    style={{
+                      height: 24,
+                      padding: '0 8px',
+                      borderRadius: 6,
+                      border: '1px solid rgba(45,212,160,0.32)',
+                      background: 'rgba(45,212,160,0.08)',
+                      color: 'var(--green)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 10,
+                      letterSpacing: '0.06em',
+                      cursor: creatingSession ? 'not-allowed' : 'pointer',
+                      opacity: creatingSession ? 0.55 : 1,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}
+                  >
+                    {creatingSession ? '…' : '+'} NEW
+                  </Button>
+                )}
                 <Button
                   onClick={onOpenCommandPalette}
                   variant="outline"
