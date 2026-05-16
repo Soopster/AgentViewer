@@ -32,7 +32,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { ChartNetwork, Filter, RotateCcw, Search, SendHorizontal, Square } from 'lucide-react'
+import { ChartNetwork, Filter, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
 import MessageItem, { LiveSubagentTextContext, MessageDensityProvider, type MessageDensity } from './MessageItem'
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
@@ -118,6 +118,7 @@ type TimelineRow = {
 }
 
 type TranscriptFilter = 'all' | 'user' | 'assistant' | 'system' | 'tools' | 'errors' | 'thinking' | 'media'
+type ActiveTranscriptFilter = Exclude<TranscriptFilter, 'all'>
 
 const TRANSCRIPT_FILTERS: Array<{ key: TranscriptFilter; label: string }> = [
   { key: 'all', label: 'All' },
@@ -129,6 +130,8 @@ const TRANSCRIPT_FILTERS: Array<{ key: TranscriptFilter; label: string }> = [
   { key: 'media', label: 'Media' },
   { key: 'system', label: 'System' },
 ]
+
+const TRANSCRIPT_FILTER_LABELS = new Map(TRANSCRIPT_FILTERS.map((filter) => [filter.key, filter.label]))
 
 const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
 const TIMELINE_OVERSCAN_PX = 1200
@@ -1241,7 +1244,7 @@ function timelineRowSearchText(row: TimelineRow): string {
   ].filter(Boolean).join(' ').toLowerCase()
 }
 
-function timelineRowMatchesTranscriptFilter(row: TimelineRow, filter: TranscriptFilter): boolean {
+function timelineRowMatchesTranscriptFilter(row: TimelineRow, filter: ActiveTranscriptFilter): boolean {
   switch (filter) {
     case 'user':
     case 'assistant':
@@ -1255,10 +1258,11 @@ function timelineRowMatchesTranscriptFilter(row: TimelineRow, filter: Transcript
       return row.message.blocks.some((block) => block.type === 'thinking')
     case 'media':
       return row.message.blocks.some((block) => block.type === 'image')
-    case 'all':
-    default:
-      return true
   }
+}
+
+function timelineRowMatchesTranscriptFilters(row: TimelineRow, filters: ActiveTranscriptFilter[]): boolean {
+  return filters.length === 0 || filters.some((filter) => timelineRowMatchesTranscriptFilter(row, filter))
 }
 
 const TimelineMessageRow = memo(function TimelineMessageRow({
@@ -1548,7 +1552,7 @@ export default function MessageView({
     if (typeof window === 'undefined') return
     window.localStorage.setItem('agentViewer:messageVisualizer', showVisualizer ? 'true' : 'false')
   }, [showVisualizer])
-  const [transcriptFilter, setTranscriptFilter] = useState<TranscriptFilter>('all')
+  const [transcriptFilters, setTranscriptFilters] = useState<ActiveTranscriptFilter[]>([])
   const [transcriptSearch, setTranscriptSearch] = useState('')
   const deferredTranscriptSearch = useDeferredValue(transcriptSearch)
   const [showTools, setShowTools] = useState<boolean>(() => {
@@ -3133,13 +3137,14 @@ export default function MessageView({
   }, [liveTimelineRows, persistedTimelineRows])
   const normalizedTranscriptSearch = deferredTranscriptSearch.trim().toLowerCase()
   const transcriptTimelineRows = useMemo<TimelineRow[]>(() => {
-    if (transcriptFilter === 'all' && normalizedTranscriptSearch === '') return timelineRows
+    if (transcriptFilters.length === 0 && normalizedTranscriptSearch === '') return timelineRows
     return timelineRows.filter((row) => {
-      if (!timelineRowMatchesTranscriptFilter(row, transcriptFilter)) return false
+      if (!timelineRowMatchesTranscriptFilters(row, transcriptFilters)) return false
       if (!normalizedTranscriptSearch) return true
       return timelineRowSearchText(row).includes(normalizedTranscriptSearch)
     })
-  }, [normalizedTranscriptSearch, timelineRows, transcriptFilter])
+  }, [normalizedTranscriptSearch, timelineRows, transcriptFilters])
+  const hasTranscriptFocus = transcriptFilters.length > 0 || transcriptSearch.trim().length > 0
   const visualizerRows = useMemo<MessageVisualizerRow[]>(
     () => timelineRows.map((row) => ({
       key: row.key,
@@ -3289,7 +3294,7 @@ export default function MessageView({
 
   const handleVisualizerSelectMessage = useCallback((messageId: string) => {
     setShowVisualizer(false)
-    setTranscriptFilter('all')
+    setTranscriptFilters([])
     setTranscriptSearch('')
     setHighlightedMessageId(messageId)
     autoFollowRef.current = false
@@ -4336,8 +4341,20 @@ export default function MessageView({
                     <button
                       key={filter.key}
                       type="button"
-                      className={cn(transcriptFilter === filter.key && 'av-active')}
-                      onClick={() => setTranscriptFilter(filter.key)}
+                      aria-pressed={filter.key === 'all' ? transcriptFilters.length === 0 : transcriptFilters.includes(filter.key)}
+                      className={cn((filter.key === 'all' ? transcriptFilters.length === 0 : transcriptFilters.includes(filter.key)) && 'av-active')}
+                      onClick={() => {
+                        if (filter.key === 'all') {
+                          setTranscriptFilters([])
+                          return
+                        }
+                        const selectedFilter = filter.key
+                        setTranscriptFilters((current) => (
+                          current.includes(selectedFilter)
+                            ? current.filter((activeFilter) => activeFilter !== selectedFilter)
+                            : [...current, selectedFilter]
+                        ))
+                      }}
                     >
                       {filter.label}
                     </button>
@@ -4346,6 +4363,46 @@ export default function MessageView({
                 <div className="av-session-viz-result-count">
                   {transcriptTimelineRows.length} shown
                 </div>
+                {hasTranscriptFocus && (
+                  <div className="av-session-viz-focusbar">
+                    <span className="av-session-viz-focus-count">
+                      {transcriptTimelineRows.length} of {timelineRows.length} turns
+                    </span>
+                    {transcriptFilters.map((filter) => (
+                      <button
+                        key={filter}
+                        type="button"
+                        className="av-session-viz-focus-chip"
+                        onClick={() => {
+                          setTranscriptFilters((current) => current.filter((activeFilter) => activeFilter !== filter))
+                        }}
+                      >
+                        Filter: {TRANSCRIPT_FILTER_LABELS.get(filter) ?? filter}
+                        <X aria-hidden="true" />
+                      </button>
+                    ))}
+                    {transcriptSearch.trim() && (
+                      <button
+                        type="button"
+                        className="av-session-viz-focus-chip"
+                        onClick={() => setTranscriptSearch('')}
+                      >
+                        Search: {transcriptSearch.trim()}
+                        <X aria-hidden="true" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="av-session-viz-clear-focus"
+                      onClick={() => {
+                        setTranscriptFilters([])
+                        setTranscriptSearch('')
+                      }}
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                )}
               </div>
             )}
             <div

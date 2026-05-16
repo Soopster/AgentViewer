@@ -1,10 +1,11 @@
 'use client'
 
-import { memo, useDeferredValue, useMemo, useState, type CSSProperties } from 'react'
+import { memo, useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import {
   AlertTriangle,
   Bot,
   Clock3,
+  ExternalLink,
   Filter,
   Gauge,
   ImageIcon,
@@ -14,6 +15,7 @@ import {
   Sparkles,
   Target,
   Wrench,
+  X,
   Zap,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -114,7 +116,14 @@ type VisualizerStats = {
 }
 
 type VisualizerFilter = 'all' | 'user' | 'assistant' | 'system' | 'tools' | 'errors' | 'thinking' | 'media'
+type ActiveVisualizerFilter = Exclude<VisualizerFilter, 'all'>
 type VisualizerView = 'rows' | 'graph'
+
+type PhaseFocus = {
+  label: string
+  startIndex: number
+  endIndex: number
+}
 
 const ROLE_META: Record<ThreadedMessage['role'], { label: string; color: string; glow: string; background: string }> = {
   user: {
@@ -217,11 +226,21 @@ const TOOL_TARGET_KEYS = [
   'tool',
 ]
 
+const FILTER_LABELS = new Map(FILTERS.map((filter) => [filter.key, filter.label]))
+
 const VERIFY_RE = /\b(test|tests|type-check|typecheck|tsc|build|verify|verification|passes|passed|succeeded|success|lint|diagnostic|checked)\b/i
 const HANDOFF_RE = /\b(done|completed|wired|implemented|verification passed|ready|left|summary|final)\b/i
 
 function toolColor(name: string): string {
   return TOOL_COLORS[name] ?? 'var(--t-other)'
+}
+
+function phaseFocusId(phase: SessionPhase): string {
+  return `${phase.key}:${phase.startIndex}:${phase.endIndex}`
+}
+
+function phaseForEntry(entry: VisualizerEntry, total: number): PhaseKey {
+  return classifyEntryPhase(entry, entry.index === total - 1)
 }
 
 function compactNumber(value: number): string {
@@ -563,12 +582,12 @@ function buildHotEntries(entries: VisualizerEntry[], maxChars: number): Visualiz
     .map(({ entry }) => entry)
 }
 
-function entryMatchesFilter(entry: VisualizerEntry, activeFilter: VisualizerFilter): boolean {
-  switch (activeFilter) {
+function entryMatchesFilter(entry: VisualizerEntry, filter: ActiveVisualizerFilter): boolean {
+  switch (filter) {
     case 'user':
     case 'assistant':
     case 'system':
-      return entry.role === activeFilter
+      return entry.role === filter
     case 'tools':
       return entry.toolCount > 0
     case 'errors':
@@ -577,10 +596,11 @@ function entryMatchesFilter(entry: VisualizerEntry, activeFilter: VisualizerFilt
       return entry.thinkingCount > 0
     case 'media':
       return entry.imageCount > 0
-    case 'all':
-    default:
-      return true
   }
+}
+
+function entryMatchesFilters(entry: VisualizerEntry, activeFilters: ActiveVisualizerFilter[]): boolean {
+  return activeFilters.length === 0 || activeFilters.some((filter) => entryMatchesFilter(entry, filter))
 }
 
 function StatPill({
@@ -654,7 +674,15 @@ function ActivitySparkline({ buckets }: { buckets: number[] }) {
   )
 }
 
-function ToolMix({ stats }: { stats: VisualizerStats }) {
+function ToolMix({
+  stats,
+  activeTool,
+  onSelectTool,
+}: {
+  stats: VisualizerStats
+  activeTool: string | null
+  onSelectTool: (toolName: string) => void
+}) {
   const max = Math.max(...stats.topTools.map((tool) => tool.count), 1)
 
   return (
@@ -665,7 +693,13 @@ function ToolMix({ stats }: { stats: VisualizerStats }) {
       ) : (
         <div className="av-session-viz-toolmix">
           {stats.topTools.map((tool) => (
-            <div key={tool.name} className="av-session-viz-toolmix-row">
+            <button
+              key={tool.name}
+              type="button"
+              className={cn('av-session-viz-toolmix-row', activeTool === tool.name && 'av-active')}
+              onClick={() => onSelectTool(tool.name)}
+              title={`Focus turns using ${tool.name}`}
+            >
               <span title={tool.name}>{tool.name}</span>
               <div aria-hidden="true">
                 <i
@@ -676,7 +710,7 @@ function ToolMix({ stats }: { stats: VisualizerStats }) {
                 />
               </div>
               <strong>{tool.count}</strong>
-            </div>
+            </button>
           ))}
         </div>
       )}
@@ -751,7 +785,17 @@ function InsightStack({ stats }: { stats: VisualizerStats }) {
   )
 }
 
-function PhaseStrip({ phases, total }: { phases: SessionPhase[]; total: number }) {
+function PhaseStrip({
+  phases,
+  total,
+  activePhaseId,
+  onSelectPhase,
+}: {
+  phases: SessionPhase[]
+  total: number
+  activePhaseId: string | null
+  onSelectPhase: (phase: SessionPhase) => void
+}) {
   return (
     <div className="av-session-viz-blueprint">
       <div className="av-session-viz-blueprint-head">
@@ -763,9 +807,11 @@ function PhaseStrip({ phases, total }: { phases: SessionPhase[]; total: number }
       </div>
       <div className="av-session-viz-phasebar">
         {phases.map((phase, index) => (
-          <div
+          <button
             key={`${phase.key}-${phase.startIndex}-${index}`}
-            className="av-session-viz-phase"
+            type="button"
+            className={cn('av-session-viz-phase', activePhaseId === phaseFocusId(phase) && 'av-active')}
+            onClick={() => onSelectPhase(phase)}
             style={{
               '--av-phase-color': phase.color,
               flexGrow: Math.max(phase.count, 1),
@@ -777,7 +823,7 @@ function PhaseStrip({ phases, total }: { phases: SessionPhase[]; total: number }
             <span>{phase.count}</span>
             {phase.toolCount > 0 && <b>{phase.toolCount} tools</b>}
             {phase.errorCount > 0 && <b className="av-error">{phase.errorCount} errors</b>}
-          </div>
+          </button>
         ))}
       </div>
     </div>
@@ -786,10 +832,12 @@ function PhaseStrip({ phases, total }: { phases: SessionPhase[]; total: number }
 
 function HotTurns({
   entries,
-  onSelectMessage,
+  selectedEntryId,
+  onInspectEntry,
 }: {
   entries: VisualizerEntry[]
-  onSelectMessage?: (messageId: string) => void
+  selectedEntryId: string | null
+  onInspectEntry: (entryId: string) => void
 }) {
   return (
     <div className="av-session-viz-panel">
@@ -802,8 +850,8 @@ function HotTurns({
             <button
               key={entry.key}
               type="button"
-              disabled={!onSelectMessage}
-              onClick={() => onSelectMessage?.(entry.id)}
+              className={cn(selectedEntryId === entry.id && 'av-active')}
+              onClick={() => onInspectEntry(entry.id)}
               style={{ '--av-hot-color': ROLE_META[entry.role].color } as CSSProperties}
             >
               <span>{String(entry.index + 1).padStart(2, '0')}</span>
@@ -846,20 +894,21 @@ function FlowEntry({
   entry,
   maxChars,
   total,
-  onSelectMessage,
+  selected,
+  onInspectEntry,
   showSession,
 }: {
   entry: VisualizerEntry
   maxChars: number
   total: number
-  onSelectMessage?: (messageId: string) => void
+  selected: boolean
+  onInspectEntry: (entryId: string) => void
   showSession?: boolean
 }) {
   const meta = ROLE_META[entry.role]
-  const phaseKey = classifyEntryPhase(entry, entry.index === total - 1)
+  const phaseKey = phaseForEntry(entry, total)
   const phaseMeta = PHASE_META[phaseKey]
   const activityWidth = `${Math.max(4, Math.min(100, (entry.textChars / maxChars) * 100))}%`
-  const canSelect = !!onSelectMessage
   const tokenLabel = entry.inputTokens > 0 || entry.outputTokens > 0
     ? `${compactNumber(entry.inputTokens)} / ${compactNumber(entry.outputTokens)}`
     : ''
@@ -867,10 +916,9 @@ function FlowEntry({
   return (
     <button
       type="button"
-      className={cn('av-session-viz-entry', entry.dimmed && 'av-dimmed', entry.errorCount > 0 && 'av-has-error')}
-      disabled={!canSelect}
-      onClick={() => onSelectMessage?.(entry.id)}
-      aria-label={`Open ${entry.roleLabel} message ${entry.index + 1}`}
+      className={cn('av-session-viz-entry', entry.dimmed && 'av-dimmed', entry.errorCount > 0 && 'av-has-error', selected && 'av-selected')}
+      onClick={() => onInspectEntry(entry.id)}
+      aria-label={`Inspect ${entry.roleLabel} message ${entry.index + 1}`}
       style={{
         '--av-entry-color': meta.color,
         '--av-entry-glow': meta.glow,
@@ -945,16 +993,17 @@ function GraphToolNode({
 function GraphEntry({
   entry,
   total,
-  onSelectMessage,
+  selected,
+  onInspectEntry,
 }: {
   entry: VisualizerEntry
   total: number
-  onSelectMessage?: (messageId: string) => void
+  selected: boolean
+  onInspectEntry: (entryId: string) => void
 }) {
   const meta = ROLE_META[entry.role]
-  const phaseKey = classifyEntryPhase(entry, entry.index === total - 1)
+  const phaseKey = phaseForEntry(entry, total)
   const phaseMeta = PHASE_META[phaseKey]
-  const canSelect = !!onSelectMessage
   const tokenLabel = entry.inputTokens > 0 || entry.outputTokens > 0
     ? `${compactNumber(entry.inputTokens)} / ${compactNumber(entry.outputTokens)} tokens`
     : `${compactNumber(entry.textChars)} chars`
@@ -963,9 +1012,8 @@ function GraphEntry({
     <div className="av-session-viz-graph-unit">
       <button
         type="button"
-        className={cn('av-session-viz-graph-node av-message-node', entry.errorCount > 0 && 'av-error')}
-        disabled={!canSelect}
-        onClick={() => onSelectMessage?.(entry.id)}
+        className={cn('av-session-viz-graph-node av-message-node', entry.errorCount > 0 && 'av-error', selected && 'av-selected')}
+        onClick={() => onInspectEntry(entry.id)}
         style={{
           '--av-node-color': meta.color,
           '--av-node-glow': meta.glow,
@@ -998,11 +1046,13 @@ function GraphEntry({
 function NodeGraphView({
   entries,
   total,
-  onSelectMessage,
+  selectedEntryId,
+  onInspectEntry,
 }: {
   entries: VisualizerEntry[]
   total: number
-  onSelectMessage?: (messageId: string) => void
+  selectedEntryId: string | null
+  onInspectEntry: (entryId: string) => void
 }) {
   if (entries.length === 0) {
     return (
@@ -1027,9 +1077,168 @@ function NodeGraphView({
             key={entry.key}
             entry={entry}
             total={total}
-            onSelectMessage={onSelectMessage}
+            selected={selectedEntryId === entry.id}
+            onInspectEntry={onInspectEntry}
           />
         ))}
+      </div>
+    </div>
+  )
+}
+
+function ActiveFocusBar({
+  activeFilters,
+  phaseFocus,
+  activeTool,
+  query,
+  shownCount,
+  total,
+  onClearFilter,
+  onClearPhase,
+  onClearTool,
+  onClearQuery,
+  onClearAll,
+}: {
+  activeFilters: ActiveVisualizerFilter[]
+  phaseFocus: PhaseFocus | null
+  activeTool: string | null
+  query: string
+  shownCount: number
+  total: number
+  onClearFilter: (filter: ActiveVisualizerFilter) => void
+  onClearPhase: () => void
+  onClearTool: () => void
+  onClearQuery: () => void
+  onClearAll: () => void
+}) {
+  const hasFocus = activeFilters.length > 0 || phaseFocus || activeTool || query.trim()
+  if (!hasFocus) return null
+
+  return (
+    <div className="av-session-viz-focusbar">
+      <span className="av-session-viz-focus-count">
+        {shownCount} of {total} turns
+      </span>
+      {activeFilters.map((filter) => (
+        <button
+          key={filter}
+          type="button"
+          className="av-session-viz-focus-chip"
+          onClick={() => onClearFilter(filter)}
+        >
+          Filter: {FILTER_LABELS.get(filter) ?? filter}
+          <X aria-hidden="true" />
+        </button>
+      ))}
+      {phaseFocus && (
+        <button type="button" className="av-session-viz-focus-chip" onClick={onClearPhase}>
+          Phase: {phaseFocus.label} {phaseFocus.startIndex + 1}-{phaseFocus.endIndex + 1}
+          <X aria-hidden="true" />
+        </button>
+      )}
+      {activeTool && (
+        <button type="button" className="av-session-viz-focus-chip" onClick={onClearTool}>
+          Tool: {activeTool}
+          <X aria-hidden="true" />
+        </button>
+      )}
+      {query.trim() && (
+        <button type="button" className="av-session-viz-focus-chip" onClick={onClearQuery}>
+          Search: {query.trim()}
+          <X aria-hidden="true" />
+        </button>
+      )}
+      <button type="button" className="av-session-viz-clear-focus" onClick={onClearAll}>
+        Clear all
+      </button>
+    </div>
+  )
+}
+
+function TurnInspector({
+  entry,
+  total,
+  isPinned,
+  onOpenMessage,
+  onClearSelection,
+}: {
+  entry: VisualizerEntry | null
+  total: number
+  isPinned: boolean
+  onOpenMessage?: (messageId: string) => void
+  onClearSelection: () => void
+}) {
+  if (!entry) {
+    return (
+      <div className="av-session-viz-panel">
+        <div className="av-session-viz-panel-title">TURN INSPECTOR</div>
+        <div className="av-session-viz-muted">Select a turn to inspect it.</div>
+      </div>
+    )
+  }
+
+  const roleMeta = ROLE_META[entry.role]
+  const phaseMeta = PHASE_META[phaseForEntry(entry, total)]
+  const tokenLabel = entry.inputTokens > 0 || entry.outputTokens > 0
+    ? `${compactNumber(entry.inputTokens)} in / ${compactNumber(entry.outputTokens)} out`
+    : 'n/a'
+  const statusLabel = entry.errorCount > 0
+    ? `${entry.errorCount} errors`
+    : entry.pendingToolCount > 0
+      ? `${entry.pendingToolCount} pending`
+      : 'clean'
+
+  return (
+    <div className="av-session-viz-panel av-session-viz-inspector">
+      <div className="av-session-viz-panel-title av-session-viz-inspector-title">
+        <span>{isPinned ? 'TURN INSPECTOR' : 'MOST ACTIVE TURN'}</span>
+        {isPinned && (
+          <button type="button" onClick={onClearSelection} title="Clear selected turn">
+            <X aria-hidden="true" />
+          </button>
+        )}
+      </div>
+      <div className="av-session-viz-inspector-head">
+        <span
+          aria-hidden="true"
+          style={{ background: roleMeta.color, boxShadow: `0 0 14px ${roleMeta.glow}` }}
+        />
+        <div>
+          <strong>Turn {entry.index + 1}</strong>
+          <em>{entry.roleLabel} / {phaseMeta.shortLabel}{entry.timeLabel ? ` / ${entry.timeLabel}` : ''}</em>
+        </div>
+      </div>
+      <p className="av-session-viz-inspector-preview">{entry.preview}</p>
+      <div className="av-session-viz-inspector-metrics">
+        <span><b>tools</b>{entry.toolCount}</span>
+        <span><b>status</b>{statusLabel}</span>
+        <span><b>tokens</b>{tokenLabel}</span>
+        <span><b>size</b>{compactNumber(entry.textChars)} chars</span>
+      </div>
+      {entry.toolSummaries.length > 0 && (
+        <div className="av-session-viz-inspector-tools">
+          {entry.toolSummaries.slice(0, 6).map((tool, index) => (
+            <span
+              key={`${entry.id}:inspector-tool:${tool.name}:${index}`}
+              style={{ '--av-tool-color': tool.error ? 'var(--red)' : tool.pending ? 'var(--amber)' : toolColor(tool.name) } as CSSProperties}
+            >
+              <i aria-hidden="true" />
+              <b>{tool.name}</b>
+              {tool.target && <em>{tool.target}</em>}
+            </span>
+          ))}
+          {entry.toolSummaries.length > 6 && <strong>+{entry.toolSummaries.length - 6} more tools</strong>}
+        </div>
+      )}
+      <div className="av-session-viz-inspector-actions">
+        <button
+          type="button"
+          disabled={!onOpenMessage}
+          onClick={() => onOpenMessage?.(entry.id)}
+        >
+          <ExternalLink aria-hidden="true" />
+          Open in transcript
+        </button>
       </div>
     </div>
   )
@@ -1042,20 +1251,55 @@ function MessageSessionVisualizer({
   showSession,
   onSelectMessage,
 }: MessageSessionVisualizerProps) {
-  const [activeFilter, setActiveFilter] = useState<VisualizerFilter>('all')
+  const [activeFilters, setActiveFilters] = useState<ActiveVisualizerFilter[]>([])
   const [activeView, setActiveView] = useState<VisualizerView>('rows')
+  const [activePhaseId, setActivePhaseId] = useState<string | null>(null)
+  const [activeTool, setActiveTool] = useState<string | null>(null)
+  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query)
   const normalizedQuery = deferredQuery.trim().toLowerCase()
   const entries = useMemo(() => rows.map(buildEntry), [rows])
   const stats = useMemo(() => buildStats(entries, rawEventCount), [entries, rawEventCount])
   const phases = useMemo(() => buildPhases(entries), [entries])
+  const phaseFocus = useMemo<PhaseFocus | null>(() => {
+    if (!activePhaseId) return null
+    const phase = phases.find((candidate) => phaseFocusId(candidate) === activePhaseId)
+    if (!phase) return null
+    return {
+      label: phase.label,
+      startIndex: phase.startIndex,
+      endIndex: phase.endIndex,
+    }
+  }, [activePhaseId, phases])
   const hotEntries = useMemo(() => buildHotEntries(entries, stats.maxChars), [entries, stats.maxChars])
   const filteredEntries = useMemo(() => entries.filter((entry) => {
-    if (!entryMatchesFilter(entry, activeFilter)) return false
+    if (!entryMatchesFilters(entry, activeFilters)) return false
+    if (phaseFocus && (entry.index < phaseFocus.startIndex || entry.index > phaseFocus.endIndex)) return false
+    if (activeTool && !entry.toolSummaries.some((tool) => tool.name === activeTool)) return false
     if (!normalizedQuery) return true
     return entry.searchText.includes(normalizedQuery)
-  }), [activeFilter, entries, normalizedQuery])
+  }), [activeFilters, activeTool, entries, normalizedQuery, phaseFocus])
+  const selectedEntry = useMemo(() => {
+    if (selectedEntryId) {
+      const selected = entries.find((entry) => entry.id === selectedEntryId)
+      if (selected) return selected
+    }
+    return hotEntries[0] ?? stats.longestEntry ?? stats.lastEntry
+  }, [entries, hotEntries, selectedEntryId, stats.lastEntry, stats.longestEntry])
+  const isPinnedSelection = selectedEntryId !== null && selectedEntry?.id === selectedEntryId
+
+  useEffect(() => {
+    if (activePhaseId && !phases.some((phase) => phaseFocusId(phase) === activePhaseId)) {
+      setActivePhaseId(null)
+    }
+  }, [activePhaseId, phases])
+
+  useEffect(() => {
+    if (selectedEntryId && !entries.some((entry) => entry.id === selectedEntryId)) {
+      setSelectedEntryId(null)
+    }
+  }, [entries, selectedEntryId])
 
   if (loading) {
     return (
@@ -1096,7 +1340,15 @@ function MessageSessionVisualizer({
           </div>
         </CardHeader>
         <div className="av-session-viz-header-tools">
-          <PhaseStrip phases={phases} total={entries.length} />
+          <PhaseStrip
+            phases={phases}
+            total={entries.length}
+            activePhaseId={activePhaseId}
+            onSelectPhase={(phase) => {
+              const id = phaseFocusId(phase)
+              setActivePhaseId((current) => current === id ? null : id)
+            }}
+          />
 
           <div className="av-session-viz-controls">
             <label className="av-session-viz-search">
@@ -1113,8 +1365,20 @@ function MessageSessionVisualizer({
                 <button
                   key={filter.key}
                   type="button"
-                  className={cn(activeFilter === filter.key && 'av-active')}
-                  onClick={() => setActiveFilter(filter.key)}
+                  aria-pressed={filter.key === 'all' ? activeFilters.length === 0 : activeFilters.includes(filter.key)}
+                  className={cn((filter.key === 'all' ? activeFilters.length === 0 : activeFilters.includes(filter.key)) && 'av-active')}
+                  onClick={() => {
+                    if (filter.key === 'all') {
+                      setActiveFilters([])
+                      return
+                    }
+                    const selectedFilter = filter.key
+                    setActiveFilters((current) => (
+                      current.includes(selectedFilter)
+                        ? current.filter((activeFilter) => activeFilter !== selectedFilter)
+                        : [...current, selectedFilter]
+                    ))
+                  }}
                 >
                   {filter.label}
                 </button>
@@ -1142,23 +1406,59 @@ function MessageSessionVisualizer({
               {filteredEntries.length} shown
             </div>
           </div>
+          <ActiveFocusBar
+            activeFilters={activeFilters}
+            phaseFocus={phaseFocus}
+            activeTool={activeTool}
+            query={query}
+            shownCount={filteredEntries.length}
+            total={entries.length}
+            onClearFilter={(filter) => {
+              setActiveFilters((current) => current.filter((activeFilter) => activeFilter !== filter))
+            }}
+            onClearPhase={() => setActivePhaseId(null)}
+            onClearTool={() => setActiveTool(null)}
+            onClearQuery={() => setQuery('')}
+            onClearAll={() => {
+              setActiveFilters([])
+              setActivePhaseId(null)
+              setActiveTool(null)
+              setQuery('')
+            }}
+          />
         </div>
       </div>
       <CardContent className="av-session-viz-content">
         <div className="av-session-viz-grid">
           <aside className="av-session-viz-side">
             <InsightStack stats={stats} />
+            <TurnInspector
+              entry={selectedEntry}
+              total={entries.length}
+              isPinned={isPinnedSelection}
+              onOpenMessage={onSelectMessage}
+              onClearSelection={() => setSelectedEntryId(null)}
+            />
             <RoleSplit stats={stats} />
             <ActivitySparkline buckets={stats.activityBuckets} />
-            <ToolMix stats={stats} />
-            <HotTurns entries={hotEntries} onSelectMessage={onSelectMessage} />
+            <ToolMix
+              stats={stats}
+              activeTool={activeTool}
+              onSelectTool={(toolName) => setActiveTool((current) => current === toolName ? null : toolName)}
+            />
+            <HotTurns
+              entries={hotEntries}
+              selectedEntryId={selectedEntryId}
+              onInspectEntry={setSelectedEntryId}
+            />
           </aside>
           <section className={cn('av-session-viz-flow', activeView === 'graph' && 'av-graph-mode')} aria-label="Message flow">
             {activeView === 'graph' ? (
               <NodeGraphView
                 entries={filteredEntries}
                 total={entries.length}
-                onSelectMessage={onSelectMessage}
+                selectedEntryId={selectedEntryId}
+                onInspectEntry={setSelectedEntryId}
               />
             ) : (
               <>
@@ -1181,7 +1481,8 @@ function MessageSessionVisualizer({
                         entry={entry}
                         maxChars={stats.maxChars}
                         total={entries.length}
-                        onSelectMessage={onSelectMessage}
+                        selected={selectedEntryId === entry.id}
+                        onInspectEntry={setSelectedEntryId}
                         showSession={showSession}
                       />
                     ))}

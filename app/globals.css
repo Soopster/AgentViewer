@@ -1672,6 +1672,7 @@ body {
 }
 
 .av-session-viz-phase {
+  appearance: none;
   display: flex;
   flex-shrink: 0;
   min-width: 74px;
@@ -1684,8 +1685,25 @@ body {
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--av-phase-color) 16%, transparent), transparent),
     var(--surface);
+  color: var(--text);
+  cursor: pointer;
   padding: 7px 8px;
   font-family: "IBM Plex Mono", monospace;
+  text-align: left;
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.av-session-viz-phase:hover,
+.av-session-viz-phase.av-active {
+  border-color: color-mix(in srgb, var(--av-phase-color) 72%, var(--border));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--av-phase-color) 24%, transparent), transparent),
+    color-mix(in srgb, var(--surface) 88%, var(--av-phase-color));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--av-phase-color) 16%, transparent);
+}
+
+.av-session-viz-phase:hover {
+  transform: translateY(-1px);
 }
 
 .av-session-viz-phase strong,
@@ -1717,7 +1735,7 @@ body {
   grid-template-columns: minmax(220px, 340px) minmax(0, 1fr) max-content max-content;
   gap: 10px;
   align-items: center;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .av-session-viz-search {
@@ -1800,6 +1818,59 @@ body {
   white-space: nowrap;
 }
 
+.av-session-viz-focusbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  margin-top: 8px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+}
+
+.av-session-viz-focus-count {
+  color: var(--text-3);
+  margin-right: 2px;
+}
+
+.av-session-viz-focus-chip,
+.av-session-viz-clear-focus {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  max-width: 280px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  overflow: hidden;
+  padding: 0 8px 0 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.av-session-viz-focus-chip {
+  border-color: color-mix(in srgb, var(--cyan) 32%, var(--border));
+  background: color-mix(in srgb, var(--cyan) 9%, var(--surface-2));
+}
+
+.av-session-viz-focus-chip svg,
+.av-session-viz-clear-focus svg {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+.av-session-viz-clear-focus {
+  color: var(--text-3);
+}
+
 .av-transcript-filter-panel {
   flex-shrink: 0;
   display: grid;
@@ -1809,6 +1880,11 @@ body {
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 96%, var(--cyan));
   padding: 10px 32px;
+}
+
+.av-transcript-filter-panel .av-session-viz-focusbar {
+  grid-column: 1 / -1;
+  margin-top: 0;
 }
 
 .av-transcript-no-results {
@@ -1948,6 +2024,188 @@ body {
   font-style: normal;
 }
 
+.av-session-viz-inspector {
+  display: grid;
+  gap: 9px;
+}
+
+.av-session-viz-inspector-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+.av-session-viz-inspector-title button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.av-session-viz-inspector-title svg {
+  width: 12px;
+  height: 12px;
+}
+
+.av-session-viz-inspector-head {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.av-session-viz-inspector-head > span {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.av-session-viz-inspector-head div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.av-session-viz-inspector-head strong,
+.av-session-viz-inspector-head em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.av-session-viz-inspector-head strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.av-session-viz-inspector-head em {
+  color: var(--text-3);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.av-session-viz-inspector-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--text-2);
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 12px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.av-session-viz-inspector-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.av-session-viz-inspector-metrics span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  padding: 6px;
+  color: var(--text-2);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+}
+
+.av-session-viz-inspector-metrics b {
+  color: var(--text-3);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.av-session-viz-inspector-tools {
+  display: grid;
+  gap: 5px;
+}
+
+.av-session-viz-inspector-tools span {
+  display: grid;
+  grid-template-columns: 8px minmax(52px, 82px) minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--av-tool-color) 26%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--av-tool-color) 7%, var(--surface));
+  padding: 5px 6px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+}
+
+.av-session-viz-inspector-tools i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--av-tool-color);
+}
+
+.av-session-viz-inspector-tools b,
+.av-session-viz-inspector-tools em,
+.av-session-viz-inspector-tools strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.av-session-viz-inspector-tools b {
+  color: var(--text-2);
+}
+
+.av-session-viz-inspector-tools em,
+.av-session-viz-inspector-tools strong {
+  color: var(--text-3);
+  font-style: normal;
+  font-weight: 500;
+}
+
+.av-session-viz-inspector-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.av-session-viz-inspector-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 34%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--cyan) 9%, var(--surface));
+  color: var(--cyan);
+  cursor: pointer;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  padding: 0 9px;
+}
+
+.av-session-viz-inspector-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.av-session-viz-inspector-actions svg {
+  width: 12px;
+  height: 12px;
+}
+
 .av-session-viz-rolebar {
   display: flex;
   height: 10px;
@@ -2012,9 +2270,23 @@ body {
   grid-template-columns: minmax(64px, 96px) minmax(0, 1fr) 28px;
   align-items: center;
   gap: 8px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
   font-family: "IBM Plex Mono", monospace;
   font-size: 10px;
   color: var(--text-2);
+  padding: 4px 5px;
+  text-align: left;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.av-session-viz-toolmix-row:hover,
+.av-session-viz-toolmix-row.av-active {
+  border-color: color-mix(in srgb, var(--cyan) 28%, var(--border));
+  background: color-mix(in srgb, var(--cyan) 7%, transparent);
 }
 
 .av-session-viz-toolmix-row > span {
@@ -2065,6 +2337,12 @@ body {
 
 .av-session-viz-hotlist button:disabled {
   cursor: default;
+}
+
+.av-session-viz-hotlist button.av-active {
+  border-color: color-mix(in srgb, var(--av-hot-color) 64%, var(--border));
+  background: color-mix(in srgb, var(--av-hot-color) 12%, var(--surface));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--av-hot-color) 10%, transparent);
 }
 
 .av-session-viz-hotlist span,
@@ -2277,6 +2555,13 @@ button.av-session-viz-graph-node:disabled {
   border-style: dashed;
 }
 
+.av-session-viz-graph-node.av-selected {
+  border-color: color-mix(in srgb, var(--av-node-color) 92%, var(--text));
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--av-node-color) 22%, transparent),
+    0 16px 32px var(--av-node-glow, var(--av-graph-node-shadow));
+}
+
 .av-session-viz-graph-node-kind {
   display: inline-flex;
   align-items: center;
@@ -2363,6 +2648,16 @@ button.av-session-viz-graph-node:disabled {
 
 .av-session-viz-entry.av-has-error {
   border-left-color: var(--red);
+}
+
+.av-session-viz-entry.av-selected {
+  border-color: color-mix(in srgb, var(--av-entry-color) 58%, var(--border));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--av-entry-color) 16%, transparent), transparent 38%),
+    color-mix(in srgb, var(--surface-2) 90%, var(--av-entry-color));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--av-entry-color) 18%, transparent),
+    0 10px 24px var(--av-entry-glow);
 }
 
 .av-session-viz-index {
