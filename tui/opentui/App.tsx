@@ -5,7 +5,7 @@ import { GitPopover } from './GitPopover'
 import { AnalyticsPopover } from './AnalyticsPopover'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
-import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable } from '@opentui/core'
+import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react'
 import {
   formatProviderLabel,
@@ -69,6 +69,10 @@ import {
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { ProviderSelection, RunningSessionRef, SendState, Session } from '../../lib/types'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
+import { listProjectFiles } from '../../lib/projectFiles'
+import { runGitCommand } from '../../lib/gitNodeProvider'
+import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '../../lib/slashCommands'
+import { readViewSessionSlashCommands } from '../../lib/sessionBackend'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 
@@ -325,7 +329,40 @@ function timeAgo(value?: string | number): string {
   return `${days}d`
 }
 
-const COMPOSER_HEIGHT = 3
+const COMPOSER_MIN_HEIGHT = 4
+const COMPOSER_MAX_HEIGHT = 12
+type ComposerKeyBinding = { name: string; action: TextareaAction; shift?: boolean; alt?: boolean; meta?: boolean; ctrl?: boolean }
+const TUI_SLASH_HINTS: Record<string, string[]> = {
+  claude: ['/clear', '/compact', '/help', '/model', '/cost', '/review'],
+  codex: ['/clear', '/diff', '/status', '/compact'],
+  opencode: ['/clear', '/summarize', '/help'],
+  copilot: ['/help', '/clear'],
+  pi: ['/help', '/clear'],
+}
+
+function detectMentionAtCursor(text: string, cursor: number): { start: number; query: string } | null {
+  if (cursor <= 0) return null
+  let i = cursor - 1
+  while (i >= 0) {
+    const ch = text[i]
+    if (ch === '@') break
+    if (!ch || /\s/.test(ch)) return null
+    i -= 1
+  }
+  if (i < 0 || text[i] !== '@') return null
+  if (i > 0 && !/\s/.test(text[i - 1] ?? '')) return null
+  const query = text.slice(i + 1, cursor)
+  if (query.length > 60) return null
+  return { start: i, query }
+}
+const composerKeyBindings: ComposerKeyBinding[] = [
+  { name: 'return', action: 'submit' },
+  { name: 'return', shift: true, action: 'newline' },
+  { name: 'return', alt: true, action: 'newline' },
+  { name: 'return', meta: true, action: 'newline' },
+  { name: 'j', ctrl: true, action: 'newline' },
+  { name: 'linefeed', action: 'newline' },
+]
 const TRANSCRIPT_TOP_MARGIN = 2
 const API_BASE_URL = process.env.AGENT_VIEWER_BASE_URL ?? 'http://localhost:3000'
 // Metadata refresh is intentionally slow because Claude control queries are
@@ -1258,6 +1295,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'copy',       label: 'Copy selected message',  key: 'y',  category: 'Transcript' },
   // Session
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
+  { id: 'reuse',      label: 'Reuse last prompt',      key: 'R',  category: 'Session'    },
   { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
   { id: 'cli',        label: 'Copy CLI resume command', key: 'C',  category: 'Session'    },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
@@ -1697,6 +1735,13 @@ export default function OpenTuiApp() {
   const renameDraftRef = useRef(renameDraft)
   const [composerActive, setComposerActive] = useState(false)
   const [composerDraft, setComposerDraft] = useState('')
+  const [composerMention, setComposerMention] = useState<{ start: number; query: string } | null>(null)
+  const [composerMentionResults, setComposerMentionResults] = useState<Array<{ path: string; basename: string }>>([])
+  const [composerMentionIndex, setComposerMentionIndex] = useState(0)
+  const [composerMentionDismissedStart, setComposerMentionDismissedStart] = useState<number | null>(null)
+  const [composerSlashIndex, setComposerSlashIndex] = useState(0)
+  const [composerSlashDismissed, setComposerSlashDismissed] = useState(false)
+  const [composerLiveSlashCommands, setComposerLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
   const [composerError, setComposerError] = useState<string | null>(null)
   const [composerLiveText, setComposerLiveText] = useState('')
@@ -1737,6 +1782,7 @@ export default function OpenTuiApp() {
   const sessionMetadataFetchedAtRef = useRef(new Map<string, number>())
   const sessionMetadataInFlightRef = useRef(new Set<string>())
   const composerAbortRef = useRef<AbortController | null>(null)
+  const composerTextareaRef = useRef<TextareaRenderable | null>(null)
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadingDetailRef = useRef(false)
   const backgroundRefreshInFlightRef = useRef(new Set<string>())
@@ -2052,7 +2098,137 @@ export default function OpenTuiApp() {
     const idx = sidebarEntries.findIndex((e) => e.type === 'session' && e.absoluteIndex === selectedIndex)
     return idx >= 0 ? idx : 0
   }, [sidebarEntries, selectedIndex])
-  const mainContentHeight = Math.max(height - 3 - (searchMode || sessionSearchMode ? 4 : 1) - COMPOSER_HEIGHT, 8)
+  const composerLineCount = composerDraft.length === 0 ? 1 : composerDraft.split('\n').length
+  // composerLineCount text rows + 1 status row + 2 border rows
+  const composerHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, composerLineCount + 3))
+  const composerFirstLine = composerDraft.split('\n')[0] ?? ''
+  const composerSlashOpen = composerFirstLine.startsWith('/') && !composerSlashDismissed
+  const composerSlashCommands: SlashCommandSuggestion[] = useMemo(() => {
+    if (!composerSlashOpen) return []
+    const baseline = getSlashCommandSuggestions(selectedSession?.provider ?? 'claude')
+    const merged: SlashCommandSuggestion[] = [...composerLiveSlashCommands]
+    const seen = new Set(merged.map((entry) => entry.command))
+    for (const entry of baseline) {
+      if (!seen.has(entry.command)) {
+        merged.push(entry)
+        seen.add(entry.command)
+      }
+    }
+    return filterSlashCommands(merged, composerFirstLine.slice(1))
+  }, [composerSlashOpen, composerFirstLine, selectedSession?.provider, composerLiveSlashCommands])
+
+  useEffect(() => {
+    if (!selectedSession) {
+      setComposerLiveSlashCommands([])
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const live = await readViewSessionSlashCommands(selectedSession.sessionId, selectedSession.provider)
+        if (cancelled) return
+        setComposerLiveSlashCommands(live.map((entry) => ({ command: entry.command, description: entry.description })))
+      } catch {
+        if (!cancelled) setComposerLiveSlashCommands([])
+      }
+    })()
+    return () => { cancelled = true }
+  }, [selectedSession?.sessionId, selectedSession?.provider, selectedSession])
+  const composerSlashHint = useMemo(() => {
+    if (!composerSlashOpen) return ''
+    const provider = selectedSession?.provider ?? 'claude'
+    const suggestions = TUI_SLASH_HINTS[provider] ?? TUI_SLASH_HINTS.claude
+    return `slash · ${suggestions.join(' · ')}`
+  }, [composerSlashOpen, selectedSession?.provider])
+
+  useEffect(() => {
+    if (!composerMention) {
+      setComposerMentionResults([])
+      return
+    }
+    const cwd = selectedSession?.cwd
+    if (!cwd) {
+      setComposerMentionResults([])
+      return
+    }
+    let cancelled = false
+    const handle = setTimeout(() => {
+      void (async () => {
+        try {
+          const all = await listProjectFiles(cwd, runGitCommand)
+          if (cancelled) return
+          const query = composerMention.query.toLowerCase()
+          const matches: Array<{ path: string; basename: string }> = []
+          for (const entry of all) {
+            if (matches.length >= 12) break
+            if (!query) { matches.push(entry); continue }
+            const lower = entry.path.toLowerCase()
+            const base = entry.basename.toLowerCase()
+            if (base === query || base.startsWith(query) || base.includes(query) || lower.includes(query)) {
+              matches.push(entry)
+            }
+          }
+          if (matches.length < 12 && query) {
+            for (const entry of all) {
+              if (matches.length >= 12) break
+              if (matches.includes(entry)) continue
+              let qi = 0
+              for (let i = 0; i < entry.path.length && qi < query.length; i += 1) {
+                if (entry.path[i] === query[qi]) qi += 1
+              }
+              if (qi === query.length) matches.push(entry)
+            }
+          }
+          setComposerMentionResults(matches)
+          setComposerMentionIndex(0)
+        } catch {
+          if (!cancelled) setComposerMentionResults([])
+        }
+      })()
+    }, 60)
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+    }
+  }, [composerMention, selectedSession?.cwd])
+
+  const insertMentionAtCursor = useCallback((entry: { path: string; basename: string }) => {
+    const renderable = composerTextareaRef.current
+    if (!renderable || !composerMention) return
+    const text = renderable.plainText
+    const cursor = renderable.cursorOffset
+    const before = text.slice(0, composerMention.start)
+    const after = text.slice(cursor)
+    const insertion = `@${entry.path} `
+    const next = `${before}${insertion}${after}`
+    renderable.setText(next)
+    renderable.cursorOffset = before.length + insertion.length
+    setComposerDraft(next)
+    setComposerMention(null)
+    setComposerMentionResults([])
+  }, [composerMention])
+
+  const insertSlashAtCursor = useCallback((command: string) => {
+    const renderable = composerTextareaRef.current
+    if (!renderable) return
+    const text = renderable.plainText
+    const newlineIdx = text.indexOf('\n')
+    const after = newlineIdx === -1 ? '' : text.slice(newlineIdx)
+    const insertion = `${command} `
+    const next = `${insertion}${after}`
+    renderable.setText(next)
+    renderable.cursorOffset = insertion.length
+    setComposerDraft(next)
+    setComposerSlashIndex(0)
+  }, [])
+  const composerMentionVisibleCount = Math.min(composerMentionResults.length, 5)
+  const composerSlashVisibleCount = Math.min(composerSlashCommands.length, 5)
+  const composerPopoverHeight = (composerActive && composerMention && composerMentionVisibleCount > 0)
+    ? composerMentionVisibleCount + 3
+    : (composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention)
+    ? composerSlashVisibleCount + 3
+    : 0
+  const mainContentHeight = Math.max(height - 3 - (searchMode || sessionSearchMode ? 4 : 1) - composerHeight - composerPopoverHeight, 8)
   const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - 4 - 1 - MIN_READER_WIDTH)
   const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
@@ -3072,7 +3248,13 @@ export default function OpenTuiApp() {
       setSentHistory((prev) => [...prev, trimmed])
       setHistoryIndex(-1)
       setDraftBeforeHistory('')
+      composerTextareaRef.current?.setText('')
       setComposerDraft('')
+      setComposerMention(null)
+      setComposerMentionResults([])
+      setComposerMentionDismissedStart(null)
+      setComposerSlashIndex(0)
+      setComposerSlashDismissed(false)
       setComposerSendState('idle')
       setComposerError(null)
       setFollowTail(true)
@@ -3966,6 +4148,21 @@ export default function OpenTuiApp() {
 
     if (composerActive) {
       if (key.name === 'escape') {
+        if (composerMention && composerMentionResults.length > 0) {
+          handled(() => {
+            setComposerMentionDismissedStart(composerMention.start)
+            setComposerMention(null)
+            setComposerMentionResults([])
+          })
+          return
+        }
+        if (composerSlashOpen && composerSlashCommands.length > 0) {
+          handled(() => {
+            setComposerSlashDismissed(true)
+            setComposerSlashIndex(0)
+          })
+          return
+        }
         handled(() => {
           if (composerSendState === 'sending') {
             cancelComposerSend()
@@ -3975,14 +4172,49 @@ export default function OpenTuiApp() {
         })
         return
       }
+      if (composerMention && composerMentionResults.length > 0) {
+        if (key.name === 'tab' || (key.name === 'return' && key.ctrl)) {
+          handled(() => {
+            const entry = composerMentionResults[composerMentionIndex] ?? composerMentionResults[0]
+            if (entry) insertMentionAtCursor(entry)
+          })
+          return
+        }
+        if (key.name === 'n' && key.ctrl) {
+          handled(() => setComposerMentionIndex((i) => Math.min(i + 1, composerMentionResults.length - 1)))
+          return
+        }
+        if (key.name === 'p' && key.ctrl) {
+          handled(() => setComposerMentionIndex((i) => Math.max(i - 1, 0)))
+          return
+        }
+      }
+      if (composerSlashOpen && composerSlashCommands.length > 0) {
+        if (key.name === 'tab') {
+          handled(() => {
+            const entry = composerSlashCommands[composerSlashIndex] ?? composerSlashCommands[0]
+            if (entry) insertSlashAtCursor(entry.command)
+          })
+          return
+        }
+        if (key.name === 'n' && key.ctrl) {
+          handled(() => setComposerSlashIndex((i) => Math.min(i + 1, composerSlashCommands.length - 1)))
+          return
+        }
+        if (key.name === 'p' && key.ctrl) {
+          handled(() => setComposerSlashIndex((i) => Math.max(i - 1, 0)))
+          return
+        }
+      }
       if (key.name === 'tab' && livePromptSuggestion && composerSendState !== 'sending') {
         handled(() => {
+          composerTextareaRef.current?.setText(livePromptSuggestion)
           setComposerDraft(livePromptSuggestion)
           setLivePromptSuggestion(null)
         })
         return
       }
-      if (key.name === 'up') {
+      if (key.name === 'p' && key.ctrl) {
         handled(() => {
           if (sentHistory.length === 0) return
           const nextIndex = historyIndex === -1
@@ -3990,19 +4222,24 @@ export default function OpenTuiApp() {
             : Math.max(historyIndex - 1, 0)
           if (historyIndex === -1) setDraftBeforeHistory(composerDraft)
           setHistoryIndex(nextIndex)
-          setComposerDraft(sentHistory[nextIndex] ?? '')
+          const replacement = sentHistory[nextIndex] ?? ''
+          composerTextareaRef.current?.setText(replacement)
+          setComposerDraft(replacement)
         })
         return
       }
-      if (key.name === 'down' && historyIndex !== -1) {
+      if (key.name === 'n' && key.ctrl && historyIndex !== -1) {
         handled(() => {
           const nextIndex = historyIndex + 1
           if (nextIndex >= sentHistory.length) {
             setHistoryIndex(-1)
+            composerTextareaRef.current?.setText(draftBeforeHistory)
             setComposerDraft(draftBeforeHistory)
           } else {
             setHistoryIndex(nextIndex)
-            setComposerDraft(sentHistory[nextIndex] ?? '')
+            const replacement = sentHistory[nextIndex] ?? ''
+            composerTextareaRef.current?.setText(replacement)
+            setComposerDraft(replacement)
           }
         })
         return
@@ -4297,6 +4534,35 @@ export default function OpenTuiApp() {
     if (sequence === 'c' && !composerActive) {
       handled(() => {
         setComposerActive(true)
+      })
+      return
+    }
+
+    if (sequence === 'R' && !composerActive) {
+      handled(() => {
+        const messages = sessionDetail?.threadedMessages
+        if (!messages || messages.length === 0) return
+        let lastUserText = ''
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+          const msg = messages[i]
+          if (msg.role !== 'user') continue
+          const text = msg.blocks
+            .map((block) => {
+              if (block.type === 'text') return block.text ?? ''
+              if (block.type === 'local_command_stdout' && 'stdout' in block && typeof block.stdout === 'string') return block.stdout
+              return ''
+            })
+            .join('\n')
+            .trim()
+          if (text.length > 0) {
+            lastUserText = text
+            break
+          }
+        }
+        if (!lastUserText) return
+        setComposerActive(true)
+        composerTextareaRef.current?.setText(lastUserText)
+        setComposerDraft(lastUserText)
       })
       return
     }
@@ -5007,33 +5273,144 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
+      {composerActive && composerMention && composerMentionVisibleCount > 0 ? (() => {
+        const rowWidth = Math.max(width - 4, 20)
+        const basenameWidth = Math.max(Math.min(28, Math.floor(rowWidth * 0.4)), 8)
+        const pathWidth = Math.max(rowWidth - basenameWidth - 4, 4)
+        const total = composerMentionResults.length
+        const start = Math.max(0, Math.min(composerMentionIndex - Math.floor((composerMentionVisibleCount - 1) / 2), total - composerMentionVisibleCount))
+        const end = Math.min(total, start + composerMentionVisibleCount)
+        const hasMoreBelow = end < total
+        const hasMoreAbove = start > 0
+        return (
+          <box
+            width={width}
+            height={composerMentionVisibleCount + 3}
+            paddingX={1}
+            backgroundColor={theme.surface2}
+            border
+            borderStyle="single"
+            borderColor={theme.border2}
+            flexDirection="column"
+          >
+            <text fg={theme.dim} wrapMode="none">
+              {fitText(`files · ⌃P/⌃N select · tab insert · esc cancel  (${composerMentionIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+            </text>
+            {composerMentionResults.slice(start, end).map((entry, offset) => {
+              const index = start + offset
+              const active = index === composerMentionIndex
+              return (
+                <box key={entry.path} flexDirection="row" height={1} width={rowWidth}>
+                  <text fg={active ? theme.cyan : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
+                  <text fg={active ? theme.cyan : theme.text} wrapMode="none">{fitText(entry.basename, basenameWidth)}</text>
+                  <text fg={theme.dim} wrapMode="none">  </text>
+                  <text fg={theme.dim} wrapMode="none">{fitText(entry.path, pathWidth)}</text>
+                </box>
+              )
+            })}
+          </box>
+        )
+      })() : null}
+
+      {composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention ? (() => {
+        const rowWidth = Math.max(width - 4, 20)
+        const commandWidth = Math.max(Math.min(22, Math.floor(rowWidth * 0.3)), 8)
+        const descWidth = Math.max(rowWidth - commandWidth - 4, 4)
+        const total = composerSlashCommands.length
+        const start = Math.max(0, Math.min(composerSlashIndex - Math.floor((composerSlashVisibleCount - 1) / 2), total - composerSlashVisibleCount))
+        const end = Math.min(total, start + composerSlashVisibleCount)
+        const hasMoreBelow = end < total
+        const hasMoreAbove = start > 0
+        return (
+          <box
+            width={width}
+            height={composerSlashVisibleCount + 3}
+            paddingX={1}
+            backgroundColor={theme.surface2}
+            border
+            borderStyle="single"
+            borderColor={theme.border2}
+            flexDirection="column"
+          >
+            <text fg={theme.dim} wrapMode="none">
+              {fitText(`commands · ⌃P/⌃N select · tab insert · esc cancel  (${composerSlashIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+            </text>
+            {composerSlashCommands.slice(start, end).map((entry, offset) => {
+              const index = start + offset
+              const active = index === composerSlashIndex
+              return (
+                <box key={entry.command} flexDirection="row" height={1} width={rowWidth}>
+                  <text fg={active ? theme.cyan : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
+                  <text fg={active ? theme.cyan : theme.text} wrapMode="none">{fitText(entry.command, commandWidth)}</text>
+                  <text fg={theme.dim} wrapMode="none">  </text>
+                  <text fg={theme.dim} wrapMode="none">{fitText(entry.description, descWidth)}</text>
+                </box>
+              )
+            })}
+          </box>
+        )
+      })() : null}
+
       <box
         paddingX={1}
         backgroundColor={theme.surface}
         border
         borderStyle="single"
         borderColor={theme.border}
-        height={COMPOSER_HEIGHT}
+        height={composerHeight}
         flexDirection="column"
       >
-        <box flexDirection="row" alignItems="center" gap={1}>
-          <input
-            focused={composerActive}
-            value={composerDraft}
-            placeholder={composerTargetSession ? 'Send a message… (enter to send)' : 'Select a session to send a message'}
-            onInput={(value) => {
-              setComposerDraft(value)
-              if (historyIndex !== -1) setHistoryIndex(-1)
-              if (composerError) setComposerError(null)
-              if (composerSendState === 'error') setComposerSendState('idle')
-            }}
-            onSubmit={() => {
-              void sendComposerMessage()
-            }}
-            style={{ flexGrow: 1 }}
-          />
+        <textarea
+          ref={composerTextareaRef}
+          focused={composerActive}
+          placeholder={composerTargetSession ? 'Send a message… (enter to send · ⌃J newline)' : 'Select a session to send a message'}
+          initialValue={composerDraft}
+          keyBindings={composerKeyBindings}
+          onContentChange={() => {
+            const renderable = composerTextareaRef.current
+            const text = renderable?.plainText ?? ''
+            const cursor = renderable?.cursorOffset ?? text.length
+            setComposerDraft(text)
+            if (historyIndex !== -1 && text !== sentHistory[historyIndex]) setHistoryIndex(-1)
+            if (composerError) setComposerError(null)
+            if (composerSendState === 'error') setComposerSendState('idle')
+            const mention = detectMentionAtCursor(text, cursor)
+            const dismissedStart = composerMentionDismissedStart
+            if (!mention || (dismissedStart !== null && mention.start !== dismissedStart)) {
+              if (dismissedStart !== null) setComposerMentionDismissedStart(null)
+            }
+            setComposerMention((prev) => {
+              if (!mention) return prev ? null : prev
+              if (dismissedStart !== null && mention.start === dismissedStart) return prev ? null : prev
+              if (prev && prev.start === mention.start && prev.query === mention.query) return prev
+              setComposerMentionIndex(0)
+              return mention
+            })
+            const firstLine = text.split('\n')[0] ?? ''
+            if (!firstLine.startsWith('/')) {
+              setComposerSlashIndex(0)
+              if (composerSlashDismissed) setComposerSlashDismissed(false)
+            }
+          }}
+          onSubmit={() => {
+            void sendComposerMessage()
+          }}
+          style={{ flexGrow: 1, backgroundColor: theme.surface, textColor: theme.text, focusedBackgroundColor: theme.surface, focusedTextColor: theme.text, placeholderColor: theme.dim }}
+        />
+        <box flexDirection="row" alignItems="center" justifyContent="space-between">
+          <text fg={composerSlashHint ? theme.cyan : theme.dim}>
+            {composerSlashHint
+              ? composerSlashHint
+              : composerDraft.length === 0
+              ? ''
+              : `${composerLineCount} line${composerLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars`}
+          </text>
           <text fg={composerSendState === 'sending' ? theme.dim : theme.cyan}>
-            {composerSendState === 'sending' ? 'Esc = cancel' : 'Enter = send'}
+            {composerSendState === 'sending'
+              ? 'Esc cancel'
+              : sentHistory.length > 0
+              ? `↵ send · ⌃J newline · ⌃P/⌃N history (${sentHistory.length}) · Esc back`
+              : '↵ send · ⌃J newline · Esc back'}
           </text>
         </box>
       </box>

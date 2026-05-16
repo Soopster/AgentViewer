@@ -22,6 +22,7 @@ import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
 import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '@/lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
+import { getSlashCommandSuggestions, filterSlashCommands } from '@/lib/slashCommands'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -108,6 +109,7 @@ type TimelineRow = {
   showForkControls?: boolean
   allowFork?: boolean
   allowResume?: boolean
+  allowEdit?: boolean
   highlighted?: boolean
   forkingMessageId?: string | null
   resumeFromMessageId?: string | null
@@ -121,6 +123,71 @@ const TIMELINE_TARGET_TOP_GUTTER_PX = 72
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 const COMPOSER_DRAFT_STORAGE_PREFIX = 'agentViewer:composerDraft:v1:'
 const SEND_ATTACHMENT_TYPES = new Set<SendAttachment['type']>(['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob'])
+function detectMentionAtCursor(text: string, cursor: number): { start: number; query: string } | null {
+  if (cursor === 0) return null
+  let i = cursor - 1
+  while (i >= 0) {
+    const ch = text[i]
+    if (ch === '@') break
+    if (!ch || /\s/.test(ch)) return null
+    i -= 1
+  }
+  if (i < 0 || text[i] !== '@') return null
+  if (i > 0 && !/\s/.test(text[i - 1] ?? '')) return null
+  const query = text.slice(i + 1, cursor)
+  if (query.length > 60) return null
+  return { start: i, query }
+}
+
+
+const composerKbdStyle: React.CSSProperties = {
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 9,
+  padding: '0 4px',
+  borderRadius: 3,
+  border: '1px solid var(--border)',
+  background: 'var(--surface-2)',
+  color: 'var(--text-2, var(--text-3))',
+  letterSpacing: '0.04em',
+}
+const composerPopoverStyle: React.CSSProperties = {
+  position: 'absolute',
+  bottom: 'calc(100% + 6px)',
+  left: 0,
+  right: 60,
+  maxHeight: 240,
+  overflowY: 'auto',
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: 8,
+  boxShadow: '0 18px 40px rgba(0,0,0,0.34)',
+  zIndex: 30,
+  padding: 4,
+  display: 'flex',
+  flexDirection: 'column',
+}
+const composerPopoverHintStyle: React.CSSProperties = {
+  padding: '4px 8px 6px',
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 9,
+  color: 'var(--text-3)',
+  letterSpacing: '0.06em',
+  borderBottom: '1px solid var(--border)',
+  marginBottom: 4,
+}
+const composerPopoverItemStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  textAlign: 'left',
+  background: 'transparent',
+  border: 'none',
+  borderRadius: 5,
+  padding: '5px 8px',
+  fontFamily: "'IBM Plex Sans', sans-serif",
+  fontSize: 12,
+  color: 'var(--text)',
+  cursor: 'pointer',
+}
 
 function normalizeSelectValue(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
@@ -162,6 +229,18 @@ function LiveSpinner({ label }: { label: string }) {
       <span>{label}</span>
     </span>
   )
+}
+
+function attachmentImagePreviewSrc(attachment: SendAttachment): string | null {
+  if (attachment.type === 'blob' && attachment.data && attachment.mimeType?.startsWith('image/')) {
+    return `data:${attachment.mimeType};base64,${attachment.data}`
+  }
+  if (attachment.type === 'image') {
+    const path = attachment.path ?? attachment.filePath ?? ''
+    if (/^https?:\/\//i.test(path)) return path
+    if (path.startsWith('data:')) return path
+  }
+  return null
 }
 
 function attachmentDisplayName(attachment: SendAttachment): string {
@@ -1151,15 +1230,25 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   row,
   onForkFromMessage,
   onToggleResume,
+  onReusePrompt,
+  onQuoteMessage,
+  onEditFromMessage,
 }: {
   row: TimelineRow
   onForkFromMessage: (messageId: string) => void
   onToggleResume: (messageId: string) => void
+  onReusePrompt: (text: string) => void
+  onQuoteMessage: (text: string) => void
+  onEditFromMessage: (messageId: string, text: string) => void
 }) {
   const [copied, setCopied] = useState(false)
   const copyText = useMemo(() => messageToCopyText(row.message), [row.message])
   const canCopy = copyText.length > 0
-  const showActions = canCopy || (row.showForkControls && (row.allowFork || row.allowResume))
+  const isUserMessage = row.message.role === 'user'
+  const canReuse = isUserMessage && copyText.length > 0
+  const canEdit = isUserMessage && copyText.length > 0 && !!row.allowEdit
+  const canQuote = !isUserMessage && copyText.length > 0
+  const showActions = canCopy || canReuse || canQuote || canEdit || (row.showForkControls && (row.allowFork || row.allowResume))
   const handleCopy = useCallback(() => {
     if (!canCopy) return
     void navigator.clipboard.writeText(copyText).then(() => {
@@ -1167,6 +1256,19 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
       window.setTimeout(() => setCopied(false), 1200)
     }).catch(() => {})
   }, [canCopy, copyText])
+  const handleReuse = useCallback(() => {
+    if (!canReuse) return
+    onReusePrompt(copyText)
+  }, [canReuse, copyText, onReusePrompt])
+  const handleQuote = useCallback(() => {
+    if (!canQuote) return
+    const selection = typeof window !== 'undefined' ? window.getSelection()?.toString().trim() : ''
+    onQuoteMessage(selection && selection.length > 0 ? selection : copyText)
+  }, [canQuote, copyText, onQuoteMessage])
+  const handleEdit = useCallback(() => {
+    if (!canEdit) return
+    onEditFromMessage(row.message.uuid, copyText)
+  }, [canEdit, copyText, onEditFromMessage, row.message.uuid])
 
   return (
     <div
@@ -1249,6 +1351,36 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
               {row.resumeFromMessageId === row.message.uuid ? 'RESUME TARGET' : 'RESUME HERE'}
             </button>
           )}
+          {canEdit && (
+            <button
+              type="button"
+              className="timeline-row-action timeline-row-action--resume"
+              onClick={handleEdit}
+              title="Edit this prompt and resend — replaces from this point"
+            >
+              EDIT
+            </button>
+          )}
+          {canReuse && (
+            <button
+              type="button"
+              className="timeline-row-action timeline-row-action--copy"
+              onClick={handleReuse}
+              title="Load this prompt into the composer"
+            >
+              REUSE
+            </button>
+          )}
+          {canQuote && (
+            <button
+              type="button"
+              className="timeline-row-action timeline-row-action--copy"
+              onClick={handleQuote}
+              title="Quote selection (or this message) in the composer"
+            >
+              QUOTE
+            </button>
+          )}
           {canCopy && (
             <button
               type="button"
@@ -1274,6 +1406,9 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   onLastRowRef,
   onForkFromMessage,
   onToggleResume,
+  onReusePrompt,
+  onQuoteMessage,
+  onEditFromMessage,
 }: {
   row: TimelineRow
   top: number
@@ -1282,6 +1417,9 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   onLastRowRef: (node: HTMLDivElement | null) => void
   onForkFromMessage: (messageId: string) => void
   onToggleResume: (messageId: string) => void
+  onReusePrompt: (text: string) => void
+  onQuoteMessage: (text: string) => void
+  onEditFromMessage: (messageId: string, text: string) => void
 }) {
   const rowRef = useRef<HTMLDivElement>(null)
 
@@ -1315,7 +1453,14 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
         right: 0,
       }}
     >
-      <TimelineMessageRow row={row} onForkFromMessage={onForkFromMessage} onToggleResume={onToggleResume} />
+      <TimelineMessageRow
+        row={row}
+        onForkFromMessage={onForkFromMessage}
+        onToggleResume={onToggleResume}
+        onReusePrompt={onReusePrompt}
+        onQuoteMessage={onQuoteMessage}
+        onEditFromMessage={onEditFromMessage}
+      />
     </div>
   )
 })
@@ -1407,6 +1552,18 @@ export default function MessageView({
   const [timelineViewportHeight, setTimelineViewportHeight] = useState(0)
   const [rowMeasurementVersion, setRowMeasurementVersion] = useState(0)
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
+  const [sentHistory, setSentHistory] = useState<string[]>([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const draftBeforeHistoryRef = useRef('')
+  const [mentionQuery, setMentionQuery] = useState<{ start: number; query: string } | null>(null)
+  const [mentionResults, setMentionResults] = useState<{ path: string; basename: string }[]>([])
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0)
+  const mentionAbortRef = useRef<AbortController | null>(null)
+  const mentionItemRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const [slashOpen, setSlashOpen] = useState(false)
+  const [slashActiveIndex, setSlashActiveIndex] = useState(0)
+  const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const [liveSlashCommands, setLiveSlashCommands] = useState<Array<{ command: string; description: string }>>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
   const timelineContentRef = useRef<HTMLDivElement | null>(null)
@@ -1490,7 +1647,9 @@ export default function MessageView({
     const textarea = textareaRef.current
     if (!textarea) return
     textarea.style.height = 'auto'
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 140)}px`
+    const next = Math.min(textarea.scrollHeight, 260)
+    textarea.style.height = `${next}px`
+    textarea.style.overflowY = textarea.scrollHeight > 260 ? 'auto' : 'hidden'
   }, [])
 
   useLayoutEffect(() => {
@@ -1764,6 +1923,13 @@ export default function MessageView({
     sendInFlightRef.current = true
     const sendAttachments = attachments
     const effort = selectedEffort === 'auto' ? undefined : selectedEffort
+    setSentHistory((prev) => {
+      if (prev.length > 0 && prev[prev.length - 1] === text) return prev
+      const next = [...prev, text]
+      return next.length > 50 ? next.slice(next.length - 50) : next
+    })
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = ''
     setInputText('')
     inputTextRef.current = ''
     setSendState('sending')
@@ -2039,13 +2205,278 @@ export default function MessageView({
     }
   }, [attachments, messages, onFork, resizeComposer, resumeFromMessageId, selectedEffort, selectedModel, session])
 
+  const updateComposerHints = useCallback((text: string, cursor: number) => {
+    const mention = detectMentionAtCursor(text, cursor)
+    setMentionQuery((prev) => {
+      if (!mention) return prev ? null : prev
+      if (prev && prev.start === mention.start && prev.query === mention.query) return prev
+      setMentionActiveIndex(0)
+      return mention
+    })
+    const isSlash = text.startsWith('/') && !/\s/.test(text.split('\n')[0] ?? '')
+    setSlashOpen((prev) => {
+      if (isSlash === prev) return prev
+      if (isSlash) setSlashActiveIndex(0)
+      return isSlash
+    })
+  }, [])
+
+  const slashCommands = useMemo(() => {
+    const baseline = getSlashCommandSuggestions(session?.provider)
+    const merged = [...liveSlashCommands]
+    const seen = new Set(merged.map((entry) => entry.command))
+    for (const entry of baseline) {
+      if (!seen.has(entry.command)) {
+        merged.push(entry)
+        seen.add(entry.command)
+      }
+    }
+    const firstLine = inputText.split('\n')[0] ?? ''
+    return filterSlashCommands(merged, firstLine.slice(1))
+  }, [inputText, liveSlashCommands, session?.provider])
+
+  useEffect(() => {
+    if (!session) {
+      setLiveSlashCommands([])
+      return
+    }
+    const controller = new AbortController()
+    const url = `/api/sessions/${session.sessionId}/commands?provider=${encodeURIComponent(session.provider ?? 'claude')}`
+    void fetch(url, { signal: controller.signal })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (controller.signal.aborted || !data || !Array.isArray(data.commands)) return
+        setLiveSlashCommands(data.commands.map((entry: { command: string; description: string }) => ({
+          command: entry.command,
+          description: entry.description ?? '',
+        })))
+      })
+      .catch(() => { /* ignore */ })
+    return () => controller.abort()
+  }, [session?.sessionId, session?.provider, session])
+
+  useEffect(() => {
+    if (!mentionQuery) {
+      mentionAbortRef.current?.abort()
+      mentionAbortRef.current = null
+      setMentionResults([])
+      return
+    }
+    const cwd = session?.cwd
+    if (!cwd) {
+      setMentionResults([])
+      return
+    }
+    const controller = new AbortController()
+    mentionAbortRef.current?.abort()
+    mentionAbortRef.current = controller
+    const url = `/api/files?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(mentionQuery.query)}`
+    const handle = window.setTimeout(async () => {
+      try {
+        const res = await fetch(url, { signal: controller.signal })
+        if (!res.ok) return
+        const data = await res.json() as { files?: Array<{ path: string; basename: string }> }
+        if (controller.signal.aborted) return
+        setMentionResults(data.files ?? [])
+        setMentionActiveIndex(0)
+      } catch (err) {
+        if ((err as { name?: string }).name === 'AbortError') return
+      }
+    }, 80)
+    return () => {
+      window.clearTimeout(handle)
+      controller.abort()
+    }
+  }, [mentionQuery, session?.cwd])
+
+  useLayoutEffect(() => {
+    const node = mentionItemRefs.current[mentionActiveIndex]
+    node?.scrollIntoView({ block: 'nearest' })
+  }, [mentionActiveIndex, mentionResults])
+
+  useLayoutEffect(() => {
+    const node = slashItemRefs.current[slashActiveIndex]
+    node?.scrollIntoView({ block: 'nearest' })
+  }, [slashActiveIndex, slashOpen])
+
+  const insertMention = useCallback((entry: { path: string; basename: string }) => {
+    const mention = mentionQuery
+    if (!mention) return
+    const textarea = textareaRef.current
+    const value = textarea?.value ?? inputTextRef.current
+    const cursor = textarea?.selectionStart ?? value.length
+    const before = value.slice(0, mention.start)
+    const after = value.slice(cursor)
+    const insertion = `@${entry.path} `
+    const next = `${before}${insertion}${after}`
+    setInputText(next)
+    inputTextRef.current = next
+    setMentionQuery(null)
+    setMentionResults([])
+    setAttachments((prev) => {
+      if (prev.some((attachment) => attachment.path === entry.path)) return prev
+      return [
+        ...prev,
+        {
+          id: `${Date.now()}-mention-${entry.path}`,
+          type: 'mention',
+          path: entry.path,
+          displayName: entry.basename,
+        },
+      ]
+    })
+    window.requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      const caret = before.length + insertion.length
+      ta.setSelectionRange(caret, caret)
+      ta.focus()
+      resizeComposer()
+    })
+  }, [mentionQuery, resizeComposer])
+
+  const insertSlashCommand = useCallback((command: string) => {
+    const remainder = inputText.split('\n').slice(1).join('\n')
+    const next = remainder ? `${command} ${remainder}` : `${command} `
+    setInputText(next)
+    inputTextRef.current = next
+    setSlashOpen(false)
+    window.requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      const caret = command.length + 1
+      ta.setSelectionRange(caret, caret)
+      ta.focus()
+      resizeComposer()
+    })
+  }, [inputText, resizeComposer])
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
-    if (e.metaKey || e.ctrlKey || !e.altKey) {
+    if (e.nativeEvent.isComposing) return
+    if (mentionQuery && mentionResults.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionActiveIndex((i) => Math.min(i + 1, mentionResults.length - 1))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionActiveIndex((i) => Math.max(i - 1, 0))
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        const entry = mentionResults[mentionActiveIndex]
+        if (entry) {
+          e.preventDefault()
+          insertMention(entry)
+          return
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setMentionQuery(null)
+        return
+      }
+    }
+    if (slashOpen && slashCommands.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashActiveIndex((i) => Math.min(i + 1, slashCommands.length - 1))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashActiveIndex((i) => Math.max(i - 1, 0))
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && (e.metaKey || e.ctrlKey))) {
+        const entry = slashCommands[slashActiveIndex]
+        if (entry) {
+          e.preventDefault()
+          insertSlashCommand(entry.command)
+          return
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashOpen(false)
+        return
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey && (e.metaKey || e.ctrlKey || !e.altKey)) {
       e.preventDefault()
       sendMessage()
+      return
     }
-  }, [sendMessage])
+    if (e.key === 'ArrowUp' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && sentHistory.length > 0) {
+      const textarea = textareaRef.current
+      const draftValue = textarea?.value ?? inputTextRef.current
+      const cursorAtStart = textarea ? textarea.selectionStart === 0 && textarea.selectionEnd === 0 : true
+      if (historyIndex === -1) {
+        if (draftValue.length > 0 && !cursorAtStart) return
+        draftBeforeHistoryRef.current = draftValue
+        const nextIndex = sentHistory.length - 1
+        setHistoryIndex(nextIndex)
+        const replacement = sentHistory[nextIndex] ?? ''
+        setInputText(replacement)
+        inputTextRef.current = replacement
+        e.preventDefault()
+        window.requestAnimationFrame(() => {
+          const ta = textareaRef.current
+          if (!ta) return
+          ta.setSelectionRange(replacement.length, replacement.length)
+          resizeComposer()
+        })
+        return
+      }
+      const nextIndex = Math.max(historyIndex - 1, 0)
+      if (nextIndex === historyIndex) {
+        e.preventDefault()
+        return
+      }
+      setHistoryIndex(nextIndex)
+      const replacement = sentHistory[nextIndex] ?? ''
+      setInputText(replacement)
+      inputTextRef.current = replacement
+      e.preventDefault()
+      window.requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (!ta) return
+        ta.setSelectionRange(replacement.length, replacement.length)
+        resizeComposer()
+      })
+      return
+    }
+    if (e.key === 'ArrowDown' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && historyIndex !== -1) {
+      const nextIndex = historyIndex + 1
+      if (nextIndex >= sentHistory.length) {
+        setHistoryIndex(-1)
+        const restored = draftBeforeHistoryRef.current
+        setInputText(restored)
+        inputTextRef.current = restored
+        e.preventDefault()
+        window.requestAnimationFrame(() => {
+          const ta = textareaRef.current
+          if (!ta) return
+          ta.setSelectionRange(restored.length, restored.length)
+          resizeComposer()
+        })
+        return
+      }
+      setHistoryIndex(nextIndex)
+      const replacement = sentHistory[nextIndex] ?? ''
+      setInputText(replacement)
+      inputTextRef.current = replacement
+      e.preventDefault()
+      window.requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (!ta) return
+        ta.setSelectionRange(replacement.length, replacement.length)
+        resizeComposer()
+      })
+      return
+    }
+  }, [sendMessage, sentHistory, historyIndex, resizeComposer, mentionQuery, mentionResults, mentionActiveIndex, insertMention, slashOpen, slashCommands, slashActiveIndex, insertSlashCommand])
 
   const handleExport = useCallback(() => {
     if (!session) return
@@ -2092,6 +2523,91 @@ export default function MessageView({
     ])
     setAttachmentPath('')
   }, [attachmentPath, attachmentType])
+
+  const ingestFileAttachments = useCallback(async (files: File[]) => {
+    if (files.length === 0) return
+    const next: SendAttachment[] = []
+    for (const file of files) {
+      const isImage = file.type.startsWith('image/')
+      if (!isImage) {
+        const path = (file as File & { path?: string }).path
+        if (path) {
+          next.push({
+            id: `${Date.now()}-${next.length}-${file.name}`,
+            type: 'file',
+            path,
+            displayName: file.name,
+          })
+        }
+        continue
+      }
+      try {
+        const buffer = await file.arrayBuffer()
+        const bytes = new Uint8Array(buffer)
+        let binary = ''
+        const chunk = 0x8000
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+        }
+        const data = typeof window === 'undefined' ? '' : window.btoa(binary)
+        next.push({
+          id: `${Date.now()}-${next.length}-${file.name || 'pasted-image'}`,
+          type: 'blob',
+          mimeType: file.type || 'image/png',
+          data,
+          displayName: file.name || `pasted-image.${(file.type.split('/')[1] ?? 'png')}`,
+        })
+      } catch {
+        // skip files that fail to read
+      }
+    }
+    if (next.length === 0) return
+    setAttachments((prev) => [...prev, ...next])
+  }, [])
+
+  const handleComposerPaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = event.clipboardData?.items
+    if (!items || items.length === 0) return
+    const files: File[] = []
+    for (const item of Array.from(items)) {
+      if (item.kind !== 'file') continue
+      const file = item.getAsFile()
+      if (file) files.push(file)
+    }
+    if (files.length === 0) return
+    event.preventDefault()
+    await ingestFileAttachments(files)
+  }, [ingestFileAttachments])
+
+  const [composerDropActive, setComposerDropActive] = useState(false)
+  const dropDepthRef = useRef(0)
+
+  const handleComposerDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    dropDepthRef.current += 1
+    setComposerDropActive(true)
+  }, [])
+
+  const handleComposerDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleComposerDragLeave = useCallback(() => {
+    dropDepthRef.current = Math.max(0, dropDepthRef.current - 1)
+    if (dropDepthRef.current === 0) setComposerDropActive(false)
+  }, [])
+
+  const handleComposerDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    dropDepthRef.current = 0
+    setComposerDropActive(false)
+    const files = Array.from(event.dataTransfer.files ?? [])
+    if (files.length === 0) return
+    await ingestFileAttachments(files)
+  }, [ingestFileAttachments])
 
   const removeAttachment = useCallback((id: string | undefined, index: number) => {
     setAttachments((prev) => prev.filter((attachment, attachmentIndex) => (
@@ -2235,6 +2751,58 @@ export default function MessageView({
     setSessionActionError(null)
     setSessionActionNotice(null)
   }, [sessionCapabilities?.resumeAtMessage])
+
+  const focusComposer = useCallback(() => {
+    setComposerCollapsed(false)
+    window.requestAnimationFrame(() => {
+      resizeComposer()
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(ta.value.length, ta.value.length)
+    })
+  }, [resizeComposer])
+
+  const handleReusePrompt = useCallback((text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    setInputText(trimmed)
+    inputTextRef.current = trimmed
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = ''
+    focusComposer()
+  }, [focusComposer])
+
+  const handleQuoteMessage = useCallback((text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    const quoted = trimmed
+      .split('\n')
+      .map((line) => `> ${line}`)
+      .join('\n')
+    const existing = inputTextRef.current
+    const separator = existing.length > 0 ? (existing.endsWith('\n') ? '' : '\n\n') : ''
+    const next = `${existing}${separator}${quoted}\n\n`
+    setInputText(next)
+    inputTextRef.current = next
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = ''
+    focusComposer()
+  }, [focusComposer])
+
+  const handleEditFromMessage = useCallback((messageId: string, text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    setInputText(trimmed)
+    inputTextRef.current = trimmed
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = ''
+    if (sessionCapabilities?.resumeAtMessage) {
+      setResumeFromMessageId(messageId)
+      setSessionActionNotice('Editing — next send will replace from this point in a forked session.')
+    }
+    focusComposer()
+  }, [focusComposer, sessionCapabilities?.resumeAtMessage])
 
   const refreshDiagnostics = useCallback(async () => {
     if (!session) return
@@ -2393,6 +2961,14 @@ export default function MessageView({
     }
     return Array.from(turns.values())
   }, [messages, sessionCapabilities?.rollback])
+  const lastUserMessageUuid = useMemo(() => {
+    for (let i = threaded.length - 1; i >= 0; i -= 1) {
+      const msg = threaded[i]
+      if (msg && msg.role === 'user') return msg.uuid
+    }
+    return null
+  }, [threaded])
+
   const persistedTimelineRows = useMemo<TimelineRow[]>(() =>
     threaded.map((msg) => ({
       key: `persisted:${threadedMessageKey(msg)}`,
@@ -2401,6 +2977,7 @@ export default function MessageView({
       showForkControls: !isProject && (sessionCapabilities?.messageFork || (msg.role === 'assistant' && sessionCapabilities?.resumeAtMessage)),
       allowFork: !!sessionCapabilities?.messageFork,
       allowResume: msg.role === 'assistant' && !!sessionCapabilities?.resumeAtMessage,
+      allowEdit: !isProject && msg.role === 'user' && msg.uuid === lastUserMessageUuid && !!sessionCapabilities?.resumeAtMessage,
       highlighted: highlightedMessageId === msg.uuid,
       forkingMessageId,
       resumeFromMessageId,
@@ -2409,6 +2986,7 @@ export default function MessageView({
     forkingMessageId,
     highlightedMessageId,
     isProject,
+    lastUserMessageUuid,
     resumeFromMessageId,
     sessionCapabilities?.messageFork,
     sessionCapabilities?.resumeAtMessage,
@@ -3742,6 +4320,9 @@ export default function MessageView({
                         onLastRowRef={setLastTimelineRow}
                         onForkFromMessage={handleForkFromMessage}
                         onToggleResume={toggleResumeFromMessage}
+                        onReusePrompt={handleReusePrompt}
+                        onQuoteMessage={handleQuoteMessage}
+                        onEditFromMessage={handleEditFromMessage}
                       />
                     ))
                   })()}
@@ -3828,12 +4409,19 @@ export default function MessageView({
         </div>
       )}
       {!isProject && !composerCollapsed && <div
+        onDragEnter={handleComposerDragEnter}
+        onDragOver={handleComposerDragOver}
+        onDragLeave={handleComposerDragLeave}
+        onDrop={handleComposerDrop}
         style={{
           padding: '8px 16px 10px',
           borderTop: '1px solid var(--border)',
-          background: 'var(--surface)',
+          background: composerDropActive ? 'rgba(56,217,245,0.06)' : 'var(--surface)',
           flexShrink: 0,
           position: 'relative',
+          transition: 'background 120ms ease',
+          outline: composerDropActive ? '1px dashed rgba(56,217,245,0.45)' : 'none',
+          outlineOffset: composerDropActive ? -4 : 0,
         }}
       >
         <button
@@ -4316,50 +4904,152 @@ export default function MessageView({
               >
                 ADD
               </Button>
-              {attachments.map((attachment, index) => (
-                <button
-                  key={attachment.id ?? `${attachment.type}-${index}`}
-                  type="button"
-                  onClick={() => removeAttachment(attachment.id, index)}
-                  disabled={sendBusy}
-                  title={attachment.path ?? attachment.filePath ?? attachmentDisplayName(attachment)}
-                  style={{
-                    height: 24,
-                    maxWidth: 180,
-                    borderRadius: 5,
-                    border: '1px solid rgba(139,128,240,0.22)',
-                    background: 'rgba(139,128,240,0.08)',
-                    color: 'var(--violet)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    padding: '0 7px',
-                    cursor: sendBusy ? 'not-allowed' : 'pointer',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {attachment.type.toUpperCase()} {attachmentDisplayName(attachment)}
-                </button>
-              ))}
+              {attachments.map((attachment, index) => {
+                const previewSrc = attachmentImagePreviewSrc(attachment)
+                const isImage = previewSrc !== null
+                return (
+                  <button
+                    key={attachment.id ?? `${attachment.type}-${index}`}
+                    type="button"
+                    onClick={() => removeAttachment(attachment.id, index)}
+                    disabled={sendBusy}
+                    title={`Click to remove · ${attachment.path ?? attachment.filePath ?? attachmentDisplayName(attachment)}`}
+                    style={isImage ? {
+                      height: 46,
+                      maxWidth: 220,
+                      borderRadius: 6,
+                      border: '1px solid rgba(139,128,240,0.32)',
+                      background: 'rgba(139,128,240,0.10)',
+                      color: 'var(--violet)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 10,
+                      padding: '3px 8px 3px 3px',
+                      cursor: sendBusy ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    } : {
+                      height: 24,
+                      maxWidth: 180,
+                      borderRadius: 5,
+                      border: '1px solid rgba(139,128,240,0.22)',
+                      background: 'rgba(139,128,240,0.08)',
+                      color: 'var(--violet)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 10,
+                      padding: '0 7px',
+                      cursor: sendBusy ? 'not-allowed' : 'pointer',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {isImage && previewSrc ? (
+                      <>
+                        <img
+                          src={previewSrc}
+                          alt={attachmentDisplayName(attachment)}
+                          style={{ height: 40, width: 40, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+                        />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                          {attachmentDisplayName(attachment)}
+                        </span>
+                      </>
+                    ) : (
+                      `${attachment.type.toUpperCase()} ${attachmentDisplayName(attachment)}`
+                    )}
+                  </button>
+                )
+              })}
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', position: 'relative' }}>
+              {mentionQuery && mentionResults.length > 0 && (
+                <div style={composerPopoverStyle}>
+                  <div style={composerPopoverHintStyle}>
+                    files · ↑↓ select · ⏎ insert · esc cancel
+                  </div>
+                  {mentionResults.map((entry, index) => {
+                    const active = index === mentionActiveIndex
+                    return (
+                      <button
+                        key={entry.path}
+                        type="button"
+                        ref={(node) => { mentionItemRefs.current[index] = node }}
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          insertMention(entry)
+                        }}
+                        onMouseEnter={() => setMentionActiveIndex(index)}
+                        style={{
+                          ...composerPopoverItemStyle,
+                          background: active ? 'rgba(139,128,240,0.18)' : 'transparent',
+                          color: active ? 'var(--violet)' : 'var(--text-2, var(--text))',
+                        }}
+                      >
+                        <span style={{ fontWeight: active ? 600 : 400 }}>{entry.basename}</span>
+                        <span style={{ marginLeft: 8, color: 'var(--text-3)', fontSize: 10 }}>{entry.path}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              {slashOpen && slashCommands.length > 0 && !mentionQuery && (
+                <div style={composerPopoverStyle}>
+                  <div style={composerPopoverHintStyle}>
+                    commands · ↑↓ select · tab insert · esc cancel
+                  </div>
+                  {slashCommands.map((entry, index) => {
+                    const active = index === slashActiveIndex
+                    return (
+                      <button
+                        key={entry.command}
+                        type="button"
+                        ref={(node) => { slashItemRefs.current[index] = node }}
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          insertSlashCommand(entry.command)
+                        }}
+                        onMouseEnter={() => setSlashActiveIndex(index)}
+                        style={{
+                          ...composerPopoverItemStyle,
+                          background: active ? 'rgba(56,217,245,0.18)' : 'transparent',
+                          color: active ? 'var(--cyan)' : 'var(--text-2, var(--text))',
+                        }}
+                      >
+                        <span style={{ fontWeight: active ? 600 : 400 }}>{entry.command}</span>
+                        <span style={{ marginLeft: 8, color: 'var(--text-3)', fontSize: 10 }}>{entry.description}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
               <Textarea
                 ref={textareaRef}
                 value={inputText}
                 onChange={e => {
-                  setInputText(e.target.value)
+                  const next = e.target.value
+                  setInputText(next)
+                  inputTextRef.current = next
+                  if (historyIndex !== -1 && next !== sentHistory[historyIndex]) {
+                    setHistoryIndex(-1)
+                    draftBeforeHistoryRef.current = ''
+                  }
                   if (sendError && !failedSend) {
                     setSendError(null)
                     setSendState('idle')
                   }
+                  updateComposerHints(next, e.target.selectionStart ?? next.length)
                 }}
+                onKeyUp={(event) => updateComposerHints(event.currentTarget.value, event.currentTarget.selectionStart ?? event.currentTarget.value.length)}
+                onClick={(event) => updateComposerHints(event.currentTarget.value, event.currentTarget.selectionStart ?? event.currentTarget.value.length)}
+                onBlur={() => { setMentionQuery(null); setSlashOpen(false) }}
                 onKeyDown={handleKeyDown}
+                onPaste={handleComposerPaste}
                 placeholder={sendBusy
                   ? 'Draft your next message…'
                   : activeToolCount > 0
                   ? `${assistantName} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
-                  : `Message ${assistantName}…`}
+                  : `Message ${assistantName}… (paste or drop images to attach)`}
                 rows={1}
                 style={{
                   flex: 1,
@@ -4373,7 +5063,8 @@ export default function MessageView({
                   color: 'var(--text)',
                   lineHeight: 1.4,
                   outline: 'none',
-                  overflow: 'hidden',
+                  overflowX: 'hidden',
+                  overflowY: 'hidden',
                   transition: 'border-color 0.15s, opacity 0.15s',
                 }}
               />
@@ -4442,9 +5133,18 @@ export default function MessageView({
                 fontSize: 10,
                 color: composerStatusColor,
                 letterSpacing: '0.04em',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
               }}
             >
-              {composerStatus}
+              <span>{composerStatus}</span>
+              <span style={{ color: 'var(--text-3)', opacity: 0.7 }}>
+                <kbd style={composerKbdStyle}>⏎</kbd> send · <kbd style={composerKbdStyle}>⇧⏎</kbd> newline · <kbd style={composerKbdStyle}>↑</kbd>/<kbd style={composerKbdStyle}>↓</kbd> history
+                {sentHistory.length > 0 ? ` (${sentHistory.length})` : ''}
+              </span>
             </div>
           </CardContent>
         </Card>

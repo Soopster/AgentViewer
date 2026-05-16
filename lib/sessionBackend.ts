@@ -2223,6 +2223,58 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
   }
 }
 
+export async function readViewSessionSlashCommands(sessionId: string, providerOverride?: AgentProvider): Promise<Array<{ command: string; description: string; argumentHint?: string }>> {
+  const provider = await resolveProvider(providerOverride)
+  if (provider === 'claude') {
+    const q = createSessionControlQuery(sessionId)
+    try {
+      const commands = await q.supportedCommands().catch(() => [])
+      return commands.map((command) => ({
+        command: command.name.startsWith('/') ? command.name : `/${command.name}`,
+        description: command.description ?? '',
+        argumentHint: command.argumentHint && command.argumentHint.trim() ? command.argumentHint : undefined,
+      }))
+    } finally {
+      q.close()
+    }
+  }
+  if (provider === 'opencode') {
+    try {
+      const client = await getOpenCodeClient()
+      const session = await getOpenCodeSession(sessionId).catch(() => null)
+      const query = session ? openCodeDirectoryQuery(session) : undefined
+      const response = await client.command.list({
+        ...OPENCODE_OPTIONS,
+        query,
+      })
+      const commands = openCodeData<OpenCodeCommand[]>(response) ?? []
+      return commands.map((command) => ({
+        command: command.name.startsWith('/') ? command.name : `/${command.name}`,
+        description: command.description ?? '',
+      }))
+    } catch {
+      return []
+    }
+  }
+  if (provider === 'pi') {
+    try {
+      // Subpath import — bypass TS bundler resolution since the package only exports '.' but ships the file.
+      const specifier = '@earendil-works/pi-coding-agent/dist/core/slash-commands.js'
+      const mod = await (0, eval)(`import('${specifier}')`) as {
+        BUILTIN_SLASH_COMMANDS?: ReadonlyArray<{ name: string; description: string }>
+      }
+      const list = mod.BUILTIN_SLASH_COMMANDS ?? []
+      return list.map((command) => ({
+        command: command.name.startsWith('/') ? command.name : `/${command.name}`,
+        description: command.description ?? '',
+      }))
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
 export async function readViewSessionDiagnostics(sessionId: string, providerOverride?: AgentProvider): Promise<{ sections: SessionDiagnosticSection[]; currentModel: string | null }> {
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
