@@ -418,6 +418,7 @@ export default function Home() {
   // Stream active single-session updates; fall back to the old poll loop if SSE drops.
   useEffect(() => {
     if (!selectedSession || selectedProject || loadingMessages) return
+    if (selectedSession.isPending) return
     if (!documentVisible) return
 
     const session = selectedSession
@@ -498,6 +499,7 @@ export default function Home() {
     loadingMessages,
     pollSelectedSessionMessages,
     selectedProject,
+    selectedSession?.isPending,
     selectedSession?.provider,
     selectedSession?.sessionId,
     documentVisible,
@@ -568,6 +570,11 @@ export default function Home() {
     setLoadingMessages(true)
     setMessages([])
     sessionLoadAbortRef.current?.abort()
+    if (session.isPending) {
+      sessionLoadAbortRef.current = null
+      setLoadingMessages(false)
+      return
+    }
     const abortController = new AbortController()
     sessionLoadAbortRef.current = abortController
     try {
