@@ -1,0 +1,1199 @@
+'use client'
+
+import { memo, useDeferredValue, useMemo, useState, type CSSProperties } from 'react'
+import {
+  AlertTriangle,
+  Bot,
+  Clock3,
+  Filter,
+  Gauge,
+  ImageIcon,
+  MessageSquareText,
+  Network,
+  Search,
+  Sparkles,
+  Target,
+  Wrench,
+  Zap,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import type { ThreadedBlock, ThreadedMessage } from '@/lib/threading'
+import type { AgentProvider, ApiMessage } from '@/lib/types'
+import { getAssistantLabel } from '@/lib/provider'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
+
+export type MessageVisualizerRow = {
+  key: string
+  message: ThreadedMessage
+  dimmed?: boolean
+  previewBadge?: string
+  showSession?: boolean
+}
+
+type MessageSessionVisualizerProps = {
+  rows: MessageVisualizerRow[]
+  rawEventCount: number
+  loading: boolean
+  showSession?: boolean
+  onSelectMessage?: (messageId: string) => void
+}
+
+type ToolSummary = {
+  name: string
+  target: string
+  error: boolean
+  pending: boolean
+}
+
+type PhaseKey = 'prompt' | 'reasoning' | 'tooling' | 'verification' | 'handoff' | 'system'
+
+type VisualizerEntry = {
+  key: string
+  id: string
+  index: number
+  role: ThreadedMessage['role']
+  roleLabel: string
+  sessionId?: string
+  provider?: AgentProvider
+  timestamp?: string
+  timestampMs: number | null
+  timeLabel: string
+  preview: string
+  searchText: string
+  toolSummaries: ToolSummary[]
+  toolCount: number
+  pendingToolCount: number
+  errorCount: number
+  thinkingCount: number
+  imageCount: number
+  textChars: number
+  inputTokens: number
+  outputTokens: number
+  cacheTokens: number
+  dimmed: boolean
+  previewBadge?: string
+}
+
+type SessionPhase = {
+  key: PhaseKey
+  label: string
+  count: number
+  startIndex: number
+  endIndex: number
+  toolCount: number
+  errorCount: number
+  color: string
+}
+
+type VisualizerStats = {
+  turns: number
+  rawEventCount: number
+  userCount: number
+  assistantCount: number
+  systemCount: number
+  toolCount: number
+  toolTurnCount: number
+  pendingToolCount: number
+  errorCount: number
+  imageCount: number
+  thinkingCount: number
+  inputTokens: number
+  outputTokens: number
+  cacheTokens: number
+  durationLabel: string
+  firstTimestampMs: number | null
+  lastTimestampMs: number | null
+  topTools: Array<{ name: string; count: number; errorCount: number; pendingCount: number }>
+  roleSegments: Array<{ key: string; label: string; count: number; color: string }>
+  activityBuckets: number[]
+  maxChars: number
+  longestEntry: VisualizerEntry | null
+  busiestEntry: VisualizerEntry | null
+  lastEntry: VisualizerEntry | null
+}
+
+type VisualizerFilter = 'all' | 'user' | 'assistant' | 'system' | 'tools' | 'errors' | 'thinking' | 'media'
+type VisualizerView = 'rows' | 'graph'
+
+const ROLE_META: Record<ThreadedMessage['role'], { label: string; color: string; glow: string; background: string }> = {
+  user: {
+    label: 'USER',
+    color: 'var(--cyan)',
+    glow: 'var(--cyan-glow)',
+    background: 'rgba(56,217,245,0.08)',
+  },
+  assistant: {
+    label: 'ASSISTANT',
+    color: 'var(--violet)',
+    glow: 'var(--violet-glow)',
+    background: 'rgba(139,128,240,0.08)',
+  },
+  system: {
+    label: 'SYSTEM',
+    color: 'var(--amber, #eaaa40)',
+    glow: 'rgba(234,170,64,0.14)',
+    background: 'rgba(234,170,64,0.08)',
+  },
+}
+
+const PHASE_META: Record<PhaseKey, { label: string; shortLabel: string; color: string; background: string }> = {
+  prompt: {
+    label: 'Prompting',
+    shortLabel: 'PROMPT',
+    color: 'var(--cyan)',
+    background: 'rgba(56,217,245,0.10)',
+  },
+  reasoning: {
+    label: 'Reasoning',
+    shortLabel: 'REASON',
+    color: 'var(--violet)',
+    background: 'rgba(139,128,240,0.10)',
+  },
+  tooling: {
+    label: 'Tool work',
+    shortLabel: 'TOOLS',
+    color: 'var(--green)',
+    background: 'rgba(45,212,160,0.10)',
+  },
+  verification: {
+    label: 'Verification',
+    shortLabel: 'VERIFY',
+    color: 'var(--amber, #eaaa40)',
+    background: 'rgba(234,170,64,0.10)',
+  },
+  handoff: {
+    label: 'Handoff',
+    shortLabel: 'HANDOFF',
+    color: 'var(--text)',
+    background: 'color-mix(in srgb, var(--text) 8%, transparent)',
+  },
+  system: {
+    label: 'System',
+    shortLabel: 'SYSTEM',
+    color: 'var(--amber, #eaaa40)',
+    background: 'rgba(234,170,64,0.10)',
+  },
+}
+
+const TOOL_COLORS: Record<string, string> = {
+  Bash: 'var(--t-bash)',
+  Edit: 'var(--t-edit)',
+  MultiEdit: 'var(--t-edit)',
+  FileChange: 'var(--t-edit)',
+  Write: 'var(--t-write)',
+  Read: 'var(--t-read)',
+  Grep: 'var(--t-grep)',
+  Glob: 'var(--t-glob)',
+  Agent: 'var(--t-agent)',
+  WebSearch: 'var(--cyan)',
+  WebFetch: 'var(--t-read)',
+  NotebookEdit: 'var(--t-edit)',
+}
+
+const FILTERS: Array<{ key: VisualizerFilter; label: string }> = [
+  { key: 'all', label: 'All' },
+  { key: 'user', label: 'User' },
+  { key: 'assistant', label: 'Agent' },
+  { key: 'tools', label: 'Tools' },
+  { key: 'errors', label: 'Errors' },
+  { key: 'thinking', label: 'Thinking' },
+  { key: 'media', label: 'Media' },
+  { key: 'system', label: 'System' },
+]
+
+const TOOL_TARGET_KEYS = [
+  'command',
+  'cmd',
+  'file_path',
+  'filePath',
+  'path',
+  'pattern',
+  'query',
+  'url',
+  'description',
+  'prompt',
+  'server',
+  'tool',
+]
+
+const VERIFY_RE = /\b(test|tests|type-check|typecheck|tsc|build|verify|verification|passes|passed|succeeded|success|lint|diagnostic|checked)\b/i
+const HANDOFF_RE = /\b(done|completed|wired|implemented|verification passed|ready|left|summary|final)\b/i
+
+function toolColor(name: string): string {
+  return TOOL_COLORS[name] ?? 'var(--t-other)'
+}
+
+function compactNumber(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k`
+  return String(value)
+}
+
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0s'
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const remainder = minutes % 60
+  return remainder > 0 ? `${hours}h ${remainder}m` : `${hours}h`
+}
+
+function formatTimeLabel(value?: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function normalizePreview(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function stringifyTargetValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return value.map(stringifyTargetValue).filter(Boolean).join(', ')
+  return ''
+}
+
+function toolTarget(input: Record<string, unknown>): string {
+  for (const key of TOOL_TARGET_KEYS) {
+    const value = stringifyTargetValue(input[key])
+    if (value) return normalizePreview(value).slice(0, 90)
+  }
+  return ''
+}
+
+function textFromToolResult(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((block) => {
+      if (!block || typeof block !== 'object') return ''
+      const record = block as Record<string, unknown>
+      return record.type === 'text' && typeof record.text === 'string' ? record.text : ''
+    })
+    .filter(Boolean)
+    .join(' ')
+}
+
+function textFromBlock(block: ThreadedBlock): string {
+  switch (block.type) {
+    case 'text':
+      return block.text
+    case 'thinking':
+      return block.thinking
+    case 'tool_thread': {
+      const target = toolTarget(block.toolUse.input)
+      return target ? `${block.toolUse.name} ${target}` : block.toolUse.name
+    }
+    case 'task_notification':
+      return block.summary || block.result || block.taskId
+    case 'system_reminder':
+      return block.content
+    case 'slash_command':
+      return [block.command, block.message, block.args].filter(Boolean).join(' ')
+    case 'local_command_stdout':
+      return block.stdout
+    case 'claude_system':
+      return block.subtype
+    case 'image':
+      return 'Image'
+    default:
+      return ''
+  }
+}
+
+function messagePreview(message: ThreadedMessage): string {
+  const preview = message.blocks
+    .map(textFromBlock)
+    .map(normalizePreview)
+    .find(Boolean)
+  return preview?.slice(0, 180) ?? `${message.role} message`
+}
+
+function messageTextLength(message: ThreadedMessage): number {
+  return message.blocks.reduce((total, block) => {
+    if (block.type === 'tool_thread') {
+      const resultLength = textFromToolResult(block.result?.content).length
+      return total + block.toolUse.name.length + toolTarget(block.toolUse.input).length + resultLength
+    }
+    return total + textFromBlock(block).length
+  }, 0)
+}
+
+function usageTokens(usage: ApiMessage['usage'] | undefined): { inputTokens: number; outputTokens: number; cacheTokens: number } {
+  return {
+    inputTokens: usage?.input_tokens ?? 0,
+    outputTokens: usage?.output_tokens ?? 0,
+    cacheTokens: (usage?.cache_read_input_tokens ?? 0) + (usage?.cache_creation_input_tokens ?? 0),
+  }
+}
+
+function buildEntry(row: MessageVisualizerRow, index: number): VisualizerEntry {
+  const { message } = row
+  const toolSummaries: ToolSummary[] = []
+  let thinkingCount = 0
+  let imageCount = 0
+
+  for (const block of message.blocks) {
+    if (block.type === 'tool_thread') {
+      toolSummaries.push({
+        name: block.toolUse.name,
+        target: toolTarget(block.toolUse.input),
+        error: !!block.result?.is_error,
+        pending: !block.result,
+      })
+    } else if (block.type === 'thinking') {
+      thinkingCount += 1
+    } else if (block.type === 'image') {
+      imageCount += 1
+    }
+  }
+
+  const timestampMs = message.timestamp ? Date.parse(message.timestamp) : Number.NaN
+  const tokenUsage = usageTokens(message.usage)
+  const roleLabel = message.role === 'assistant'
+    ? getAssistantLabel(message.provider)
+    : ROLE_META[message.role].label
+  const preview = messagePreview(message)
+  const searchText = [
+    roleLabel,
+    message.role,
+    message.sessionId,
+    message.provider,
+    preview,
+    ...toolSummaries.flatMap((tool) => [tool.name, tool.target]),
+  ].filter(Boolean).join(' ').toLowerCase()
+
+  return {
+    key: row.key,
+    id: message.uuid,
+    index,
+    role: message.role,
+    roleLabel,
+    sessionId: message.sessionId,
+    provider: message.provider,
+    timestamp: message.timestamp,
+    timestampMs: Number.isFinite(timestampMs) ? timestampMs : null,
+    timeLabel: formatTimeLabel(message.timestamp),
+    preview,
+    searchText,
+    toolSummaries,
+    toolCount: toolSummaries.length,
+    pendingToolCount: toolSummaries.filter((tool) => tool.pending).length,
+    errorCount: toolSummaries.filter((tool) => tool.error).length,
+    thinkingCount,
+    imageCount,
+    textChars: messageTextLength(message),
+    inputTokens: tokenUsage.inputTokens,
+    outputTokens: tokenUsage.outputTokens,
+    cacheTokens: tokenUsage.cacheTokens,
+    dimmed: !!row.dimmed,
+    previewBadge: row.previewBadge,
+  }
+}
+
+function classifyEntryPhase(entry: VisualizerEntry, isLast: boolean): PhaseKey {
+  if (entry.role === 'system') return 'system'
+  if (entry.role === 'user') return 'prompt'
+  if (entry.errorCount > 0 || entry.toolCount > 0) return 'tooling'
+  if (VERIFY_RE.test(entry.preview)) return 'verification'
+  if (isLast || HANDOFF_RE.test(entry.preview)) return 'handoff'
+  return 'reasoning'
+}
+
+function buildPhases(entries: VisualizerEntry[]): SessionPhase[] {
+  const phases: SessionPhase[] = []
+
+  entries.forEach((entry, index) => {
+    const key = classifyEntryPhase(entry, index === entries.length - 1)
+    const meta = PHASE_META[key]
+    const current = phases.at(-1)
+
+    if (current && current.key === key) {
+      current.count += 1
+      current.endIndex = entry.index
+      current.toolCount += entry.toolCount
+      current.errorCount += entry.errorCount
+      return
+    }
+
+    phases.push({
+      key,
+      label: meta.label,
+      count: 1,
+      startIndex: entry.index,
+      endIndex: entry.index,
+      toolCount: entry.toolCount,
+      errorCount: entry.errorCount,
+      color: meta.color,
+    })
+  })
+
+  return phases
+}
+
+function buildActivityBuckets(entries: VisualizerEntry[], bucketCount = 36): number[] {
+  const buckets = Array.from({ length: bucketCount }, () => 0)
+  if (entries.length === 0) return buckets
+
+  const timedEntries = entries.filter((entry) => entry.timestampMs !== null)
+  if (timedEntries.length >= 2) {
+    const first = timedEntries[0]?.timestampMs ?? 0
+    const last = timedEntries.at(-1)?.timestampMs ?? first
+    const span = Math.max(last - first, 1)
+    for (const entry of timedEntries) {
+      const index = Math.min(bucketCount - 1, Math.floor(((entry.timestampMs! - first) / span) * bucketCount))
+      buckets[index] += 1 + entry.toolCount + entry.errorCount
+    }
+    return buckets
+  }
+
+  entries.forEach((entry, index) => {
+    const bucketIndex = Math.min(bucketCount - 1, Math.floor((index / Math.max(entries.length - 1, 1)) * bucketCount))
+    buckets[bucketIndex] += 1 + entry.toolCount + entry.errorCount
+  })
+  return buckets
+}
+
+function buildStats(entries: VisualizerEntry[], rawEventCount: number): VisualizerStats {
+  let userCount = 0
+  let assistantCount = 0
+  let systemCount = 0
+  let toolCount = 0
+  let toolTurnCount = 0
+  let pendingToolCount = 0
+  let errorCount = 0
+  let imageCount = 0
+  let thinkingCount = 0
+  let inputTokens = 0
+  let outputTokens = 0
+  let cacheTokens = 0
+  let maxChars = 1
+  let longestEntry: VisualizerEntry | null = null
+  let busiestEntry: VisualizerEntry | null = null
+  const tools = new Map<string, { name: string; count: number; errorCount: number; pendingCount: number }>()
+  const timestamps: number[] = []
+
+  for (const entry of entries) {
+    if (entry.role === 'user') userCount += 1
+    if (entry.role === 'assistant') assistantCount += 1
+    if (entry.role === 'system') systemCount += 1
+    if (entry.toolCount > 0) toolTurnCount += 1
+    toolCount += entry.toolCount
+    pendingToolCount += entry.pendingToolCount
+    errorCount += entry.errorCount
+    imageCount += entry.imageCount
+    thinkingCount += entry.thinkingCount
+    inputTokens += entry.inputTokens
+    outputTokens += entry.outputTokens
+    cacheTokens += entry.cacheTokens
+    maxChars = Math.max(maxChars, entry.textChars)
+    if (entry.timestampMs !== null) timestamps.push(entry.timestampMs)
+    if (!longestEntry || entry.textChars > longestEntry.textChars) longestEntry = entry
+    if (!busiestEntry || entry.toolCount > busiestEntry.toolCount || (entry.toolCount === busiestEntry.toolCount && entry.errorCount > busiestEntry.errorCount)) {
+      busiestEntry = entry
+    }
+
+    for (const tool of entry.toolSummaries) {
+      const current = tools.get(tool.name) ?? { name: tool.name, count: 0, errorCount: 0, pendingCount: 0 }
+      current.count += 1
+      if (tool.error) current.errorCount += 1
+      if (tool.pending) current.pendingCount += 1
+      tools.set(tool.name, current)
+    }
+  }
+
+  const first = timestamps.length > 0 ? Math.min(...timestamps) : null
+  const last = timestamps.length > 0 ? Math.max(...timestamps) : null
+  const durationLabel = first !== null && last !== null ? formatDuration(last - first) : '0s'
+
+  return {
+    turns: entries.length,
+    rawEventCount,
+    userCount,
+    assistantCount,
+    systemCount,
+    toolCount,
+    toolTurnCount,
+    pendingToolCount,
+    errorCount,
+    imageCount,
+    thinkingCount,
+    inputTokens,
+    outputTokens,
+    cacheTokens,
+    durationLabel,
+    firstTimestampMs: first,
+    lastTimestampMs: last,
+    topTools: Array.from(tools.values()).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)).slice(0, 8),
+    roleSegments: [
+      { key: 'user', label: 'USER', count: userCount, color: ROLE_META.user.color },
+      { key: 'assistant', label: 'ASSISTANT', count: assistantCount, color: ROLE_META.assistant.color },
+      { key: 'system', label: 'SYSTEM', count: systemCount, color: ROLE_META.system.color },
+    ],
+    activityBuckets: buildActivityBuckets(entries),
+    maxChars,
+    longestEntry,
+    busiestEntry,
+    lastEntry: entries.at(-1) ?? null,
+  }
+}
+
+function buildHotEntries(entries: VisualizerEntry[], maxChars: number): VisualizerEntry[] {
+  return entries
+    .map((entry) => ({
+      entry,
+      score:
+        entry.errorCount * 80
+        + entry.pendingToolCount * 45
+        + entry.toolCount * 18
+        + entry.thinkingCount * 10
+        + entry.imageCount * 10
+        + (entry.textChars / Math.max(maxChars, 1)) * 28
+        + (entry.previewBadge ? 12 : 0),
+    }))
+    .filter(({ score }) => score > 8)
+    .sort((a, b) => b.score - a.score || a.entry.index - b.entry.index)
+    .slice(0, 6)
+    .map(({ entry }) => entry)
+}
+
+function entryMatchesFilter(entry: VisualizerEntry, activeFilter: VisualizerFilter): boolean {
+  switch (activeFilter) {
+    case 'user':
+    case 'assistant':
+    case 'system':
+      return entry.role === activeFilter
+    case 'tools':
+      return entry.toolCount > 0
+    case 'errors':
+      return entry.errorCount > 0 || entry.pendingToolCount > 0
+    case 'thinking':
+      return entry.thinkingCount > 0
+    case 'media':
+      return entry.imageCount > 0
+    case 'all':
+    default:
+      return true
+  }
+}
+
+function StatPill({
+  icon: Icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: LucideIcon
+  label: string
+  value: string
+  tone?: string
+}) {
+  return (
+    <div className="av-session-viz-stat">
+      <Icon aria-hidden="true" style={{ width: 14, height: 14, color: tone ?? 'var(--text-3)', flexShrink: 0 }} />
+      <span>{label}</span>
+      <strong style={{ color: tone ?? 'var(--text)' }}>{value}</strong>
+    </div>
+  )
+}
+
+function RoleSplit({ stats }: { stats: VisualizerStats }) {
+  const total = Math.max(stats.userCount + stats.assistantCount + stats.systemCount, 1)
+
+  return (
+    <div className="av-session-viz-panel">
+      <div className="av-session-viz-panel-title">ROLE SPLIT</div>
+      <div className="av-session-viz-rolebar" aria-hidden="true">
+        {stats.roleSegments.map((segment) => (
+          <div
+            key={segment.key}
+            style={{
+              flexBasis: `${Math.max(2, (segment.count / total) * 100)}%`,
+              background: segment.color,
+              opacity: segment.count > 0 ? 0.9 : 0.2,
+            }}
+          />
+        ))}
+      </div>
+      <div className="av-session-viz-legend">
+        {stats.roleSegments.map((segment) => (
+          <span key={segment.key}>
+            <i aria-hidden="true" style={{ background: segment.color }} />
+            {segment.label} {segment.count}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ActivitySparkline({ buckets }: { buckets: number[] }) {
+  const max = Math.max(...buckets, 1)
+
+  return (
+    <div className="av-session-viz-panel">
+      <div className="av-session-viz-panel-title">ACTIVITY SIGNATURE</div>
+      <div className="av-session-viz-sparkline" aria-hidden="true">
+        {buckets.map((value, index) => (
+          <span
+            key={`${index}-${value}`}
+            style={{
+              height: `${Math.max(8, (value / max) * 100)}%`,
+              opacity: value > 0 ? 0.92 : 0.18,
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ToolMix({ stats }: { stats: VisualizerStats }) {
+  const max = Math.max(...stats.topTools.map((tool) => tool.count), 1)
+
+  return (
+    <div className="av-session-viz-panel">
+      <div className="av-session-viz-panel-title">TOOL MIX</div>
+      {stats.topTools.length === 0 ? (
+        <div className="av-session-viz-muted">No tools in this view.</div>
+      ) : (
+        <div className="av-session-viz-toolmix">
+          {stats.topTools.map((tool) => (
+            <div key={tool.name} className="av-session-viz-toolmix-row">
+              <span title={tool.name}>{tool.name}</span>
+              <div aria-hidden="true">
+                <i
+                  style={{
+                    width: `${Math.max(7, (tool.count / max) * 100)}%`,
+                    background: tool.errorCount > 0 ? 'var(--red, #f87171)' : tool.pendingCount > 0 ? 'var(--amber, #eaaa40)' : toolColor(tool.name),
+                  }}
+                />
+              </div>
+              <strong>{tool.count}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function InsightCard({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  icon: LucideIcon
+  label: string
+  value: string
+  detail: string
+  tone: string
+}) {
+  return (
+    <div className="av-session-viz-insight">
+      <Icon aria-hidden="true" style={{ color: tone }} />
+      <span>
+        <b>{label}</b>
+        <strong style={{ color: tone }}>{value}</strong>
+        <em>{detail}</em>
+      </span>
+    </div>
+  )
+}
+
+function InsightStack({ stats }: { stats: VisualizerStats }) {
+  const toolRate = stats.turns > 0 ? Math.round((stats.toolTurnCount / stats.turns) * 100) : 0
+  const outputRatio = stats.inputTokens > 0 ? Math.round((stats.outputTokens / stats.inputTokens) * 100) : 0
+  const longest = stats.longestEntry ? `Turn ${stats.longestEntry.index + 1}` : 'None'
+
+  return (
+    <div className="av-session-viz-panel">
+      <div className="av-session-viz-panel-title">SESSION READOUT</div>
+      <div className="av-session-viz-insights">
+        <InsightCard
+          icon={Gauge}
+          label="tool density"
+          value={`${toolRate}%`}
+          detail={`${stats.toolTurnCount} tool-active turns`}
+          tone="var(--green)"
+        />
+        <InsightCard
+          icon={AlertTriangle}
+          label="recovery"
+          value={stats.errorCount > 0 ? `${stats.errorCount}` : 'clean'}
+          detail={stats.pendingToolCount > 0 ? `${stats.pendingToolCount} pending tool results` : 'no tool failures'}
+          tone={stats.errorCount > 0 || stats.pendingToolCount > 0 ? 'var(--red)' : 'var(--text-3)'}
+        />
+        <InsightCard
+          icon={Zap}
+          label="token shape"
+          value={stats.inputTokens > 0 || stats.outputTokens > 0 ? `${outputRatio}%` : 'n/a'}
+          detail={`${compactNumber(stats.cacheTokens)} cached input tokens`}
+          tone="var(--violet)"
+        />
+        <InsightCard
+          icon={Target}
+          label="largest turn"
+          value={longest}
+          detail={stats.longestEntry ? `${compactNumber(stats.longestEntry.textChars)} chars` : 'no content'}
+          tone="var(--cyan)"
+        />
+      </div>
+    </div>
+  )
+}
+
+function PhaseStrip({ phases, total }: { phases: SessionPhase[]; total: number }) {
+  return (
+    <div className="av-session-viz-blueprint">
+      <div className="av-session-viz-blueprint-head">
+        <span>
+          <Sparkles aria-hidden="true" />
+          Session blueprint
+        </span>
+        <em>{phases.length} phases</em>
+      </div>
+      <div className="av-session-viz-phasebar">
+        {phases.map((phase, index) => (
+          <div
+            key={`${phase.key}-${phase.startIndex}-${index}`}
+            className="av-session-viz-phase"
+            style={{
+              '--av-phase-color': phase.color,
+              flexGrow: Math.max(phase.count, 1),
+              flexBasis: `${Math.max(8, (phase.count / Math.max(total, 1)) * 100)}%`,
+            } as CSSProperties}
+            title={`${phase.label}: turns ${phase.startIndex + 1}-${phase.endIndex + 1}`}
+          >
+            <strong>{PHASE_META[phase.key].shortLabel}</strong>
+            <span>{phase.count}</span>
+            {phase.toolCount > 0 && <b>{phase.toolCount} tools</b>}
+            {phase.errorCount > 0 && <b className="av-error">{phase.errorCount} errors</b>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function HotTurns({
+  entries,
+  onSelectMessage,
+}: {
+  entries: VisualizerEntry[]
+  onSelectMessage?: (messageId: string) => void
+}) {
+  return (
+    <div className="av-session-viz-panel">
+      <div className="av-session-viz-panel-title">HOT TURNS</div>
+      {entries.length === 0 ? (
+        <div className="av-session-viz-muted">No standout turns yet.</div>
+      ) : (
+        <div className="av-session-viz-hotlist">
+          {entries.map((entry) => (
+            <button
+              key={entry.key}
+              type="button"
+              disabled={!onSelectMessage}
+              onClick={() => onSelectMessage?.(entry.id)}
+              style={{ '--av-hot-color': ROLE_META[entry.role].color } as CSSProperties}
+            >
+              <span>{String(entry.index + 1).padStart(2, '0')}</span>
+              <strong>{entry.roleLabel}</strong>
+              <em>{entry.toolCount > 0 ? `${entry.toolCount} tools` : `${compactNumber(entry.textChars)} chars`}</em>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function EntryTools({ entry }: { entry: VisualizerEntry }) {
+  if (entry.toolSummaries.length === 0) {
+    return <span className="av-session-viz-no-tools">No tools</span>
+  }
+
+  return (
+    <span className="av-session-viz-toolchips">
+      {entry.toolSummaries.slice(0, 4).map((tool, index) => (
+        <span
+          key={`${entry.id}-${tool.name}-${index}`}
+          className={cn('av-session-viz-toolchip', tool.error && 'av-error', tool.pending && 'av-pending')}
+          title={[tool.name, tool.target].filter(Boolean).join(': ')}
+          style={{ '--av-tool-color': tool.error ? 'var(--red)' : tool.pending ? 'var(--amber)' : toolColor(tool.name) } as CSSProperties}
+        >
+          <i aria-hidden="true" />
+          {tool.name}
+        </span>
+      ))}
+      {entry.toolSummaries.length > 4 && (
+        <b className="av-session-viz-toolmore">+{entry.toolSummaries.length - 4}</b>
+      )}
+    </span>
+  )
+}
+
+function FlowEntry({
+  entry,
+  maxChars,
+  total,
+  onSelectMessage,
+  showSession,
+}: {
+  entry: VisualizerEntry
+  maxChars: number
+  total: number
+  onSelectMessage?: (messageId: string) => void
+  showSession?: boolean
+}) {
+  const meta = ROLE_META[entry.role]
+  const phaseKey = classifyEntryPhase(entry, entry.index === total - 1)
+  const phaseMeta = PHASE_META[phaseKey]
+  const activityWidth = `${Math.max(4, Math.min(100, (entry.textChars / maxChars) * 100))}%`
+  const canSelect = !!onSelectMessage
+  const tokenLabel = entry.inputTokens > 0 || entry.outputTokens > 0
+    ? `${compactNumber(entry.inputTokens)} / ${compactNumber(entry.outputTokens)}`
+    : ''
+
+  return (
+    <button
+      type="button"
+      className={cn('av-session-viz-entry', entry.dimmed && 'av-dimmed', entry.errorCount > 0 && 'av-has-error')}
+      disabled={!canSelect}
+      onClick={() => onSelectMessage?.(entry.id)}
+      aria-label={`Open ${entry.roleLabel} message ${entry.index + 1}`}
+      style={{
+        '--av-entry-color': meta.color,
+        '--av-entry-glow': meta.glow,
+        '--av-entry-bg': meta.background,
+        '--av-phase-color': phaseMeta.color,
+        '--av-phase-bg': phaseMeta.background,
+      } as CSSProperties}
+    >
+      <span className="av-session-viz-index">{String(entry.index + 1).padStart(2, '0')}</span>
+      <span className="av-session-viz-entry-role">
+        <i aria-hidden="true" />
+        <strong>{entry.roleLabel}</strong>
+        {entry.timeLabel && <em>{entry.timeLabel}</em>}
+      </span>
+      <span className="av-session-viz-entry-body">
+        <span className="av-session-viz-entry-head">
+          <b>{phaseMeta.shortLabel}</b>
+          {entry.previewBadge && <b className="av-live">{entry.previewBadge}</b>}
+          {entry.errorCount > 0 && <b className="av-error">{entry.errorCount} ERROR</b>}
+          {entry.pendingToolCount > 0 && <b className="av-pending">{entry.pendingToolCount} PENDING</b>}
+          {showSession && entry.sessionId && <em>{entry.sessionId.slice(0, 8)}</em>}
+        </span>
+        <span className="av-session-viz-preview">{entry.preview}</span>
+        <span className="av-session-viz-activity" aria-hidden="true">
+          <i style={{ width: activityWidth }} />
+        </span>
+      </span>
+      <EntryTools entry={entry} />
+      <span className="av-session-viz-entry-meta">
+        {entry.toolCount > 0 && <span>{entry.toolCount} tools</span>}
+        {entry.thinkingCount > 0 && <span>{entry.thinkingCount} thoughts</span>}
+        {entry.imageCount > 0 && <span>{entry.imageCount} images</span>}
+        {entry.textChars > 0 && <span>{compactNumber(entry.textChars)} chars</span>}
+        {tokenLabel && <span>{tokenLabel} tok</span>}
+      </span>
+    </button>
+  )
+}
+
+function GraphToolNode({
+  tool,
+  entryId,
+  index,
+}: {
+  tool: ToolSummary
+  entryId: string
+  index: number
+}) {
+  const status = tool.error ? 'ERROR' : tool.pending ? 'PENDING' : 'SUCCESS'
+  const nodeColor = tool.error ? 'var(--red)' : tool.pending ? 'var(--amber)' : toolColor(tool.name)
+
+  return (
+    <div
+      className={cn('av-session-viz-graph-node av-tool-node', tool.error && 'av-error', tool.pending && 'av-pending')}
+      style={{
+        '--av-node-color': nodeColor,
+        '--av-node-glow': `color-mix(in srgb, ${nodeColor} 18%, transparent)`,
+      } as CSSProperties}
+      title={[tool.name, tool.target].filter(Boolean).join(': ')}
+    >
+      <span className="av-session-viz-graph-node-kind">
+        <Wrench aria-hidden="true" />
+        tool
+      </span>
+      <strong>{tool.name}</strong>
+      {tool.target && <p>{tool.target}</p>}
+      <em>{status} / turn {entryId.slice(0, 8)} / #{index + 1}</em>
+    </div>
+  )
+}
+
+function GraphEntry({
+  entry,
+  total,
+  onSelectMessage,
+}: {
+  entry: VisualizerEntry
+  total: number
+  onSelectMessage?: (messageId: string) => void
+}) {
+  const meta = ROLE_META[entry.role]
+  const phaseKey = classifyEntryPhase(entry, entry.index === total - 1)
+  const phaseMeta = PHASE_META[phaseKey]
+  const canSelect = !!onSelectMessage
+  const tokenLabel = entry.inputTokens > 0 || entry.outputTokens > 0
+    ? `${compactNumber(entry.inputTokens)} / ${compactNumber(entry.outputTokens)} tokens`
+    : `${compactNumber(entry.textChars)} chars`
+
+  return (
+    <div className="av-session-viz-graph-unit">
+      <button
+        type="button"
+        className={cn('av-session-viz-graph-node av-message-node', entry.errorCount > 0 && 'av-error')}
+        disabled={!canSelect}
+        onClick={() => onSelectMessage?.(entry.id)}
+        style={{
+          '--av-node-color': meta.color,
+          '--av-node-glow': meta.glow,
+          '--av-phase-color': phaseMeta.color,
+        } as CSSProperties}
+      >
+        <span className="av-session-viz-graph-node-kind">
+          <Network aria-hidden="true" />
+          {phaseMeta.shortLabel}
+        </span>
+        <strong>{entry.roleLabel}</strong>
+        <p>{entry.preview}</p>
+        <em>
+          turn {String(entry.index + 1).padStart(2, '0')} / {tokenLabel}
+          {entry.timeLabel ? ` / ${entry.timeLabel}` : ''}
+        </em>
+      </button>
+      {entry.toolSummaries.map((tool, index) => (
+        <GraphToolNode
+          key={`${entry.id}:tool:${tool.name}:${index}`}
+          tool={tool}
+          entryId={entry.id}
+          index={index}
+        />
+      ))}
+    </div>
+  )
+}
+
+function NodeGraphView({
+  entries,
+  total,
+  onSelectMessage,
+}: {
+  entries: VisualizerEntry[]
+  total: number
+  onSelectMessage?: (messageId: string) => void
+}) {
+  if (entries.length === 0) {
+    return (
+      <div className="av-session-viz-no-results">
+        No nodes match the current filter.
+      </div>
+    )
+  }
+
+  return (
+    <div className="av-session-viz-nodegraph" aria-label="Execution graph">
+      <div className="av-session-viz-nodegraph-head">
+        <span>
+          <Network aria-hidden="true" />
+          Node flow
+        </span>
+        <em>{entries.length} turns</em>
+      </div>
+      <div className="av-session-viz-nodechain">
+        {entries.map((entry) => (
+          <GraphEntry
+            key={entry.key}
+            entry={entry}
+            total={total}
+            onSelectMessage={onSelectMessage}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function MessageSessionVisualizer({
+  rows,
+  rawEventCount,
+  loading,
+  showSession,
+  onSelectMessage,
+}: MessageSessionVisualizerProps) {
+  const [activeFilter, setActiveFilter] = useState<VisualizerFilter>('all')
+  const [activeView, setActiveView] = useState<VisualizerView>('rows')
+  const [query, setQuery] = useState('')
+  const deferredQuery = useDeferredValue(query)
+  const normalizedQuery = deferredQuery.trim().toLowerCase()
+  const entries = useMemo(() => rows.map(buildEntry), [rows])
+  const stats = useMemo(() => buildStats(entries, rawEventCount), [entries, rawEventCount])
+  const phases = useMemo(() => buildPhases(entries), [entries])
+  const hotEntries = useMemo(() => buildHotEntries(entries, stats.maxChars), [entries, stats.maxChars])
+  const filteredEntries = useMemo(() => entries.filter((entry) => {
+    if (!entryMatchesFilter(entry, activeFilter)) return false
+    if (!normalizedQuery) return true
+    return entry.searchText.includes(normalizedQuery)
+  }), [activeFilter, entries, normalizedQuery])
+
+  if (loading) {
+    return (
+      <div className="av-session-viz-loading">
+        Loading...
+      </div>
+    )
+  }
+
+  if (entries.length === 0) {
+    return (
+      <div className="av-session-viz-empty">
+        No messages.
+      </div>
+    )
+  }
+
+  return (
+    <Card className="av-session-visualizer">
+      <div className="av-session-viz-fixed-header">
+        <CardHeader className="av-session-viz-header">
+          <div>
+            <CardTitle className="av-session-viz-title">
+              <Network aria-hidden="true" style={{ width: 17, height: 17 }} />
+              Session Visualiser
+            </CardTitle>
+            <div className="av-session-viz-subtitle">
+              {stats.turns} turns / {stats.rawEventCount} events / {stats.durationLabel}
+            </div>
+          </div>
+          <div className="av-session-viz-stats">
+            <StatPill icon={MessageSquareText} label="turns" value={compactNumber(stats.turns)} tone="var(--cyan)" />
+            <StatPill icon={Wrench} label="tools" value={compactNumber(stats.toolCount)} tone="var(--green)" />
+            <StatPill icon={AlertTriangle} label="errors" value={compactNumber(stats.errorCount)} tone={stats.errorCount > 0 ? 'var(--red, #f87171)' : 'var(--text-3)'} />
+            <StatPill icon={Clock3} label="span" value={stats.durationLabel} tone="var(--amber, #eaaa40)" />
+            <StatPill icon={Bot} label="tokens" value={`${compactNumber(stats.inputTokens)} / ${compactNumber(stats.outputTokens)}`} tone="var(--violet)" />
+            <StatPill icon={ImageIcon} label="media" value={compactNumber(stats.imageCount)} tone="var(--t-read)" />
+          </div>
+        </CardHeader>
+        <div className="av-session-viz-header-tools">
+          <PhaseStrip phases={phases} total={entries.length} />
+
+          <div className="av-session-viz-controls">
+            <label className="av-session-viz-search">
+              <Search aria-hidden="true" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search turns, tools, paths, commands..."
+              />
+            </label>
+            <div className="av-session-viz-filterbar" aria-label="Visualiser filters">
+              <Filter aria-hidden="true" />
+              {FILTERS.map((filter) => (
+                <button
+                  key={filter.key}
+                  type="button"
+                  className={cn(activeFilter === filter.key && 'av-active')}
+                  onClick={() => setActiveFilter(filter.key)}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+            <div className="av-session-viz-view-toggle" aria-label="Visualiser view">
+              <button
+                type="button"
+                className={cn(activeView === 'rows' && 'av-active')}
+                onClick={() => setActiveView('rows')}
+              >
+                <MessageSquareText aria-hidden="true" />
+                Rows
+              </button>
+              <button
+                type="button"
+                className={cn(activeView === 'graph' && 'av-active')}
+                onClick={() => setActiveView('graph')}
+              >
+                <Network aria-hidden="true" />
+                Graph
+              </button>
+            </div>
+            <div className="av-session-viz-result-count">
+              {filteredEntries.length} shown
+            </div>
+          </div>
+        </div>
+      </div>
+      <CardContent className="av-session-viz-content">
+        <div className="av-session-viz-grid">
+          <aside className="av-session-viz-side">
+            <InsightStack stats={stats} />
+            <RoleSplit stats={stats} />
+            <ActivitySparkline buckets={stats.activityBuckets} />
+            <ToolMix stats={stats} />
+            <HotTurns entries={hotEntries} onSelectMessage={onSelectMessage} />
+          </aside>
+          <section className={cn('av-session-viz-flow', activeView === 'graph' && 'av-graph-mode')} aria-label="Message flow">
+            {activeView === 'graph' ? (
+              <NodeGraphView
+                entries={filteredEntries}
+                total={entries.length}
+                onSelectMessage={onSelectMessage}
+              />
+            ) : (
+              <>
+                <div className="av-session-viz-lane-head" aria-hidden="true">
+                  <span>#</span>
+                  <span>ACTOR</span>
+                  <span>FLOW</span>
+                  <span>TOOLS</span>
+                  <span>METRICS</span>
+                </div>
+                {filteredEntries.length === 0 ? (
+                  <div className="av-session-viz-no-results">
+                    No turns match the current filter.
+                  </div>
+                ) : (
+                  <div className="av-session-viz-entries">
+                    {filteredEntries.map((entry) => (
+                      <FlowEntry
+                        key={entry.key}
+                        entry={entry}
+                        maxChars={stats.maxChars}
+                        total={entries.length}
+                        onSelectMessage={onSelectMessage}
+                        showSession={showSession}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+export default memo(MessageSessionVisualizer)
