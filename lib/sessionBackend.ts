@@ -1448,13 +1448,18 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
 
 async function createClaudeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
-  const model = typeof body.model === 'string' ? body.model : 'claude-sonnet-4-6'
+  const explicitModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined
+  const isPendingSession = Boolean(body.isPendingSession)
+  // For pending (newly created) sessions there is no prior model on disk, so we
+  // need an explicit default. For existing/resumed sessions we leave model
+  // unset so the SDK reuses whatever the session was last running with — same
+  // as `claude --resume` from the CLI.
+  const model = explicitModel ?? (isPendingSession ? 'claude-sonnet-4-6' : undefined)
   const effort = parseEffort(body)
   const attachments = parseAttachments(body)
   const prompt = await buildClaudePrompt(userMessage, attachments)
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
   const forkSessionOnSend = Boolean(body.forkSession)
-  const isPendingSession = Boolean(body.isPendingSession)
   const cwdOverride = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined
   const taskBudgetTotal = typeof body.taskBudgetTokens === 'number' && body.taskBudgetTokens > 0
     ? Math.floor(body.taskBudgetTokens)
@@ -1471,7 +1476,7 @@ async function createClaudeStream(sessionId: string, request: NextRequest, body:
         options: {
           ...(isPendingSession ? {} : { resume: sessionId }),
           ...(cwdOverride ? { cwd: cwdOverride } : {}),
-          model,
+          ...(model ? { model } : {}),
           effort: effort === 'off' || effort === 'minimal' ? undefined : effort,
           thinking: effort === 'off'
             ? { type: 'disabled' }

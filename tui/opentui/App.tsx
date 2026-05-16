@@ -72,6 +72,7 @@ import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '../../lib/slashCommands'
+import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
 import { readViewSessionSlashCommands, createNewViewSession } from '../../lib/sessionBackend'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
@@ -355,10 +356,14 @@ function detectMentionAtCursor(text: string, cursor: number): { start: number; q
   if (query.length > 60) return null
   return { start: i, query }
 }
+// NOTE: OpenTUI's mergeKeyBindings hashes by `name:ctrl:shift:meta:super` —
+// `alt` is NOT part of the key. Listing `{ name: 'return', alt: true, ... }`
+// collapses onto the same slot as plain `{ name: 'return', ... }` and silently
+// overwrites the submit binding, so Enter ends up bound to newline.
+// Option-Enter on macOS is delivered as `meta: true` (see binding below).
 const composerKeyBindings: ComposerKeyBinding[] = [
   { name: 'return', action: 'submit' },
   { name: 'return', shift: true, action: 'newline' },
-  { name: 'return', alt: true, action: 'newline' },
   { name: 'return', meta: true, action: 'newline' },
   { name: 'j', ctrl: true, action: 'newline' },
   { name: 'linefeed', action: 'newline' },
@@ -1849,6 +1854,7 @@ export default function OpenTuiApp() {
     if (composerActive) setFocusedPane('messages')
   }, [composerActive])
 
+
   useEffect(() => {
     if (!selectedSessionKey) {
       setContextUsage(null)
@@ -1884,7 +1890,18 @@ export default function OpenTuiApp() {
     if (!selectedSessionKey) return 0
     return sessions.findIndex((session) => sessionKey(session) === selectedSessionKey)
   }, [selectedSessionKey, sessions])
-  const selectedSession = selectedIndex >= 0 ? sessions[selectedIndex] ?? null : sessions[0] ?? null
+  // Fall back to openTabSessions when the key doesn't match anything in
+  // `sessions` — that's the case for a freshly created pending Claude session
+  // (added to openTabSessions immediately, but only appears in `sessions` once
+  // the SDK materialises it on first send).
+  const selectedSession = useMemo<Session | null>(() => {
+    if (selectedIndex >= 0) return sessions[selectedIndex] ?? null
+    if (selectedSessionKey) {
+      const fromTab = openTabSessions.find((session) => sessionKey(session) === selectedSessionKey)
+      if (fromTab) return fromTab
+    }
+    return sessions[0] ?? null
+  }, [openTabSessions, selectedIndex, selectedSessionKey, sessions])
   const selectedSessionIdentity = selectedSession ? sessionKey(selectedSession) : null
   const selectedSessionTarget = useMemo<Session | null>(() => (
     selectedSession
@@ -1926,6 +1943,23 @@ export default function OpenTuiApp() {
       || composerTargetSession.provider !== selectedSession.provider
     ),
   )
+  const composerProvider = composerTargetSession?.provider ?? selectedSession?.provider ?? null
+  const composerConfig = useMemo(() => getProviderComposer(composerProvider), [composerProvider])
+  const composerExampleSeed = useMemo(() => {
+    const source = composerTargetSession?.sessionId ?? composerProvider ?? ''
+    let hash = 0
+    for (let i = 0; i < source.length; i += 1) hash = ((hash << 5) - hash + source.charCodeAt(i)) | 0
+    return hash
+  }, [composerTargetSession?.sessionId, composerProvider])
+  const composerExample = useMemo(
+    () => pickProviderExample(composerProvider, composerExampleSeed),
+    [composerProvider, composerExampleSeed],
+  )
+  const composerAccentColor = useMemo(() => {
+    const key = composerConfig.tuiAccentKey
+    const value = (theme as unknown as Record<string, string>)[key]
+    return value ?? theme.cyan
+  }, [composerConfig.tuiAccentKey, theme])
 
   // Card formatting runs in the threading worker (proposal 1). The worker client
   // keeps a per-(density, showToolCalls) cache (proposal 2) so density toggles
@@ -1963,6 +1997,11 @@ export default function OpenTuiApp() {
       : stripToolCallBlocks(sessionDetail.threadedMessages)
     return filtered.map((msg) => formatTranscriptCard(msg, density))
   }, [density, sessionDetail, selectedSessionTarget, showToolCalls])
+
+  // (Auto-open of the composer on a pending session was removed: with
+  // composerActive=true, the global key handler's `N` / `c` / `q` shortcuts
+  // were intercepted by the composer-active branch. The welcome banner +
+  // explicit `c` keypress is the native model here.)
 
   // Warm the worker + client caches when the user toggles density/showToolCalls
   // to a variant that isn't yet cached. The synchronous fallback above keeps the
@@ -2229,7 +2268,39 @@ export default function OpenTuiApp() {
     : (composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention)
     ? composerSlashVisibleCount + 3
     : 0
-  const mainContentHeight = Math.max(height - 3 - (searchMode || sessionSearchMode ? 4 : 1) - composerHeight - composerPopoverHeight, 8)
+  // Status indicators (requesting spinner, subagent tail, live-prompt
+  // suggestion, composer status, auto-targeting note) render as siblings
+  // *between* the scrollbox and the composer. They each take fixed rows when
+  // visible — we must subtract them from mainContentHeight so the transcript
+  // shrinks instead of pushing the composer off-screen.
+  const hasSubagentTail = useMemo(
+    () => Object.values(liveSubagentText).some((t) => t.trim().length > 0),
+    [liveSubagentText],
+  )
+  const hasComposerStatusMessage = Boolean(
+    composerError || (composerSendState === 'sending')
+  )
+  const composerStatusBlockHeight = (() => {
+    let rows = 0
+    if (composerSendState === 'sending' && liveStatus === 'requesting' && !composerLiveText) rows += 2
+    if (hasSubagentTail) rows += 2
+    if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
+    if (hasComposerStatusMessage) {
+      const streamingMarkdown = composerSendState === 'sending' && composerLiveText && syntaxStyle && !composerError
+      rows += streamingMarkdown ? 5 : 2
+    }
+    if (composerAutoTargetingRunning && composerTargetSession) rows += 1
+    return rows
+  })()
+  const mainContentHeight = Math.max(
+    height
+    - 3
+    - (searchMode || sessionSearchMode ? 4 : 1)
+    - composerHeight
+    - composerPopoverHeight
+    - composerStatusBlockHeight,
+    8,
+  )
   const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - 4 - 1 - MIN_READER_WIDTH)
   const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
@@ -2504,10 +2575,21 @@ export default function OpenTuiApp() {
       startTransition(() => {
         setSessions((prev) => sessionsShallowEqual(prev, nextSessions) ? prev : nextSessions)
         setSelectedSessionKey((current) => {
-          if (nextSessions.length === 0) return null
+          // Draft sessions (pending Claude after N, or any session that's
+          // been opened as a tab but not yet materialised server-side) live
+          // in openTabSessions, not `sessions`. If we clobber a draft
+          // selection here, pressing N silently lands the user on the first
+          // server session instead of the new welcome tab.
+          const isDraftTab = (key: string | null) => Boolean(
+            key && openTabSessionsRef.current.some((tab) => sessionKey(tab) === key)
+          )
+          if (nextSessions.length === 0) {
+            return isDraftTab(current) ? current : null
+          }
           if (preserveSelection && current) {
             const matched = nextSessions.find((session) => sessionKey(session) === current)
             if (matched) return sessionKey(matched)
+            if (isDraftTab(current)) return current
           }
           return sessionKey(nextSessions[0])
         })
@@ -3158,7 +3240,7 @@ export default function OpenTuiApp() {
           provider: targetSession.provider,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
           isPendingSession: targetSession.isPending === true ? true : undefined,
-          cwd: targetSession.isPending && targetSession.cwd ? targetSession.cwd : undefined,
+          cwd: targetSession.cwd ?? undefined,
         }),
         signal: controller.signal,
       })
@@ -4981,7 +5063,33 @@ export default function OpenTuiApp() {
                   </box>
                 </box>
               ) : (
-                <text fg={theme.dim}>{fitText('No messages.', rightPaneWidth - 4)}</text>
+                (() => {
+                  const welcome = getProviderComposer(selectedSession.provider ?? null)
+                  const welcomeAccent = ((theme as unknown as Record<string, string>)[welcome.tuiAccentKey]) ?? theme.cyan
+                  const innerWidth = Math.max(rightPaneWidth - 4, 20)
+                  return (
+                    <box flexDirection="column" paddingY={1}>
+                      <text fg={welcomeAccent} wrapMode="none">{fitText(welcome.welcomeTitle, innerWidth)}</text>
+                      <text fg={theme.dim} wrapMode="none">{fitText(welcome.welcomeSubtitle, innerWidth)}</text>
+                      {selectedSession.cwd ? (
+                        <box marginTop={1}>
+                          <text fg={theme.dim} wrapMode="none">{fitText(`cwd  ${selectedSession.cwd}`, innerWidth)}</text>
+                        </box>
+                      ) : null}
+                      <box marginTop={1} flexDirection="column">
+                        {welcome.welcomeBullets.map((bullet) => (
+                          <box key={bullet} flexDirection="row" height={1} width={innerWidth}>
+                            <text fg={welcomeAccent} wrapMode="none">{welcome.glyph} </text>
+                            <text fg={theme.text} wrapMode="none">{fitText(bullet, innerWidth - 2)}</text>
+                          </box>
+                        ))}
+                      </box>
+                      <box marginTop={1}>
+                        <text fg={theme.dim} wrapMode="none">{fitText('Press c to open the composer and start chatting.', innerWidth)}</text>
+                      </box>
+                    </box>
+                  )
+                })()
               )
             ) : (
               <scrollbox
@@ -5293,14 +5401,18 @@ export default function OpenTuiApp() {
 
       {composerStatusMessage ? (
         composerSendState === 'sending' && composerLiveText && syntaxStyle && !composerError ? (
-          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1} height={4}>
-            <markdown
-              content={composerLiveText}
-              syntaxStyle={syntaxStyle}
-              fg={theme.dim}
-              streaming={true}
-              width={Math.max(width - 4, 20)}
-            />
+          // OpenTUI's <box height={n}> does not clip <markdown> overflow — once
+          // the streaming preview grows beyond 4 rows it bleeds onto the
+          // composer below. Render only the tail as plain wrapped text so the
+          // preview always fits the reserved 5-row slot.
+          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1} height={4} overflow="hidden">
+            <text fg={theme.dim} wrapMode="word">
+              {composerLiveText
+                .replace(/\s+$/g, '')
+                .split('\n')
+                .slice(-3)
+                .join('\n')}
+            </text>
           </box>
         ) : (
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
@@ -5342,16 +5454,16 @@ export default function OpenTuiApp() {
             borderColor={theme.border2}
             flexDirection="column"
           >
-            <text fg={theme.dim} wrapMode="none">
-              {fitText(`files · ⌃P/⌃N select · tab insert · esc cancel  (${composerMentionIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+            <text fg={composerAccentColor} wrapMode="none">
+              {fitText(`${composerConfig.label} files · ⌃P/⌃N select · tab insert · esc cancel  (${composerMentionIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
             </text>
             {composerMentionResults.slice(start, end).map((entry, offset) => {
               const index = start + offset
               const active = index === composerMentionIndex
               return (
                 <box key={entry.path} flexDirection="row" height={1} width={rowWidth}>
-                  <text fg={active ? theme.cyan : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
-                  <text fg={active ? theme.cyan : theme.text} wrapMode="none">{fitText(entry.basename, basenameWidth)}</text>
+                  <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
+                  <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(entry.basename, basenameWidth)}</text>
                   <text fg={theme.dim} wrapMode="none">  </text>
                   <text fg={theme.dim} wrapMode="none">{fitText(entry.path, pathWidth)}</text>
                 </box>
@@ -5381,16 +5493,16 @@ export default function OpenTuiApp() {
             borderColor={theme.border2}
             flexDirection="column"
           >
-            <text fg={theme.dim} wrapMode="none">
-              {fitText(`commands · ⌃P/⌃N select · tab insert · esc cancel  (${composerSlashIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+            <text fg={composerAccentColor} wrapMode="none">
+              {fitText(`${composerConfig.label} commands · ⌃P/⌃N select · tab insert · esc cancel  (${composerSlashIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
             </text>
             {composerSlashCommands.slice(start, end).map((entry, offset) => {
               const index = start + offset
               const active = index === composerSlashIndex
               return (
                 <box key={entry.command} flexDirection="row" height={1} width={rowWidth}>
-                  <text fg={active ? theme.cyan : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
-                  <text fg={active ? theme.cyan : theme.text} wrapMode="none">{fitText(entry.command, commandWidth)}</text>
+                  <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
+                  <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(entry.command, commandWidth)}</text>
                   <text fg={theme.dim} wrapMode="none">  </text>
                   <text fg={theme.dim} wrapMode="none">{fitText(entry.description, descWidth)}</text>
                 </box>
@@ -5405,14 +5517,18 @@ export default function OpenTuiApp() {
         backgroundColor={theme.surface}
         border
         borderStyle="single"
-        borderColor={theme.border}
+        borderColor={composerActive ? composerAccentColor : theme.border}
         height={composerHeight}
         flexDirection="column"
       >
         <textarea
           ref={composerTextareaRef}
           focused={composerActive}
-          placeholder={composerTargetSession ? 'Send a message… (enter to send · ⌃J newline)' : 'Select a session to send a message'}
+          placeholder={composerTargetSession
+            ? (composerSendState === 'sending'
+                ? composerConfig.placeholderStreaming
+                : composerExample)
+            : composerConfig.placeholderNoSession}
           initialValue={composerDraft}
           keyBindings={composerKeyBindings}
           onContentChange={() => {
@@ -5447,19 +5563,19 @@ export default function OpenTuiApp() {
           style={{ flexGrow: 1, backgroundColor: theme.surface, textColor: theme.text, focusedBackgroundColor: theme.surface, focusedTextColor: theme.text, placeholderColor: theme.dim }}
         />
         <box flexDirection="row" alignItems="center" justifyContent="space-between">
-          <text fg={composerSlashHint ? theme.cyan : theme.dim}>
+          <text fg={composerSlashHint ? composerAccentColor : theme.dim}>
             {composerSlashHint
               ? composerSlashHint
               : composerDraft.length === 0
-              ? ''
+              ? `${composerConfig.glyph} ${composerConfig.label}`
               : `${composerLineCount} line${composerLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars`}
           </text>
-          <text fg={composerSendState === 'sending' ? theme.dim : theme.cyan}>
+          <text fg={composerSendState === 'sending' ? theme.dim : composerAccentColor}>
             {composerSendState === 'sending'
-              ? 'Esc cancel'
+              ? composerConfig.footerHintSending
               : sentHistory.length > 0
-              ? `↵ send · ⌃J newline · ⌃P/⌃N history (${sentHistory.length}) · Esc back`
-              : '↵ send · ⌃J newline · Esc back'}
+              ? `${composerConfig.footerHintIdle} (${sentHistory.length})`
+              : composerConfig.footerHintIdle}
           </text>
         </box>
       </box>

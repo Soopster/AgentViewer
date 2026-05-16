@@ -199,6 +199,29 @@ function toSystemPayload(msg: SessionMessage): SystemMessagePayload | null {
   return msg.message as SystemMessagePayload
 }
 
+// Subtypes that are SDK plumbing the user never sees from a real `claude` CLI
+// process. Each send to a resumed session re-runs `query()`, which re-fires
+// these — they pile up in the transcript and break the "continuing a session"
+// illusion. The events are still persisted to the session file; we just hide
+// them from the rendered timeline.
+const HIDDEN_PLUMBING_SUBTYPES = new Set(['init', 'status'])
+
+function isHiddenPlumbingMessage(payload: SystemMessagePayload): boolean {
+  if (HIDDEN_PLUMBING_SUBTYPES.has(payload.subtype)) return true
+  // SessionStart hooks fire on every resume but the CLI only fires them once
+  // per process. Suppress them so re-sends don't litter the transcript.
+  if (
+    (payload.subtype === 'hook_started'
+      || payload.subtype === 'hook_progress'
+      || payload.subtype === 'hook_response')
+    && typeof payload.hook_event === 'string'
+    && payload.hook_event === 'SessionStart'
+  ) {
+    return true
+  }
+  return false
+}
+
 function messageUsage(msg: SessionMessage): ApiMessage['usage'] | undefined {
   if (msg.type === 'system') return undefined
   return (msg.message as ApiMessage).usage
@@ -245,6 +268,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
 
     const systemPayload = toSystemPayload(msg)
     if (systemPayload) {
+      if (isHiddenPlumbingMessage(systemPayload)) continue
       out.push({
         role: 'system',
         uuid: msg.uuid,

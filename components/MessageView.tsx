@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
+import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useDeferredValue } from 'react'
 import type {
   SessionMessage,
   Session,
@@ -23,6 +23,7 @@ import { getPrimarySessionTag } from '@/lib/sessionTags'
 import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '@/lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import { getSlashCommandSuggestions, filterSlashCommands } from '@/lib/slashCommands'
+import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -31,8 +32,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { RotateCcw, SendHorizontal, Square } from 'lucide-react'
+import { ChartNetwork, Filter, RotateCcw, Search, SendHorizontal, Square } from 'lucide-react'
 import MessageItem, { LiveSubagentTextContext, MessageDensityProvider, type MessageDensity } from './MessageItem'
+import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import CodeThemeToggle from './CodeThemeToggle'
 import TabBar from './TabBar'
@@ -115,6 +117,19 @@ type TimelineRow = {
   resumeFromMessageId?: string | null
 }
 
+type TranscriptFilter = 'all' | 'user' | 'assistant' | 'system' | 'tools' | 'errors' | 'thinking' | 'media'
+
+const TRANSCRIPT_FILTERS: Array<{ key: TranscriptFilter; label: string }> = [
+  { key: 'all', label: 'All' },
+  { key: 'user', label: 'User' },
+  { key: 'assistant', label: 'Agent' },
+  { key: 'tools', label: 'Tools' },
+  { key: 'errors', label: 'Errors' },
+  { key: 'thinking', label: 'Thinking' },
+  { key: 'media', label: 'Media' },
+  { key: 'system', label: 'System' },
+]
+
 const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
 const TIMELINE_OVERSCAN_PX = 1200
 const ESTIMATED_CHARS_PER_LINE = 92
@@ -140,16 +155,6 @@ function detectMentionAtCursor(text: string, cursor: number): { start: number; q
 }
 
 
-const composerKbdStyle: React.CSSProperties = {
-  fontFamily: "'IBM Plex Mono', monospace",
-  fontSize: 9,
-  padding: '0 4px',
-  borderRadius: 3,
-  border: '1px solid var(--border)',
-  background: 'var(--surface-2)',
-  color: 'var(--text-2, var(--text-3))',
-  letterSpacing: '0.04em',
-}
 const composerPopoverStyle: React.CSSProperties = {
   position: 'absolute',
   bottom: 'calc(100% + 6px)',
@@ -1226,6 +1231,36 @@ function messageToCopyText(message: ThreadedMessage): string {
   return parts.join('\n\n').trim()
 }
 
+function timelineRowSearchText(row: TimelineRow): string {
+  return [
+    row.message.role,
+    row.message.provider,
+    row.message.sessionId,
+    row.previewBadge,
+    messageToCopyText(row.message),
+  ].filter(Boolean).join(' ').toLowerCase()
+}
+
+function timelineRowMatchesTranscriptFilter(row: TimelineRow, filter: TranscriptFilter): boolean {
+  switch (filter) {
+    case 'user':
+    case 'assistant':
+    case 'system':
+      return row.message.role === filter
+    case 'tools':
+      return row.message.blocks.some((block) => block.type === 'tool_thread')
+    case 'errors':
+      return row.message.blocks.some((block) => block.type === 'tool_thread' && (block.result?.is_error || !block.result))
+    case 'thinking':
+      return row.message.blocks.some((block) => block.type === 'thinking')
+    case 'media':
+      return row.message.blocks.some((block) => block.type === 'image')
+    case 'all':
+    default:
+      return true
+  }
+}
+
 const TimelineMessageRow = memo(function TimelineMessageRow({
   row,
   onForkFromMessage,
@@ -1505,6 +1540,17 @@ export default function MessageView({
   const [forking, setForking] = useState(false)
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null)
   const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const [showVisualizer, setShowVisualizer] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem('agentViewer:messageVisualizer') === 'true'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('agentViewer:messageVisualizer', showVisualizer ? 'true' : 'false')
+  }, [showVisualizer])
+  const [transcriptFilter, setTranscriptFilter] = useState<TranscriptFilter>('all')
+  const [transcriptSearch, setTranscriptSearch] = useState('')
+  const deferredTranscriptSearch = useDeferredValue(transcriptSearch)
   const [showTools, setShowTools] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true
     return window.localStorage.getItem('agentViewer:showTools') !== 'false'
@@ -1751,6 +1797,8 @@ export default function MessageView({
     })
   }, [composerDraftKey, resizeComposer])
 
+  const autoFocusedSessionsRef = useRef<Set<string>>(new Set())
+
   useEffect(() => {
     if (suppressDraftSaveRef.current) return
     writeComposerDraft(composerDraftKey, {
@@ -1781,7 +1829,7 @@ export default function MessageView({
     const observer = new ResizeObserver(() => updateMetrics())
     observer.observe(node)
     return () => observer.disconnect()
-  }, [showDiagnostics, session?.sessionId])
+  }, [showDiagnostics, showVisualizer, session?.sessionId])
 
   useEffect(() => {
     if (!rewindPreview || rewindPreview.userMessageId === rewindTargetId) return
@@ -1972,7 +2020,7 @@ export default function MessageView({
           provider: session.provider,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
           isPendingSession: session.isPending === true ? true : undefined,
-          cwd: session.isPending && session.cwd ? session.cwd : undefined,
+          cwd: session.cwd ?? undefined,
         }),
         signal: controller.signal,
       })
@@ -2007,8 +2055,10 @@ export default function MessageView({
                 onFork?.(parsed.sessionId)
                 setSessionActionNotice('Forked a continuation from the selected point.')
               } else if (session.isPending && parsed.sessionId && parsed.sessionId !== session.sessionId) {
+                // Swap to the real SDK session id silently. Real CLI shows no
+                // "new session created" banner — the streaming reply itself
+                // signals that the session is live.
                 onFork?.(parsed.sessionId)
-                setSessionActionNotice('New session created.')
               }
             } catch { /* ignore */ }
             continue
@@ -2889,9 +2939,42 @@ export default function MessageView({
   )
   const isProject = !!projectView
   const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
+
+  // Auto-focus the composer for a brand-new pending session — same as opening
+  // a CLI and landing at the prompt. Gated on `isPending` to avoid stealing
+  // focus on every navigation back to an existing session.
+  useEffect(() => {
+    if (!session || session.isPending !== true) return
+    if (isProject) return
+    const key = `${session.provider ?? 'claude'}:${session.sessionId}`
+    if (autoFocusedSessionsRef.current.has(key)) return
+    autoFocusedSessionsRef.current.add(key)
+    window.requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(ta.value.length, ta.value.length)
+    })
+  }, [isProject, session])
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
   const sendBusy = sendState === 'sending' || awaitingPersistedTurn
   const canSubmitMessage = Boolean(session && inputText.trim() && !sendBusy)
+  const composerConfig = useMemo(() => getProviderComposer(session?.provider), [session?.provider])
+  const composerExampleSeed = useMemo(() => {
+    const source = session?.sessionId ?? session?.provider ?? ''
+    let hash = 0
+    for (let i = 0; i < source.length; i += 1) hash = ((hash << 5) - hash + source.charCodeAt(i)) | 0
+    return hash
+  }, [session?.sessionId, session?.provider])
+  const composerExample = useMemo(
+    () => pickProviderExample(session?.provider, composerExampleSeed),
+    [composerExampleSeed, session?.provider],
+  )
+  const composerPlaceholder = sendBusy
+    ? composerConfig.placeholderStreaming
+    : activeToolCount > 0
+    ? `${composerConfig.label} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
+    : composerExample
   const composerStatus = sendState === 'error'
     ? 'Failed'
     : sendState === 'sending'
@@ -3048,11 +3131,31 @@ export default function MessageView({
     if (liveTimelineRows.length === 0) return persistedTimelineRows
     return [...persistedTimelineRows, ...liveTimelineRows]
   }, [liveTimelineRows, persistedTimelineRows])
+  const normalizedTranscriptSearch = deferredTranscriptSearch.trim().toLowerCase()
+  const transcriptTimelineRows = useMemo<TimelineRow[]>(() => {
+    if (transcriptFilter === 'all' && normalizedTranscriptSearch === '') return timelineRows
+    return timelineRows.filter((row) => {
+      if (!timelineRowMatchesTranscriptFilter(row, transcriptFilter)) return false
+      if (!normalizedTranscriptSearch) return true
+      return timelineRowSearchText(row).includes(normalizedTranscriptSearch)
+    })
+  }, [normalizedTranscriptSearch, timelineRows, transcriptFilter])
+  const visualizerRows = useMemo<MessageVisualizerRow[]>(
+    () => timelineRows.map((row) => ({
+      key: row.key,
+      message: row.message,
+      dimmed: row.dimmed,
+      previewBadge: row.previewBadge,
+      showSession: row.showSession,
+    })),
+    [timelineRows],
+  )
   const timelineTargetMessageId = useMemo(
     () => resolveTimelineTargetMessageId(targetMessageId, messages, timelineRows),
     [messages, targetMessageId, timelineRows],
   )
   const hasLiveTimeline = timelineRows.length > 0
+  const hasTranscriptTimeline = transcriptTimelineRows.length > 0
 
   // On the first completed load for a session, wait for rows to exist and then force the
   // viewport to the live edge so initial virtualization and measurement do not leave us at the top.
@@ -3106,11 +3209,11 @@ export default function MessageView({
   }, [alignLastTimelineRowToViewportBottom, hasLiveTimeline, loading, messages.length, scrollTimelineToBottom, session?.sessionId, targetMessageId])
 
   useEffect(() => {
-    timelineRowsRef.current = timelineRows
-  }, [timelineRows])
+    timelineRowsRef.current = transcriptTimelineRows
+  }, [transcriptTimelineRows])
 
   useEffect(() => {
-    const activeKeys = new Set(timelineRows.map((row) => row.key))
+    const activeKeys = new Set(transcriptTimelineRows.map((row) => row.key))
     let changed = false
     for (const key of rowHeightsRef.current.keys()) {
       if (activeKeys.has(key)) continue
@@ -3118,7 +3221,7 @@ export default function MessageView({
       changed = true
     }
     if (changed) setRowMeasurementVersion((version) => version + 1)
-  }, [timelineRows])
+  }, [transcriptTimelineRows])
 
   const setLastTimelineRow = useCallback((node: HTMLDivElement | null) => {
     lastTimelineRowRef.current = node
@@ -3170,19 +3273,52 @@ export default function MessageView({
   }, [])
 
   useLayoutEffect(() => {
-    if (!autoFollow || !hasLiveTimeline || loading) return
+    if (!autoFollow || !hasTranscriptTimeline || loading) return
     scrollTimelineToBottom()
     alignLastTimelineRowToViewportBottom()
-  }, [alignLastTimelineRowToViewportBottom, autoFollow, hasLiveTimeline, loading, rowMeasurementVersion, scrollTimelineToBottom, timelineRows.length])
+  }, [alignLastTimelineRowToViewportBottom, autoFollow, hasTranscriptTimeline, loading, rowMeasurementVersion, scrollTimelineToBottom, transcriptTimelineRows.length])
 
   // Separate the expensive O(n) height accumulation from the scroll-reactive
   // visibility window. rowLayout only recomputes when rows or measurements
   // change; virtualTimeline re-runs on every scroll but only does a scan of
   // the visible window — no new objects for off-screen rows.
   const rowLayout = useMemo(() => {
-    return buildTimelineRowLayout(timelineRows, rowHeightsRef.current)
-  }, [timelineRows, rowMeasurementVersion])
+    return buildTimelineRowLayout(transcriptTimelineRows, rowHeightsRef.current)
+  }, [rowMeasurementVersion, transcriptTimelineRows])
   rowLayoutRef.current = rowLayout
+
+  const handleVisualizerSelectMessage = useCallback((messageId: string) => {
+    setShowVisualizer(false)
+    setTranscriptFilter('all')
+    setTranscriptSearch('')
+    setHighlightedMessageId(messageId)
+    autoFollowRef.current = false
+    setAutoFollow(false)
+
+    const scrollToMessage = () => {
+      const node = timelineRef.current
+      const rows = timelineRowsRef.current
+      const layout = rowLayoutRef.current
+      if (!node) return
+
+      const rowIndex = rows.findIndex((row) => row.message.uuid === messageId)
+      if (rowIndex < 0) return
+
+      const targetTop = Math.max(layout.tops[rowIndex] - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
+      suppressFollowEvalUntilRef.current = performance.now() + 300
+      node.scrollTop = targetTop
+      setTimelineScrollTop(targetTop)
+    }
+
+    window.requestAnimationFrame(() => {
+      scrollToMessage()
+      window.requestAnimationFrame(() => {
+        if (!scrollMountedTimelineRowIntoView(messageId)) {
+          scrollToMessage()
+        }
+      })
+    })
+  }, [scrollMountedTimelineRowIntoView])
 
   useLayoutEffect(() => {
     if (!timelineTargetMessageId || loading) return
@@ -3190,7 +3326,7 @@ export default function MessageView({
     const node = timelineRef.current
     if (!node) return
 
-    const rowIndex = timelineRows.findIndex((row) => row.message.uuid === timelineTargetMessageId)
+    const rowIndex = transcriptTimelineRows.findIndex((row) => row.message.uuid === timelineTargetMessageId)
     if (rowIndex < 0) return
 
     handledTargetMessageRequestRef.current = targetMessageRequestId
@@ -3201,7 +3337,7 @@ export default function MessageView({
     setTimelineScrollTop(targetTop)
     node.scrollTop = targetTop
     setHighlightedMessageId(timelineTargetMessageId)
-  }, [loading, rowLayout, targetMessageRequestId, timelineRows, timelineTargetMessageId])
+  }, [loading, rowLayout, targetMessageRequestId, transcriptTimelineRows, timelineTargetMessageId])
 
   useEffect(() => {
     if (!highlightedMessageId) return
@@ -3213,7 +3349,7 @@ export default function MessageView({
 
   const virtualTimeline = useMemo(() => {
     const { tops, heights, totalHeight } = rowLayout
-    const n = timelineRows.length
+    const n = transcriptTimelineRows.length
     const viewportHeight = timelineViewportHeight || 800
     const rangeStart = Math.max(0, timelineScrollTop - TIMELINE_OVERSCAN_PX)
     const rangeEnd = timelineScrollTop + viewportHeight + TIMELINE_OVERSCAN_PX
@@ -3227,11 +3363,11 @@ export default function MessageView({
 
     const visibleRows: Array<{ row: TimelineRow; top: number; height: number }> = []
     for (let i = startIndex; i < Math.min(endIndex, n); i++) {
-      visibleRows.push({ row: timelineRows[i], top: tops[i], height: heights[i] })
+      visibleRows.push({ row: transcriptTimelineRows[i], top: tops[i], height: heights[i] })
     }
 
     return { totalHeight, visibleRows }
-  }, [rowLayout, timelineRows, timelineScrollTop, timelineViewportHeight])
+  }, [rowLayout, transcriptTimelineRows, timelineScrollTop, timelineViewportHeight])
 
   useLayoutEffect(() => {
     if (!timelineTargetMessageId || highlightedMessageId !== timelineTargetMessageId || loading) return
@@ -3254,6 +3390,7 @@ export default function MessageView({
   // before paint, so new content simply appears at the bottom of the viewport
   // without any visible scroll or shift.
   useEffect(() => {
+    if (showVisualizer) return
     const node = timelineRef.current
     const content = timelineContentRef.current
     if (!node || !content) return
@@ -3269,7 +3406,7 @@ export default function MessageView({
     observer.observe(content)
     observer.observe(node)
     return () => observer.disconnect()
-  }, [hasLiveTimeline, session?.sessionId])
+  }, [hasLiveTimeline, session?.sessionId, showVisualizer])
 
   // When autoFollow is first enabled, pin once.
   useEffect(() => {
@@ -3666,6 +3803,30 @@ export default function MessageView({
             📊 ANALYTICS
           </Button>
         )}
+
+        <Button
+          onClick={() => setShowVisualizer((value) => !value)}
+          title={showVisualizer ? 'Show transcript view' : 'Show session visualiser'}
+          variant="outline"
+          size="sm"
+          className="av-hover-control"
+          style={{
+            flexShrink: 0,
+            height: 26,
+            padding: '0 10px',
+            background: showVisualizer ? 'rgba(56,217,245,0.14)' : 'rgba(56,217,245,0.06)',
+            border: '1px solid rgba(56,217,245,0.22)',
+            borderRadius: 5,
+            color: showVisualizer ? 'var(--cyan)' : 'var(--text-3)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            letterSpacing: '0.08em',
+            cursor: 'pointer',
+          }}
+        >
+          <ChartNetwork data-icon="inline-start" />
+          {showVisualizer ? 'TRANSCRIPT' : 'VISUALISER'}
+        </Button>
 
         {/* Code theme picker */}
         <CodeThemeToggle />
@@ -4130,15 +4291,74 @@ export default function MessageView({
 
       {/* ── Timeline feed ────────────────────────────── */}
       <div
-        ref={timelineRef}
-        onScroll={handleTimelineScroll}
         style={{
           flex: 1,
-          overflow: 'auto',
-          overflowAnchor: 'none',
-          padding: '28px 32px 72px',
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
         }}
       >
+        {showVisualizer ? (
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              padding: '18px 24px',
+            }}
+          >
+            <MessageSessionVisualizer
+              rows={visualizerRows}
+              rawEventCount={messages.length}
+              loading={loading}
+              showSession={isProject}
+              onSelectMessage={handleVisualizerSelectMessage}
+            />
+          </div>
+        ) : (
+          <>
+            {!loading && hasLiveTimeline && (
+              <div className="av-transcript-filter-panel">
+                <label className="av-session-viz-search">
+                  <Search aria-hidden="true" />
+                  <input
+                    value={transcriptSearch}
+                    onChange={(event) => setTranscriptSearch(event.target.value)}
+                    placeholder="Search turns, tools, paths, commands..."
+                  />
+                </label>
+                <div className="av-session-viz-filterbar" aria-label="Transcript filters">
+                  <Filter aria-hidden="true" />
+                  {TRANSCRIPT_FILTERS.map((filter) => (
+                    <button
+                      key={filter.key}
+                      type="button"
+                      className={cn(transcriptFilter === filter.key && 'av-active')}
+                      onClick={() => setTranscriptFilter(filter.key)}
+                    >
+                      {filter.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="av-session-viz-result-count">
+                  {transcriptTimelineRows.length} shown
+                </div>
+              </div>
+            )}
+            <div
+              ref={timelineRef}
+              onScroll={handleTimelineScroll}
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: 'auto',
+                overflowAnchor: 'none',
+                padding: '28px 32px 72px',
+              }}
+            >
         {showDiagnostics && !isProject && (
           <div
             style={{
@@ -4289,9 +4509,92 @@ export default function MessageView({
           </div>
         )}
         {!loading && !hasLiveTimeline && (
-          <div style={{ fontSize: 13, color: 'var(--text-3)' }}>No messages.</div>
+          session ? (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 14,
+                maxWidth: 640,
+                padding: '20px 18px',
+                borderRadius: 10,
+                border: `1px solid rgba(${composerConfig.cssAccentRgb},0.28)`,
+                background: `linear-gradient(180deg, rgba(${composerConfig.cssAccentRgb},0.08), transparent 70%)`,
+              }}
+            >
+              <div style={{
+                fontFamily: "'Oxanium', monospace",
+                fontSize: 16,
+                fontWeight: 600,
+                color: `var(${composerConfig.cssAccentVar})`,
+                letterSpacing: '0.04em',
+              }}>
+                {composerConfig.welcomeTitle}
+              </div>
+              <div style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                color: 'var(--text-3)',
+                letterSpacing: '0.04em',
+              }}>
+                {composerConfig.welcomeSubtitle}
+              </div>
+              {session.cwd && (
+                <div style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11,
+                  color: 'var(--text-3)',
+                  letterSpacing: '0.02em',
+                }}>
+                  cwd <span style={{ color: 'var(--text-2)' }}>{session.cwd}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                {composerConfig.welcomeBullets.map((bullet) => (
+                  <button
+                    key={bullet}
+                    type="button"
+                    onClick={() => handleReusePrompt(bullet)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      gap: 10,
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: '1px solid var(--border)',
+                      borderRadius: 6,
+                      padding: '8px 12px',
+                      cursor: 'pointer',
+                      fontFamily: "'IBM Plex Sans', sans-serif",
+                      fontSize: 13,
+                      color: 'var(--text)',
+                      transition: 'background 0.15s, border-color 0.15s',
+                    }}
+                    onMouseEnter={(event) => {
+                      event.currentTarget.style.background = `rgba(${composerConfig.cssAccentRgb},0.10)`
+                      event.currentTarget.style.borderColor = `rgba(${composerConfig.cssAccentRgb},0.45)`
+                    }}
+                    onMouseLeave={(event) => {
+                      event.currentTarget.style.background = 'transparent'
+                      event.currentTarget.style.borderColor = 'var(--border)'
+                    }}
+                  >
+                    <span style={{ color: `var(${composerConfig.cssAccentVar})`, fontWeight: 600 }}>{composerConfig.glyph}</span>
+                    <span>{bullet}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: 'var(--text-3)' }}>No messages.</div>
+          )
         )}
-        {!loading && hasLiveTimeline && (
+        {!loading && hasLiveTimeline && !hasTranscriptTimeline && (
+          <div className="av-transcript-no-results">
+            No messages match the current filter.
+          </div>
+        )}
+        {!loading && hasTranscriptTimeline && (
           <div style={{ position: 'relative' }}>
             <div
               className="timeline-line"
@@ -4314,7 +4617,7 @@ export default function MessageView({
               <MessageDensityProvider density={density}>
                 <LiveSubagentTextContext.Provider value={liveSubagentText}>
                   {(() => {
-                    const lastRowKey = timelineRows.at(-1)?.key
+                    const lastRowKey = transcriptTimelineRows.at(-1)?.key
                     return virtualTimeline.visibleRows.map(({ row, top }) => (
                       <VirtualTimelineRow
                         key={row.key}
@@ -4336,7 +4639,7 @@ export default function MessageView({
             </div>
           </div>
         )}
-        {hasLiveTimeline && (
+        {hasTranscriptTimeline && (
           <div style={{ position: 'sticky', bottom: 12, display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
             {autoFollow ? (
               <div
@@ -4378,6 +4681,9 @@ export default function MessageView({
               </Button>
             )}
           </div>
+        )}
+            </div>
+          </>
         )}
       </div>
 
@@ -4970,8 +5276,8 @@ export default function MessageView({
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', position: 'relative' }}>
               {mentionQuery && mentionResults.length > 0 && (
                 <div style={composerPopoverStyle}>
-                  <div style={composerPopoverHintStyle}>
-                    files · ↑↓ select · ⏎ insert · esc cancel
+                  <div style={{ ...composerPopoverHintStyle, color: `var(${composerConfig.cssAccentVar})` }}>
+                    {composerConfig.label} files · ↑↓ select · ⏎ insert · esc cancel
                   </div>
                   {mentionResults.map((entry, index) => {
                     const active = index === mentionActiveIndex
@@ -4987,8 +5293,8 @@ export default function MessageView({
                         onMouseEnter={() => setMentionActiveIndex(index)}
                         style={{
                           ...composerPopoverItemStyle,
-                          background: active ? 'rgba(139,128,240,0.18)' : 'transparent',
-                          color: active ? 'var(--violet)' : 'var(--text-2, var(--text))',
+                          background: active ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'transparent',
+                          color: active ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2, var(--text))',
                         }}
                       >
                         <span style={{ fontWeight: active ? 600 : 400 }}>{entry.basename}</span>
@@ -5000,8 +5306,8 @@ export default function MessageView({
               )}
               {slashOpen && slashCommands.length > 0 && !mentionQuery && (
                 <div style={composerPopoverStyle}>
-                  <div style={composerPopoverHintStyle}>
-                    commands · ↑↓ select · tab insert · esc cancel
+                  <div style={{ ...composerPopoverHintStyle, color: `var(${composerConfig.cssAccentVar})` }}>
+                    {composerConfig.label} commands · ↑↓ select · tab insert · esc cancel
                   </div>
                   {slashCommands.map((entry, index) => {
                     const active = index === slashActiveIndex
@@ -5017,8 +5323,8 @@ export default function MessageView({
                         onMouseEnter={() => setSlashActiveIndex(index)}
                         style={{
                           ...composerPopoverItemStyle,
-                          background: active ? 'rgba(56,217,245,0.18)' : 'transparent',
-                          color: active ? 'var(--cyan)' : 'var(--text-2, var(--text))',
+                          background: active ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'transparent',
+                          color: active ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2, var(--text))',
                         }}
                       >
                         <span style={{ fontWeight: active ? 600 : 400 }}>{entry.command}</span>
@@ -5050,11 +5356,7 @@ export default function MessageView({
                 onBlur={() => { setMentionQuery(null); setSlashOpen(false) }}
                 onKeyDown={handleKeyDown}
                 onPaste={handleComposerPaste}
-                placeholder={sendBusy
-                  ? 'Draft your next message…'
-                  : activeToolCount > 0
-                  ? `${assistantName} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
-                  : `Message ${assistantName}… (paste or drop images to attach)`}
+                placeholder={composerPlaceholder}
                 rows={1}
                 style={{
                   flex: 1,
@@ -5105,17 +5407,17 @@ export default function MessageView({
                   type="button"
                   onClick={sendMessage}
                   disabled={!canSubmitMessage}
-                  aria-label={awaitingPersistedTurn ? 'Waiting for turn to finish' : 'Send message'}
-                  title={awaitingPersistedTurn ? 'Waiting for turn to finish' : 'Send message'}
+                  aria-label={awaitingPersistedTurn ? 'Waiting for turn to finish' : `${composerConfig.sendVerb} to ${composerConfig.label}`}
+                  title={awaitingPersistedTurn ? 'Waiting for turn to finish' : `${composerConfig.sendVerb} to ${composerConfig.label}`}
                   style={{
                     flexShrink: 0,
                     width: 34,
                     height: 34,
                     padding: 0,
-                    background: 'rgba(139,128,240,0.18)',
-                    border: '1px solid rgba(139,128,240,0.3)',
+                    background: `rgba(${composerConfig.cssAccentRgb},0.18)`,
+                    border: `1px solid rgba(${composerConfig.cssAccentRgb},0.3)`,
                     borderRadius: 6,
-                    color: 'var(--violet)',
+                    color: `var(${composerConfig.cssAccentVar})`,
                     fontFamily: "'Oxanium', monospace",
                     fontSize: 10,
                     fontWeight: 600,
@@ -5145,10 +5447,13 @@ export default function MessageView({
                 flexWrap: 'wrap',
               }}
             >
-              <span>{composerStatus}</span>
+              <span>
+                <span style={{ color: `var(${composerConfig.cssAccentVar})`, marginRight: 6, fontWeight: 600 }}>{composerConfig.glyph}</span>
+                {composerStatus}
+              </span>
               <span style={{ color: 'var(--text-3)', opacity: 0.7 }}>
-                <kbd style={composerKbdStyle}>⏎</kbd> send · <kbd style={composerKbdStyle}>⇧⏎</kbd> newline · <kbd style={composerKbdStyle}>↑</kbd>/<kbd style={composerKbdStyle}>↓</kbd> history
-                {sentHistory.length > 0 ? ` (${sentHistory.length})` : ''}
+                {sendBusy ? composerConfig.footerHintSending : composerConfig.footerHintIdle}
+                {!sendBusy && sentHistory.length > 0 ? ` (${sentHistory.length})` : ''}
               </span>
             </div>
           </CardContent>
