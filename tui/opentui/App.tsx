@@ -44,6 +44,7 @@ import {
   readTuiTheme,
   readTuiTranscriptView,
   runTuiSessionAction,
+  streamTuiSessionTurn,
   writeTuiDensity,
   writeTuiFocusMode,
   writeTuiProvider,
@@ -369,7 +370,6 @@ const composerKeyBindings: ComposerKeyBinding[] = [
   { name: 'linefeed', action: 'newline' },
 ]
 const TRANSCRIPT_TOP_MARGIN = 2
-const API_BASE_URL = process.env.AGENT_VIEWER_BASE_URL ?? 'http://localhost:3000'
 // Metadata refresh is intentionally slow because Claude control queries are
 // expensive and can still cause main-thread pressure when they complete.
 const CLAUDE_METADATA_REFRESH_MS = 5 * 60_000
@@ -383,10 +383,6 @@ const NOTIFY_AFTER_MS = 8_000
 const NOTIFY_PREVIEW_CHARS = 140
 const MAX_CODE_BLOCK_RENDER_LINES = 240
 const MAX_MARKDOWN_SYNTAX_CHARS = 80_000
-
-function buildApiUrl(path: string): string {
-  return new URL(path, API_BASE_URL).toString()
-}
 
 type SseFrame = {
   event: string
@@ -3232,18 +3228,17 @@ export default function OpenTuiApp() {
     let replyAccumulator = ''
 
     try {
-      const res = await fetch(buildApiUrl(`/api/sessions/${targetSession.sessionId}/messages`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const res = await streamTuiSessionTurn(
+        targetSession,
+        {
           message: trimmed,
           provider: targetSession.provider,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
           isPendingSession: targetSession.isPending === true ? true : undefined,
           cwd: targetSession.cwd ?? undefined,
-        }),
-        signal: controller.signal,
-      })
+        },
+        controller.signal,
+      )
 
       if (!res.ok) {
         const json = await res.json().catch(() => ({}))

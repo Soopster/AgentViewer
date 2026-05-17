@@ -37,5 +37,5 @@ export async function POST(
   const { sessionId } = await params
   const body = await request.json().catch(() => ({}))
   const provider = isAgentProvider(body?.provider) ? body.provider : undefined
-  return streamViewSessionTurn({ sessionId, request, body, provider })
+  return streamViewSessionTurn({ sessionId, signal: request.signal, body, provider })
 }

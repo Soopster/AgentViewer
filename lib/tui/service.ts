@@ -38,6 +38,7 @@ import {
   readViewSessionInfo,
   readViewSessionModels,
   runViewSessionAction,
+  streamViewSessionTurn,
 } from '../sessionBackend'
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
@@ -241,6 +242,19 @@ export async function readTuiSessionMetadata(session: Session): Promise<TuiSessi
 
 export async function patchTuiSession(session: Session, body: Record<string, unknown>): Promise<void> {
   return patchViewSession(session.sessionId, body, session.provider)
+}
+
+export async function streamTuiSessionTurn(
+  session: Session,
+  body: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<Response> {
+  return streamViewSessionTurn({
+    sessionId: session.sessionId,
+    signal: signal ?? new AbortController().signal,
+    body,
+    provider: session.provider as AgentProvider | undefined,
+  })
 }
 
 export async function readTuiSessionDiagnostics(

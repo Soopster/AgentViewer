@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 
 async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length)
@@ -257,7 +257,7 @@ type ProjectMessageBatchParams = {
 
 type SendMessageParams = {
   sessionId: string
-  request: NextRequest
+  signal: AbortSignal
   body: Record<string, unknown>
   provider?: AgentProvider
 }
@@ -1446,7 +1446,7 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
   }
 }
 
-async function createClaudeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
+async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const explicitModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined
   const isPendingSession = Boolean(body.isPendingSession)
@@ -1467,7 +1467,7 @@ async function createClaudeStream(sessionId: string, request: NextRequest, body:
 
   const encoder = new TextEncoder()
   const abortController = new AbortController()
-  request.signal.addEventListener('abort', () => abortController.abort())
+  signal.addEventListener('abort', () => abortController.abort())
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -1590,7 +1590,7 @@ function getCodexNotificationTurnId(notification: CodexNotification): string | n
   return null
 }
 
-async function createCodexStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
+async function createCodexStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const model = typeof body.model === 'string' ? body.model : null
   const attachments = parseAttachments(body)
@@ -1680,7 +1680,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
         flushNotification(notification)
       })
 
-      request.signal.addEventListener('abort', () => {
+      signal.addEventListener('abort', () => {
         const running = getRunningSession(sessionId)
         if (running?.provider === 'codex') {
           void running.interrupt().catch(() => {})
@@ -1746,7 +1746,7 @@ async function createCodexStream(sessionId: string, request: NextRequest, body: 
   })
 }
 
-async function createOpenCodeStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
+async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const selectedModel = decodeOpenCodeModelValue(typeof body.model === 'string' ? body.model : null)
   const attachments = parseAttachments(body)
@@ -1755,7 +1755,7 @@ async function createOpenCodeStream(sessionId: string, request: NextRequest, bod
   const encoder = new TextEncoder()
   const abortController = new AbortController()
 
-  request.signal.addEventListener('abort', () => {
+  signal.addEventListener('abort', () => {
     abortController.abort()
     const running = getRunningSession(sessionId)
     if (running?.provider === 'opencode') {
@@ -1871,7 +1871,7 @@ async function createOpenCodeStream(sessionId: string, request: NextRequest, bod
   })
 }
 
-async function createCopilotStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
+async function createCopilotStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const selectedModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null
   const effort = parseEffort(body)
@@ -1924,7 +1924,7 @@ async function createCopilotStream(sessionId: string, request: NextRequest, body
           interrupt: () => session?.abort() ?? Promise.resolve(),
         })
 
-        request.signal.addEventListener('abort', () => {
+        signal.addEventListener('abort', () => {
           const running = getRunningSession(sessionId)
           if (running?.provider === 'copilot') {
             void running.interrupt().catch(() => {})
@@ -1965,7 +1965,7 @@ async function createCopilotStream(sessionId: string, request: NextRequest, body
   })
 }
 
-async function createPiStream(sessionId: string, request: NextRequest, body: Record<string, unknown>): Promise<Response> {
+async function createPiStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const selectedModel = decodePiModelValue(typeof body.model === 'string' ? body.model : null)
   const effort = parseEffort(body)
@@ -2006,7 +2006,7 @@ async function createPiStream(sessionId: string, request: NextRequest, body: Rec
           interrupt: () => agentSession.abort(),
         })
 
-        request.signal.addEventListener('abort', () => {
+        signal.addEventListener('abort', () => {
           const running = getRunningSession(sessionId)
           if (running?.provider === 'pi') {
             void running.interrupt().catch(() => {})
@@ -2053,19 +2053,19 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
 
   const provider = await resolveProvider(params.provider)
   if (provider === 'codex') {
-    return createCodexStream(params.sessionId, params.request, params.body)
+    return createCodexStream(params.sessionId, params.signal, params.body)
   }
   if (provider === 'opencode') {
-    return createOpenCodeStream(params.sessionId, params.request, params.body)
+    return createOpenCodeStream(params.sessionId, params.signal, params.body)
   }
   if (provider === 'copilot') {
-    return createCopilotStream(params.sessionId, params.request, params.body)
+    return createCopilotStream(params.sessionId, params.signal, params.body)
   }
   if (provider === 'pi') {
-    return createPiStream(params.sessionId, params.request, params.body)
+    return createPiStream(params.sessionId, params.signal, params.body)
   }
 
-  return createClaudeStream(params.sessionId, params.request, params.body)
+  return createClaudeStream(params.sessionId, params.signal, params.body)
 }
 
 export async function forkViewSession({ sessionId, body, provider }: ForkParams): Promise<{ sessionId: string }> {
