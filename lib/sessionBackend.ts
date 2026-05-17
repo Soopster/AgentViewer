@@ -1809,7 +1809,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
         }
 
         consumeEvents = (async () => {
-          for await (const event of events.stream as AsyncGenerator<OpenCodeEvent>) {
+          for await (const event of events.stream) {
             const eventSessionId = openCodeEventSessionId(event)
             if (eventSessionId && eventSessionId !== targetSessionId) continue
 
