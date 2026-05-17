@@ -51,7 +51,7 @@ import type {
   ReasoningEffortLevel,
 } from './types'
 import { createSessionControlQuery } from './sdkControlQuery'
-import { getCopilotClient, resumeCopilotSession } from './copilotClient'
+import { acquireCopilotSession, evictCopilotSession, getCopilotClient, resumeCopilotSession } from './copilotClient'
 import {
   deriveCopilotState,
   mapCopilotDiagnosticsToSections,
@@ -123,6 +123,7 @@ import type {
 } from '@opencode-ai/sdk'
 import { normalizeProjectPath, sameProjectPath } from './projectPaths'
 import {
+  evictPiAgentSession,
   forkPiSession,
   getPiSessionEntries,
   getPiSessionMessages,
@@ -1076,6 +1077,9 @@ export async function deleteViewSession(sessionId: string, providerOverride?: Ag
     return
   }
   if (provider === 'copilot') {
+    // Drop any warm session for this id before the SDK deletes it so the next
+    // resume reconnects against the new state.
+    await evictCopilotSession(sessionId).catch(() => {})
     const client = await getCopilotClient()
     await client.deleteSession(sessionId)
     await removePersistedSessionBestEffort(provider, sessionId)
@@ -1446,10 +1450,21 @@ export async function listProjectSessionMessageBatches(params: ProjectMessageBat
   }
 }
 
+const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const
+type ClaudePermissionMode = typeof CLAUDE_PERMISSION_MODES[number]
+
+function parseClaudePermissionMode(body: Record<string, unknown>): ClaudePermissionMode | undefined {
+  const mode = typeof body.permissionMode === 'string' ? body.permissionMode : ''
+  return CLAUDE_PERMISSION_MODES.includes(mode as ClaudePermissionMode)
+    ? mode as ClaudePermissionMode
+    : undefined
+}
+
 async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const explicitModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined
   const isPendingSession = Boolean(body.isPendingSession)
+  const permissionMode = parseClaudePermissionMode(body)
   // For pending (newly created) sessions there is no prior model on disk, so we
   // need an explicit default. For existing/resumed sessions we leave model
   // unset so the SDK reuses whatever the session was last running with — same
@@ -1477,6 +1492,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
           ...(isPendingSession ? {} : { resume: sessionId }),
           ...(cwdOverride ? { cwd: cwdOverride } : {}),
           ...(model ? { model } : {}),
+          ...(permissionMode ? { permissionMode } : {}),
           effort: effort === 'off' || effort === 'minimal' ? undefined : effort,
           thinking: effort === 'off'
             ? { type: 'disabled' }
@@ -1593,6 +1609,13 @@ function getCodexNotificationTurnId(notification: CodexNotification): string | n
 async function createCodexStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const model = typeof body.model === 'string' ? body.model : null
+  const effort = parseEffort(body)
+  // Codex's app-server accepts `low`/`medium`/`high` for reasoningEffort
+  // (mirrors the CLI's `/reasoning` setting). `off`/`minimal`/`xhigh`/`max`
+  // are not valid there, so drop them and let Codex use its thread default.
+  const codexEffort = effort === 'low' || effort === 'medium' || effort === 'high'
+    ? effort
+    : undefined
   const attachments = parseAttachments(body)
   const client = getCodexClient()
   const encoder = new TextEncoder()
@@ -1695,6 +1718,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         const started = await client.request<CodexTurnStartResponse>('turn/start', {
           threadId: sessionId,
           model: model ?? undefined,
+          reasoningEffort: codexEffort,
           input: buildCodexInput(userMessage, attachments),
         })
 
@@ -1751,6 +1775,15 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
   const selectedModel = decodeOpenCodeModelValue(typeof body.model === 'string' ? body.model : null)
   const attachments = parseAttachments(body)
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
+  const requestedAgent = typeof body.agent === 'string' && body.agent.trim() ? body.agent.trim() : undefined
+  // OpenCode CLI convention: a prompt starting with `!` is treated as a direct
+  // shell invocation against the session, not as natural language. The CLI
+  // routes it via the session.shell RPC. Match that here so the composer
+  // feels native — but only when no attachments tag along, since shell takes
+  // a single command string.
+  const bangShell = userMessage.startsWith('!') && attachments.length === 0
+    ? userMessage.slice(1).trim()
+    : null
   const client = await getOpenCodeClient()
   const encoder = new TextEncoder()
   const abortController = new AbortController()
@@ -1836,14 +1869,27 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
           }
         })()
 
-        await client.session.promptAsync({
-          ...OPENCODE_OPTIONS,
-          path: { id: targetSessionId },
-          body: {
-            model: selectedModel ?? undefined,
-            parts: buildOpenCodeParts(userMessage, attachments),
-          },
-        })
+        if (bangShell) {
+          await client.session.shell({
+            ...OPENCODE_OPTIONS,
+            path: { id: targetSessionId },
+            body: {
+              agent: requestedAgent ?? 'build',
+              model: selectedModel ?? undefined,
+              command: bangShell,
+            },
+          })
+        } else {
+          await client.session.promptAsync({
+            ...OPENCODE_OPTIONS,
+            path: { id: targetSessionId },
+            body: {
+              model: selectedModel ?? undefined,
+              agent: requestedAgent,
+              parts: buildOpenCodeParts(userMessage, attachments),
+            },
+          })
+        }
 
         await consumeEvents
       } catch (err) {
@@ -1881,7 +1927,8 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
   const stream = new ReadableStream({
     async start(controller) {
-      let session: Awaited<ReturnType<typeof resumeCopilotSession>> | null = null
+      let session: Awaited<ReturnType<typeof acquireCopilotSession>> | null = null
+      let unsubscribe: (() => void) | null = null
       let closed = false
       let emittedError = false
 
@@ -1911,11 +1958,11 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           controller.enqueue(encoder.encode(`data: ${formatCopilotEvent(event)}\n\n`))
         }
 
-        session = await resumeCopilotSession(sessionId, {
-          disableResume: false,
-          streaming: true,
-          onEvent: handleEvent,
-        })
+        // Warm session pool: re-use a single Copilot session per id across
+        // sends and bind a fresh listener for this turn only. The native CLI
+        // keeps the JSON-RPC connection alive between turns; this matches.
+        session = await acquireCopilotSession(sessionId)
+        unsubscribe = session.on(handleEvent)
 
         controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`))
 
@@ -1948,9 +1995,11 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         if (!emittedError) {
           controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
         }
+        // If the session itself is hosed, evict so the next send reconnects.
+        await evictCopilotSession(sessionId).catch(() => {})
       } finally {
         clearRunningSession(sessionId)
-        await session?.disconnect().catch(() => {})
+        try { unsubscribe?.() } catch { /* ignore */ }
         close()
       }
     },
@@ -2117,6 +2166,9 @@ export async function forkViewSession({ sessionId, body, provider }: ForkParams)
     if (!newId) {
       throw new Error('Failed to fork Pi session')
     }
+    // The source session's on-disk state has been rewritten by the branch
+    // operation — drop any warm AgentSession so the next send re-opens it.
+    evictPiAgentSession(sessionId)
     return { sessionId: newId }
   }
 

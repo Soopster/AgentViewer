@@ -102,3 +102,58 @@ export async function resumeCopilotSession(
     throw wrapCopilotError(error)
   }
 }
+
+// ---- Warm session pool ----
+//
+// The Copilot CLI keeps its session JSON-RPC connection alive between turns;
+// re-running resumeSession on every send adds noticeable latency. We cache one
+// streaming-enabled session per sessionId and let callers subscribe via the
+// session's native `on()` API per turn. Evicted after TTL to bound memory.
+const COPILOT_SESSION_TTL_MS = 5 * 60 * 1000
+type CopilotPoolEntry = { session: CopilotSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
+const copilotSessionPool = new Map<string, CopilotPoolEntry>()
+
+function scheduleCopilotEviction(sessionId: string): void {
+  const entry = copilotSessionPool.get(sessionId)
+  if (!entry) return
+  if (entry.timer) clearTimeout(entry.timer)
+  entry.timer = setTimeout(async () => {
+    const current = copilotSessionPool.get(sessionId)
+    if (!current) return
+    if (Date.now() - current.lastUsed < COPILOT_SESSION_TTL_MS) return
+    copilotSessionPool.delete(sessionId)
+    await current.session.disconnect().catch(() => {})
+  }, COPILOT_SESSION_TTL_MS)
+  if (typeof entry.timer === 'object' && entry.timer && 'unref' in entry.timer) {
+    (entry.timer as { unref: () => void }).unref()
+  }
+}
+
+export async function acquireCopilotSession(sessionId: string): Promise<CopilotSession> {
+  const cached = copilotSessionPool.get(sessionId)
+  if (cached) {
+    cached.lastUsed = Date.now()
+    scheduleCopilotEviction(sessionId)
+    return cached.session
+  }
+  const session = await resumeCopilotSession(sessionId, {
+    disableResume: false,
+    streaming: true,
+  })
+  const entry: CopilotPoolEntry = {
+    session,
+    lastUsed: Date.now(),
+    timer: setTimeout(() => {}, 0),
+  }
+  copilotSessionPool.set(sessionId, entry)
+  scheduleCopilotEviction(sessionId)
+  return session
+}
+
+export async function evictCopilotSession(sessionId: string): Promise<void> {
+  const entry = copilotSessionPool.get(sessionId)
+  if (!entry) return
+  clearTimeout(entry.timer)
+  copilotSessionPool.delete(sessionId)
+  await entry.session.disconnect().catch(() => {})
+}

@@ -87,14 +87,58 @@ export async function createPiAgentSession(cwd: string): Promise<AgentSession> {
   }
 }
 
+// Pool of warm Pi AgentSessions so back-to-back sends don't pay the full
+// createAgentSession cost on every turn. The native Pi CLI keeps the session
+// process alive between prompts — this pool mirrors that. Entries are evicted
+// after `PI_SESSION_TTL_MS` of inactivity to bound memory.
+const PI_SESSION_TTL_MS = 5 * 60 * 1000
+type PiPoolEntry = { session: AgentSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
+const piSessionPool = new Map<string, PiPoolEntry>()
+
+function schedulePiEviction(sessionId: string): void {
+  const entry = piSessionPool.get(sessionId)
+  if (!entry) return
+  if (entry.timer) clearTimeout(entry.timer)
+  entry.timer = setTimeout(() => {
+    const current = piSessionPool.get(sessionId)
+    if (current && Date.now() - current.lastUsed >= PI_SESSION_TTL_MS) {
+      piSessionPool.delete(sessionId)
+    }
+  }, PI_SESSION_TTL_MS)
+  // Don't keep the event loop alive solely for eviction.
+  if (typeof entry.timer === 'object' && entry.timer && 'unref' in entry.timer) {
+    (entry.timer as { unref: () => void }).unref()
+  }
+}
+
 export async function openPiAgentSession(sessionId: string): Promise<AgentSession> {
+  const cached = piSessionPool.get(sessionId)
+  if (cached) {
+    cached.lastUsed = Date.now()
+    schedulePiEviction(sessionId)
+    return cached.session
+  }
   const sm = openPiSessionManager(sessionId)
   try {
     const result = await createAgentSession({ sessionManager: sm })
+    const entry: PiPoolEntry = {
+      session: result.session,
+      lastUsed: Date.now(),
+      timer: setTimeout(() => {}, 0),
+    }
+    piSessionPool.set(sessionId, entry)
+    schedulePiEviction(sessionId)
     return result.session
   } catch (error) {
     throw wrapPiError(error)
   }
+}
+
+export function evictPiAgentSession(sessionId: string): void {
+  const entry = piSessionPool.get(sessionId)
+  if (!entry) return
+  clearTimeout(entry.timer)
+  piSessionPool.delete(sessionId)
 }
 
 export async function refreshPiSessionCache(cwd?: string): Promise<void> {

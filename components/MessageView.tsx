@@ -22,7 +22,7 @@ import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
 import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '@/lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
-import { getSlashCommandSuggestions, filterSlashCommands } from '@/lib/slashCommands'
+import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '@/lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -1530,6 +1530,12 @@ export default function MessageView({
   const [availableModels, setAvailableModels] = useState<SessionModelInfo[]>([])
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedEffort, setSelectedEffort] = useState<'auto' | ReasoningEffortLevel>('auto')
+  // Claude `/permissions` modes — passed through to body.permissionMode on send.
+  const [selectedPermissionMode, setSelectedPermissionMode] = useState<'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'>('default')
+  // Mirrors the CLI "queue next prompt while streaming" behavior. When a send
+  // fires while one is in flight, the draft is captured here and flushed by an
+  // effect once the active turn finishes.
+  const [queuedSend, setQueuedSend] = useState<{ text: string; attachments: SendAttachment[] } | null>(null)
   const [attachments, setAttachments] = useState<SendAttachment[]>([])
   const [attachmentType, setAttachmentType] = useState<SendAttachment['type']>('file')
   const [attachmentPath, setAttachmentPath] = useState('')
@@ -1613,7 +1619,7 @@ export default function MessageView({
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashActiveIndex, setSlashActiveIndex] = useState(0)
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const [liveSlashCommands, setLiveSlashCommands] = useState<Array<{ command: string; description: string }>>([])
+  const [liveSlashCommands, setLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const timelineRef = useRef<HTMLDivElement>(null)
   const timelineContentRef = useRef<HTMLDivElement | null>(null)
@@ -1662,8 +1668,9 @@ export default function MessageView({
   )
   const effortOptions = useMemo<ReasoningEffortLevel[]>(() => {
     if (!selectedModelInfo?.supportsEffort) return []
-    if (activeProvider === 'codex' || activeProvider === 'opencode') return []
+    if (activeProvider === 'opencode') return []
     const levels = selectedModelInfo.supportedEffortLevels?.filter((level) => {
+      if (activeProvider === 'codex') return level === 'low' || level === 'medium' || level === 'high'
       if (activeProvider === 'copilot') return level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh'
       if (activeProvider === 'claude') return level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh' || level === 'max'
       if (activeProvider === 'pi') return level === 'off' || level === 'minimal' || level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh'
@@ -1671,6 +1678,7 @@ export default function MessageView({
     }) ?? []
     if (levels.length > 0) return levels
     if (activeProvider === 'pi') return ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
+    if (activeProvider === 'codex') return ['low', 'medium', 'high']
     return ['low', 'medium', 'high']
   }, [activeProvider, selectedModelInfo])
   const composerDraftKey = useMemo(() => composerDraftStorageKey(session), [session])
@@ -1715,6 +1723,30 @@ export default function MessageView({
       .catch(() => {})
   }, [session?.provider, session?.sessionId])
 
+  // Fetches the live model list + current model from the active provider.
+  // Used both on session change and after each turn — `/model X` slashes
+  // change the SDK's current model and the dropdown should follow.
+  const refreshSessionModels = useCallback(({ preserveSelection }: { preserveSelection: boolean }) => {
+    if (!session) return
+    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/models`, session.provider))
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) return
+        const nextModels = Array.isArray(data.models) ? data.models.filter((model: SessionModelInfo) => normalizeSelectValue(model.value)) : []
+        setAvailableModels(nextModels)
+        const live = normalizeSelectValue(data.currentModel)
+        setSelectedModel((prev) => {
+          if (preserveSelection && prev && nextModels.some((m: SessionModelInfo) => normalizeSelectValue(m.value) === normalizeSelectValue(prev))) {
+            // Keep user's pick if it is still valid; otherwise fall back.
+            if (live && live !== normalizeSelectValue(prev)) return live
+            return prev
+          }
+          return live ?? normalizeSelectValue(nextModels[0]?.value) ?? ''
+        })
+      })
+      .catch(() => {})
+  }, [session])
+
   useEffect(() => {
     if (!session) {
       setAvailableModels([])
@@ -1722,21 +1754,8 @@ export default function MessageView({
       setSelectedEffort('auto')
       return
     }
-
-    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/models`, session.provider))
-      .then(r => r.json())
-      .then(data => {
-        if (data.error) return
-        const nextModels = Array.isArray(data.models) ? data.models.filter((model: SessionModelInfo) => normalizeSelectValue(model.value)) : []
-        setAvailableModels(nextModels)
-        setSelectedModel(
-          normalizeSelectValue(data.currentModel)
-          ?? normalizeSelectValue(nextModels[0]?.value)
-          ?? ''
-        )
-      })
-      .catch(() => {})
-  }, [session?.provider, session?.sessionId])
+    refreshSessionModels({ preserveSelection: false })
+  }, [session?.provider, session?.sessionId, refreshSessionModels])
 
   useEffect(() => {
     if (selectedEffort === 'auto') return
@@ -1967,7 +1986,22 @@ export default function MessageView({
   }, [optimisticUserText, session])
 
   const sendMessage = useCallback(async () => {
-    if (!session || sendInFlightRef.current || awaitingPersistedTurnRef.current) return
+    if (!session) return
+    // Native CLIs (Claude, Codex) accept a follow-up prompt while the current
+    // turn is still streaming — they queue it. Mirror that: if a send fires
+    // while one is in flight, stash the draft and have the post-stream effect
+    // flush it once the current turn lands.
+    if (sendInFlightRef.current || awaitingPersistedTurnRef.current) {
+      const queueText = (textareaRef.current?.value ?? inputTextRef.current).trim()
+      if (!queueText) return
+      setQueuedSend({ text: queueText, attachments })
+      setInputText('')
+      inputTextRef.current = ''
+      textareaRef.current?.value !== undefined && (textareaRef.current!.value = '')
+      setAttachments([])
+      window.requestAnimationFrame(resizeComposer)
+      return
+    }
 
     const text = (textareaRef.current?.value ?? inputTextRef.current).trim()
     if (!text) return
@@ -2025,6 +2059,9 @@ export default function MessageView({
           taskBudgetTokens: taskBudgetTokens ?? undefined,
           isPendingSession: session.isPending === true ? true : undefined,
           cwd: session.cwd ?? undefined,
+          permissionMode: session.provider === 'claude' && selectedPermissionMode !== 'default'
+            ? selectedPermissionMode
+            : undefined,
         }),
         signal: controller.signal,
       })
@@ -2221,6 +2258,9 @@ export default function MessageView({
       setSendState('idle')
       setLiveStatus(null)
       setAttachments([])
+      // Pick up any model/effort the user invoked via a slash command (e.g.
+      // `/model claude-sonnet-4-6`) so the composer chip mirrors the SDK.
+      refreshSessionModels({ preserveSelection: true })
       if (session.provider === 'claude') {
         setLiveThreadedMessages((prev) => prev.length > 0
           ? prev
@@ -2262,7 +2302,29 @@ export default function MessageView({
       abortControllerRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, messages, onFork, resizeComposer, resumeFromMessageId, selectedEffort, selectedModel, session])
+  }, [attachments, messages, onFork, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+
+  // Flush queued sends once the active turn finishes. Restores the queued
+  // text into the composer so sendMessage picks it up and fires naturally.
+  useEffect(() => {
+    if (!queuedSend) return
+    if (sendInFlightRef.current || awaitingPersistedTurnRef.current) return
+    if (sendState === 'sending' || awaitingPersistedTurn) return
+    const next = queuedSend
+    setQueuedSend(null)
+    setInputText(next.text)
+    inputTextRef.current = next.text
+    setAttachments(next.attachments)
+    window.requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (ta) {
+        ta.value = next.text
+        ta.setSelectionRange(next.text.length, next.text.length)
+      }
+      resizeComposer()
+      void sendMessage()
+    })
+  }, [awaitingPersistedTurn, queuedSend, resizeComposer, sendMessage, sendState])
 
   const updateComposerHints = useCallback((text: string, cursor: number) => {
     const mention = detectMentionAtCursor(text, cursor)
@@ -2305,9 +2367,10 @@ export default function MessageView({
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (controller.signal.aborted || !data || !Array.isArray(data.commands)) return
-        setLiveSlashCommands(data.commands.map((entry: { command: string; description: string }) => ({
+        setLiveSlashCommands(data.commands.map((entry: { command: string; description: string; argumentHint?: string }) => ({
           command: entry.command,
           description: entry.description ?? '',
+          argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
         })))
       })
       .catch(() => { /* ignore */ })
@@ -2981,6 +3044,8 @@ export default function MessageView({
     : composerExample
   const composerStatus = sendState === 'error'
     ? 'Failed'
+    : queuedSend && (sendState === 'sending' || awaitingPersistedTurn)
+    ? 'Queued · sends after current turn'
     : sendState === 'sending'
     ? 'Sending...'
     : awaitingPersistedTurn
@@ -2988,6 +3053,8 @@ export default function MessageView({
     : 'Ready'
   const composerStatusColor = sendState === 'error'
     ? 'var(--red, #f87171)'
+    : queuedSend
+    ? 'var(--amber, #eaaa40)'
     : sendState === 'sending' || awaitingPersistedTurn
     ? 'var(--cyan)'
     : 'var(--text-3)'
@@ -5012,6 +5079,29 @@ export default function MessageView({
                 </label>
               )}
               {session?.provider === 'claude' && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 160px', minWidth: 140 }}>
+                  <Label style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    color: 'var(--text-3)',
+                    letterSpacing: '0.05em',
+                  }}>
+                    MODE
+                  </Label>
+                  <NativeSelect
+                    value={selectedPermissionMode}
+                    onChange={(event) => setSelectedPermissionMode(event.target.value as typeof selectedPermissionMode)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                    title="Claude permission mode — mirrors the CLI's /permissions"
+                  >
+                    <NativeSelectOption value="default">DEFAULT</NativeSelectOption>
+                    <NativeSelectOption value="acceptEdits">ACCEPT EDITS</NativeSelectOption>
+                    <NativeSelectOption value="plan">PLAN</NativeSelectOption>
+                    <NativeSelectOption value="bypassPermissions">BYPASS</NativeSelectOption>
+                  </NativeSelect>
+                </label>
+              )}
+              {session?.provider === 'claude' && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 140px', minWidth: 120 }}>
                   <Label style={{
                     fontFamily: "'IBM Plex Mono', monospace",
@@ -5385,6 +5475,11 @@ export default function MessageView({
                         }}
                       >
                         <span style={{ fontWeight: active ? 600 : 400 }}>{entry.command}</span>
+                        {entry.argumentHint && (
+                          <span style={{ marginLeft: 6, color: 'var(--text-3)', fontSize: 10, fontStyle: 'italic', opacity: 0.85 }}>
+                            {entry.argumentHint}
+                          </span>
+                        )}
                         <span style={{ marginLeft: 8, color: 'var(--text-3)', fontSize: 10 }}>{entry.description}</span>
                       </button>
                     )

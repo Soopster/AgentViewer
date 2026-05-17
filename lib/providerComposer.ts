@@ -91,10 +91,10 @@ const OPENCODE: ProviderComposerConfig = {
   glyph: '❯',
   cssAccentVar: '--amber',
   cssAccentRgb: '234,170,64',
-  placeholderIdle: 'Ask anything — opencode will plan, edit, and run with your tools.',
+  placeholderIdle: 'Ask anything — opencode will plan, edit, and run. `!cmd` runs shell.',
   placeholderStreaming: 'Draft your next prompt for opencode…',
   placeholderNoSession: 'Pick an opencode session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · @ files · ↑↓ history',
+  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · @ files · ↑↓ history',
   footerHintSending: 'Esc cancel · streaming…',
   sendVerb: 'Send',
   examples: [

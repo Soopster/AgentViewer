@@ -37,6 +37,7 @@ import {
   readTuiSessionDiagnostics,
   readTuiSessionReaderState,
   readTuiSessions,
+  readTuiSessionMetadata,
   readTuiSidebarSort,
   readTuiSidebarWidth,
   readTuiShowToolCalls,
@@ -1318,6 +1319,9 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
   { id: 'tools',      label: 'Toggle tool calls',      key: 'X',  category: 'View'       },
+  { id: 'effort',     label: 'Cycle reasoning effort', key: 'E',  category: 'Session'    },
+  { id: 'mode',       label: 'Cycle permission mode',  key: 'M',  category: 'Session'    },
+  { id: 'model',      label: 'Pick model',             key: '⌥M', category: 'Session'    },
   // App
   { id: 'refresh',    label: 'Refresh sessions',       key: 'r',  category: 'App'        },
   { id: 'quit',       label: 'Quit',                   key: 'q',  category: 'App'        },
@@ -1747,10 +1751,24 @@ export default function OpenTuiApp() {
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
   const [composerError, setComposerError] = useState<string | null>(null)
   const [composerLiveText, setComposerLiveText] = useState('')
+  // Queued prompt waiting for the active turn to finish (CLI-style queue).
+  const [queuedComposerSend, setQueuedComposerSend] = useState<string | null>(null)
   const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
   const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | null>(null)
   const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
   const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
+  // Provider-agnostic send knobs. Forwarded into the streamTuiSessionTurn
+  // body so the TUI composer matches the web composer's send-time controls
+  // (model / reasoning effort / Claude permission mode). Defaults of `auto`
+  // / `default` mean "let the SDK keep whatever the session was using".
+  const [tuiEffort, setTuiEffort] = useState<'auto' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>('auto')
+  const [tuiPermissionMode, setTuiPermissionMode] = useState<'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'>('default')
+  const [tuiModelOverride, setTuiModelOverride] = useState<Record<string, string>>({})
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [modelPickerOptions, setModelPickerOptions] = useState<Array<{ name: string; value: string; description: string }>>([])
+  const [modelPickerIndex, setModelPickerIndex] = useState(0)
+  const [modelPickerLoading, setModelPickerLoading] = useState(false)
+  const [modelPickerError, setModelPickerError] = useState<string | null>(null)
   const [sentHistory, setSentHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [draftBeforeHistory, setDraftBeforeHistory] = useState('')
@@ -2137,6 +2155,19 @@ export default function OpenTuiApp() {
   const composerLineCount = composerDraft.length === 0 ? 1 : composerDraft.split('\n').length
   // composerLineCount text rows + 1 status row + 2 border rows
   const composerHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, composerLineCount + 3))
+  // One-line chip summarising send-body knobs that are NOT the default. Skipped
+  // when everything is at default so the footer stays uncluttered.
+  const composerKnobsChip = useMemo(() => {
+    const parts: string[] = []
+    const targetKey = composerTargetSession ? sessionKey(composerTargetSession) : null
+    const modelOverride = targetKey ? tuiModelOverride[targetKey] : undefined
+    if (modelOverride) parts.push(`model:${modelOverride.split('/').pop()}`)
+    if (tuiEffort !== 'auto') parts.push(`effort:${tuiEffort}`)
+    if (composerTargetSession?.provider === 'claude' && tuiPermissionMode !== 'default') {
+      parts.push(`mode:${tuiPermissionMode}`)
+    }
+    return parts.length > 0 ? `· ${parts.join(' · ')}` : ''
+  }, [composerTargetSession, tuiEffort, tuiModelOverride, tuiPermissionMode])
   const composerFirstLine = composerDraft.split('\n')[0] ?? ''
   const composerSlashOpen = composerFirstLine.startsWith('/') && !composerSlashDismissed
   const composerSlashCommands: SlashCommandSuggestion[] = useMemo(() => {
@@ -2163,7 +2194,11 @@ export default function OpenTuiApp() {
       try {
         const live = await readViewSessionSlashCommands(selectedSession.sessionId, selectedSession.provider)
         if (cancelled) return
-        setComposerLiveSlashCommands(live.map((entry) => ({ command: entry.command, description: entry.description })))
+        setComposerLiveSlashCommands(live.map((entry) => ({
+          command: entry.command,
+          description: entry.description,
+          argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
+        })))
       } catch {
         if (!cancelled) setComposerLiveSlashCommands([])
       }
@@ -2990,6 +3025,41 @@ export default function OpenTuiApp() {
     setThemeMenuOpen(false)
   }, [])
 
+  // Pop a small select overlay listing the active session's available models.
+  // Reuses readTuiSessionMetadata which already returns the SDK-reported list
+  // for any provider — keeps this one switch out of the TUI layer.
+  const openModelPicker = useCallback(async () => {
+    const target = selectedSession ?? composerTargetSession
+    if (!target) {
+      setNotice({ tone: 'info', text: 'Pick a session first' })
+      return
+    }
+    setModelPickerError(null)
+    setModelPickerLoading(true)
+    setModelPickerOpen(true)
+    try {
+      const meta = await readTuiSessionMetadata(target)
+      const options = meta.models
+        .filter((m): m is { value: string; displayName?: string; description?: string } & typeof m =>
+          typeof m.value === 'string' && m.value.length > 0)
+        .map((m) => ({ name: m.displayName || m.value, value: m.value, description: m.description ?? '' }))
+      if (options.length === 0) {
+        setModelPickerError('No models reported by provider')
+        setModelPickerOptions([])
+        setModelPickerIndex(0)
+        return
+      }
+      const currentValue = tuiModelOverride[sessionKey(target)] ?? meta.currentModel ?? options[0]!.value
+      const idx = Math.max(0, options.findIndex((o) => o.value === currentValue))
+      setModelPickerOptions(options)
+      setModelPickerIndex(idx >= 0 ? idx : 0)
+    } catch (err) {
+      setModelPickerError(err instanceof Error ? err.message : 'Failed to load models')
+    } finally {
+      setModelPickerLoading(false)
+    }
+  }, [composerTargetSession, selectedSession, tuiModelOverride])
+
   const closeCommandPalette = useCallback(() => {
     setCommandPaletteOpen(false)
     setCommandPaletteQuery('')
@@ -3203,9 +3273,16 @@ export default function OpenTuiApp() {
   }, [renameSessionKey, selectedSession, provider, refreshSessions])
 
   const sendComposerMessage = useCallback(async () => {
-    if (composerSendState === 'sending') return
     const trimmed = composerDraft.trim()
     if (!trimmed || !composerTargetSession) return
+    // Native CLIs queue a follow-up prompt while the active turn streams.
+    // Mirror that here: when sending, stash this draft and flush it after.
+    if (composerSendState === 'sending') {
+      setQueuedComposerSend(trimmed)
+      composerTextareaRef.current?.setText('')
+      setComposerDraft('')
+      return
+    }
 
     const targetSession = composerTargetSession
     const controller = new AbortController()
@@ -3228,6 +3305,7 @@ export default function OpenTuiApp() {
     let replyAccumulator = ''
 
     try {
+      const overrideModel = tuiModelOverride[sessionKey(targetSession)]
       const res = await streamTuiSessionTurn(
         targetSession,
         {
@@ -3236,6 +3314,11 @@ export default function OpenTuiApp() {
           taskBudgetTokens: taskBudgetTokens ?? undefined,
           isPendingSession: targetSession.isPending === true ? true : undefined,
           cwd: targetSession.cwd ?? undefined,
+          model: overrideModel || undefined,
+          effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+          permissionMode: targetSession.provider === 'claude' && tuiPermissionMode !== 'default'
+            ? tuiPermissionMode
+            : undefined,
         },
         controller.signal,
       )
@@ -3395,7 +3478,21 @@ export default function OpenTuiApp() {
     clearSessionRunning,
     renderer,
     taskBudgetTokens,
+    tuiEffort,
+    tuiPermissionMode,
+    tuiModelOverride,
   ])
+
+  // Flush queued prompt once the active turn lands (CLI-style queueing).
+  useEffect(() => {
+    if (!queuedComposerSend) return
+    if (composerSendState === 'sending') return
+    const next = queuedComposerSend
+    setQueuedComposerSend(null)
+    composerTextareaRef.current?.setText(next)
+    setComposerDraft(next)
+    void sendComposerMessage()
+  }, [composerSendState, queuedComposerSend, sendComposerMessage])
 
   useEffect(() => {
     let cancelled = false
@@ -3850,9 +3947,11 @@ export default function OpenTuiApp() {
 
   const composerStatusMessage = composerError
     ? composerError
-    : composerSendState === 'sending'
-      ? composerLiveText || 'Waiting for saved response…'
-      : null
+    : queuedComposerSend && composerSendState === 'sending'
+      ? `Queued · sends after current turn: "${queuedComposerSend.slice(0, 60)}${queuedComposerSend.length > 60 ? '…' : ''}"`
+      : composerSendState === 'sending'
+        ? composerLiveText || 'Waiting for saved response…'
+        : null
   const composerTargetMessage = composerAutoTargetingRunning && composerTargetSession
     ? `Auto-targeting running ${String(composerTargetSession.provider ?? 'claude').toUpperCase()} session ${composerTargetSession.sessionId.slice(-8)}`
     : null
@@ -3945,6 +4044,26 @@ export default function OpenTuiApp() {
           void writeTuiShowToolCalls(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
           return next
         })
+        break
+      }
+      case 'effort': {
+        const order = ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+        setTuiEffort((current) => {
+          const idx = order.indexOf(current)
+          return order[(idx + 1) % order.length]!
+        })
+        break
+      }
+      case 'mode': {
+        const order = ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const
+        setTuiPermissionMode((current) => {
+          const idx = order.indexOf(current)
+          return order[(idx + 1) % order.length]!
+        })
+        break
+      }
+      case 'model': {
+        void openModelPicker()
         break
       }
       case 'view': {
@@ -4159,6 +4278,20 @@ export default function OpenTuiApp() {
         handled(() => {
           closeProviderMenu()
         })
+        return
+      }
+      if (key.name === 'q' || isCtrl('c')) {
+        handled(() => {
+          renderer.destroy()
+          process.exit(0)
+        })
+      }
+      return
+    }
+
+    if (modelPickerOpen) {
+      if (key.name === 'escape') {
+        handled(() => setModelPickerOpen(false))
         return
       }
       if (key.name === 'q' || isCtrl('c')) {
@@ -5161,6 +5294,60 @@ export default function OpenTuiApp() {
           </box>
         ) : null}
 
+        {modelPickerOpen ? (
+          <box
+            position="absolute"
+            top={focusMode ? 1 : 3}
+            right={2}
+            width={48}
+            height={16}
+            border
+            borderStyle="single"
+            borderColor={theme.border2}
+            backgroundColor={theme.surface}
+            zIndex={20}
+            flexDirection="column"
+          >
+            <box paddingX={1} paddingTop={1}>
+              <text fg={theme.text}>MODELS</text>
+            </box>
+            <box flexGrow={1} paddingX={1} paddingBottom={1}>
+              {modelPickerLoading ? (
+                <text fg={theme.dim} wrapMode="none">Loading…</text>
+              ) : modelPickerError ? (
+                <text fg={theme.red} wrapMode="none">{modelPickerError}</text>
+              ) : modelPickerOptions.length === 0 ? (
+                <text fg={theme.dim} wrapMode="none">No models available</text>
+              ) : (
+                <select
+                  style={{ height: 12 }}
+                  focused
+                  options={modelPickerOptions}
+                  selectedIndex={modelPickerIndex}
+                  selectedBackgroundColor={theme.surface3}
+                  selectedTextColor={theme.text}
+                  textColor={theme.muted}
+                  descriptionColor={theme.dim}
+                  selectedDescriptionColor={theme.cyan}
+                  backgroundColor={theme.surface}
+                  focusedBackgroundColor={theme.surface}
+                  showScrollIndicator={false}
+                  itemSpacing={0}
+                  onChange={(index) => setModelPickerIndex(index)}
+                  onSelect={(_, option) => {
+                    const target = selectedSession ?? composerTargetSession
+                    const value = typeof option?.value === 'string' ? option.value : ''
+                    if (target && value) {
+                      setTuiModelOverride((prev) => ({ ...prev, [sessionKey(target)]: value }))
+                    }
+                    setModelPickerOpen(false)
+                  }}
+                />
+              )}
+            </box>
+          </box>
+        ) : null}
+
         {themeMenuOpen ? (() => {
           type ThemeRow =
             | { kind: 'header'; label: string }
@@ -5470,7 +5657,12 @@ export default function OpenTuiApp() {
 
       {composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention ? (() => {
         const rowWidth = Math.max(width - 4, 20)
-        const commandWidth = Math.max(Math.min(22, Math.floor(rowWidth * 0.3)), 8)
+        // Allow extra width when any visible entry carries an argumentHint so
+        // the inline `/cmd [arg]` form has room to render without clipping.
+        const hasHint = composerSlashCommands.some((entry) => Boolean(entry.argumentHint))
+        const commandRatio = hasHint ? 0.45 : 0.3
+        const commandCap = hasHint ? 36 : 22
+        const commandWidth = Math.max(Math.min(commandCap, Math.floor(rowWidth * commandRatio)), 8)
         const descWidth = Math.max(rowWidth - commandWidth - 4, 4)
         const total = composerSlashCommands.length
         const start = Math.max(0, Math.min(composerSlashIndex - Math.floor((composerSlashVisibleCount - 1) / 2), total - composerSlashVisibleCount))
@@ -5494,10 +5686,13 @@ export default function OpenTuiApp() {
             {composerSlashCommands.slice(start, end).map((entry, offset) => {
               const index = start + offset
               const active = index === composerSlashIndex
+              const commandText = entry.argumentHint
+                ? fitText(`${entry.command} ${entry.argumentHint}`, commandWidth)
+                : fitText(entry.command, commandWidth)
               return (
                 <box key={entry.command} flexDirection="row" height={1} width={rowWidth}>
                   <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
-                  <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(entry.command, commandWidth)}</text>
+                  <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{commandText}</text>
                   <text fg={theme.dim} wrapMode="none">  </text>
                   <text fg={theme.dim} wrapMode="none">{fitText(entry.description, descWidth)}</text>
                 </box>
@@ -5562,8 +5757,8 @@ export default function OpenTuiApp() {
             {composerSlashHint
               ? composerSlashHint
               : composerDraft.length === 0
-              ? `${composerConfig.glyph} ${composerConfig.label}`
-              : `${composerLineCount} line${composerLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars`}
+              ? `${composerConfig.glyph} ${composerConfig.label}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+              : `${composerLineCount} line${composerLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`}
           </text>
           <text fg={composerSendState === 'sending' ? theme.dim : composerAccentColor}>
             {composerSendState === 'sending'
