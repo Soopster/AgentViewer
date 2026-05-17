@@ -1764,6 +1764,7 @@ export default function OpenTuiApp() {
   const [composerMentionResults, setComposerMentionResults] = useState<Array<{ path: string; basename: string }>>([])
   const [composerMentionIndex, setComposerMentionIndex] = useState(0)
   const [composerMentionDismissedStart, setComposerMentionDismissedStart] = useState<number | null>(null)
+  const [composerMentionAttachments, setComposerMentionAttachments] = useState<SendAttachment[]>([])
   const [composerSlashIndex, setComposerSlashIndex] = useState(0)
   const [composerSlashDismissed, setComposerSlashDismissed] = useState(false)
   const [composerLiveSlashCommands, setComposerLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
@@ -1771,7 +1772,7 @@ export default function OpenTuiApp() {
   const [composerError, setComposerError] = useState<string | null>(null)
   const [composerLiveText, setComposerLiveText] = useState('')
   // Queued prompt waiting for the active turn to finish (CLI-style queue).
-  const [queuedComposerSend, setQueuedComposerSend] = useState<string | null>(null)
+  const [queuedComposerSend, setQueuedComposerSend] = useState<{ text: string; attachments: SendAttachment[] } | null>(null)
   const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
   const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | null>(null)
   const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
@@ -2294,6 +2295,18 @@ export default function OpenTuiApp() {
     renderable.setText(next)
     renderable.cursorOffset = before.length + insertion.length
     setComposerDraft(next)
+    setComposerMentionAttachments((prev) => {
+      if (prev.some((attachment) => attachment.path === entry.path)) return prev
+      return [
+        ...prev,
+        {
+          id: `mention-${entry.path}`,
+          type: 'mention',
+          path: entry.path,
+          displayName: entry.basename,
+        },
+      ]
+    })
     setComposerMention(null)
     setComposerMentionResults([])
   }, [composerMention])
@@ -3291,15 +3304,17 @@ export default function OpenTuiApp() {
     }
   }, [renameSessionKey, selectedSession, provider, refreshSessions])
 
-  const sendComposerMessage = useCallback(async (draftOverride?: string) => {
+  const sendComposerMessage = useCallback(async (draftOverride?: string, attachmentsOverride?: SendAttachment[]) => {
     const trimmed = (draftOverride ?? composerDraft).trim()
     if (!trimmed || !composerTargetSession) return
+    const sendAttachments = attachmentsOverride ?? activeMentionAttachments(trimmed, composerMentionAttachments)
     // Native CLIs queue a follow-up prompt while the active turn streams.
     // Mirror that here: when sending, stash this draft and flush it after.
     if (composerSendState === 'sending') {
-      setQueuedComposerSend(trimmed)
+      setQueuedComposerSend({ text: trimmed, attachments: sendAttachments })
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
+      setComposerMentionAttachments([])
       return
     }
 
@@ -3333,6 +3348,7 @@ export default function OpenTuiApp() {
           taskBudgetTokens: taskBudgetTokens ?? undefined,
           isPendingSession: targetSession.isPending === true ? true : undefined,
           cwd: targetSession.cwd ?? undefined,
+          attachments: sendAttachments.length > 0 ? sendAttachments : undefined,
           model: overrideModel || undefined,
           effort: tuiEffort === 'auto' ? undefined : tuiEffort,
           permissionMode: targetSession.provider === 'claude' && tuiPermissionMode !== 'default'
@@ -3447,6 +3463,7 @@ export default function OpenTuiApp() {
       setComposerMention(null)
       setComposerMentionResults([])
       setComposerMentionDismissedStart(null)
+      setComposerMentionAttachments([])
       setComposerSlashIndex(0)
       setComposerSlashDismissed(false)
       setComposerSendState('idle')
@@ -3500,6 +3517,7 @@ export default function OpenTuiApp() {
     tuiEffort,
     tuiPermissionMode,
     tuiModelOverride,
+    composerMentionAttachments,
   ])
 
   // Flush queued prompt once the active turn lands (CLI-style queueing).
@@ -3508,9 +3526,10 @@ export default function OpenTuiApp() {
     if (composerSendState === 'sending') return
     const next = queuedComposerSend
     setQueuedComposerSend(null)
-    composerTextareaRef.current?.setText(next)
-    setComposerDraft(next)
-    void sendComposerMessage(next)
+    composerTextareaRef.current?.setText(next.text)
+    setComposerDraft(next.text)
+    setComposerMentionAttachments(next.attachments)
+    void sendComposerMessage(next.text, next.attachments)
   }, [composerSendState, queuedComposerSend, sendComposerMessage])
 
   useEffect(() => {
@@ -3967,7 +3986,7 @@ export default function OpenTuiApp() {
   const composerStatusMessage = composerError
     ? composerError
     : queuedComposerSend && composerSendState === 'sending'
-      ? `Queued · sends after current turn: "${queuedComposerSend.slice(0, 60)}${queuedComposerSend.length > 60 ? '…' : ''}"`
+      ? `Queued · sends after current turn: "${queuedComposerSend.text.slice(0, 60)}${queuedComposerSend.text.length > 60 ? '…' : ''}"`
       : composerSendState === 'sending'
         ? composerLiveText || 'Waiting for saved response…'
         : null
