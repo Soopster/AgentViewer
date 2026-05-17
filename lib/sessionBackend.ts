@@ -534,7 +534,7 @@ function buildCopilotAttachments(attachments: SendAttachment[]): NonNullable<Cop
   const result: NonNullable<CopilotMessageOptions['attachments']> = []
   for (const attachment of attachments) {
     const path = attachmentPath(attachment)
-    if (attachment.type === 'file' || attachment.type === 'image') {
+    if (attachment.type === 'file' || attachment.type === 'image' || attachment.type === 'mention') {
       if (path) result.push({ type: 'file', path, displayName: attachment.displayName })
       continue
     }
@@ -568,11 +568,11 @@ function buildCopilotAttachments(attachments: SendAttachment[]): NonNullable<Cop
 }
 
 function buildOpenCodeParts(userMessage: string, attachments: SendAttachment[]): Array<OpenCodeTextPartInput | OpenCodeFilePartInput> {
-  const text = `${userMessage}${attachmentsAsPromptText(attachments, ['file', 'image', 'blob'])}`.trim()
+  const text = `${userMessage}${attachmentsAsPromptText(attachments, ['file', 'image', 'blob', 'mention'])}`.trim()
   const parts: Array<OpenCodeTextPartInput | OpenCodeFilePartInput> = [{ type: 'text', text }]
   for (const attachment of attachments) {
     const path = attachmentPath(attachment)
-    if (!path || (attachment.type !== 'file' && attachment.type !== 'image')) continue
+    if (!path || (attachment.type !== 'file' && attachment.type !== 'image' && attachment.type !== 'mention')) continue
     const name = attachmentName(attachment)
     const resolved = isHttpUrl(path) ? path : absoluteAttachmentPath(path)
     const label = `@${name}`
