@@ -4,11 +4,17 @@ import { memo, useDeferredValue, useEffect, useMemo, useState, type CSSPropertie
 import {
   AlertTriangle,
   Bot,
+  ChevronDown,
+  ChevronUp,
   Clock3,
   ExternalLink,
+  Eye,
+  EyeOff,
   Filter,
   Gauge,
   ImageIcon,
+  Maximize2,
+  Minimize2,
   MessageSquareText,
   Network,
   Search,
@@ -118,6 +124,7 @@ type VisualizerStats = {
 type VisualizerFilter = 'all' | 'user' | 'assistant' | 'system' | 'tools' | 'errors' | 'thinking' | 'media'
 type ActiveVisualizerFilter = Exclude<VisualizerFilter, 'all'>
 type VisualizerView = 'rows' | 'graph'
+type GraphDensity = 'comfortable' | 'compact'
 
 type PhaseFocus = {
   label: string
@@ -994,11 +1001,13 @@ function GraphEntry({
   entry,
   total,
   selected,
+  showTools,
   onInspectEntry,
 }: {
   entry: VisualizerEntry
   total: number
   selected: boolean
+  showTools: boolean
   onInspectEntry: (entryId: string) => void
 }) {
   const meta = ROLE_META[entry.role]
@@ -1031,14 +1040,23 @@ function GraphEntry({
           {entry.timeLabel ? ` / ${entry.timeLabel}` : ''}
         </em>
       </button>
-      {entry.toolSummaries.map((tool, index) => (
-        <GraphToolNode
-          key={`${entry.id}:tool:${tool.name}:${index}`}
-          tool={tool}
-          entryId={entry.id}
-          index={index}
-        />
-      ))}
+      {showTools ? (
+        entry.toolSummaries.map((tool, index) => (
+          <GraphToolNode
+            key={`${entry.id}:tool:${tool.name}:${index}`}
+            tool={tool}
+            entryId={entry.id}
+            index={index}
+          />
+        ))
+      ) : entry.toolCount > 0 ? (
+        <div className="av-session-viz-graph-tool-summary">
+          <Wrench aria-hidden="true" />
+          <span>{entry.toolCount} tools</span>
+          {entry.errorCount > 0 && <b className="av-error">{entry.errorCount} errors</b>}
+          {entry.pendingToolCount > 0 && <b className="av-pending">{entry.pendingToolCount} pending</b>}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -1047,11 +1065,19 @@ function NodeGraphView({
   entries,
   total,
   selectedEntryId,
+  showTools,
+  density,
+  onToggleTools,
+  onToggleDensity,
   onInspectEntry,
 }: {
   entries: VisualizerEntry[]
   total: number
   selectedEntryId: string | null
+  showTools: boolean
+  density: GraphDensity
+  onToggleTools: () => void
+  onToggleDensity: () => void
   onInspectEntry: (entryId: string) => void
 }) {
   if (entries.length === 0) {
@@ -1062,14 +1088,66 @@ function NodeGraphView({
     )
   }
 
+  const selectedIndex = selectedEntryId ? entries.findIndex((entry) => entry.id === selectedEntryId) : -1
+  const selectedEntry = selectedIndex >= 0 ? entries[selectedIndex] : null
+  const visibleToolCount = entries.reduce((count, entry) => count + entry.toolCount, 0)
+  const visibleErrorCount = entries.reduce((count, entry) => count + entry.errorCount + entry.pendingToolCount, 0)
+
   return (
-    <div className="av-session-viz-nodegraph" aria-label="Execution graph">
+    <div className={cn('av-session-viz-nodegraph', density === 'compact' && 'av-compact')} aria-label="Execution graph">
       <div className="av-session-viz-nodegraph-head">
         <span>
           <Network aria-hidden="true" />
           Node flow
         </span>
-        <em>{entries.length} turns</em>
+        <div className="av-session-viz-nodegraph-actions">
+          <button
+            type="button"
+            onClick={onToggleTools}
+            title={showTools ? 'Hide tool nodes' : 'Show tool nodes'}
+          >
+            {showTools ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+            {showTools ? 'Hide tools' : 'Show tools'}
+          </button>
+          <button
+            type="button"
+            onClick={onToggleDensity}
+            title={density === 'compact' ? 'Use comfortable graph spacing' : 'Use compact graph spacing'}
+          >
+            <Minimize2 aria-hidden="true" />
+            {density === 'compact' ? 'Comfort' : 'Compact'}
+          </button>
+          <em>{entries.length} turns / {visibleToolCount} tools</em>
+        </div>
+      </div>
+      <div className="av-session-viz-graph-readout">
+        <span>
+          {selectedEntry
+            ? `Selected turn ${selectedEntry.index + 1} / ${selectedEntry.roleLabel} / ${selectedEntry.toolCount} tools`
+            : `${entries.length} visible turns / ${visibleErrorCount} issues`}
+        </span>
+        <div>
+          <button
+            type="button"
+            disabled={selectedIndex <= 0}
+            onClick={() => {
+              if (selectedIndex > 0) onInspectEntry(entries[selectedIndex - 1]!.id)
+            }}
+          >
+            <ChevronUp aria-hidden="true" />
+            Prev
+          </button>
+          <button
+            type="button"
+            disabled={selectedIndex < 0 || selectedIndex >= entries.length - 1}
+            onClick={() => {
+              if (selectedIndex >= 0 && selectedIndex < entries.length - 1) onInspectEntry(entries[selectedIndex + 1]!.id)
+            }}
+          >
+            <ChevronDown aria-hidden="true" />
+            Next
+          </button>
+        </div>
       </div>
       <div className="av-session-viz-nodechain">
         {entries.map((entry) => (
@@ -1078,6 +1156,7 @@ function NodeGraphView({
             entry={entry}
             total={total}
             selected={selectedEntryId === entry.id}
+            showTools={showTools}
             onInspectEntry={onInspectEntry}
           />
         ))}
@@ -1256,6 +1335,9 @@ function MessageSessionVisualizer({
   const [activePhaseId, setActivePhaseId] = useState<string | null>(null)
   const [activeTool, setActiveTool] = useState<string | null>(null)
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
+  const [graphShowTools, setGraphShowTools] = useState(true)
+  const [graphDensity, setGraphDensity] = useState<GraphDensity>('comfortable')
+  const [timelineMaximized, setTimelineMaximized] = useState(false)
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query)
   const normalizedQuery = deferredQuery.trim().toLowerCase()
@@ -1401,6 +1483,15 @@ function MessageSessionVisualizer({
                 <Network aria-hidden="true" />
                 Graph
               </button>
+              <button
+                type="button"
+                className={cn(timelineMaximized && 'av-active')}
+                onClick={() => setTimelineMaximized((value) => !value)}
+                title={timelineMaximized ? 'Restore side readout' : 'Maximise timeline'}
+              >
+                {timelineMaximized ? <Minimize2 aria-hidden="true" /> : <Maximize2 aria-hidden="true" />}
+                {timelineMaximized ? 'Details' : 'Maximise'}
+              </button>
             </div>
             <div className="av-session-viz-result-count">
               {filteredEntries.length} shown
@@ -1428,36 +1519,42 @@ function MessageSessionVisualizer({
           />
         </div>
       </div>
-      <CardContent className="av-session-viz-content">
-        <div className="av-session-viz-grid">
-          <aside className="av-session-viz-side">
-            <InsightStack stats={stats} />
-            <TurnInspector
-              entry={selectedEntry}
-              total={entries.length}
-              isPinned={isPinnedSelection}
-              onOpenMessage={onSelectMessage}
-              onClearSelection={() => setSelectedEntryId(null)}
-            />
-            <RoleSplit stats={stats} />
-            <ActivitySparkline buckets={stats.activityBuckets} />
-            <ToolMix
-              stats={stats}
-              activeTool={activeTool}
-              onSelectTool={(toolName) => setActiveTool((current) => current === toolName ? null : toolName)}
-            />
-            <HotTurns
-              entries={hotEntries}
-              selectedEntryId={selectedEntryId}
-              onInspectEntry={setSelectedEntryId}
-            />
-          </aside>
+      <CardContent className={cn('av-session-viz-content', timelineMaximized && 'av-maximized')}>
+        <div className={cn('av-session-viz-grid', timelineMaximized && 'av-maximized')}>
+          {!timelineMaximized && (
+            <aside className="av-session-viz-side">
+              <InsightStack stats={stats} />
+              <TurnInspector
+                entry={selectedEntry}
+                total={entries.length}
+                isPinned={isPinnedSelection}
+                onOpenMessage={onSelectMessage}
+                onClearSelection={() => setSelectedEntryId(null)}
+              />
+              <RoleSplit stats={stats} />
+              <ActivitySparkline buckets={stats.activityBuckets} />
+              <ToolMix
+                stats={stats}
+                activeTool={activeTool}
+                onSelectTool={(toolName) => setActiveTool((current) => current === toolName ? null : toolName)}
+              />
+              <HotTurns
+                entries={hotEntries}
+                selectedEntryId={selectedEntryId}
+                onInspectEntry={setSelectedEntryId}
+              />
+            </aside>
+          )}
           <section className={cn('av-session-viz-flow', activeView === 'graph' && 'av-graph-mode')} aria-label="Message flow">
             {activeView === 'graph' ? (
               <NodeGraphView
                 entries={filteredEntries}
                 total={entries.length}
                 selectedEntryId={selectedEntryId}
+                showTools={graphShowTools}
+                density={graphDensity}
+                onToggleTools={() => setGraphShowTools((value) => !value)}
+                onToggleDensity={() => setGraphDensity((value) => value === 'compact' ? 'comfortable' : 'compact')}
                 onInspectEntry={setSelectedEntryId}
               />
             ) : (

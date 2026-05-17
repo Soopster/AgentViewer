@@ -1603,6 +1603,10 @@ body {
   padding: 14px 18px 18px;
 }
 
+.av-session-viz-content.av-maximized {
+  padding: 8px 10px 10px;
+}
+
 .av-session-viz-header-tools {
   padding: 8px 18px 12px;
 }
@@ -1940,6 +1944,15 @@ body {
   height: 100%;
   align-items: start;
   min-height: 0;
+}
+
+.av-session-viz-grid.av-maximized {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.av-session-viz-grid.av-maximized .av-session-viz-flow {
+  min-width: 0;
 }
 
 .av-session-viz-side {
@@ -2450,6 +2463,49 @@ body {
   color: var(--text-3);
 }
 
+.av-session-viz-nodegraph-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.av-session-viz-nodegraph-actions button,
+.av-session-viz-graph-readout button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  border: 1px solid var(--av-graph-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--av-graph-surface-2) 86%, transparent);
+  color: var(--text-2);
+  cursor: pointer;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.av-session-viz-nodegraph-actions button:hover,
+.av-session-viz-graph-readout button:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--cyan) 38%, var(--av-graph-border));
+  background: color-mix(in srgb, var(--cyan) 9%, var(--av-graph-surface-2));
+  color: var(--cyan);
+}
+
+.av-session-viz-nodegraph-actions svg,
+.av-session-viz-graph-readout svg {
+  width: 12px;
+  height: 12px;
+}
+
+.av-session-viz-graph-readout button:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
 .av-session-viz-nodegraph-head span {
   display: inline-flex;
   align-items: center;
@@ -2466,6 +2522,33 @@ body {
 
 .av-session-viz-nodegraph-head em {
   font-style: normal;
+}
+
+.av-session-viz-graph-readout {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--av-graph-border) 58%, transparent);
+  background: color-mix(in srgb, var(--av-graph-surface-2) 62%, transparent);
+  padding: 8px 12px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.av-session-viz-graph-readout > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.av-session-viz-graph-readout > div {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 6px;
 }
 
 .av-session-viz-nodechain {
@@ -2494,6 +2577,34 @@ body {
   justify-items: center;
   gap: 18px;
   margin-bottom: 18px;
+}
+
+.av-session-viz-nodegraph.av-compact .av-session-viz-nodechain {
+  padding-top: 14px;
+  padding-bottom: 28px;
+}
+
+.av-session-viz-nodegraph.av-compact .av-session-viz-graph-unit {
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.av-session-viz-nodegraph.av-compact .av-session-viz-graph-unit:not(:last-child)::after {
+  width: 10px;
+  height: 10px;
+}
+
+.av-session-viz-nodegraph.av-compact .av-session-viz-graph-node {
+  gap: 3px;
+  padding: 8px 10px;
+}
+
+.av-session-viz-nodegraph.av-compact .av-session-viz-graph-node strong {
+  font-size: 13px;
+}
+
+.av-session-viz-nodegraph.av-compact .av-session-viz-graph-node p {
+  display: none;
 }
 
 .av-session-viz-graph-unit:not(:last-child)::after {
@@ -2545,6 +2656,41 @@ button.av-session-viz-graph-node:disabled {
   width: min(320px, 70%);
   min-width: 220px;
   border-width: 2px;
+}
+
+.av-session-viz-graph-tool-summary {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  max-width: min(360px, 76%);
+  border: 1px dashed color-mix(in srgb, var(--green) 42%, var(--av-graph-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--green) 8%, var(--av-graph-surface-2));
+  color: var(--text-2);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  padding: 5px 9px;
+}
+
+.av-session-viz-graph-tool-summary svg {
+  width: 12px;
+  height: 12px;
+  color: var(--green);
+}
+
+.av-session-viz-graph-tool-summary b {
+  font-weight: 700;
+}
+
+.av-session-viz-graph-tool-summary b.av-error {
+  color: var(--red);
+}
+
+.av-session-viz-graph-tool-summary b.av-pending {
+  color: var(--amber);
 }
 
 .av-session-viz-graph-node.av-error {
@@ -2889,6 +3035,17 @@ button.av-session-viz-graph-node:disabled {
 
   .av-session-viz-result-count {
     justify-self: start;
+  }
+
+  .av-session-viz-nodegraph-head,
+  .av-session-viz-graph-readout {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .av-session-viz-nodegraph-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .av-session-viz-side {
