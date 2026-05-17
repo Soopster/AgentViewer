@@ -69,7 +69,7 @@ import {
   transcriptCardsVariantKey,
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import type { ProviderSelection, RunningSessionRef, SendState, Session } from '../../lib/types'
+import type { ProviderSelection, RunningSessionRef, SendAttachment, SendState, Session } from '../../lib/types'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
@@ -319,6 +319,18 @@ function fitText(value: string, width: number): string {
   return `${value.slice(0, width - 1)}…`
 }
 
+function formatModelChipValue(value: string): string {
+  try {
+    const parsed = JSON.parse(value) as { modelID?: unknown; modelId?: unknown; id?: unknown }
+    for (const candidate of [parsed.modelID, parsed.modelId, parsed.id]) {
+      if (typeof candidate === 'string' && candidate.trim()) return candidate
+    }
+  } catch {
+    // Plain provider model id.
+  }
+  return value.split('/').pop() || value
+}
+
 function timeAgo(value?: string | number): string {
   if (value == null) return ''
   const ms = Date.now() - new Date(value).getTime()
@@ -357,6 +369,13 @@ function detectMentionAtCursor(text: string, cursor: number): { start: number; q
   const query = text.slice(i + 1, cursor)
   if (query.length > 60) return null
   return { start: i, query }
+}
+
+function activeMentionAttachments(text: string, attachments: SendAttachment[]): SendAttachment[] {
+  if (attachments.length === 0) return []
+  return attachments.filter((attachment) => (
+    attachment.path && text.includes(`@${attachment.path}`)
+  ))
 }
 // NOTE: OpenTUI's mergeKeyBindings hashes by `name:ctrl:shift:meta:super` —
 // `alt` is NOT part of the key. Listing `{ name: 'return', alt: true, ... }`
@@ -2161,7 +2180,7 @@ export default function OpenTuiApp() {
     const parts: string[] = []
     const targetKey = composerTargetSession ? sessionKey(composerTargetSession) : null
     const modelOverride = targetKey ? tuiModelOverride[targetKey] : undefined
-    if (modelOverride) parts.push(`model:${modelOverride.split('/').pop()}`)
+    if (modelOverride) parts.push(`model:${formatModelChipValue(modelOverride)}`)
     if (tuiEffort !== 'auto') parts.push(`effort:${tuiEffort}`)
     if (composerTargetSession?.provider === 'claude' && tuiPermissionMode !== 'default') {
       parts.push(`mode:${tuiPermissionMode}`)
@@ -3272,8 +3291,8 @@ export default function OpenTuiApp() {
     }
   }, [renameSessionKey, selectedSession, provider, refreshSessions])
 
-  const sendComposerMessage = useCallback(async () => {
-    const trimmed = composerDraft.trim()
+  const sendComposerMessage = useCallback(async (draftOverride?: string) => {
+    const trimmed = (draftOverride ?? composerDraft).trim()
     if (!trimmed || !composerTargetSession) return
     // Native CLIs queue a follow-up prompt while the active turn streams.
     // Mirror that here: when sending, stash this draft and flush it after.
@@ -3491,7 +3510,7 @@ export default function OpenTuiApp() {
     setQueuedComposerSend(null)
     composerTextareaRef.current?.setText(next)
     setComposerDraft(next)
-    void sendComposerMessage()
+    void sendComposerMessage(next)
   }, [composerSendState, queuedComposerSend, sendComposerMessage])
 
   useEffect(() => {

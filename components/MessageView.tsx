@@ -1726,9 +1726,11 @@ export default function MessageView({
   // Fetches the live model list + current model from the active provider.
   // Used both on session change and after each turn — `/model X` slashes
   // change the SDK's current model and the dropdown should follow.
+  const modelSessionId = session?.sessionId
+  const modelSessionProvider = session?.provider
   const refreshSessionModels = useCallback(({ preserveSelection }: { preserveSelection: boolean }) => {
-    if (!session) return
-    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/models`, session.provider))
+    if (!modelSessionId) return
+    fetch(withProviderQuery(`/api/sessions/${modelSessionId}/models`, modelSessionProvider))
       .then(r => r.json())
       .then(data => {
         if (data.error) return
@@ -1745,7 +1747,7 @@ export default function MessageView({
         })
       })
       .catch(() => {})
-  }, [session])
+  }, [modelSessionId, modelSessionProvider])
 
   useEffect(() => {
     if (!session) {

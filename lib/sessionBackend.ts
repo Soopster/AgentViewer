@@ -51,7 +51,7 @@ import type {
   ReasoningEffortLevel,
 } from './types'
 import { createSessionControlQuery } from './sdkControlQuery'
-import { acquireCopilotSession, evictCopilotSession, getCopilotClient, resumeCopilotSession } from './copilotClient'
+import { acquireCopilotSession, evictCopilotSession, getCopilotClient } from './copilotClient'
 import {
   deriveCopilotState,
   mapCopilotDiagnosticsToSections,
@@ -656,6 +656,17 @@ function formatOpenCodeEvent(event: OpenCodeEvent): string {
   return JSON.stringify({ type: 'opencode_event', event })
 }
 
+function parseOpenCodeSlashCommand(message: string): { command: string; arguments: string } | null {
+  if (!message.startsWith('/')) return null
+  const trimmed = message.trim()
+  const match = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(trimmed)
+  if (!match) return null
+  return {
+    command: match[1]!,
+    arguments: match[2]?.trim() ?? '',
+  }
+}
+
 function formatCopilotEvent(event: CopilotSessionEvent): string {
   return JSON.stringify({ type: 'copilot_event', event })
 }
@@ -669,12 +680,8 @@ async function findCopilotSessionMetadata(sessionId: string): Promise<CopilotSes
 }
 
 async function readCopilotSessionEvents(sessionId: string): Promise<CopilotSessionEvent[]> {
-  const session = await resumeCopilotSession(sessionId)
-  try {
-    return await session.getMessages()
-  } finally {
-    await session.disconnect().catch(() => {})
-  }
+  const session = await acquireCopilotSession(sessionId)
+  return session.getMessages()
 }
 
 async function listCopilotSessions({ limit, offset, dir, includeWorktrees }: ListParams): Promise<Session[]> {
@@ -960,19 +967,15 @@ export async function readViewSessionInfo(sessionId: string, providerOverride?: 
     const [metadata, stored, session] = await Promise.all([
       findCopilotSessionMetadata(sessionId),
       getCopilotStoredMetadata(sessionId),
-      resumeCopilotSession(sessionId),
+      acquireCopilotSession(sessionId),
     ])
 
-    try {
-      const [events, currentModel] = await Promise.all([
-        session.getMessages(),
-        session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
-      ])
+    const [events, currentModel] = await Promise.all([
+      session.getMessages(),
+      session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
+    ])
 
-      return mapCopilotSessionToInfo(sessionId, events, stored, metadata, currentModel.modelId)
-    } finally {
-      await session.disconnect().catch(() => {})
-    }
+    return mapCopilotSessionToInfo(sessionId, events, stored, metadata, currentModel.modelId)
   }
   if (provider === 'pi') {
     const [sessions, stored] = await Promise.all([
@@ -1784,6 +1787,9 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
   const bangShell = userMessage.startsWith('!') && attachments.length === 0
     ? userMessage.slice(1).trim()
     : null
+  const slashCommand = attachments.length === 0
+    ? parseOpenCodeSlashCommand(userMessage)
+    : null
   const client = await getOpenCodeClient()
   const encoder = new TextEncoder()
   const abortController = new AbortController()
@@ -1877,6 +1883,17 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
               agent: requestedAgent ?? 'build',
               model: selectedModel ?? undefined,
               command: bangShell,
+            },
+          })
+        } else if (slashCommand) {
+          await client.session.command({
+            ...OPENCODE_OPTIONS,
+            path: { id: targetSessionId },
+            body: {
+              agent: requestedAgent,
+              model: selectedModel?.modelID,
+              command: slashCommand.command,
+              arguments: slashCommand.arguments,
             },
           })
         } else {
@@ -2276,19 +2293,15 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
   }
   if (provider === 'copilot') {
     const client = await getCopilotClient()
-    const session = await resumeCopilotSession(sessionId)
-    try {
-      const [models, currentModel] = await Promise.all([
-        client.listModels(),
-        session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
-      ])
-      return {
-        models: mapCopilotModelsToSessionModels(models),
-        currentModel: currentModel.modelId ?? null,
-        contextUsage: null,
-      }
-    } finally {
-      await session.disconnect().catch(() => {})
+    const session = await acquireCopilotSession(sessionId)
+    const [models, currentModel] = await Promise.all([
+      client.listModels(),
+      session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
+    ])
+    return {
+      models: mapCopilotModelsToSessionModels(models),
+      currentModel: currentModel.modelId ?? null,
+      contextUsage: null,
     }
   }
   if (provider === 'pi') {
@@ -2474,7 +2487,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
     const client = await getCopilotClient()
     const [metadata, session, status, auth] = await Promise.all([
       findCopilotSessionMetadata(sessionId),
-      resumeCopilotSession(sessionId),
+      acquireCopilotSession(sessionId),
       client.getStatus().catch(() => ({ version: 'unknown', protocolVersion: 0 }) as CopilotGetStatusResponse),
       client.getAuthStatus().catch(() => ({
         isAuthenticated: false,
@@ -2482,45 +2495,41 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
       }) as CopilotGetAuthStatusResponse),
     ])
 
-    try {
-      const [events, currentModel, mode, tools, quota] = await Promise.all([
-        session.getMessages(),
-        session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
-        session.rpc.mode.get().catch(() => ({ mode: undefined })),
-        client.rpc.tools.list({ model: undefined }).catch(() => ({ tools: [] as Array<{ name: string; description?: string }> })),
-        client.rpc.account.getQuota().catch(() => ({ quotaSnapshots: {} as Record<string, {
-          entitlementRequests: number
-          usedRequests: number
-          remainingPercentage: number
-          overage: number
-          overageAllowedWithExhaustedQuota: boolean
-          resetDate?: string
-        }> })),
-      ])
+    const [events, currentModel, mode, tools, quota] = await Promise.all([
+      session.getMessages(),
+      session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
+      session.rpc.mode.get().catch(() => ({ mode: undefined })),
+      client.rpc.tools.list({ model: undefined }).catch(() => ({ tools: [] as Array<{ name: string; description?: string }> })),
+      client.rpc.account.getQuota().catch(() => ({ quotaSnapshots: {} as Record<string, {
+        entitlementRequests: number
+        usedRequests: number
+        remainingPercentage: number
+        overage: number
+        overageAllowedWithExhaustedQuota: boolean
+        resetDate?: string
+      }> })),
+    ])
 
-      const quotaItems = Object.entries(quota.quotaSnapshots).map(([name, snapshot]) => {
-        const remaining = Math.round(snapshot.remainingPercentage * 100)
-        const reset = snapshot.resetDate ? ` · resets ${snapshot.resetDate}` : ''
-        return `${name} · ${snapshot.usedRequests}/${snapshot.entitlementRequests} used · ${remaining}% remaining${reset}`
-      })
+    const quotaItems = Object.entries(quota.quotaSnapshots).map(([name, snapshot]) => {
+      const remaining = Math.round(snapshot.remainingPercentage * 100)
+      const reset = snapshot.resetDate ? ` · resets ${snapshot.resetDate}` : ''
+      return `${name} · ${snapshot.usedRequests}/${snapshot.entitlementRequests} used · ${remaining}% remaining${reset}`
+    })
 
-      return {
-        currentModel: currentModel.modelId ?? deriveCopilotState(events, metadata).currentModel ?? null,
-        sections: mapCopilotDiagnosticsToSections({
-          sessionId,
-          status,
-          auth,
-          currentModel: currentModel.modelId ?? null,
-          mode: typeof mode === 'string' ? mode : mode.mode ?? null,
-          tools: tools.tools,
-          quotaItems,
-          metadata,
-          events,
-          workspacePath: session.workspacePath,
-        }),
-      }
-    } finally {
-      await session.disconnect().catch(() => {})
+    return {
+      currentModel: currentModel.modelId ?? deriveCopilotState(events, metadata).currentModel ?? null,
+      sections: mapCopilotDiagnosticsToSections({
+        sessionId,
+        status,
+        auth,
+        currentModel: currentModel.modelId ?? null,
+        mode: typeof mode === 'string' ? mode : mode.mode ?? null,
+        tools: tools.tools,
+        quotaItems,
+        metadata,
+        events,
+        workspacePath: session.workspacePath,
+      }),
     }
   }
   if (provider === 'pi') {
