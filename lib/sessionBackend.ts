@@ -74,6 +74,7 @@ import type {
   CodexModelListResponse,
   CodexMcpServerListResponse,
   CodexNotification,
+  CodexThread,
   CodexThreadForkResponse,
   CodexThreadListResponse,
   CodexThreadReadResponse,
@@ -844,6 +845,26 @@ async function readCodexThread(sessionId: string, includeTurns: boolean) {
   return response.thread
 }
 
+function isCodexMissingRolloutError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return (
+    /no rollout found for thread id/i.test(message) ||
+    /thread .+ is not materialized yet/i.test(message) ||
+    /includeTurns is unavailable before first user message/i.test(message)
+  )
+}
+
+function pendingCodexSessionInfo(sessionId: string, tag: string | null): SessionInfo {
+  return {
+    sessionId,
+    summary: 'New session',
+    lastModified: Date.now(),
+    tag: tag ?? undefined,
+    provider: 'codex',
+    capabilities: getProviderCapabilities('codex'),
+  }
+}
+
 async function resumeCodexThread(sessionId: string): Promise<CodexThreadResumeResponse> {
   const client = getCodexClient()
   return client.request<CodexThreadResumeResponse>('thread/resume', {
@@ -943,12 +964,21 @@ export async function listViewSessions(params: ListParams): Promise<Session[]> {
 export async function readViewSessionInfo(sessionId: string, providerOverride?: AgentProvider): Promise<SessionInfo | null> {
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
-    const [thread, resume, tag] = await Promise.all([
-      readCodexThread(sessionId, false),
-      resumeCodexThread(sessionId),
-      getCodexStoredTag(sessionId),
-    ])
-    return mapCodexThreadToSessionInfo(thread, tag, resume.model)
+    const tag = await getCodexStoredTag(sessionId)
+    let thread: CodexThread | null = null
+    let resume: CodexThreadResumeResponse | null = null
+    try {
+      thread = await readCodexThread(sessionId, false)
+    } catch (err) {
+      if (!isCodexMissingRolloutError(err)) throw err
+    }
+    try {
+      resume = await resumeCodexThread(sessionId)
+    } catch (err) {
+      if (!isCodexMissingRolloutError(err)) throw err
+    }
+    if (!thread) return pendingCodexSessionInfo(sessionId, tag)
+    return mapCodexThreadToSessionInfo(thread, tag, resume?.model ?? null)
   }
   if (provider === 'opencode') {
     const [session, messages, tag] = await Promise.all([
@@ -1191,7 +1221,13 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
 }
 
 async function readCodexMessagesAll(sessionId: string): Promise<SessionMessage[]> {
-  const thread = await readCodexThread(sessionId, true)
+  let thread: CodexThread
+  try {
+    thread = await readCodexThread(sessionId, true)
+  } catch (err) {
+    if (isCodexMissingRolloutError(err)) return []
+    throw err
+  }
   const turns = thread.turns
   const lastTurn = turns.at(-1)
   const lastItem = lastTurn?.items.at(-1)
@@ -2222,7 +2258,7 @@ export async function createNewViewSession({
     if (title && title.trim()) {
       await client.request('thread/name/set', { threadId: newId, name: title.trim() }).catch(() => {})
     }
-    return { sessionId: newId, provider, cwd: response.thread.cwd ?? resolvedCwd, isPending: false }
+    return { sessionId: newId, provider, cwd: response.thread.cwd ?? resolvedCwd, isPending: true }
   }
 
   if (provider === 'opencode') {

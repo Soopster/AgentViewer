@@ -20,6 +20,10 @@ import type {
 import { CODEX_CAPABILITIES } from './provider'
 import { buildThreadedMessages, type ThreadedMessage } from './threading'
 
+function isPendingCodexThread(thread: CodexThread): boolean {
+  return !thread.path && !thread.preview && (thread.turns?.length ?? 0) === 0
+}
+
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -296,6 +300,7 @@ export function mapCodexThreadToSession(thread: CodexThread, tag: string | null)
     createdAt: thread.createdAt * 1000,
     provider: 'codex',
     capabilities: CODEX_CAPABILITIES,
+    isPending: isPendingCodexThread(thread) ? true : undefined,
   }
 }
 

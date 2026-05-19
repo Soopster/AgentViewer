@@ -96,8 +96,9 @@ export type Session = {
   capabilities?: SessionCapabilities
   /**
    * Client-only flag set when the session was just created via /api/sessions/new
-   * and the underlying provider hasn't materialised it yet (Claude). The first
-   * send must carry isPendingSession: true so the backend skips resume.
+   * and the underlying provider has not materialized the transcript yet. The first
+   * send carries isPendingSession so provider backends can skip resume/read paths
+   * that are unavailable before the first user message.
    */
   isPending?: boolean
   [key: string]: unknown

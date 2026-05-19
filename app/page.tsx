@@ -80,6 +80,18 @@ function projectSessionKey(session: Pick<Session, 'sessionId' | 'provider'>): st
   return `${session.provider ?? 'claude'}:${session.sessionId}`
 }
 
+function dedupeSessionsByKey(sessions: Session[]): Session[] {
+  const seen = new Set<string>()
+  const result: Session[] = []
+  for (const session of sessions) {
+    const key = projectSessionKey(session)
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(session)
+  }
+  return result
+}
+
 function sessionsFingerprint(sessions: Session[]): string {
   return sessions.map((s) => `${s.provider ?? 'claude'}:${s.sessionId}:${s.lastModified ?? s.createdAt ?? ''}`).join('|')
 }
@@ -554,10 +566,15 @@ export default function Home() {
     }
     startTransition(() => {
       setOpenTabSessions((prev) => {
-        const alreadyOpen = prev.some(
-          (s) => projectSessionKey(s) === projectSessionKey(session),
-        )
-        return alreadyOpen ? prev : [...prev, session]
+        const key = projectSessionKey(session)
+        const alreadyOpen = prev.some((s) => projectSessionKey(s) === key)
+        if (!alreadyOpen) return [...prev, session]
+        return prev.map((s) => {
+          if (projectSessionKey(s) !== key) return s
+          const merged: Session = { ...s, ...session }
+          if (session.isPending === undefined) delete merged.isPending
+          return merged
+        })
       })
       setSelectedTabKey(projectSessionKey(session))
       setSelectedProject(null)
@@ -687,11 +704,50 @@ export default function Home() {
     })
   }, [])
 
-  // Navigate to a newly forked session
+  // Navigate to a newly forked session, or materialize a provider-created
+  // pending tab after its first streamed session event.
   const handleFork = useCallback((newSessionId: string) => {
     if (!selectedSession?.provider) return
+    if (selectedSession.isPending) {
+      const oldKey = projectSessionKey(selectedSession)
+      const materialized: Session = {
+        ...selectedSession,
+        sessionId: newSessionId,
+        isPending: false,
+        lastModified: Date.now(),
+      }
+      const newKey = projectSessionKey(materialized)
+      setOpenTabSessions((prev) => {
+        const replaced = prev.map((session) =>
+          projectSessionKey(session) === oldKey ? materialized : session
+        )
+        const next = replaced.some((session) => projectSessionKey(session) === newKey)
+          ? replaced
+          : [...replaced, materialized]
+        return dedupeSessionsByKey(next)
+      })
+      setSessions((prev) => prev.map((session) =>
+        projectSessionKey(session) === oldKey || projectSessionKey(session) === newKey
+          ? { ...session, ...materialized }
+          : session
+      ))
+      setSelectedProject((prev) => prev
+        ? {
+            ...prev,
+            sessions: prev.sessions.map((session) =>
+              projectSessionKey(session) === oldKey || projectSessionKey(session) === newKey
+                ? { ...session, ...materialized }
+                : session
+            ),
+          }
+        : prev
+      )
+      setSelectedTabKey(newKey)
+      void selectSession(materialized)
+      return
+    }
     void selectSession({ sessionId: newSessionId, provider: selectedSession.provider } as Session)
-  }, [selectedSession?.provider])
+  }, [selectSession, selectedSession])
 
   const handleDelete = useCallback((sessionId: string, deletedProvider?: AgentProvider) => {
     const sameSession = (session: Session) =>

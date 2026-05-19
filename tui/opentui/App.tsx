@@ -1925,10 +1925,14 @@ export default function OpenTuiApp() {
     return sessions.findIndex((session) => sessionKey(session) === selectedSessionKey)
   }, [selectedSessionKey, sessions])
   // Fall back to openTabSessions when the key doesn't match anything in
-  // `sessions` — that's the case for a freshly created pending Claude session
+  // `sessions` — that's the case for freshly created pending provider sessions
   // (added to openTabSessions immediately, but only appears in `sessions` once
   // the SDK materialises it on first send).
   const selectedSession = useMemo<Session | null>(() => {
+    if (selectedSessionKey) {
+      const fromTab = openTabSessions.find((session) => sessionKey(session) === selectedSessionKey)
+      if (fromTab?.isPending) return fromTab
+    }
     if (selectedIndex >= 0) return sessions[selectedIndex] ?? null
     if (selectedSessionKey) {
       const fromTab = openTabSessions.find((session) => sessionKey(session) === selectedSessionKey)
@@ -2638,7 +2642,7 @@ export default function OpenTuiApp() {
       startTransition(() => {
         setSessions((prev) => sessionsShallowEqual(prev, nextSessions) ? prev : nextSessions)
         setSelectedSessionKey((current) => {
-          // Draft sessions (pending Claude after N, or any session that's
+          // Draft sessions (pending provider sessions after N, or any session that's
           // been opened as a tab but not yet materialised server-side) live
           // in openTabSessions, not `sessions`. If we clobber a draft
           // selection here, pressing N silently lands the user on the first
@@ -3395,6 +3399,7 @@ export default function OpenTuiApp() {
             const updated: Session = { ...targetSession, sessionId: realId, isPending: false }
             const newKey = sessionKey(updated)
             setOpenTabSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? updated : s))
+            setSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? { ...s, sessionId: realId, isPending: false } : s))
             if (selectedSessionKeyRef.current === oldKey) setSelectedSessionKey(newKey)
           }
           return
@@ -3590,16 +3595,17 @@ export default function OpenTuiApp() {
 
   useEffect(() => {
     if (!bootstrapped) return
-    if (!selectedSessionTarget) {
+    if (!selectedSessionTarget || selectedSession?.isPending) {
       setSessionDetail(null)
       setLoadingDetail(false)
+      setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
       return
     }
 
     const cachedDetail = sessionDetailCacheRef.current.get(sessionKey(selectedSessionTarget)) ?? null
     setSessionDetail(cachedDetail)
     void refreshSelectedSessionDetail(selectedSessionTarget, true)
-  }, [bootstrapped, refreshSelectedSessionDetail, selectedSessionIdentity, selectedSessionTarget])
+  }, [bootstrapped, refreshSelectedSessionDetail, selectedSession?.isPending, selectedSessionIdentity, selectedSessionTarget])
 
   useEffect(() => {
     if (selectedSession || sessions.length === 0) return
@@ -3620,7 +3626,7 @@ export default function OpenTuiApp() {
   }, [bootstrapped, loadingSessions, provider, refreshSessions])
 
   useEffect(() => {
-    if (!bootstrapped || !selectedSessionTarget) return undefined
+    if (!bootstrapped || !selectedSessionTarget || selectedSession?.isPending) return undefined
     let active = true
     const interval = setInterval(() => {
       if (!active || providerSwitchRef.current) return
@@ -3636,7 +3642,7 @@ export default function OpenTuiApp() {
       active = false
       clearInterval(interval)
     }
-  }, [bootstrapped, refreshSelectedSessionDetail, selectedSessionIdentity, selectedSessionTarget])
+  }, [bootstrapped, refreshSelectedSessionDetail, selectedSession?.isPending, selectedSessionIdentity, selectedSessionTarget])
 
   useEffect(() => {
     if (!bootstrapped || !tabsEnabled || openTabSessions.length === 0) return undefined
@@ -4825,7 +4831,9 @@ export default function OpenTuiApp() {
             setComposerActive(true)
             setNotice({
               tone: 'info',
-              text: result.isPending ? 'New Claude session ready — first message will create it.' : 'New session created.',
+              text: result.isPending
+                ? `New ${formatProviderLabel(result.provider)} session ready — first message will create it.`
+                : 'New session created.',
             })
           } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to create session')

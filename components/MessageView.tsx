@@ -2097,7 +2097,7 @@ export default function MessageView({
               if (resumeFromMessageId && parsed.sessionId && parsed.sessionId !== session.sessionId) {
                 onFork?.(parsed.sessionId)
                 setSessionActionNotice('Forked a continuation from the selected point.')
-              } else if (session.isPending && parsed.sessionId && parsed.sessionId !== session.sessionId) {
+              } else if (session.isPending && parsed.sessionId) {
                 // Swap to the real SDK session id silently. Real CLI shows no
                 // "new session created" banner — the streaming reply itself
                 // signals that the session is live.
