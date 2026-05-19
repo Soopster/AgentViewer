@@ -33,7 +33,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 import { ChartNetwork, Filter, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
-import MessageItem, { LiveSubagentTextContext, MessageDensityProvider, type MessageDensity } from './MessageItem'
+import MessageItem, { LiveSubagentTextContext, MessageDensityProvider, TaskActiveFormsContext, buildTaskActiveFormsForWeb, type MessageDensity } from './MessageItem'
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import CodeThemeToggle from './CodeThemeToggle'
@@ -3006,6 +3006,7 @@ export default function MessageView({
     () => (showTools ? threadedFull : stripToolCallBlocks(threadedFull)),
     [threadedFull, showTools],
   )
+  const taskActiveForms = useMemo(() => buildTaskActiveFormsForWeb(threaded), [threaded])
   const isProject = !!projectView
   const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
 
@@ -4742,24 +4743,26 @@ export default function MessageView({
             >
               <MessageDensityProvider density={density}>
                 <LiveSubagentTextContext.Provider value={liveSubagentText}>
-                  {(() => {
-                    const lastRowKey = transcriptTimelineRows.at(-1)?.key
-                    return virtualTimeline.visibleRows.map(({ row, top }) => (
-                      <VirtualTimelineRow
-                        key={row.key}
-                        row={row}
-                        top={top}
-                        isLast={row.key === lastRowKey}
-                        onMeasure={handleTimelineRowMeasure}
-                        onLastRowRef={setLastTimelineRow}
-                        onForkFromMessage={handleForkFromMessage}
-                        onToggleResume={toggleResumeFromMessage}
-                        onReusePrompt={handleReusePrompt}
-                        onQuoteMessage={handleQuoteMessage}
-                        onEditFromMessage={handleEditFromMessage}
-                      />
-                    ))
-                  })()}
+                  <TaskActiveFormsContext.Provider value={taskActiveForms}>
+                    {(() => {
+                      const lastRowKey = transcriptTimelineRows.at(-1)?.key
+                      return virtualTimeline.visibleRows.map(({ row, top }) => (
+                        <VirtualTimelineRow
+                          key={row.key}
+                          row={row}
+                          top={top}
+                          isLast={row.key === lastRowKey}
+                          onMeasure={handleTimelineRowMeasure}
+                          onLastRowRef={setLastTimelineRow}
+                          onForkFromMessage={handleForkFromMessage}
+                          onToggleResume={toggleResumeFromMessage}
+                          onReusePrompt={handleReusePrompt}
+                          onQuoteMessage={handleQuoteMessage}
+                          onEditFromMessage={handleEditFromMessage}
+                        />
+                      ))
+                    })()}
+                  </TaskActiveFormsContext.Provider>
                 </LiveSubagentTextContext.Provider>
               </MessageDensityProvider>
             </div>

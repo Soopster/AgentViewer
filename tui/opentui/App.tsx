@@ -11,6 +11,7 @@ import {
   formatProviderLabel,
   formatSessionProject,
   formatSessionTitle,
+  buildTaskActiveForms,
   formatTranscriptCard,
   type TuiTranscriptCard,
   type TuiTranscriptCodeBlock,
@@ -2033,7 +2034,8 @@ export default function OpenTuiApp() {
     const filtered = showToolCalls
       ? sessionDetail.threadedMessages
       : stripToolCallBlocks(sessionDetail.threadedMessages)
-    return filtered.map((msg) => formatTranscriptCard(msg, density))
+    const activeForms = buildTaskActiveForms(filtered)
+    return filtered.map((msg) => formatTranscriptCard(msg, density, activeForms))
   }, [density, sessionDetail, selectedSessionTarget, showToolCalls])
 
   // (Auto-open of the composer on a pending session was removed: with

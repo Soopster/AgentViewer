@@ -9,8 +9,11 @@ import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock,
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
 import type {
   TaskCreateInput,
+  TaskCreateOutput,
   TaskGetInput,
+  TaskGetOutput,
   TaskUpdateInput,
+  TaskUpdateOutput,
   TaskListOutput,
 } from '@anthropic-ai/claude-agent-sdk/sdk-tools'
 import { getAssistantLabel } from '@/lib/provider'
@@ -1922,24 +1925,50 @@ function TaskCard({ thread }: { thread: ToolThread }) {
   const c     = 'var(--amber)'
   const input = toolUse.input as TaskInput
   const raw = result ? resultToString(result.content) : ''
+  const isError = result?.is_error === true
+  const activeForms = use(TaskActiveFormsContext)
+
+  const parsed = useMemo<unknown>(() => {
+    if (!raw) return null
+    try { return JSON.parse(raw) } catch { return null }
+  }, [raw])
 
   let tasks: TaskRecord[] | null = null
-  if (name === 'TaskList' && raw) {
-    try {
-      const p = JSON.parse(raw)
-      if (Array.isArray(p)) tasks = p as TaskRecord[]
-      else if (p && typeof p === 'object' && Array.isArray((p as TaskListOutput).tasks)) {
-        tasks = (p as TaskListOutput).tasks
-      }
-    } catch { /* not JSON */ }
+  if (name === 'TaskList' && parsed) {
+    if (Array.isArray(parsed)) tasks = parsed as TaskRecord[]
+    else if (typeof parsed === 'object' && Array.isArray((parsed as TaskListOutput).tasks)) {
+      tasks = (parsed as TaskListOutput).tasks
+    }
   }
+
+  const createdId = name === 'TaskCreate' && parsed && typeof parsed === 'object'
+    ? (parsed as TaskCreateOutput).task?.id ?? null
+    : null
+  const gotTask = name === 'TaskGet' && parsed && typeof parsed === 'object'
+    ? ((parsed as TaskGetOutput).task ?? null)
+    : null
+  const updateOut = (name === 'TaskUpdate' && parsed && typeof parsed === 'object'
+    ? (parsed as TaskUpdateOutput)
+    : null)
+
+  // TaskStop SDK input field is `task_id` (snake) for the background-process
+  // tool; older agents used `taskId`. Accept either.
+  const stopId = name === 'TaskStop'
+    ? (input.taskId ?? (toolUse.input as { task_id?: string }).task_id ?? '')
+    : ''
+  const taskUpdateInput = input as Partial<TaskUpdateInput>
+  const addBlocks = name === 'TaskUpdate' && Array.isArray(taskUpdateInput.addBlocks)
+    ? taskUpdateInput.addBlocks : []
+  const addBlockedBy = name === 'TaskUpdate' && Array.isArray(taskUpdateInput.addBlockedBy)
+    ? taskUpdateInput.addBlockedBy : []
+  const statusChange = updateOut?.statusChange ?? null
 
   const headerContent = (
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
+        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', flexWrap: 'wrap',
         background: `linear-gradient(to right, rgba(245,158,11,${hovered ? '0.14' : '0.08'}) 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
         transition: 'background 0.15s ease',
       }}
@@ -1948,25 +1977,55 @@ function TaskCard({ thread }: { thread: ToolThread }) {
         TASK
       </span>
       {name === 'TaskCreate' && (
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {input.subject ?? ''}
-        </span>
+        <>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+            {input.subject ?? ''}
+          </span>
+          {createdId && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
+              #{createdId}
+            </span>
+          )}
+        </>
       )}
       {name === 'TaskList' && (
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', fontSize: 11, flex: 1 }}>
           {tasks !== null ? `${tasks.length} task${tasks.length !== 1 ? 's' : ''}` : 'list'}
         </span>
       )}
-      {(name === 'TaskGet' || name === 'TaskUpdate' || name === 'TaskStop') && (
+      {(name === 'TaskGet' || name === 'TaskUpdate') && (
         <>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flexShrink: 0 }}>
             #{input.taskId ?? ''}
           </span>
-          {name === 'TaskUpdate' && input.status && (
+          {name === 'TaskUpdate' && statusChange && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: TASK_COLOR[statusChange.to] ?? 'var(--text-3)', background: 'var(--surface-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
+              {statusChange.from} → {statusChange.to}
+            </span>
+          )}
+          {name === 'TaskUpdate' && !statusChange && input.status && (
             <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: TASK_COLOR[input.status] ?? 'var(--text-3)', background: 'var(--surface-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
               {input.status}
             </span>
           )}
+          {name === 'TaskUpdate' && addBlockedBy.length > 0 && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', background: 'var(--surface-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
+              +blocked by {addBlockedBy.map((id) => `#${id}`).join(', ')}
+            </span>
+          )}
+          {name === 'TaskUpdate' && addBlocks.length > 0 && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', background: 'var(--surface-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
+              +blocks {addBlocks.map((id) => `#${id}`).join(', ')}
+            </span>
+          )}
+          <span style={{ flex: 1 }} />
+        </>
+      )}
+      {name === 'TaskStop' && (
+        <>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text)', fontSize: 13, flexShrink: 0 }}>
+            #{stopId}
+          </span>
           <span style={{ flex: 1 }} />
         </>
       )}
@@ -1981,8 +2040,90 @@ function TaskCard({ thread }: { thread: ToolThread }) {
     </div>
   )
 
+  const bodyContent = (() => {
+    if (name === 'TaskCreate') {
+      const description = (input.description ?? '').trim()
+      const activeForm = (input.activeForm ?? '').trim()
+      if (!description && !activeForm) return null
+      return (
+        <div style={{ padding: '8px 14px', display: 'flex', flexDirection: 'column', gap: 4, background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
+          {description && (
+            <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.45 }}>
+              {description}
+            </div>
+          )}
+          {activeForm && (
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+              active: {activeForm}
+            </div>
+          )}
+        </div>
+      )
+    }
+    if (name === 'TaskGet' && gotTask) {
+      const description = (gotTask.description ?? '').trim()
+      const blockedBy = Array.isArray(gotTask.blockedBy) ? gotTask.blockedBy : []
+      const blocks = Array.isArray(gotTask.blocks) ? gotTask.blocks : []
+      return (
+        <div style={{ padding: '8px 14px', display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: TASK_COLOR[gotTask.status] ?? 'var(--text-3)' }}>
+              {TASK_ICON[gotTask.status] ?? '○'}
+            </span>
+            <span style={{ fontSize: 13, color: 'var(--text)', fontWeight: 500 }}>
+              {gotTask.subject}
+            </span>
+          </div>
+          {description && (
+            <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.45, paddingLeft: 20 }}>
+              {description}
+            </div>
+          )}
+          {blockedBy.length > 0 && (
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', paddingLeft: 20 }}>
+              ↳ blocked by {blockedBy.map((id) => `#${id}`).join(', ')}
+            </div>
+          )}
+          {blocks.length > 0 && (
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', paddingLeft: 20 }}>
+              ⤴ blocks {blocks.map((id) => `#${id}`).join(', ')}
+            </div>
+          )}
+        </div>
+      )
+    }
+    if (name === 'TaskGet' && parsed && !gotTask && !isError) {
+      return (
+        <div style={{ padding: '8px 14px', fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic', background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
+          task not found
+        </div>
+      )
+    }
+    if (name === 'TaskUpdate' && updateOut && (updateOut.updatedFields?.length || updateOut.error)) {
+      const fields = updateOut.updatedFields ?? []
+      return (
+        <div style={{ padding: '6px 14px', display: 'flex', flexDirection: 'column', gap: 3, background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
+          {fields.length > 0 && (
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+              changed: {fields.join(', ')}
+            </div>
+          )}
+          {updateOut.error && (
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--red)' }}>
+              {updateOut.error}
+            </div>
+          )}
+        </div>
+      )
+    }
+    return null
+  })()
+
   // TaskList with parsed tasks: custom layout
   if (name === 'TaskList' && tasks !== null) {
+    const completedSet = new Set(
+      tasks.filter((t) => t.status === 'completed' && t.id).map((t) => t.id as string),
+    )
     return (
       <div style={{ border: '1px solid var(--border)', borderLeft: `2px solid ${c}`, borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
         {headerContent}
@@ -1990,18 +2131,58 @@ function TaskCard({ thread }: { thread: ToolThread }) {
           <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 5, background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
             {tasks.map((t, i) => {
               const st = t.status ?? 'pending'
+              const blockedBy = Array.isArray(t.blockedBy) ? t.blockedBy : []
+              const openBlockers = blockedBy.filter((id) => !completedSet.has(id))
+              const isBlocked = st === 'pending' && openBlockers.length > 0
+              const activeForm = st === 'in_progress' && t.id ? activeForms.get(t.id) : undefined
+              const subject = activeForm && activeForm.trim() ? activeForm.trim() : (t.subject ?? t.id ?? '—')
+              const subjectColor = st === 'completed'
+                ? 'var(--text-3)'
+                : isBlocked
+                ? 'var(--text-2)'
+                : 'var(--text)'
               return (
-                <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: TASK_COLOR[st] ?? 'var(--text-3)', flexShrink: 0, marginTop: 1, width: 12, textAlign: 'center' }}>
-                    {TASK_ICON[st] ?? '○'}
-                  </span>
-                  <span style={{ fontSize: 13, color: st === 'completed' ? 'var(--text-3)' : 'var(--text)', lineHeight: 1.5, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {t.subject ?? t.id ?? '—'}
-                  </span>
-                  {t.id && (
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
-                      #{t.id}
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: TASK_COLOR[st] ?? 'var(--text-3)', flexShrink: 0, marginTop: 1, width: 12, textAlign: 'center' }}>
+                      {TASK_ICON[st] ?? '○'}
                     </span>
+                    <span
+                      title={blockedBy.length > 0 ? `blocked by ${blockedBy.map((id) => `#${id}`).join(', ')}` : undefined}
+                      style={{
+                        fontSize: 13,
+                        color: subjectColor,
+                        lineHeight: 1.5,
+                        flex: 1,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        textDecoration: st === 'completed' ? 'line-through' : 'none',
+                        fontStyle: activeForm ? 'italic' : 'normal',
+                      }}
+                    >
+                      {subject}
+                    </span>
+                    {t.owner && (
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--violet)', flexShrink: 0 }}>
+                        @{t.owner}
+                      </span>
+                    )}
+                    {t.id && (
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
+                        #{t.id}
+                      </span>
+                    )}
+                  </div>
+                  {isBlocked && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 20 }}>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0 }}>
+                        ↳
+                      </span>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+                        blocked by {openBlockers.map((id) => `#${id}`).join(', ')}
+                      </span>
+                    </div>
                   )}
                 </div>
               )
@@ -2014,7 +2195,7 @@ function TaskCard({ thread }: { thread: ToolThread }) {
 
   // All others: use CardShell
   return (
-    <CardShell color={c} result={result} toolName={name} header={headerContent} />
+    <CardShell color={c} result={result} toolName={name} header={headerContent} body={bodyContent} />
   )
 }
 
@@ -2935,7 +3116,24 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
   const { subtype, payload } = block
   const content = typeof payload.content === 'string' ? payload.content : ''
   const headerLabel = subtype.replace(/_/g, ' ').toUpperCase()
+  const errorCode = typeof payload.error === 'string' ? payload.error : ''
+  const apiErrorStatus = typeof payload.api_error_status === 'number' ? payload.api_error_status : null
+  const errorSummary = useMemo(() => {
+    if (!errorCode) return ''
+    switch (errorCode) {
+      case 'model_not_found': return 'Model not available — pick a different model'
+      case 'authentication_failed': return 'Authentication failed'
+      case 'oauth_org_not_allowed': return 'OAuth org not allowed'
+      case 'billing_error': return 'Billing error'
+      case 'rate_limit': return 'Rate limited'
+      case 'invalid_request': return 'Invalid request'
+      case 'server_error': return 'Server error'
+      case 'max_output_tokens': return 'Max output tokens reached'
+      default: return errorCode.replace(/_/g, ' ')
+    }
+  }, [errorCode])
   const detailPreview = useMemo(() => {
+    if (errorSummary) return apiErrorStatus ? `${errorSummary} (HTTP ${apiErrorStatus})` : errorSummary
     if (content.trim()) return content.replace(/\s+/g, ' ').trim()
     if (subtype === 'compact_boundary') return 'Conversation compacted'
     if (subtype === 'task_started' && typeof payload.description === 'string') return payload.description
@@ -2975,9 +3173,15 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       return `${count} memor${count === 1 ? 'y' : 'ies'}${mode ? ` · ${mode}` : ''}`
     }
     return 'Claude system event'
-  }, [content, payload.description, payload.elapsed_time_seconds, payload.hook_event, payload.hook_name, payload.level, payload.memories, payload.mode, payload.outcome, payload.output, payload.status, payload.stdout, payload.summary, payload.tool_name, subtype])
+  }, [apiErrorStatus, content, errorSummary, payload.description, payload.elapsed_time_seconds, payload.hook_event, payload.hook_name, payload.level, payload.memories, payload.mode, payload.outcome, payload.output, payload.status, payload.stdout, payload.summary, payload.tool_name, subtype])
   const hookOutcome = typeof payload.outcome === 'string' ? payload.outcome : ''
-  const tone = payload.level === 'warning'
+  const isHardError = errorCode === 'model_not_found'
+    || errorCode === 'authentication_failed'
+    || errorCode === 'oauth_org_not_allowed'
+    || errorCode === 'billing_error'
+  const tone = isHardError
+    ? 'var(--red)'
+    : payload.level === 'warning'
     ? 'var(--yellow)'
     : subtype === 'hook_response' && (hookOutcome === 'error' || hookOutcome === 'cancelled')
     ? 'var(--yellow)'
@@ -2994,6 +3198,8 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     : 'var(--text-3)'
   const badges = useMemo(() => {
     const nextBadges: string[] = []
+    if (errorCode) nextBadges.push(errorCode)
+    if (apiErrorStatus != null) nextBadges.push(`HTTP ${apiErrorStatus}`)
     if (typeof payload.status === 'string') nextBadges.push(payload.status)
     if (typeof payload.task_id === 'string') nextBadges.push(payload.task_id.slice(0, 8))
     if (typeof payload.tool_use_id === 'string') nextBadges.push(payload.tool_use_id.slice(0, 8))
@@ -3011,7 +3217,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       if (typeof compact.pre_tokens === 'number') nextBadges.push(`${fmtTokens(compact.pre_tokens)} pre`)
     }
     return nextBadges
-  }, [payload.compact_metadata, payload.hook_event, payload.hook_name, payload.mcp_server_name, payload.mode, payload.outcome, payload.status, payload.subagent_type, payload.task_id, payload.task_type, payload.tool_name, payload.tool_use_id, subtype])
+  }, [apiErrorStatus, errorCode, payload.compact_metadata, payload.hook_event, payload.hook_name, payload.mcp_server_name, payload.mode, payload.outcome, payload.status, payload.subagent_type, payload.task_id, payload.task_type, payload.tool_name, payload.tool_use_id, subtype])
 
   const body = useMemo(() => {
     if (subtype === 'task_notification') return content || (typeof payload.result === 'string' ? payload.result : '')
@@ -3214,6 +3420,43 @@ function densityConfig(d: MessageDensity): DensityConfig {
 const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanced'))
 const SessionContext = createContext<string | undefined>(undefined)
 export const LiveSubagentTextContext = createContext<Record<string, string>>({})
+export const TaskActiveFormsContext = createContext<Map<string, string>>(new Map())
+
+/**
+ * Scan threaded messages for TaskCreate/TaskUpdate calls and build a
+ * taskId → activeForm map reflecting the most recent activeForm set for each
+ * task. Used by the TaskList renderer to substitute the present-continuous form
+ * when a task is in_progress.
+ */
+export function buildTaskActiveFormsForWeb(messages: ThreadedMessage[]): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const m of messages) {
+    for (const b of m.blocks) {
+      if (b.type !== 'tool_thread') continue
+      const name = b.toolUse.name
+      if (name === 'TaskCreate') {
+        const inp = b.toolUse.input as { activeForm?: string }
+        const af = typeof inp.activeForm === 'string' ? inp.activeForm.trim() : ''
+        if (!af || !b.result) continue
+        const text = typeof b.result.content === 'string'
+          ? b.result.content
+          : Array.isArray(b.result.content)
+          ? b.result.content.map((c) => (c && typeof c === 'object' && 'text' in c && typeof (c as { text: unknown }).text === 'string') ? (c as { text: string }).text : '').join('')
+          : ''
+        try {
+          const parsed = JSON.parse(text) as { task?: { id?: string } }
+          const id = parsed?.task?.id
+          if (typeof id === 'string' && id) map.set(id, af)
+        } catch { /* skip */ }
+      } else if (name === 'TaskUpdate') {
+        const inp = b.toolUse.input as { taskId?: string; activeForm?: string }
+        const af = typeof inp.activeForm === 'string' ? inp.activeForm.trim() : ''
+        if (typeof inp.taskId === 'string' && af) map.set(inp.taskId, af)
+      }
+    }
+  }
+  return map
+}
 
 export function MessageDensityProvider({ density, children }: { density: MessageDensity; children: React.ReactNode }) {
   const value = useMemo(() => densityConfig(density), [density])

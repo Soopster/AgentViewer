@@ -290,8 +290,62 @@ function formatAgentStatsSummary(parsed: Record<string, unknown> | null): string
 const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TaskStop'])
 const TASK_STATUS_ICON: Record<string, string> = { completed: '✓', in_progress: '◐', pending: '○', deleted: '✗' }
 
-type TaskItem = { id?: string; subject?: string; status?: string; owner?: string }
-type TaskToolInput = { taskId?: string; subject?: string; description?: string; status?: string; owner?: string }
+type TaskItem = { id?: string; subject?: string; status?: string; owner?: string; blockedBy?: string[] }
+type TaskToolInput = {
+  taskId?: string
+  task_id?: string
+  subject?: string
+  description?: string
+  activeForm?: string
+  status?: string
+  owner?: string
+  addBlocks?: string[]
+  addBlockedBy?: string[]
+}
+
+type TaskGetResult = { task?: { id?: string; subject?: string; description?: string; status?: string; blocks?: string[]; blockedBy?: string[] } | null }
+type TaskCreateResult = { task?: { id?: string; subject?: string } }
+type TaskUpdateResult = { success?: boolean; taskId?: string; updatedFields?: string[]; error?: string; statusChange?: { from?: string; to?: string } }
+
+function parseTaskResultJson(raw: string | null | undefined): unknown {
+  if (!raw) return null
+  try { return JSON.parse(raw) } catch { return null }
+}
+
+export type TaskActiveForms = Map<string, string>
+
+/**
+ * Scan a thread of messages for TaskCreate/TaskUpdate calls and build a map of
+ * taskId → activeForm reflecting the most recent activeForm set for each task.
+ * Used by the TaskList renderer to substitute the present-continuous form for
+ * tasks that are currently in_progress.
+ */
+export function buildTaskActiveForms(messages: ThreadedMessage[]): TaskActiveForms {
+  const map = new Map<string, string>()
+  for (const m of messages) {
+    for (const b of m.blocks) {
+      if (b.type !== 'tool_thread') continue
+      const name = b.toolUse.name
+      if (name === 'TaskCreate') {
+        const inp = b.toolUse.input as { activeForm?: string }
+        const af = typeof inp.activeForm === 'string' ? inp.activeForm.trim() : ''
+        if (!af || !b.result) continue
+        const text = resultRawTextOf(b)
+        if (!text) continue
+        try {
+          const parsed = JSON.parse(text) as { task?: { id?: string } }
+          const id = parsed?.task?.id
+          if (typeof id === 'string' && id) map.set(id, af)
+        } catch { /* skip */ }
+      } else if (name === 'TaskUpdate') {
+        const inp = b.toolUse.input as { taskId?: string; activeForm?: string }
+        const af = typeof inp.activeForm === 'string' ? inp.activeForm.trim() : ''
+        if (typeof inp.taskId === 'string' && af) map.set(inp.taskId, af)
+      }
+    }
+  }
+  return map
+}
 
 function parseTaskListPayload(raw: string | null | undefined): TaskItem[] | null {
   if (!raw) return null
@@ -395,7 +449,7 @@ function formatToolSearchTool(thread: ToolThread, expanded: boolean): TuiTranscr
   return lines
 }
 
-function formatTaskTool(thread: ToolThread, expanded: boolean): TuiTranscriptCardLine[] {
+function formatTaskTool(thread: ToolThread, expanded: boolean, activeForms?: TaskActiveForms): TuiTranscriptCardLine[] {
   const name = thread.toolUse.name
   const input = thread.toolUse.input as TaskToolInput
   const result = thread.result
@@ -404,11 +458,17 @@ function formatTaskTool(thread: ToolThread, expanded: boolean): TuiTranscriptCar
 
   if (name === 'TaskCreate') {
     const subject = (input.subject ?? '').trim() || 'task'
+    const createOut = parseTaskResultJson(raw) as TaskCreateResult | null
+    const createdId = createOut?.task?.id ?? null
+    const idTag = createdId ? ` #${createdId}` : ''
     const lines: TuiTranscriptCardLine[] = [
-      line(`tool TaskCreate: ${truncateLine(subject)}`, 'tool'),
+      line(`tool TaskCreate${idTag}: ${truncateLine(subject)}`, 'tool'),
     ]
     if (expanded && input.description && input.description.trim()) {
       lines.push(line(truncateLine(input.description.trim()), 'muted'))
+    }
+    if (expanded && input.activeForm && input.activeForm.trim()) {
+      lines.push(line(`active: ${truncateLine(input.activeForm.trim())}`, 'dim'))
     }
     if (result) {
       lines.push(line(isError ? '✗ ERROR' : '✓ created', isError ? 'result_error' : 'result_ok'))
@@ -418,20 +478,57 @@ function formatTaskTool(thread: ToolThread, expanded: boolean): TuiTranscriptCar
 
   if (name === 'TaskUpdate') {
     const id = input.taskId ? `#${input.taskId}` : ''
-    const icon = input.status ? (TASK_STATUS_ICON[input.status] ?? '') : ''
-    const status = input.status ? ` → ${input.status}${icon ? ` ${icon}` : ''}` : ''
+    const updateOut = parseTaskResultJson(raw) as TaskUpdateResult | null
+    const sc = updateOut?.statusChange
+    const statusPill = sc?.from && sc?.to
+      ? ` → ${sc.from} → ${sc.to}${TASK_STATUS_ICON[sc.to] ? ` ${TASK_STATUS_ICON[sc.to]}` : ''}`
+      : input.status
+        ? ` → ${input.status}${TASK_STATUS_ICON[input.status] ? ` ${TASK_STATUS_ICON[input.status]}` : ''}`
+        : ''
     const lines: TuiTranscriptCardLine[] = [
-      line(`tool TaskUpdate ${id}${status}`.replace(/\s+/g, ' ').trim(), 'tool'),
+      line(`tool TaskUpdate ${id}${statusPill}`.replace(/\s+/g, ' ').trim(), 'tool'),
     ]
-    if (result && isError) lines.push(line('✗ ERROR', 'result_error'))
+    if (Array.isArray(input.addBlockedBy) && input.addBlockedBy.length > 0) {
+      lines.push(line(`  +blocked by ${input.addBlockedBy.map((x) => `#${x}`).join(', ')}`, 'dim'))
+    }
+    if (Array.isArray(input.addBlocks) && input.addBlocks.length > 0) {
+      lines.push(line(`  +blocks ${input.addBlocks.map((x) => `#${x}`).join(', ')}`, 'dim'))
+    }
+    if (expanded && updateOut?.updatedFields && updateOut.updatedFields.length > 0) {
+      lines.push(line(`changed: ${updateOut.updatedFields.join(', ')}`, 'dim'))
+    }
+    if (updateOut?.error) {
+      lines.push(line(`✗ ${truncateLine(updateOut.error)}`, 'result_error'))
+    } else if (result && isError) {
+      lines.push(line('✗ ERROR', 'result_error'))
+    }
     return lines
   }
 
   if (name === 'TaskGet') {
     const id = input.taskId ? `#${input.taskId}` : ''
     const lines: TuiTranscriptCardLine[] = [line(`tool TaskGet ${id}`.trim(), 'tool')]
-    if (result) {
-      lines.push(line(isError ? '✗ ERROR' : '✓ ok', isError ? 'result_error' : 'result_ok'))
+    if (isError) {
+      lines.push(line('✗ ERROR', 'result_error'))
+      return lines
+    }
+    const getOut = parseTaskResultJson(raw) as TaskGetResult | null
+    const task = getOut?.task ?? null
+    if (task) {
+      const icon = TASK_STATUS_ICON[task.status ?? 'pending'] ?? '○'
+      const subject = (task.subject ?? '').trim() || '(no subject)'
+      lines.push(line(`  ${icon} ${truncateLine(subject)}`, 'muted'))
+      if (expanded && task.description && task.description.trim()) {
+        lines.push(line(`    ${truncateLine(task.description.trim())}`, 'dim'))
+      }
+      if (Array.isArray(task.blockedBy) && task.blockedBy.length > 0) {
+        lines.push(line(`    ↳ blocked by ${task.blockedBy.map((x) => `#${x}`).join(', ')}`, 'dim'))
+      }
+      if (Array.isArray(task.blocks) && task.blocks.length > 0) {
+        lines.push(line(`    ⤴ blocks ${task.blocks.map((x) => `#${x}`).join(', ')}`, 'dim'))
+      }
+    } else if (result) {
+      lines.push(line('task not found', 'dim'))
     }
     return lines
   }
@@ -447,14 +544,26 @@ function formatTaskTool(thread: ToolThread, expanded: boolean): TuiTranscriptCar
       return lines
     }
     if (tasks && tasks.length > 0) {
+      const completedSet = new Set(
+        tasks.filter((t) => t.status === 'completed' && t.id).map((t) => t.id as string),
+      )
       const limit = expanded ? tasks.length : Math.min(tasks.length, MAX_CARD_LINES - 1)
       for (let i = 0; i < limit; i++) {
         const t = tasks[i]
         const icon = TASK_STATUS_ICON[t.status ?? 'pending'] ?? '○'
         const tone: TuiTranscriptLineTone = t.status === 'completed' ? 'dim' : 'muted'
         const idTag = t.id ? `#${t.id} ` : ''
-        const subject = (t.subject ?? '').trim() || '(no subject)'
-        lines.push(line(`${icon} ${idTag}${truncateLine(subject)}`, tone))
+        const baseSubject = (t.subject ?? '').trim() || '(no subject)'
+        const activeForm = t.status === 'in_progress' && t.id ? activeForms?.get(t.id) : undefined
+        const subject = activeForm && activeForm.trim() ? activeForm.trim() : baseSubject
+        const owner = t.owner ? ` @${t.owner}` : ''
+        lines.push(line(`${icon} ${idTag}${truncateLine(subject)}${owner}`, tone))
+        if (expanded && Array.isArray(t.blockedBy)) {
+          const openBlockers = t.blockedBy.filter((id) => !completedSet.has(id))
+          if (openBlockers.length > 0 && t.status !== 'completed') {
+            lines.push(line(`  ↳ blocked by ${openBlockers.map((id) => `#${id}`).join(', ')}`, 'dim'))
+          }
+        }
       }
       if (!expanded && tasks.length > limit) {
         lines.push(line(`… ${tasks.length - limit} more`, 'dim'))
@@ -464,7 +573,8 @@ function formatTaskTool(thread: ToolThread, expanded: boolean): TuiTranscriptCar
   }
 
   if (name === 'TaskStop') {
-    const id = input.taskId ? `#${input.taskId}` : ''
+    const rawId = input.taskId ?? input.task_id ?? ''
+    const id = rawId ? `#${rawId}` : ''
     const lines: TuiTranscriptCardLine[] = [line(`tool TaskStop ${id}`.trim(), 'tool')]
     if (result) {
       lines.push(line(isError ? '✗ ERROR' : '✓ stopped', isError ? 'result_error' : 'result_ok'))
@@ -475,13 +585,13 @@ function formatTaskTool(thread: ToolThread, expanded: boolean): TuiTranscriptCar
   return []
 }
 
-function previewTool(thread: ToolThread): TuiTranscriptCardLine[] {
+function previewTool(thread: ToolThread, activeForms?: TaskActiveForms): TuiTranscriptCardLine[] {
   if (thread.toolUse.name === 'FileChange') {
     return previewFileChange(thread)
   }
 
   if (TASK_TOOL_NAMES.has(thread.toolUse.name)) {
-    return formatTaskTool(thread, false)
+    return formatTaskTool(thread, false, activeForms)
   }
 
   if (thread.toolUse.name === 'ToolSearch') {
@@ -562,7 +672,7 @@ function previewTool(thread: ToolThread): TuiTranscriptCardLine[] {
   ]
 }
 
-function formatBlock(block: ThreadedBlock): TuiTranscriptCardLine[] {
+function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms): TuiTranscriptCardLine[] {
   switch (block.type) {
     case 'text':
       return block.text.trim()
@@ -573,7 +683,7 @@ function formatBlock(block: ThreadedBlock): TuiTranscriptCardLine[] {
         ? [line(`thinking: ${truncateLine(block.thinking.trim().split('\n')[0])}`, 'thinking')]
         : [line('thinking', 'thinking')]
     case 'tool_thread':
-      return previewTool(block)
+      return previewTool(block, activeForms)
     case 'task_notification':
       return [line(`task ${block.status}: ${truncateLine(block.summary || block.taskId)}`, 'thinking')]
     case 'system_reminder':
@@ -587,6 +697,15 @@ function formatBlock(block: ThreadedBlock): TuiTranscriptCardLine[] {
     case 'claude_system': {
       const subagentType = typeof block.payload.subagent_type === 'string' ? block.payload.subagent_type : ''
       const subagentPrefix = subagentType ? `[${subagentType}] ` : ''
+      const errorCode = typeof block.payload.error === 'string' ? block.payload.error : ''
+      if (errorCode) {
+        const apiStatus = typeof block.payload.api_error_status === 'number' ? block.payload.api_error_status : null
+        const label = errorCode === 'model_not_found'
+          ? 'model not available'
+          : errorCode.replace(/_/g, ' ')
+        const suffix = apiStatus != null ? ` (HTTP ${apiStatus})` : ''
+        return [line(`● ${label}${suffix}`, 'result_error')]
+      }
       if (block.subtype === 'task_started' || block.subtype === 'task_progress' || block.subtype === 'task_updated' || block.subtype === 'task_notification') {
         const text = typeof block.payload.summary === 'string' ? block.payload.summary
           : typeof block.payload.description === 'string' ? block.payload.description
@@ -630,12 +749,13 @@ function formatBlock(block: ThreadedBlock): TuiTranscriptCardLine[] {
 }
 
 export function formatTranscriptLines(messages: ThreadedMessage[]): string[] {
+  const activeForms = buildTaskActiveForms(messages)
   const lines = messages.flatMap((message) => {
     const role = message.role === 'assistant'
       ? getAssistantLabel(message.provider)
       : message.role.toUpperCase()
     const header = `${role}${message.timestamp ? ` ${formatTimestamp(message.timestamp)}` : ''}`
-    const body = message.blocks.flatMap(formatBlock)
+    const body = message.blocks.flatMap((b) => formatBlock(b, activeForms))
     return [header, ...body.map((entry) => `  ${entry.text}`), '']
   })
 
@@ -825,7 +945,7 @@ function synthesizeEditDiff(message: ThreadedMessage): string | undefined {
   return hunks.length > 0 ? hunks.join('\n') : undefined
 }
 
-export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensity = 'balanced'): TuiTranscriptCard {
+export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensity = 'balanced', activeForms?: TaskActiveForms): TuiTranscriptCard {
   const baseLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
     : message.role.toUpperCase()
@@ -838,8 +958,8 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     ? ` · req:${message.requestId.slice(0, 10)}`
     : ''
   const label = `${subagentLabel}${taskSuffix}${requestSuffix}`
-  const previewLines = message.blocks.flatMap(formatBlock)
-  const { processedLines: expandedLines, codeBlocks, hasMermaidDiagrams } = extractCodeBlocksFromBlocks(message.blocks)
+  const previewLines = message.blocks.flatMap((b) => formatBlock(b, activeForms))
+  const { processedLines: expandedLines, codeBlocks, hasMermaidDiagrams } = extractCodeBlocksFromBlocks(message.blocks, activeForms)
   const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
   const category = classifyCardCategory(message)
   const autoFold = category !== 'conversation' && category !== 'insight'
@@ -879,7 +999,8 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
 }
 
 export function formatTranscriptCards(messages: ThreadedMessage[], density: TuiDensity = 'balanced'): TuiTranscriptCard[] {
-  return messages.map((message) => formatTranscriptCard(message, density))
+  const activeForms = buildTaskActiveForms(messages)
+  return messages.map((message) => formatTranscriptCard(message, density, activeForms))
 }
 
 export function formatSessionLabel(session: Session): string {
@@ -984,7 +1105,7 @@ function renderMermaidForTui(content: string): string {
   }
 }
 
-function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[]): {
+function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[], activeForms?: TaskActiveForms): {
   processedLines: TuiTranscriptCardLine[]
   codeBlocks: TuiTranscriptCodeBlock[]
   hasMermaidDiagrams: boolean
@@ -998,12 +1119,12 @@ function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[]): {
     if (block.type === 'tool_thread' && block.toolUse.name === 'Read') {
       const readBlock = readCodeBlockFromTool(block, `read${n++}`)
       if (readBlock) all.push(readBlock)
-      lines.push(...formatBlockExpanded(block).filter((l) => l.text.trim()))
+      lines.push(...formatBlockExpanded(block, activeForms).filter((l) => l.text.trim()))
       continue
     }
 
     if (block.type !== 'text' || !block.text.trim()) {
-      lines.push(...formatBlockExpanded(block).filter((l) => l.text.trim()))
+      lines.push(...formatBlockExpanded(block, activeForms).filter((l) => l.text.trim()))
       continue
     }
     const matches = Array.from(block.text.matchAll(CODE_FENCE_RE))
@@ -1028,7 +1149,7 @@ function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[]): {
   return { processedLines: lines, codeBlocks: all, hasMermaidDiagrams }
 }
 
-function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
+function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms): TuiTranscriptCardLine[] {
   switch (block.type) {
     case 'text':
       return block.text.trim()
@@ -1049,7 +1170,7 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
       const toolName = block.toolUse.name
 
       if (TASK_TOOL_NAMES.has(toolName)) {
-        return formatTaskTool(block, true)
+        return formatTaskTool(block, true, activeForms)
       }
 
       if (toolName === 'ToolSearch') {
@@ -1171,6 +1292,22 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
         ? sanitizeLine(block.stdout).trim().split('\n').map((l) => line(l.trimEnd(), 'dim'))
         : []
     case 'claude_system': {
+      const errorCode = typeof block.payload.error === 'string' ? block.payload.error : ''
+      if (errorCode) {
+        const apiStatus = typeof block.payload.api_error_status === 'number' ? block.payload.api_error_status : null
+        const label = errorCode === 'model_not_found'
+          ? 'Model not available — pick a different model'
+          : errorCode.replace(/_/g, ' ')
+        const lines: TuiTranscriptCardLine[] = [line(`● ${label}`, 'result_error')]
+        if (apiStatus != null) lines.push(line(`  HTTP ${apiStatus}`, 'dim'))
+        const errs = Array.isArray(block.payload.errors) ? block.payload.errors as unknown[] : null
+        if (errs) {
+          for (const e of errs.slice(0, 3)) {
+            if (typeof e === 'string' && e.trim()) lines.push(line(`  ${truncateLine(e.trim())}`, 'dim'))
+          }
+        }
+        return lines
+      }
       if (block.subtype === 'task_progress' || block.subtype === 'task_updated') {
         const p = block.payload
         const patch = typeof p.patch === 'object' && p.patch !== null
@@ -1222,8 +1359,9 @@ function formatBlockExpanded(block: ThreadedBlock): TuiTranscriptCardLine[] {
 export function formatMessageExpanded(messages: ThreadedMessage[], messageUuid: string): TuiTranscriptCardLine[] {
   const message = messages.find((m) => m.uuid === messageUuid)
   if (!message) return []
+  const activeForms = buildTaskActiveForms(messages)
   return message.blocks
-    .flatMap(formatBlockExpanded)
+    .flatMap((b) => formatBlockExpanded(b, activeForms))
     .filter((ln) => ln.text.trim().length > 0)
 }
 

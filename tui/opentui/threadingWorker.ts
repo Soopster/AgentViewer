@@ -5,7 +5,7 @@ import {
   type IncrementalThreadingCache,
   type ThreadedMessage,
 } from '../../lib/threading'
-import { formatTranscriptCard, type TuiTranscriptCard } from '../format'
+import { buildTaskActiveForms, formatTranscriptCard, type TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 import type { Session, SessionMessage } from '../../lib/types'
 import { sameSessionMessageContent, threadedMessageFingerprint } from './messageFingerprint'
@@ -109,6 +109,13 @@ function threadMessages(session: Session, messages: SessionMessage[]): ThreadedM
   return nextThreaded
 }
 
+function hasTaskListBlock(msg: ThreadedMessage): boolean {
+  for (const b of msg.blocks) {
+    if (b.type === 'tool_thread' && b.toolUse.name === 'TaskList') return true
+  }
+  return false
+}
+
 function formatCards(
   sessionCacheKey: string,
   threaded: ThreadedMessage[],
@@ -121,6 +128,7 @@ function formatCards(
     perSession = new Map()
     cardCacheByKey.set(sessionCacheKey, perSession)
   }
+  const activeForms = buildTaskActiveForms(messages)
 
   const cards: TuiTranscriptCard[] = new Array(messages.length)
   const seenMessageKeys = new Set<string>()
@@ -128,6 +136,13 @@ function formatCards(
     const msg = messages[i]
     const messageKey = threadedMessageFingerprint(msg)
     seenMessageKeys.add(messageKey)
+    // TaskList rendering depends on the session-wide activeForms map, which
+    // can change as earlier TaskCreate/TaskUpdate calls arrive. Skip the
+    // per-message cache for these to avoid stale subjects.
+    if (hasTaskListBlock(msg)) {
+      cards[i] = formatTranscriptCard(msg, density, activeForms)
+      continue
+    }
     let perMessage = perSession.get(messageKey)
     if (!perMessage) {
       perMessage = new Map()
@@ -135,7 +150,7 @@ function formatCards(
     }
     let card = perMessage.get(density)
     if (!card) {
-      card = formatTranscriptCard(msg, density)
+      card = formatTranscriptCard(msg, density, activeForms)
       perMessage.set(density, card)
     }
     cards[i] = card
