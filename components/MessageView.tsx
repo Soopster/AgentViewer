@@ -34,6 +34,8 @@ import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 import { ChartNetwork, Filter, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
 import MessageItem, { LiveSubagentTextContext, MessageDensityProvider, TaskActiveFormsContext, buildTaskActiveFormsForWeb, type MessageDensity } from './MessageItem'
+import { TaskRail } from './TaskRail'
+import { buildTaskRegistry } from '@/lib/taskRegistry'
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import CodeThemeToggle from './CodeThemeToggle'
@@ -59,6 +61,7 @@ type Props = {
   selectedTabId?: string | null
   onSelectTab?: (session: Session) => void
   onCloseTab?: (sessionKey: string) => void
+  taskPanelOpenRequest?: number
 }
 
 type SseFrame = {
@@ -1517,6 +1520,7 @@ export default function MessageView({
   selectedTabId,
   onSelectTab,
   onCloseTab,
+  taskPanelOpenRequest = 0,
 }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
@@ -3007,8 +3011,15 @@ export default function MessageView({
     [threadedFull, showTools],
   )
   const taskActiveForms = useMemo(() => buildTaskActiveFormsForWeb(threaded), [threaded])
+  const taskRegistry = useMemo(() => buildTaskRegistry(threaded), [threaded])
+  const [taskRailOpen, setTaskRailOpen] = useState(true)
   const isProject = !!projectView
   const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
+
+  useEffect(() => {
+    if (taskPanelOpenRequest <= 0) return
+    setTaskRailOpen(true)
+  }, [taskPanelOpenRequest])
 
   // Auto-focus the composer for a brand-new pending session — same as opening
   // a CLI and landing at the prompt. Gated on `isPending` to avoid stealing
@@ -3391,6 +3402,35 @@ export default function MessageView({
         if (!scrollMountedTimelineRowIntoView(messageId)) {
           scrollToMessage()
         }
+      })
+    })
+  }, [scrollMountedTimelineRowIntoView])
+
+  // Used by TaskRail to scroll the transcript to a task's most recent event.
+  // Same scroll/highlight behavior as the visualizer-select path but without
+  // touching filters/search or the visualizer toggle.
+  const handleJumpToMessage = useCallback((messageId: string) => {
+    setHighlightedMessageId(messageId)
+    autoFollowRef.current = false
+    setAutoFollow(false)
+
+    const scrollToMessage = () => {
+      const node = timelineRef.current
+      const rows = timelineRowsRef.current
+      const layout = rowLayoutRef.current
+      if (!node) return
+      const rowIndex = rows.findIndex((row) => row.message.uuid === messageId)
+      if (rowIndex < 0) return
+      const targetTop = Math.max(layout.tops[rowIndex] - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
+      suppressFollowEvalUntilRef.current = performance.now() + 300
+      node.scrollTop = targetTop
+      setTimelineScrollTop(targetTop)
+    }
+
+    window.requestAnimationFrame(() => {
+      scrollToMessage()
+      window.requestAnimationFrame(() => {
+        if (!scrollMountedTimelineRowIntoView(messageId)) scrollToMessage()
       })
     })
   }, [scrollMountedTimelineRowIntoView])
@@ -3879,6 +3919,32 @@ export default function MessageView({
           </Button>
         )}
 
+        {/* Tasks panel — Claude only */}
+        {!isProject && activeProvider === 'claude' && taskRegistry.size > 0 && (
+          <Button
+            onClick={() => setTaskRailOpen((value) => !value)}
+            title={taskRailOpen ? 'Hide task panel' : 'Show task panel'}
+            variant="outline"
+            size="sm"
+            className="av-hover-control"
+            style={{
+              flexShrink: 0,
+              height: 26,
+              padding: '0 10px',
+              background: taskRailOpen ? 'rgba(245,158,11,0.14)' : 'transparent',
+              border: '1px solid var(--border)',
+              borderRadius: 5,
+              color: taskRailOpen ? 'var(--amber)' : 'var(--text-2)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 11,
+              letterSpacing: '0.08em',
+              cursor: 'pointer',
+            }}
+          >
+            ☐ TASKS · {taskRegistry.size}
+          </Button>
+        )}
+
         <Button
           onClick={() => setShowVisualizer((value) => !value)}
           title={showVisualizer ? 'Show transcript view' : 'Show session visualiser'}
@@ -4364,7 +4430,16 @@ export default function MessageView({
         />
       )}
 
-      {/* ── Timeline feed ────────────────────────────── */}
+      {/* ── Timeline feed + optional right-rail task panel ── */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'row',
+          overflow: 'hidden',
+        }}
+      >
       <div
         style={{
           flex: 1,
@@ -4814,6 +4889,14 @@ export default function MessageView({
             </div>
           </>
         )}
+      </div>
+      {taskRailOpen && activeProvider === 'claude' && taskRegistry.size > 0 && (
+        <TaskRail
+          registry={taskRegistry}
+          onJumpToEvent={handleJumpToMessage}
+          onClose={() => setTaskRailOpen(false)}
+        />
+      )}
       </div>
 
       {/* ── Message input (single session only) ──────── */}

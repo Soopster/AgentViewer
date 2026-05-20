@@ -1912,11 +1912,83 @@ function WorktreeCard({ thread }: { thread: ToolThread }) {
 // The TaskList tool reports an array (older agents) or `{ tasks: [...] }` (per
 // the SDK's TaskListOutput). We keep the rendered record loose since the
 // stop-tool variant (no SDK type) shares this shape.
-type TaskRecord = Partial<TaskListOutput['tasks'][number]>
+type TaskRecord = Partial<Omit<TaskListOutput['tasks'][number], 'status'>> & { status?: string }
 type TaskInput = Partial<TaskCreateInput & TaskGetInput & TaskUpdateInput & { _stopReason?: string }>
+type TaskListGroupKey = 'in_progress' | 'blocked' | 'paused' | 'pending' | 'failed' | 'stopped' | 'completed' | 'other'
 
-const TASK_ICON: Record<string, string>  = { completed: '✓', in_progress: '◐', pending: '○' }
-const TASK_COLOR: Record<string, string> = { completed: 'var(--green)', in_progress: 'var(--amber)', pending: 'var(--text-3)' }
+const TASK_ICON: Record<string, string>  = {
+  completed: '✓',
+  in_progress: '◐',
+  running: '◐',
+  pending: '○',
+  paused: 'Ⅱ',
+  failed: '×',
+  stopped: '■',
+  killed: '■',
+  deleted: '✗',
+}
+const TASK_COLOR: Record<string, string> = {
+  completed: 'var(--green)',
+  in_progress: 'var(--amber)',
+  running: 'var(--amber)',
+  pending: 'var(--text-3)',
+  paused: 'var(--yellow)',
+  failed: 'var(--red)',
+  stopped: 'var(--text-3)',
+  killed: 'var(--text-3)',
+  deleted: 'var(--red)',
+}
+const TASK_LIST_GROUP_ORDER: TaskListGroupKey[] = [
+  'in_progress',
+  'blocked',
+  'paused',
+  'pending',
+  'failed',
+  'stopped',
+  'completed',
+  'other',
+]
+const TASK_LIST_GROUP_LABEL: Record<TaskListGroupKey, string> = {
+  in_progress: 'IN PROGRESS',
+  blocked: 'BLOCKED',
+  paused: 'PAUSED',
+  pending: 'PENDING',
+  failed: 'FAILED',
+  stopped: 'STOPPED',
+  completed: 'COMPLETED',
+  other: 'OTHER',
+}
+
+function taskListGroupFor(task: TaskRecord, completedSet: Set<string>): TaskListGroupKey {
+  const status = task.status ?? 'pending'
+  const blockedBy = Array.isArray(task.blockedBy) ? task.blockedBy : []
+  const openBlockers = blockedBy.filter((id) => !completedSet.has(id))
+  if ((status === 'pending' || status === '') && openBlockers.length > 0) return 'blocked'
+  if (status === 'in_progress' || status === 'running') return 'in_progress'
+  if (status === 'paused') return 'paused'
+  if (status === 'pending' || status === '') return 'pending'
+  if (status === 'failed') return 'failed'
+  if (status === 'stopped' || status === 'killed') return 'stopped'
+  if (status === 'completed') return 'completed'
+  return 'other'
+}
+
+function groupTaskRecords(tasks: TaskRecord[], completedSet: Set<string>): Array<{ group: TaskListGroupKey; tasks: TaskRecord[] }> {
+  const grouped: Record<TaskListGroupKey, TaskRecord[]> = {
+    in_progress: [],
+    blocked: [],
+    paused: [],
+    pending: [],
+    failed: [],
+    stopped: [],
+    completed: [],
+    other: [],
+  }
+  for (const task of tasks) grouped[taskListGroupFor(task, completedSet)].push(task)
+  return TASK_LIST_GROUP_ORDER
+    .map((group) => ({ group, tasks: grouped[group] }))
+    .filter((entry) => entry.tasks.length > 0)
+}
 
 function TaskCard({ thread }: { thread: ToolThread }) {
   const [hovered, setHovered] = useState(false)
@@ -2124,69 +2196,85 @@ function TaskCard({ thread }: { thread: ToolThread }) {
     const completedSet = new Set(
       tasks.filter((t) => t.status === 'completed' && t.id).map((t) => t.id as string),
     )
+    const groupedTasks = groupTaskRecords(tasks, completedSet)
     return (
       <div style={{ border: '1px solid var(--border)', borderLeft: `2px solid ${c}`, borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
         {headerContent}
         {tasks.length > 0 && (
-          <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 5, background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
-            {tasks.map((t, i) => {
-              const st = t.status ?? 'pending'
-              const blockedBy = Array.isArray(t.blockedBy) ? t.blockedBy : []
-              const openBlockers = blockedBy.filter((id) => !completedSet.has(id))
-              const isBlocked = st === 'pending' && openBlockers.length > 0
-              const activeForm = st === 'in_progress' && t.id ? activeForms.get(t.id) : undefined
-              const subject = activeForm && activeForm.trim() ? activeForm.trim() : (t.subject ?? t.id ?? '—')
-              const subjectColor = st === 'completed'
-                ? 'var(--text-3)'
-                : isBlocked
-                ? 'var(--text-2)'
-                : 'var(--text)'
-              return (
-                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: TASK_COLOR[st] ?? 'var(--text-3)', flexShrink: 0, marginTop: 1, width: 12, textAlign: 'center' }}>
-                      {TASK_ICON[st] ?? '○'}
-                    </span>
-                    <span
-                      title={blockedBy.length > 0 ? `blocked by ${blockedBy.map((id) => `#${id}`).join(', ')}` : undefined}
-                      style={{
-                        fontSize: 13,
-                        color: subjectColor,
-                        lineHeight: 1.5,
-                        flex: 1,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        textDecoration: st === 'completed' ? 'line-through' : 'none',
-                        fontStyle: activeForm ? 'italic' : 'normal',
-                      }}
-                    >
-                      {subject}
-                    </span>
-                    {t.owner && (
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--violet)', flexShrink: 0 }}>
-                        @{t.owner}
-                      </span>
-                    )}
-                    {t.id && (
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
-                        #{t.id}
-                      </span>
-                    )}
-                  </div>
-                  {isBlocked && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 20 }}>
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0 }}>
-                        ↳
-                      </span>
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
-                        blocked by {openBlockers.map((id) => `#${id}`).join(', ')}
-                      </span>
-                    </div>
-                  )}
+          <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
+            {groupedTasks.map(({ group, tasks: groupTasks }) => (
+              <section key={group} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <div
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    color: 'var(--text-3)',
+                    letterSpacing: '0.08em',
+                    lineHeight: 1.3,
+                  }}
+                >
+                  {TASK_LIST_GROUP_LABEL[group]} · {groupTasks.length}
                 </div>
-              )
-            })}
+                {groupTasks.map((t, i) => {
+                  const st = t.status ?? 'pending'
+                  const blockedBy = Array.isArray(t.blockedBy) ? t.blockedBy : []
+                  const openBlockers = blockedBy.filter((id) => !completedSet.has(id))
+                  const isBlocked = group === 'blocked'
+                  const activeForm = (st === 'in_progress' || st === 'running') && t.id ? activeForms.get(t.id) : undefined
+                  const subject = activeForm && activeForm.trim() ? activeForm.trim() : (t.subject ?? t.id ?? '—')
+                  const subjectColor = st === 'completed'
+                    ? 'var(--text-3)'
+                    : isBlocked
+                    ? 'var(--text-2)'
+                    : 'var(--text)'
+                  return (
+                    <div key={`${group}-${t.id ?? i}`} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: TASK_COLOR[st] ?? 'var(--text-3)', flexShrink: 0, marginTop: 1, width: 12, textAlign: 'center' }}>
+                          {TASK_ICON[st] ?? '○'}
+                        </span>
+                        <span
+                          title={blockedBy.length > 0 ? `blocked by ${blockedBy.map((id) => `#${id}`).join(', ')}` : undefined}
+                          style={{
+                            fontSize: 13,
+                            color: subjectColor,
+                            lineHeight: 1.5,
+                            flex: 1,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            textDecoration: st === 'completed' ? 'line-through' : 'none',
+                            fontStyle: activeForm ? 'italic' : 'normal',
+                          }}
+                        >
+                          {subject}
+                        </span>
+                        {t.owner && (
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--violet)', flexShrink: 0 }}>
+                            @{t.owner}
+                          </span>
+                        )}
+                        {t.id && (
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
+                            #{t.id}
+                          </span>
+                        )}
+                      </div>
+                      {isBlocked && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 20 }}>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0 }}>
+                            ↳
+                          </span>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+                            blocked by {openBlockers.map((id) => `#${id}`).join(', ')}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </section>
+            ))}
           </div>
         )}
       </div>

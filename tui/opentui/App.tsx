@@ -3,6 +3,7 @@ import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMe
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
 import { AnalyticsPopover } from './AnalyticsPopover'
+import { TaskPanelPopover } from './TaskPanelPopover'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
 import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
@@ -18,6 +19,7 @@ import {
   type TuiTranscriptCardLine,
 } from '../format'
 import { stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
+import { buildTaskRegistry } from '../../lib/taskRegistry'
 import {
   THEME,
   getProviderAccent,
@@ -1315,6 +1317,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'search',     label: 'Search messages',        key: '/',  category: 'Transcript' },
   { id: 'fold',       label: 'Fold/expand card',       key: 'e',  category: 'Transcript' },
   { id: 'copy',       label: 'Copy selected message',  key: 'y',  category: 'Transcript' },
+  { id: 'tasks',      label: 'Open task panel',         key: '⇧T', category: 'Transcript' },
   // Session
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
   { id: 'new',        label: 'New agent session',      key: 'N',  category: 'Session'    },
@@ -1725,6 +1728,8 @@ export default function OpenTuiApp() {
   const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const analyticsKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [taskPanelOpen, setTaskPanelOpen] = useState(false)
+  const taskPanelKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticsSections, setDiagnosticsSections] = useState<import('../../lib/types').SessionDiagnosticSection[]>([])
@@ -2035,7 +2040,8 @@ export default function OpenTuiApp() {
       ? sessionDetail.threadedMessages
       : stripToolCallBlocks(sessionDetail.threadedMessages)
     const activeForms = buildTaskActiveForms(filtered)
-    return filtered.map((msg) => formatTranscriptCard(msg, density, activeForms))
+    const taskRegistry = buildTaskRegistry(filtered)
+    return filtered.map((msg) => formatTranscriptCard(msg, density, activeForms, taskRegistry))
   }, [density, sessionDetail, selectedSessionTarget, showToolCalls])
 
   // (Auto-open of the composer on a pending session was removed: with
@@ -4142,6 +4148,13 @@ export default function OpenTuiApp() {
         setFocusedPane('messages')
         void copySelectedMessage()
         break
+      case 'tasks':
+        if (selectedSession?.provider === 'claude') {
+          setTaskPanelOpen(true)
+        } else {
+          showNotice('info', 'Task panel is available for Claude sessions')
+        }
+        break
       case 'tab-toggle': {
         const next = !tabsEnabled
         setTabsEnabled(next)
@@ -4217,7 +4230,7 @@ export default function OpenTuiApp() {
     }
   }, [
     activeTabIndex, closeCommandPalette, copyCliCommand, copySelectedMessage, density, focusMode, focusedPane, jumpToResumeMarker,
-    tabsEnabled, sidebarSort,
+    showNotice, tabsEnabled, sidebarSort,
     jumpToTranscriptTail, jumpToUnreadBoundary, openTabSessions, provider, railVisible,
     refreshSessions, refreshSelectedSessionDetail, renderer, selectTabSession, selectedSessionKey,
     selectedSession, selectedSessionTarget, sessions, themeMode, toggleExpansion, transcriptView,
@@ -4267,6 +4280,11 @@ export default function OpenTuiApp() {
 
     if (analyticsOpen) {
       handled(() => { analyticsKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (taskPanelOpen) {
+      handled(() => { taskPanelKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -4544,6 +4562,12 @@ export default function OpenTuiApp() {
     // Global analytics popover
     if (isCtrl('a')) {
       handled(() => setAnalyticsOpen(true))
+      return
+    }
+
+    // Global task panel — Claude sessions only
+    if (isShifted('T') && selectedSession?.provider === 'claude') {
+      handled(() => setTaskPanelOpen(true))
       return
     }
 
@@ -5867,6 +5891,34 @@ export default function OpenTuiApp() {
           height={height}
           onClose={() => setAnalyticsOpen(false)}
           onKeyHandlerReady={(handler) => { analyticsKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
+      {taskPanelOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {taskPanelOpen ? (
+        <TaskPanelPopover
+          messages={sessionDetail?.threadedMessages ?? []}
+          theme={theme}
+          width={width}
+          height={height}
+          onClose={() => setTaskPanelOpen(false)}
+          onSelectTask={(uuid) => {
+            const idx = transcriptCards.findIndex((c) => c.key === uuid)
+            if (idx >= 0) jumpToTranscriptIndex(idx)
+            setTaskPanelOpen(false)
+          }}
+          onKeyHandlerReady={(handler) => { taskPanelKeyHandlerRef.current = handler }}
         />
       ) : null}
 

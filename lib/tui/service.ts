@@ -45,7 +45,7 @@ import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/them
 import type { TuiTranscriptCard } from '../../tui/format'
 
 const DEFAULT_SESSION_LIMIT = 200
-const CLAUDE_MESSAGE_LIMIT = 400
+const CLAUDE_MESSAGE_LIMIT = 2000
 const TOOL_HEAVY_PROVIDER_MESSAGE_LIMIT = 2000
 
 export type TuiSessionDetail = {

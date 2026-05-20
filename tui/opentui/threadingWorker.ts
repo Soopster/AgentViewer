@@ -5,6 +5,7 @@ import {
   type IncrementalThreadingCache,
   type ThreadedMessage,
 } from '../../lib/threading'
+import { buildTaskRegistry } from '../../lib/taskRegistry'
 import { buildTaskActiveForms, formatTranscriptCard, type TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
 import type { Session, SessionMessage } from '../../lib/types'
@@ -129,6 +130,7 @@ function formatCards(
     cardCacheByKey.set(sessionCacheKey, perSession)
   }
   const activeForms = buildTaskActiveForms(messages)
+  const taskRegistry = buildTaskRegistry(messages)
 
   const cards: TuiTranscriptCard[] = new Array(messages.length)
   const seenMessageKeys = new Set<string>()
@@ -140,7 +142,7 @@ function formatCards(
     // can change as earlier TaskCreate/TaskUpdate calls arrive. Skip the
     // per-message cache for these to avoid stale subjects.
     if (hasTaskListBlock(msg)) {
-      cards[i] = formatTranscriptCard(msg, density, activeForms)
+      cards[i] = formatTranscriptCard(msg, density, activeForms, taskRegistry)
       continue
     }
     let perMessage = perSession.get(messageKey)
@@ -150,7 +152,7 @@ function formatCards(
     }
     let card = perMessage.get(density)
     if (!card) {
-      card = formatTranscriptCard(msg, density, activeForms)
+      card = formatTranscriptCard(msg, density, activeForms, taskRegistry)
       perMessage.set(density, card)
     }
     cards[i] = card

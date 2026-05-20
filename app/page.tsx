@@ -194,6 +194,7 @@ export default function Home() {
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
+  const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
   const documentVisible = useDocumentVisible()
   // Tracks how many messages we've already loaded so polling can fetch only new ones
   const msgCountRef = useRef(0)
@@ -933,6 +934,7 @@ export default function Home() {
                   selectedTabId={selectedTabKey}
                   onSelectTab={selectOpenTab}
                   onCloseTab={closeTab}
+                  taskPanelOpenRequest={taskPanelOpenRequest}
                 />
               </ViewTransition>
               {commandPaletteOpen ? (
@@ -948,6 +950,7 @@ export default function Home() {
                   includeWorktrees={includeWorktrees}
                   messagePaneCollapsed={messagePaneCollapsed}
                   canOpenGit={!!activeProjectDir}
+                  canOpenTasks={!selectedProject && (selectedSession?.provider ?? provider) === 'claude'}
                   onSelectSession={selectCommandPaletteSession}
                   onSelectProject={selectProject}
                   onChangeProvider={handleChangeProvider}
@@ -955,6 +958,7 @@ export default function Home() {
                   onToggleWorktrees={setIncludeWorktrees}
                   onToggleMessagePane={toggleMessagePane}
                   onOpenGit={openGitPopover}
+                  onOpenTasks={() => setTaskPanelOpenRequest((value) => value + 1)}
                 />
               ) : null}
             </div>

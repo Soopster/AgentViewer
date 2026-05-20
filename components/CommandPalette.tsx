@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bot, Database, FolderOpen, GitBranch, Layers3, PanelLeftOpen, PanelRightOpen, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
+import { BarChart3, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -28,6 +28,7 @@ type CommandPaletteProps = {
   includeWorktrees: boolean
   messagePaneCollapsed: boolean
   canOpenGit: boolean
+  canOpenTasks: boolean
   onSelectSession: (session: Session, targetMessageId?: string) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onChangeProvider: (provider: ProviderSelection) => void
@@ -35,6 +36,7 @@ type CommandPaletteProps = {
   onToggleWorktrees: (include: boolean) => void
   onToggleMessagePane: () => void
   onOpenGit: () => void
+  onOpenTasks: () => void
 }
 
 type PaletteItem = {
@@ -297,6 +299,7 @@ export default function CommandPalette({
   includeWorktrees,
   messagePaneCollapsed,
   canOpenGit,
+  canOpenTasks,
   onSelectSession,
   onSelectProject,
   onChangeProvider,
@@ -304,6 +307,7 @@ export default function CommandPalette({
   onToggleWorktrees,
   onToggleMessagePane,
   onOpenGit,
+  onOpenTasks,
 }: CommandPaletteProps) {
   const { state: sidebarState, toggleSidebar } = useSidebar()
   const [query, setQuery] = useState('')
@@ -469,6 +473,19 @@ export default function CommandPalette({
         run: onOpenGit,
       },
       {
+        id: 'open-task-panel',
+        label: 'Open task panel',
+        description: canOpenTasks ? 'Show the active Claude session task registry and lineage' : 'Select a Claude session with tasks first',
+        icon: <ListTodo size={16} />,
+        shortcut: 'Tasks',
+        group: 'actions',
+        keywords: ['task', 'tasks', 'todo', 'todos', 'task panel', 'task rail', 'lineage', 'registry', 'claude'],
+        score: 0,
+        run: () => {
+          if (canOpenTasks) onOpenTasks()
+        },
+      },
+      {
         id: 'scope-all',
         label: 'Show all projects',
         description: 'Clear the project scope filter',
@@ -521,7 +538,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenGit, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenGit, canOpenTasks, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {
