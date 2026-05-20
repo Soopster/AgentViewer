@@ -101,6 +101,47 @@ function normalizeSystemMessage(value: unknown, fallbackSubtype: string): System
   }
 }
 
+function normalizeClaudeEventAsSystem(record: Record<string, unknown>): SystemMessagePayload | null {
+  if (record.type === 'rate_limit_event') {
+    const info = asObject(record.rate_limit_info)
+    const status = typeof info.status === 'string' ? info.status : 'unknown'
+    const utilization = typeof info.utilization === 'number'
+      ? ` · ${Math.round(info.utilization * 100)}%`
+      : ''
+    return {
+      type: 'system',
+      subtype: 'rate_limit_event',
+      ...record,
+      content: `Rate limit ${status}${utilization}`,
+      level: status === 'rejected' ? 'warning' : undefined,
+    }
+  }
+
+  if (record.type === 'prompt_suggestion') {
+    return {
+      type: 'system',
+      subtype: 'prompt_suggestion',
+      ...record,
+      content: typeof record.suggestion === 'string' ? record.suggestion : 'Prompt suggestion',
+    }
+  }
+
+  if (record.type === 'auth_status') {
+    const output = Array.isArray(record.output)
+      ? record.output.filter((entry): entry is string => typeof entry === 'string').join('\n')
+      : ''
+    return {
+      type: 'system',
+      subtype: 'auth_status',
+      ...record,
+      content: typeof record.error === 'string' ? record.error : output,
+      level: typeof record.error === 'string' ? 'warning' : undefined,
+    }
+  }
+
+  return null
+}
+
 function normalizeTimestamp(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
@@ -121,8 +162,21 @@ function readString(record: Record<string, unknown>, ...keys: string[]): string 
 export function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | null {
   const record = asObject(value)
   const type = record.type
-  if (type !== 'user' && type !== 'assistant' && type !== 'system') return null
   if (typeof record.uuid !== 'string' || typeof record.session_id !== 'string') return null
+  const eventPayload = normalizeClaudeEventAsSystem(record)
+  if (eventPayload) {
+    return {
+      type: 'system',
+      uuid: record.uuid,
+      session_id: record.session_id,
+      parent_tool_use_id: null,
+      provider: 'claude',
+      timestamp: normalizeTimestamp(record.timestamp),
+      origin: asOrigin(record.origin),
+      message: eventPayload,
+    }
+  }
+  if (type !== 'user' && type !== 'assistant' && type !== 'system') return null
   const payload = asObject(record.message)
 
   const taskDescription = type === 'user' ? readString(record, 'task_description', 'taskDescription') : undefined
@@ -153,6 +207,19 @@ export function normalizeClaudeHistoryMessages(messages: unknown[]): SessionMess
 export function normalizeClaudeStreamMessage(value: unknown): SessionMessage | null {
   const record = asObject(value)
   if (typeof record.uuid !== 'string' || typeof record.session_id !== 'string') return null
+
+  const eventPayload = normalizeClaudeEventAsSystem(record)
+  if (eventPayload) {
+    return {
+      type: 'system',
+      uuid: record.uuid,
+      session_id: record.session_id,
+      parent_tool_use_id: null,
+      provider: 'claude',
+      timestamp: new Date().toISOString(),
+      message: eventPayload,
+    }
+  }
 
   if (record.type === 'system') {
     return {
