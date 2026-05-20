@@ -219,6 +219,15 @@ function isHiddenPlumbingMessage(payload: SystemMessagePayload): boolean {
   ) {
     return true
   }
+  // Bare fallback event with no payload — the SDK occasionally emits
+  // `{type:"system"}` with no subtype, which our normalizer fills in as
+  // subtype "system". There's nothing to render.
+  if (payload.subtype === 'system') {
+    const keys = Object.keys(payload).filter(
+      (k) => k !== 'type' && k !== 'subtype' && payload[k] !== undefined && payload[k] !== null,
+    )
+    if (keys.length === 0) return true
+  }
   return false
 }
 

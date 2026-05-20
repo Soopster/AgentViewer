@@ -1,10 +1,18 @@
 import { getAssistantLabel } from '../lib/provider'
+import {
+  extractClaudeReadFileSummary,
+  formatClaudeReadKind,
+  formatClaudeReadMetadata,
+  formatClaudeReadRange,
+  formatClaudeRuntimeCounts,
+  formatClaudeRuntimeDetailLines,
+} from '../lib/claudeSdkFeatures'
 import { pathBasename } from '../lib/projectPaths'
 import { renderMermaidASCII } from 'beautiful-mermaid'
 import { detectTuiCodeFiletypeFromPath, normalizeTuiCodeFiletype } from './codeFiletypes'
 import type { ThreadedBlock, ThreadedMessage, ToolThread } from '../lib/threading'
 import { buildTaskRegistry, parseCreatedTaskId, type TaskRegistry } from '../lib/taskRegistry'
-import type { ContentBlock, Session, SessionInfo } from '../lib/types'
+import type { ContentBlock, Session, SessionInfo, SystemMessagePayload } from '../lib/types'
 import type { TuiDensity } from './theme'
 
 const MAX_PREVIEW_CHARS = 160
@@ -98,6 +106,65 @@ function previewJson(value: unknown): string {
   } catch {
     return truncateLine(String(value))
   }
+}
+
+type McpToolId = { server: string; tool: string }
+
+function parseMcpToolName(name: string): McpToolId | null {
+  if (!name.startsWith('mcp__')) return null
+  const rest = name.slice(5)
+  const idx = rest.indexOf('__')
+  if (idx <= 0) return null
+  const server = rest.slice(0, idx)
+  const tool = rest.slice(idx + 2)
+  if (!server || !tool) return null
+  return { server, tool }
+}
+
+function prettifyFencedJson(text: string): string {
+  return text.replace(/```json\s*\n([\s\S]*?)\n```/g, (match, body: string) => {
+    const trimmed = body.trim()
+    if (trimmed.includes('\n')) return match
+    try {
+      const parsed = JSON.parse(trimmed)
+      return '```json\n' + JSON.stringify(parsed, null, 2) + '\n```'
+    } catch {
+      return match
+    }
+  })
+}
+
+function extractResultText(content: unknown): string {
+  if (typeof content === 'string') return prettifyFencedJson(content)
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue
+    const b = block as { type?: string; text?: unknown }
+    if (b.type === 'text' && typeof b.text === 'string') {
+      parts.push(b.text)
+    } else if (b.type === 'image') {
+      parts.push('[image]')
+    }
+  }
+  return prettifyFencedJson(parts.join('\n').trim())
+}
+
+function mcpHeaderLabel(id: McpToolId): string {
+  return `mcp ${id.server}/${id.tool}`
+}
+
+function summarizeMcpInput(input: Record<string, unknown>): string {
+  const keys = Object.keys(input)
+  if (keys.length === 0) return ''
+  const firstKey = keys[0]
+  const firstVal = input[firstKey]
+  if (typeof firstVal === 'string') {
+    const oneLine = firstVal.replace(/\s+/g, ' ').trim()
+    return keys.length === 1 ? oneLine : `${firstKey}: ${oneLine}`
+  }
+  if (firstVal == null) return firstKey
+  return `${firstKey}: ${previewJson(firstVal)}`
 }
 
 function line(text: string, tone: TuiTranscriptLineTone = 'default'): TuiTranscriptCardLine {
@@ -440,7 +507,49 @@ function resultTextOf(thread: ToolThread): string | null {
   return null
 }
 
+function readInputPathOf(thread: ToolThread): string | undefined {
+  const input = thread.toolUse.input as { file_path?: unknown }
+  return typeof input.file_path === 'string' ? input.file_path : undefined
+}
+
+function readSummaryOf(thread: ToolThread) {
+  return extractClaudeReadFileSummary(thread.result, readInputPathOf(thread))
+}
+
+function readSummaryStatusText(thread: ToolThread): string {
+  const summary = readSummaryOf(thread)
+  const range = summary ? formatClaudeReadRange(summary) : null
+  const kind = summary ? formatClaudeReadKind(summary) : null
+  const parts = [
+    range,
+    kind,
+    summary?.truncatedByTokenCap ? 'partial: token cap' : null,
+  ].filter(Boolean)
+  return parts.length > 0 ? parts.join(' · ') : 'OK'
+}
+
+function claudeRuntimeSuffix(payload: SystemMessagePayload): string {
+  return formatClaudeRuntimeCounts(payload).join(' · ')
+}
+
+function withClaudeRuntimeSuffix(text: string, payload: SystemMessagePayload): string {
+  const suffix = claudeRuntimeSuffix(payload)
+  return suffix ? `${text} · ${suffix}` : text
+}
+
+function claudeRuntimeDetailCardLines(payload: SystemMessagePayload): TuiTranscriptCardLine[] {
+  return formatClaudeRuntimeDetailLines(payload).map((entry) => {
+    if (!entry.trim()) return line('', 'dim')
+    if (entry.endsWith(':')) return line(entry, 'system')
+    return line(`  ${truncateLine(entry)}`, 'dim')
+  })
+}
+
 function resultRawTextOf(thread: ToolThread): string | null {
+  if (thread.toolUse.name === 'Read') {
+    const summary = readSummaryOf(thread)
+    if (summary?.content) return summary.content
+  }
   const content = thread.result?.content
   if (typeof content === 'string') return content || null
   if (Array.isArray(content)) {
@@ -449,6 +558,12 @@ function resultRawTextOf(thread: ToolThread): string | null {
       const text = (block as { type?: string; text?: unknown }).text
       if (block && (block as { type?: string }).type === 'text' && typeof text === 'string') {
         parts.push(text)
+        continue
+      }
+      const file = (block as { type?: string; file?: unknown }).file
+      if (block && (block as { type?: string }).type === 'text' && file && typeof file === 'object') {
+        const content = (file as { content?: unknown }).content
+        if (typeof content === 'string') parts.push(content)
       }
     }
     const joined = parts.join('\n\n')
@@ -733,6 +848,41 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
     ]
   }
 
+  if (toolName === 'Read') {
+    const filePath = typeof input.file_path === 'string' ? pathBasename(input.file_path) : ''
+    const pages = typeof input.pages === 'string' && input.pages.trim() ? ` pages ${input.pages.trim()}` : ''
+    const isError = thread.result?.is_error === true
+    const resultText = thread.result
+      ? isError ? 'ERROR' : readSummaryStatusText(thread)
+      : 'pending'
+    return [
+      line(`tool Read${filePath ? `: ${filePath}` : ''}${pages}`, 'tool'),
+      line(`${isError ? '✗' : thread.result ? '✓' : '…'} ${resultText}`, isError ? 'result_error' : thread.result ? 'result_ok' : 'dim'),
+    ]
+  }
+
+  const mcpId = parseMcpToolName(toolName)
+  if (mcpId) {
+    const isError = thread.result?.is_error === true
+    const summary = summarizeMcpInput(input)
+    const rawResult = extractResultText(thread.result?.content)
+    const resultPreview = thread.result
+      ? rawResult
+        ? truncateLine(rawResult.split('\n').find((l) => l.trim()) ?? rawResult.trim())
+        : 'ok'
+      : 'pending'
+    const label = mcpHeaderLabel(mcpId)
+    const remaining = Math.max(20, MAX_PREVIEW_CHARS - label.length - 2)
+    const header = summary ? `${label}: ${truncateLine(summary, remaining)}` : label
+    return [
+      line(header, 'tool'),
+      line(
+        `${isError ? '✗' : thread.result ? '✓' : '…'} ${resultPreview}`,
+        isError ? 'result_error' : thread.result ? 'result_ok' : 'dim',
+      ),
+    ]
+  }
+
   const target = typeof input.file_path === 'string'
     ? pathBasename(input.file_path)
     : typeof input.path === 'string'
@@ -746,7 +896,7 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
   const resultText = typeof thread.result?.content === 'string'
     ? truncateLine(thread.result.content.trim())
     : thread.result
-    ? 'structured result'
+    ? truncateLine(extractResultText(thread.result.content)) || 'structured result'
     : 'pending'
 
   return [
@@ -793,28 +943,28 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
         const text = typeof block.payload.summary === 'string' ? block.payload.summary
           : typeof block.payload.description === 'string' ? block.payload.description
           : 'task running'
-        return [line(`● ${subagentPrefix}${truncateLine(text)}`, 'thinking')]
+        return [line(`● ${subagentPrefix}${truncateLine(withClaudeRuntimeSuffix(text, block.payload))}`, 'thinking')]
       }
       if (block.subtype === 'hook_started') {
         const name = typeof block.payload.hook_name === 'string' ? block.payload.hook_name : 'hook'
         const event = typeof block.payload.hook_event === 'string' ? block.payload.hook_event : ''
-        return [line(`hook ${name}${event ? ` ▸ ${event}` : ''}`, 'system')]
+        return [line(withClaudeRuntimeSuffix(`hook ${name}${event ? ` ▸ ${event}` : ''}`, block.payload), 'system')]
       }
       if (block.subtype === 'hook_progress') {
         const name = typeof block.payload.hook_name === 'string' ? block.payload.hook_name : 'hook'
         const output = typeof block.payload.output === 'string' && block.payload.output ? block.payload.output
           : typeof block.payload.stdout === 'string' ? block.payload.stdout : ''
-        return [line(`hook ${name}${output ? ` · ${truncateLine(output)}` : ''}`, 'system')]
+        return [line(withClaudeRuntimeSuffix(`hook ${name}${output ? ` · ${truncateLine(output)}` : ''}`, block.payload), 'system')]
       }
       if (block.subtype === 'hook_response') {
         const name = typeof block.payload.hook_name === 'string' ? block.payload.hook_name : 'hook'
         const outcome = typeof block.payload.outcome === 'string' ? block.payload.outcome : ''
-        return [line(`hook ${name}${outcome ? ` ${outcome}` : ''}`, 'system')]
+        return [line(withClaudeRuntimeSuffix(`hook ${name}${outcome ? ` ${outcome}` : ''}`, block.payload), 'system')]
       }
       if (block.subtype === 'memory_recall') {
         const memories = Array.isArray(block.payload.memories) ? block.payload.memories as Array<Record<string, unknown>> : []
         const mode = typeof block.payload.mode === 'string' ? block.payload.mode : ''
-        const head = line(`memory ${mode || 'recall'}: ${memories.length} file${memories.length === 1 ? '' : 's'}`, 'system')
+        const head = line(withClaudeRuntimeSuffix(`memory ${mode || 'recall'}: ${memories.length} file${memories.length === 1 ? '' : 's'}`, block.payload), 'system')
         const previews = memories.slice(0, 2).map((m) => {
           const path = typeof m.path === 'string' ? m.path : ''
           const scope = typeof m.scope === 'string' ? m.scope : ''
@@ -822,7 +972,33 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
         })
         return [head, ...previews]
       }
-      return [line(`system ${block.subtype}`, 'system')]
+      if (block.subtype === 'rate_limit_event') {
+        const info = typeof block.payload.rate_limit_info === 'object' && block.payload.rate_limit_info !== null
+          ? block.payload.rate_limit_info as Record<string, unknown>
+          : null
+        const status = typeof info?.status === 'string' ? info.status : 'updated'
+        const utilization = typeof info?.utilization === 'number' ? ` · ${Math.round(info.utilization * 100)}%` : ''
+        return [line(`rate limit ${status}${utilization}`, status === 'rejected' ? 'result_error' : 'system')]
+      }
+      if (block.subtype === 'prompt_suggestion' && typeof block.payload.suggestion === 'string') {
+        return [line(`suggestion: ${truncateLine(block.payload.suggestion)}`, 'result_ok')]
+      }
+      if (block.subtype === 'auth_status') {
+        const text = typeof block.payload.error === 'string'
+          ? block.payload.error
+          : typeof block.payload.content === 'string' && block.payload.content.trim()
+          ? block.payload.content
+          : block.payload.isAuthenticating === true ? 'authenticating' : 'auth status'
+        return [line(`auth: ${truncateLine(text)}`, typeof block.payload.error === 'string' ? 'result_error' : 'system')]
+      }
+      if (block.subtype === 'permission_denied') {
+        const tool = typeof block.payload.tool_name === 'string' ? block.payload.tool_name : 'tool'
+        return [line(`permission denied: ${tool}`, 'result_error')]
+      }
+      if (block.subtype === 'notification' && typeof block.payload.text === 'string') {
+        return [line(`notice: ${truncateLine(block.payload.text)}`, 'system')]
+      }
+      return [line(withClaudeRuntimeSuffix(`system ${block.subtype}`, block.payload), 'system')]
     }
     case 'image':
       return [line('image attachment', 'muted')]
@@ -1142,22 +1318,27 @@ function parseReadResultLines(raw: string): Array<{ num: string; code: string }>
 
 function readCodeBlockFromTool(thread: ToolThread, key: string): TuiTranscriptCodeBlock | null {
   if (!thread.result || thread.result.is_error) return null
+  const summary = readSummaryOf(thread)
+  if (summary && summary.kind !== 'text') return null
   const raw = resultRawTextOf(thread)
   if (!raw) return null
   const input = thread.toolUse.input as { file_path?: string }
-  const filePath = typeof input.file_path === 'string' ? input.file_path : undefined
+  const filePath = summary?.filePath ?? (typeof input.file_path === 'string' ? input.file_path : undefined)
   const parsed = parseReadResultLines(raw)
   const content = parsed.map((entry) => entry.code).join('\n')
   if (!content.trim()) return null
   const lineNumbers = parsed.map((entry) => entry.num)
   const hasLineNumbers = lineNumbers.length > 0 && lineNumbers.every((num) => /^\d+$/.test(num))
+  const structuredLineNumbers = summary?.startLine != null
+    ? parsed.map((_, index) => String(summary.startLine! + index))
+    : undefined
   return {
     key,
     lang: displayLanguageFromPath(filePath),
     filetype: detectTuiCodeFiletypeFromPath(filePath),
     content,
     filePath,
-    lineNumbers: hasLineNumbers ? lineNumbers : undefined,
+    lineNumbers: structuredLineNumbers ?? (hasLineNumbers ? lineNumbers : undefined),
   }
 }
 
@@ -1204,6 +1385,36 @@ function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[], activeForms?: Task
       const readBlock = readCodeBlockFromTool(block, `read${n++}`)
       if (readBlock) all.push(readBlock)
       lines.push(...formatBlockExpanded(block, activeForms, taskRegistry).filter((l) => l.text.trim()))
+      continue
+    }
+
+    if (block.type === 'tool_thread' && parseMcpToolName(block.toolUse.name)) {
+      const rawLines = formatBlockExpanded(block, activeForms, taskRegistry).filter((l) => l.text.trim())
+      const lifted: TuiTranscriptCardLine[] = []
+      let i = 0
+      while (i < rawLines.length) {
+        const cur = rawLines[i]
+        const openMatch = cur.text.match(/^```(\S*)/)
+        if (openMatch) {
+          const lang = (openMatch[1] || 'text').toLowerCase()
+          let j = i + 1
+          const contentLines: string[] = []
+          while (j < rawLines.length && rawLines[j].text.trim() !== '```') {
+            contentLines.push(rawLines[j].text)
+            j++
+          }
+          if (j < rawLines.length) {
+            const content = contentLines.join('\n')
+            all.push({ key: `mcp${n++}`, lang, filetype: normalizeTuiCodeFiletype(lang), content })
+            lifted.push(line(`[code: ${lang}]`, 'dim'))
+            i = j + 1
+            continue
+          }
+        }
+        lifted.push(cur)
+        i++
+      }
+      lines.push(...lifted)
       continue
     }
 
@@ -1310,12 +1521,19 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
 
       if (toolName === 'Read') {
         const filePath = typeof input.file_path === 'string' ? input.file_path : ''
+        const pages = typeof input.pages === 'string' && input.pages.trim() ? ` pages ${input.pages.trim()}` : ''
         const isError = block.result?.is_error === true
+        const summary = readSummaryOf(block)
         const lines: TuiTranscriptCardLine[] = [
-          line(`tool Read${filePath ? `: ${filePath}` : ''}`, 'tool'),
+          line(`tool Read${filePath ? `: ${filePath}` : ''}${pages}`, 'tool'),
         ]
         if (!block.result) return lines
-        lines.push(line(isError ? '✗ ERROR' : '✓ OK', isError ? 'result_error' : 'result_ok'))
+        lines.push(line(isError ? '✗ ERROR' : `✓ ${summary ? readSummaryStatusText(block) : 'OK'}`, isError ? 'result_error' : 'result_ok'))
+        if (summary) {
+          for (const entry of formatClaudeReadMetadata(summary)) {
+            lines.push(line(`  ${entry}`, entry === 'token cap' ? 'result_error' : 'dim'))
+          }
+        }
         if (isError) {
           const content = resultRawTextOf(block)
           if (content) {
@@ -1327,6 +1545,51 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
                 .filter((l) => l.length > 0)
                 .map((l) => line(truncateLine(l), 'muted')),
             )
+          }
+        }
+        return lines
+      }
+
+      const mcpId = parseMcpToolName(toolName)
+      if (mcpId) {
+        const isError = block.result?.is_error === true
+        const lines: TuiTranscriptCardLine[] = [line(mcpHeaderLabel(mcpId), 'tool')]
+        const inputKeys = Object.keys(input)
+        for (const key of inputKeys) {
+          const value = input[key]
+          if (typeof value === 'string') {
+            const trimmed = value.trim()
+            if (!trimmed) continue
+            const valueLines = sanitizeLine(trimmed).split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0)
+            if (valueLines.length <= 1 && (valueLines[0]?.length ?? 0) + key.length + 2 <= MAX_PREVIEW_CHARS) {
+              lines.push(line(`${key}: ${valueLines[0] ?? ''}`, 'dim'))
+            } else {
+              lines.push(line(`${key}:`, 'dim'))
+              const shown = valueLines.slice(0, MAX_BLOCK_LINES)
+              for (const l of shown) lines.push(line(`  ${truncateLine(l)}`, 'muted'))
+              if (valueLines.length > shown.length) {
+                lines.push(line(`  … ${valueLines.length - shown.length} more lines`, 'dim'))
+              }
+            }
+          } else if (value == null || typeof value === 'number' || typeof value === 'boolean') {
+            lines.push(line(`${key}: ${value === null ? 'null' : String(value)}`, 'dim'))
+          } else {
+            lines.push(line(`${key}: ${previewJson(value)}`, 'dim'))
+          }
+        }
+        if (!block.result) {
+          lines.push(line('… pending', 'dim'))
+          return lines
+        }
+        const resultText = extractResultText(block.result.content)
+        lines.push(line(isError ? '✗ ERROR' : '✓ OK', isError ? 'result_error' : 'result_ok'))
+        // Result text is emitted unfiltered (no line cap, fences left in) so
+        // extractCodeBlocksFromBlocks can lift fenced code into TUI code blocks.
+        if (resultText) {
+          const resultLines = sanitizeLine(resultText).split('\n').map((l) => l.trimEnd())
+          for (const l of resultLines) {
+            if (l.length === 0) continue
+            lines.push(line(l, 'muted'))
           }
         }
         return lines
@@ -1348,6 +1611,8 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
       const isError = block.result?.is_error === true
       const content = typeof block.result?.content === 'string'
         ? sanitizeLine(block.result.content).trim()
+        : Array.isArray(block.result?.content)
+        ? sanitizeLine(extractResultText(block.result.content)).trim() || null
         : null
 
       if (content) {
@@ -1429,9 +1694,116 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
         if (typeof patch?.error === 'string' && patch.error.trim()) {
           lines.push(line(`  error: ${truncateLine(patch.error.trim())}`, 'result_error'))
         }
+        return [...lines, ...claudeRuntimeDetailCardLines(block.payload)]
+      }
+      if (block.subtype === 'task_started' || block.subtype === 'task_notification') {
+        const text = typeof block.payload.summary === 'string' ? block.payload.summary
+          : typeof block.payload.description === 'string' ? block.payload.description
+          : typeof block.payload.content === 'string' ? block.payload.content
+          : 'task'
+        const status = typeof block.payload.status === 'string' ? ` · ${block.payload.status}` : ''
+        return [
+          line(`● ${text}${status}`, 'thinking'),
+          ...claudeRuntimeDetailCardLines(block.payload),
+        ]
+      }
+      if (block.subtype === 'rate_limit_event') {
+        const info = typeof block.payload.rate_limit_info === 'object' && block.payload.rate_limit_info !== null
+          ? block.payload.rate_limit_info as Record<string, unknown>
+          : null
+        const lines: TuiTranscriptCardLine[] = [
+          line(`rate limit ${typeof info?.status === 'string' ? info.status : 'updated'}`, info?.status === 'rejected' ? 'result_error' : 'system'),
+        ]
+        if (typeof info?.rateLimitType === 'string') lines.push(line(`  limit: ${info.rateLimitType}`, 'dim'))
+        if (typeof info?.utilization === 'number') lines.push(line(`  utilization: ${Math.round(info.utilization * 100)}%`, 'dim'))
+        if (typeof info?.overageStatus === 'string') lines.push(line(`  overage: ${info.overageStatus}`, 'dim'))
+        if (typeof info?.overageDisabledReason === 'string') lines.push(line(`  overage disabled: ${info.overageDisabledReason}`, 'dim'))
         return lines
       }
-      return [line(`system ${block.subtype}`, 'system')]
+      if (block.subtype === 'prompt_suggestion' && typeof block.payload.suggestion === 'string') {
+        return [line('prompt suggestion', 'result_ok'), line(`  ${truncateLine(block.payload.suggestion)}`, 'dim')]
+      }
+      if (block.subtype === 'auth_status') {
+        const output = Array.isArray(block.payload.output)
+          ? block.payload.output.filter((entry): entry is string => typeof entry === 'string')
+          : []
+        const content = typeof block.payload.content === 'string' ? block.payload.content : ''
+        const error = typeof block.payload.error === 'string' ? block.payload.error : ''
+        return [
+          line(`auth ${block.payload.isAuthenticating === true ? 'authenticating' : 'status'}`, error ? 'result_error' : 'system'),
+          ...[content, ...output, error].filter(Boolean).map((entry) => line(`  ${truncateLine(entry)}`, error ? 'result_error' : 'dim')),
+        ]
+      }
+      if (block.subtype === 'permission_denied') {
+        const tool = typeof block.payload.tool_name === 'string' ? block.payload.tool_name : 'tool'
+        const reason = typeof block.payload.decision_reason === 'string' ? block.payload.decision_reason : ''
+        const message = typeof block.payload.message === 'string' ? block.payload.message : ''
+        return [
+          line(`permission denied: ${tool}`, 'result_error'),
+          ...[reason, message].filter(Boolean).map((entry) => line(`  ${truncateLine(entry)}`, 'dim')),
+        ]
+      }
+      if (block.subtype === 'notification' && typeof block.payload.text === 'string') {
+        return [line(`notice: ${block.payload.text}`, 'system')]
+      }
+      if (block.subtype === 'memory_recall') {
+        const memories = Array.isArray(block.payload.memories) ? block.payload.memories as Array<Record<string, unknown>> : []
+        const mode = typeof block.payload.mode === 'string' ? block.payload.mode : 'recall'
+        return [
+          line(`memory ${mode}: ${memories.length} file${memories.length === 1 ? '' : 's'}`, 'system'),
+          ...memories.map((m) => {
+            const path = typeof m.path === 'string' ? m.path : ''
+            const scope = typeof m.scope === 'string' ? m.scope : ''
+            return line(`  ${scope ? `[${scope}] ` : ''}${truncateLine(path)}`, 'muted')
+          }),
+        ]
+      }
+      if (block.subtype === 'api_retry') {
+        const attempt = typeof block.payload.attempt === 'number' ? block.payload.attempt : undefined
+        const max = typeof block.payload.max_retries === 'number' ? block.payload.max_retries : undefined
+        const delayMs = typeof block.payload.retry_delay_ms === 'number' ? block.payload.retry_delay_ms : undefined
+        const status = typeof block.payload.error_status === 'number' ? block.payload.error_status : null
+        const head = attempt != null && max != null ? `api retry ${attempt}/${max}` : 'api retry'
+        const lines: TuiTranscriptCardLine[] = [line(head, 'result_error')]
+        if (delayMs != null) lines.push(line(`  delay: ${(delayMs / 1000).toFixed(1)}s`, 'dim'))
+        if (status != null) lines.push(line(`  HTTP ${status}`, 'dim'))
+        const err = block.payload.error && typeof block.payload.error === 'object'
+          ? block.payload.error as Record<string, unknown>
+          : null
+        if (typeof err?.message === 'string') lines.push(line(`  ${truncateLine(err.message)}`, 'dim'))
+        return lines
+      }
+      if (block.subtype === 'session_state_changed') {
+        const state = typeof block.payload.state === 'string' ? block.payload.state : 'changed'
+        return [line(`session state: ${state}`, 'system')]
+      }
+      if (block.subtype === 'local_command_output') {
+        const text = typeof block.payload.content === 'string' ? block.payload.content : ''
+        if (!text.trim()) return [line('local command output', 'system')]
+        const lines: TuiTranscriptCardLine[] = [line('local command output', 'system')]
+        for (const l of sanitizeLine(text).split('\n').map((s) => s.trimEnd()).filter((s) => s.length > 0).slice(0, MAX_BLOCK_LINES)) {
+          lines.push(line(`  ${truncateLine(l)}`, 'dim'))
+        }
+        return lines
+      }
+      if (block.subtype === 'result') {
+        const resultSubtype = typeof block.payload.result_subtype === 'string' ? block.payload.result_subtype : ''
+        const isError = resultSubtype && resultSubtype !== 'success'
+        const head = isError ? `run ended: ${resultSubtype.replace(/_/g, ' ')}` : 'run completed'
+        const lines: TuiTranscriptCardLine[] = [line(head, isError ? 'result_error' : 'result_ok')]
+        if (typeof block.payload.num_turns === 'number') lines.push(line(`  ${block.payload.num_turns} turn${block.payload.num_turns === 1 ? '' : 's'}`, 'dim'))
+        if (typeof block.payload.duration_ms === 'number') lines.push(line(`  ${(block.payload.duration_ms / 1000).toFixed(1)}s`, 'dim'))
+        if (typeof block.payload.total_cost_usd === 'number') lines.push(line(`  $${block.payload.total_cost_usd.toFixed(4)}`, 'dim'))
+        const errors = Array.isArray(block.payload.errors) ? block.payload.errors as unknown[] : []
+        for (const e of errors.slice(0, 3)) {
+          if (typeof e === 'string' && e.trim()) lines.push(line(`  ${truncateLine(e.trim())}`, 'result_error'))
+        }
+        return lines
+      }
+      return [
+        line(withClaudeRuntimeSuffix(`system ${block.subtype}`, block.payload), 'system'),
+        ...claudeRuntimeDetailCardLines(block.payload),
+      ]
     }
     case 'image':
       return [line('image attachment', 'muted')]

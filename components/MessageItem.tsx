@@ -7,6 +7,15 @@ import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, ClaudeSystemBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
+import {
+  extractClaudeReadFileSummary,
+  formatClaudeReadKind,
+  formatClaudeReadMetadata,
+  formatClaudeReadRange,
+  formatClaudeRuntimeCounts,
+  formatClaudeRuntimeDetailLines,
+  type ClaudeReadFileSummary,
+} from '@/lib/claudeSdkFeatures'
 import type {
   TaskCreateInput,
   TaskCreateOutput,
@@ -38,6 +47,23 @@ const TOOL_COLORS: Record<string, string> = {
 
 function toolColor(name: string) {
   return TOOL_COLORS[name] ?? 'var(--t-other)'
+}
+
+type McpToolId = { server: string; tool: string }
+
+function parseMcpToolName(name: string): McpToolId | null {
+  if (!name.startsWith('mcp__')) return null
+  const rest = name.slice(5)
+  const idx = rest.indexOf('__')
+  if (idx <= 0) return null
+  const server = rest.slice(0, idx)
+  const tool = rest.slice(idx + 2)
+  if (!server || !tool) return null
+  return { server, tool }
+}
+
+function isMcpToolName(name: string): boolean {
+  return parseMcpToolName(name) !== null
 }
 
 function formatStableMessageTime(value?: string): string {
@@ -656,6 +682,305 @@ function GenericToolCard({ thread }: { thread: ToolThread }) {
   )
 }
 
+// ── MCP tool card ─────────────────────────────────────────────────────────────
+
+const MCP_CODE_LANG_KEYS: Record<string, string> = {
+  function: 'javascript',
+  script: 'javascript',
+  code: 'javascript',
+  js: 'javascript',
+  javascript: 'javascript',
+  ts: 'typescript',
+  typescript: 'typescript',
+  python: 'python',
+  py: 'python',
+  sql: 'sql',
+  html: 'html',
+  css: 'css',
+  shell: 'bash',
+  bash: 'bash',
+  command: 'bash',
+  query: 'text',
+}
+
+function mcpFieldLanguage(key: string, value: string): string | null {
+  const lc = key.toLowerCase()
+  if (MCP_CODE_LANG_KEYS[lc]) return MCP_CODE_LANG_KEYS[lc]
+  if (value.includes('\n')) return 'text'
+  return null
+}
+
+function mcpPreviewText(input: Record<string, unknown>): string | null {
+  const keys = Object.keys(input)
+  if (keys.length === 0) return null
+  const firstKey = keys[0]
+  const firstVal = input[firstKey]
+  let preview: string
+  if (typeof firstVal === 'string') {
+    const oneLine = firstVal.replace(/\s+/g, ' ').trim()
+    preview = keys.length === 1 ? oneLine : `${firstKey}: ${oneLine}`
+  } else if (firstVal == null) {
+    preview = firstKey
+  } else {
+    const json = JSON.stringify(firstVal)
+    preview = `${firstKey}: ${json}`
+  }
+  return preview.length > 0 ? preview : null
+}
+
+function McpToolCard({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const { toolUse, result } = thread
+  const id = parseMcpToolName(toolUse.name)!
+  const c = toolColor(toolUse.name)
+  const input = (toolUse.input ?? {}) as Record<string, unknown>
+  const inputKeys = Object.keys(input)
+  const preview = useMemo(() => mcpPreviewText(input), [input])
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderLeft: `2px solid ${c}`,
+        borderRadius: 6,
+        overflow: 'hidden',
+        fontSize: 13,
+        marginTop: 4,
+      }}
+    >
+      <div
+        onClick={() => setOpen(v => !v)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        className="av-tool-header"
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 14px',
+          background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          userSelect: 'none',
+          cursor: 'pointer',
+        }}
+      >
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 10, fontWeight: 600, letterSpacing: '0.08em',
+          color: c,
+          background: 'var(--surface-3)',
+          border: `1px solid ${c}33`,
+          borderRadius: 3,
+          padding: '1px 5px',
+          flexShrink: 0,
+        }}>
+          MCP
+        </span>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11, color: 'var(--text-3)',
+          letterSpacing: '0.04em',
+          flexShrink: 0,
+        }}>
+          {id.server}
+        </span>
+        <span style={{ color: 'var(--text-3)', fontSize: 11, flexShrink: 0 }}>·</span>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 13, color: 'var(--text)', fontWeight: 500,
+          flexShrink: 0,
+        }}>
+          {id.tool}
+        </span>
+        {!open && preview && (
+          <span style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            color: 'var(--text-3)', fontSize: 11,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            flex: 1, marginLeft: 4,
+          }}>
+            {preview}
+          </span>
+        )}
+        <span style={{ color: 'var(--text-3)', fontSize: 11, marginLeft: 'auto', flexShrink: 0 }}>
+          {inputKeys.length === 0 ? '— no args' : open ? '▲' : '▼'}
+        </span>
+      </div>
+      {open && inputKeys.length > 0 && (
+        <div style={{
+          padding: '8px 14px',
+          background: 'var(--surface)',
+          borderTop: '1px solid var(--border)',
+          display: 'flex', flexDirection: 'column', gap: 6,
+        }}>
+          {inputKeys.map((key) => {
+            const value = input[key]
+            if (typeof value === 'string') {
+              const lang = mcpFieldLanguage(key, value)
+              const multiline = value.includes('\n') || value.length > 80
+              if (lang && multiline) {
+                return (
+                  <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.04em',
+                    }}>
+                      {key}
+                    </span>
+                    <CodeViewer code={value} language={lang} maxHeight={320} />
+                  </div>
+                )
+              }
+              return (
+                <div key={key} style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 12, color: 'var(--text-2)',
+                  lineHeight: 1.6,
+                  display: 'flex', gap: 8,
+                }}>
+                  <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{key}:</span>
+                  <span style={{ color: 'var(--text)', wordBreak: 'break-all' }}>{value}</span>
+                </div>
+              )
+            }
+            if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+              return (
+                <div key={key} style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 12, color: 'var(--text-2)',
+                  lineHeight: 1.6,
+                  display: 'flex', gap: 8,
+                }}>
+                  <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{key}:</span>
+                  <span style={{ color: 'var(--text)' }}>{String(value)}</span>
+                </div>
+              )
+            }
+            const json = JSON.stringify(value, null, 2)
+            return (
+              <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.04em',
+                }}>
+                  {key}
+                </span>
+                <CodeViewer code={json} language="json" maxHeight={240} />
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {result && <McpResultSection result={result} />}
+    </div>
+  )
+}
+
+function prettifyFencedJson(text: string): string {
+  return text.replace(/```json\s*\n([\s\S]*?)\n```/g, (match, body: string) => {
+    const trimmed = body.trim()
+    if (trimmed.includes('\n')) return match
+    try {
+      const parsed = JSON.parse(trimmed)
+      return '```json\n' + JSON.stringify(parsed, null, 2) + '\n```'
+    } catch {
+      return match
+    }
+  })
+}
+
+function McpResultSection({ result }: { result: ToolResultBlock }) {
+  const [expanded, setExpanded] = useState(false)
+  const imageBlock = useMemo(() => (
+    Array.isArray(result.content)
+      ? result.content.find((b): b is ImageBlock => (b as ImageBlock).type === 'image') ?? null
+      : null
+  ), [result.content])
+  const raw = useMemo(() => {
+    if (imageBlock) return ''
+    return prettifyFencedJson(resultToString(result.content))
+  }, [imageBlock, result.content])
+  const isError = result.is_error === true
+
+  if (imageBlock) {
+    return (
+      <>
+        <ResultStatusBar isError={false} />
+        <ImageResultSection block={imageBlock} />
+      </>
+    )
+  }
+
+  if (isError) return <GenericResultSection raw={raw} isError />
+
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return <ResultStatusBar isError={false} />
+  }
+
+  const nonEmpty = trimmed.split('\n').filter(l => l.trim())
+  if (nonEmpty.length === 1 && trimmed.length < 140) {
+    return (
+      <div style={{
+        padding: '4px 12px',
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 11, color: 'var(--green)',
+        background: 'rgba(45,212,160,0.05)',
+        borderTop: '1px solid rgba(45,212,160,0.15)',
+        letterSpacing: '0.03em',
+      }}>
+        ✓ {trimmed}
+      </div>
+    )
+  }
+
+  const APPROX_LINE_LIMIT = 24
+  const lineCount = trimmed.split('\n').length
+  const collapsible = lineCount > APPROX_LINE_LIMIT
+  let visible = collapsible && !expanded
+    ? trimmed.split('\n').slice(0, APPROX_LINE_LIMIT).join('\n')
+    : trimmed
+  // Close any code fence the truncation may have orphaned, so ReactMarkdown still
+  // renders the partial block as code rather than leaking syntax into the rest of the page.
+  if (collapsible && !expanded) {
+    const fenceCount = (visible.match(/^```/gm) ?? []).length
+    if (fenceCount % 2 === 1) visible += '\n```'
+  }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)' }}>
+      <ResultStatusBar isError={false} />
+      <div style={{
+        padding: '6px 14px 2px',
+        background: 'var(--surface)',
+        fontSize: 13, color: 'var(--text)', lineHeight: 1.65,
+      }}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+          {visible}
+        </ReactMarkdown>
+      </div>
+      {collapsible && (
+        <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+          {expanded ? '▲ collapse' : `▼ ${lineCount - APPROX_LINE_LIMIT} more lines`}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function ResultStatusBar({ isError }: { isError: boolean }) {
+  return (
+    <div style={{
+      padding: '3px 12px', fontSize: 11,
+      fontFamily: "'IBM Plex Mono', monospace",
+      fontWeight: 500, letterSpacing: '0.06em',
+      color: isError ? 'var(--red)' : 'var(--green)',
+      background: isError ? 'rgba(240,96,96,0.06)' : 'rgba(45,212,160,0.05)',
+      borderTop: `1px solid ${isError ? 'rgba(240,96,96,0.25)' : 'var(--border)'}`,
+    }}>
+      {isError ? '✗ ERROR' : '✓ OK'}
+    </div>
+  )
+}
+
 // ── AskUserQuestion card ──────────────────────────────────────────────────────
 
 type AUQOption  = { label: string; description?: string; preview?: string }
@@ -978,12 +1303,19 @@ function BashCard({ thread }: { thread: ToolThread }) {
 
 function ReadCard({ thread }: { thread: ToolThread }) {
   const [hovered, setHovered] = useState(false)
-  const input = thread.toolUse.input as { file_path?: string; offset?: number; limit?: number }
+  const input = thread.toolUse.input as { file_path?: string; offset?: number; limit?: number; pages?: string }
   const filePath = input.file_path ?? ''
   const c = toolColor('Read')
+  const readSummary = useMemo(
+    () => extractClaudeReadFileSummary(thread.result, filePath),
+    [thread.result, filePath],
+  )
+  const readRangeLabel = readSummary?.structured ? formatClaudeReadRange(readSummary) : null
+  const readKindLabel = readSummary ? formatClaudeReadKind(readSummary) : null
   const rangeLabel = [
     input.offset != null ? `@${input.offset}` : null,
     input.limit  != null ? `+${input.limit}`  : null,
+    input.pages ? `pages ${input.pages}` : null,
   ].filter(Boolean).join(' ')
   return (
     <CardShell color={c} result={thread.result} toolName="Read" resultFilePath={filePath}
@@ -1003,6 +1335,15 @@ function ReadCard({ thread }: { thread: ToolThread }) {
           </span>
           {rangeLabel && (
             <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>{rangeLabel}</span>
+          )}
+          {readRangeLabel && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>{readRangeLabel}</span>
+          )}
+          {readKindLabel && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--cyan)', flexShrink: 0 }}>{readKindLabel}</span>
+          )}
+          {readSummary?.truncatedByTokenCap && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--yellow)', flexShrink: 0 }}>token cap</span>
           )}
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
             {filePath}
@@ -2505,6 +2846,7 @@ function ToolThreadCard({ thread }: { thread: ToolThread }) {
   if (name === 'TaskCreate' || name === 'TaskList' || name === 'TaskGet' || name === 'TaskUpdate' || name === 'TaskStop') return <TaskCard thread={thread} />
   if (name === 'CronCreate' || name === 'CronList' || name === 'CronDelete') return <CronCard thread={thread} />
   if (name === 'ListMcpResourcesTool' || name === 'ReadMcpResourceTool') return <McpCard thread={thread} />
+  if (isMcpToolName(name)) return <McpToolCard thread={thread} />
   return <GenericToolCard thread={thread} />
 }
 
@@ -2514,9 +2856,16 @@ function resultToString(content: ToolResultBlock['content']): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
     return content
-      .map(b => ((b as { type: string; text?: string }).type === 'text'
-        ? (b as { text: string }).text
-        : JSON.stringify(b)))
+      .map(b => {
+        if ((b as { type: string }).type !== 'text') return JSON.stringify(b)
+        const text = (b as { text?: unknown }).text
+        if (typeof text === 'string') return text
+        const file = (b as { file?: unknown }).file
+        if (file && typeof file === 'object' && typeof (file as { content?: unknown }).content === 'string') {
+          return (file as { content: string }).content
+        }
+        return JSON.stringify(b)
+      })
       .join('\n')
   }
   return JSON.stringify(content, null, 2)
@@ -2541,9 +2890,11 @@ function parseFileLines(text: string) {
   return lines
 }
 
-function ReadResultSection({ raw, filePath }: { raw: string; filePath?: string }) {
+function ReadResultSection({ raw, filePath, summary }: { raw: string; filePath?: string; summary?: ClaudeReadFileSummary }) {
   const [expanded, setExpanded] = useState(false)
   const LIMIT = 25
+  const displayFilePath = summary?.filePath ?? filePath
+  const readMetadata = summary ? formatClaudeReadMetadata(summary) : []
 
   const parts = useMemo(() => splitResultParts(raw), [raw])
   const textPartLines = useMemo(
@@ -2568,6 +2919,26 @@ function ReadResultSection({ raw, filePath }: { raw: string; filePath?: string }
 
   return (
     <div style={{ borderTop: '1px solid var(--border)' }}>
+      {readMetadata.length > 0 && (
+        <div style={{
+          padding: '4px 12px',
+          display: 'flex',
+          gap: 10,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          color: 'var(--text-3)',
+          background: 'var(--surface)',
+          borderBottom: '1px solid var(--border)',
+        }}>
+          {readMetadata.map((entry) => (
+            <span key={entry} style={{ color: entry === 'token cap' ? 'var(--yellow)' : undefined }}>
+              {entry === 'token cap' ? 'Partial read: token cap reached' : entry}
+            </span>
+          ))}
+        </div>
+      )}
       {processedParts.map((part, i) =>
         part.kind === 'system_reminder'
           ? <SystemReminderCard key={i} block={{ type: 'system_reminder', content: part.content }} />
@@ -2576,9 +2947,9 @@ function ReadResultSection({ raw, filePath }: { raw: string; filePath?: string }
               <div key={i}>
                 <CodeViewer
                   code={part.visibleLines.map(line => line.code).join('\n')}
-                  filePath={filePath}
-                  showLineNumbers={shouldShowLineNumbers(part.visibleLines)}
-                  startingLineNumber={inferStartingLineNumber(part.visibleLines)}
+                  filePath={displayFilePath}
+                  showLineNumbers={summary?.structured && summary.startLine != null ? true : shouldShowLineNumbers(part.visibleLines)}
+                  startingLineNumber={summary?.structured && summary.startLine != null ? summary.startLine : inferStartingLineNumber(part.visibleLines)}
                   maxHeight={500}
                 />
               </div>
@@ -2716,12 +3087,26 @@ function ToolResultSection({ result, toolName, filePath }: { result: ToolResultB
       ? result.content.find((b): b is ImageBlock => (b as ImageBlock).type === 'image') ?? null
       : null
   ), [result.content])
-  const raw = useMemo(() => imageBlock ? '' : resultToString(result.content), [imageBlock, result.content])
+  const readSummary = useMemo(
+    () => toolName === 'Read' ? extractClaudeReadFileSummary(result, filePath) : null,
+    [filePath, result, toolName],
+  )
+  const raw = useMemo(
+    () => imageBlock ? '' : toolName === 'Read' && readSummary?.content ? readSummary.content : resultToString(result.content),
+    [imageBlock, readSummary?.content, result.content, toolName],
+  )
   const nonEmpty = useMemo(() => raw.split('\n').filter(l => l.trim()), [raw])
 
   if (imageBlock) return <ImageResultSection block={imageBlock} />
 
-  if (result.is_error) return <GenericResultSection raw={raw} isError />
+  if (result.is_error) return <GenericResultSection raw={readSummary?.content ?? raw} isError />
+
+  if (toolName === 'Read' && readSummary && readSummary.kind !== 'text') {
+    const metadata = formatClaudeReadMetadata(readSummary).filter((entry) => entry !== 'token cap')
+    return <GenericResultSection raw={readSummary.content} note={metadata.length > 0 ? `· ${metadata.join(' · ')}` : undefined} />
+  }
+
+  if (toolName === 'Read') return <ReadResultSection raw={readSummary?.content ?? raw} filePath={filePath} summary={readSummary ?? undefined} />
 
   if (nonEmpty.length === 1 && raw.length < 140) {
     return (
@@ -2737,8 +3122,6 @@ function ToolResultSection({ result, toolName, filePath }: { result: ToolResultB
       </div>
     )
   }
-
-  if (toolName === 'Read') return <ReadResultSection raw={raw} filePath={filePath} />
 
   const persistedMatch = raw.match(/<persisted-output>[\s\S]*?Preview[^\n]*:\n([\s\S]*)/)
   if (persistedMatch) return <GenericResultSection raw={persistedMatch[1].trim()} note="· preview" />
@@ -3198,6 +3581,14 @@ function safeJson(value: unknown): string {
   }
 }
 
+function formatClaudeTimestamp(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  const ms = value > 10_000_000_000 ? value : value * 1000
+  const date = new Date(ms)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+}
+
 function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
@@ -3220,48 +3611,124 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       default: return errorCode.replace(/_/g, ' ')
     }
   }, [errorCode])
+  const runtimeCountText = useMemo(() => formatClaudeRuntimeCounts(payload).join(' · '), [payload])
+  const runtimeDetailBody = useMemo(() => formatClaudeRuntimeDetailLines(payload).join('\n'), [payload])
   const detailPreview = useMemo(() => {
+    const withRuntime = (value: string) => runtimeCountText ? `${value} · ${runtimeCountText}` : value
     if (errorSummary) return apiErrorStatus ? `${errorSummary} (HTTP ${apiErrorStatus})` : errorSummary
-    if (content.trim()) return content.replace(/\s+/g, ' ').trim()
-    if (subtype === 'compact_boundary') return 'Conversation compacted'
-    if (subtype === 'task_started' && typeof payload.description === 'string') return payload.description
-    if (subtype === 'task_progress' && typeof payload.summary === 'string') return payload.summary
+    if (content.trim()) return withRuntime(content.replace(/\s+/g, ' ').trim())
+    if (subtype === 'compact_boundary') return withRuntime('Conversation compacted')
+    if (subtype === 'task_started' && typeof payload.description === 'string') return withRuntime(payload.description)
+    if (subtype === 'task_progress' && typeof payload.summary === 'string') return withRuntime(payload.summary)
     if (subtype === 'task_updated') {
-      if (typeof payload.summary === 'string') return payload.summary
+      if (typeof payload.summary === 'string') return withRuntime(payload.summary)
       const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch as Record<string, unknown> : null
-      if (typeof patch?.description === 'string') return patch.description
-      if (typeof patch?.status === 'string') return `Task ${patch.status}`
+      if (typeof patch?.description === 'string') return withRuntime(patch.description)
+      if (typeof patch?.status === 'string') return withRuntime(`Task ${patch.status}`)
     }
-    if (subtype === 'task_notification' && typeof payload.summary === 'string') return payload.summary
+    if (subtype === 'task_notification' && typeof payload.summary === 'string') return withRuntime(payload.summary)
     if (subtype === 'tool_progress' && typeof payload.tool_name === 'string') {
-      return `${payload.tool_name} · ${typeof payload.elapsed_time_seconds === 'number' ? `${payload.elapsed_time_seconds}s` : 'running'}`
+      return withRuntime(`${payload.tool_name} · ${typeof payload.elapsed_time_seconds === 'number' ? `${payload.elapsed_time_seconds}s` : 'running'}`)
     }
-    if (subtype === 'tool_use_summary' && typeof payload.summary === 'string') return payload.summary
-    if (subtype === 'status' && typeof payload.status === 'string') return payload.status
+    if (subtype === 'tool_use_summary' && typeof payload.summary === 'string') return withRuntime(payload.summary)
+    if (subtype === 'status' && typeof payload.status === 'string') return withRuntime(payload.status)
     if (subtype === 'hook_started') {
       const hookName = typeof payload.hook_name === 'string' ? payload.hook_name : 'hook'
       const event = typeof payload.hook_event === 'string' ? payload.hook_event : ''
-      return event ? `${hookName} ▸ ${event}` : hookName
+      return withRuntime(event ? `${hookName} ▸ ${event}` : hookName)
     }
     if (subtype === 'hook_progress') {
       const hookName = typeof payload.hook_name === 'string' ? payload.hook_name : 'hook'
       const output = typeof payload.output === 'string' && payload.output ? payload.output
         : typeof payload.stdout === 'string' ? payload.stdout : ''
-      return output ? `${hookName} · ${output.replace(/\s+/g, ' ').trim().slice(0, 120)}` : hookName
+      return withRuntime(output ? `${hookName} · ${output.replace(/\s+/g, ' ').trim().slice(0, 120)}` : hookName)
     }
     if (subtype === 'hook_response') {
       const hookName = typeof payload.hook_name === 'string' ? payload.hook_name : 'hook'
       const outcome = typeof payload.outcome === 'string' ? payload.outcome : ''
-      return outcome ? `${hookName} ${outcome}` : hookName
+      return withRuntime(outcome ? `${hookName} ${outcome}` : hookName)
     }
     if (subtype === 'memory_recall') {
       const memories = Array.isArray(payload.memories) ? payload.memories : []
       const mode = typeof payload.mode === 'string' ? payload.mode : ''
       const count = memories.length
-      return `${count} memor${count === 1 ? 'y' : 'ies'}${mode ? ` · ${mode}` : ''}`
+      return withRuntime(`${count} memor${count === 1 ? 'y' : 'ies'}${mode ? ` · ${mode}` : ''}`)
     }
-    return 'Claude system event'
-  }, [apiErrorStatus, content, errorSummary, payload.description, payload.elapsed_time_seconds, payload.hook_event, payload.hook_name, payload.level, payload.memories, payload.mode, payload.outcome, payload.output, payload.status, payload.stdout, payload.summary, payload.tool_name, subtype])
+    if (subtype === 'rate_limit_event') {
+      const info = payload.rate_limit_info && typeof payload.rate_limit_info === 'object'
+        ? payload.rate_limit_info as Record<string, unknown>
+        : null
+      const status = typeof info?.status === 'string' ? info.status : 'updated'
+      const utilization = typeof info?.utilization === 'number' ? ` · ${Math.round(info.utilization * 100)}%` : ''
+      return `Rate limit ${status}${utilization}`
+    }
+    if (subtype === 'prompt_suggestion' && typeof payload.suggestion === 'string') return payload.suggestion
+    if (subtype === 'auth_status') {
+      if (typeof payload.error === 'string') return payload.error
+      if (payload.isAuthenticating === true) return 'Authenticating'
+      return 'Authentication status'
+    }
+    if (subtype === 'files_persisted') {
+      const files = Array.isArray(payload.files) ? payload.files.length : 0
+      const failed = Array.isArray(payload.failed) ? payload.failed.length : 0
+      return `${files} file${files === 1 ? '' : 's'} persisted${failed ? ` · ${failed} failed` : ''}`
+    }
+    if (subtype === 'permission_denied') {
+      const tool = typeof payload.tool_name === 'string' ? payload.tool_name : 'tool'
+      const reason = typeof payload.decision_reason === 'string' ? payload.decision_reason : ''
+      return reason ? `${tool} denied · ${reason}` : `${tool} denied`
+    }
+    if (subtype === 'notification' && typeof payload.text === 'string') return payload.text
+    if (subtype === 'plugin_install') {
+      const name = typeof payload.name === 'string' ? payload.name : 'plugin'
+      const status = typeof payload.status === 'string' ? payload.status : 'updated'
+      return `${name} ${status}`
+    }
+    if (subtype === 'elicitation_complete' && typeof payload.mcp_server_name === 'string') return `${payload.mcp_server_name} elicitation complete`
+    if (subtype === 'mirror_error' && typeof payload.error === 'string') return payload.error
+    if (subtype === 'api_retry') {
+      const attempt = typeof payload.attempt === 'number' ? payload.attempt : undefined
+      const max = typeof payload.max_retries === 'number' ? payload.max_retries : undefined
+      const delayMs = typeof payload.retry_delay_ms === 'number' ? payload.retry_delay_ms : undefined
+      const status = typeof payload.error_status === 'number' ? payload.error_status : null
+      const parts: string[] = []
+      if (attempt != null && max != null) parts.push(`attempt ${attempt}/${max}`)
+      else if (attempt != null) parts.push(`attempt ${attempt}`)
+      if (delayMs != null) parts.push(`retry in ${(delayMs / 1000).toFixed(1)}s`)
+      if (status != null) parts.push(`HTTP ${status}`)
+      return parts.length > 0 ? parts.join(' · ') : 'API retry'
+    }
+    if (subtype === 'session_state_changed') {
+      const state = typeof payload.state === 'string' ? payload.state : 'changed'
+      return `Session ${state}`
+    }
+    if (subtype === 'local_command_output') {
+      if (content) return content.replace(/\s+/g, ' ').trim()
+      return 'Local command output'
+    }
+    if (subtype === 'result') {
+      const resultSubtype = typeof payload.result_subtype === 'string' ? payload.result_subtype : null
+      const durationMs = typeof payload.duration_ms === 'number' ? payload.duration_ms : null
+      const turns = typeof payload.num_turns === 'number' ? payload.num_turns : null
+      const errors = Array.isArray(payload.errors) ? payload.errors : []
+      const head = resultSubtype && resultSubtype !== 'success'
+        ? resultSubtype.replace(/_/g, ' ')
+        : 'Run completed'
+      const parts: string[] = [head]
+      if (turns != null) parts.push(`${turns} turn${turns === 1 ? '' : 's'}`)
+      if (durationMs != null) parts.push(`${(durationMs / 1000).toFixed(1)}s`)
+      if (errors.length > 0 && typeof errors[0] === 'string') parts.push(errors[0])
+      return parts.join(' · ')
+    }
+    // Surface a useful string field on unknown subtypes instead of "Claude system event"
+    for (const key of ['message', 'text', 'summary', 'description', 'error', 'content'] as const) {
+      const value = payload[key]
+      if (typeof value === 'string' && value.trim()) {
+        return withRuntime(value.replace(/\s+/g, ' ').trim())
+      }
+    }
+    return withRuntime('Claude system event')
+  }, [apiErrorStatus, content, errorSummary, payload, runtimeCountText, subtype])
   const hookOutcome = typeof payload.outcome === 'string' ? payload.outcome : ''
   const isHardError = errorCode === 'model_not_found'
     || errorCode === 'authentication_failed'
@@ -3283,6 +3750,20 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     ? 'var(--cyan)'
     : subtype === 'memory_recall'
     ? 'var(--cyan)'
+    : subtype === 'rate_limit_event'
+    ? 'var(--yellow)'
+    : subtype === 'permission_denied'
+    ? 'var(--red)'
+    : subtype === 'prompt_suggestion'
+    ? 'var(--green)'
+    : subtype === 'api_retry'
+    ? 'var(--yellow)'
+    : subtype === 'session_state_changed'
+    ? 'var(--violet)'
+    : subtype === 'local_command_output'
+    ? 'var(--cyan)'
+    : subtype === 'result'
+    ? (typeof payload.result_subtype === 'string' && payload.result_subtype !== 'success' ? 'var(--red)' : 'var(--green)')
     : 'var(--text-3)'
   const badges = useMemo(() => {
     const nextBadges: string[] = []
@@ -3298,6 +3779,15 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     if (typeof payload.mcp_server_name === 'string') nextBadges.push(payload.mcp_server_name)
     if (typeof payload.subagent_type === 'string') nextBadges.push(payload.subagent_type)
     if (typeof payload.task_type === 'string' && payload.task_type !== payload.subagent_type) nextBadges.push(payload.task_type)
+    if (subtype === 'rate_limit_event' && payload.rate_limit_info && typeof payload.rate_limit_info === 'object') {
+      const info = payload.rate_limit_info as Record<string, unknown>
+      if (typeof info.rateLimitType === 'string') nextBadges.push(info.rateLimitType)
+      if (typeof info.overageStatus === 'string') nextBadges.push(`overage ${info.overageStatus}`)
+      if (info.isUsingOverage === true) nextBadges.push('using overage')
+    }
+    if (subtype === 'notification' && typeof payload.priority === 'string') nextBadges.push(payload.priority)
+    if (subtype === 'plugin_install' && typeof payload.name === 'string') nextBadges.push(payload.name)
+    nextBadges.push(...formatClaudeRuntimeCounts(payload))
     if (subtype === 'memory_recall' && typeof payload.mode === 'string') nextBadges.push(payload.mode)
     if (subtype === 'compact_boundary' && payload.compact_metadata && typeof payload.compact_metadata === 'object') {
       const compact = payload.compact_metadata as { trigger?: unknown; pre_tokens?: unknown }
@@ -3305,14 +3795,17 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       if (typeof compact.pre_tokens === 'number') nextBadges.push(`${fmtTokens(compact.pre_tokens)} pre`)
     }
     return nextBadges
-  }, [apiErrorStatus, errorCode, payload.compact_metadata, payload.hook_event, payload.hook_name, payload.mcp_server_name, payload.mode, payload.outcome, payload.status, payload.subagent_type, payload.task_id, payload.task_type, payload.tool_name, payload.tool_use_id, subtype])
+  }, [apiErrorStatus, errorCode, payload, subtype])
 
   const body = useMemo(() => {
-    if (subtype === 'task_notification') return content || (typeof payload.result === 'string' ? payload.result : '')
-    if (subtype === 'task_progress') {
-      return [content, typeof payload.last_tool_name === 'string' ? `Last tool: ${payload.last_tool_name}` : ''].filter(Boolean).join('\n')
+    let main = ''
+    if (subtype === 'task_notification') {
+      main = content || (typeof payload.result === 'string' ? payload.result : '')
     }
-    if (subtype === 'task_updated') {
+    else if (subtype === 'task_progress') {
+      main = [content, typeof payload.last_tool_name === 'string' ? `Last tool: ${payload.last_tool_name}` : ''].filter(Boolean).join('\n')
+    }
+    else if (subtype === 'task_updated') {
       const patch = payload.patch && typeof payload.patch === 'object' ? payload.patch as Record<string, unknown> : null
       const lines = [
         content,
@@ -3321,12 +3814,17 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
         typeof patch?.error === 'string' ? `Error: ${patch.error}` : '',
         typeof patch?.total_paused_ms === 'number' ? `Paused: ${(patch.total_paused_ms / 1000).toFixed(1)}s` : '',
       ].filter(Boolean)
-      return lines.join('\n')
+      main = lines.join('\n')
     }
-    if (subtype === 'hook_progress' || subtype === 'hook_response') {
-      return [content, typeof payload.stdout === 'string' ? payload.stdout : '', typeof payload.stderr === 'string' ? payload.stderr : ''].filter(Boolean).join('\n\n')
+    else if (subtype === 'hook_started' || subtype === 'hook_progress' || subtype === 'hook_response') {
+      main = [
+        content,
+        typeof payload.output === 'string' ? payload.output : '',
+        typeof payload.stdout === 'string' ? payload.stdout : '',
+        typeof payload.stderr === 'string' ? payload.stderr : '',
+      ].filter(Boolean).join('\n\n')
     }
-    if (subtype === 'memory_recall') {
+    else if (subtype === 'memory_recall') {
       const memories = Array.isArray(payload.memories) ? payload.memories as Array<Record<string, unknown>> : []
       const lines = memories.map((m) => {
         const scope = typeof m.scope === 'string' ? m.scope : ''
@@ -3335,10 +3833,90 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
         const header = scope ? `[${scope}] ${path}` : path
         return memContent ? `${header}\n${memContent}` : header
       })
-      return lines.join('\n\n')
+      main = lines.join('\n\n')
     }
-    return content
-  }, [content, payload.last_tool_name, payload.memories, payload.result, payload.stderr, payload.stdout, subtype])
+    else if (subtype === 'rate_limit_event') {
+      const info = payload.rate_limit_info && typeof payload.rate_limit_info === 'object'
+        ? payload.rate_limit_info as Record<string, unknown>
+        : null
+      const lines = [
+        typeof info?.status === 'string' ? `Status: ${info.status}` : '',
+        typeof info?.rateLimitType === 'string' ? `Limit: ${info.rateLimitType}` : '',
+        typeof info?.utilization === 'number' ? `Utilization: ${Math.round(info.utilization * 100)}%` : '',
+        formatClaudeTimestamp(info?.resetsAt) ? `Resets: ${formatClaudeTimestamp(info?.resetsAt)}` : '',
+        typeof info?.overageStatus === 'string' ? `Overage: ${info.overageStatus}` : '',
+        formatClaudeTimestamp(info?.overageResetsAt) ? `Overage resets: ${formatClaudeTimestamp(info?.overageResetsAt)}` : '',
+        typeof info?.overageDisabledReason === 'string' ? `Overage disabled: ${info.overageDisabledReason}` : '',
+      ].filter(Boolean)
+      main = lines.join('\n')
+    }
+    else if (subtype === 'auth_status') {
+      const output = Array.isArray(payload.output)
+        ? payload.output.filter((entry): entry is string => typeof entry === 'string').join('\n')
+        : ''
+      main = [content, output, typeof payload.error === 'string' ? payload.error : ''].filter(Boolean).join('\n')
+    }
+    else if (subtype === 'files_persisted') {
+      const files = Array.isArray(payload.files) ? payload.files as Array<Record<string, unknown>> : []
+      const failed = Array.isArray(payload.failed) ? payload.failed as Array<Record<string, unknown>> : []
+      main = [
+        ...files.map((file) => {
+          const name = typeof file.filename === 'string' ? file.filename : 'file'
+          const id = typeof file.file_id === 'string' ? file.file_id : ''
+          return id ? `${name} (${id})` : name
+        }),
+        ...failed.map((file) => {
+          const name = typeof file.filename === 'string' ? file.filename : 'file'
+          const err = typeof file.error === 'string' ? file.error : 'failed'
+          return `${name}: ${err}`
+        }),
+      ].join('\n')
+    }
+    else if (subtype === 'permission_denied') {
+      main = [
+        content,
+        typeof payload.message === 'string' ? payload.message : '',
+        typeof payload.decision_reason === 'string' ? `Reason: ${payload.decision_reason}` : '',
+      ].filter(Boolean).join('\n')
+    }
+    else if (subtype === 'plugin_install') {
+      main = [content, typeof payload.error === 'string' ? payload.error : ''].filter(Boolean).join('\n')
+    }
+    else if (subtype === 'api_retry') {
+      const err = payload.error && typeof payload.error === 'object' ? payload.error as Record<string, unknown> : null
+      const lines = [
+        typeof payload.attempt === 'number' && typeof payload.max_retries === 'number'
+          ? `Attempt ${payload.attempt} of ${payload.max_retries}`
+          : '',
+        typeof payload.retry_delay_ms === 'number' ? `Retry delay: ${(payload.retry_delay_ms / 1000).toFixed(1)}s` : '',
+        typeof payload.error_status === 'number' ? `HTTP ${payload.error_status}` : '',
+        typeof err?.message === 'string' ? err.message : '',
+      ].filter(Boolean)
+      main = lines.join('\n')
+    }
+    else if (subtype === 'session_state_changed') {
+      main = typeof payload.state === 'string' ? `state: ${payload.state}` : ''
+    }
+    else if (subtype === 'local_command_output') {
+      main = content
+    }
+    else if (subtype === 'result') {
+      const errors = Array.isArray(payload.errors) ? payload.errors.filter((e): e is string => typeof e === 'string') : []
+      const lines = [
+        typeof payload.result_subtype === 'string' ? `Outcome: ${payload.result_subtype}` : '',
+        typeof payload.num_turns === 'number' ? `Turns: ${payload.num_turns}` : '',
+        typeof payload.duration_ms === 'number' ? `Duration: ${(payload.duration_ms / 1000).toFixed(1)}s` : '',
+        typeof payload.duration_api_ms === 'number' ? `API time: ${(payload.duration_api_ms / 1000).toFixed(1)}s` : '',
+        typeof payload.total_cost_usd === 'number' ? `Cost: $${payload.total_cost_usd.toFixed(4)}` : '',
+        typeof payload.stop_reason === 'string' ? `Stop: ${payload.stop_reason}` : '',
+        ...errors,
+      ].filter(Boolean)
+      main = lines.join('\n')
+    } else {
+      main = content
+    }
+    return [main, runtimeDetailBody].filter(Boolean).join('\n\n')
+  }, [content, payload, runtimeDetailBody, subtype])
   const payloadJson = useMemo(() => safeJson(payload), [payload])
 
   return (
