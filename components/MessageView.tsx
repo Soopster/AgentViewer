@@ -459,14 +459,14 @@ function extractStreamingAssistantText(payload: unknown): string | null {
     const properties = eventRecord.properties
     if (!properties || typeof properties !== 'object') return null
     const propertiesRecord = properties as Record<string, unknown>
-    if (eventRecord.type === 'message.part.delta') {
-      const field = typeof propertiesRecord.field === 'string' ? propertiesRecord.field : ''
-      return field === 'text' && typeof propertiesRecord.delta === 'string'
-        ? propertiesRecord.delta
-        : null
-    }
-
     if (eventRecord.type !== 'message.part.updated') return null
+
+    // The harness emits a dedicated `opencode-delta` frame when the SDK
+    // includes a `delta` field — let that path drive the live text so
+    // we don't double-apply the snapshot on top of the delta-accumulated
+    // string.
+    if (typeof propertiesRecord.delta === 'string' && propertiesRecord.delta) return null
+
     const part = propertiesRecord.part
     if (!part || typeof part !== 'object') return null
     const partRecord = part as Record<string, unknown>
@@ -2116,6 +2116,39 @@ export default function MessageView({
               const parsed = JSON.parse(frame.data)
               throw new Error(parsed.error ?? 'Unknown agent error')
             } catch (e) { throw e }
+          }
+
+          // OpenCode harness — synthesized smooth-streaming text deltas.
+          // The harness emits one frame per `message.part.updated` that
+          // carries a `delta` field, matching how opencode-web applies its
+          // own deltas to the in-memory part cache.
+          if (frame.event === 'opencode-delta') {
+            try {
+              const parsed = JSON.parse(frame.data) as { delta?: string; field?: string; partType?: string }
+              if (typeof parsed.delta === 'string' && parsed.delta && parsed.field === 'text' && parsed.partType === 'text') {
+                setLiveStatus(null)
+                setLiveAssistantText((prev) => `${prev}${parsed.delta}`)
+              }
+            } catch { /* ignore */ }
+            continue
+          }
+
+          // OpenCode session.status frames mirror opencode-web's busy
+          // indicator. Maps to our own live-status state.
+          if (frame.event === 'opencode-status') {
+            try {
+              const parsed = JSON.parse(frame.data) as { type?: string }
+              if (parsed.type === 'busy') setLiveStatus('requesting')
+              else if (parsed.type === 'idle') setLiveStatus(null)
+            } catch { /* ignore */ }
+            continue
+          }
+
+          if (frame.event === 'opencode-todos') {
+            // Todos are surfaced through the polling refresh today, but
+            // catching the frame here drops it cleanly rather than letting
+            // the generic JSON.parse below fail on a non-data frame.
+            continue
           }
 
           try {

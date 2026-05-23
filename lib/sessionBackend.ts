@@ -94,6 +94,7 @@ import {
 } from './codexMapper'
 import { getCodexStoredTag, getCodexStoredTagsForSessions, setCodexStoredTag } from './codexTags'
 import { getOpenCodeClient } from './opencodeClient'
+import { subscribeToOpenCodeEvents } from './opencodeHarness'
 import {
   currentOpenCodeModelValue,
   decodeOpenCodeModelValue,
@@ -603,54 +604,6 @@ async function buildPiImages(attachments: SendAttachment[]): Promise<Array<{ typ
 
 function codexContextUsageToEventData(contextUsage: ContextUsage): string {
   return `event: context-usage\ndata: ${JSON.stringify(contextUsage)}\n\n`
-}
-
-function openCodeEventSessionId(event: OpenCodeEvent): string | undefined {
-  const eventRecord = event as Record<string, unknown>
-  if (eventRecord.type === 'message.part.delta') {
-    const properties = eventRecord.properties
-    if (properties && typeof properties === 'object') {
-      const sessionID = (properties as Record<string, unknown>).sessionID
-      return typeof sessionID === 'string' ? sessionID : undefined
-    }
-  }
-
-  switch (event.type) {
-    case 'message.updated':
-      return event.properties.info.sessionID
-    case 'message.removed':
-      return event.properties.sessionID
-    case 'message.part.updated':
-      return event.properties.part.sessionID
-    case 'message.part.removed':
-      return event.properties.sessionID
-    case 'permission.updated':
-      return event.properties.sessionID
-    case 'permission.replied':
-      return event.properties.sessionID
-    case 'session.status':
-      return event.properties.sessionID
-    case 'session.idle':
-      return event.properties.sessionID
-    case 'session.compacted':
-      return event.properties.sessionID
-    case 'todo.updated':
-      return event.properties.sessionID
-    case 'command.executed':
-      return event.properties.sessionID
-    case 'session.created':
-      return event.properties.info.id
-    case 'session.updated':
-      return event.properties.info.id
-    case 'session.deleted':
-      return event.properties.info.id
-    case 'session.diff':
-      return event.properties.sessionID
-    case 'session.error':
-      return event.properties.sessionID
-    default:
-      return undefined
-  }
 }
 
 function formatOpenCodeEvent(event: OpenCodeEvent): string {
@@ -1843,18 +1796,18 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
       let targetSessionId = sessionId
       let closed = false
       let consumeEvents: Promise<void> | null = null
+      // Subscribe to the shared event harness — one upstream connection
+      // per process, multiplexed by session. Filter on the original session
+      // id first; if we end up forking we'll resubscribe to the new id.
+      let subscription = subscribeToOpenCodeEvents({ sessionId })
       const close = () => {
         if (closed) return
         closed = true
+        subscription.close()
         controller.close()
       }
 
       try {
-        const events = await client.event.subscribe({
-          ...OPENCODE_OPTIONS,
-          signal: abortController.signal,
-        })
-
         if (resumeSessionAt) {
           const forkedResponse = await client.session.fork({
             ...OPENCODE_OPTIONS,
@@ -1862,9 +1815,27 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
             body: { messageID: resumeSessionAt },
           })
           targetSessionId = openCodeData<OpenCodeSession>(forkedResponse).id
+          // Switch the harness subscription onto the fork so we receive
+          // its events without echoing the dead parent.
+          subscription.close()
+          subscription = subscribeToOpenCodeEvents({ sessionId: targetSessionId })
         }
 
         controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: targetSessionId })}\n\n`))
+
+        // Replay cached state so the client doesn't have to wait for the
+        // next live event tick to render a stale permission prompt or busy
+        // indicator — this is what opencode-web does on every subscribe.
+        const cached = subscription.snapshot
+        if (cached?.status) {
+          controller.enqueue(encoder.encode(`event: opencode-status\ndata: ${JSON.stringify(cached.status)}\n\n`))
+        }
+        if (cached?.todos && cached.todos.length > 0) {
+          controller.enqueue(encoder.encode(`event: opencode-todos\ndata: ${JSON.stringify(cached.todos)}\n\n`))
+        }
+        for (const permission of cached?.permissions ?? []) {
+          controller.enqueue(encoder.encode(`data: ${formatOpenCodeEvent({ type: 'permission.updated', properties: permission } as OpenCodeEvent)}\n\n`))
+        }
 
         setRunningSession(sessionId, {
           provider: 'opencode',
@@ -1884,15 +1855,40 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
         }
 
         consumeEvents = (async () => {
-          for await (const event of events.stream) {
-            const eventSessionId = openCodeEventSessionId(event)
-            if (eventSessionId && eventSessionId !== targetSessionId) continue
+          for await (const harnessEvent of subscription.events) {
+            if (harnessEvent.type === 'delta') {
+              // Synthesized smooth-streaming frame — mirrors what
+              // opencode-web's event reducer applies to its store via the
+              // `part_text_accum_delta` field. Clients can append delta
+              // text without re-reading the entire part.
+              controller.enqueue(encoder.encode(`event: opencode-delta\ndata: ${JSON.stringify({
+                sessionId: harnessEvent.sessionId,
+                messageId: harnessEvent.messageId,
+                partId: harnessEvent.partId,
+                partType: harnessEvent.partType,
+                field: harnessEvent.field,
+                delta: harnessEvent.delta,
+              })}\n\n`))
+              continue
+            }
+
+            if (harnessEvent.type !== 'event') continue
+
+            const event = harnessEvent.event
 
             if (event.type === 'message.updated' && event.properties.info.role === 'assistant') {
               const usage = mapOpenCodeContextUsage(event.properties.info)
               if (usage) {
                 controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
               }
+            }
+
+            if (event.type === 'session.status') {
+              controller.enqueue(encoder.encode(`event: opencode-status\ndata: ${JSON.stringify(event.properties.status)}\n\n`))
+            }
+
+            if (event.type === 'todo.updated') {
+              controller.enqueue(encoder.encode(`event: opencode-todos\ndata: ${JSON.stringify(event.properties.todos)}\n\n`))
             }
 
             if (event.type === 'session.error') {
@@ -1951,6 +1947,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
         }
       } finally {
         abortController.abort()
+        subscription.close()
         await consumeEvents?.catch(() => {})
         clearRunningSession(sessionId)
         if (targetSessionId !== sessionId) {
