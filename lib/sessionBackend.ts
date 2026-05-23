@@ -1267,6 +1267,15 @@ export async function getViewSubagentMessages(
   providerOverride?: AgentProvider,
 ): Promise<SessionMessage[]> {
   const provider = await resolveProvider(providerOverride)
+  if (provider === 'opencode') {
+    // OpenCode subagents (spawned by the `task` tool) are real child sessions:
+    // task_id === child sessionId. Fetch and map the child transcript so the
+    // parent's task card can render the inner conversation inline.
+    const raw = await getOpenCodeSessionMessages(agentId).catch(() => [] as Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>)
+    if (raw.length === 0) return []
+    const mapped = sortMessagesChronologically(mapOpenCodeMessagesToSessionMessages(raw))
+    return withOriginKind(mapped, `subagent:${agentId}`)
+  }
   if (provider !== 'claude') return []
   const raw = await getSubagentMessages(sessionId, agentId).catch(() => [] as SessionMessage[])
   return withOriginKind(normalizeClaudeHistoryMessages(raw as unknown[]), `subagent:${agentId}`)

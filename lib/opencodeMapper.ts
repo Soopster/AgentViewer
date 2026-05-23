@@ -61,9 +61,9 @@ function partSummary(part: Part): string | null {
     case 'file':
       return `[file] ${part.filename ?? part.url}`
     case 'agent':
-      return `Agent: ${part.name}`
+      return `↪ Switched to agent: ${part.name}`
     case 'subtask':
-      return `Subtask: ${part.description}`
+      return `↪ Subtask launched: ${part.description}${part.agent ? ` (@${part.agent})` : ''}`
     case 'patch':
       return `Patched files: ${part.files.join(', ')}`
     case 'compaction':
@@ -127,10 +127,10 @@ function buildAssistantContent(parts: Part[]) {
         content.push(textBlock(`Patched files: ${part.files.join(', ')}`))
         break
       case 'agent':
-        content.push(textBlock(`Using agent ${part.name}`))
+        content.push(textBlock(`↪ Switched to agent: ${part.name}`))
         break
       case 'subtask':
-        content.push(textBlock(`Subtask: ${part.description}`))
+        content.push(textBlock(`↪ Subtask launched: ${part.description}${part.agent ? ` (@${part.agent})` : ''}`))
         break
       case 'file':
         content.push(textBlock(`[file] ${part.filename ?? part.url}`))
@@ -190,6 +190,7 @@ export function mapOpenCodeSessionToSession(session: OpenCodeSession, tag: strin
     createdAt: normalizeTimestamp(session.time.created),
     provider: 'opencode',
     capabilities: OPENCODE_CAPABILITIES,
+    parentSessionId: session.parentID,
   }
 }
 
@@ -206,6 +207,7 @@ export function mapOpenCodeSessionToInfo(session: OpenCodeSession, tag: string |
     provider: 'opencode',
     capabilities: OPENCODE_CAPABILITIES,
     currentModel,
+    parentSessionId: session.parentID,
   }
 }
 

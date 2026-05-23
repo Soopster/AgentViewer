@@ -95,6 +95,12 @@ export type Session = {
   provider?: AgentProvider
   capabilities?: SessionCapabilities
   /**
+   * When this session was spawned as a subagent by another session, the id of
+   * the parent. OpenCode subagents (spawned by the `task` tool) populate this
+   * from the SDK's `Session.parentID`.
+   */
+  parentSessionId?: string
+  /**
    * Client-only flag set when the session was just created via /api/sessions/new
    * and the underlying provider has not materialized the transcript yet. The first
    * send carries isPendingSession so provider backends can skip resume/read paths
@@ -156,6 +162,7 @@ export type SessionInfo = {
   provider: AgentProvider
   capabilities: SessionCapabilities
   currentModel?: string
+  parentSessionId?: string
 }
 
 export type RunningSessionRef = {

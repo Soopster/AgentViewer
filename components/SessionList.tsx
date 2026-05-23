@@ -339,9 +339,29 @@ const SessionRow = memo(function SessionRow({
           fontFamily: "'IBM Plex Mono', monospace",
           fontSize: 12,
           letterSpacing: '0.04em',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
         }}
       >
-        {shortId}
+        <span>{shortId}</span>
+        {session.parentSessionId && (
+          <span
+            title={`Subagent of ${session.parentSessionId}`}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 9,
+              padding: '0 5px',
+              borderRadius: 3,
+              border: '1px solid var(--border)',
+              color: 'var(--text-3)',
+              letterSpacing: '0.06em',
+              opacity: 0.85,
+            }}
+          >
+            ↪ child of {session.parentSessionId.slice(-8)}
+          </span>
+        )}
       </div>
 
       {/* Session title */}

@@ -40,6 +40,8 @@ const TOOL_COLORS: Record<string, string> = {
   Grep:      'var(--t-grep)',
   Glob:      'var(--t-glob)',
   Agent:     'var(--t-agent)',
+  task:      'var(--t-agent)',
+  task_status: 'var(--t-agent)',
   WebSearch: 'var(--cyan)',
   WebFetch:  'var(--t-read)',
   NotebookEdit: 'var(--t-edit)',
@@ -1781,6 +1783,211 @@ function AgentCard({ thread }: { thread: ToolThread }) {
   )
 }
 
+// ── OpenCode task / task_status card ──────────────────────────────────────────
+
+type OpenCodeTaskInput = {
+  description?: string
+  prompt?: string
+  subagent_type?: string
+  task_id?: string
+  background?: boolean
+  wait?: boolean
+}
+
+type OpenCodeTaskParsed = {
+  taskId: string | null
+  state: 'pending' | 'running' | 'completed' | 'error' | 'cancelled' | null
+  bodyText: string
+  isErrorBody: boolean
+}
+
+/**
+ * The `task` tool result envelope follows OpenCode's `format()` / `output()` in
+ * `packages/opencode/src/tool/task.ts`:
+ *   task_id: <id>
+ *   [state: <state>]   ← only for background / task_status
+ *
+ *   <task_result>…</task_result>     or   <task_error>…</task_error>
+ */
+function parseOpenCodeTaskResult(raw: string): OpenCodeTaskParsed {
+  if (!raw) return { taskId: null, state: null, bodyText: '', isErrorBody: false }
+  const idMatch = raw.match(/^task_id:\s*(\S+)/m)
+  const stateMatch = raw.match(/^state:\s*(\w+)/m)
+  const bodyMatch = raw.match(/<task_(result|error)>([\s\S]*?)<\/task_\1>/)
+  const state = stateMatch?.[1] as OpenCodeTaskParsed['state'] | undefined
+  return {
+    taskId: idMatch?.[1] ?? null,
+    state: state ?? null,
+    bodyText: (bodyMatch?.[2] ?? '').trim(),
+    isErrorBody: bodyMatch?.[1] === 'error',
+  }
+}
+
+const OPENCODE_TASK_STATE_COLOR: Record<NonNullable<OpenCodeTaskParsed['state']>, string> = {
+  pending: 'var(--text-3)',
+  running: 'var(--amber)',
+  completed: 'var(--green)',
+  error: 'var(--red)',
+  cancelled: 'var(--text-3)',
+}
+
+function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
+  const sessionId = use(SessionContext)
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const [transcriptOpen, setTranscriptOpen] = useState(false)
+  const [transcriptMessages, setTranscriptMessages] = useState<SubagentMessage[] | null>(null)
+  const [transcriptLoading, setTranscriptLoading] = useState(false)
+
+  const name = thread.toolUse.name
+  const input = thread.toolUse.input as OpenCodeTaskInput
+  const c = toolColor(name)
+  const raw = thread.result ? resultToString(thread.result.content) : ''
+  const isStatus = name === 'task_status'
+  const isResultError = thread.result?.is_error === true
+
+  const parsed = useMemo(() => parseOpenCodeTaskResult(raw), [raw])
+  // The sync task tool result omits the state line — if we got a result and it
+  // isn't an error, treat it as completed.
+  const inferredState: OpenCodeTaskParsed['state'] = parsed.state
+    ?? (parsed.isErrorBody || isResultError
+      ? 'error'
+      : thread.result
+        ? 'completed'
+        : 'running')
+
+  // task_status takes task_id in input; the regular `task` tool returns it in
+  // the result body. Either path lands us on the child sessionId.
+  const taskId = parsed.taskId ?? input.task_id ?? null
+  const shortTaskId = taskId ? taskId.slice(-8) : null
+  const description = (input.description ?? '').trim() || (isStatus ? 'task status' : 'subagent task')
+  const stateColor = inferredState ? OPENCODE_TASK_STATE_COLOR[inferredState] : 'var(--text-3)'
+  const stateLabel = inferredState ?? '…'
+  const isBackground = input.background === true || (isStatus && inferredState === 'running')
+
+  const canViewTranscript = !!taskId && !!sessionId
+
+  const loadTranscript = async () => {
+    if (transcriptMessages || !taskId || !sessionId) return
+    setTranscriptLoading(true)
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/subagents/${taskId}/messages?provider=opencode`)
+      const data = await res.json() as { messages?: SubagentMessage[] }
+      setTranscriptMessages(data.messages ?? [])
+    } catch {
+      setTranscriptMessages([])
+    } finally {
+      setTranscriptLoading(false)
+    }
+  }
+
+  const handleTranscriptToggle = () => {
+    const next = !transcriptOpen
+    setTranscriptOpen(next)
+    if (next) loadTranscript()
+  }
+
+  const headerLabel = isStatus
+    ? (isBackground ? 'TASK_STATUS ⟳' : 'TASK_STATUS')
+    : (isBackground ? 'TASK ⟳' : 'TASK')
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderLeft: `2px solid ${c}`, borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
+      <div
+        onClick={() => parsed.bodyText ? setOpen(v => !v) : undefined}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px',
+          background: `linear-gradient(to right, ${c}${hovered ? '22' : '14'} 0%, var(--surface) ${hovered ? '65%' : '50%'})`,
+          cursor: parsed.bodyText ? 'pointer' : 'default', userSelect: 'none',
+          transition: 'background 0.15s ease',
+        }}
+      >
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
+          {headerLabel}
+        </span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>
+          {description}
+        </span>
+        {input.subagent_type && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
+            @{input.subagent_type}
+          </span>
+        )}
+        {shortTaskId && (
+          <span title={taskId ?? undefined} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', flexShrink: 0 }}>
+            #{shortTaskId}
+          </span>
+        )}
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: stateColor, flexShrink: 0 }}>
+          {stateLabel}
+        </span>
+        {parsed.bodyText && <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>}
+      </div>
+
+      {canViewTranscript && (
+        <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
+          <button
+            onClick={handleTranscriptToggle}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              width: '100%', padding: '4px 12px',
+              background: 'none', border: 'none', cursor: 'pointer',
+              fontFamily: "'IBM Plex Mono', monospace", fontSize: 11,
+              color: transcriptOpen ? c : 'var(--text-3)',
+              textAlign: 'left',
+            }}
+          >
+            <span style={{ opacity: 0.7 }}>↪</span>
+            <span>{transcriptOpen ? 'HIDE TRANSCRIPT' : 'VIEW TRANSCRIPT'}</span>
+            {transcriptLoading && <span style={{ opacity: 0.5 }}>…</span>}
+            {!transcriptLoading && transcriptMessages && <span style={{ opacity: 0.5 }}>({transcriptMessages.length} msgs)</span>}
+          </button>
+          {transcriptOpen && transcriptMessages && (
+            <div style={{ borderTop: '1px solid var(--border)', maxHeight: 420, overflowY: 'auto', background: 'var(--bg)' }}>
+              {transcriptMessages.length === 0
+                ? <div style={{ padding: '10px 14px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>No messages</div>
+                : transcriptMessages.map((msg) => {
+                    const text  = extractTextContent(msg.message.content)
+                    const tools = extractToolNames(msg.message.content)
+                    const isAssistant = msg.message.role === 'assistant'
+                    if (!text && tools.length === 0) return null
+                    return (
+                      <div key={msg.uuid} style={{ borderBottom: '1px solid var(--border)', padding: '6px 14px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: isAssistant ? c : 'var(--text-3)', letterSpacing: '0.06em' }}>
+                            {isAssistant ? 'AGENT' : 'USER'}
+                          </span>
+                          {tools.length > 0 && (
+                            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)' }}>
+                              {tools.join(', ')}
+                            </span>
+                          )}
+                        </div>
+                        {text && (
+                          <div style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 12, color: 'var(--text-2)', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto' }}>
+                            {text.length > 500 ? text.slice(0, 500) + '…' : text}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })
+              }
+            </div>
+          )}
+        </div>
+      )}
+
+      {open && parsed.bodyText && (
+        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, color: parsed.isErrorBody ? 'var(--red)' : 'var(--text-2)', lineHeight: 1.65, maxHeight: 320, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {parsed.bodyText}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Plan mode card ────────────────────────────────────────────────────────────
 
 function PlanModeCard({ thread }: { thread: ToolThread }) {
@@ -2835,6 +3042,7 @@ function ToolThreadCard({ thread }: { thread: ToolThread }) {
   if (name === 'Glob')                         return <GlobCard thread={thread} />
   if (name === 'TodoWrite')                    return <TodoWriteCard thread={thread} />
   if (name === 'Agent')                        return <AgentCard thread={thread} />
+  if (name === 'task' || name === 'task_status') return <OpenCodeTaskCard thread={thread} />
   if (name === 'EnterPlanMode' || name === 'ExitPlanMode') return <PlanModeCard thread={thread} />
   if (name === 'Skill')                        return <SkillCard thread={thread} />
   if (name === 'AskUserQuestion')              return <AskUserQuestionCard thread={thread} />

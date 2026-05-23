@@ -356,6 +356,14 @@ function formatAgentStatsSummary(parsed: Record<string, unknown> | null): string
 }
 
 const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TaskStop'])
+const OPENCODE_TASK_TOOL_NAMES = new Set(['task', 'task_status'])
+const OPENCODE_TASK_STATE_TONE: Record<string, TuiTranscriptLineTone> = {
+  pending: 'dim',
+  running: 'thinking',
+  completed: 'result_ok',
+  error: 'result_error',
+  cancelled: 'dim',
+}
 const TASK_STATUS_ICON: Record<string, string> = {
   completed: '✓',
   in_progress: '◐',
@@ -783,6 +791,198 @@ function formatTaskTool(thread: ToolThread, expanded: boolean, activeForms?: Tas
   return []
 }
 
+type OpenCodeTaskParsed = {
+  taskId: string | null
+  state: 'pending' | 'running' | 'completed' | 'error' | 'cancelled' | null
+  bodyText: string
+  isErrorBody: boolean
+}
+
+/** Parser for the `task` / `task_status` result envelope. Matches the format
+ *  produced by `output()` / `backgroundOutput()` / `format()` in OpenCode's
+ *  `packages/opencode/src/tool/{task,task_status}.ts`. */
+function parseOpenCodeTaskResult(raw: string): OpenCodeTaskParsed {
+  if (!raw) return { taskId: null, state: null, bodyText: '', isErrorBody: false }
+  const idMatch = raw.match(/^task_id:\s*(\S+)/m)
+  const stateMatch = raw.match(/^state:\s*(\w+)/m)
+  const bodyMatch = raw.match(/<task_(result|error)>([\s\S]*?)<\/task_\1>/)
+  const state = stateMatch?.[1] as OpenCodeTaskParsed['state'] | undefined
+  return {
+    taskId: idMatch?.[1] ?? null,
+    state: state ?? null,
+    bodyText: (bodyMatch?.[2] ?? '').trim(),
+    isErrorBody: bodyMatch?.[1] === 'error',
+  }
+}
+
+type OpenCodeTaskInput = {
+  description?: string
+  subagent_type?: string
+  task_id?: string
+  background?: boolean
+  wait?: boolean
+}
+
+type AskUserOption = { label: string; description?: string; preview?: string }
+type AskUserQuestion = { question: string; header?: string; multiSelect?: boolean; options: AskUserOption[] }
+type AskUserAnswers = { answers?: Record<string, string>; annotations?: Record<string, { preview?: string; notes?: string }> }
+
+function parseAskUserAnswers(raw: string | null): AskUserAnswers {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as AskUserAnswers
+    if (parsed && typeof parsed === 'object') return parsed
+  } catch { /* fall through */ }
+  return {}
+}
+
+function selectedOptionLabels(question: AskUserQuestion, answers: AskUserAnswers['answers']): Set<string> {
+  const raw = answers?.[question.question]
+  if (typeof raw !== 'string' || !raw) return new Set()
+  // multi-select answers are comma-separated per AskUserQuestionOutput schema
+  const parts = raw.split(',').map((p) => p.trim()).filter(Boolean)
+  return new Set(parts)
+}
+
+function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean): TuiTranscriptCardLine[] {
+  const input = thread.toolUse.input as { questions?: AskUserQuestion[] }
+  const questions = Array.isArray(input.questions) ? input.questions : []
+  const raw = resultTextOf(thread)
+  const isError = thread.result?.is_error === true
+  const parsed = parseAskUserAnswers(raw)
+  const answered = !!thread.result && !isError && !!parsed.answers && Object.keys(parsed.answers).length > 0
+
+  const stateTone: TuiTranscriptLineTone = isError
+    ? 'result_error'
+    : answered
+      ? 'result_ok'
+      : thread.result
+        ? 'dim'
+        : 'thinking'
+  const stateGlyph = isError ? '✗' : answered ? '✓' : thread.result ? '○' : '◌'
+  const stateLabel = isError ? 'error' : answered ? 'answered' : thread.result ? 'no answer' : 'pending'
+
+  const headerSummary = questions.length === 0
+    ? 'no questions'
+    : questions.length === 1
+      ? truncateLine(questions[0].question)
+      : `${questions.length} questions`
+
+  const lines: TuiTranscriptCardLine[] = [
+    line(`ask user: ${headerSummary}`, 'tool'),
+    line(`${stateGlyph} ${stateLabel}`, stateTone),
+  ]
+
+  // Compact mode: show at most one line per question if there are multiple,
+  // or all options collapsed for a single question.
+  if (!expanded) {
+    if (questions.length === 1) {
+      const q = questions[0]
+      const selected = selectedOptionLabels(q, parsed.answers)
+      const maxOptions = Math.max(MAX_CARD_LINES, 4)
+      const visible = q.options.slice(0, maxOptions)
+      for (const opt of visible) {
+        const hit = selected.has(opt.label)
+        const marker = hit
+          ? (q.multiSelect ? '☑' : '●')
+          : (q.multiSelect ? '☐' : '○')
+        const tone: TuiTranscriptLineTone = hit ? 'result_ok' : 'muted'
+        lines.push(line(`  ${marker} ${truncateLine(opt.label)}`, tone))
+      }
+      if (q.options.length > visible.length) {
+        lines.push(line(`  … +${q.options.length - visible.length} more`, 'dim'))
+      }
+    } else {
+      for (const q of questions.slice(0, 3)) {
+        const selected = selectedOptionLabels(q, parsed.answers)
+        const answer = selected.size > 0
+          ? [...selected].join(', ')
+          : (answered ? '—' : 'pending')
+        const headerChip = q.header ? `[${q.header}] ` : ''
+        const tone: TuiTranscriptLineTone = selected.size > 0 ? 'result_ok' : 'muted'
+        lines.push(line(`  ${headerChip}${truncateLine(q.question)} → ${truncateLine(answer)}`, tone))
+      }
+      if (questions.length > 3) {
+        lines.push(line(`  … +${questions.length - 3} more questions`, 'dim'))
+      }
+    }
+    return lines
+  }
+
+  // Expanded mode: full questions, options, descriptions, selection markers,
+  // and any user-supplied notes/preview content.
+  for (const [qi, q] of questions.entries()) {
+    if (qi > 0) lines.push(line('', 'dim'))
+    const headerChip = q.header ? `[${q.header.toUpperCase()}] ` : ''
+    const mode = q.multiSelect ? ' (multi-select)' : ''
+    lines.push(line(`${headerChip}${truncateLine(q.question)}${mode}`, 'system'))
+
+    const selected = selectedOptionLabels(q, parsed.answers)
+    for (const opt of q.options) {
+      const hit = selected.has(opt.label)
+      const marker = hit
+        ? (q.multiSelect ? '☑' : '●')
+        : (q.multiSelect ? '☐' : '○')
+      const tone: TuiTranscriptLineTone = hit ? 'result_ok' : 'muted'
+      lines.push(line(`  ${marker} ${truncateLine(opt.label)}${opt.preview ? '  ⤓' : ''}`, tone))
+      if (opt.description) {
+        lines.push(line(`      ${truncateLine(opt.description)}`, 'dim'))
+      }
+    }
+
+    const note = parsed.annotations?.[q.question]?.notes?.trim()
+    if (note) {
+      for (const ln of note.split('\n')) {
+        lines.push(line(`  ✎ ${truncateLine(ln)}`, 'agent'))
+      }
+    }
+  }
+
+  return lines
+}
+
+function formatOpenCodeTaskTool(thread: ToolThread, expanded: boolean): TuiTranscriptCardLine[] {
+  const name = thread.toolUse.name
+  const input = thread.toolUse.input as OpenCodeTaskInput
+  const result = thread.result
+  const isResultError = result?.is_error === true
+  const raw = resultTextOf(thread) ?? ''
+  const parsed = parseOpenCodeTaskResult(raw)
+  const inferredState: OpenCodeTaskParsed['state'] = parsed.state
+    ?? (parsed.isErrorBody || isResultError
+      ? 'error'
+      : result
+        ? 'completed'
+        : 'running')
+  const isStatus = name === 'task_status'
+  const description = (input.description ?? '').trim() || (isStatus ? 'task status' : 'subagent task')
+  const subagentTag = input.subagent_type ? ` [@${input.subagent_type}]` : ''
+  const taskId = parsed.taskId ?? input.task_id ?? ''
+  const shortId = taskId ? ` #${taskId.slice(-8)}` : ''
+  const bgMark = (input.background === true || (isStatus && inferredState === 'running')) ? ' ⟳' : ''
+  const stateTone = OPENCODE_TASK_STATE_TONE[inferredState ?? 'pending'] ?? 'dim'
+  const stateGlyph = inferredState === 'completed'
+    ? '✓'
+    : inferredState === 'error'
+      ? '✗'
+      : inferredState === 'cancelled'
+        ? '■'
+        : inferredState === 'running'
+          ? '◐'
+          : '…'
+
+  const lines: TuiTranscriptCardLine[] = [
+    line(`tool ${name}${bgMark}: ${truncateLine(description)}${subagentTag}${shortId}`, 'tool'),
+    line(`${stateGlyph} ${inferredState ?? 'pending'}`, stateTone),
+  ]
+  if (expanded && parsed.bodyText) {
+    for (const ln of parsed.bodyText.split('\n')) {
+      lines.push(line(truncateLine(ln), parsed.isErrorBody ? 'result_error' : 'muted'))
+    }
+  }
+  return lines
+}
+
 function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
   if (thread.toolUse.name === 'FileChange') {
     return previewFileChange(thread)
@@ -790,6 +990,14 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
 
   if (TASK_TOOL_NAMES.has(thread.toolUse.name)) {
     return formatTaskTool(thread, false, activeForms, taskRegistry)
+  }
+
+  if (OPENCODE_TASK_TOOL_NAMES.has(thread.toolUse.name)) {
+    return formatOpenCodeTaskTool(thread, false)
+  }
+
+  if (thread.toolUse.name === 'AskUserQuestion') {
+    return formatAskUserQuestionTool(thread, false)
   }
 
   if (thread.toolUse.name === 'ToolSearch') {
@@ -1466,6 +1674,14 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
 
       if (TASK_TOOL_NAMES.has(toolName)) {
         return formatTaskTool(block, true, activeForms, taskRegistry)
+      }
+
+      if (OPENCODE_TASK_TOOL_NAMES.has(toolName)) {
+        return formatOpenCodeTaskTool(block, true)
+      }
+
+      if (toolName === 'AskUserQuestion') {
+        return formatAskUserQuestionTool(block, true)
       }
 
       if (toolName === 'ToolSearch') {
