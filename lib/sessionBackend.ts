@@ -1852,6 +1852,8 @@ async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
 
 function formatCodexNotification(notification: CodexNotification): string | null {
   switch (notification.method) {
+    case 'error':
+      return JSON.stringify({ type: 'codex_error', ...notification.params })
     case 'item/agentMessage/delta':
       return JSON.stringify({ type: 'codex_agent_message_delta', ...notification.params })
     case 'item/plan/delta':
@@ -1860,10 +1862,28 @@ function formatCodexNotification(notification: CodexNotification): string | null
       return JSON.stringify({ type: 'codex_reasoning_summary_delta', ...notification.params })
     case 'item/reasoning/textDelta':
       return JSON.stringify({ type: 'codex_reasoning_delta', ...notification.params })
+    case 'item/commandExecution/outputDelta':
+      return JSON.stringify({ type: 'codex_command_output_delta', ...notification.params })
+    case 'item/fileChange/outputDelta':
+      return JSON.stringify({ type: 'codex_file_change_output_delta', ...notification.params })
+    case 'item/fileChange/patchUpdated':
+      return JSON.stringify({ type: 'codex_file_change_patch_updated', ...notification.params })
+    case 'item/mcpToolCall/progress':
+      return JSON.stringify({ type: 'codex_mcp_tool_progress', ...notification.params })
+    case 'turn/plan/updated':
+      return JSON.stringify({ type: 'codex_turn_plan_updated', ...notification.params })
+    case 'turn/diff/updated':
+      return JSON.stringify({ type: 'codex_turn_diff_updated', ...notification.params })
+    case 'thread/realtime/transcript/delta':
+      return JSON.stringify({ type: 'codex_realtime_transcript_delta', ...notification.params })
+    case 'thread/realtime/transcript/done':
+      return JSON.stringify({ type: 'codex_realtime_transcript_done', ...notification.params })
     case 'thread/realtime/transcriptUpdated':
       return JSON.stringify({ type: 'codex_realtime_transcript', ...notification.params })
     case 'thread/realtime/itemAdded':
       return JSON.stringify({ type: 'codex_realtime_item_added', ...notification.params })
+    case 'thread/realtime/error':
+      return JSON.stringify({ type: 'codex_realtime_error', ...notification.params })
     case 'item/started':
       return JSON.stringify({ type: 'codex_item_started', ...notification.params })
     case 'item/completed':
@@ -1878,6 +1898,32 @@ function getCodexNotificationTurnId(notification: CodexNotification): string | n
   if (typeof params.turnId === 'string' && params.turnId) return params.turnId
   if (typeof params.turn?.id === 'string' && params.turn.id) return params.turn.id
   return null
+}
+
+function isCodexRealtimeNotification(notification: CodexNotification): boolean {
+  switch (notification.method) {
+    case 'error':
+    case 'item/agentMessage/delta':
+    case 'item/plan/delta':
+    case 'item/reasoning/summaryTextDelta':
+    case 'item/reasoning/textDelta':
+    case 'item/commandExecution/outputDelta':
+    case 'item/fileChange/outputDelta':
+    case 'item/fileChange/patchUpdated':
+    case 'item/mcpToolCall/progress':
+    case 'turn/plan/updated':
+    case 'turn/diff/updated':
+    case 'thread/realtime/transcript/delta':
+    case 'thread/realtime/transcript/done':
+    case 'thread/realtime/transcriptUpdated':
+    case 'thread/realtime/itemAdded':
+    case 'thread/realtime/error':
+    case 'item/started':
+    case 'item/completed':
+      return true
+    default:
+      return false
+  }
 }
 
 async function createCodexStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
@@ -1947,6 +1993,11 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         safeEnqueue(`data: ${payload}\n\n`)
       }
 
+      // Prime the SSE stream before Codex startup/resume work so the TUI can
+      // render "turn running" immediately and intermediaries do not buffer the
+      // first real event behind the turn/start response.
+      safeEnqueue(':ok\n\n')
+
       // Subscribe via the codex harness — events for this thread arrive
       // pre-filtered and the snapshot cache lets a downstream client
       // resume without losing the latest turn state. Matches how the
@@ -1998,6 +2049,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           const notificationTurnId = getCodexNotificationTurnId(notification)
 
           if (notification.method === 'thread/tokenUsage/updated') {
+            if (!targetTurnId && notificationTurnId) activateTargetTurn(notificationTurnId)
             if (!targetTurnId || notificationTurnId !== targetTurnId) continue
             const usage = mapCodexTokenUsageToContextUsage(
               (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
@@ -2008,11 +2060,15 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           }
 
           if (!targetTurnId) {
-            bufferedNotifications.push(notification)
-            if (notification.method === 'turn/started' && notificationTurnId) {
+            if (notificationTurnId) {
               activateTargetTurn(notificationTurnId)
+            } else if (isCodexRealtimeNotification(notification)) {
+              flushNotification(notification)
+              continue
+            } else {
+              bufferedNotifications.push(notification)
+              continue
             }
-            continue
           }
 
           if (notificationTurnId && notificationTurnId !== targetTurnId) continue

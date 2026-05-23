@@ -229,6 +229,7 @@ export type CodexThreadTokenUsage = {
 }
 
 export type CodexNotification =
+  | { method: 'error'; params: { error: { message?: string; additionalDetails?: string | null }; willRetry: boolean; threadId: string; turnId: string } }
   | { method: 'turn/started'; params: { threadId: string; turnId?: string; turn?: Pick<CodexTurn, 'id' | 'status' | 'error'> | null } }
   | { method: 'turn/completed'; params: { threadId: string; turnId?: string; turn?: Pick<CodexTurn, 'id' | 'status' | 'error'> | null } }
   | { method: 'item/started'; params: { threadId: string; turnId: string; item: CodexThreadItem } }
@@ -237,7 +238,18 @@ export type CodexNotification =
   | { method: 'item/plan/delta'; params: { threadId: string; turnId: string; itemId: string; delta: string } }
   | { method: 'item/reasoning/summaryTextDelta'; params: { threadId: string; turnId: string; itemId: string; delta: string; summaryIndex: number } }
   | { method: 'item/reasoning/textDelta'; params: { threadId: string; turnId: string; itemId: string; delta: string; contentIndex: number } }
+  | { method: 'item/commandExecution/outputDelta'; params: { threadId: string; turnId: string; itemId: string; delta: string } }
+  | { method: 'item/fileChange/outputDelta'; params: { threadId: string; turnId: string; itemId: string; delta: string } }
+  | { method: 'item/fileChange/patchUpdated'; params: { threadId: string; turnId: string; itemId: string; changes: CodexFileUpdateChange[] } }
+  | { method: 'item/mcpToolCall/progress'; params: { threadId: string; turnId: string; itemId: string; message: string } }
+  | { method: 'turn/plan/updated'; params: { threadId: string; turnId: string; explanation: string | null; plan: Array<Record<string, unknown>> } }
+  | { method: 'turn/diff/updated'; params: { threadId: string; turnId: string; diff: string } }
+  | { method: 'thread/realtime/started'; params: { threadId: string; realtimeSessionId: string | null; version?: unknown } }
+  | { method: 'thread/realtime/transcript/delta'; params: { threadId: string; role: string; delta: string } }
+  | { method: 'thread/realtime/transcript/done'; params: { threadId: string; role: string; text: string } }
   | { method: 'thread/realtime/transcriptUpdated'; params: { threadId: string; role: string; text: string } }
   | { method: 'thread/realtime/itemAdded'; params: { threadId: string; item: Record<string, unknown> } }
+  | { method: 'thread/realtime/error'; params: { threadId: string; message: string } }
+  | { method: 'thread/realtime/closed'; params: { threadId: string; reason: string | null } }
   | { method: 'thread/tokenUsage/updated'; params: { threadId: string; turnId: string; tokenUsage: CodexThreadTokenUsage } }
   | { method: string; params: Record<string, unknown> }

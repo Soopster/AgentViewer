@@ -495,6 +495,27 @@ function extractTextContent(content: unknown): string {
     .trim()
 }
 
+function extractCodexTurnPlanText(payload: Record<string, unknown>): string | null {
+  const plan = Array.isArray(payload.plan) ? payload.plan : []
+  const steps = plan
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return []
+      const record = entry as Record<string, unknown>
+      const step = typeof record.step === 'string' ? record.step.trim() : ''
+      if (!step) return []
+      const status = typeof record.status === 'string' ? record.status : ''
+      const marker = status === 'completed'
+        ? '[x]'
+        : status === 'inProgress'
+        ? '[~]'
+        : '[ ]'
+      return [`${marker} ${step}`]
+    })
+  const explanation = typeof payload.explanation === 'string' ? payload.explanation.trim() : ''
+  if (steps.length === 0) return explanation || null
+  return `${explanation ? `${explanation}\n\n` : ''}## Plan\n\n${steps.join('\n')}`
+}
+
 function extractStreamingAssistantText(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
@@ -506,6 +527,31 @@ function extractStreamingAssistantText(payload: unknown): string | null {
   if ((record.type === 'codex_plan_delta' || record.type === 'codex_reasoning_delta' || record.type === 'codex_reasoning_summary_delta')
     && typeof record.delta === 'string') {
     return record.delta
+  }
+
+  if (record.type === 'codex_turn_plan_updated') {
+    return extractCodexTurnPlanText(record)
+  }
+
+  if (record.type === 'codex_error') {
+    const error = record.error
+    if (!error || typeof error !== 'object') return null
+    const errorRecord = error as Record<string, unknown>
+    const message = typeof errorRecord.message === 'string' ? errorRecord.message : ''
+    const details = typeof errorRecord.additionalDetails === 'string' ? errorRecord.additionalDetails : ''
+    return [message, details].filter(Boolean).join('\n\n') || null
+  }
+
+  if (record.type === 'codex_realtime_transcript_delta') {
+    return record.role === 'assistant' && typeof record.delta === 'string'
+      ? record.delta
+      : null
+  }
+
+  if (record.type === 'codex_realtime_transcript_done') {
+    return record.role === 'assistant' && typeof record.text === 'string'
+      ? record.text
+      : null
   }
 
   if (record.type === 'codex_realtime_transcript') {
@@ -648,7 +694,10 @@ function shouldReplaceLiveAssistantText(payload: unknown): boolean {
   if (!payload || typeof payload !== 'object') return false
   const record = payload as Record<string, unknown>
   if (record.type === 'assistant') return true
+  if (record.type === 'codex_error') return true
+  if (record.type === 'codex_turn_plan_updated') return true
   if (record.type === 'codex_realtime_transcript') return true
+  if (record.type === 'codex_realtime_transcript_done') return true
   if (record.type === 'codex_realtime_item_added') return true
   if (record.type === 'codex_item_completed') {
     const item = record.item
@@ -722,6 +771,147 @@ function completeLiveToolThread(messages: ThreadedMessage[], key: string): Threa
       }),
     }
   })
+}
+
+function codexLiveToolLabel(item: Record<string, unknown>): string | null {
+  switch (item.type) {
+    case 'commandExecution':
+      return 'Bash'
+    case 'fileChange':
+      return 'FileChange'
+    case 'mcpToolCall':
+      return typeof item.tool === 'string' && item.tool.trim()
+        ? item.tool
+        : 'MCP'
+    case 'dynamicToolCall':
+      return typeof item.tool === 'string' && item.tool.trim()
+        ? item.tool
+        : 'DynamicTool'
+    case 'collabAgentToolCall':
+      return 'Agent'
+    case 'webSearch':
+      return 'WebSearch'
+    case 'imageView':
+      return 'ImageView'
+    case 'imageGeneration':
+      return 'ImageGeneration'
+    case 'contextCompaction':
+      return 'ContextCompaction'
+    case 'hookPrompt':
+      return 'Hook'
+    default:
+      return null
+  }
+}
+
+function extractCodexLiveToolActivity(payload: Record<string, unknown>): TuiLiveToolActivity | null {
+  if (payload.type !== 'codex_item_started' && payload.type !== 'codex_item_completed') return null
+  const item = payload.item
+  if (!item || typeof item !== 'object') return null
+  const itemRecord = item as Record<string, unknown>
+  const label = codexLiveToolLabel(itemRecord)
+  if (!label) return null
+  const itemId = typeof itemRecord.id === 'string' && itemRecord.id
+    ? itemRecord.id
+    : typeof payload.itemId === 'string' && payload.itemId
+    ? payload.itemId
+    : label
+  return {
+    key: itemId,
+    label,
+    status: payload.type === 'codex_item_completed' ? 'done' : 'running',
+  }
+}
+
+function applyLiveToolActivity(prev: TuiLiveToolActivity[], activity: TuiLiveToolActivity): TuiLiveToolActivity[] {
+  const existingIndex = prev.findIndex((entry) => entry.key === activity.key)
+  if (existingIndex === -1) return [...prev, activity]
+  return prev.map((entry, index) => index === existingIndex ? activity : entry)
+}
+
+function codexToolNameForDelta(type: unknown): string {
+  if (type === 'codex_file_change_output_delta' || type === 'codex_file_change_patch_updated') return 'FileChange'
+  if (type === 'codex_mcp_tool_progress') return 'MCP'
+  return 'Bash'
+}
+
+function codexLiveDeltaText(record: Record<string, unknown>): string | null {
+  if (record.type === 'codex_mcp_tool_progress') {
+    return typeof record.message === 'string' && record.message ? `${record.message}\n` : null
+  }
+  if (record.type === 'codex_file_change_patch_updated') {
+    const changes = Array.isArray(record.changes) ? record.changes.length : 0
+    return `Patch updated (${changes} change${changes === 1 ? '' : 's'}).\n`
+  }
+  if (record.type === 'codex_command_output_delta' || record.type === 'codex_file_change_output_delta') {
+    return typeof record.delta === 'string' ? record.delta : null
+  }
+  return null
+}
+
+function appendCodexLiveToolOutput(
+  messages: ThreadedMessage[],
+  payload: Record<string, unknown>,
+  targetSession: Session,
+): ThreadedMessage[] {
+  const deltaText = codexLiveDeltaText(payload)
+  if (!deltaText) return messages
+
+  const turnId = typeof payload.turnId === 'string' && payload.turnId ? payload.turnId : null
+  const itemId = typeof payload.itemId === 'string' && payload.itemId ? payload.itemId : null
+  if (!turnId || !itemId) return messages
+
+  const messageUuid = `${turnId}:${itemId}`
+  const toolUseId = `${messageUuid}:tool`
+  let matched = false
+  const nextMessages = messages.map((message) => {
+    if (message.uuid !== messageUuid) return message
+    matched = true
+    return {
+      ...message,
+      blocks: message.blocks.map((block) => {
+        if (block.type !== 'tool_thread' || block.toolUse.id !== toolUseId) return block
+        const existing = typeof block.result?.content === 'string' ? block.result.content : ''
+        const result: ToolResultBlock = {
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: `${existing}${deltaText}`,
+          is_error: block.result?.is_error,
+        }
+        return { ...block, result }
+      }),
+    }
+  })
+
+  if (matched) return nextMessages
+
+  const sessionId = typeof payload.threadId === 'string' && payload.threadId
+    ? payload.threadId
+    : targetSession.sessionId
+  const toolName = codexToolNameForDelta(payload.type)
+  return [
+    ...nextMessages,
+    {
+      role: 'assistant',
+      uuid: messageUuid,
+      sessionId,
+      provider: targetSession.provider ?? 'codex',
+      blocks: [{
+        type: 'tool_thread',
+        toolUse: {
+          type: 'tool_use',
+          id: toolUseId,
+          name: toolName,
+          input: { status: 'running', itemId },
+        },
+        result: {
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: deltaText,
+        },
+      }],
+    },
+  ]
 }
 
 function liveMessageSessionKey(message: ThreadedMessage): string | null {
@@ -2032,6 +2222,7 @@ export default function OpenTuiApp() {
   const composerTextareaRef = useRef<TextareaRenderable | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const liveTranscriptBaselineRef = useRef(new Map<string, { count: number; lastFingerprint: string | null }>())
+  const awaitingPersistedTurnRef = useRef(false)
   const liveTextFlushFrameRef = useRef<number | null>(null)
   const pendingLiveTextRef = useRef('')
   const liveTextTargetSessionRef = useRef<Session | null>(null)
@@ -2063,6 +2254,7 @@ export default function OpenTuiApp() {
   useEffect(() => { searchModeRef.current = searchMode }, [searchMode])
   useEffect(() => { sessionSearchModeRef.current = sessionSearchMode }, [sessionSearchMode])
   useEffect(() => { exitConfirmOpenRef.current = exitConfirmOpen }, [exitConfirmOpen])
+  useEffect(() => { awaitingPersistedTurnRef.current = awaitingPersistedTurn }, [awaitingPersistedTurn])
   useEffect(() => {
     setActiveTheme(themeMode)
   }, [themeMode])
@@ -3123,14 +3315,14 @@ export default function OpenTuiApp() {
   const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
     const cacheKeyForGuards = sessionKey(session)
     if (!foreground && (loadingDetailRef.current || backgroundRefreshInFlightRef.current.has(cacheKeyForGuards))) return
-    if (!foreground && liveTranscriptBaselineRef.current.has(cacheKeyForGuards)) return
+    if (!foreground && liveTranscriptBaselineRef.current.has(cacheKeyForGuards) && !awaitingPersistedTurnRef.current) return
 
     // Skip background polls when the session file hasn't changed since the
     // cached detail was populated — avoids re-reading and re-threading the
     // full message file every interval for idle sessions. Worst case the
     // sidebar's lastModified is stale and we skip one poll; the next sidebar
     // refresh catches us up.
-    if (!foreground && typeof session.lastModified === 'number') {
+    if (!foreground && !awaitingPersistedTurnRef.current && typeof session.lastModified === 'number') {
       const recordedMtime = sessionDetailMtimeRef.current.get(cacheKeyForGuards)
       if (recordedMtime != null && recordedMtime >= session.lastModified) return
     }
@@ -3154,6 +3346,20 @@ export default function OpenTuiApp() {
     try {
       const detail = await readTuiSessionDetailAsync(session, densityRef.current, showToolCallsRef.current)
       if (requestId !== detailRequestRef.current) return
+      const liveBaseline = liveTranscriptBaselineRef.current.get(cacheKeyForGuards)
+      if (liveBaseline) {
+        const lastFingerprint = sessionMessageFingerprint(detail.rawMessages.at(-1))
+        const persistedTurnArrived =
+          detail.rawMessages.length > liveBaseline.count
+          || lastFingerprint !== liveBaseline.lastFingerprint
+        if (persistedTurnArrived) {
+          liveTranscriptBaselineRef.current.delete(cacheKeyForGuards)
+          setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== cacheKeyForGuards))
+          liveToolIndexesRef.current.clear()
+          setComposerLiveText('')
+          setAwaitingPersistedTurn(false)
+        }
+      }
       if (typeof session.lastModified === 'number') {
         sessionDetailMtimeRef.current.set(cacheKeyForGuards, session.lastModified)
       }
@@ -3923,6 +4129,14 @@ export default function OpenTuiApp() {
           setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, agentCard))
         }
 
+        if (targetSession.provider === 'codex') {
+          const codexToolActivity = extractCodexLiveToolActivity(parsedRecord)
+          if (codexToolActivity) {
+            setLiveToolActivities((prev) => applyLiveToolActivity(prev, codexToolActivity))
+          }
+          setLiveTranscriptMessages((prev) => appendCodexLiveToolOutput(prev, parsedRecord, targetSession))
+        }
+
         const codexCompletionItem = parsedRecord.type === 'codex_item_completed' && parsedRecord.item && typeof parsedRecord.item === 'object'
           ? parsedRecord.item as Record<string, unknown>
           : null
@@ -3933,11 +4147,21 @@ export default function OpenTuiApp() {
           if (threaded) {
             setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, threaded))
           }
-        } else if (targetSession.provider === 'codex' && !codexCompletionIsText) {
+        } else if (targetSession.provider === 'codex') {
           const threaded = normalizeCodexStreamThreadedMessage(parsed, targetSession.sessionId)
           if (threaded) {
             setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, threaded))
           }
+          if (codexCompletionIsText) {
+            pendingLiveTextRef.current = ''
+            setComposerLiveText('')
+          }
+        }
+
+        if (targetSession.provider === 'codex' && codexCompletionIsText) {
+          const finalText = extractStreamingAssistantText(parsed)
+          if (finalText) replyAccumulator = finalText
+          return
         }
 
         const delta = extractStreamingAssistantText(parsed)
@@ -4002,10 +4226,9 @@ export default function OpenTuiApp() {
       setComposerSendState('idle')
       setComposerError(null)
       setAwaitingPersistedTurn(true)
-    setAwaitingPersistedTurn(false)
-    setFollowTail(true)
-    setPendingNewCount(0)
-    setUnreadBoundaryKey(null)
+      setFollowTail(true)
+      setPendingNewCount(0)
+      setUnreadBoundaryKey(null)
       setSelectedSessionKey(sessionKey(targetSession))
       void refreshSessions(provider, true, false)
       void refreshSelectedSessionDetail(targetSession, true)
