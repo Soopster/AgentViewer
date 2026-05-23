@@ -69,9 +69,9 @@ const CODEX: ProviderComposerConfig = {
   placeholderIdle: 'Explain this codebase',
   placeholderStreaming: 'Type a follow-up — Tab to queue while the turn runs',
   placeholderNoSession: 'Pick a Codex thread to send a message',
-  // Match codex-rs/tui footer wording: `/` for commands, `@` for file paths, Shift+Enter newline,
-  // Tab to queue (when a turn is running), Ctrl+R search history.
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / for commands · @ for file paths · ⌃R search history',
+  // Match the bindings implemented by this composer: `/` for commands, `@` for file paths,
+  // and Shift+Enter for newline.
+  footerHintIdle: '⏎ send · ⇧⏎ newline · / for commands · @ for file paths',
   footerHintSending: 'Esc to interrupt · ⇥ to queue · turn running…',
   sendVerb: 'Send',
   // Verbatim from codex-rs chatwidget.rs PLACEHOLDERS so rotating examples match what Codex shows.

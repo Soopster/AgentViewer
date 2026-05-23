@@ -51,6 +51,7 @@ import {
   readTuiTranscriptView,
   runTuiSessionAction,
   streamTuiSessionTurn,
+  interruptTuiSessionTurn,
   writeTuiDensity,
   writeTuiFocusMode,
   writeTuiProvider,
@@ -76,7 +77,7 @@ import {
   transcriptCardsVariantKey,
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import type { ProviderSelection, RunningSessionRef, SendAttachment, SendState, Session, ToolResultBlock } from '../../lib/types'
+import type { ContextUsage, ProviderSelection, RunningSessionRef, SendAttachment, SendState, Session, ToolResultBlock } from '../../lib/types'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
@@ -194,6 +195,7 @@ const TASK_PANEL_DEFAULT_WIDTH = 32
 const TASK_PANEL_MAX_WIDTH = 60
 const TASK_PANEL_RESIZE_STEP = 4
 const SESSION_CACHE_LIMIT = 8
+const EXIT_CLEANUP_TIMEOUT_MS = 1500
 const MESSAGE_SCROLL_ACCEL = new MacOSScrollAccel()
 
 type PaneFocus = 'sessions' | 'messages'
@@ -311,6 +313,23 @@ function renderContextBar(totalTokens: number, maxTokens: number, percentage: nu
   const filled = Math.round((percentage / 100) * barWidth)
   const bar = '▓'.repeat(filled) + '░'.repeat(barWidth - filled)
   return `${fmtTokens(totalTokens)} / ${fmtTokens(maxTokens)}  ${bar}  ${percentage}%`
+}
+
+function formatContextUsageChip(usage: Pick<ContextUsage, 'totalTokens' | 'maxTokens' | 'percentage'>): string {
+  const total = fmtTokens(usage.totalTokens)
+  if (usage.maxTokens <= 0) return total
+  const percentage = Number.isFinite(usage.percentage) ? Math.round(usage.percentage) : 0
+  return `${total}/${fmtTokens(usage.maxTokens)} ${percentage}%`
+}
+
+function formatTuiComposerIdleHint(baseHint: string, historyCount: number): string {
+  const cleaned = baseHint
+    .replace(/\s*·\s*(?:↑↓|⌃P\/⌃N|\^P\/\^N|\^R|⌃R)\s+(?:search\s+)?history(?:\s*\(\d+\))?/g, '')
+    .trim()
+  const historyHint = historyCount > 0
+    ? `⌃P/⌃N history (${historyCount})`
+    : '⌃P/⌃N history'
+  return `${cleaned} · ${historyHint}`
 }
 
 function contextBarColor(percentage: number, theme: TuiThemePalette): string {
@@ -1583,7 +1602,7 @@ function touchMapEntry<K, V>(map: Map<K, V>, key: K, value: V): void {
 
 function pruneSessionCaches(
   detailCache: Map<string, TuiSessionDetail>,
-  usageCache: Map<string, import('../../lib/types').ContextUsage | null>,
+  usageCache: Map<string, ContextUsage | null>,
   metadataFetchedAt: Map<string, number>,
   pinnedKeys: Set<string>,
   limit = SESSION_CACHE_LIMIT,
@@ -1897,6 +1916,8 @@ export default function OpenTuiApp() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteQuery, setCommandPaletteQuery] = useState('')
   const [commandPaletteIndex, setCommandPaletteIndex] = useState(0)
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
+  const [exitCleanupInProgress, setExitCleanupInProgress] = useState(false)
   const [gitOpen, setGitOpen] = useState(false)
   const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
@@ -1934,7 +1955,7 @@ export default function OpenTuiApp() {
     loaded: false,
     state: null,
   })
-  const [contextUsage, setContextUsage] = useState<import('../../lib/types').ContextUsage | null>(null)
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
   const [contextUsageStatus, setContextUsageStatus] = useState<'idle' | 'loading' | 'unavailable' | 'ready'>('idle')
   const [renameSessionKey, setRenameSessionKey] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
@@ -2003,10 +2024,11 @@ export default function OpenTuiApp() {
     keys: [],
   })
   const sessionDetailCacheRef = useRef(new Map<string, TuiSessionDetail>())
-  const sessionContextUsageCacheRef = useRef(new Map<string, import('../../lib/types').ContextUsage | null>())
+  const sessionContextUsageCacheRef = useRef(new Map<string, ContextUsage | null>())
   const sessionMetadataFetchedAtRef = useRef(new Map<string, number>())
   const sessionMetadataInFlightRef = useRef(new Set<string>())
   const composerAbortRef = useRef<AbortController | null>(null)
+  const activeComposerSendCleanupRef = useRef<Promise<void> | null>(null)
   const composerTextareaRef = useRef<TextareaRenderable | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const liveTranscriptBaselineRef = useRef(new Map<string, { count: number; lastFingerprint: string | null }>())
@@ -2023,6 +2045,8 @@ export default function OpenTuiApp() {
   const tabsEnabledRef = useRef(true)
   const themeMenuOriginRef = useRef<TuiThemeMode | null>(null)
   const currentThemeRef = useRef<TuiThemeMode>('light')
+  const exitConfirmOpenRef = useRef(false)
+  const exitInProgressRef = useRef(false)
   const densityRef = useRef<TuiDensity>('balanced')
   const showToolCallsRef = useRef(true)
   // Tracked for the detail-poll skip path (proposal 6): the 2s background
@@ -2038,6 +2062,7 @@ export default function OpenTuiApp() {
   useEffect(() => { composerDraftRef.current = composerDraft }, [composerDraft])
   useEffect(() => { searchModeRef.current = searchMode }, [searchMode])
   useEffect(() => { sessionSearchModeRef.current = sessionSearchMode }, [sessionSearchMode])
+  useEffect(() => { exitConfirmOpenRef.current = exitConfirmOpen }, [exitConfirmOpen])
   useEffect(() => {
     setActiveTheme(themeMode)
   }, [themeMode])
@@ -2429,19 +2454,42 @@ export default function OpenTuiApp() {
     return idx >= 0 ? idx : 0
   }, [sidebarEntries, selectedIndex])
   const composerHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, (composerDraft.length === 0 ? 1 : composerDraft.split('\n').length) + 3))
-  // One-line chip summarising send-body knobs that are NOT the default. Skipped
-  // when everything is at default so the footer stays uncluttered.
+  const composerCurrentModel = useMemo(() => {
+    if (!composerTargetSession) return null
+    const targetKey = sessionKey(composerTargetSession)
+    const modelOverride = tuiModelOverride[targetKey]
+    const selectedDetailModel = sessionDetail?.info
+      && sessionDetail.info.sessionId === composerTargetSession.sessionId
+      && sessionDetail.info.provider === composerTargetSession.provider
+      ? sessionDetail.info.currentModel
+      : undefined
+    const cachedDetailModel = sessionDetailCacheRef.current.get(targetKey)?.info?.currentModel
+    const contextModel = selectedSessionKey === targetKey ? contextUsage?.model : undefined
+    const rawModel = modelOverride ?? selectedDetailModel ?? cachedDetailModel ?? contextModel
+    if (!rawModel) return null
+    const model = formatModelChipValue(rawModel)
+    return model && model.toLowerCase() !== 'unknown' ? model : null
+  }, [composerTargetSession, contextUsage, selectedSessionKey, sessionDetail, tuiModelOverride])
+  const composerContextUsage = useMemo(() => {
+    if (!composerTargetSession) return null
+    const targetKey = sessionKey(composerTargetSession)
+    const usage = selectedSessionKey === targetKey
+      ? contextUsage
+      : sessionContextUsageCacheRef.current.get(targetKey) ?? null
+    return usage ? formatContextUsageChip(usage) : null
+  }, [composerTargetSession, contextUsage, selectedSessionKey])
+  // One-line chip summarising the active model plus send-body knobs that are
+  // not default. Skipped when no metadata is known and knobs are default.
   const composerKnobsChip = useMemo(() => {
     const parts: string[] = []
-    const targetKey = composerTargetSession ? sessionKey(composerTargetSession) : null
-    const modelOverride = targetKey ? tuiModelOverride[targetKey] : undefined
-    if (modelOverride) parts.push(`model:${formatModelChipValue(modelOverride)}`)
+    if (composerCurrentModel) parts.push(`model:${composerCurrentModel}`)
+    if (composerContextUsage) parts.push(`ctx:${composerContextUsage}`)
     if (tuiEffort !== 'auto') parts.push(`effort:${tuiEffort}`)
     if (composerTargetSession?.provider === 'claude' && tuiPermissionMode !== 'default') {
       parts.push(`mode:${tuiPermissionMode}`)
     }
     return parts.length > 0 ? `· ${parts.join(' · ')}` : ''
-  }, [composerTargetSession, tuiEffort, tuiModelOverride, tuiPermissionMode])
+  }, [composerContextUsage, composerCurrentModel, composerTargetSession?.provider, tuiEffort, tuiPermissionMode])
   const composerFirstLine = composerDraft.split('\n')[0] ?? ''
   const composerSlashOpen = composerFirstLine.startsWith('/') && !composerSlashDismissed
   const composerSlashCommands: SlashCommandSuggestion[] = useMemo(() => {
@@ -3321,6 +3369,50 @@ export default function OpenTuiApp() {
     setThemeMenuOpen(false)
   }, [])
 
+  const persistTheme = useCallback(() => {
+    try { writeTuiThemeSync(currentThemeRef.current) } catch { /* best-effort */ }
+  }, [])
+
+  const confirmExit = useCallback(() => {
+    if (exitInProgressRef.current) return
+    exitInProgressRef.current = true
+    setExitCleanupInProgress(true)
+    setQueuedComposerSend(null)
+
+    const cleanupPromise = activeComposerSendCleanupRef.current
+    const controller = composerAbortRef.current
+    const runningRefs = [...runningSessionsRef.current]
+    if (controller && !controller.signal.aborted) controller.abort()
+
+    void (async () => {
+      const cleanupTasks: Promise<unknown>[] = []
+      if (runningRefs.length > 0) {
+        cleanupTasks.push(Promise.allSettled(runningRefs.map((running) => interruptTuiSessionTurn(running))))
+      }
+      if (cleanupPromise) {
+        cleanupTasks.push(cleanupPromise.catch(() => undefined))
+      }
+      if (cleanupTasks.length > 0) {
+        await Promise.race([
+          Promise.all(cleanupTasks).then(() => undefined),
+          new Promise<void>((resolve) => setTimeout(resolve, EXIT_CLEANUP_TIMEOUT_MS)),
+        ])
+      }
+      persistTheme()
+      renderer.destroy()
+      process.exit(0)
+    })()
+  }, [persistTheme, renderer])
+
+  const requestExit = useCallback(() => {
+    setExitConfirmOpen(true)
+  }, [])
+
+  const cancelExit = useCallback(() => {
+    if (exitInProgressRef.current) return
+    setExitConfirmOpen(false)
+  }, [])
+
   // Pop a small select overlay listing the active session's available models.
   // Reuses readTuiSessionMetadata which already returns the SDK-reported list
   // for any provider — keeps this one switch out of the TUI layer.
@@ -3379,24 +3471,27 @@ export default function OpenTuiApp() {
   }, [themeMode])
 
   useEffect(() => {
-    const persist = () => {
-      try { writeTuiThemeSync(currentThemeRef.current) } catch { /* best-effort */ }
+    const onInterrupt = () => {
+      if (exitConfirmOpenRef.current) {
+        confirmExit()
+        return
+      }
+      setExitConfirmOpen(true)
     }
-    const onSignal = () => {
-      persist()
-      process.exit(0)
+    const onTerminate = () => {
+      confirmExit()
     }
-    process.on('exit', persist)
-    process.on('SIGINT', onSignal)
-    process.on('SIGTERM', onSignal)
-    process.on('SIGHUP', onSignal)
+    process.on('exit', persistTheme)
+    process.on('SIGINT', onInterrupt)
+    process.on('SIGTERM', onTerminate)
+    process.on('SIGHUP', onTerminate)
     return () => {
-      process.off('exit', persist)
-      process.off('SIGINT', onSignal)
-      process.off('SIGTERM', onSignal)
-      process.off('SIGHUP', onSignal)
+      process.off('exit', persistTheme)
+      process.off('SIGINT', onInterrupt)
+      process.off('SIGTERM', onTerminate)
+      process.off('SIGHUP', onTerminate)
     }
-  }, [])
+  }, [confirmExit, persistTheme])
 
   const paletteDisplayRows = useMemo((): PaletteRow[] => {
     if (commandPaletteQuery) {
@@ -3505,6 +3600,19 @@ export default function OpenTuiApp() {
     }
   }, [refreshDiagnostics, selectedSession])
 
+  // Fire-and-forget push of model/permission changes through the actions
+  // route, mirroring MessageView.tsx. For warm Claude sessions the server's
+  // claudePool applies these live via setModel/setPermissionMode on the
+  // persistent Query; otherwise the change still rides on the next send's
+  // body. Skips when no Claude target, or when the target is still pending.
+  const pushClaudeControl = useCallback((
+    target: Session | null | undefined,
+    body: Record<string, unknown>,
+  ): void => {
+    if (!target || target.provider !== 'claude' || target.isPending) return
+    void runTuiSessionAction(target, body).catch(() => { /* swallow */ })
+  }, [])
+
   const cancelComposerSend = useCallback(() => {
     const target = composerTargetSession
     if (composerAbortRef.current) {
@@ -3606,6 +3714,11 @@ export default function OpenTuiApp() {
 
     const targetSession = composerTargetSession
     const controller = new AbortController()
+    let resolveTurnCleanup: () => void = () => {}
+    const turnCleanupPromise = new Promise<void>((resolve) => {
+      resolveTurnCleanup = resolve
+    })
+    activeComposerSendCleanupRef.current = turnCleanupPromise
     composerAbortRef.current = controller
     setComposerSendState('sending')
     setComposerError(null)
@@ -3694,7 +3807,9 @@ export default function OpenTuiApp() {
           throw new Error(typeof message === 'string' ? message : 'Unknown agent error')
         }
         if (frame.event === 'context-usage' && parsed) {
-          setContextUsage(parsed as import('../../lib/types').ContextUsage)
+          const usage = parsed as ContextUsage
+          touchMapEntry(sessionContextUsageCacheRef.current, sessionKey(targetSession), usage)
+          setContextUsage(usage)
           return
         }
         if (frame.event === 'session' && parsed) {
@@ -3951,6 +4066,10 @@ export default function OpenTuiApp() {
       setLiveSubagentText({})
       setLiveToolActivities([])
       clearSessionRunning(runningRef)
+      if (activeComposerSendCleanupRef.current === turnCleanupPromise) {
+        activeComposerSendCleanupRef.current = null
+      }
+      resolveTurnCleanup()
     }
   }, [
     composerTargetSession,
@@ -4477,6 +4596,10 @@ export default function OpenTuiApp() {
   const composerTargetMessage = composerAutoTargetingRunning && composerTargetSession
     ? `Auto-targeting running ${String(composerTargetSession.provider ?? 'claude').toUpperCase()} session ${composerTargetSession.sessionId.slice(-8)}`
     : null
+  const composerIdleFooterHint = useMemo(
+    () => formatTuiComposerIdleHint(composerConfig.footerHintIdle, sentHistory.length),
+    [composerConfig.footerHintIdle, sentHistory.length],
+  )
 
   const resizeSidebar = useCallback((delta: number) => {
     const nextWidth = clamp(sidebarWidth + delta, MIN_SIDEBAR_WIDTH, maxSidebarWidth)
@@ -4589,8 +4712,14 @@ export default function OpenTuiApp() {
       case 'mode': {
         const order = ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const
         setTuiPermissionMode((current) => {
-          const idx = order.indexOf(current)
-          return order[(idx + 1) % order.length]!
+          const next = order[(order.indexOf(current) + 1) % order.length]!
+          // Push to the warm pool if the active Claude session has one;
+          // otherwise this is a no-op and the next send carries it via body.
+          pushClaudeControl(composerTargetSession ?? selectedSession, {
+            action: 'setPermissionMode',
+            permissionMode: next,
+          })
+          return next
         })
         break
       }
@@ -4704,14 +4833,14 @@ export default function OpenTuiApp() {
         if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
         break
       case 'quit':
-        renderer.destroy()
-        process.exit(0)
+        requestExit()
+        break
     }
   }, [
     activeTabIndex, closeCommandPalette, copyCliCommand, copySelectedMessage, density, focusMode, focusedPane, jumpToResumeMarker,
     showNotice, tabsEnabled, sidebarSort,
     jumpToTranscriptTail, jumpToUnreadBoundary, openTabSessions, provider, railVisible,
-    refreshSessions, refreshSelectedSessionDetail, renderer, selectTabSession, selectedSessionKey,
+    refreshSessions, refreshSelectedSessionDetail, requestExit, selectTabSession, selectedSessionKey,
     selectedSession, selectedSessionTarget, sessions, themeMode, toggleExpansion, transcriptView,
   ])
 
@@ -4731,6 +4860,19 @@ export default function OpenTuiApp() {
       key.preventDefault()
       key.stopPropagation()
       action()
+    }
+
+    if (exitConfirmOpen) {
+      if (key.name === 'return' || key.name === 'y') {
+        handled(confirmExit)
+        return
+      }
+      if (key.name === 'escape' || key.name === 'n') {
+        handled(cancelExit)
+        return
+      }
+      handled(() => {})
+      return
     }
 
     if (searchMode) {
@@ -4824,10 +4966,7 @@ export default function OpenTuiApp() {
         return
       }
       if (key.name === 'q' || isCtrl('c')) {
-        handled(() => {
-          renderer.destroy()
-          process.exit(0)
-        })
+        handled(requestExit)
       }
       return
     }
@@ -4838,10 +4977,7 @@ export default function OpenTuiApp() {
         return
       }
       if (key.name === 'q' || isCtrl('c')) {
-        handled(() => {
-          renderer.destroy()
-          process.exit(0)
-        })
+        handled(requestExit)
       }
       return
     }
@@ -4869,10 +5005,7 @@ export default function OpenTuiApp() {
         return
       }
       if (key.name === 'q' || isCtrl('c')) {
-        handled(() => {
-          renderer.destroy()
-          process.exit(0)
-        })
+        handled(requestExit)
       }
       return
     }
@@ -5020,10 +5153,7 @@ export default function OpenTuiApp() {
     }
 
     if (key.name === 'q' || key.name === 'escape' || isCtrl('c')) {
-      handled(() => {
-        renderer.destroy()
-        process.exit(0)
-      })
+      handled(requestExit)
       return
     }
 
@@ -5954,6 +6084,9 @@ export default function OpenTuiApp() {
                     const value = typeof option?.value === 'string' ? option.value : ''
                     if (target && value) {
                       setTuiModelOverride((prev) => ({ ...prev, [sessionKey(target)]: value }))
+                      // Push live to the warm pool when the target is a non-pending
+                      // Claude session; cold sessions ignore and the next send applies it.
+                      pushClaudeControl(target, { action: 'setModel', model: value })
                     }
                     setModelPickerOpen(false)
                   }}
@@ -6393,9 +6526,7 @@ export default function OpenTuiApp() {
           <text fg={composerSendState === 'sending' ? theme.dim : composerAccentColor}>
             {composerSendState === 'sending'
               ? composerConfig.footerHintSending
-              : sentHistory.length > 0
-              ? `${composerConfig.footerHintIdle} (${sentHistory.length})`
-              : composerConfig.footerHintIdle}
+              : composerIdleFooterHint}
           </text>
         </box>
       </box>
@@ -6552,6 +6683,60 @@ export default function OpenTuiApp() {
                     : 'Esc close',
                   overlayWidth - 4,
                 )}
+              </text>
+            </box>
+          </box>
+        )
+      })() : null}
+
+      {exitConfirmOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={89}
+        />
+      ) : null}
+
+      {exitConfirmOpen ? (() => {
+        const overlayWidth = Math.min(Math.max(width - 6, 32), 58)
+        const overlayHeight = 8
+        const exitBodyText = exitCleanupInProgress
+          ? 'Stopping running turns before closing...'
+          : composerSendState === 'sending' || runningSessions.length > 0
+            ? 'Running turns will be interrupted before quit.'
+            : 'Close the terminal viewer now?'
+        const exitActionText = exitCleanupInProgress
+          ? 'Cleaning up...'
+          : 'Enter/Y quit  ·  Esc/N cancel'
+        return (
+          <box
+            position="absolute"
+            top={Math.max(1, Math.floor((height - overlayHeight) / 2))}
+            left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
+            width={overlayWidth}
+            height={overlayHeight}
+            border
+            borderStyle="single"
+            borderColor={theme.red}
+            backgroundColor={theme.surface}
+            zIndex={90}
+            flexDirection="column"
+          >
+            <box paddingX={1} paddingTop={1}>
+              <text fg={theme.text}>EXIT AGENT VIEWER?</text>
+            </box>
+            <box paddingX={1} marginTop={1}>
+              <text fg={theme.dim} wrapMode="none">
+                {fitText(exitBodyText, overlayWidth - 4)}
+              </text>
+            </box>
+            <box paddingX={1} marginTop={2}>
+              <text fg={theme.red} wrapMode="none">
+                {fitText(exitActionText, overlayWidth - 4)}
               </text>
             </box>
           </box>

@@ -115,8 +115,15 @@ function toolInput(value: unknown): Record<string, unknown> {
   return Object.keys(objectValue).length > 0 ? objectValue : { value }
 }
 
-function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadItem, timestamp?: string): SessionMessage[] {
+function mapItemToMessages(
+  threadId: string,
+  turnId: string,
+  item: CodexThreadItem,
+  timestamp?: string,
+  options: { includeToolResults?: boolean } = {},
+): SessionMessage[] {
   const baseId = `${turnId}:${item.id}`
+  const includeToolResults = options.includeToolResults ?? true
 
   switch (item.type) {
     case 'userMessage': {
@@ -157,7 +164,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, resultText || 'No output recorded.', item.status === 'failed'),
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'fileChange': {
       const toolUseId = `${baseId}:tool`
@@ -173,7 +180,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, summarizeFileChanges(item.status, item.changes), item.status === 'failed'),
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'mcpToolCall': {
       const toolUseId = `${baseId}:tool`
@@ -195,7 +202,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, resultText, Boolean(item.error)),
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'dynamicToolCall': {
       const toolUseId = `${baseId}:tool`
@@ -208,7 +215,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, stringify(item.contentItems ?? { success: item.success, status: item.status }), item.success === false),
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'collabAgentToolCall': {
       const toolUseId = `${baseId}:tool`
@@ -229,7 +236,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, stringify(item.agentsStates)),
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'webSearch': {
       const toolUseId = `${baseId}:tool`
@@ -245,7 +252,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
         makeToolResult(toolUseId, stringify(item.action ?? { query: item.query })),
       ], turnId, timestamp)
-      return [assistant, result]
+      return includeToolResults ? [assistant, result] : [assistant]
     }
     case 'imageView':
       return [makeMessage(threadId, baseId, 'assistant', `[image view] ${item.path}`, turnId, timestamp)]
@@ -267,7 +274,7 @@ function mapItemToMessages(threadId: string, turnId: string, item: CodexThreadIt
 export function normalizeCodexStreamThreadedMessage(payload: unknown, fallbackSessionId?: string): ThreadedMessage | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
-  if (record.type !== 'codex_item_completed') return null
+  if (record.type !== 'codex_item_completed' && record.type !== 'codex_item_started') return null
 
   const item = asObject(record.item)
   const itemId = typeof item.id === 'string' ? item.id : null
@@ -282,7 +289,9 @@ export function normalizeCodexStreamThreadedMessage(payload: unknown, fallbackSe
   if (!itemId || !itemType || !turnId || !threadId) return null
 
   const timestamp = uuidV7ToIsoTimestamp(itemId) ?? uuidV7ToIsoTimestamp(turnId)
-  const messages = mapItemToMessages(threadId, turnId, item as CodexThreadItem, timestamp)
+  const messages = mapItemToMessages(threadId, turnId, item as CodexThreadItem, timestamp, {
+    includeToolResults: record.type === 'codex_item_completed',
+  })
   if (messages.length === 0) return null
 
   return buildThreadedMessages(messages).find((message) => message.role === 'assistant') ?? null

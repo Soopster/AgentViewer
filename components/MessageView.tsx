@@ -1915,6 +1915,35 @@ export default function MessageView({
     textarea.style.overflowY = textarea.scrollHeight > 260 ? 'auto' : 'hidden'
   }, [])
 
+  // Fire-and-forget push of model/permission changes through the actions
+  // route. For warm Claude sessions the server's claudePool applies these
+  // live via setModel/setPermissionMode on the persistent Query; for cold
+  // sessions it's a no-op and the change still rides on body.{model,
+  // permissionMode} of the next /messages/events POST. Either way the next
+  // send is correct — this just makes the change visible immediately on
+  // warm sessions instead of waiting for the next turn to start.
+  const commitClaudeModelSelection = useCallback((nextModel: string) => {
+    setSelectedModel(nextModel)
+    if (!session || session.provider !== 'claude' || session.isPending) return
+    if (!nextModel || nextModel === selectedModel) return
+    void fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'claude', action: 'setModel', model: nextModel }),
+    }).catch(() => { /* swallow; next send carries body.model */ })
+  }, [session, selectedModel])
+
+  const commitClaudePermissionSelection = useCallback((nextMode: typeof selectedPermissionMode) => {
+    setSelectedPermissionMode(nextMode)
+    if (!session || session.provider !== 'claude' || session.isPending) return
+    if (nextMode === selectedPermissionMode) return
+    void fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'claude', action: 'setPermissionMode', permissionMode: nextMode }),
+    }).catch(() => { /* swallow; next send carries body.permissionMode */ })
+  }, [session, selectedPermissionMode])
+
   useLayoutEffect(() => {
     resizeComposer()
   }, [inputText, resizeComposer])
@@ -5365,7 +5394,7 @@ export default function MessageView({
                 </Label>
                 <NativeSelect
                   value={selectedModelValue ?? ''}
-                  onChange={(event) => setSelectedModel(event.target.value)}
+                  onChange={(event) => commitClaudeModelSelection(event.target.value)}
                   className={cn(compactNativeSelectClassName, 'flex-1')}
                 >
                   {modelOptions.length === 0 ? (
@@ -5417,7 +5446,7 @@ export default function MessageView({
                   </Label>
                   <NativeSelect
                     value={selectedPermissionMode}
-                    onChange={(event) => setSelectedPermissionMode(event.target.value as typeof selectedPermissionMode)}
+                    onChange={(event) => commitClaudePermissionSelection(event.target.value as typeof selectedPermissionMode)}
                     className={cn(compactNativeSelectClassName, 'flex-1')}
                     title="Claude permission mode — mirrors the CLI's /permissions"
                   >

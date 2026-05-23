@@ -26,7 +26,9 @@ import {
   query,
   renameSession,
   tagSession,
+  type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
+import { acquireClaudeSession, peekClaudeSession, recycleClaudeSession } from './claudePool'
 import type { ContentBlockParam as ClaudeContentBlockParam, MessageParam as ClaudeMessageParam } from '@anthropic-ai/sdk/resources'
 import type {
   GetAuthStatusResponse as CopilotGetAuthStatusResponse,
@@ -478,7 +480,10 @@ function attachmentsAsPromptText(attachments: SendAttachment[], ignoredTypes: Se
   return lines.length > 0 ? `\n\n${lines.join('\n')}` : ''
 }
 
-async function buildClaudePrompt(userMessage: string, attachments: SendAttachment[]): Promise<string | AsyncIterable<{ type: 'user'; message: ClaudeMessageParam; parent_tool_use_id: null }>> {
+async function buildClaudePromptParts(userMessage: string, attachments: SendAttachment[]): Promise<{
+  text: string
+  imageBlocks: ClaudeContentBlockParam[]
+}> {
   const imageBlocks: ClaudeContentBlockParam[] = []
   for (const attachment of attachments) {
     const image = await readLocalImageAttachment(attachment)
@@ -497,6 +502,11 @@ async function buildClaudePrompt(userMessage: string, attachments: SendAttachmen
   }
 
   const text = `${userMessage}${attachmentsAsPromptText(attachments)}`.trim()
+  return { text, imageBlocks }
+}
+
+async function buildClaudePrompt(userMessage: string, attachments: SendAttachment[]): Promise<string | AsyncIterable<{ type: 'user'; message: ClaudeMessageParam; parent_tool_use_id: null }>> {
+  const { text, imageBlocks } = await buildClaudePromptParts(userMessage, attachments)
   if (imageBlocks.length === 0) return text
 
   async function* messages() {
@@ -514,6 +524,20 @@ async function buildClaudePrompt(userMessage: string, attachments: SendAttachmen
   }
 
   return messages()
+}
+
+async function buildClaudeUserMessage(userMessage: string, attachments: SendAttachment[]): Promise<SDKUserMessage> {
+  const { text, imageBlocks } = await buildClaudePromptParts(userMessage, attachments)
+  return {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: imageBlocks.length === 0
+        ? text
+        : [{ type: 'text', text }, ...imageBlocks],
+    },
+    parent_tool_use_id: null,
+  }
 }
 
 function buildCodexInput(userMessage: string, attachments: SendAttachment[]): CodexUserInput[] {
@@ -1131,13 +1155,53 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
   }
 
   if (resolvedProvider === 'claude') {
+    // Phase 2: prefer the warm pool entry's persistent Query for control RPCs
+    // — avoids spinning a fresh CLI subprocess just to swap a model or
+    // reconnect an MCP server. Falls back to createSessionControlQuery only
+    // when the session isn't pooled (no recent send → no warm Query).
+    if (action === 'setModel') {
+      const model = typeof body.model === 'string' ? body.model.trim() : ''
+      if (!model) throw new Error('model is required')
+      const warm = peekClaudeSession(sessionId)
+      if (warm) {
+        await warm.setModel(model)
+        return { ok: true, applied: 'live' }
+      }
+      // No warm entry — the next send will apply it via body.model on /messages/events.
+      return { ok: true, applied: 'next-send' }
+    }
+    if (action === 'setPermissionMode') {
+      const mode = parseClaudePermissionMode(body)
+      if (!mode) throw new Error('permissionMode is required')
+      const warm = peekClaudeSession(sessionId)
+      if (warm) {
+        await warm.setPermissionMode(mode)
+        return { ok: true, applied: 'live' }
+      }
+      return { ok: true, applied: 'next-send' }
+    }
+    if (action === 'getContextUsage') {
+      const warm = peekClaudeSession(sessionId)
+      if (!warm) {
+        // Don't spin a subprocess for a getter — the next pooled send will
+        // emit a fresh usage event at the top of its stream anyway.
+        return { ok: true, applied: 'cold', usage: null }
+      }
+      const usage = await warm.query.getContextUsage()
+      return { ok: true, applied: 'live', usage }
+    }
     if (action === 'reconnectMcpServer') {
       const serverName = typeof body.serverName === 'string' ? body.serverName : ''
       if (!serverName) throw new Error('serverName is required')
+      const warm = peekClaudeSession(sessionId)
+      if (warm) {
+        await warm.query.reconnectMcpServer(serverName)
+        return { ok: true, applied: 'live' }
+      }
       const q = createSessionControlQuery(sessionId)
       try {
         await q.reconnectMcpServer(serverName)
-        return { ok: true }
+        return { ok: true, applied: 'cold' }
       } finally {
         q.close()
       }
@@ -1147,19 +1211,36 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       const enabled = typeof body.enabled === 'boolean' ? body.enabled : null
       if (!serverName) throw new Error('serverName is required')
       if (enabled === null) throw new Error('enabled (boolean) is required')
+      const warm = peekClaudeSession(sessionId)
+      if (warm) {
+        await warm.query.toggleMcpServer(serverName, enabled)
+        return { ok: true, applied: 'live' }
+      }
       const q = createSessionControlQuery(sessionId)
       try {
         await q.toggleMcpServer(serverName, enabled)
-        return { ok: true }
+        return { ok: true, applied: 'cold' }
       } finally {
         q.close()
       }
     }
     if (action === 'reloadPlugins') {
+      const warm = peekClaudeSession(sessionId)
+      if (warm) {
+        const result = await warm.query.reloadPlugins()
+        return {
+          applied: 'live',
+          plugins: result.plugins ?? [],
+          commands: result.commands?.length ?? 0,
+          agents: result.agents?.length ?? 0,
+          mcpServers: result.mcpServers?.length ?? 0,
+        }
+      }
       const q = createSessionControlQuery(sessionId)
       try {
         const result = await q.reloadPlugins()
         return {
+          applied: 'cold',
           plugins: result.plugins ?? [],
           commands: result.commands?.length ?? 0,
           agents: result.agents?.length ?? 0,
@@ -1474,7 +1555,6 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   const model = explicitModel ?? (isPendingSession ? 'claude-sonnet-4-6' : undefined)
   const effort = parseEffort(body)
   const attachments = parseAttachments(body)
-  const prompt = await buildClaudePrompt(userMessage, attachments)
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
   const forkSessionOnSend = Boolean(body.forkSession)
   const cwdOverride = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined
@@ -1482,6 +1562,74 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     ? Math.floor(body.taskBudgetTokens)
     : undefined
 
+  // Cold-path conditions: brand-new session (no id yet), fork (creates a new
+  // conversation root), or rewind (changes the resume point). These mutate
+  // the conversation root or don't have a stable id to key the pool on, so we
+  // run the legacy single-shot query() and let the pool catch up on turn 2.
+  const useColdPath = isPendingSession || forkSessionOnSend || Boolean(resumeSessionAt)
+
+  if (useColdPath) {
+    return createClaudeStreamCold({
+      sessionId,
+      signal,
+      userMessage,
+      attachments,
+      isPendingSession,
+      permissionMode,
+      model,
+      effort,
+      resumeSessionAt,
+      forkSessionOnSend,
+      cwdOverride,
+      taskBudgetTotal,
+    })
+  }
+
+  return createClaudeStreamPooled({
+    sessionId,
+    signal,
+    userMessage,
+    attachments,
+    permissionMode,
+    model,
+    effort,
+    cwdOverride,
+    taskBudgetTotal,
+  })
+}
+
+type ClaudeStreamColdArgs = {
+  sessionId: string
+  signal: AbortSignal
+  userMessage: string
+  attachments: SendAttachment[]
+  isPendingSession: boolean
+  permissionMode: ClaudePermissionMode | undefined
+  model: string | undefined
+  effort: ReasoningEffortLevel | undefined
+  resumeSessionAt: string | undefined
+  forkSessionOnSend: boolean
+  cwdOverride: string | undefined
+  taskBudgetTotal: number | undefined
+}
+
+async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Response> {
+  const {
+    sessionId,
+    signal,
+    userMessage,
+    attachments,
+    isPendingSession,
+    permissionMode,
+    model,
+    effort,
+    resumeSessionAt,
+    forkSessionOnSend,
+    cwdOverride,
+    taskBudgetTotal,
+  } = args
+
+  const prompt = await buildClaudePrompt(userMessage, attachments)
   const encoder = new TextEncoder()
   const abortController = new AbortController()
   signal.addEventListener('abort', () => abortController.abort())
@@ -1543,6 +1691,130 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
         clearRunningSession(sessionId)
         q.close()
         controller.close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no',
+    },
+  })
+}
+
+type ClaudeStreamPooledArgs = {
+  sessionId: string
+  signal: AbortSignal
+  userMessage: string
+  attachments: SendAttachment[]
+  permissionMode: ClaudePermissionMode | undefined
+  model: string | undefined
+  effort: ReasoningEffortLevel | undefined
+  cwdOverride: string | undefined
+  taskBudgetTotal: number | undefined
+}
+
+async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<Response> {
+  const {
+    sessionId,
+    signal,
+    userMessage,
+    attachments,
+    permissionMode,
+    model,
+    effort,
+    cwdOverride,
+    taskBudgetTotal,
+  } = args
+
+  let pushMessage: SDKUserMessage
+  try {
+    pushMessage = await buildClaudeUserMessage(userMessage, attachments)
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: err instanceof Error ? err.message : 'Failed to build prompt' }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } },
+    )
+  }
+
+  const encoder = new TextEncoder()
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      let entry
+      try {
+        entry = acquireClaudeSession({
+          sessionId,
+          cwd: cwdOverride,
+          model,
+          permissionMode,
+          effort,
+          taskBudgetTokens: taskBudgetTotal,
+        })
+      } catch (err) {
+        controller.enqueue(encoder.encode(
+          `event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`,
+        ))
+        controller.close()
+        return
+      }
+
+      setRunningSession(entry.sessionId, {
+        provider: 'claude',
+        interrupt: () => entry.query.interrupt(),
+      })
+
+      // We already know the session id — emit immediately so the client doesn't
+      // have to wait for the SDK's init message.
+      controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: entry.sessionId })}\n\n`))
+
+      // Cheap freebie: the persistent Query lets us read context usage without
+      // spinning up a subprocess. The cold path had to call this on a fresh
+      // Query too.
+      try {
+        const usage = await entry.query.getContextUsage()
+        controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+      } catch {}
+
+      try {
+        await entry.run(pushMessage, {
+          signal,
+          onMessage: (msg) => {
+            try {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
+            } catch {
+              /* downstream closed; ignore */
+            }
+          },
+          onError: (err) => {
+            // If the pool entry died mid-turn, drop it so the next acquire
+            // gets a fresh subprocess.
+            recycleClaudeSession(entry.sessionId)
+            if (signal.aborted) return
+            try {
+              controller.enqueue(encoder.encode(
+                `event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`,
+              ))
+            } catch {
+              /* ignore */
+            }
+          },
+        })
+      } catch (err) {
+        if (!signal.aborted) {
+          try {
+            controller.enqueue(encoder.encode(
+              `event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`,
+            ))
+          } catch {
+            /* ignore */
+          }
+        }
+      } finally {
+        clearRunningSession(entry.sessionId)
+        try { controller.close() } catch { /* idempotent */ }
       }
     },
   })
@@ -1629,6 +1901,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       let currentModel = model ?? 'codex'
       let closed = false
       let completionSeen = false
+      let bufferedTurnCompleted = false
       let completionCloseTimer: ReturnType<typeof setTimeout> | null = null
 
       const safeEnqueue = (chunk: string) => {
@@ -1685,6 +1958,38 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         consumeAborted = true
         subscription.close()
       }
+      const activateTargetTurn = (turnId: string) => {
+        if (!turnId || targetTurnId) return
+        targetTurnId = turnId
+
+        setRunningSession(sessionId, {
+          provider: 'codex',
+          interrupt: () => client.request('turn/interrupt', { threadId: sessionId, turnId }),
+        })
+
+        for (const notification of bufferedNotifications.splice(0)) {
+          const bufferedTurnId = getCodexNotificationTurnId(notification)
+          if (bufferedTurnId && bufferedTurnId !== turnId) continue
+          if (notification.method === 'turn/completed') {
+            bufferedTurnCompleted = true
+            continue
+          }
+          if (notification.method === 'thread/tokenUsage/updated') {
+            const usage = mapCodexTokenUsageToContextUsage(
+              (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
+              currentModel,
+            )
+            safeEnqueue(codexContextUsageToEventData(usage))
+            continue
+          }
+          if (completionSeen) scheduleCompletionClose(unsubscribe)
+          flushNotification(notification)
+        }
+
+        if (bufferedTurnCompleted) {
+          scheduleCompletionClose(unsubscribe)
+        }
+      }
       const consume = (async () => {
         for await (const harnessEvent of subscription.events) {
           if (consumeAborted) break
@@ -1704,6 +2009,9 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
 
           if (!targetTurnId) {
             bufferedNotifications.push(notification)
+            if (notification.method === 'turn/started' && notificationTurnId) {
+              activateTargetTurn(notificationTurnId)
+            }
             continue
           }
 
@@ -1746,36 +2054,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           input: buildCodexInput(userMessage, attachments),
         })
 
-        targetTurnId = started.turn.id
-
-        setRunningSession(sessionId, {
-          provider: 'codex',
-          interrupt: () => client.request('turn/interrupt', { threadId: sessionId, turnId: targetTurnId }),
-        })
-
-        let bufferedTurnCompleted = false
-        for (const notification of bufferedNotifications) {
-          const bufferedTurnId = getCodexNotificationTurnId(notification)
-          if (bufferedTurnId && bufferedTurnId !== targetTurnId) continue
-          if (notification.method === 'turn/completed') {
-            bufferedTurnCompleted = true
-            continue
-          }
-          if (notification.method === 'thread/tokenUsage/updated') {
-            const usage = mapCodexTokenUsageToContextUsage(
-              (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
-              currentModel,
-            )
-            safeEnqueue(codexContextUsageToEventData(usage))
-            continue
-          }
-          if (completionSeen) scheduleCompletionClose(unsubscribe)
-          flushNotification(notification)
-        }
-
-        if (bufferedTurnCompleted) {
-          scheduleCompletionClose(unsubscribe)
-        }
+        activateTargetTurn(started.turn.id)
       } catch (err) {
         unsubscribe()
         clearRunningSession(sessionId)

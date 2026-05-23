@@ -34,6 +34,7 @@ import {
   listViewSessionMessages,
   listViewSessions,
   patchViewSession,
+  interruptViewSession,
   readViewSessionDiagnostics,
   readViewSessionInfo,
   readViewSessionModels,
@@ -255,6 +256,10 @@ export async function streamTuiSessionTurn(
     body,
     provider: session.provider as AgentProvider | undefined,
   })
+}
+
+export async function interruptTuiSessionTurn(session: { sessionId: string }): Promise<void> {
+  await interruptViewSession(session.sessionId)
 }
 
 export async function readTuiSessionDiagnostics(
