@@ -414,6 +414,12 @@ type SseFrame = {
   data: string
 }
 
+type TuiLiveToolActivity = {
+  key: string
+  label: string
+  status: 'running' | 'done'
+}
+
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
   const normalized = buffer.replace(/\r\n/g, '\n')
   const frames: SseFrame[] = []
@@ -1920,6 +1926,7 @@ export default function OpenTuiApp() {
   const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
   const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | null>(null)
   const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
+  const [liveToolActivities, setLiveToolActivities] = useState<TuiLiveToolActivity[]>([])
   const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
   // Provider-agnostic send knobs. Forwarded into the streamTuiSessionTurn
   // body so the TUI composer matches the web composer's send-time controls
@@ -1969,6 +1976,9 @@ export default function OpenTuiApp() {
   const composerTextareaRef = useRef<TextareaRenderable | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const liveTranscriptBaselineRef = useRef(new Map<string, { count: number; lastFingerprint: string | null }>())
+  const liveTextFlushFrameRef = useRef<number | null>(null)
+  const pendingLiveTextRef = useRef('')
+  const liveTextTargetSessionRef = useRef<Session | null>(null)
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadingDetailRef = useRef(false)
   const backgroundRefreshInFlightRef = useRef(new Set<string>())
@@ -2535,17 +2545,20 @@ export default function OpenTuiApp() {
     () => Object.values(liveSubagentText).some((t) => t.trim().length > 0),
     [liveSubagentText],
   )
+  const activeRunningToolCount = liveToolActivities.filter((a) => a.status === 'running').length
   const hasComposerStatusMessage = Boolean(
     composerError || (composerSendState === 'sending')
   )
   const composerStatusBlockHeight = (() => {
     let rows = 0
-    if (composerSendState === 'sending' && liveStatus === 'requesting' && !composerLiveText) rows += 2
+    if (composerSendState === 'sending' && liveStatus === 'requesting' && !composerLiveText && activeRunningToolCount === 0) rows += 2
+    if (composerSendState === 'sending' && liveStatus !== 'requesting' && activeRunningToolCount === 0 && !composerLiveText) rows += 2
     if (hasSubagentTail) rows += 2
+    if (liveToolActivities.length > 0 && activeRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
     if (hasComposerStatusMessage) {
       const streamingMarkdown = composerSendState === 'sending' && composerLiveText && syntaxStyle && !composerError
-      rows += streamingMarkdown ? 5 : 2
+      rows += streamingMarkdown ? 6 : 2
     }
     if (composerAutoTargetingRunning && composerTargetSession) rows += 1
     return rows
@@ -3449,10 +3462,17 @@ export default function OpenTuiApp() {
       setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
     }
     liveToolIndexesRef.current.clear()
+    if (liveTextFlushFrameRef.current != null) {
+      cancelAnimationFrame(liveTextFlushFrameRef.current)
+      liveTextFlushFrameRef.current = null
+    }
+    pendingLiveTextRef.current = ''
+    liveTextTargetSessionRef.current = null
     setComposerSendState('idle')
     setComposerLiveText('')
     setLiveStatus(null)
     setLiveSubagentText({})
+    setLiveToolActivities([])
   }, [composerTargetSession])
 
   // Keep the ref in sync on every render so commitRename always reads the latest draft,
@@ -3507,6 +3527,18 @@ export default function OpenTuiApp() {
     }
   }, [renameSessionKey, selectedSession, provider, refreshSessions])
 
+  const flushLiveText = useCallback(() => {
+    liveTextFlushFrameRef.current = null
+    const text = pendingLiveTextRef.current
+    const session = liveTextTargetSessionRef.current
+    if (!session) return
+    setComposerLiveText(text)
+    setLiveTranscriptMessages((prev) => upsertThreadedMessage(
+      prev,
+      makeLiveAssistantMessage(session, text),
+    ))
+  }, [])
+
   const sendComposerMessage = useCallback(async (draftOverride?: string, attachmentsOverride?: SendAttachment[]) => {
     const trimmed = (draftOverride ?? composerDraft).trim()
     if (!trimmed || !composerTargetSession) return
@@ -3526,11 +3558,18 @@ export default function OpenTuiApp() {
     composerAbortRef.current = controller
     setComposerSendState('sending')
     setComposerError(null)
-    // no longer track awaiting state separately
+    flushLiveText() // flush any stale pending text
+    pendingLiveTextRef.current = ''
+    liveTextTargetSessionRef.current = targetSession
+    if (liveTextFlushFrameRef.current != null) {
+      cancelAnimationFrame(liveTextFlushFrameRef.current)
+      liveTextFlushFrameRef.current = null
+    }
     setComposerLiveText('')
     setLivePromptSuggestion(null)
     setLiveStatus(null)
     setLiveSubagentText({})
+    setLiveToolActivities([])
     const runningRef: RunningSessionRef = {
       sessionId: targetSession.sessionId,
       provider: targetSession.provider ?? 'claude',
@@ -3662,6 +3701,7 @@ export default function OpenTuiApp() {
         if (claudeToolUse) {
           const startIndex = streamEventIndex(parsed, 'content_block_start')
           if (startIndex != null) liveToolIndexesRef.current.set(startIndex, claudeToolUse.id)
+          setLiveToolActivities((prev) => [...prev, { key: claudeToolUse.id, label: claudeToolUse.name, status: 'running' }])
           setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, {
             role: 'assistant',
             uuid: `live-tool:${claudeToolUse.id}`,
@@ -3679,6 +3719,9 @@ export default function OpenTuiApp() {
         if (stopIndex != null) {
           const toolKey = liveToolIndexesRef.current.get(stopIndex)
           if (toolKey) {
+            setLiveToolActivities((prev) => prev.map((a) =>
+              a.key === toolKey ? { ...a, status: 'done' } : a
+            ))
             setLiveTranscriptMessages((prev) => completeLiveToolThread(prev, toolKey))
           }
         }
@@ -3710,14 +3753,11 @@ export default function OpenTuiApp() {
         setLiveStatus(null)
         const replace = shouldReplaceLiveAssistantText(parsed)
         replyAccumulator = replace ? delta : `${replyAccumulator}${delta}`
-        setComposerLiveText((prev) => {
-          const nextText = replace ? delta : `${prev}${delta}`
-          setLiveTranscriptMessages((prevMessages) => upsertThreadedMessage(
-            prevMessages,
-            makeLiveAssistantMessage(targetSession, nextText),
-          ))
-          return nextText
-        })
+        pendingLiveTextRef.current = replace ? delta : `${pendingLiveTextRef.current}${delta}`
+        liveTextTargetSessionRef.current = targetSession
+        if (liveTextFlushFrameRef.current == null) {
+          liveTextFlushFrameRef.current = requestAnimationFrame(flushLiveText)
+        }
       }
 
       while (true) {
@@ -3758,6 +3798,13 @@ export default function OpenTuiApp() {
       void refreshSessions(provider, true, false)
       void refreshSelectedSessionDetail(targetSession, true)
 
+      if (liveTextFlushFrameRef.current != null) {
+        cancelAnimationFrame(liveTextFlushFrameRef.current)
+        liveTextFlushFrameRef.current = null
+      }
+      pendingLiveTextRef.current = ''
+      liveTextTargetSessionRef.current = null
+
       const elapsedMs = Date.now() - sendStartedAt
       if (elapsedMs >= NOTIFY_AFTER_MS) {
         const firstLine = replyAccumulator.split('\n').find((line) => line.trim().length > 0) ?? ''
@@ -3775,18 +3822,32 @@ export default function OpenTuiApp() {
         liveTranscriptBaselineRef.current.delete(targetKey)
         setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
         liveToolIndexesRef.current.clear()
+        if (liveTextFlushFrameRef.current != null) {
+          cancelAnimationFrame(liveTextFlushFrameRef.current)
+          liveTextFlushFrameRef.current = null
+        }
+        pendingLiveTextRef.current = ''
+        liveTextTargetSessionRef.current = null
         return
       }
       setComposerSendState('error')
       setComposerError(err instanceof Error ? err.message : 'Failed to send message')
       setComposerLiveText('')
       setLiveStatus(null)
+      setLiveToolActivities([])
     } finally {
       void reader?.cancel()
       composerAbortRef.current = null
+      if (liveTextFlushFrameRef.current != null) {
+        cancelAnimationFrame(liveTextFlushFrameRef.current)
+        liveTextFlushFrameRef.current = null
+      }
+      pendingLiveTextRef.current = ''
+      liveTextTargetSessionRef.current = null
       setComposerLiveText('')
       setLiveStatus(null)
       setLiveSubagentText({})
+      setLiveToolActivities([])
       clearSessionRunning(runningRef)
     }
   }, [
@@ -4276,7 +4337,13 @@ export default function OpenTuiApp() {
     : queuedComposerSend && composerSendState === 'sending'
       ? `Queued · sends after current turn: "${queuedComposerSend.text.slice(0, 60)}${queuedComposerSend.text.length > 60 ? '…' : ''}"`
       : composerSendState === 'sending'
-        ? composerLiveText || 'Waiting for saved response…'
+        ? activeRunningToolCount > 0
+          ? `Turn running; using ${activeRunningToolCount} tool${activeRunningToolCount === 1 ? '' : 's'}.`
+          : composerLiveText
+            ? 'Turn running; streaming assistant response.'
+            : liveStatus === 'requesting'
+              ? 'Turn running; waiting for provider response.'
+              : 'Turn running.'
         : null
   const composerTargetMessage = composerAutoTargetingRunning && composerTargetSession
     ? `Auto-targeting running ${String(composerTargetSession.provider ?? 'claude').toUpperCase()} session ${composerTargetSession.sessionId.slice(-8)}`
@@ -5897,10 +5964,24 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {composerSendState === 'sending' && liveStatus === 'requesting' && !composerLiveText ? (
+      {composerSendState === 'sending' && liveStatus === 'requesting' && !composerLiveText && activeRunningToolCount === 0 ? (
         <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
           <text fg={theme.cyan} wrapMode="none">
             {fitText('● requesting…', Math.max(width - 4, 20))}
+          </text>
+        </box>
+      ) : composerSendState === 'sending' && liveStatus !== 'requesting' && activeRunningToolCount === 0 && !composerLiveText ? (
+        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+          <text fg={theme.cyan} wrapMode="none">
+            {fitText('● turn running…', Math.max(width - 4, 20))}
+          </text>
+        </box>
+      ) : null}
+
+      {liveToolActivities.length > 0 && activeRunningToolCount > 0 ? (
+        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1} gap={1}>
+          <text fg={theme.dim} wrapMode="none">
+            {fitText(`tools: ${liveToolActivities.map((a) => `${a.label}${a.status === 'running' ? ' ●' : ' ✓'}`).join('  ')}`, Math.max(width - 4, 20))}
           </text>
         </box>
       ) : null}
@@ -5932,13 +6013,13 @@ export default function OpenTuiApp() {
           // OpenTUI's <box height={n}> does not clip <markdown> overflow — once
           // the streaming preview grows beyond 4 rows it bleeds onto the
           // composer below. Render only the tail as plain wrapped text so the
-          // preview always fits the reserved 5-row slot.
-          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1} height={4} overflow="hidden">
+          // preview always fits the reserved row slot.
+          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1} height={5} overflow="hidden">
             <text fg={theme.dim} wrapMode="word">
               {composerLiveText
                 .replace(/\s+$/g, '')
                 .split('\n')
-                .slice(-3)
+                .slice(-4)
                 .join('\n')}
             </text>
           </box>
