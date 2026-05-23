@@ -129,6 +129,9 @@ function buildAssistantContent(parts: Part[]) {
       case 'agent':
         content.push(textBlock(`Using agent ${part.name}`))
         break
+      case 'subtask':
+        content.push(textBlock(`Subtask: ${part.description}`))
+        break
       case 'file':
         content.push(textBlock(`[file] ${part.filename ?? part.url}`))
         break

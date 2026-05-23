@@ -3,7 +3,9 @@ import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMe
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
 import { AnalyticsPopover } from './AnalyticsPopover'
+import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
+import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
 import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
@@ -187,6 +189,10 @@ const DEFAULT_SIDEBAR_WIDTH = 32
 const SIDEBAR_RESIZE_STEP = 2
 const MIN_SIDEBAR_WIDTH = 28
 const MIN_READER_WIDTH = 40
+const TASK_PANEL_MIN_WIDTH = 24
+const TASK_PANEL_DEFAULT_WIDTH = 32
+const TASK_PANEL_MAX_WIDTH = 60
+const TASK_PANEL_RESIZE_STEP = 4
 const SESSION_CACHE_LIMIT = 8
 const MESSAGE_SCROLL_ACCEL = new MacOSScrollAccel()
 
@@ -714,14 +720,36 @@ function makeLiveUserMessage(session: Session, text: string): ThreadedMessage {
   }
 }
 
-function makeLiveAssistantMessage(session: Session, text: string): ThreadedMessage {
-  return {
-    role: 'assistant',
-    uuid: 'live-assistant',
-    sessionId: session.sessionId,
-    provider: session.provider ?? 'claude',
-    blocks: [{ type: 'text', text }],
+type OpenCodeLiveSubagentInfo = {
+  agentId: string
+  name: string
+  type: 'agent' | 'subtask'
+}
+
+function extractOpenCodeLiveSubagent(payload: unknown): OpenCodeLiveSubagentInfo | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  if (record.type !== 'opencode_event') return null
+  const event = record.event
+  if (!event || typeof event !== 'object') return null
+  const eventRecord = event as Record<string, unknown>
+  if (eventRecord.type !== 'message.part.updated') return null
+  const properties = eventRecord.properties
+  if (!properties || typeof properties !== 'object') return null
+  const part = (properties as Record<string, unknown>).part
+  if (!part || typeof part !== 'object') return null
+  const partRecord = part as Record<string, unknown>
+  const partType = partRecord.type
+  if (partType !== 'agent' && partType !== 'subtask') return null
+  const agentId = typeof partRecord.id === 'string' ? partRecord.id : null
+  if (!agentId) return null
+  if (partType === 'agent') {
+    const name = typeof partRecord.name === 'string' ? partRecord.name : 'agent'
+    return { agentId, name, type: 'agent' }
   }
+  const description = typeof partRecord.description === 'string' ? partRecord.description : ''
+  const agent = typeof partRecord.agent === 'string' ? partRecord.agent : ''
+  return { agentId, name: description || agent || 'subtask', type: 'subtask' }
 }
 
 function extractOpenCodeLiveToolThread(payload: unknown, session: Session): ThreadedMessage | null {
@@ -1461,6 +1489,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'fold',       label: 'Fold/expand card',       key: 'e',  category: 'Transcript' },
   { id: 'copy',       label: 'Copy selected message',  key: 'y',  category: 'Transcript' },
   { id: 'tasks',      label: 'Open task panel',         key: '⇧T', category: 'Transcript' },
+  { id: 'tasks-full', label: 'Task lineage popover',   key: '⇧L', category: 'Transcript' },
   // Session
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
   { id: 'new',        label: 'New agent session',      key: 'N',  category: 'Session'    },
@@ -1479,7 +1508,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'tab-close',  label: 'Close current tab',      key: 'w',  category: 'Tabs'       },
   // View
   { id: 'theme',      label: 'Switch theme',           key: 't',  category: 'View'       },
-  { id: 'thinking',   label: 'Toggle thinking mode',   key: 'T',  category: 'View'       },
+  { id: 'thinking',   label: 'Toggle thinking mode',   key: 'i',  category: 'View'       },
   { id: 'density',    label: 'Toggle density',         key: 'd',  category: 'View'       },
   { id: 'view',       label: 'Toggle transcript view', key: 'v',  category: 'View'       },
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
@@ -1850,6 +1879,7 @@ export default function OpenTuiApp() {
   const [showToolCalls, setShowToolCalls] = useState(true)
   const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
   const [sidebarWidthPreference, setSidebarWidthPreference] = useState(DEFAULT_SIDEBAR_WIDTH)
+  const [taskPanelWidth, setTaskPanelWidth] = useState(TASK_PANEL_DEFAULT_WIDTH)
   const [sessions, setSessions] = useState<Session[]>([])
   const [runningSessions, setRunningSessions] = useState<RunningSessionRef[]>([])
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null)
@@ -1872,7 +1902,9 @@ export default function OpenTuiApp() {
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const analyticsKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
-  const taskPanelKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
+  const taskPopoverKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useState(false)
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [diagnosticsSections, setDiagnosticsSections] = useState<import('../../lib/types').SessionDiagnosticSection[]>([])
@@ -1909,6 +1941,8 @@ export default function OpenTuiApp() {
   const renameDraftRef = useRef(renameDraft)
   const [composerActive, setComposerActive] = useState(false)
   const [composerDraft, setComposerDraft] = useState('')
+  const composerDraftStorageKeyRef = useRef<string | null>(null)
+  const [composerLiveTodos, setComposerLiveTodos] = useState<import('../../lib/taskRegistry').OpenCodeTodo[]>([])
   const [composerMention, setComposerMention] = useState<{ start: number; query: string } | null>(null)
   const [composerMentionResults, setComposerMentionResults] = useState<Array<{ path: string; basename: string }>>([])
   const [composerMentionIndex, setComposerMentionIndex] = useState(0)
@@ -2154,11 +2188,26 @@ export default function OpenTuiApp() {
     const value = (theme as unknown as Record<string, string>)[key]
     return value ?? theme.cyan
   }, [composerConfig.tuiAccentKey, theme])
+  const liveTranscriptMessagesCacheRef = useRef<ThreadedMessage[] | null>(null)
   const liveTranscriptMessagesForSession = useMemo(() => {
     if (!selectedSessionTarget) return []
     const key = sessionKey(selectedSessionTarget)
-    return liveTranscriptMessages.filter((message) => liveMessageSessionKey(message) === key)
+    const filtered = liveTranscriptMessages.filter((message) => liveMessageSessionKey(message) === key)
+    const prev = liveTranscriptMessagesCacheRef.current
+    if (prev && prev.length === filtered.length && prev.every((m, i) => m === filtered[i])) {
+      return prev
+    }
+    liveTranscriptMessagesCacheRef.current = filtered
+    return filtered
   }, [liveTranscriptMessages, selectedSessionTarget])
+
+  const taskPanelMessages = useMemo(() => {
+    const persisted = sessionDetail?.threadedMessages ?? []
+    const live = liveTranscriptMessagesForSession
+    if (live.length === 0) return persisted
+    const seen = new Set(live.map((m) => m.uuid))
+    return [...live, ...persisted.filter((m) => !seen.has(m.uuid))]
+  }, [sessionDetail?.threadedMessages, liveTranscriptMessagesForSession])
 
   // Card formatting runs in the threading worker (proposal 1). The worker client
   // keeps a per-(density, showToolCalls) cache (proposal 2) so density toggles
@@ -2235,6 +2284,8 @@ export default function OpenTuiApp() {
     liveTranscriptBaselineRef.current.delete(key)
     setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== key))
     liveToolIndexesRef.current.clear()
+    setComposerLiveText('')
+    setAwaitingPersistedTurn(false)
   }, [selectedSessionIdentity, selectedSessionTarget, sessionDetail])
 
   // (Auto-open of the composer on a pending session was removed: with
@@ -2377,9 +2428,7 @@ export default function OpenTuiApp() {
     const idx = sidebarEntries.findIndex((e) => e.type === 'session' && e.absoluteIndex === selectedIndex)
     return idx >= 0 ? idx : 0
   }, [sidebarEntries, selectedIndex])
-  const composerLineCount = composerDraft.length === 0 ? 1 : composerDraft.split('\n').length
-  // composerLineCount text rows + 1 status row + 2 border rows
-  const composerHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, composerLineCount + 3))
+  const composerHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, (composerDraft.length === 0 ? 1 : composerDraft.split('\n').length) + 3))
   // One-line chip summarising send-body knobs that are NOT the default. Skipped
   // when everything is at default so the footer stays uncluttered.
   const composerKnobsChip = useMemo(() => {
@@ -2547,7 +2596,7 @@ export default function OpenTuiApp() {
   )
   const activeRunningToolCount = liveToolActivities.filter((a) => a.status === 'running').length
   const hasComposerStatusMessage = Boolean(
-    composerError || (composerSendState === 'sending')
+    composerError || (composerSendState === 'sending') || awaitingPersistedTurn
   )
   const composerStatusBlockHeight = (() => {
     let rows = 0
@@ -2560,6 +2609,7 @@ export default function OpenTuiApp() {
       const streamingMarkdown = composerSendState === 'sending' && composerLiveText && syntaxStyle && !composerError
       rows += streamingMarkdown ? 6 : 2
     }
+    if (awaitingPersistedTurn) rows += 2
     if (composerAutoTargetingRunning && composerTargetSession) rows += 1
     return rows
   })()
@@ -2572,9 +2622,14 @@ export default function OpenTuiApp() {
     - composerStatusBlockHeight,
     8,
   )
-  const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - 4 - 1 - MIN_READER_WIDTH)
+  const effectiveTaskPanelWidth = taskPanelOpen ? taskPanelWidth : 0
+  const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - 4 - 1 - MIN_READER_WIDTH - effectiveTaskPanelWidth - (taskPanelOpen ? 1 : 0))
   const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
-  const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0), 40)
+  const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0) - effectiveTaskPanelWidth - (taskPanelOpen ? 1 : 0), 40)
+  const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10)
+  const composerVisualLineCount = composerDraft.length === 0
+    ? 1
+    : composerDraft.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / textareaInnerWidth)), 0)
 
   const isPreviewMode = tabsEnabled && !!selectedSessionKey && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
   const visibleTabSessions = useMemo(() => (
@@ -3533,10 +3588,6 @@ export default function OpenTuiApp() {
     const session = liveTextTargetSessionRef.current
     if (!session) return
     setComposerLiveText(text)
-    setLiveTranscriptMessages((prev) => upsertThreadedMessage(
-      prev,
-      makeLiveAssistantMessage(session, text),
-    ))
   }, [])
 
   const sendComposerMessage = useCallback(async (draftOverride?: string, attachmentsOverride?: SendAttachment[]) => {
@@ -3625,6 +3676,8 @@ export default function OpenTuiApp() {
       const decoder = new TextDecoder()
       let sseBuffer = ''
 
+      const activeSubagentIdRef = { current: '' }
+
       const handleFrame = (frame: SseFrame) => {
         let parsed: unknown = null
         try {
@@ -3665,6 +3718,10 @@ export default function OpenTuiApp() {
             setSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? { ...s, sessionId: realId, isPending: false } : s))
             if (selectedSessionKeyRef.current === oldKey) setSelectedSessionKey(newKey)
           }
+          return
+        }
+        if (frame.event === 'opencode-todos' && Array.isArray(parsed)) {
+          setComposerLiveTodos(parsed as import('../../lib/taskRegistry').OpenCodeTodo[])
           return
         }
         if (!parsed) return
@@ -3731,6 +3788,26 @@ export default function OpenTuiApp() {
           setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, openCodeToolThread))
         }
 
+        const openCodeSubagent = extractOpenCodeLiveSubagent(parsed)
+        if (openCodeSubagent) {
+          activeSubagentIdRef.current = openCodeSubagent.agentId
+          setLiveSubagentText((prev) => ({
+            ...prev,
+            [openCodeSubagent.agentId]: `Agent: ${openCodeSubagent.name}`,
+          }))
+          const label = openCodeSubagent.type === 'agent'
+            ? `Running agent: ${openCodeSubagent.name}`
+            : `Running subtask: ${openCodeSubagent.name}`
+          const agentCard: ThreadedMessage = {
+            role: 'assistant',
+            uuid: `live-subagent:${openCodeSubagent.agentId}`,
+            sessionId: targetSession.sessionId,
+            provider: targetSession.provider ?? 'opencode',
+            blocks: [{ type: 'text', text: label }],
+          }
+          setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, agentCard))
+        }
+
         const codexCompletionItem = parsedRecord.type === 'codex_item_completed' && parsedRecord.item && typeof parsedRecord.item === 'object'
           ? parsedRecord.item as Record<string, unknown>
           : null
@@ -3751,12 +3828,29 @@ export default function OpenTuiApp() {
         const delta = extractStreamingAssistantText(parsed)
         if (!delta) return
         setLiveStatus(null)
+
+        // Route agent/subtask text to liveSubagentText so it appears as ↪ subagent: <text>
+        // in the status footer, visually distinct from the main model's text.
+        const agentId = activeSubagentIdRef.current
+        if (targetSession.provider === 'opencode' && agentId) {
+          const replace = shouldReplaceLiveAssistantText(parsed)
+          setLiveSubagentText((prev) => ({
+            ...prev,
+            [agentId]: replace ? delta : (prev[agentId] ?? '') + delta,
+          }))
+          return
+        }
+
         const replace = shouldReplaceLiveAssistantText(parsed)
         replyAccumulator = replace ? delta : `${replyAccumulator}${delta}`
         pendingLiveTextRef.current = replace ? delta : `${pendingLiveTextRef.current}${delta}`
         liveTextTargetSessionRef.current = targetSession
         if (liveTextFlushFrameRef.current == null) {
-          liveTextFlushFrameRef.current = requestAnimationFrame(flushLiveText)
+          if (targetSession.provider === 'opencode') {
+            flushLiveText()
+          } else {
+            liveTextFlushFrameRef.current = requestAnimationFrame(flushLiveText)
+          }
         }
       }
 
@@ -3783,6 +3877,7 @@ export default function OpenTuiApp() {
       setDraftBeforeHistory('')
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
+      if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, '')
       setComposerMention(null)
       setComposerMentionResults([])
       setComposerMentionDismissedStart(null)
@@ -3791,9 +3886,11 @@ export default function OpenTuiApp() {
       setComposerSlashDismissed(false)
       setComposerSendState('idle')
       setComposerError(null)
-      setFollowTail(true)
-      setPendingNewCount(0)
-      setUnreadBoundaryKey(null)
+      setAwaitingPersistedTurn(true)
+    setAwaitingPersistedTurn(false)
+    setFollowTail(true)
+    setPendingNewCount(0)
+    setUnreadBoundaryKey(null)
       setSelectedSessionKey(sessionKey(targetSession))
       void refreshSessions(provider, true, false)
       void refreshSelectedSessionDetail(targetSession, true)
@@ -3821,6 +3918,7 @@ export default function OpenTuiApp() {
       if (err instanceof Error && err.name === 'AbortError') {
         liveTranscriptBaselineRef.current.delete(targetKey)
         setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
+        setAwaitingPersistedTurn(false)
         liveToolIndexesRef.current.clear()
         if (liveTextFlushFrameRef.current != null) {
           cancelAnimationFrame(liveTextFlushFrameRef.current)
@@ -3830,11 +3928,15 @@ export default function OpenTuiApp() {
         liveTextTargetSessionRef.current = null
         return
       }
+      const failedDraft = draftOverride ?? composerDraft
       setComposerSendState('error')
       setComposerError(err instanceof Error ? err.message : 'Failed to send message')
       setComposerLiveText('')
       setLiveStatus(null)
       setLiveToolActivities([])
+      setAwaitingPersistedTurn(false)
+      composerTextareaRef.current?.setText(failedDraft)
+      setComposerDraft(failedDraft)
     } finally {
       void reader?.cancel()
       composerAbortRef.current = null
@@ -3949,6 +4051,23 @@ export default function OpenTuiApp() {
     setSessionDetail(cachedDetail)
     void refreshSelectedSessionDetail(selectedSessionTarget, true)
   }, [bootstrapped, refreshSelectedSessionDetail, selectedSession?.isPending, selectedSessionIdentity, selectedSessionTarget])
+
+  // Clear stale live todos on session switch
+  useEffect(() => {
+    setComposerLiveTodos([])
+  }, [selectedSessionIdentity])
+
+  // Restore persisted composer draft on session switch
+  useEffect(() => {
+    if (!selectedSession) return
+    const key = `${selectedSession.provider ?? 'claude'}:${selectedSession.sessionId}`
+    composerDraftStorageKeyRef.current = key
+    const saved = readComposerDraft(key)
+    if (saved && saved !== composerDraft) {
+      setComposerDraft(saved)
+      composerTextareaRef.current?.setText(saved)
+    }
+  }, [selectedSessionIdentity])
 
   useEffect(() => {
     if (selectedSession || sessions.length === 0) return
@@ -4122,9 +4241,10 @@ export default function OpenTuiApp() {
         setResumeMarkerKey(restoredState.cursorKey)
       } else {
         setTranscriptCursorKey(transcriptCards[transcriptCards.length - 1].key)
-        setFollowTail(true)
-        setPendingNewCount(0)
-        setUnreadBoundaryKey(null)
+    setComposerLiveTodos([])
+    setFollowTail(true)
+    setPendingNewCount(0)
+    setUnreadBoundaryKey(null)
         setResumeMarkerKey(null)
       }
       previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
@@ -4324,9 +4444,16 @@ export default function OpenTuiApp() {
     prevTranscriptLengthRef.current = transcriptCards.length
   }, [followTail, transcriptCards.length])
 
+  useLayoutEffect(() => {
+    if (!followTail) return
+    if (composerSendState === 'sending' && composerLiveText) {
+      transcriptScrollRef.current?.scrollTo(transcriptScrollRef.current?.scrollHeight ?? Number.MAX_SAFE_INTEGER)
+    }
+  }, [composerLiveText, composerSendState, followTail])
+
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b ${tabsEnabled ? 'hide' : 'show'} tabs  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  z focus  p provider  t theme  T thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  r refresh  ? commands  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b ${tabsEnabled ? 'hide' : 'show'} tabs  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
     [width, transcriptView, density, tabsEnabled, showToolCalls],
@@ -4334,17 +4461,19 @@ export default function OpenTuiApp() {
 
   const composerStatusMessage = composerError
     ? composerError
-    : queuedComposerSend && composerSendState === 'sending'
-      ? `Queued · sends after current turn: "${queuedComposerSend.text.slice(0, 60)}${queuedComposerSend.text.length > 60 ? '…' : ''}"`
-      : composerSendState === 'sending'
-        ? activeRunningToolCount > 0
-          ? `Turn running; using ${activeRunningToolCount} tool${activeRunningToolCount === 1 ? '' : 's'}.`
-          : composerLiveText
-            ? 'Turn running; streaming assistant response.'
-            : liveStatus === 'requesting'
-              ? 'Turn running; waiting for provider response.'
-              : 'Turn running.'
-        : null
+    : awaitingPersistedTurn
+      ? 'Syncing transcript…'
+      : queuedComposerSend && composerSendState === 'sending'
+        ? `Queued · sends after current turn: "${queuedComposerSend.text.slice(0, 60)}${queuedComposerSend.text.length > 60 ? '…' : ''}"`
+        : composerSendState === 'sending'
+          ? activeRunningToolCount > 0
+            ? `Turn running; using ${activeRunningToolCount} tool${activeRunningToolCount === 1 ? '' : 's'}.`
+            : composerLiveText
+              ? 'Turn running; streaming assistant response.'
+              : liveStatus === 'requesting'
+                ? 'Turn running; waiting for provider response.'
+                : 'Turn running.'
+          : null
   const composerTargetMessage = composerAutoTargetingRunning && composerTargetSession
     ? `Auto-targeting running ${String(composerTargetSession.provider ?? 'claude').toUpperCase()} session ${composerTargetSession.sessionId.slice(-8)}`
     : null
@@ -4357,6 +4486,16 @@ export default function OpenTuiApp() {
       setError(err instanceof Error ? err.message : 'Failed to store sidebar width')
     })
   }, [maxSidebarWidth, sidebarWidth])
+
+  const maxTaskPanelWidth = taskPanelOpen
+    ? Math.max(TASK_PANEL_MIN_WIDTH, width - 4 - sidebarWidth - (showRail ? 1 : 0) - MIN_READER_WIDTH - (taskPanelOpen ? 1 : 0))
+    : TASK_PANEL_DEFAULT_WIDTH
+  const resizeTaskPanel = useCallback((delta: number) => {
+    const nextWidth = taskPanelOpen
+      ? clamp(taskPanelWidth + delta, TASK_PANEL_MIN_WIDTH, maxTaskPanelWidth)
+      : TASK_PANEL_DEFAULT_WIDTH + delta
+    setTaskPanelWidth(Math.round(nextWidth / TASK_PANEL_RESIZE_STEP) * TASK_PANEL_RESIZE_STEP)
+  }, [taskPanelOpen, taskPanelWidth, maxTaskPanelWidth])
 
   const showNotice = useCallback((tone: NoticeTone, text: string) => {
     if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
@@ -4490,11 +4629,10 @@ export default function OpenTuiApp() {
         void copySelectedMessage()
         break
       case 'tasks':
-        if (selectedSession?.provider === 'claude') {
-          setTaskPanelOpen(true)
-        } else {
-          showNotice('info', 'Task panel is available for Claude sessions')
-        }
+        setTaskPanelOpen(true)
+        break
+      case 'tasks-full':
+        setTaskPopoverOpen(true)
         break
       case 'tab-toggle': {
         const next = !tabsEnabled
@@ -4624,8 +4762,8 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (taskPanelOpen) {
-      handled(() => { taskPanelKeyHandlerRef.current?.(key) })
+    if (taskPopoverOpen) {
+      handled(() => { taskPopoverKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -4794,11 +4932,15 @@ export default function OpenTuiApp() {
           return
         }
         handled(() => {
-          if (composerSendState === 'sending') {
-            cancelComposerSend()
-          } else {
-            setComposerActive(false)
-          }
+          setComposerActive(false)
+        })
+        return
+      }
+      // Cancel in-flight send (Ctrl+C when composer is open)
+      if (isCtrl('c') && composerSendState === 'sending') {
+        handled(() => {
+          cancelComposerSend()
+          setComposerActive(false)
         })
         return
       }
@@ -4906,9 +5048,25 @@ export default function OpenTuiApp() {
       return
     }
 
-    // Global task panel — Claude sessions only
-    if (isShifted('T') && selectedSession?.provider === 'claude') {
-      handled(() => setTaskPanelOpen(true))
+    // Global task panel toggle
+    if (isShifted('T')) {
+      handled(() => setTaskPanelOpen((v) => !v))
+      return
+    }
+
+    // Task panel resize (only when open)
+    if (taskPanelOpen && sequence === '_') {
+      handled(() => resizeTaskPanel(-TASK_PANEL_RESIZE_STEP))
+      return
+    }
+    if (taskPanelOpen && sequence === '+') {
+      handled(() => resizeTaskPanel(TASK_PANEL_RESIZE_STEP))
+      return
+    }
+
+    // Global task lineage popover
+    if (isShifted('L')) {
+      handled(() => setTaskPopoverOpen(true))
       return
     }
 
@@ -5239,7 +5397,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (sequence === 'T') {
+    if (sequence === 'i') {
       handled(() => {
         setThinkingMode((current) => !current)
       })
@@ -5653,6 +5811,33 @@ export default function OpenTuiApp() {
                 <box height={TRANSCRIPT_TOP_MARGIN} />
                 {transcriptChildren}
 
+                {composerSendState === 'sending' && composerLiveText ? (
+                  <box
+                    key="live-stream-text"
+                    flexDirection="column"
+                    marginBottom={densityState.cardGap}
+                  >
+                    <box
+                      borderStyle="single"
+                      borderColor={providerAccent}
+                      backgroundColor={theme.surface}
+                    >
+                      <box flexDirection="column" width={rightPaneWidth - 4}>
+                        <box paddingX={1} paddingTop={1}>
+                          <text fg={providerAccent}>
+                            {fitText(`● assistant  streaming`, rightPaneWidth - 6)}
+                          </text>
+                        </box>
+                        <box paddingX={1} paddingY={1}>
+                          <text fg={theme.text} wrapMode="word">
+                            {composerLiveText}
+                          </text>
+                        </box>
+                      </box>
+                    </box>
+                  </box>
+                ) : null}
+
               </scrollbox>
             )}
           </box>
@@ -5664,6 +5849,23 @@ export default function OpenTuiApp() {
           ) : null}
           </box>
         </box>
+
+        {taskPanelOpen ? (
+          <box width={taskPanelWidth} overflow="hidden" marginLeft={1}>
+            <TaskSidePanel
+              messages={taskPanelMessages}
+              todos={composerLiveTodos}
+              session={selectedSession}
+              theme={theme}
+              width={taskPanelWidth}
+              height={mainContentHeight - 2}
+              onSelectTask={(uuid) => {
+                const idx = transcriptCards.findIndex((c) => c.key === uuid)
+                if (idx >= 0) jumpToTranscriptIndex(idx)
+              }}
+            />
+          </box>
+        ) : null}
 
         {providerMenuOpen ? (
           <box
@@ -6153,6 +6355,7 @@ export default function OpenTuiApp() {
             const text = renderable?.plainText ?? ''
             const cursor = renderable?.cursorOffset ?? text.length
             setComposerDraft(text)
+            if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, text)
             if (historyIndex !== -1 && text !== sentHistory[historyIndex]) setHistoryIndex(-1)
             if (composerError) setComposerError(null)
             if (composerSendState === 'error') setComposerSendState('idle')
@@ -6185,7 +6388,7 @@ export default function OpenTuiApp() {
               ? composerSlashHint
               : composerDraft.length === 0
               ? `${composerConfig.glyph} ${composerConfig.label}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
-              : `${composerLineCount} line${composerLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`}
+              : `${composerVisualLineCount} line${composerVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`}
           </text>
           <text fg={composerSendState === 'sending' ? theme.dim : composerAccentColor}>
             {composerSendState === 'sending'
@@ -6249,7 +6452,7 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
-      {taskPanelOpen ? (
+      {taskPopoverOpen ? (
         <box
           position="absolute"
           top={0}
@@ -6261,19 +6464,18 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
-      {taskPanelOpen ? (
+      {taskPopoverOpen ? (
         <TaskPanelPopover
-          messages={sessionDetail?.threadedMessages ?? []}
+          messages={taskPanelMessages}
           theme={theme}
           width={width}
           height={height}
-          onClose={() => setTaskPanelOpen(false)}
+          onClose={() => setTaskPopoverOpen(false)}
           onSelectTask={(uuid) => {
             const idx = transcriptCards.findIndex((c) => c.key === uuid)
             if (idx >= 0) jumpToTranscriptIndex(idx)
-            setTaskPanelOpen(false)
           }}
-          onKeyHandlerReady={(handler) => { taskPanelKeyHandlerRef.current = handler }}
+          onKeyHandlerReady={(handler) => { taskPopoverKeyHandlerRef.current = handler }}
         />
       ) : null}
 
