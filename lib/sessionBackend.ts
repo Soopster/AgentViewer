@@ -95,6 +95,7 @@ import {
 import { getCodexStoredTag, getCodexStoredTagsForSessions, setCodexStoredTag } from './codexTags'
 import { getOpenCodeClient } from './opencodeClient'
 import { getOpenCodeProjectDiagnostics, subscribeToOpenCodeEvents } from './opencodeHarness'
+import { getCodexProjectDiagnostics, subscribeToCodexEvents } from './codexHarness'
 import {
   currentOpenCodeModelValue,
   decodeOpenCodeModelValue,
@@ -1664,36 +1665,58 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         safeEnqueue(`data: ${payload}\n\n`)
       }
 
-      const unsubscribe = client.subscribe((notification) => {
-        const params = notification.params as { threadId?: string; turnId?: string }
-        if (params.threadId !== sessionId) return
-        const notificationTurnId = getCodexNotificationTurnId(notification)
+      // Subscribe via the codex harness — events for this thread arrive
+      // pre-filtered and the snapshot cache lets a downstream client
+      // resume without losing the latest turn state. Matches how the
+      // opencode stream consumes its harness.
+      const subscription = subscribeToCodexEvents({ threadId: sessionId })
+      const cachedSnapshot = subscription.snapshot
+      let consumeAborted = false
+      const unsubscribe = () => {
+        consumeAborted = true
+        subscription.close()
+      }
+      const consume = (async () => {
+        for await (const harnessEvent of subscription.events) {
+          if (consumeAborted) break
+          if (harnessEvent.type !== 'notification') continue
+          const notification = harnessEvent.notification
+          const notificationTurnId = getCodexNotificationTurnId(notification)
 
-        if (notification.method === 'thread/tokenUsage/updated') {
-          if (!targetTurnId || notificationTurnId !== targetTurnId) return
-          const usage = mapCodexTokenUsageToContextUsage(
-            (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
-            currentModel,
-          )
-          safeEnqueue(codexContextUsageToEventData(usage))
-          return
+          if (notification.method === 'thread/tokenUsage/updated') {
+            if (!targetTurnId || notificationTurnId !== targetTurnId) continue
+            const usage = mapCodexTokenUsageToContextUsage(
+              (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
+              currentModel,
+            )
+            safeEnqueue(codexContextUsageToEventData(usage))
+            continue
+          }
+
+          if (!targetTurnId) {
+            bufferedNotifications.push(notification)
+            continue
+          }
+
+          if (notificationTurnId && notificationTurnId !== targetTurnId) continue
+
+          if (notification.method === 'turn/completed') {
+            scheduleCompletionClose(unsubscribe)
+            continue
+          }
+
+          if (completionSeen) scheduleCompletionClose(unsubscribe)
+          flushNotification(notification)
         }
+      })()
+      void consume.catch(() => {})
 
-        if (!targetTurnId) {
-          bufferedNotifications.push(notification)
-          return
-        }
-
-        if (notificationTurnId && notificationTurnId !== targetTurnId) return
-
-        if (notification.method === 'turn/completed') {
-          scheduleCompletionClose(unsubscribe)
-          return
-        }
-
-        if (completionSeen) scheduleCompletionClose(unsubscribe)
-        flushNotification(notification)
-      })
+      // Replay snapshot state so the live indicator and token usage
+      // reflect what the harness already knows about this thread.
+      if (cachedSnapshot?.tokenUsage) {
+        const usage = mapCodexTokenUsageToContextUsage(cachedSnapshot.tokenUsage, currentModel)
+        safeEnqueue(codexContextUsageToEventData(usage))
+      }
 
       signal.addEventListener('abort', () => {
         const running = getRunningSession(sessionId)
@@ -2440,24 +2463,23 @@ export async function readViewSessionSlashCommands(sessionId: string, providerOv
 export async function readViewSessionDiagnostics(sessionId: string, providerOverride?: AgentProvider): Promise<{ sections: SessionDiagnosticSection[]; currentModel: string | null }> {
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
-    const client = getCodexClient()
-    const [thread, resume, mcpServers, features, skills, apps] = await Promise.all([
+    // Per-thread reads stay direct (they're specific to this sessionId),
+    // but the four project-wide reads go through the harness cache so
+    // repeated opens of the diagnostics panel share one HTTP round-trip.
+    const [thread, resume, project] = await Promise.all([
       readCodexThread(sessionId, false),
       resumeCodexThread(sessionId),
-      client.request<CodexMcpServerListResponse>('mcpServerStatus/list', {}),
-      client.request<CodexExperimentalFeatureListResponse>('experimentalFeature/list', {}),
-      client.request<{ data: Array<{ cwd: string; skills: Array<{ name?: string; description?: string }>; errors?: string[] }> }>('skills/list', {}),
-      client.request<CodexAppsListResponse>('app/list', {}),
+      getCodexProjectDiagnostics(),
     ])
 
     return {
       sections: mapCodexDiagnosticsToSections({
         thread,
         currentModel: resume.model,
-        mcpServers: mcpServers.data,
-        features: features.data,
-        skills: skills.data,
-        apps: apps.data,
+        mcpServers: project.mcpServers,
+        features: project.features,
+        skills: project.skills,
+        apps: project.apps,
       }),
       currentModel: resume.model,
     }

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { isAgentProvider } from '@/lib/provider'
 import { listViewSessionMessages } from '@/lib/sessionBackend'
 import { subscribeToOpenCodeEvents } from '@/lib/opencodeHarness'
+import { subscribeToCodexEvents } from '@/lib/codexHarness'
 import type { AgentProvider, SessionMessage } from '@/lib/types'
 
 export const maxDuration = 300
@@ -96,6 +97,20 @@ export async function GET(
 
       if (provider === 'opencode') {
         void pumpOpenCode({
+          sessionId,
+          provider,
+          limit,
+          backfill,
+          offset,
+          enqueue,
+          close,
+          signal: request.signal,
+        })
+        return
+      }
+
+      if (provider === 'codex') {
+        void pumpCodex({
           sessionId,
           provider,
           limit,
@@ -323,4 +338,135 @@ function errorMessage(error: unknown): string {
     }
   }
   return 'Unknown OpenCode session error'
+}
+
+// Codex shares the harness/refetch pattern with opencode. Mirrors
+// pumpOpenCode but consumes codex JSON-RPC notifications.
+const CODEX_FALLBACK_POLL_MS = 30_000
+const CODEX_REFETCH_DEBOUNCE_MS = 80
+
+async function pumpCodex({ sessionId, provider, limit, backfill, offset, enqueue, close, signal }: OpenCodePumpInput): Promise<void> {
+  let lastSignature = ''
+  let cursorOffset = offset
+  let lastHeartbeat = Date.now()
+  let inFlight = false
+  let pending = false
+  let refetchTimer: ReturnType<typeof setTimeout> | undefined
+  let fallbackTimer: ReturnType<typeof setTimeout> | undefined
+  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined
+
+  const refetch = async () => {
+    if (inFlight) {
+      pending = true
+      return
+    }
+    inFlight = true
+    try {
+      const messages = await listViewSessionMessages(
+        sessionId,
+        { offset: cursorOffset, limit, tail: false },
+        provider,
+      )
+      const signature = messageWindowSignature(cursorOffset, messages)
+      if (messages.length > 0 && signature !== lastSignature) {
+        enqueue('messages', { offset: cursorOffset, messages })
+        lastSignature = signature
+        cursorOffset = Math.max(0, cursorOffset + messages.length - backfill)
+      }
+    } catch (err) {
+      enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })
+      close()
+      return
+    } finally {
+      inFlight = false
+    }
+    if (pending && !signal.aborted) {
+      pending = false
+      void refetch()
+    }
+  }
+
+  const scheduleRefetch = () => {
+    if (signal.aborted) return
+    if (refetchTimer) return
+    refetchTimer = setTimeout(() => {
+      refetchTimer = undefined
+      void refetch()
+    }, CODEX_REFETCH_DEBOUNCE_MS)
+  }
+
+  const scheduleFallback = () => {
+    if (fallbackTimer) clearTimeout(fallbackTimer)
+    fallbackTimer = setTimeout(() => {
+      if (signal.aborted) return
+      void refetch()
+      scheduleFallback()
+    }, CODEX_FALLBACK_POLL_MS)
+  }
+
+  const scheduleHeartbeat = () => {
+    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+    heartbeatTimer = setTimeout(() => {
+      if (signal.aborted) return
+      const now = Date.now()
+      if (now - lastHeartbeat >= HEARTBEAT_MS) {
+        enqueue('heartbeat', { ts: now })
+        lastHeartbeat = now
+      }
+      scheduleHeartbeat()
+    }, HEARTBEAT_MS)
+  }
+
+  const subscription = subscribeToCodexEvents({ threadId: sessionId })
+  let consumeAborted = false
+  const consume = (async () => {
+    for await (const event of subscription.events) {
+      if (consumeAborted) break
+      if (event.type !== 'notification') continue
+      const method = event.notification.method
+      // Refetch on lifecycle events that mutate the persisted thread log.
+      if (
+        method === 'item/started'
+        || method === 'item/completed'
+        || method === 'turn/started'
+        || method === 'turn/completed'
+        || method === 'thread/closed'
+        || method === 'thread/archived'
+        || method === 'thread/name/updated'
+        || method === 'thread/goal/updated'
+      ) {
+        scheduleRefetch()
+        continue
+      }
+      if (method === 'error') {
+        const data = event.notification.params as { message?: unknown }
+        enqueue('error', { error: typeof data?.message === 'string' ? data.message : 'Codex error' })
+        close()
+        return
+      }
+    }
+  })()
+
+  const onAbort = () => {
+    consumeAborted = true
+    subscription.close()
+    if (refetchTimer) clearTimeout(refetchTimer)
+    if (fallbackTimer) clearTimeout(fallbackTimer)
+    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+    close()
+  }
+  if (signal.aborted) {
+    onAbort()
+    return
+  }
+  signal.addEventListener('abort', onAbort, { once: true })
+
+  await refetch()
+  scheduleFallback()
+  scheduleHeartbeat()
+
+  await consume.catch(() => {})
+  if (!signal.aborted) {
+    onAbort()
+  }
 }
