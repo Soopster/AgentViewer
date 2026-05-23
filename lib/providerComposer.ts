@@ -65,24 +65,34 @@ const CODEX: ProviderComposerConfig = {
   glyph: '›',
   cssAccentVar: '--green',
   cssAccentRgb: '45,212,160',
-  placeholderIdle: 'What can codex do for you? — describe a change and codex will run it.',
-  placeholderStreaming: 'Draft your next instruction for codex…',
-  placeholderNoSession: 'Pick a codex session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ↑↓ history',
-  footerHintSending: 'Esc cancel · running…',
-  sendVerb: 'Run',
+  // Mirror codex-rs PLACEHOLDERS[0] so the empty composer reads the same as the CLI.
+  placeholderIdle: 'Explain this codebase',
+  placeholderStreaming: 'Type a follow-up — Tab to queue while the turn runs',
+  placeholderNoSession: 'Pick a Codex thread to send a message',
+  // Match codex-rs/tui footer wording: `/` for commands, `@` for file paths, Shift+Enter newline,
+  // Tab to queue (when a turn is running), Ctrl+R search history.
+  footerHintIdle: '⏎ send · ⇧⏎ newline · / for commands · @ for file paths · ⌃R search history',
+  footerHintSending: 'Esc to interrupt · ⇥ to queue · turn running…',
+  sendVerb: 'Send',
+  // Verbatim from codex-rs chatwidget.rs PLACEHOLDERS so rotating examples match what Codex shows.
   examples: [
-    'Try "apply the migration to production"',
-    'Try "patch this file to add logging"',
-    'Try "show /diff and stage the changes"',
+    'Explain this codebase',
+    'Summarize recent commits',
+    'Implement {feature}',
+    'Find and fix a bug in @filename',
+    'Write tests for @filename',
+    'Improve documentation in @filename',
+    'Run /review on my current changes',
+    'Use /skills to list available skills',
   ],
   tuiAccentKey: 'green',
-  welcomeTitle: '› codex',
-  welcomeSubtitle: '/help · /diff · /status · approvals on demand',
+  // Codex's onboarding banner: "Welcome to Codex, OpenAI's command-line coding agent".
+  welcomeTitle: 'Welcome to Codex',
+  welcomeSubtitle: "OpenAI's command-line coding agent · /status · /diff · /review",
   welcomeBullets: [
-    'apply the pending migration',
-    'patch this file to add logging',
-    'show /diff and stage the changes',
+    'Explain this codebase',
+    'Summarize recent commits',
+    'Run /review on my current changes',
   ],
 }
 
