@@ -148,7 +148,18 @@ const TRANSCRIPT_FILTERS: Array<{ key: TranscriptFilter; label: string }> = [
 const TRANSCRIPT_FILTER_LABELS = new Map(TRANSCRIPT_FILTERS.map((filter) => [filter.key, filter.label]))
 
 const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
-const TIMELINE_OVERSCAN_PX = 1200
+// Bumped from 1200 → 2400 so more rows are mounted ahead of the visible
+// window when the user scrubs the scrollbar quickly. With variable-height
+// tool cards, this gives ResizeObserver more time to settle each row before
+// it enters view, which keeps the visible layout stable during fast scrolls.
+const TIMELINE_OVERSCAN_PX = 2400
+// Milliseconds of inactivity after the last scroll event before we consider
+// the user "done scrolling" and start applying scrollTop anchor adjustments
+// again. Anchor compensation is helpful while reading (a row above the
+// viewport gets measured and we keep the user's content visually stable);
+// during active scroll it fights the user's input and is the main source of
+// the perceived jumpiness on long transcripts with tool cards.
+const SCROLL_IDLE_MS = 140
 const ESTIMATED_CHARS_PER_LINE = 92
 const TIMELINE_BOTTOM_GUTTER_PX = 72
 const TIMELINE_TARGET_TOP_GUTTER_PX = 72
@@ -1803,6 +1814,12 @@ export default function MessageView({
   const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
   const measurementFrameRef = useRef<number | null>(null)
   const scrollRafRef = useRef<number | null>(null)
+  // Set true on each scroll event, cleared SCROLL_IDLE_MS after the last
+  // event. While true, we skip the scrollTop anchor adjustment in
+  // handleTimelineRowMeasure — measurements still flow into the layout, but
+  // they don't yank the scrollbar against the user's drag.
+  const userScrollingRef = useRef(false)
+  const userScrollingTimerRef = useRef<number | null>(null)
   const suppressFollowEvalUntilRef = useRef<number>(0)
   const autoFollowRef = useRef(false)
   const timelineRowsRef = useRef<TimelineRow[]>([])
@@ -2071,6 +2088,9 @@ export default function MessageView({
     if (liveAssistantFlushFrameRef.current != null) {
       window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
     }
+    if (userScrollingTimerRef.current != null) {
+      window.clearTimeout(userScrollingTimerRef.current)
+    }
   }, [])
 
   useEffect(() => {
@@ -2125,6 +2145,14 @@ export default function MessageView({
   }, [])
 
   const handleTimelineScroll = useCallback(() => {
+    userScrollingRef.current = true
+    if (userScrollingTimerRef.current != null) {
+      window.clearTimeout(userScrollingTimerRef.current)
+    }
+    userScrollingTimerRef.current = window.setTimeout(() => {
+      userScrollingRef.current = false
+      userScrollingTimerRef.current = null
+    }, SCROLL_IDLE_MS)
     if (scrollRafRef.current != null) return
     scrollRafRef.current = window.requestAnimationFrame(() => {
       scrollRafRef.current = null
@@ -3611,6 +3639,13 @@ export default function MessageView({
       const node = timelineRef.current
       const layout = rowLayoutRef.current
       const isFollowing = autoFollowRef.current
+      // While the user is actively dragging the scrollbar, refuse to apply
+      // anchor compensation — it adds to scrollTop on the same frame the
+      // user is updating it, which the browser perceives as a fight and
+      // produces the visible jumpiness on fast scrubs over tool-heavy
+      // transcripts. Layout still updates so positions remain correct;
+      // only the scrollTop nudge is suppressed.
+      const allowScrollAdjust = !userScrollingRef.current
       let scrollDelta = 0
       let changed = false
 
@@ -3624,14 +3659,14 @@ export default function MessageView({
 
         rowHeightsRef.current.set(key, nextMeasuredHeight)
         changed = true
-        if (!isFollowing && node && layout.tops[index] < node.scrollTop) {
+        if (allowScrollAdjust && !isFollowing && node && layout.tops[index] < node.scrollTop) {
           scrollDelta += nextMeasuredHeight - previousHeight
         }
       }
 
       pending.clear()
 
-      if (node && !isFollowing && scrollDelta !== 0) {
+      if (node && allowScrollAdjust && !isFollowing && scrollDelta !== 0) {
         suppressFollowEvalUntilRef.current = performance.now() + 200
         node.scrollTop += scrollDelta
         setTimelineScrollTop(node.scrollTop)

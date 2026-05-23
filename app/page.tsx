@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback, startTransition, ViewTransition } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, startTransition, ViewTransition } from 'react'
 import dynamic from 'next/dynamic'
 import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
@@ -106,6 +106,46 @@ function dedupeSessionsByKey(sessions: Session[]): Session[] {
 
 function sessionsFingerprint(sessions: Session[]): string {
   return sessions.map((s) => `${s.provider ?? 'claude'}:${s.sessionId}:${s.lastModified ?? s.createdAt ?? ''}`).join('|')
+}
+
+// Per-session fingerprint covering every field that affects how SessionRow
+// renders. When the polled session has the same fingerprint as the one we
+// already have, we reuse the prior object so React.memo on SessionRow can
+// short-circuit — otherwise every 5s sessions poll replaces every Session
+// reference and forces every row to re-render even when nothing visible
+// changed.
+function sessionRenderFingerprint(s: Session): string {
+  return [
+    s.sessionId,
+    s.provider ?? '',
+    s.customTitle ?? '',
+    s.summary ?? '',
+    s.firstPrompt ?? '',
+    s.cwd ?? '',
+    s.lastModified ?? '',
+    s.createdAt ?? '',
+    s.tag ?? '',
+    s.parentSessionId ?? '',
+    s.isPending ? '1' : '0',
+  ].join('|')
+}
+
+function stabilizeSessionIdentities(prev: Session[], next: Session[]): Session[] {
+  if (prev.length === 0) return next
+  const priorByKey = new Map<string, Session>()
+  for (const s of prev) priorByKey.set(`${s.provider ?? 'claude'}:${s.sessionId}`, s)
+  let reusedAll = prev.length === next.length
+  const stabilized = next.map((session) => {
+    const prior = priorByKey.get(`${session.provider ?? 'claude'}:${session.sessionId}`)
+    if (!prior) {
+      reusedAll = false
+      return session
+    }
+    if (sessionRenderFingerprint(prior) === sessionRenderFingerprint(session)) return prior
+    reusedAll = false
+    return session
+  })
+  return reusedAll ? prev : stabilized
 }
 
 function apiMessageSignature(message: SessionMessage): string {
@@ -249,13 +289,33 @@ export default function Home() {
   const sessionListScrollRequestRef = useRef(0)
   // Cancels the previous session-switch fetch so a slow A response can't overwrite B's messages
   const sessionLoadAbortRef = useRef<AbortController | null>(null)
-  const selectedSession =
-    openTabSessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
-    sessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
-    null
+  // Memoize the selected session lookup so MessageView and effects that
+  // depend on it don't see a new object reference on every render of this
+  // page (which used to fire on every keystroke into the composer).
+  const selectedSession = useMemo(
+    () =>
+      openTabSessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
+      sessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
+      null,
+    [openTabSessions, sessions, selectedTabKey],
+  )
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
   const messageAreaKey = selectedTabKey ?? (selectedProject ? `proj:${selectedProject.dir}` : '')
+  // Bundle the projectView prop so it only gets a new identity when one of
+  // its fields actually changes — otherwise <MessageView /> sees a new object
+  // on every parent render.
+  const projectViewProp = useMemo(
+    () => (selectedProject
+      ? {
+          key: selectedProject.key,
+          sessionCount: selectedProject.sessions.length,
+          providerMode: (provider === 'all' ? 'all' : 'current') as 'all' | 'current',
+        }
+      : undefined),
+    [provider, selectedProject],
+  )
+  const openCodeTodosForView = todosForSessionId === selectedSession?.sessionId ? sessionTodos : undefined
 
   const toggleMessagePane = useCallback(() => {
     setMessagePaneCollapsed((prev) => {
@@ -269,6 +329,9 @@ export default function Home() {
     if (!activeProjectDir) return
     setGitPopoverOpen(true)
   }, [activeProjectDir])
+
+  const openCommandPalette = useCallback(() => setCommandPaletteOpen(true), [])
+  const openTaskPanel = useCallback(() => setTaskPanelOpenRequest((value) => value + 1), [])
 
   const fetchProjectSessions = useCallback(async (dir: string, selection: ProviderSelection) => {
     const params = new URLSearchParams()
@@ -305,7 +368,9 @@ export default function Home() {
       const fp = sessionsFingerprint(loaded)
       if (fp !== sessionsFingerprintRef.current) {
         sessionsFingerprintRef.current = fp
-        startTransition(() => { setSessions(loaded) })
+        startTransition(() => {
+          setSessions((prev) => stabilizeSessionIdentities(prev, loaded))
+        })
       }
       return
     }
@@ -321,7 +386,9 @@ export default function Home() {
     const fp = sessionsFingerprint(loaded)
     if (fp !== sessionsFingerprintRef.current) {
       sessionsFingerprintRef.current = fp
-      startTransition(() => { setSessions(loaded) })
+      startTransition(() => {
+        setSessions((prev) => stabilizeSessionIdentities(prev, loaded))
+      })
     }
   }, [activeProjectDir, fetchProjectSessions, sessionScope])
 
@@ -917,7 +984,7 @@ export default function Home() {
             includeWorktrees={includeWorktrees}
             onChangeScope={setSessionScope}
             onToggleWorktrees={setIncludeWorktrees}
-            onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+            onOpenCommandPalette={openCommandPalette}
             canOpenGit={!!activeProjectDir}
             onOpenGit={openGitPopover}
             onNewSession={handleNewSession}
@@ -988,7 +1055,7 @@ export default function Home() {
                   session={selectedSession}
                   targetMessageId={targetMessage?.messageId ?? null}
                   targetMessageRequestId={targetMessage?.requestId ?? 0}
-                  projectView={selectedProject ? { key: selectedProject.key, sessionCount: selectedProject.sessions.length, providerMode: provider === 'all' ? 'all' : 'current' } : undefined}
+                  projectView={projectViewProp}
                   onFork={handleFork}
                   onDelete={handleDelete}
                   openTabs={openTabSessions}
@@ -996,7 +1063,7 @@ export default function Home() {
                   onSelectTab={selectOpenTab}
                   onCloseTab={closeTab}
                   taskPanelOpenRequest={taskPanelOpenRequest}
-                  openCodeTodos={todosForSessionId === selectedSession?.sessionId ? sessionTodos : undefined}
+                  openCodeTodos={openCodeTodosForView}
                 />
               </ViewTransition>
               {commandPaletteOpen ? (
@@ -1020,7 +1087,7 @@ export default function Home() {
                   onToggleWorktrees={setIncludeWorktrees}
                   onToggleMessagePane={toggleMessagePane}
                   onOpenGit={openGitPopover}
-                  onOpenTasks={() => setTaskPanelOpenRequest((value) => value + 1)}
+                  onOpenTasks={openTaskPanel}
                 />
               ) : null}
             </div>

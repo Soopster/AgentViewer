@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useState, useRef, useCallback, useDeferredValue, useEffect, useMemo, ViewTransition } from 'react'
+import { memo, useState, useRef, useCallback, useDeferredValue, useEffect, useMemo } from 'react'
 import { normalizeProjectPath, pathBasename, pickCanonicalProjectPath, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import { parseSessionTagInput, parseStoredSessionTags, serializeSessionTags } from '@/lib/sessionTags'
@@ -263,13 +263,19 @@ const SessionRow = memo(function SessionRow({
   const [editing, setEditing] = useState<'title' | 'tag' | null>(null)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
-  const shortId = session.sessionId.slice(-12)
+  const shortId = useMemo(() => session.sessionId.slice(-12), [session.sessionId])
   const sessionTitle = getSessionTitle(session)
-  const sessionPreview = getSessionPreview(session, sessionTitle)
-  const sessionTags = parseStoredSessionTags(session.tag)
+  const sessionPreview = useMemo(() => getSessionPreview(session, sessionTitle), [session, sessionTitle])
+  const sessionTags = useMemo(() => parseStoredSessionTags(session.tag), [session.tag])
   const activityTime = session.lastModified ?? session.createdAt
-  const activityTitle = hydrated ? formatTimestamp(activityTime) : formatStableTimestamp(activityTime)
-  const providerStyle = session.provider ? providerChipStyle(session.provider) : null
+  const activityTitle = useMemo(
+    () => (hydrated ? formatTimestamp(activityTime) : formatStableTimestamp(activityTime)),
+    [activityTime, hydrated],
+  )
+  const providerStyle = useMemo(
+    () => (session.provider ? providerChipStyle(session.provider) : null),
+    [session.provider],
+  )
 
   const startEdit = useCallback((kind: 'title' | 'tag', value: string) => (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -329,7 +335,11 @@ const SessionRow = memo(function SessionRow({
         padding: '10px 16px 10px 24px',
         borderBottom: '1px solid var(--border)',
         contentVisibility: 'auto',
-        containIntrinsicSize: '96px',
+        // `auto 96px` lets the browser remember the real measured row height
+        // after the row has been painted once, instead of forcing the layout
+        // back to a 96px estimate every time the row scrolls off-screen — that
+        // mismatch was the main cause of perceived flicker while scrolling.
+        containIntrinsicSize: 'auto 96px',
       }}
     >
       {/* Session ID */}
@@ -649,22 +659,21 @@ const ProjectGroup = memo(function ProjectGroup({
 
       {/* Sessions */}
       {!collapsed && sessions.map((session) => (
-        <ViewTransition key={sessionTabKey(session)} enter="fade-in" default="none">
-          <SessionRow
-            session={session}
-            selected={sessionTabKey(session) === selectedId}
-            hydrated={hydrated}
-            onSelect={onSelect}
-            onRename={onRename}
-            onTag={onTag}
-          />
-        </ViewTransition>
+        <SessionRow
+          key={sessionTabKey(session)}
+          session={session}
+          selected={sessionTabKey(session) === selectedId}
+          hydrated={hydrated}
+          onSelect={onSelect}
+          onRename={onRename}
+          onTag={onTag}
+        />
       ))}
     </div>
   )
 })
 
-export default function SessionList({
+function SessionListInner({
   sessions,
   loading,
   error,
@@ -1241,16 +1250,15 @@ export default function SessionList({
                           )
                         }
                         return (
-                          <ViewTransition key={entry.key} enter="fade-in" default="none">
-                            <SessionRow
-                              session={entry.session}
-                              selected={sessionTabKey(entry.session) === selectedId}
-                              hydrated={hydrated}
-                              onSelect={onSelect}
-                              onRename={onRename}
-                              onTag={onTag}
-                            />
-                          </ViewTransition>
+                          <SessionRow
+                            key={entry.key}
+                            session={entry.session}
+                            selected={sessionTabKey(entry.session) === selectedId}
+                            hydrated={hydrated}
+                            onSelect={onSelect}
+                            onRename={onRename}
+                            onTag={onTag}
+                          />
                         )
                       })}
                     </div>
@@ -2106,3 +2114,6 @@ export default function SessionList({
     </div>
   )
 }
+
+const SessionList = memo(SessionListInner)
+export default SessionList
