@@ -8,6 +8,7 @@ import { CodeThemeProvider } from '@/components/CodeThemeContext'
 import { Sidebar, SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { isProviderSelection } from '@/lib/provider'
 import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
+import { compactStableFingerprint } from '@/lib/compactFingerprint'
 import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
 import type { Todo as OpenCodeTodo } from '@opencode-ai/sdk'
 
@@ -44,6 +45,12 @@ const MESSAGE_STREAM_LIMIT = 200 + MESSAGE_POLL_BACKFILL
 const MESSAGE_POLL_FALLBACK_MS = 2000
 const MESSAGE_STREAM_RETRY_INITIAL_MS = 2000
 const MESSAGE_STREAM_RETRY_MAX_MS = 30000
+// Project-feed memory caps. The view is recency-skewed and renders a virtual
+// list, so dropping the cross-session ceiling to 2 500 (down from 5 000) plus
+// 200 (from 300) per session removes ~50% of the SessionMessage objects held
+// in browser memory for active dashboards without changing what's on-screen.
+const PROJECT_MESSAGE_TOTAL_MEMORY_LIMIT = 2500
+const PROJECT_MESSAGE_PER_SESSION_MEMORY_LIMIT = 200
 
 type MessageStreamPayload = {
   offset?: number
@@ -77,6 +84,10 @@ function sessionMessageKey(message: SessionMessage): string {
   return `${message.provider ?? 'claude'}:${message.uuid}`
 }
 
+function projectMessageSessionKey(message: SessionMessage): string {
+  return `${message.provider ?? 'claude'}:${message.session_id}`
+}
+
 function projectSessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
   return `${session.provider ?? 'claude'}:${session.sessionId}`
 }
@@ -101,12 +112,7 @@ function apiMessageSignature(message: SessionMessage): string {
   const originKind = message.origin?.kind ?? ''
   const turnId = message.turnId ?? ''
   const timestamp = message.timestamp ?? ''
-  let payload = ''
-  try {
-    payload = JSON.stringify(message.message)
-  } catch {
-    payload = String(message.message)
-  }
+  const payload = compactStableFingerprint(message.message)
   return [message.type, timestamp, originKind, turnId, payload].join('|')
 }
 
@@ -161,6 +167,36 @@ function mergeMessages(existing: SessionMessage[], incoming: SessionMessage[]): 
 
   const additions = appended.sort((a, b) => messageTimestampMs(a) - messageTimestampMs(b))
   return mergeSortedMessages(mergedExisting, additions)
+}
+
+function trimProjectMessagesForMemory(messages: SessionMessage[]): SessionMessage[] {
+  if (messages.length <= PROJECT_MESSAGE_TOTAL_MEMORY_LIMIT) {
+    const counts = new Map<string, number>()
+    let exceedsPerSessionLimit = false
+    for (const message of messages) {
+      const key = projectMessageSessionKey(message)
+      const next = (counts.get(key) ?? 0) + 1
+      if (next > PROJECT_MESSAGE_PER_SESSION_MEMORY_LIMIT) {
+        exceedsPerSessionLimit = true
+        break
+      }
+      counts.set(key, next)
+    }
+    if (!exceedsPerSessionLimit) return messages
+  }
+
+  const kept: SessionMessage[] = []
+  const counts = new Map<string, number>()
+  for (let i = messages.length - 1; i >= 0 && kept.length < PROJECT_MESSAGE_TOTAL_MEMORY_LIMIT; i -= 1) {
+    const message = messages[i]
+    const key = projectMessageSessionKey(message)
+    const count = counts.get(key) ?? 0
+    if (count >= PROJECT_MESSAGE_PER_SESSION_MEMORY_LIMIT) continue
+    counts.set(key, count + 1)
+    kept.push(message)
+  }
+  kept.reverse()
+  return kept
 }
 
 function useDocumentVisible(): boolean {
@@ -567,7 +603,7 @@ export default function Home() {
         }
         const incoming = batches.flatMap((batch) => batch.messages)
         if (incoming.length > 0) {
-          setMessages((prev) => mergeMessages(prev, incoming))
+          setMessages((prev) => trimProjectMessagesForMemory(mergeMessages(prev, incoming)))
         }
         setSelectedProject((prev) => prev && sameProjectPath(prev.dir, selectedProject.dir)
           ? { ...prev, sessions: projectSessions }
@@ -689,7 +725,7 @@ export default function Home() {
       projectMessageCountsRef.current = new Map(
         batches.map((batch) => [batch.key, batch.offset + batch.messages.length])
       )
-      setMessages(all)
+      setMessages(trimProjectMessagesForMemory(all))
       setSelectedProject({ key: projectName, dir: projectDir, sessions: sessionsForProject })
     } catch (err) {
       console.error('Failed to load project messages:', err)

@@ -7,7 +7,22 @@ export type ProjectFileEntry = {
 }
 
 const CACHE_TTL_MS = 5_000
+// Each entry can hold thousands of ProjectFileEntry records (FALLBACK_MAX_ENTRIES
+// = 5 000). Cap the number of distinct cwds we remember at once so a developer
+// browsing several projects in one session can't accumulate hundreds of MB of
+// stale filename arrays.
+const CACHE_MAX_ENTRIES = 8
 const cache = new Map<string, { at: number; entries: ProjectFileEntry[] }>()
+
+function rememberProjectFileEntries(cwd: string, entries: ProjectFileEntry[]): void {
+  if (cache.has(cwd)) cache.delete(cwd)
+  cache.set(cwd, { at: Date.now(), entries })
+  while (cache.size > CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next().value
+    if (oldest === undefined) break
+    cache.delete(oldest)
+  }
+}
 
 const FALLBACK_IGNORE = new Set([
   '.git',
@@ -35,11 +50,14 @@ export async function listProjectFiles(
   runGit: (cwd: string, args: string[]) => Promise<string>,
 ): Promise<ProjectFileEntry[]> {
   const cached = cache.get(cwd)
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.entries
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    rememberProjectFileEntries(cwd, cached.entries)
+    return cached.entries
+  }
 
   const gitEntries = await tryGitListing(cwd, runGit)
   const entries = gitEntries.length > 0 ? gitEntries : await fallbackWalk(cwd)
-  cache.set(cwd, { at: Date.now(), entries })
+  rememberProjectFileEntries(cwd, entries)
   return entries
 }
 

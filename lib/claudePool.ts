@@ -114,7 +114,10 @@ type InternalEntry = {
   alive: boolean
 }
 
-const BUFFER_CAP = 256
+// Init/state messages emitted between session spawn and the first subscriber
+// attaching. The legitimate burst is on the order of a dozen, so 64 leaves
+// generous headroom while halving the worst-case detached-session footprint.
+const BUFFER_CAP = 64
 
 function effortToSdk(effort: ReasoningEffortLevel | undefined):
   | { effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; thinking?: { type: 'disabled' } | { type: 'adaptive' } }

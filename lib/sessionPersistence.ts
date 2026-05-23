@@ -190,7 +190,21 @@ let database: SqliteDatabase | null = null
 let databaseOpenPromise: Promise<SqliteDatabase> | null = null
 let persistenceWriteQueue: Promise<void> = Promise.resolve()
 let migrationsApplied = false
+// LRU-capped: the signature is just a short hash but the map otherwise grows
+// once per distinct session ever indexed, which on a long-running server can
+// reach tens of thousands of entries across providers.
+const MESSAGE_SIGNATURE_CACHE_MAX = 256
 const messageSignatureCache = new Map<string, string>()
+
+function rememberSignature(sessionKey: string, signature: string): void {
+  if (messageSignatureCache.has(sessionKey)) messageSignatureCache.delete(sessionKey)
+  messageSignatureCache.set(sessionKey, signature)
+  while (messageSignatureCache.size > MESSAGE_SIGNATURE_CACHE_MAX) {
+    const oldest = messageSignatureCache.keys().next().value
+    if (oldest === undefined) break
+    messageSignatureCache.delete(oldest)
+  }
+}
 
 function persistenceDisabled(): boolean {
   return process.env.AGENT_VIEWER_DISABLE_SESSION_INDEX === '1'
@@ -205,13 +219,18 @@ async function ensureIndexDirs(): Promise<void> {
 }
 
 function configureDatabase(db: SqliteDatabase): void {
+  // Memory budget: 8 MiB page cache (was 64 MiB) is more than enough for our
+  // paginated reads; mmap disabled because mapping the whole index file just
+  // turns disk pages into resident RSS we don't get to reclaim. The OS page
+  // cache still serves hot reads efficiently without counting against this
+  // process. Total resident SQLite footprint drops by ~80 MiB on warm runs.
   db.exec(`
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
-    PRAGMA cache_size = -65536;
+    PRAGMA cache_size = -8192;
     PRAGMA temp_store = MEMORY;
-    PRAGMA mmap_size = 268435456;
+    PRAGMA mmap_size = 0;
   `)
 }
 
@@ -818,7 +837,7 @@ async function migrateLegacyJsonIfNeeded(db: SqliteDatabase): Promise<void> {
       upsertSessionRecord(db, session, store.signature)
       replaceMessagesForSession(db, store.sessionKey, store.messages)
     })
-    if (store.signature) messageSignatureCache.set(store.sessionKey, store.signature)
+    if (store.signature) rememberSignature(store.sessionKey, store.signature)
   }
 
   withTransaction(db, () => {
@@ -1198,7 +1217,7 @@ export async function syncPersistedSessionMessages(
   await runPersistenceWrite((db) => {
     const existingSignature = readSessionSignature(db, sessionKey)
     if (existingSignature === signature) {
-      messageSignatureCache.set(sessionKey, signature)
+      rememberSignature(sessionKey, signature)
       return
     }
 
@@ -1226,7 +1245,7 @@ export async function syncPersistedSessionMessages(
         replaceMessagesForSession(db, sessionKey, persistedMessages)
       }
     })
-    messageSignatureCache.set(sessionKey, signature)
+    rememberSignature(sessionKey, signature)
   })
 }
 

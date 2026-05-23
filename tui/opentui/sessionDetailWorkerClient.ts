@@ -4,17 +4,13 @@ import type { Session } from '../../lib/types'
 import type { TuiDensity } from '../theme'
 import { buildAndFormatTranscriptAsync } from './threadingWorkerClient'
 
-export function transcriptCardsVariantKey(density: TuiDensity, showToolCalls: boolean): string {
-  return `${density}|${showToolCalls ? 1 : 0}`
-}
-
 export async function readTuiSessionDetailAsync(
   session: Session,
   density: TuiDensity,
   showToolCalls: boolean,
 ): Promise<TuiSessionDetail> {
   const { info, rawMessages } = await readTuiSessionDetailSource(session)
-  const { threadedMessages, transcriptCards } = await buildAndFormatTranscriptAsync(
+  const { threadedMessages } = await buildAndFormatTranscriptAsync(
     session,
     rawMessages,
     density,
@@ -24,8 +20,6 @@ export async function readTuiSessionDetailAsync(
     info,
     rawMessages,
     threadedMessages,
-    transcriptCards,
-    transcriptCardsVariant: transcriptCardsVariantKey(density, showToolCalls),
     contextUsage: null,
   }
 }

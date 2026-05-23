@@ -12,9 +12,8 @@ export type TranscriptPayload = {
 type ThreadingClientCache = {
   messages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
-  // Multi-variant card cache. Key: `${density}|${showToolCalls ? 1 : 0}`.
-  // Density toggles between previously-seen variants hit the cache in O(1)
-  // without a worker round-trip (proposal 2).
+  // LRU card cache keyed by `${density}|${showToolCalls ? 1 : 0}`. Kept tiny
+  // because each entry can contain one formatted card per transcript message.
   cardsByVariant: Map<string, TuiTranscriptCard[]>
 }
 
@@ -38,7 +37,11 @@ type WorkerResponse =
 let worker: Worker | null = null
 let requestCounter = 0
 const pending = new Map<number, Pending>()
-const THREADING_CACHE_LIMIT = 8
+// Matches the worker-side cap. Holds the active session plus one neighbour;
+// switching back further re-runs threading from disk-sourced messages which
+// is already fast and avoids a 3rd resident transcript.
+const THREADING_CACHE_LIMIT = 2
+const CARD_VARIANT_CACHE_LIMIT = 1
 const threadingCacheByKey = new Map<string, ThreadingClientCache>()
 
 function cacheKey(session: Session): string {
@@ -47,6 +50,22 @@ function cacheKey(session: Session): string {
 
 function variantKey(density: TuiDensity, showToolCalls: boolean): string {
   return `${density}|${showToolCalls ? 1 : 0}`
+}
+
+function rememberCardsVariant(
+  cache: ThreadingClientCache,
+  density: TuiDensity,
+  showToolCalls: boolean,
+  cards: TuiTranscriptCard[],
+): void {
+  const key = variantKey(density, showToolCalls)
+  if (cache.cardsByVariant.has(key)) cache.cardsByVariant.delete(key)
+  cache.cardsByVariant.set(key, cards)
+  while (cache.cardsByVariant.size > CARD_VARIANT_CACHE_LIMIT) {
+    const oldestKey = cache.cardsByVariant.keys().next().value
+    if (oldestKey === undefined) break
+    cache.cardsByVariant.delete(oldestKey)
+  }
 }
 
 function touchThreadingCache(key: string, cache: ThreadingClientCache): void {
@@ -129,12 +148,13 @@ export function buildAndFormatTranscriptAsync(
         const cardsByVariant = existing?.threadedMessages === payload.threadedMessages
           ? existing.cardsByVariant
           : new Map<string, TuiTranscriptCard[]>()
-        cardsByVariant.set(variantKey(density, showToolCalls), payload.transcriptCards)
-        touchThreadingCache(key, {
+        const cacheEntry = {
           messages,
           threadedMessages: payload.threadedMessages,
           cardsByVariant,
-        })
+        }
+        rememberCardsVariant(cacheEntry, density, showToolCalls, payload.transcriptCards)
+        touchThreadingCache(key, cacheEntry)
         resolve(payload)
       },
       reject,
@@ -145,9 +165,9 @@ export function buildAndFormatTranscriptAsync(
 
 /**
  * Re-format already-threaded messages with a new density / showToolCalls pair.
- * Used when the user toggles density or tool visibility — avoids re-reading
- * disk and re-threading; the worker hits its per-(message fingerprint, density) card cache
- * for previously-visited densities.
+ * Used when the user toggles density or tool visibility. This avoids re-reading
+ * disk and re-threading while keeping only the current formatted-card variant
+ * resident on the main thread.
  */
 export function formatTranscriptCardsAsync(
   session: Session,
@@ -173,7 +193,7 @@ export function formatTranscriptCardsAsync(
       resolve: (transcriptCards) => {
         const existing = threadingCacheByKey.get(key)
         if (existing && existing.threadedMessages === threaded) {
-          existing.cardsByVariant.set(variantKey(density, showToolCalls), transcriptCards)
+          rememberCardsVariant(existing, density, showToolCalls, transcriptCards)
           touchThreadingCache(key, existing)
         }
         resolve(transcriptCards)

@@ -165,8 +165,10 @@ import {
 export const maxDuration = 300
 
 // Session info rarely changes between polls — cache for 20 s to avoid repeating
-// filesystem I/O on every 5-second session list refresh.
+// filesystem I/O on every 5-second session list refresh. Bounded by LRU so the
+// long-lived dev server cannot accumulate entries for every session ever listed.
 const SESSION_INFO_TTL = 20_000
+const SESSION_INFO_CACHE_MAX = 128
 type SessionInfoCacheEntry = { result: Awaited<ReturnType<typeof getSessionInfo>>; ts: number }
 const sessionInfoCache = new Map<string, SessionInfoCacheEntry>()
 
@@ -177,11 +179,24 @@ function pruneSessionInfoCache() {
   }
 }
 
+function touchSessionInfoCache(sessionId: string, entry: SessionInfoCacheEntry): void {
+  if (sessionInfoCache.has(sessionId)) sessionInfoCache.delete(sessionId)
+  sessionInfoCache.set(sessionId, entry)
+  while (sessionInfoCache.size > SESSION_INFO_CACHE_MAX) {
+    const oldest = sessionInfoCache.keys().next().value
+    if (oldest === undefined) break
+    sessionInfoCache.delete(oldest)
+  }
+}
+
 async function getCachedSessionInfo(sessionId: string, dir: string | undefined): Promise<Awaited<ReturnType<typeof getSessionInfo>>> {
   const cached = sessionInfoCache.get(sessionId)
-  if (cached && Date.now() - cached.ts < SESSION_INFO_TTL) return cached.result
+  if (cached && Date.now() - cached.ts < SESSION_INFO_TTL) {
+    touchSessionInfoCache(sessionId, cached)
+    return cached.result
+  }
   const result = await getSessionInfo(sessionId, dir ? { dir } : undefined)
-  sessionInfoCache.set(sessionId, { result, ts: Date.now() })
+  touchSessionInfoCache(sessionId, { result, ts: Date.now() })
   return result
 }
 
@@ -189,7 +204,10 @@ async function getCachedSessionInfo(sessionId: string, dir: string | undefined):
 // normalize/dedup/sort pipeline when the underlying transcript is unchanged.
 // Each call computes a cheap raw signature; on match we return the cached
 // array (slice happens at the call site). On mismatch we re-map and store.
+// LRU-capped because each entry holds a fully normalized message array — a
+// large session can be MBs, so an unbounded map dominates server RSS.
 const MAPPED_MESSAGE_TTL = 60_000
+const MAPPED_MESSAGE_CACHE_MAX = 10
 type MappedMessageCacheEntry = {
   signature: string
   messages: SessionMessage[]
@@ -208,6 +226,9 @@ function readMappedMessagesCache(key: string, signature: string): SessionMessage
   const cached = mappedMessageCache.get(key)
   if (cached && cached.signature === signature) {
     cached.ts = Date.now()
+    // Touch LRU order so the active session stays resident under cap.
+    mappedMessageCache.delete(key)
+    mappedMessageCache.set(key, cached)
     return cached.messages
   }
   return null
@@ -215,7 +236,13 @@ function readMappedMessagesCache(key: string, signature: string): SessionMessage
 
 function writeMappedMessagesCache(key: string, signature: string, messages: SessionMessage[]): SessionMessage[] {
   pruneMappedMessageCache()
+  if (mappedMessageCache.has(key)) mappedMessageCache.delete(key)
   mappedMessageCache.set(key, { signature, messages, ts: Date.now() })
+  while (mappedMessageCache.size > MAPPED_MESSAGE_CACHE_MAX) {
+    const oldest = mappedMessageCache.keys().next().value
+    if (oldest === undefined) break
+    mappedMessageCache.delete(oldest)
+  }
   return messages
 }
 

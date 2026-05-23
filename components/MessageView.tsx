@@ -40,6 +40,7 @@ import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSe
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import CodeThemeToggle from './CodeThemeToggle'
 import TabBar from './TabBar'
+import { compactStableFingerprint } from '@/lib/compactFingerprint'
 
 const AnalyticsPopover = dynamic(() => import('./AnalyticsPopover'), { ssr: false })
 
@@ -985,19 +986,13 @@ function sessionMessageThreadedKey(message: SessionMessage): string {
 
 function sessionMessageFingerprint(message: SessionMessage | undefined): string | null {
   if (!message) return null
-  let payload = ''
-  try {
-    payload = JSON.stringify(message.message)
-  } catch {
-    payload = String(message.message)
-  }
   return [
     message.type,
     message.uuid,
     message.timestamp ?? '',
     message.turnId ?? '',
     message.origin?.kind ?? '',
-    payload,
+    compactStableFingerprint(message.message),
   ].join('|')
 }
 
@@ -3240,7 +3235,9 @@ export default function MessageView({
       const cached = previous.get(threadedMessageKey(message))
       return cached && threadedMessageEqual(cached, message) ? cached : message
     })
-    threadedCacheRef.current = new Map(stabilized.map((message) => [threadedMessageKey(message), message]))
+    const nextCache = new Map<string, ThreadedMessage>()
+    for (const message of stabilized) nextCache.set(threadedMessageKey(message), message)
+    threadedCacheRef.current = nextCache
     prevThreadingRef.current = { messages, threaded: stabilized }
     return stabilized
   }, [messages])
@@ -3340,7 +3337,10 @@ export default function MessageView({
   const visiblePersistedMessageKeys = useMemo(() => {
     const baseline = pendingMessageBaselineRef.current
     if (!showLiveTimelineOverlay || !baseline || baseline.sessionId !== session?.sessionId) return null
-    return new Set(messages.slice(0, baseline.count).map(sessionMessageThreadedKey))
+    const keys = new Set<string>()
+    const limit = Math.min(baseline.count, messages.length)
+    for (let i = 0; i < limit; i += 1) keys.add(sessionMessageThreadedKey(messages[i]))
+    return keys
   }, [messages, session?.sessionId, showLiveTimelineOverlay])
   const visibleThreaded = useMemo(() => {
     if (!visiblePersistedMessageKeys) return threaded
@@ -3510,14 +3510,16 @@ export default function MessageView({
   }, [normalizedTranscriptSearch, timelineRows, transcriptFilters])
   const hasTranscriptFocus = transcriptFilters.length > 0 || transcriptSearch.trim().length > 0
   const visualizerRows = useMemo<MessageVisualizerRow[]>(
-    () => timelineRows.map((row) => ({
-      key: row.key,
-      message: row.message,
-      dimmed: row.dimmed,
-      previewBadge: row.previewBadge,
-      showSession: row.showSession,
-    })),
-    [timelineRows],
+    () => showVisualizer
+      ? timelineRows.map((row) => ({
+          key: row.key,
+          message: row.message,
+          dimmed: row.dimmed,
+          previewBadge: row.previewBadge,
+          showSession: row.showSession,
+        }))
+      : [],
+    [showVisualizer, timelineRows],
   )
   const timelineTargetMessageId = useMemo(
     () => resolveTimelineTargetMessageId(targetMessageId, messages, timelineRows),

@@ -71,12 +71,24 @@ export type ThreadedMessage = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// LRU-capped: tags are drawn from a small known set (task-notification,
+// command-name, …) so this cap is comfortably above steady state and just
+// prevents a leak if an unusual or attacker-controlled tag ever appears.
+const XML_TAG_RE_CACHE_MAX = 32
 const XML_TAG_RE_CACHE = new Map<string, RegExp>()
 function xmlTagRegex(tag: string): RegExp {
-  let re = XML_TAG_RE_CACHE.get(tag)
-  if (!re) {
-    re = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`)
-    XML_TAG_RE_CACHE.set(tag, re)
+  const cached = XML_TAG_RE_CACHE.get(tag)
+  if (cached) {
+    XML_TAG_RE_CACHE.delete(tag)
+    XML_TAG_RE_CACHE.set(tag, cached)
+    return cached
+  }
+  const re = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`)
+  XML_TAG_RE_CACHE.set(tag, re)
+  while (XML_TAG_RE_CACHE.size > XML_TAG_RE_CACHE_MAX) {
+    const oldest = XML_TAG_RE_CACHE.keys().next().value
+    if (oldest === undefined) break
+    XML_TAG_RE_CACHE.delete(oldest)
   }
   return re
 }

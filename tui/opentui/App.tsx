@@ -74,7 +74,6 @@ import {
   readTuiSessionDetailAsync,
   formatTranscriptCardsAsync,
   getTranscriptCardsSync,
-  transcriptCardsVariantKey,
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { ContextUsage, ProviderSelection, RunningSessionRef, SendAttachment, SendState, Session, ToolResultBlock } from '../../lib/types'
@@ -84,6 +83,7 @@ import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
 import { readViewSessionSlashCommands, createNewViewSession } from '../../lib/sessionBackend'
+import { compactStableFingerprint } from '../../lib/compactFingerprint'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 
@@ -194,7 +194,11 @@ const TASK_PANEL_MIN_WIDTH = 24
 const TASK_PANEL_DEFAULT_WIDTH = 32
 const TASK_PANEL_MAX_WIDTH = 60
 const TASK_PANEL_RESIZE_STEP = 4
-const SESSION_CACHE_LIMIT = 8
+// Cached TuiSessionDetail bundles include the full transcript, blocks, and
+// derived landmarks. Cap at 2 — active + one neighbour — to halve the worst-
+// case resident footprint on long-running TUI sessions. Switching further back
+// re-fetches and re-threads, which the workers already do off the main thread.
+const SESSION_CACHE_LIMIT = 2
 const EXIT_CLEANUP_TIMEOUT_MS = 1500
 const MESSAGE_SCROLL_ACCEL = new MacOSScrollAccel()
 
@@ -1076,19 +1080,13 @@ function sessionMessageFingerprint(message: import('../../lib/types').SessionMes
   if (!message) return null
   const cached = sessionMessageFingerprintCache.get(message)
   if (cached !== undefined) return cached
-  let payload = ''
-  try {
-    payload = JSON.stringify(message.message)
-  } catch {
-    payload = String(message.message)
-  }
   const fingerprint = [
     message.type,
     message.uuid,
     message.timestamp ?? '',
     message.turnId ?? '',
     message.origin?.kind ?? '',
-    payload,
+    compactStableFingerprint(message.message),
   ].join('|')
   sessionMessageFingerprintCache.set(message, fingerprint)
   return fingerprint
@@ -2426,21 +2424,9 @@ export default function OpenTuiApp() {
     return [...live, ...persisted.filter((m) => !seen.has(m.uuid))]
   }, [sessionDetail?.threadedMessages, liveTranscriptMessagesForSession])
 
-  // Card formatting runs in the threading worker (proposal 1). The worker client
-  // keeps a per-(density, showToolCalls) cache (proposal 2) so density toggles
-  // between previously-seen variants are O(1) without a worker round-trip.
-  //
-  // Render path:
-  //   1. getTranscriptCardsSync hits the client cache for the current variant —
-  //      common case for steady-state polling and density flips back to a
-  //      visited value. Cold load also lands here because readTuiSessionDetail-
-  //      Async warmed the cache before sessionDetail was committed to state.
-  //   2. sessionDetail.transcriptCards has the matching variant tag — common
-  //      case when the threading-client cache was evicted (8-session LRU) but
-  //      the detail itself is still in sessionDetailCacheRef.
-  //   3. Synchronous main-thread format — rare. Only hits the first time the
-  //      user toggles to a never-seen variant; the effect below then warms
-  //      both caches so the next visit is instant.
+  // Card formatting runs in the threading worker. The worker client keeps only
+  // the most recent card variant; if it has been evicted, this render path can
+  // still format synchronously from the already-threaded messages.
   const transcriptCards = useMemo<TuiTranscriptCard[]>(() => {
     if (!selectedSessionTarget) return []
     let baseCards: TuiTranscriptCard[] = []
@@ -2454,20 +2440,12 @@ export default function OpenTuiApp() {
       if (cachedSync) {
         baseCards = cachedSync
       } else {
-        const wantedVariant = transcriptCardsVariantKey(density, showToolCalls)
-        if (
-          sessionDetail.transcriptCards
-          && sessionDetail.transcriptCardsVariant === wantedVariant
-        ) {
-          baseCards = sessionDetail.transcriptCards
-        } else {
-          const filtered = showToolCalls
-            ? sessionDetail.threadedMessages
-            : stripToolCallBlocks(sessionDetail.threadedMessages)
-          const activeForms = buildTaskActiveForms(filtered)
-          const taskRegistry = buildTaskRegistry(filtered)
-          baseCards = filtered.map((msg) => formatTranscriptCard(msg, density, activeForms, taskRegistry))
-        }
+        const filtered = showToolCalls
+          ? sessionDetail.threadedMessages
+          : stripToolCallBlocks(sessionDetail.threadedMessages)
+        const activeForms = buildTaskActiveForms(filtered)
+        const taskRegistry = buildTaskRegistry(filtered)
+        baseCards = filtered.map((msg) => formatTranscriptCard(msg, density, activeForms, taskRegistry))
       }
     }
 

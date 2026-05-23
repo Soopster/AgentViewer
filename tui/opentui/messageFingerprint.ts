@@ -1,17 +1,10 @@
 import type { ThreadedMessage } from '../../lib/threading'
 import type { SessionMessage } from '../../lib/types'
+import { compactStableFingerprint } from '../../lib/compactFingerprint'
 
 const SEPARATOR = '\x1f'
 const sessionMessageFingerprintCache = new WeakMap<SessionMessage, string>()
 const threadedMessageFingerprintCache = new WeakMap<ThreadedMessage, string>()
-
-function stableStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
-}
 
 export function sessionMessageFingerprint(message: SessionMessage | undefined): string {
   if (!message) return ''
@@ -24,7 +17,7 @@ export function sessionMessageFingerprint(message: SessionMessage | undefined): 
     message.timestamp ?? '',
     message.turnId ?? '',
     message.origin?.kind ?? '',
-    stableStringify(message.message),
+    compactStableFingerprint(message.message),
   ].join(SEPARATOR)
   sessionMessageFingerprintCache.set(message, fingerprint)
   return fingerprint
@@ -47,8 +40,8 @@ export function threadedMessageFingerprint(message: ThreadedMessage | undefined)
     message.uuid,
     message.timestamp ?? '',
     message.origin?.kind ?? '',
-    stableStringify(message.usage ?? null),
-    stableStringify(message.blocks),
+    compactStableFingerprint(message.usage ?? null),
+    compactStableFingerprint(message.blocks),
   ].join(SEPARATOR)
   threadedMessageFingerprintCache.set(message, fingerprint)
   return fingerprint

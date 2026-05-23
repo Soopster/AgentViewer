@@ -39,12 +39,17 @@ declare const self: {
   postMessage: (message: WorkerResponse) => void
 }
 
-const THREADING_CACHE_LIMIT = 8
+// Each entry pins a full threaded transcript + per-message card cache; for the
+// largest sessions that is multiple MB. Two entries (the active session plus
+// one most-recently-visited) covers the common back-and-forth pattern without
+// holding 33% more memory than necessary.
+const THREADING_CACHE_LIMIT = 2
+const CARD_DENSITY_CACHE_LIMIT = 1
 const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
 
 // Per-session card cache keyed by message content fingerprint -> density -> card.
-// Stable refs are returned across calls so the main thread's render-time identity
-// checks bail out when density/showToolCalls flip back to a previously-seen value.
+// Stable refs are returned across calls for the active density without keeping
+// every previously-seen density resident for large transcripts.
 type CardCache = Map<string, Map<TuiDensity, TuiTranscriptCard>>
 const cardCacheByKey = new Map<string, CardCache>()
 
@@ -153,7 +158,13 @@ function formatCards(
     let card = perMessage.get(density)
     if (!card) {
       card = formatTranscriptCard(msg, density, activeForms, taskRegistry)
+      if (perMessage.has(density)) perMessage.delete(density)
       perMessage.set(density, card)
+      while (perMessage.size > CARD_DENSITY_CACHE_LIMIT) {
+        const oldestDensity = perMessage.keys().next().value
+        if (oldestDensity === undefined) break
+        perMessage.delete(oldestDensity)
+      }
     }
     cards[i] = card
   }
