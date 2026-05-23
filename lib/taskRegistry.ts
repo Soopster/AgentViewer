@@ -1,6 +1,13 @@
 import type { ClaudeSystemBlock, ThreadedMessage, ToolThread } from './threading'
 import type { SystemMessagePayload, ToolResultBlock } from './types'
 
+export type OpenCodeTodo = {
+  id: string
+  content: string
+  status: string
+  priority: string
+}
+
 export type TaskStatus = 'pending' | 'in_progress' | 'paused' | 'completed' | 'failed' | 'stopped'
 export type TaskEventKind = 'created' | 'updated' | 'listed' | 'read' | 'started' | 'progress' | 'notified'
 
@@ -435,9 +442,58 @@ export function buildTaskRegistry(messages: ThreadedMessage[]): TaskRegistry {
         })
         continue
       }
+
+      if (name === 'TodoWrite') {
+        const inp = thread.toolUse.input as { todos?: Array<{ content: string; status: string; activeForm?: string }> }
+        const todos = inp.todos ?? []
+        for (let i = 0; i < todos.length; i++) {
+          const todo = todos[i]
+          if (!todo.content) continue
+          const id = `todo:${uuid}:${i}`
+          const status = normalizeStatus(todo.status)
+          if (!status) continue
+          upsert(registry, id, {
+            subject: todo.content,
+            status,
+            activeForm: todo.activeForm,
+          }, uuid, ts, {
+            kind: 'created',
+            status,
+            subject: todo.content,
+            activeForm: todo.activeForm,
+            details: 'TodoWrite',
+          })
+        }
+        continue
+      }
     }
   }
 
+  return registry
+}
+
+/**
+ * Builds a TaskRegistry from OpenCode session-level todos (from todo.updated events).
+ * These are the canonical live todo list for an OpenCode session.
+ */
+export function buildTaskRegistryFromTodos(todos: OpenCodeTodo[]): TaskRegistry {
+  const registry: TaskRegistry = new Map()
+  for (const todo of todos) {
+    const subject = todo.content
+    const status = normalizeStatus(todo.status) ?? (
+      todo.status === 'cancelled' ? 'stopped' as TaskStatus : undefined
+    )
+    if (!status) continue
+    upsert(registry, todo.id, {
+      subject,
+      status,
+    }, `todo:${todo.id}`, undefined, {
+      kind: 'updated',
+      status,
+      subject,
+      details: `priority: ${todo.priority}`,
+    })
+  }
   return registry
 }
 

@@ -35,7 +35,7 @@ import dynamic from 'next/dynamic'
 import { ChartNetwork, Filter, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
 import MessageItem, { LiveSubagentTextContext, MessageDensityProvider, TaskActiveFormsContext, buildTaskActiveFormsForWeb, type MessageDensity } from './MessageItem'
 import { TaskRail } from './TaskRail'
-import { buildTaskRegistry } from '@/lib/taskRegistry'
+import { buildTaskRegistry, buildTaskRegistryFromTodos } from '@/lib/taskRegistry'
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import CodeThemeToggle from './CodeThemeToggle'
@@ -3220,7 +3220,16 @@ export default function MessageView({
     [threadedFull, showTools],
   )
   const taskActiveForms = useMemo(() => buildTaskActiveFormsForWeb(threaded), [threaded])
-  const taskRegistry = useMemo(() => buildTaskRegistry(threaded), [threaded])
+  const taskRegistry = useMemo(() => {
+    const registry = buildTaskRegistry(threaded)
+    if (openCodeTodos && openCodeTodos.length > 0) {
+      const todosRegistry = buildTaskRegistryFromTodos(openCodeTodos)
+      for (const [id, task] of todosRegistry) {
+        registry.set(id, task)
+      }
+    }
+    return registry
+  }, [threaded, openCodeTodos])
   const [taskRailOpen, setTaskRailOpen] = useState(true)
   const isProject = !!projectView
   const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
@@ -4164,8 +4173,8 @@ export default function MessageView({
           </Button>
         )}
 
-        {/* Tasks panel — Claude only */}
-        {!isProject && activeProvider === 'claude' && taskRegistry.size > 0 && (
+        {/* Tasks panel */}
+        {!isProject && taskRegistry.size > 0 && (
           <Button
             onClick={() => setTaskRailOpen((value) => !value)}
             title={taskRailOpen ? 'Hide task panel' : 'Show task panel'}
@@ -5140,7 +5149,7 @@ export default function MessageView({
           </>
         )}
       </div>
-      {taskRailOpen && activeProvider === 'claude' && taskRegistry.size > 0 && (
+      {taskRailOpen && taskRegistry.size > 0 && (
         <TaskRail
           registry={taskRegistry}
           onJumpToEvent={handleJumpToMessage}
