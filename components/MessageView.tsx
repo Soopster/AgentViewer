@@ -2,7 +2,6 @@
 
 import Link from 'next/link'
 import { memo, useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useDeferredValue } from 'react'
-import { flushSync } from 'react-dom'
 import type {
   SessionMessage,
   Session,
@@ -2250,18 +2249,13 @@ export default function MessageView({
           // OpenCode harness — synthesized smooth-streaming text deltas.
           // The harness emits one frame per `message.part.updated` that
           // carries a `delta` field, matching how opencode-web applies its
-          // own deltas to the in-memory part cache. flushSync paints each
-          // chunk immediately instead of letting React batch a burst of
-          // tokens into one render — matches the TUI's per-event redraw
-          // rhythm.
+          // own deltas to the in-memory part cache.
           if (frame.event === 'opencode-delta') {
             try {
               const parsed = JSON.parse(frame.data) as { delta?: string; field?: string; partType?: string }
               if (typeof parsed.delta === 'string' && parsed.delta && parsed.field === 'text' && parsed.partType === 'text') {
-                flushSync(() => {
-                  setLiveStatus(null)
-                  setLiveAssistantText((prev) => `${prev}${parsed.delta}`)
-                })
+                setLiveStatus(null)
+                setLiveAssistantText((prev) => `${prev}${parsed.delta}`)
               }
             } catch { /* ignore */ }
             continue

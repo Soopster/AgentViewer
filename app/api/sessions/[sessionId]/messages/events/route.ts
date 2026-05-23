@@ -22,6 +22,10 @@ const OPENCODE_FALLBACK_POLL_MS = 30_000
 // fast-streaming reply doesn't trigger one DB read per token. This matches
 // the cadence at which opencode-web batches its store updates.
 const OPENCODE_REFETCH_DEBOUNCE_MS = 80
+// Streaming chunk events are noisy — the live text already updates from
+// the delta frames. Refetch the persisted log at most once a second as a
+// safety net so missed deltas still surface, without flooding the SDK.
+const OPENCODE_STREAMING_REFETCH_DEBOUNCE_MS = 1000
 
 function parsePositiveInt(value: string | null, fallback: number, max: number): number {
   const parsed = parseInt(value ?? '', 10)
@@ -231,13 +235,13 @@ async function pumpOpenCode({ sessionId, provider, limit, backfill, offset, enqu
     }
   }
 
-  const scheduleRefetch = () => {
+  const scheduleRefetch = (debounceMs: number = OPENCODE_REFETCH_DEBOUNCE_MS) => {
     if (signal.aborted) return
     if (refetchTimer) return
     refetchTimer = setTimeout(() => {
       refetchTimer = undefined
       void refetch()
-    }, OPENCODE_REFETCH_DEBOUNCE_MS)
+    }, debounceMs)
   }
 
   const scheduleFallback = () => {
@@ -275,18 +279,22 @@ async function pumpOpenCode({ sessionId, provider, limit, backfill, offset, enqu
       if (item.type !== 'event') continue
       const event = item.event
       switch (event.type) {
-        // Refetch when the persisted log changes — i.e., a message
-        // finalizes or is removed. During active streaming the live
-        // text in MessageView is driven by `opencode-delta` frames from
-        // the send-stream, so we deliberately skip the per-part-update
-        // refresh that would otherwise hammer the SDK reading the
-        // growing log dozens of times per turn.
+        // Lifecycle events — refetch quickly so message boundaries
+        // settle into the persisted timeline.
         case 'message.updated':
         case 'message.removed':
         case 'message.part.removed':
         case 'session.compacted':
         case 'session.idle':
           scheduleRefetch()
+          break
+        // Streaming chunk — the live text in MessageView is driven by
+        // `opencode-delta` frames from the send-stream, but we also want
+        // a periodic safety-net refresh of the persisted timeline so any
+        // missed delta still surfaces. Throttle aggressively so a fast
+        // reply doesn't trigger dozens of SDK reads.
+        case 'message.part.updated':
+          scheduleRefetch(OPENCODE_STREAMING_REFETCH_DEBOUNCE_MS)
           break
         case 'todo.updated':
           enqueue('todos', { sessionId, todos: event.properties.todos })

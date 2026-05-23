@@ -336,12 +336,14 @@ class OpenCodeHarness {
 
   private enqueueEvent(event: OpenCodeEvent): void {
     // Delta-bearing `message.part.updated` events drive live text
-    // streaming. There's nothing to coalesce (the SDK already throttles
-    // them), so pushing them through the 16ms flush window just adds
-    // round-trip latency that makes the composer feel laggy. Send them
-    // straight to subscribers and let the queue keep batching full
-    // snapshots.
+    // streaming. We want them to reach subscribers immediately, but we
+    // also have to preserve order against any queued full snapshots —
+    // otherwise a snapshot that was queued earlier would arrive AFTER
+    // the delta and overwrite the live text with stale content. Flush
+    // the queue first so anything ahead lands before the delta, then
+    // emit the delta directly.
     if (event.type === 'message.part.updated' && event.properties.delta) {
+      if (this.queue.length > 0) this.flush()
       this.handleEvent(event)
       return
     }
