@@ -275,9 +275,14 @@ async function pumpOpenCode({ sessionId, provider, limit, backfill, offset, enqu
       if (item.type !== 'event') continue
       const event = item.event
       switch (event.type) {
+        // Refetch when the persisted log changes — i.e., a message
+        // finalizes or is removed. During active streaming the live
+        // text in MessageView is driven by `opencode-delta` frames from
+        // the send-stream, so we deliberately skip the per-part-update
+        // refresh that would otherwise hammer the SDK reading the
+        // growing log dozens of times per turn.
         case 'message.updated':
         case 'message.removed':
-        case 'message.part.updated':
         case 'message.part.removed':
         case 'session.compacted':
         case 'session.idle':

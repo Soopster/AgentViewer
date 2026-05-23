@@ -335,6 +335,17 @@ class OpenCodeHarness {
   }
 
   private enqueueEvent(event: OpenCodeEvent): void {
+    // Delta-bearing `message.part.updated` events drive live text
+    // streaming. There's nothing to coalesce (the SDK already throttles
+    // them), so pushing them through the 16ms flush window just adds
+    // round-trip latency that makes the composer feel laggy. Send them
+    // straight to subscribers and let the queue keep batching full
+    // snapshots.
+    if (event.type === 'message.part.updated' && event.properties.delta) {
+      this.handleEvent(event)
+      return
+    }
+
     const key = coalesceKey(event)
     if (key) {
       const existing = this.coalesced.get(key)

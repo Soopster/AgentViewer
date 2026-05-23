@@ -1830,6 +1830,11 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
         controller.close()
       }
 
+      // Push an SSE comment immediately so any intermediate proxy starts
+      // forwarding the response without waiting for the first real frame.
+      // Mirrors how curl-friendly SSE servers prime the pipe.
+      controller.enqueue(encoder.encode(':ok\n\n'))
+
       try {
         if (resumeSessionAt) {
           const forkedResponse = await client.session.fork({
@@ -1983,8 +1988,9 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
 
   return new Response(stream, {
     headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
     },
   })
