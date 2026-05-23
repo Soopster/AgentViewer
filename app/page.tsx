@@ -9,6 +9,7 @@ import { Sidebar, SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { isProviderSelection } from '@/lib/provider'
 import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
+import type { Todo as OpenCodeTodo } from '@opencode-ai/sdk'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
@@ -185,6 +186,11 @@ export default function Home() {
   const [targetMessage, setTargetMessage] = useState<MessageTarget | null>(null)
   const [sessionListScrollRequest, setSessionListScrollRequest] = useState<SessionListScrollRequest | null>(null)
   const [messages, setMessages] = useState<SessionMessage[]>([])
+  // OpenCode `todo.updated` events arrive via the messages SSE stream and
+  // are surfaced as a pinned card in MessageView. Keyed by sessionId so a
+  // tab swap doesn't show another session's todos.
+  const [sessionTodos, setSessionTodos] = useState<OpenCodeTodo[]>([])
+  const [todosForSessionId, setTodosForSessionId] = useState<string | null>(null)
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
@@ -428,6 +434,16 @@ export default function Home() {
     projectMessageCountsRef.current.clear()
   }, [selectedProject])
 
+  // Drop stale opencode todos when the active session changes — they're
+  // session-scoped and re-emitted by the stream's snapshot replay.
+  useEffect(() => {
+    const activeSessionId = selectedSession?.sessionId ?? null
+    if (todosForSessionId && todosForSessionId !== activeSessionId) {
+      setSessionTodos([])
+      setTodosForSessionId(null)
+    }
+  }, [selectedSession?.sessionId, todosForSessionId])
+
   // Stream active single-session updates; fall back to the old poll loop if SSE drops.
   useEffect(() => {
     if (!selectedSession || selectedProject || loadingMessages) return
@@ -486,6 +502,15 @@ export default function Home() {
           if (payload.messages && payload.messages.length > 0) {
             setMessages((prev) => mergeMessages(prev, payload.messages as SessionMessage[]))
           }
+        } catch { /* ignore malformed stream payloads */ }
+      })
+
+      source.addEventListener('todos', (event) => {
+        try {
+          const payload = JSON.parse((event as MessageEvent<string>).data) as { sessionId?: string; todos?: OpenCodeTodo[] }
+          if (!payload.sessionId || payload.sessionId !== session.sessionId) return
+          setTodosForSessionId(payload.sessionId)
+          setSessionTodos(Array.isArray(payload.todos) ? payload.todos : [])
         } catch { /* ignore malformed stream payloads */ }
       })
 
@@ -935,6 +960,7 @@ export default function Home() {
                   onSelectTab={selectOpenTab}
                   onCloseTab={closeTab}
                   taskPanelOpenRequest={taskPanelOpenRequest}
+                  openCodeTodos={todosForSessionId === selectedSession?.sessionId ? sessionTodos : undefined}
                 />
               </ViewTransition>
               {commandPaletteOpen ? (

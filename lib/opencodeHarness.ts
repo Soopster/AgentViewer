@@ -1,6 +1,12 @@
 import { getOpenCodeClient } from './opencodeClient'
 import type {
+  Agent as OpenCodeAgent,
+  Command as OpenCodeCommand,
+  ConfigProvidersResponse as OpenCodeConfigProvidersResponse,
   Event as OpenCodeEvent,
+  FormatterStatus as OpenCodeFormatterStatus,
+  LspStatus as OpenCodeLspStatus,
+  McpStatus as OpenCodeMcpStatus,
   Permission as OpenCodePermission,
   SessionStatus as OpenCodeSessionStatus,
   Todo as OpenCodeTodo,
@@ -36,6 +42,26 @@ export type SessionSnapshot = {
   todos?: OpenCodeTodo[]
   permissions: OpenCodePermission[]
 }
+
+export type ProjectDiagnostics = {
+  providers: OpenCodeConfigProvidersResponse
+  commands: OpenCodeCommand[]
+  agents: OpenCodeAgent[]
+  lsp: OpenCodeLspStatus[]
+  formatters: OpenCodeFormatterStatus[]
+  mcp: Record<string, OpenCodeMcpStatus>
+}
+
+type DiagnosticsCacheEntry = {
+  value: ProjectDiagnostics
+  fetchedAt: number
+  stale: boolean
+}
+
+// Project-level diagnostics rarely change — providers, agents, commands,
+// formatters, MCP servers are configured once and stay put. We refresh
+// only when an event signals a relevant change, or after a TTL backstop.
+const DIAGNOSTICS_TTL_MS = 30_000
 
 type Subscriber = {
   sessionId?: string
@@ -124,6 +150,8 @@ class OpenCodeHarness {
   private runPromise: Promise<void> | undefined
   private started = false
   private connected = false
+  private diagnosticsCache = new Map<string, DiagnosticsCacheEntry>()
+  private diagnosticsInflight = new Map<string, Promise<ProjectDiagnostics>>()
 
   subscribe(options: { sessionId?: string } = {}): {
     snapshot: SessionSnapshot | undefined
@@ -208,6 +236,10 @@ class OpenCodeHarness {
 
   getSnapshot(sessionId: string): SessionSnapshot | undefined {
     return this.snapshots.get(sessionId)
+  }
+
+  ensureStarted(): void {
+    this.start()
   }
 
   private start(): void {
@@ -358,7 +390,27 @@ class OpenCodeHarness {
 
   private handleEvent(event: OpenCodeEvent): void {
     this.applyToSnapshot(event)
+    this.invalidateProjectStateFromEvent(event)
     this.broadcast(event)
+  }
+
+  private invalidateProjectStateFromEvent(event: OpenCodeEvent): void {
+    // Mark cached project diagnostics stale when an event hints that
+    // their value may have changed. The next getProjectDiagnostics call
+    // will refresh; subsequent ones share that refresh.
+    switch (event.type) {
+      case 'lsp.updated':
+      case 'lsp.client.diagnostics':
+      case 'file.watcher.updated':
+      case 'session.created':
+      case 'session.updated':
+      case 'session.deleted':
+      case 'installation.updated':
+        this.markDiagnosticsStale()
+        break
+      default:
+        break
+    }
   }
 
   private applyToSnapshot(event: OpenCodeEvent): void {
@@ -397,6 +449,57 @@ class OpenCodeHarness {
         break
     }
     this.snapshots.set(sessionId, existing)
+  }
+
+  private markDiagnosticsStale(): void {
+    for (const entry of this.diagnosticsCache.values()) {
+      entry.stale = true
+    }
+  }
+
+  async getProjectDiagnostics(directory: string | undefined): Promise<ProjectDiagnostics> {
+    const key = directory ?? ''
+    const cached = this.diagnosticsCache.get(key)
+    const now = Date.now()
+    if (cached && !cached.stale && now - cached.fetchedAt < DIAGNOSTICS_TTL_MS) {
+      return cached.value
+    }
+
+    const existing = this.diagnosticsInflight.get(key)
+    if (existing) return existing
+
+    const fetch = (async () => {
+      const client = await getOpenCodeClient()
+      const query = directory ? { directory } : undefined
+      const opts = { responseStyle: 'data' as const, throwOnError: true as const, query }
+      // Single fan-out call. Subsequent requests within the TTL window
+      // share this Promise via diagnosticsInflight — no thundering herd.
+      const [providers, commands, agents, lsp, formatters, mcp] = await Promise.all([
+        client.config.providers(opts),
+        client.command.list(opts),
+        client.app.agents(opts),
+        client.lsp.status(opts),
+        client.formatter.status(opts),
+        client.mcp.status(opts),
+      ])
+      const next: ProjectDiagnostics = {
+        providers: providers as unknown as OpenCodeConfigProvidersResponse,
+        commands: commands as unknown as OpenCodeCommand[],
+        agents: agents as unknown as OpenCodeAgent[],
+        lsp: lsp as unknown as OpenCodeLspStatus[],
+        formatters: formatters as unknown as OpenCodeFormatterStatus[],
+        mcp: mcp as unknown as Record<string, OpenCodeMcpStatus>,
+      }
+      this.diagnosticsCache.set(key, { value: next, fetchedAt: Date.now(), stale: false })
+      return next
+    })()
+
+    this.diagnosticsInflight.set(key, fetch)
+    try {
+      return await fetch
+    } finally {
+      this.diagnosticsInflight.delete(key)
+    }
   }
 
   private broadcast(event: OpenCodeEvent): void {
@@ -467,4 +570,13 @@ export function subscribeToOpenCodeEvents(options: { sessionId?: string } = {}) 
 
 export function getOpenCodeSessionSnapshot(sessionId: string): SessionSnapshot | undefined {
   return globalThis.__openCodeHarness?.getSnapshot(sessionId)
+}
+
+export function getOpenCodeProjectDiagnostics(directory: string | undefined): Promise<ProjectDiagnostics> {
+  // Start the persistent event subscription so cache invalidation can
+  // flow in as servers/agents/lsp/mcp change. Without this, stale entries
+  // only refresh after the TTL backstop elapses.
+  const harness = getHarness()
+  harness.ensureStarted()
+  return harness.getProjectDiagnostics(directory)
 }

@@ -94,7 +94,7 @@ import {
 } from './codexMapper'
 import { getCodexStoredTag, getCodexStoredTagsForSessions, setCodexStoredTag } from './codexTags'
 import { getOpenCodeClient } from './opencodeClient'
-import { subscribeToOpenCodeEvents } from './opencodeHarness'
+import { getOpenCodeProjectDiagnostics, subscribeToOpenCodeEvents } from './opencodeHarness'
 import {
   currentOpenCodeModelValue,
   decodeOpenCodeModelValue,
@@ -2405,15 +2405,12 @@ export async function readViewSessionSlashCommands(sessionId: string, providerOv
   }
   if (provider === 'opencode') {
     try {
-      const client = await getOpenCodeClient()
       const session = await getOpenCodeSession(sessionId).catch(() => null)
       const query = session ? openCodeDirectoryQuery(session) : undefined
-      const response = await client.command.list({
-        ...OPENCODE_OPTIONS,
-        query,
-      })
-      const commands = openCodeData<OpenCodeCommand[]>(response) ?? []
-      return commands.map((command) => ({
+      // Routed through the harness cache — every keystroke in the
+      // composer was previously firing a fresh command.list HTTP call.
+      const project = await getOpenCodeProjectDiagnostics(query?.directory)
+      return project.commands.map((command) => ({
         command: command.name.startsWith('/') ? command.name : `/${command.name}`,
         description: command.description ?? '',
       }))
@@ -2469,31 +2466,12 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
     const client = await getOpenCodeClient()
     const session = await getOpenCodeSession(sessionId)
     const query = openCodeDirectoryQuery(session)
-    const [providers, commands, agents, lsp, formatters, mcp, messages, children] = await Promise.all([
-      client.config.providers({
-        ...OPENCODE_OPTIONS,
-        query,
-      }),
-      client.command.list({
-        ...OPENCODE_OPTIONS,
-        query,
-      }),
-      client.app.agents({
-        ...OPENCODE_OPTIONS,
-        query,
-      }),
-      client.lsp.status({
-        ...OPENCODE_OPTIONS,
-        query,
-      }),
-      client.formatter.status({
-        ...OPENCODE_OPTIONS,
-        query,
-      }),
-      client.mcp.status({
-        ...OPENCODE_OPTIONS,
-        query,
-      }),
+    // Project-level config (providers/commands/agents/lsp/formatters/mcp)
+    // is identical across every session under the same directory, so route
+    // those reads through the harness cache. The remaining session-specific
+    // calls fan out as before.
+    const [project, messages, children] = await Promise.all([
+      getOpenCodeProjectDiagnostics(query?.directory),
       getOpenCodeSessionMessages(sessionId),
       client.session.children({
         ...OPENCODE_OPTIONS,
@@ -2505,12 +2483,12 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
     return {
       currentModel: currentOpenCodeModelValue(messages.at(-1)?.info),
       sections: mapOpenCodeDiagnosticsToSections({
-        providers: openCodeData<OpenCodeConfigProvidersResponse>(providers),
-        commands: openCodeData<OpenCodeCommand[]>(commands),
-        agents: openCodeData<OpenCodeAgent[]>(agents),
-        lsp: openCodeData<OpenCodeLspStatus[]>(lsp),
-        formatters: openCodeData<OpenCodeFormatterStatus[]>(formatters),
-        mcp: openCodeData<Record<string, OpenCodeMcpStatus>>(mcp),
+        providers: project.providers,
+        commands: project.commands,
+        agents: project.agents,
+        lsp: project.lsp,
+        formatters: project.formatters,
+        mcp: project.mcp,
         children: openCodeData<OpenCodeSession[]>(children),
         currentSession: session,
       }),
