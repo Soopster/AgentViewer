@@ -64,6 +64,8 @@ import {
   type TuiSessionDetail,
   type TuiSidebarSort,
 } from '../../lib/tui/service'
+import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '../../lib/claudeMapper'
+import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
 import {
   readTuiSessionDetailAsync,
@@ -72,7 +74,7 @@ import {
   transcriptCardsVariantKey,
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import type { ProviderSelection, RunningSessionRef, SendAttachment, SendState, Session } from '../../lib/types'
+import type { ProviderSelection, RunningSessionRef, SendAttachment, SendState, Session, ToolResultBlock } from '../../lib/types'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
@@ -651,6 +653,141 @@ function shouldReplaceLiveAssistantText(payload: unknown): boolean {
   const event = record.event
   if (!event || typeof event !== 'object') return false
   return (event as Record<string, unknown>).type === 'assistant.message'
+}
+
+function stringifyLiveValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function upsertThreadedMessage(messages: ThreadedMessage[], nextMessage: ThreadedMessage): ThreadedMessage[] {
+  const existingIndex = messages.findIndex((message) => message.uuid === nextMessage.uuid)
+  if (existingIndex === -1) return [...messages, nextMessage]
+  return messages.map((message, index) => index === existingIndex ? nextMessage : message)
+}
+
+function completeLiveToolThread(messages: ThreadedMessage[], key: string): ThreadedMessage[] {
+  const targetUuid = `live-tool:${key}`
+  return messages.map((message) => {
+    if (message.uuid !== targetUuid) return message
+    return {
+      ...message,
+      blocks: message.blocks.map((block) => {
+        if (block.type !== 'tool_thread') return block
+        if (block.result) return block
+        return {
+          ...block,
+          result: {
+            type: 'tool_result',
+            tool_use_id: block.toolUse.id,
+            content: 'Tool call emitted in live stream. Final output will appear when the transcript syncs.',
+          },
+        }
+      }),
+    }
+  })
+}
+
+function liveMessageSessionKey(message: ThreadedMessage): string | null {
+  if (!message.sessionId) return null
+  return `${message.provider ?? 'claude'}:${message.sessionId}`
+}
+
+function makeLiveUserMessage(session: Session, text: string): ThreadedMessage {
+  return {
+    role: 'user',
+    uuid: 'live-user',
+    sessionId: session.sessionId,
+    provider: session.provider ?? 'claude',
+    blocks: [{ type: 'text', text }],
+  }
+}
+
+function makeLiveAssistantMessage(session: Session, text: string): ThreadedMessage {
+  return {
+    role: 'assistant',
+    uuid: 'live-assistant',
+    sessionId: session.sessionId,
+    provider: session.provider ?? 'claude',
+    blocks: [{ type: 'text', text }],
+  }
+}
+
+function extractOpenCodeLiveToolThread(payload: unknown, session: Session): ThreadedMessage | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  if (record.type !== 'opencode_event') return null
+
+  const event = record.event
+  if (!event || typeof event !== 'object') return null
+  const eventRecord = event as Record<string, unknown>
+  if (eventRecord.type !== 'message.part.updated') return null
+
+  const properties = eventRecord.properties
+  if (!properties || typeof properties !== 'object') return null
+  const part = (properties as Record<string, unknown>).part
+  if (!part || typeof part !== 'object') return null
+  const partRecord = part as Record<string, unknown>
+  if (partRecord.type !== 'tool' || typeof partRecord.tool !== 'string') return null
+
+  const state = partRecord.state
+  const stateRecord = state && typeof state === 'object' ? state as Record<string, unknown> : {}
+  const status = typeof stateRecord.status === 'string' ? stateRecord.status : ''
+  const toolUseId = typeof partRecord.callID === 'string'
+    ? partRecord.callID
+    : typeof partRecord.id === 'string'
+    ? partRecord.id
+    : `${partRecord.tool}:live`
+  const input = stateRecord.input && typeof stateRecord.input === 'object'
+    ? stateRecord.input as Record<string, unknown>
+    : {}
+
+  let result: ToolResultBlock | null = null
+  if (status === 'completed' || status === 'error') {
+    const raw = status === 'error'
+      ? (stateRecord.error ?? stateRecord.output)
+      : stateRecord.output
+    result = {
+      type: 'tool_result',
+      tool_use_id: toolUseId,
+      content: stringifyLiveValue(raw) || status,
+      is_error: status === 'error' ? true : undefined,
+    }
+  }
+
+  return {
+    role: 'assistant',
+    uuid: `live-tool:${toolUseId}`,
+    sessionId: session.sessionId,
+    provider: session.provider ?? 'opencode',
+    blocks: [{
+      type: 'tool_thread',
+      toolUse: {
+        type: 'tool_use',
+        id: toolUseId,
+        name: partRecord.tool,
+        input,
+      },
+      result,
+    }],
+  }
+}
+
+function streamEventIndex(payload: unknown, eventType: string): number | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  if (record.type !== 'stream_event') return null
+  const event = record.event
+  if (!event || typeof event !== 'object') return null
+  const eventRecord = event as Record<string, unknown>
+  return eventRecord.type === eventType && typeof eventRecord.index === 'number'
+    ? eventRecord.index
+    : null
 }
 
 function formatTimeGap(deltaMs: number): string | null {
@@ -1777,6 +1914,7 @@ export default function OpenTuiApp() {
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
   const [composerError, setComposerError] = useState<string | null>(null)
   const [composerLiveText, setComposerLiveText] = useState('')
+  const [liveTranscriptMessages, setLiveTranscriptMessages] = useState<ThreadedMessage[]>([])
   // Queued prompt waiting for the active turn to finish (CLI-style queue).
   const [queuedComposerSend, setQueuedComposerSend] = useState<{ text: string; attachments: SendAttachment[] } | null>(null)
   const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
@@ -1829,6 +1967,8 @@ export default function OpenTuiApp() {
   const sessionMetadataInFlightRef = useRef(new Set<string>())
   const composerAbortRef = useRef<AbortController | null>(null)
   const composerTextareaRef = useRef<TextareaRenderable | null>(null)
+  const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
+  const liveTranscriptBaselineRef = useRef(new Map<string, { count: number; lastFingerprint: string | null }>())
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadingDetailRef = useRef(false)
   const backgroundRefreshInFlightRef = useRef(new Set<string>())
@@ -2004,6 +2144,11 @@ export default function OpenTuiApp() {
     const value = (theme as unknown as Record<string, string>)[key]
     return value ?? theme.cyan
   }, [composerConfig.tuiAccentKey, theme])
+  const liveTranscriptMessagesForSession = useMemo(() => {
+    if (!selectedSessionTarget) return []
+    const key = sessionKey(selectedSessionTarget)
+    return liveTranscriptMessages.filter((message) => liveMessageSessionKey(message) === key)
+  }, [liveTranscriptMessages, selectedSessionTarget])
 
   // Card formatting runs in the threading worker (proposal 1). The worker client
   // keeps a per-(density, showToolCalls) cache (proposal 2) so density toggles
@@ -2021,28 +2166,66 @@ export default function OpenTuiApp() {
   //      user toggles to a never-seen variant; the effect below then warms
   //      both caches so the next visit is instant.
   const transcriptCards = useMemo<TuiTranscriptCard[]>(() => {
-    if (!sessionDetail || !selectedSessionTarget) return []
-    const cachedSync = getTranscriptCardsSync(
-      selectedSessionTarget,
-      sessionDetail.threadedMessages,
-      density,
-      showToolCalls,
-    )
-    if (cachedSync) return cachedSync
-    const wantedVariant = transcriptCardsVariantKey(density, showToolCalls)
-    if (
-      sessionDetail.transcriptCards
-      && sessionDetail.transcriptCardsVariant === wantedVariant
-    ) {
-      return sessionDetail.transcriptCards
+    if (!selectedSessionTarget) return []
+    let baseCards: TuiTranscriptCard[] = []
+    if (sessionDetail) {
+      const cachedSync = getTranscriptCardsSync(
+        selectedSessionTarget,
+        sessionDetail.threadedMessages,
+        density,
+        showToolCalls,
+      )
+      if (cachedSync) {
+        baseCards = cachedSync
+      } else {
+        const wantedVariant = transcriptCardsVariantKey(density, showToolCalls)
+        if (
+          sessionDetail.transcriptCards
+          && sessionDetail.transcriptCardsVariant === wantedVariant
+        ) {
+          baseCards = sessionDetail.transcriptCards
+        } else {
+          const filtered = showToolCalls
+            ? sessionDetail.threadedMessages
+            : stripToolCallBlocks(sessionDetail.threadedMessages)
+          const activeForms = buildTaskActiveForms(filtered)
+          const taskRegistry = buildTaskRegistry(filtered)
+          baseCards = filtered.map((msg) => formatTranscriptCard(msg, density, activeForms, taskRegistry))
+        }
+      }
     }
-    const filtered = showToolCalls
-      ? sessionDetail.threadedMessages
-      : stripToolCallBlocks(sessionDetail.threadedMessages)
-    const activeForms = buildTaskActiveForms(filtered)
-    const taskRegistry = buildTaskRegistry(filtered)
-    return filtered.map((msg) => formatTranscriptCard(msg, density, activeForms, taskRegistry))
-  }, [density, sessionDetail, selectedSessionTarget, showToolCalls])
+
+    if (liveTranscriptMessagesForSession.length === 0) return baseCards
+    const liveMessages = showToolCalls
+      ? liveTranscriptMessagesForSession
+      : stripToolCallBlocks(liveTranscriptMessagesForSession)
+    const contextMessages = sessionDetail
+      ? [...sessionDetail.threadedMessages, ...liveMessages]
+      : liveMessages
+    const activeForms = buildTaskActiveForms(contextMessages)
+    const taskRegistry = buildTaskRegistry(contextMessages)
+    const liveCards = liveMessages.map((message) => ({
+      ...formatTranscriptCard(message, density, activeForms, taskRegistry),
+      key: `live:${message.uuid}`,
+    }))
+    return [...baseCards, ...liveCards]
+  }, [density, liveTranscriptMessagesForSession, sessionDetail, selectedSessionTarget, showToolCalls])
+
+  useLayoutEffect(() => {
+    if (!selectedSessionTarget || !sessionDetail) return
+    const key = sessionKey(selectedSessionTarget)
+    const baseline = liveTranscriptBaselineRef.current.get(key)
+    if (!baseline) return
+    const lastFingerprint = sessionMessageFingerprint(sessionDetail.rawMessages.at(-1))
+    const persistedTurnArrived =
+      sessionDetail.rawMessages.length > baseline.count
+      || lastFingerprint !== baseline.lastFingerprint
+    if (!persistedTurnArrived) return
+
+    liveTranscriptBaselineRef.current.delete(key)
+    setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== key))
+    liveToolIndexesRef.current.clear()
+  }, [selectedSessionIdentity, selectedSessionTarget, sessionDetail])
 
   // (Auto-open of the composer on a pending session was removed: with
   // composerActive=true, the global key handler's `N` / `c` / `q` shortcuts
@@ -2824,6 +3007,7 @@ export default function OpenTuiApp() {
   const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
     const cacheKeyForGuards = sessionKey(session)
     if (!foreground && (loadingDetailRef.current || backgroundRefreshInFlightRef.current.has(cacheKeyForGuards))) return
+    if (!foreground && liveTranscriptBaselineRef.current.has(cacheKeyForGuards)) return
 
     // Skip background polls when the session file hasn't changed since the
     // cached detail was populated — avoids re-reading and re-threading the
@@ -3254,15 +3438,22 @@ export default function OpenTuiApp() {
   }, [refreshDiagnostics, selectedSession])
 
   const cancelComposerSend = useCallback(() => {
+    const target = composerTargetSession
     if (composerAbortRef.current) {
       composerAbortRef.current.abort()
     }
     composerAbortRef.current = null
+    if (target) {
+      const targetKey = sessionKey(target)
+      liveTranscriptBaselineRef.current.delete(targetKey)
+      setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
+    }
+    liveToolIndexesRef.current.clear()
     setComposerSendState('idle')
     setComposerLiveText('')
     setLiveStatus(null)
     setLiveSubagentText({})
-  }, [])
+  }, [composerTargetSession])
 
   // Keep the ref in sync on every render so commitRename always reads the latest draft,
   // regardless of which version of the callback is held by onSubmit or the keyboard handler.
@@ -3345,6 +3536,21 @@ export default function OpenTuiApp() {
       provider: targetSession.provider ?? 'claude',
     }
     markSessionRunning(runningRef)
+    const targetKey = sessionKey(targetSession)
+    const baselineDetail = sessionDetailCacheRef.current.get(targetKey)
+      ?? (selectedSessionKeyRef.current === targetKey ? sessionDetail : null)
+    liveTranscriptBaselineRef.current.set(targetKey, {
+      count: baselineDetail?.rawMessages.length ?? 0,
+      lastFingerprint: sessionMessageFingerprint(baselineDetail?.rawMessages.at(-1)),
+    })
+    liveToolIndexesRef.current.clear()
+    setLiveTranscriptMessages((prev) => [
+      ...prev.filter((message) => liveMessageSessionKey(message) !== targetKey),
+      makeLiveUserMessage(targetSession, trimmed),
+    ])
+    setFollowTail(true)
+    setPendingNewCount(0)
+    setUnreadBoundaryKey(null)
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
     const sendStartedAt = Date.now()
@@ -3406,6 +3612,16 @@ export default function OpenTuiApp() {
             const oldKey = sessionKey(targetSession)
             const updated: Session = { ...targetSession, sessionId: realId, isPending: false }
             const newKey = sessionKey(updated)
+            const baseline = liveTranscriptBaselineRef.current.get(oldKey)
+            if (baseline) {
+              liveTranscriptBaselineRef.current.delete(oldKey)
+              liveTranscriptBaselineRef.current.set(newKey, baseline)
+            }
+            setLiveTranscriptMessages((prev) => prev.map((message) =>
+              liveMessageSessionKey(message) === oldKey
+                ? { ...message, sessionId: realId }
+                : message
+            ))
             setOpenTabSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? updated : s))
             setSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? { ...s, sessionId: realId, isPending: false } : s))
             if (selectedSessionKeyRef.current === oldKey) setSelectedSessionKey(newKey)
@@ -3442,12 +3658,66 @@ export default function OpenTuiApp() {
           })
         }
 
+        const claudeToolUse = extractClaudeStreamToolUse(parsed)
+        if (claudeToolUse) {
+          const startIndex = streamEventIndex(parsed, 'content_block_start')
+          if (startIndex != null) liveToolIndexesRef.current.set(startIndex, claudeToolUse.id)
+          setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, {
+            role: 'assistant',
+            uuid: `live-tool:${claudeToolUse.id}`,
+            sessionId: targetSession.sessionId,
+            provider: targetSession.provider ?? 'claude',
+            blocks: [{
+              type: 'tool_thread',
+              toolUse: claudeToolUse,
+              result: null,
+            }],
+          }))
+        }
+
+        const stopIndex = streamEventIndex(parsed, 'content_block_stop')
+        if (stopIndex != null) {
+          const toolKey = liveToolIndexesRef.current.get(stopIndex)
+          if (toolKey) {
+            setLiveTranscriptMessages((prev) => completeLiveToolThread(prev, toolKey))
+          }
+        }
+
+        const openCodeToolThread = extractOpenCodeLiveToolThread(parsed, targetSession)
+        if (openCodeToolThread) {
+          setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, openCodeToolThread))
+        }
+
+        const codexCompletionItem = parsedRecord.type === 'codex_item_completed' && parsedRecord.item && typeof parsedRecord.item === 'object'
+          ? parsedRecord.item as Record<string, unknown>
+          : null
+        const codexCompletionIsText = codexCompletionItem?.type === 'agentMessage' || codexCompletionItem?.type === 'plan'
+
+        if (targetSession.provider === 'claude') {
+          const threaded = normalizeClaudeStreamThreadedMessage(parsed)
+          if (threaded) {
+            setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, threaded))
+          }
+        } else if (targetSession.provider === 'codex' && !codexCompletionIsText) {
+          const threaded = normalizeCodexStreamThreadedMessage(parsed, targetSession.sessionId)
+          if (threaded) {
+            setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, threaded))
+          }
+        }
+
         const delta = extractStreamingAssistantText(parsed)
         if (!delta) return
         setLiveStatus(null)
         const replace = shouldReplaceLiveAssistantText(parsed)
         replyAccumulator = replace ? delta : `${replyAccumulator}${delta}`
-        setComposerLiveText((prev) => replace ? delta : `${prev}${delta}`)
+        setComposerLiveText((prev) => {
+          const nextText = replace ? delta : `${prev}${delta}`
+          setLiveTranscriptMessages((prevMessages) => upsertThreadedMessage(
+            prevMessages,
+            makeLiveAssistantMessage(targetSession, nextText),
+          ))
+          return nextText
+        })
       }
 
       while (true) {
@@ -3486,7 +3756,7 @@ export default function OpenTuiApp() {
       setUnreadBoundaryKey(null)
       setSelectedSessionKey(sessionKey(targetSession))
       void refreshSessions(provider, true, false)
-      void refreshSelectedSessionDetail(targetSession, false)
+      void refreshSelectedSessionDetail(targetSession, true)
 
       const elapsedMs = Date.now() - sendStartedAt
       if (elapsedMs >= NOTIFY_AFTER_MS) {
@@ -3502,6 +3772,9 @@ export default function OpenTuiApp() {
       }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
+        liveTranscriptBaselineRef.current.delete(targetKey)
+        setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
+        liveToolIndexesRef.current.clear()
         return
       }
       setComposerSendState('error')
@@ -3531,6 +3804,7 @@ export default function OpenTuiApp() {
     tuiPermissionMode,
     tuiModelOverride,
     composerMentionAttachments,
+    sessionDetail,
   ])
 
   // Flush queued prompt once the active turn lands (CLI-style queueing).

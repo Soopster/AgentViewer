@@ -118,6 +118,8 @@ type TimelineRow = {
   showSession: boolean
   dimmed?: boolean
   previewBadge?: string
+  activityDetail?: string
+  activityTone?: 'running' | 'syncing'
   liveToolActivities?: LiveToolActivity[]
   showForkControls?: boolean
   allowFork?: boolean
@@ -467,13 +469,14 @@ function extractStreamingAssistantText(payload: unknown): string | null {
     const properties = eventRecord.properties
     if (!properties || typeof properties !== 'object') return null
     const propertiesRecord = properties as Record<string, unknown>
-    if (eventRecord.type !== 'message.part.updated') return null
+    if (eventRecord.type === 'message.part.delta') {
+      const field = typeof propertiesRecord.field === 'string' ? propertiesRecord.field : ''
+      return field === 'text' && typeof propertiesRecord.delta === 'string'
+        ? propertiesRecord.delta
+        : null
+    }
 
-    // The harness emits a dedicated `opencode-delta` frame when the SDK
-    // includes a `delta` field — let that path drive the live text so
-    // we don't double-apply the snapshot on top of the delta-accumulated
-    // string.
-    if (typeof propertiesRecord.delta === 'string' && propertiesRecord.delta) return null
+    if (eventRecord.type !== 'message.part.updated') return null
 
     const part = propertiesRecord.part
     if (!part || typeof part !== 'object') return null
@@ -976,6 +979,10 @@ function threadedMessageKey(message: ThreadedMessage): string {
   return `${message.provider ?? 'claude'}:${message.uuid}`
 }
 
+function sessionMessageThreadedKey(message: SessionMessage): string {
+  return `${message.provider ?? 'claude'}:${message.uuid}`
+}
+
 function sessionMessageFingerprint(message: SessionMessage | undefined): string | null {
   if (!message) return null
   let payload = ''
@@ -1108,7 +1115,7 @@ function estimateThreadedBlockHeight(block: ThreadedBlock): number {
 function estimateTimelineRowHeight(row: TimelineRow): number {
   const { message } = row
   const headerHeight = 82
-  const previewHeight = row.previewBadge ? 28 : 0
+  const previewHeight = row.previewBadge ? (row.activityDetail ? 42 : 28) : 0
   const liveToolsHeight = row.liveToolActivities && row.liveToolActivities.length > 0
     ? 34 * Math.ceil(row.liveToolActivities.length / 3) + 10
     : 0
@@ -1251,6 +1258,7 @@ function timelineRowSearchText(row: TimelineRow): string {
     row.message.provider,
     row.message.sessionId,
     row.previewBadge,
+    row.activityDetail,
     messageToCopyText(row.message),
   ].filter(Boolean).join(' ').toLowerCase()
 }
@@ -1333,20 +1341,47 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
       }}
     >
       {row.previewBadge && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '0 0 8px 0' }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          alignItems: 'center',
+          gap: 8,
+          margin: '0 0 8px 0',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 10,
+          letterSpacing: '0.05em',
+        }}>
+          {row.activityDetail && (
+            <span style={{
+              color: 'var(--text-3)',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              {row.activityDetail}
+            </span>
+          )}
           <span style={{
             height: 20,
             padding: '0 8px',
             borderRadius: 999,
-            border: '1px solid rgba(45,212,160,0.22)',
-            background: 'rgba(45,212,160,0.08)',
-            color: 'var(--green)',
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 10,
+            border: row.activityTone === 'syncing' ? '1px solid rgba(234,170,64,0.28)' : '1px solid rgba(56,217,245,0.25)',
+            background: row.activityTone === 'syncing' ? 'rgba(234,170,64,0.09)' : 'rgba(56,217,245,0.08)',
+            color: row.activityTone === 'syncing' ? 'var(--amber, #eaaa40)' : 'var(--cyan)',
             letterSpacing: '0.06em',
             display: 'inline-flex',
             alignItems: 'center',
+            gap: 6,
           }}>
+            <span style={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: row.activityTone === 'syncing' ? 'var(--amber, #eaaa40)' : 'var(--cyan)',
+              boxShadow: row.activityTone === 'syncing' ? '0 0 6px rgba(234,170,64,0.45)' : '0 0 6px var(--cyan-glow)',
+              animation: row.activityTone === 'syncing' ? undefined : 'pulse 1.2s ease-in-out infinite',
+            }} />
             {row.previewBadge}
           </span>
         </div>
@@ -1762,6 +1797,9 @@ export default function MessageView({
   const sendInFlightRef = useRef(false)
   const awaitingPersistedTurnRef = useRef(false)
   const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; lastFingerprint: string | null; sessionId: string } | null>(null)
+  const liveAssistantTextRef = useRef('')
+  const pendingLiveAssistantTextRef = useRef<string | null>(null)
+  const liveAssistantFlushFrameRef = useRef<number | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const rowHeightsRef = useRef<Map<string, number>>(new Map())
   const rowLayoutRef = useRef<TimelineRowLayout>(buildTimelineRowLayout([], new Map()))
@@ -1822,6 +1860,41 @@ export default function MessageView({
   useEffect(() => {
     awaitingPersistedTurnRef.current = awaitingPersistedTurn
   }, [awaitingPersistedTurn])
+
+  const flushLiveAssistantText = useCallback(() => {
+    liveAssistantFlushFrameRef.current = null
+    const nextText = pendingLiveAssistantTextRef.current
+    if (nextText == null) return
+    pendingLiveAssistantTextRef.current = null
+    setLiveAssistantText(nextText)
+  }, [])
+
+  const flushLiveAssistantTextNow = useCallback(() => {
+    if (liveAssistantFlushFrameRef.current != null) {
+      window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
+      liveAssistantFlushFrameRef.current = null
+    }
+    flushLiveAssistantText()
+  }, [flushLiveAssistantText])
+
+  const clearLiveAssistantText = useCallback(() => {
+    if (liveAssistantFlushFrameRef.current != null) {
+      window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
+      liveAssistantFlushFrameRef.current = null
+    }
+    liveAssistantTextRef.current = ''
+    pendingLiveAssistantTextRef.current = null
+    setLiveAssistantText('')
+  }, [])
+
+  const queueLiveAssistantText = useCallback((deltaText: string, replace: boolean) => {
+    const nextText = replace ? deltaText : `${liveAssistantTextRef.current}${deltaText}`
+    liveAssistantTextRef.current = nextText
+    pendingLiveAssistantTextRef.current = nextText
+    if (liveAssistantFlushFrameRef.current == null) {
+      liveAssistantFlushFrameRef.current = window.requestAnimationFrame(flushLiveAssistantText)
+    }
+  }, [flushLiveAssistantText])
 
   useEffect(() => {
     if (!cliPopoverOpen) return
@@ -1917,7 +1990,7 @@ export default function MessageView({
     setSelectedEffort('auto')
     setPendingPermissions([])
     setOptimisticUserText(null)
-    setLiveAssistantText('')
+    clearLiveAssistantText()
     setLiveToolActivities([])
     setLiveThreadedMessages([])
     setAwaitingPersistedTurn(false)
@@ -1939,7 +2012,7 @@ export default function MessageView({
     pendingMessageBaselineRef.current = null
     liveToolIndexesRef.current.clear()
     initialScrollDoneRef.current = false
-  }, [session?.sessionId])
+  }, [clearLiveAssistantText, session?.sessionId])
 
   useEffect(() => {
     suppressDraftSaveRef.current = true
@@ -1970,6 +2043,9 @@ export default function MessageView({
     }
     if (scrollRafRef.current != null) {
       window.cancelAnimationFrame(scrollRafRef.current)
+    }
+    if (liveAssistantFlushFrameRef.current != null) {
+      window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
     }
   }, [])
 
@@ -2063,7 +2139,7 @@ export default function MessageView({
     return true
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!awaitingPersistedTurn || !session) return
 
     const baseline = pendingMessageBaselineRef.current
@@ -2076,10 +2152,14 @@ export default function MessageView({
       messages.length > baseline.count
       || currentLastUuid !== baseline.lastUuid
       || currentLastFingerprint !== baseline.lastFingerprint
+    const persistedAssistantArrived = messages
+      .slice(Math.min(baseline.count, messages.length))
+      .some((message) => message.type === 'assistant')
+    const liveAssistantVisible = liveAssistantTextRef.current.trim().length > 0 || liveThreadedMessages.length > 0
 
-    if (persistedTurnArrived) {
+    if (persistedTurnArrived && (persistedAssistantArrived || !liveAssistantVisible)) {
       setOptimisticUserText(null)
-      setLiveAssistantText('')
+      clearLiveAssistantText()
       setLiveToolActivities([])
       setLiveThreadedMessages([])
       awaitingPersistedTurnRef.current = false
@@ -2090,7 +2170,7 @@ export default function MessageView({
         window.requestAnimationFrame(() => scrollTimelineToBottom())
       }
     }
-  }, [autoFollow, awaitingPersistedTurn, messages, scrollTimelineToBottom, session])
+  }, [autoFollow, awaitingPersistedTurn, clearLiveAssistantText, liveAssistantText, liveThreadedMessages.length, messages, scrollTimelineToBottom, session])
 
   const cancelSend = useCallback(() => {
     if (session) {
@@ -2110,14 +2190,14 @@ export default function MessageView({
     setSendState('idle')
     setSendError(null)
     setOptimisticUserText(null)
-    setLiveAssistantText('')
+    clearLiveAssistantText()
     setLiveToolActivities([])
     setLiveThreadedMessages([])
     setAwaitingPersistedTurn(false)
     pendingMessageBaselineRef.current = null
     liveToolIndexesRef.current.clear()
     textareaRef.current?.focus()
-  }, [optimisticUserText, session])
+  }, [clearLiveAssistantText, optimisticUserText, session])
 
   const sendMessage = useCallback(async () => {
     if (!session) return
@@ -2156,7 +2236,7 @@ export default function MessageView({
     setSendError(null)
     setFailedSend(null)
     setOptimisticUserText(text)
-    setLiveAssistantText('')
+    clearLiveAssistantText()
     setLiveToolActivities([])
     setLiveThreadedMessages([])
     setLivePromptSuggestion(null)
@@ -2184,7 +2264,7 @@ export default function MessageView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
-          model: selectedModel,
+          model: selectedModel || undefined,
           effort,
           attachments: sendAttachments,
           resumeSessionAt: resumeFromMessageId ?? undefined,
@@ -2244,21 +2324,6 @@ export default function MessageView({
               const parsed = JSON.parse(frame.data)
               throw new Error(parsed.error ?? 'Unknown agent error')
             } catch (e) { throw e }
-          }
-
-          // OpenCode harness — synthesized smooth-streaming text deltas.
-          // The harness emits one frame per `message.part.updated` that
-          // carries a `delta` field, matching how opencode-web applies its
-          // own deltas to the in-memory part cache.
-          if (frame.event === 'opencode-delta') {
-            try {
-              const parsed = JSON.parse(frame.data) as { delta?: string; field?: string; partType?: string }
-              if (typeof parsed.delta === 'string' && parsed.delta && parsed.field === 'text' && parsed.partType === 'text') {
-                setLiveStatus(null)
-                setLiveAssistantText((prev) => `${prev}${parsed.delta}`)
-              }
-            } catch { /* ignore */ }
-            continue
           }
 
           // OpenCode session.status frames mirror opencode-web's busy
@@ -2370,35 +2435,20 @@ export default function MessageView({
             const deltaText = extractStreamingAssistantText(parsed)
             if (deltaText) {
               setLiveStatus(null)
-              if (session.provider === 'claude') {
-                setLiveAssistantText((prev) => {
-                  const nextText = shouldReplaceLiveAssistantText(parsed)
-                    ? deltaText
-                    : `${prev}${deltaText}`
-                  setLiveThreadedMessages((prevMessages) => upsertThreadedMessage(prevMessages, {
-                    role: 'assistant',
-                    uuid: 'live-assistant',
-                    sessionId: session.sessionId,
-                    provider: session.provider,
-                    blocks: [{ type: 'text', text: nextText }],
-                  }))
-                  return nextText
-                })
-              } else {
-                setLiveAssistantText((prev) =>
-                  shouldReplaceLiveAssistantText(parsed)
-                    ? deltaText
-                    : `${prev}${deltaText}`
-                )
-              }
+              queueLiveAssistantText(deltaText, shouldReplaceLiveAssistantText(parsed))
             }
+
+            const codexCompletionItem = parsed?.type === 'codex_item_completed' && parsed.item && typeof parsed.item === 'object'
+              ? parsed.item as Record<string, unknown>
+              : null
+            const codexCompletionIsText = codexCompletionItem?.type === 'agentMessage' || codexCompletionItem?.type === 'plan'
 
             if (session.provider === 'claude') {
               const threaded = normalizeClaudeStreamThreadedMessage(parsed)
               if (threaded) {
                 setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
               }
-            } else if (session.provider === 'codex') {
+            } else if (session.provider === 'codex' && !codexCompletionIsText) {
               const threaded = normalizeCodexStreamThreadedMessage(parsed, session.sessionId)
               if (threaded) {
                 setLiveThreadedMessages((prev) => upsertThreadedMessage(prev, threaded))
@@ -2422,25 +2472,20 @@ export default function MessageView({
         }
       }
 
+      flushLiveAssistantTextNow()
       setSendState('idle')
       setLiveStatus(null)
       setAttachments([])
       // Pick up any model/effort the user invoked via a slash command (e.g.
       // `/model claude-sonnet-4-6`) so the composer chip mirrors the SDK.
       refreshSessionModels({ preserveSelection: true })
-      if (session.provider === 'claude') {
-        setLiveThreadedMessages((prev) => prev.length > 0
-          ? prev
-          : [{
-              role: 'assistant',
-              uuid: 'live-assistant',
-              sessionId: session.sessionId,
-              provider: session.provider,
-              blocks: [{ type: 'text', text: 'Waiting for saved response…' }],
-            }])
+      if (pendingMessageBaselineRef.current) {
+        awaitingPersistedTurnRef.current = true
+        setAwaitingPersistedTurn(true)
+      } else {
+        awaitingPersistedTurnRef.current = false
+        setAwaitingPersistedTurn(false)
       }
-      awaitingPersistedTurnRef.current = true
-      setAwaitingPersistedTurn(true)
       setResumeFromMessageId(null)
       textareaRef.current?.focus()
     } catch (err) {
@@ -2457,7 +2502,7 @@ export default function MessageView({
         return text
       })
       setOptimisticUserText(null)
-      setLiveAssistantText('')
+      clearLiveAssistantText()
       setLiveToolActivities([])
       setLiveThreadedMessages([])
       awaitingPersistedTurnRef.current = false
@@ -2469,7 +2514,7 @@ export default function MessageView({
       abortControllerRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, messages, onFork, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, clearLiveAssistantText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
@@ -2523,13 +2568,16 @@ export default function MessageView({
     return filterSlashCommands(merged, firstLine.slice(1))
   }, [inputText, liveSlashCommands, session?.provider])
 
+  const commandSessionId = session?.sessionId
+  const commandSessionProvider = session?.provider
+
   useEffect(() => {
-    if (!session) {
+    if (!commandSessionId) {
       setLiveSlashCommands([])
       return
     }
     const controller = new AbortController()
-    const url = `/api/sessions/${session.sessionId}/commands?provider=${encodeURIComponent(session.provider ?? 'claude')}`
+    const url = `/api/sessions/${commandSessionId}/commands?provider=${encodeURIComponent(commandSessionProvider ?? 'claude')}`
     void fetch(url, { signal: controller.signal })
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
@@ -2542,7 +2590,7 @@ export default function MessageView({
       })
       .catch(() => { /* ignore */ })
     return () => controller.abort()
-  }, [session?.sessionId, session?.provider, session])
+  }, [commandSessionId, commandSessionProvider])
 
   useEffect(() => {
     if (!mentionQuery) {
@@ -3200,7 +3248,7 @@ export default function MessageView({
   }, [isProject, session])
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
   const sendBusy = sendState === 'sending' || awaitingPersistedTurn
-  const canSubmitMessage = Boolean(session && inputText.trim() && !sendBusy)
+  const canSubmitMessage = Boolean(session && inputText.trim())
   const composerConfig = useMemo(() => getProviderComposer(session?.provider), [session?.provider])
   const composerExampleSeed = useMemo(() => {
     const source = session?.sessionId ?? session?.provider ?? ''
@@ -3233,7 +3281,34 @@ export default function MessageView({
     : sendState === 'sending' || awaitingPersistedTurn
     ? 'var(--cyan)'
     : 'var(--text-3)'
-  const liveUserMessage = useMemo<ThreadedMessage | null>(() => (!isProject && optimisticUserText
+  const liveTurnTone: 'running' | 'syncing' = awaitingPersistedTurn ? 'syncing' : 'running'
+  const liveTurnBadge = awaitingPersistedTurn ? 'SYNCING' : 'RUNNING'
+  const liveTurnActivityDetail = awaitingPersistedTurn
+    ? queuedSend
+      ? 'Turn complete; syncing transcript. Next message queued.'
+      : 'Turn complete; syncing transcript.'
+    : activeToolCount > 0
+    ? `Turn running; using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}.`
+    : liveStatus === 'requesting' && !liveAssistantText.trim()
+    ? 'Turn running; waiting for provider response.'
+    : liveAssistantText.trim()
+    ? 'Turn running; streaming assistant response.'
+    : 'Turn running.'
+  const showLiveTimelineOverlay = Boolean(
+    !isProject
+    && session
+    && pendingMessageBaselineRef.current?.sessionId === session.sessionId,
+  )
+  const visiblePersistedMessageKeys = useMemo(() => {
+    const baseline = pendingMessageBaselineRef.current
+    if (!showLiveTimelineOverlay || !baseline || baseline.sessionId !== session?.sessionId) return null
+    return new Set(messages.slice(0, baseline.count).map(sessionMessageThreadedKey))
+  }, [messages, session?.sessionId, showLiveTimelineOverlay])
+  const visibleThreaded = useMemo(() => {
+    if (!visiblePersistedMessageKeys) return threaded
+    return threaded.filter((msg) => visiblePersistedMessageKeys.has(threadedMessageKey(msg)))
+  }, [threaded, visiblePersistedMessageKeys])
+  const liveUserMessage = useMemo<ThreadedMessage | null>(() => (showLiveTimelineOverlay && optimisticUserText
     ? {
         role: 'user',
         uuid: 'live-user',
@@ -3241,8 +3316,8 @@ export default function MessageView({
         provider: session?.provider,
         blocks: [{ type: 'text', text: optimisticUserText }],
       }
-    : null), [isProject, optimisticUserText, session?.provider, session?.sessionId])
-  const liveAssistantMessage = useMemo<ThreadedMessage | null>(() => (!isProject && session?.provider !== 'claude' && (sendState === 'sending' || awaitingPersistedTurn)
+    : null), [optimisticUserText, session?.provider, session?.sessionId, showLiveTimelineOverlay])
+  const liveAssistantMessage = useMemo<ThreadedMessage | null>(() => (showLiveTimelineOverlay && (sendState === 'sending' || awaitingPersistedTurn)
     ? {
         role: 'assistant',
         uuid: 'live-assistant',
@@ -3261,11 +3336,11 @@ export default function MessageView({
     : null), [
       activeToolCount,
       awaitingPersistedTurn,
-      isProject,
       liveAssistantText,
       sendState,
       session?.provider,
       session?.sessionId,
+      showLiveTimelineOverlay,
     ])
   const rewindCandidates = useMemo(() =>
     (sessionCapabilities?.fileRewind ? messages : [])
@@ -3296,15 +3371,15 @@ export default function MessageView({
     return Array.from(turns.values())
   }, [messages, sessionCapabilities?.rollback])
   const lastUserMessageUuid = useMemo(() => {
-    for (let i = threaded.length - 1; i >= 0; i -= 1) {
-      const msg = threaded[i]
+    for (let i = visibleThreaded.length - 1; i >= 0; i -= 1) {
+      const msg = visibleThreaded[i]
       if (msg && msg.role === 'user') return msg.uuid
     }
     return null
-  }, [threaded])
+  }, [visibleThreaded])
 
   const persistedTimelineRows = useMemo<TimelineRow[]>(() =>
-    threaded.map((msg) => ({
+    visibleThreaded.map((msg) => ({
       key: `persisted:${threadedMessageKey(msg)}`,
       message: msg,
       showSession: isProject,
@@ -3324,7 +3399,7 @@ export default function MessageView({
     resumeFromMessageId,
     sessionCapabilities?.messageFork,
     sessionCapabilities?.resumeAtMessage,
-    threaded,
+    visibleThreaded,
   ])
 
   const liveThreadedVisible = useMemo(
@@ -3332,6 +3407,7 @@ export default function MessageView({
     [liveThreadedMessages, showTools],
   )
   const liveTimelineRows = useMemo<TimelineRow[]>(() => {
+    if (!showLiveTimelineOverlay) return []
     const rows: TimelineRow[] = []
     if (liveUserMessage) {
       rows.push({
@@ -3348,7 +3424,9 @@ export default function MessageView({
         message: liveAssistantMessage,
         showSession: false,
         dimmed: true,
-        previewBadge: awaitingPersistedTurn ? 'SYNCING TO LOG' : 'LIVE PREVIEW',
+        previewBadge: liveTurnBadge,
+        activityDetail: liveTurnActivityDetail,
+        activityTone: liveTurnTone,
         liveToolActivities: session?.provider !== 'claude' ? liveToolActivities : undefined,
       })
     }
@@ -3359,7 +3437,9 @@ export default function MessageView({
         message: msg,
         showSession: false,
         dimmed: true,
-        previewBadge: index === 0 ? (awaitingPersistedTurn ? 'SYNCING TO LOG' : 'LIVE PREVIEW') : undefined,
+        previewBadge: index === 0 && !liveAssistantMessage ? liveTurnBadge : undefined,
+        activityDetail: index === 0 && !liveAssistantMessage ? liveTurnActivityDetail : undefined,
+        activityTone: index === 0 && !liveAssistantMessage ? liveTurnTone : undefined,
       })
     })
 
@@ -3369,8 +3449,12 @@ export default function MessageView({
     liveAssistantMessage,
     liveToolActivities,
     liveThreadedVisible,
+    liveTurnActivityDetail,
+    liveTurnBadge,
+    liveTurnTone,
     liveUserMessage,
     session?.provider,
+    showLiveTimelineOverlay,
   ])
   const timelineRows = useMemo<TimelineRow[]>(() => {
     if (persistedTimelineRows.length === 0) return liveTimelineRows
@@ -5184,26 +5268,6 @@ export default function MessageView({
             {sessionActionError ?? sessionActionNotice}
           </div>
         )}
-        {liveStatus === 'requesting' && sendState === 'sending' && !liveAssistantText && (
-          <div style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            color: 'var(--text-3)',
-            marginBottom: 8,
-            letterSpacing: '0.04em',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}>
-            <span style={{
-              width: 6, height: 6, borderRadius: '50%',
-              background: 'var(--cyan)',
-              boxShadow: '0 0 6px var(--cyan-glow)',
-              animation: 'pulse 1.2s ease-in-out infinite',
-            }} />
-            requesting…
-          </div>
-        )}
         {livePromptSuggestion && sendState !== 'sending' && (
           <div style={{
             display: 'flex',
@@ -5782,39 +5846,67 @@ export default function MessageView({
                 }}
               />
               {sendState === 'sending' ? (
-                <Button
-                  type="button"
-                  onClick={cancelSend}
-                  variant="outline"
-                  aria-label="Cancel send"
-                  title="Cancel send"
-                  style={{
-                    flexShrink: 0,
-                    width: 34,
-                    height: 34,
-                    padding: 0,
-                    background: 'rgba(248,113,113,0.1)',
-                    border: '1px solid rgba(248,113,113,0.3)',
-                    borderRadius: 6,
-                    color: 'var(--red, #f87171)',
-                    fontFamily: "'Oxanium', monospace",
-                    fontSize: 10,
-                    fontWeight: 600,
-                    letterSpacing: '0.1em',
-                    cursor: 'pointer',
-                    transition: 'background 0.15s',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  <Square data-icon="inline-start" />
-                </Button>
+                <div style={{ flexShrink: 0, display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <Button
+                    type="button"
+                    onClick={sendMessage}
+                    disabled={!canSubmitMessage}
+                    variant="outline"
+                    aria-label="Queue message after current turn"
+                    title="Queue message after current turn"
+                    style={{
+                      width: 34,
+                      height: 34,
+                      padding: 0,
+                      background: `rgba(${composerConfig.cssAccentRgb},0.18)`,
+                      border: `1px solid rgba(${composerConfig.cssAccentRgb},0.3)`,
+                      borderRadius: 6,
+                      color: `var(${composerConfig.cssAccentVar})`,
+                      fontFamily: "'Oxanium', monospace",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      letterSpacing: '0.1em',
+                      cursor: !canSubmitMessage ? 'not-allowed' : 'pointer',
+                      transition: 'background 0.15s, color 0.15s',
+                      whiteSpace: 'nowrap',
+                      opacity: !canSubmitMessage ? 0.55 : 1,
+                    }}
+                  >
+                    <SendHorizontal data-icon="inline-start" />
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={cancelSend}
+                    variant="outline"
+                    aria-label="Cancel send"
+                    title="Cancel send"
+                    style={{
+                      width: 34,
+                      height: 34,
+                      padding: 0,
+                      background: 'rgba(248,113,113,0.1)',
+                      border: '1px solid rgba(248,113,113,0.3)',
+                      borderRadius: 6,
+                      color: 'var(--red, #f87171)',
+                      fontFamily: "'Oxanium', monospace",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      letterSpacing: '0.1em',
+                      cursor: 'pointer',
+                      transition: 'background 0.15s',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <Square data-icon="inline-start" />
+                  </Button>
+                </div>
               ) : (
                 <Button
                   type="button"
                   onClick={sendMessage}
                   disabled={!canSubmitMessage}
-                  aria-label={awaitingPersistedTurn ? 'Waiting for turn to finish' : `${composerConfig.sendVerb} to ${composerConfig.label}`}
-                  title={awaitingPersistedTurn ? 'Waiting for turn to finish' : `${composerConfig.sendVerb} to ${composerConfig.label}`}
+                  aria-label={awaitingPersistedTurn ? 'Queue message after current turn' : `${composerConfig.sendVerb} to ${composerConfig.label}`}
+                  title={awaitingPersistedTurn ? 'Queue message after current turn' : `${composerConfig.sendVerb} to ${composerConfig.label}`}
                   style={{
                     flexShrink: 0,
                     width: 34,

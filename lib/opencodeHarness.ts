@@ -32,7 +32,6 @@ const HEARTBEAT_TIMEOUT_MS = 15_000
 
 export type HarnessEvent =
   | { type: 'event'; event: OpenCodeEvent; sessionId?: string }
-  | { type: 'delta'; sessionId: string; messageId: string; partId: string; partType: string; field: string; delta: string }
   | { type: 'snapshot'; sessionId: string; snapshot: SessionSnapshot }
   | { type: 'disconnected' }
   | { type: 'connected' }
@@ -123,10 +122,11 @@ function coalesceKey(event: OpenCodeEvent): string | undefined {
     case 'lsp.updated':
       return `lsp.updated`
     case 'message.part.updated': {
+      // `part.text` is cumulative — the SDK always emits the full current
+      // state of the part. Coalescing per-partID keeps the wire chatty-
+      // free during fast streaming while clients still see every visible
+      // text change at 60fps.
       const part = event.properties.part
-      // `delta` fragments carry incremental text; coalescing them would lose
-      // characters. Only coalesce full part-state updates, keyed by partID.
-      if (event.properties.delta) return undefined
       return `message.part.updated:${part.messageID}:${part.id}`
     }
     default:
@@ -140,7 +140,6 @@ class OpenCodeHarness {
   private queue: Queued[] = []
   private buffer: Queued[] = []
   private coalesced = new Map<string, number>()
-  private staleDeltas = new Set<string>()
   private flushTimer: ReturnType<typeof setTimeout> | undefined
   private lastFlushAt = 0
   private streamErrorLogged = false
@@ -335,31 +334,11 @@ class OpenCodeHarness {
   }
 
   private enqueueEvent(event: OpenCodeEvent): void {
-    // Delta-bearing `message.part.updated` events drive live text
-    // streaming. We want them to reach subscribers immediately, but we
-    // also have to preserve order against any queued full snapshots —
-    // otherwise a snapshot that was queued earlier would arrive AFTER
-    // the delta and overwrite the live text with stale content. Flush
-    // the queue first so anything ahead lands before the delta, then
-    // emit the delta directly.
-    if (event.type === 'message.part.updated' && event.properties.delta) {
-      if (this.queue.length > 0) this.flush()
-      this.handleEvent(event)
-      return
-    }
-
     const key = coalesceKey(event)
     if (key) {
       const existing = this.coalesced.get(key)
       if (existing !== undefined) {
         this.queue[existing] = { event, key }
-        if (event.type === 'message.part.updated') {
-          const part = event.properties.part
-          // A full re-publish supersedes any in-flight deltas for the same
-          // part — skip them when flushing so the client sees the canonical
-          // state, not a torn intermediate.
-          this.staleDeltas.add(`${part.messageID}:${part.id}`)
-        }
         return
       }
       this.coalesced.set(key, this.queue.length)
@@ -382,21 +361,14 @@ class OpenCodeHarness {
     if (this.queue.length === 0) return
 
     const events = this.queue
-    const stale = this.staleDeltas.size > 0 ? new Set(this.staleDeltas) : undefined
     this.queue = this.buffer
     this.buffer = events
     this.queue.length = 0
     this.coalesced.clear()
-    this.staleDeltas.clear()
     this.lastFlushAt = Date.now()
 
     for (const item of events) {
-      const event = item.event
-      if (stale && event.type === 'message.part.updated' && event.properties.delta) {
-        const part = event.properties.part
-        if (stale.has(`${part.messageID}:${part.id}`)) continue
-      }
-      this.handleEvent(event)
+      this.handleEvent(item.event)
     }
     this.buffer.length = 0
   }
@@ -520,30 +492,9 @@ class OpenCodeHarness {
     const dropFor = (subscriber: Subscriber): boolean =>
       !!subscriber.sessionId && !!sessionId && subscriber.sessionId !== sessionId
 
-    // Synthesize a delta-shaped payload alongside the raw event so clients
-    // can render streaming text incrementally without diffing the full
-    // part text against the previous tick — the same trick opencode-web
-    // uses internally to drive smooth output.
-    let delta: HarnessEvent | undefined
-    if (event.type === 'message.part.updated' && event.properties.delta) {
-      const part = event.properties.part
-      if (part.type === 'text' || part.type === 'reasoning') {
-        delta = {
-          type: 'delta',
-          sessionId: part.sessionID,
-          messageId: part.messageID,
-          partId: part.id,
-          partType: part.type,
-          field: 'text',
-          delta: event.properties.delta,
-        }
-      }
-    }
-
     for (const subscriber of this.subscribers) {
       if (dropFor(subscriber)) continue
       subscriber.push({ type: 'event', event, sessionId })
-      if (delta) subscriber.push(delta)
     }
   }
 

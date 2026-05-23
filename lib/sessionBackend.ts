@@ -1540,8 +1540,8 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
 
   return new Response(stream, {
     headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
       'X-Accel-Buffering': 'no',
     },
   })
@@ -1778,8 +1778,8 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
 
   return new Response(stream, {
     headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
       'X-Accel-Buffering': 'no',
     },
   })
@@ -1884,22 +1884,6 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
 
         consumeEvents = (async () => {
           for await (const harnessEvent of subscription.events) {
-            if (harnessEvent.type === 'delta') {
-              // Synthesized smooth-streaming frame — mirrors what
-              // opencode-web's event reducer applies to its store via the
-              // `part_text_accum_delta` field. Clients can append delta
-              // text without re-reading the entire part.
-              controller.enqueue(encoder.encode(`event: opencode-delta\ndata: ${JSON.stringify({
-                sessionId: harnessEvent.sessionId,
-                messageId: harnessEvent.messageId,
-                partId: harnessEvent.partId,
-                partType: harnessEvent.partType,
-                field: harnessEvent.field,
-                delta: harnessEvent.delta,
-              })}\n\n`))
-              continue
-            }
-
             if (harnessEvent.type !== 'event') continue
 
             const event = harnessEvent.event
@@ -2086,8 +2070,8 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
   return new Response(stream, {
     headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
       'X-Accel-Buffering': 'no',
     },
   })
@@ -2166,8 +2150,8 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
 
   return new Response(stream, {
     headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
       'X-Accel-Buffering': 'no',
     },
   })

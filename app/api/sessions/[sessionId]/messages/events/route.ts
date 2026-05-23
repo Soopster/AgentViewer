@@ -22,9 +22,10 @@ const OPENCODE_FALLBACK_POLL_MS = 30_000
 // fast-streaming reply doesn't trigger one DB read per token. This matches
 // the cadence at which opencode-web batches its store updates.
 const OPENCODE_REFETCH_DEBOUNCE_MS = 80
-// Streaming chunk events are noisy — the live text already updates from
-// the delta frames. Refetch the persisted log at most once a second as a
-// safety net so missed deltas still surface, without flooding the SDK.
+// Streaming chunk events are noisy — the send stream already forwards the
+// raw OpenCode part updates/deltas for live text. Refetch the persisted log
+// at most once a second as a safety net so missed stream events still surface,
+// without flooding the SDK.
 const OPENCODE_STREAMING_REFETCH_DEBOUNCE_MS = 1000
 
 function parsePositiveInt(value: string | null, fallback: number, max: number): number {
@@ -38,10 +39,36 @@ function parseOffset(value: string | null): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
 }
 
+function hashString(value: string): string {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function messageSignature(message: SessionMessage): string {
+  let payload = ''
+  try {
+    payload = JSON.stringify(message.message)
+  } catch {
+    payload = String(message.message)
+  }
+  return [
+    message.uuid,
+    message.type,
+    message.timestamp ?? '',
+    message.turnId ?? '',
+    message.origin?.kind ?? '',
+    message.parent_tool_use_id ?? '',
+    hashString(payload),
+  ].join(':')
+}
+
 function messageWindowSignature(offset: number, messages: SessionMessage[]): string {
   if (messages.length === 0) return `${offset}:0:`
-  const tail = messages[messages.length - 1]
-  return `${offset}:${messages.length}:${tail.uuid}:${tail.type}:${tail.timestamp ?? ''}:${tail.turnId ?? ''}:${tail.origin?.kind ?? ''}`
+  return `${offset}:${messages.length}:${messages.map(messageSignature).join('|')}`
 }
 
 function wait(ms: number, signal: AbortSignal): Promise<boolean> {
@@ -288,11 +315,11 @@ async function pumpOpenCode({ sessionId, provider, limit, backfill, offset, enqu
         case 'session.idle':
           scheduleRefetch()
           break
-        // Streaming chunk — the live text in MessageView is driven by
-        // `opencode-delta` frames from the send-stream, but we also want
-        // a periodic safety-net refresh of the persisted timeline so any
-        // missed delta still surfaces. Throttle aggressively so a fast
-        // reply doesn't trigger dozens of SDK reads.
+        // Streaming chunk — the live text in MessageView is driven by the
+        // send-stream's raw OpenCode part updates/deltas, but we also want a
+        // periodic safety-net refresh of the persisted timeline so any missed
+        // stream event still surfaces. Throttle aggressively so a fast reply
+        // doesn't trigger dozens of SDK reads.
         case 'message.part.updated':
           scheduleRefetch(OPENCODE_STREAMING_REFETCH_DEBOUNCE_MS)
           break
