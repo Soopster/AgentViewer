@@ -128,9 +128,31 @@ export type SessionModelInfo = {
   supportedEffortLevels?: ReasoningEffortLevel[]
 }
 
+export type SessionComposerAgentOption = {
+  value: string
+  label: string
+  description?: string
+  mode?: string
+  native?: boolean
+}
+
+export type SessionComposerModeOption = {
+  value: string
+  label: string
+  description?: string
+}
+
+export type SessionComposerOptions = {
+  agents?: SessionComposerAgentOption[]
+  mentionAgents?: SessionComposerAgentOption[]
+  currentAgent?: string | null
+  modes?: SessionComposerModeOption[]
+  currentMode?: string | null
+}
+
 export type SendAttachment = {
   id?: string
-  type: 'file' | 'directory' | 'selection' | 'image' | 'mention' | 'skill' | 'blob'
+  type: 'file' | 'directory' | 'selection' | 'image' | 'mention' | 'skill' | 'blob' | 'agent'
   path?: string
   filePath?: string
   displayName?: string

@@ -9,6 +9,7 @@ import type {
   ContextUsage,
   SessionInfo,
   SessionModelInfo,
+  SessionComposerOptions,
   SessionDiagnosticSection,
   ToolUseBlock,
   ToolResultBlock,
@@ -24,6 +25,7 @@ import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '@/lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer'
+import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -35,12 +37,22 @@ import dynamic from 'next/dynamic'
 import { ChartNetwork, Filter, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
 import MessageItem, { LiveSubagentTextContext, MessageDensityProvider, TaskActiveFormsContext, buildTaskActiveFormsForWeb, type MessageDensity } from './MessageItem'
 import { TaskRail } from './TaskRail'
-import { buildTaskRegistry, buildTaskRegistryFromTodos } from '@/lib/taskRegistry'
+import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos, type CodexPlanStep } from '@/lib/taskRegistry'
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import CodeThemeToggle from './CodeThemeToggle'
 import TabBar from './TabBar'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
+import {
+  buildTimelineRowLayout,
+  computeTimelineScrollCompensation,
+  findTimelineScrollAnchor,
+  getVirtualTimelineWindow,
+  resolveTimelineRenderedHeight,
+  type TimelineMeasurementChange,
+  type TimelineRowLayout,
+  type TimelineScrollAnchor,
+} from '@/lib/timelineVirtualizer'
 
 const AnalyticsPopover = dynamic(() => import('./AnalyticsPopover'), { ssr: false })
 
@@ -64,6 +76,7 @@ type Props = {
   onCloseTab?: (sessionKey: string) => void
   taskPanelOpenRequest?: number
   openCodeTodos?: OpenCodeTodo[]
+  codexPlan?: { plan: CodexPlanStep[]; explanation: string | null }
 }
 
 type OpenCodeTodo = {
@@ -101,6 +114,7 @@ type PendingPermission = {
   id: string
   title: string
   detail?: string
+  canApproveAlways?: boolean
 }
 
 type FailedSend = {
@@ -112,6 +126,10 @@ type ComposerDraft = {
   text: string
   attachments: SendAttachment[]
 }
+
+type MentionResult =
+  | { kind: 'file'; path: string; basename: string }
+  | { kind: 'agent'; name: string; description?: string; mode?: string }
 
 type TimelineRow = {
   key: string
@@ -160,12 +178,13 @@ const TIMELINE_OVERSCAN_PX = 2400
 // during active scroll it fights the user's input and is the main source of
 // the perceived jumpiness on long transcripts with tool cards.
 const SCROLL_IDLE_MS = 140
+const PROGRAMMATIC_SCROLL_SUPPRESSION_MS = 120
 const ESTIMATED_CHARS_PER_LINE = 92
 const TIMELINE_BOTTOM_GUTTER_PX = 72
 const TIMELINE_TARGET_TOP_GUTTER_PX = 72
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 const COMPOSER_DRAFT_STORAGE_PREFIX = 'agentViewer:composerDraft:v1:'
-const SEND_ATTACHMENT_TYPES = new Set<SendAttachment['type']>(['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob'])
+const SEND_ATTACHMENT_TYPES = new Set<SendAttachment['type']>(['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob', 'agent'])
 function detectMentionAtCursor(text: string, cursor: number): { start: number; query: string } | null {
   if (cursor === 0) return null
   let i = cursor - 1
@@ -329,6 +348,97 @@ function writeComposerDraft(storageKey: string | null, draft: ComposerDraft) {
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function copilotPermissionSummary(permission: Record<string, unknown>): { title: string; detail?: string; canApproveAlways?: boolean } {
+  const kind = stringField(permission, 'kind') ?? 'permission'
+  const canApproveAlways = permission.canOfferSessionApproval === true
+  const intention = stringField(permission, 'intention')
+  switch (kind) {
+    case 'commands':
+    case 'shell':
+      return {
+        title: 'Copilot wants to run a command',
+        detail: stringField(permission, 'fullCommandText') ?? intention,
+        canApproveAlways,
+      }
+    case 'write':
+      return {
+        title: 'Copilot wants to write a file',
+        detail: [stringField(permission, 'fileName'), intention].filter(Boolean).join(' - ') || undefined,
+        canApproveAlways,
+      }
+    case 'read':
+    case 'path': {
+      const paths = Array.isArray(permission.paths)
+        ? permission.paths.filter((path): path is string => typeof path === 'string')
+        : []
+      return {
+        title: 'Copilot wants to read files',
+        detail: stringField(permission, 'path') ?? (paths.length > 0 ? paths.join(', ') : intention),
+        canApproveAlways,
+      }
+    }
+    case 'url':
+      return {
+        title: 'Copilot wants to access a URL',
+        detail: stringField(permission, 'url') ?? intention,
+        canApproveAlways,
+      }
+    case 'mcp':
+      return {
+        title: 'Copilot wants to use an MCP tool',
+        detail: [stringField(permission, 'serverName'), stringField(permission, 'toolTitle') ?? stringField(permission, 'toolName')].filter(Boolean).join(' / ') || undefined,
+        canApproveAlways,
+      }
+    case 'custom-tool':
+      return {
+        title: 'Copilot wants to use a tool',
+        detail: [stringField(permission, 'toolName'), stringField(permission, 'toolDescription')].filter(Boolean).join(' - ') || undefined,
+        canApproveAlways,
+      }
+    case 'memory':
+      return {
+        title: 'Copilot wants to update memory',
+        detail: stringField(permission, 'fact') ?? stringField(permission, 'subject'),
+        canApproveAlways,
+      }
+    case 'hook':
+      return {
+        title: 'Copilot wants approval',
+        detail: stringField(permission, 'hookMessage') ?? stringField(permission, 'toolName'),
+        canApproveAlways,
+      }
+    case 'extension-management':
+      return {
+        title: 'Copilot wants to manage an extension',
+        detail: [stringField(permission, 'operation'), stringField(permission, 'extensionName')].filter(Boolean).join(' - ') || undefined,
+        canApproveAlways,
+      }
+    case 'extension-permission-access':
+      return {
+        title: 'Copilot wants extension permission access',
+        detail: stringField(permission, 'extensionName'),
+        canApproveAlways,
+      }
+    default:
+      return {
+        title: `Copilot requests ${kind} permission`,
+        detail: intention,
+        canApproveAlways,
+      }
+  }
+}
+
 function extractOpenCodePermission(payload: unknown): PendingPermission | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
@@ -367,6 +477,35 @@ function extractOpenCodePermissionReply(payload: unknown): string | null {
   if (!properties || typeof properties !== 'object') return null
   const permissionID = (properties as Record<string, unknown>).permissionID
   return typeof permissionID === 'string' ? permissionID : null
+}
+
+function extractCopilotPermission(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'copilot_event') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.requested') return null
+  const data = asRecord(eventRecord.data)
+  if (!data || data.resolvedByHook === true) return null
+  const id = stringField(data, 'requestId')
+  if (!id) return null
+  const permission = asRecord(data.promptRequest) ?? asRecord(data.permissionRequest)
+  if (!permission) return {
+    id,
+    title: 'Copilot requests permission',
+  }
+  return {
+    id,
+    ...copilotPermissionSummary(permission),
+  }
+}
+
+function extractCopilotPermissionCompletion(payload: unknown): string | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'copilot_event') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.completed') return null
+  const data = asRecord(eventRecord.data)
+  return data ? stringField(data, 'requestId') ?? null : null
 }
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
@@ -1033,7 +1172,7 @@ function estimateTextSectionHeight(
 function estimateContentBlockHeight(block: ContentBlock): number {
   if (block.type === 'text') return estimateTextSectionHeight(typeof block.text === 'string' ? block.text : '')
   if (block.type === 'thinking') return 70
-  if (block.type === 'image') return 220
+  if (block.type === 'image') return 520
   if (block.type === 'tool_result') {
     if (typeof block.content === 'string') {
       return estimateTextSectionHeight(block.content, { lineHeight: 18, padding: 18, min: 60, max: 260 })
@@ -1044,6 +1183,84 @@ function estimateContentBlockHeight(block: ContentBlock): number {
     return 60
   }
   return 68
+}
+
+function toolResultContentToText(content: ToolResultBlock['content']): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (!block || typeof block !== 'object') return ''
+        const record = block as Record<string, unknown>
+        if (record.type !== 'text') return JSON.stringify(block)
+        if (typeof record.text === 'string') return record.text
+        const file = record.file
+        if (file && typeof file === 'object' && typeof (file as Record<string, unknown>).content === 'string') {
+          return (file as { content: string }).content
+        }
+        return JSON.stringify(block)
+      })
+      .filter(Boolean)
+      .join('\n')
+  }
+  return JSON.stringify(content, null, 2)
+}
+
+function toolResultHasImage(content: ToolResultBlock['content']): boolean {
+  return Array.isArray(content) && content.some((block) => !!block && typeof block === 'object' && (block as { type?: unknown }).type === 'image')
+}
+
+function estimateLimitedPreHeight(text: string, limit: number): { lineHeight: number; hidden: boolean } {
+  const lineCount = Math.max(1, text.split('\n').length)
+  const visibleLines = Math.min(lineCount, limit)
+  return {
+    lineHeight: 16 + visibleLines * 21,
+    hidden: lineCount > limit,
+  }
+}
+
+function estimateGenericToolResultHeight(result: ToolResultBlock): number {
+  const raw = toolResultContentToText(result.content)
+  const nonEmpty = raw.split('\n').filter((line) => line.trim())
+  if (!result.is_error && nonEmpty.length === 1 && raw.length < 140) return 30
+
+  const persistedMatch = raw.match(/<persisted-output>[\s\S]*?Preview[^\n]*:\n([\s\S]*)/)
+  const displayText = persistedMatch ? persistedMatch[1].trim() : raw
+  const { lineHeight, hidden } = estimateLimitedPreHeight(displayText, 20)
+  return 28 + lineHeight + (hidden ? 31 : 0)
+}
+
+function estimateReadToolResultHeight(result: ToolResultBlock, filePath?: string): number {
+  const summary = extractClaudeReadFileSummary(result, filePath)
+  if (summary && summary.kind !== 'text') {
+    return estimateGenericToolResultHeight({
+      ...result,
+      content: summary.content,
+    })
+  }
+
+  const raw = summary?.content ?? toolResultContentToText(result.content)
+  const lineCount = Math.max(1, raw.split('\n').length)
+  const visibleLines = Math.min(lineCount, 25)
+  const metadataHeight = summary ? 30 : 0
+  const codeHeight = Math.min(500, Math.max(44, 38 + visibleLines * 20))
+  const expandHeight = lineCount > 25 ? 31 : 0
+  return 1 + metadataHeight + codeHeight + expandHeight
+}
+
+function estimateToolResultHeight(result: ToolResultBlock | null | undefined, toolName: string, filePath?: string): number {
+  if (!result) return 0
+  if (toolResultHasImage(result.content)) return 540
+  if (toolName === 'Read') return estimateReadToolResultHeight(result, filePath)
+  return estimateGenericToolResultHeight(result)
+}
+
+function estimateSimpleToolHeaderHeight(toolName: string, input: Record<string, unknown>): number {
+  if (toolName === 'Bash') {
+    const command = typeof input.command === 'string' ? input.command : ''
+    return estimateTextSectionHeight(command, { lineHeight: 20, padding: 18, min: 38, max: 180 })
+  }
+  return 38
 }
 
 function estimateToolThreadHeight(block: Extract<ThreadedBlock, { type: 'tool_thread' }>): number {
@@ -1085,7 +1302,11 @@ function estimateToolThreadHeight(block: Extract<ThreadedBlock, { type: 'tool_th
   }
 
   if (toolUse.name === 'Read' || toolUse.name === 'Glob' || toolUse.name === 'Grep' || toolUse.name === 'Bash') {
-    return 84
+    const filePath = typeof input.file_path === 'string' ? input.file_path : undefined
+    const bodyHeight = toolUse.name === 'Bash' && typeof input.description === 'string' && input.description
+      ? 24
+      : 0
+    return 8 + estimateSimpleToolHeaderHeight(toolUse.name, input) + bodyHeight + estimateToolResultHeight(result, toolUse.name, filePath)
   }
 
   if (toolUse.name === 'Agent') {
@@ -1131,38 +1352,12 @@ function estimateTimelineRowHeight(row: TimelineRow): number {
   return Math.max(estimated, message.role === 'system' ? 120 : ESTIMATED_TIMELINE_ROW_HEIGHT)
 }
 
-type TimelineRowLayout = {
-  tops: Float64Array
-  heights: Float64Array
-  totalHeight: number
-  indexByKey: Map<string, number>
-}
-
-function buildTimelineRowLayout(timelineRows: TimelineRow[], measuredHeights: Map<string, number>): TimelineRowLayout {
-  const n = timelineRows.length
-  const tops = new Float64Array(n)
-  const heights = new Float64Array(n)
-  const indexByKey = new Map<string, number>()
-  let totalHeight = 0
-  for (let i = 0; i < n; i++) {
-    const row = timelineRows[i]
-    tops[i] = totalHeight
-    heights[i] = measuredHeights.get(row.key) ?? estimateTimelineRowHeight(row)
-    indexByKey.set(row.key, i)
-    totalHeight += heights[i]
-  }
-  return { tops, heights, totalHeight, indexByKey }
-}
-
-function upperBound(values: Float64Array, length: number, target: number): number {
-  let low = 0
-  let high = length
-  while (low < high) {
-    const mid = (low + high) >>> 1
-    if (values[mid] <= target) low = mid + 1
-    else high = mid
-  }
-  return low
+function readResizeObserverHeight(entry: ResizeObserverEntry, fallbackNode: HTMLElement): number {
+  const borderBoxSize = entry.borderBoxSize
+  const firstBorderBox = Array.isArray(borderBoxSize) ? borderBoxSize[0] : borderBoxSize
+  if (firstBorderBox?.blockSize) return firstBorderBox.blockSize
+  if (entry.contentRect.height) return entry.contentRect.height
+  return fallbackNode.getBoundingClientRect().height
 }
 
 function messageContentBlocksForTarget(message: SessionMessage): ContentBlock[] {
@@ -1637,10 +1832,13 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
     const node = rowRef.current
     if (!node) return
 
-    const measure = () => onMeasure(row.key, node.offsetHeight)
-    measure()
+    onMeasure(row.key, node.getBoundingClientRect().height)
 
-    const observer = new ResizeObserver(() => measure())
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      onMeasure(row.key, readResizeObserverHeight(entry, node))
+    })
     observer.observe(node)
     return () => observer.disconnect()
   }, [onMeasure, row.key])
@@ -1658,7 +1856,8 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
       data-message-id={row.message.uuid}
       style={{
         position: 'absolute',
-        top,
+        top: 0,
+        transform: `translateY(${top}px)`,
         left: 0,
         right: 0,
       }}
@@ -1690,6 +1889,7 @@ export default function MessageView({
   onCloseTab,
   taskPanelOpenRequest = 0,
   openCodeTodos,
+  codexPlan,
 }: Props) {
   const [inputText, setInputText] = useState('')
   const [sendState, setSendState] = useState<SendState>('idle')
@@ -1703,6 +1903,9 @@ export default function MessageView({
   const [availableModels, setAvailableModels] = useState<SessionModelInfo[]>([])
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedEffort, setSelectedEffort] = useState<'auto' | ReasoningEffortLevel>('auto')
+  const [composerOptions, setComposerOptions] = useState<SessionComposerOptions>({})
+  const [selectedAgent, setSelectedAgent] = useState('')
+  const [selectedCopilotMode, setSelectedCopilotMode] = useState('interactive')
   // Claude `/permissions` modes — passed through to body.permissionMode on send.
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'>('default')
   // Mirrors the CLI "queue next prompt while streaming" behavior. When a send
@@ -1751,6 +1954,7 @@ export default function MessageView({
     if (typeof window === 'undefined') return
     window.localStorage.setItem('agentViewer:density', density)
     rowHeightsRef.current.clear()
+    setRowMeasurementVersion((version) => version + 1)
   }, [density])
   const [composerCollapsed, setComposerCollapsed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
@@ -1779,13 +1983,14 @@ export default function MessageView({
   const [autoFollow, setAutoFollow] = useState(false)
   const [timelineScrollTop, setTimelineScrollTop] = useState(0)
   const [timelineViewportHeight, setTimelineViewportHeight] = useState(0)
+  const [timelineHeightOverride, setTimelineHeightOverride] = useState<number | null>(null)
   const [rowMeasurementVersion, setRowMeasurementVersion] = useState(0)
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const [sentHistory, setSentHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const draftBeforeHistoryRef = useRef('')
   const [mentionQuery, setMentionQuery] = useState<{ start: number; query: string } | null>(null)
-  const [mentionResults, setMentionResults] = useState<{ path: string; basename: string }[]>([])
+  const [mentionResults, setMentionResults] = useState<MentionResult[]>([])
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0)
   const mentionAbortRef = useRef<AbortController | null>(null)
   const mentionItemRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -1808,12 +2013,16 @@ export default function MessageView({
   const liveAssistantFlushFrameRef = useRef<number | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const rowHeightsRef = useRef<Map<string, number>>(new Map())
-  const rowLayoutRef = useRef<TimelineRowLayout>(buildTimelineRowLayout([], new Map()))
+  const rowLayoutRef = useRef<TimelineRowLayout>(buildTimelineRowLayout([], new Map(), estimateTimelineRowHeight))
   const threadedCacheRef = useRef<Map<string, ThreadedMessage>>(new Map())
   const prevThreadingRef = useRef<IncrementalThreadingCache | null>(null)
   const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
   const measurementFrameRef = useRef<number | null>(null)
   const scrollRafRef = useRef<number | null>(null)
+  const programmaticScrollUntilRef = useRef<number>(0)
+  const timelineHeightOverrideRef = useRef<number | null>(null)
+  const activeTimelineScrollAnchorRef = useRef<TimelineScrollAnchor | null>(null)
+  const pendingTimelineAnchorRestoreRef = useRef(false)
   // Set true on each scroll event, cleared SCROLL_IDLE_MS after the last
   // event. While true, we skip the scrollTop anchor adjustment in
   // handleTimelineRowMeasure — measurements still flow into the layout, but
@@ -1847,6 +2056,18 @@ export default function MessageView({
   const selectedModelInfo = useMemo(
     () => modelOptions.find((model) => model.value === selectedModelValue) ?? null,
     [modelOptions, selectedModelValue],
+  )
+  const composerAgentOptions = useMemo(
+    () => composerOptions.agents?.filter((agent) => normalizeSelectValue(agent.value)) ?? [],
+    [composerOptions.agents],
+  )
+  const composerMentionAgentOptions = useMemo(
+    () => composerOptions.mentionAgents?.filter((agent) => normalizeSelectValue(agent.value)) ?? [],
+    [composerOptions.mentionAgents],
+  )
+  const composerModeOptions = useMemo(
+    () => composerOptions.modes?.filter((mode) => normalizeSelectValue(mode.value)) ?? [],
+    [composerOptions.modes],
   )
   const effortOptions = useMemo<ReasoningEffortLevel[]>(() => {
     if (!selectedModelInfo?.supportsEffort) return []
@@ -1956,6 +2177,17 @@ export default function MessageView({
     }).catch(() => { /* swallow; next send carries body.permissionMode */ })
   }, [session, selectedPermissionMode])
 
+  const commitCopilotModeSelection = useCallback((nextMode: string) => {
+    setSelectedCopilotMode(nextMode)
+    if (!session || session.provider !== 'copilot' || session.isPending) return
+    if (nextMode === selectedCopilotMode) return
+    void fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'copilot', action: 'setMode', mode: nextMode }),
+    }).catch(() => { /* swallow; next send carries body.mode */ })
+  }, [session, selectedCopilotMode])
+
   useLayoutEffect(() => {
     resizeComposer()
   }, [inputText, resizeComposer])
@@ -2006,11 +2238,58 @@ export default function MessageView({
   }, [session?.provider, session?.sessionId, refreshSessionModels])
 
   useEffect(() => {
+    if (!session) {
+      setComposerOptions({})
+      setSelectedAgent('')
+      setSelectedCopilotMode('interactive')
+      return
+    }
+
+    const controller = new AbortController()
+    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/composer`, session.provider), { signal: controller.signal })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data: SessionComposerOptions | null) => {
+        if (controller.signal.aborted || !data) return
+        setComposerOptions(data)
+        if (session.provider === 'opencode') {
+          const agents = data.agents ?? []
+          const current = normalizeSelectValue(data.currentAgent)
+          setSelectedAgent(
+            current && agents.some((agent) => normalizeSelectValue(agent.value) === current)
+              ? current
+              : normalizeSelectValue(agents[0]?.value) ?? '',
+          )
+        } else {
+          setSelectedAgent('')
+        }
+        if (session.provider === 'copilot') {
+          const modes = data.modes ?? []
+          const current = normalizeSelectValue(data.currentMode) ?? 'interactive'
+          setSelectedCopilotMode(
+            modes.some((mode) => normalizeSelectValue(mode.value) === current)
+              ? current
+              : normalizeSelectValue(modes[0]?.value) ?? 'interactive',
+          )
+        } else {
+          setSelectedCopilotMode('interactive')
+        }
+      })
+      .catch(() => { /* ignore; provider defaults still apply on send */ })
+    return () => controller.abort()
+  }, [session?.provider, session?.sessionId])
+
+  useEffect(() => {
     if (selectedEffort === 'auto') return
     if (!effortOptions.includes(selectedEffort)) {
       setSelectedEffort('auto')
     }
   }, [effortOptions, selectedEffort])
+
+  useEffect(() => {
+    if (activeProvider !== 'opencode' && attachmentType === 'agent') {
+      setAttachmentType('file')
+    }
+  }, [activeProvider, attachmentType])
 
   // Reset context usage when switching sessions
   useEffect(() => {
@@ -2029,6 +2308,9 @@ export default function MessageView({
     setAttachments([])
     setAttachmentPath('')
     setSelectedEffort('auto')
+    setSelectedAgent('')
+    setSelectedCopilotMode('interactive')
+    setComposerOptions({})
     setPendingPermissions([])
     setOptimisticUserText(null)
     clearLiveAssistantText()
@@ -2049,6 +2331,10 @@ export default function MessageView({
       window.cancelAnimationFrame(measurementFrameRef.current)
       measurementFrameRef.current = null
     }
+    timelineHeightOverrideRef.current = null
+    activeTimelineScrollAnchorRef.current = null
+    pendingTimelineAnchorRestoreRef.current = false
+    setTimelineHeightOverride(null)
     setRowMeasurementVersion(0)
     pendingMessageBaselineRef.current = null
     liveToolIndexesRef.current.clear()
@@ -2091,6 +2377,9 @@ export default function MessageView({
     if (userScrollingTimerRef.current != null) {
       window.clearTimeout(userScrollingTimerRef.current)
     }
+    timelineHeightOverrideRef.current = null
+    activeTimelineScrollAnchorRef.current = null
+    pendingTimelineAnchorRestoreRef.current = false
   }, [])
 
   useEffect(() => {
@@ -2113,14 +2402,39 @@ export default function MessageView({
     setRewindPreview(null)
   }, [rewindPreview, rewindTargetId])
 
+  const markProgrammaticTimelineScroll = useCallback((duration = PROGRAMMATIC_SCROLL_SUPPRESSION_MS) => {
+    programmaticScrollUntilRef.current = Math.max(programmaticScrollUntilRef.current, performance.now() + duration)
+  }, [])
+
+  const restoreTimelineScrollAnchor = useCallback(() => {
+    const node = timelineRef.current
+    const anchor = activeTimelineScrollAnchorRef.current
+    activeTimelineScrollAnchorRef.current = null
+    if (!node || !anchor) return
+
+    const layout = rowLayoutRef.current
+    const index = layout.indexByKey.get(anchor.key)
+    if (index == null) return
+
+    const maxScrollTop = Math.max(node.scrollHeight - node.clientHeight, 0)
+    const targetTop = Math.max(0, Math.min(layout.tops[index] + anchor.offset, maxScrollTop))
+    if (Math.abs(node.scrollTop - targetTop) < 1) return
+
+    suppressFollowEvalUntilRef.current = performance.now() + 200
+    markProgrammaticTimelineScroll()
+    node.scrollTop = targetTop
+    setTimelineScrollTop(node.scrollTop)
+  }, [markProgrammaticTimelineScroll])
+
   const scrollTimelineToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const node = timelineRef.current
     if (!node) return
     const targetTop = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
     setTimelineScrollTop(targetTop)
     suppressFollowEvalUntilRef.current = performance.now() + 200
+    markProgrammaticTimelineScroll(behavior === 'smooth' ? 700 : undefined)
     node.scrollTo({ top: targetTop, behavior })
-  }, [])
+  }, [markProgrammaticTimelineScroll])
 
   const toggleLiveFollow = useCallback(() => {
     setAutoFollow((current) => {
@@ -2140,30 +2454,46 @@ export default function MessageView({
     const rowRect = lastRow.getBoundingClientRect()
     const targetTop = Math.max(node.scrollTop + (rowRect.bottom - nodeRect.bottom), 0)
     suppressFollowEvalUntilRef.current = performance.now() + 200
+    markProgrammaticTimelineScroll()
     node.scrollTop = targetTop
     setTimelineScrollTop(targetTop)
-  }, [])
+  }, [markProgrammaticTimelineScroll])
 
   const handleTimelineScroll = useCallback(() => {
-    userScrollingRef.current = true
-    if (userScrollingTimerRef.current != null) {
-      window.clearTimeout(userScrollingTimerRef.current)
+    const isProgrammaticScroll = performance.now() < programmaticScrollUntilRef.current
+    if (!isProgrammaticScroll) {
+      if (timelineHeightOverrideRef.current == null) {
+        const stableHeight = rowLayoutRef.current.totalHeight
+        timelineHeightOverrideRef.current = stableHeight
+        activeTimelineScrollAnchorRef.current = findTimelineScrollAnchor(timelineRowsRef.current, rowLayoutRef.current, timelineRef.current?.scrollTop ?? 0)
+        setTimelineHeightOverride(stableHeight)
+      }
+      userScrollingRef.current = true
+      if (userScrollingTimerRef.current != null) {
+        window.clearTimeout(userScrollingTimerRef.current)
+      }
+      userScrollingTimerRef.current = window.setTimeout(() => {
+        userScrollingRef.current = false
+        userScrollingTimerRef.current = null
+        timelineHeightOverrideRef.current = null
+        pendingTimelineAnchorRestoreRef.current = true
+        setTimelineHeightOverride(null)
+      }, SCROLL_IDLE_MS)
     }
-    userScrollingTimerRef.current = window.setTimeout(() => {
-      userScrollingRef.current = false
-      userScrollingTimerRef.current = null
-    }, SCROLL_IDLE_MS)
     if (scrollRafRef.current != null) return
     scrollRafRef.current = window.requestAnimationFrame(() => {
       scrollRafRef.current = null
       const node = timelineRef.current
       if (!node) return
+      if (!isProgrammaticScroll) {
+        activeTimelineScrollAnchorRef.current = findTimelineScrollAnchor(timelineRowsRef.current, rowLayoutRef.current, node.scrollTop)
+      }
       setTimelineScrollTop(node.scrollTop)
       if (performance.now() < suppressFollowEvalUntilRef.current) return
       const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
       setAutoFollow(distanceFromBottom <= TIMELINE_BOTTOM_GUTTER_PX + 16)
     })
-  }, [])
+  }, [restoreTimelineScrollAnchor])
 
   const scrollMountedTimelineRowIntoView = useCallback((messageId: string): boolean => {
     const node = timelineRef.current
@@ -2185,11 +2515,12 @@ export default function MessageView({
     autoFollowRef.current = false
     setAutoFollow(false)
     if (Math.abs(node.scrollTop - targetTop) > 1) {
+      markProgrammaticTimelineScroll()
       node.scrollTop = targetTop
       setTimelineScrollTop(targetTop)
     }
     return true
-  }, [])
+  }, [markProgrammaticTimelineScroll])
 
   useLayoutEffect(() => {
     if (!awaitingPersistedTurn || !session) return
@@ -2322,6 +2653,10 @@ export default function MessageView({
           resumeSessionAt: resumeFromMessageId ?? undefined,
           forkSession: Boolean(resumeFromMessageId),
           provider: session.provider,
+          agent: session.provider === 'opencode' && selectedAgent ? selectedAgent : undefined,
+          mode: session.provider === 'copilot' && selectedCopilotMode !== 'interactive' ? selectedCopilotMode : undefined,
+          manualPermissions: session.provider === 'copilot' ? true : undefined,
+          nativeCommands: session.provider === 'copilot' ? true : undefined,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
           isPendingSession: session.isPending === true ? true : undefined,
           cwd: session.cwd ?? undefined,
@@ -2396,6 +2731,24 @@ export default function MessageView({
             continue
           }
 
+          if (frame.event === 'command-result') {
+            try {
+              const parsed = JSON.parse(frame.data) as { message?: unknown; mode?: unknown }
+              if (typeof parsed.message === 'string' && parsed.message.trim()) {
+                setSessionActionNotice(parsed.message.trim())
+              }
+              if (typeof parsed.mode === 'string') {
+                setSelectedCopilotMode(parsed.mode)
+              }
+            } catch { /* ignore malformed command result */ }
+            pendingMessageBaselineRef.current = null
+            setOptimisticUserText(null)
+            clearLiveAssistantText()
+            setLiveToolActivities([])
+            setLiveThreadedMessages([])
+            continue
+          }
+
           try {
             const parsed = JSON.parse(frame.data)
             if (parsed?.type === 'prompt_suggestion' && typeof parsed.suggestion === 'string') {
@@ -2421,14 +2774,14 @@ export default function MessageView({
                 return rest
               })
             }
-            const pendingPermission = extractOpenCodePermission(parsed)
+            const pendingPermission = extractOpenCodePermission(parsed) ?? extractCopilotPermission(parsed)
             if (pendingPermission) {
               setPendingPermissions((prev) => [
                 ...prev.filter((permission) => permission.id !== pendingPermission.id),
                 pendingPermission,
               ])
             }
-            const repliedPermissionId = extractOpenCodePermissionReply(parsed)
+            const repliedPermissionId = extractOpenCodePermissionReply(parsed) ?? extractCopilotPermissionCompletion(parsed)
             if (repliedPermissionId) {
               setPendingPermissions((prev) => prev.filter((permission) => permission.id !== repliedPermissionId))
             }
@@ -2566,7 +2919,7 @@ export default function MessageView({
       abortControllerRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, clearLiveAssistantText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, clearLiveAssistantText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotMode, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
@@ -2651,9 +3004,27 @@ export default function MessageView({
       setMentionResults([])
       return
     }
+    const agentMatches: MentionResult[] = activeProvider === 'opencode'
+      ? composerMentionAgentOptions
+          .filter((agent) => {
+            const query = mentionQuery.query.toLowerCase()
+            if (!query) return true
+            return agent.value.toLowerCase().includes(query)
+              || agent.label.toLowerCase().includes(query)
+              || (agent.description?.toLowerCase().includes(query) ?? false)
+          })
+          .slice(0, 8)
+          .map((agent) => ({
+            kind: 'agent' as const,
+            name: agent.value,
+            description: agent.description,
+            mode: agent.mode,
+          }))
+      : []
     const cwd = session?.cwd
     if (!cwd) {
-      setMentionResults([])
+      setMentionResults(agentMatches)
+      setMentionActiveIndex(0)
       return
     }
     const controller = new AbortController()
@@ -2666,7 +3037,8 @@ export default function MessageView({
         if (!res.ok) return
         const data = await res.json() as { files?: Array<{ path: string; basename: string }> }
         if (controller.signal.aborted) return
-        setMentionResults(data.files ?? [])
+        const fileMatches: MentionResult[] = (data.files ?? []).map((file) => ({ kind: 'file', ...file }))
+        setMentionResults([...agentMatches, ...fileMatches])
         setMentionActiveIndex(0)
       } catch (err) {
         if ((err as { name?: string }).name === 'AbortError') return
@@ -2676,7 +3048,7 @@ export default function MessageView({
       window.clearTimeout(handle)
       controller.abort()
     }
-  }, [mentionQuery, session?.cwd])
+  }, [activeProvider, composerMentionAgentOptions, mentionQuery, session?.cwd])
 
   useLayoutEffect(() => {
     const node = mentionItemRefs.current[mentionActiveIndex]
@@ -2688,7 +3060,7 @@ export default function MessageView({
     node?.scrollIntoView({ block: 'nearest' })
   }, [slashActiveIndex, slashOpen])
 
-  const insertMention = useCallback((entry: { path: string; basename: string }) => {
+  const insertMention = useCallback((entry: MentionResult) => {
     const mention = mentionQuery
     if (!mention) return
     const textarea = textareaRef.current
@@ -2696,13 +3068,27 @@ export default function MessageView({
     const cursor = textarea?.selectionStart ?? value.length
     const before = value.slice(0, mention.start)
     const after = value.slice(cursor)
-    const insertion = `@${entry.path} `
+    const insertion = entry.kind === 'agent'
+      ? `@${entry.name} `
+      : `@${entry.path} `
     const next = `${before}${insertion}${after}`
     setInputText(next)
     inputTextRef.current = next
     setMentionQuery(null)
     setMentionResults([])
     setAttachments((prev) => {
+      if (entry.kind === 'agent') {
+        if (prev.some((attachment) => attachment.type === 'agent' && attachment.displayName === entry.name)) return prev
+        return [
+          ...prev,
+          {
+            id: `${Date.now()}-agent-${entry.name}`,
+            type: 'agent',
+            displayName: entry.name,
+            text: `@${entry.name}`,
+          },
+        ]
+      }
       if (prev.some((attachment) => attachment.path === entry.path)) return prev
       return [
         ...prev,
@@ -2908,6 +3294,8 @@ export default function MessageView({
         id: `${Date.now()}-${prev.length}`,
         type: attachmentType,
         path,
+        displayName: attachmentType === 'agent' ? path.replace(/^@/, '') : undefined,
+        text: attachmentType === 'agent' ? `@${path.replace(/^@/, '')}` : undefined,
       },
     ])
     setAttachmentPath('')
@@ -3282,8 +3670,14 @@ export default function MessageView({
         registry.set(id, task)
       }
     }
+    if (codexPlan && codexPlan.plan.length > 0) {
+      const planRegistry = buildTaskRegistryFromCodexPlan(codexPlan.plan)
+      for (const [id, task] of planRegistry) {
+        registry.set(id, task)
+      }
+    }
     return registry
-  }, [threaded, openCodeTodos])
+  }, [threaded, openCodeTodos, codexPlan])
   const [taskRailOpen, setTaskRailOpen] = useState(true)
   const isProject = !!projectView
   const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
@@ -3555,6 +3949,7 @@ export default function MessageView({
   )
   const hasLiveTimeline = timelineRows.length > 0
   const hasTranscriptTimeline = transcriptTimelineRows.length > 0
+  timelineRowsRef.current = transcriptTimelineRows
 
   // On the first completed load for a session, wait for rows to exist and then force the
   // viewport to the live edge so initial virtualization and measurement do not leave us at the top.
@@ -3584,6 +3979,7 @@ export default function MessageView({
     if (node) {
       const targetTop = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
       suppressFollowEvalUntilRef.current = performance.now() + 200
+      markProgrammaticTimelineScroll()
       node.scrollTop = targetTop
       setTimelineScrollTop(targetTop)
     }
@@ -3605,11 +4001,7 @@ export default function MessageView({
       cancelled = true
       if (frameId != null) window.cancelAnimationFrame(frameId)
     }
-  }, [alignLastTimelineRowToViewportBottom, hasLiveTimeline, loading, messages.length, scrollTimelineToBottom, session?.sessionId, targetMessageId])
-
-  useEffect(() => {
-    timelineRowsRef.current = transcriptTimelineRows
-  }, [transcriptTimelineRows])
+  }, [alignLastTimelineRowToViewportBottom, hasLiveTimeline, loading, markProgrammaticTimelineScroll, messages.length, scrollTimelineToBottom, session?.sessionId, targetMessageId])
 
   useEffect(() => {
     const activeKeys = new Set(transcriptTimelineRows.map((row) => row.key))
@@ -3638,6 +4030,7 @@ export default function MessageView({
 
       const node = timelineRef.current
       const layout = rowLayoutRef.current
+      const rows = timelineRowsRef.current
       const isFollowing = autoFollowRef.current
       // While the user is actively dragging the scrollbar, refuse to apply
       // anchor compensation — it adds to scrollTop on the same frame the
@@ -3646,28 +4039,31 @@ export default function MessageView({
       // transcripts. Layout still updates so positions remain correct;
       // only the scrollTop nudge is suppressed.
       const allowScrollAdjust = !userScrollingRef.current
-      let scrollDelta = 0
+      const anchor = node ? findTimelineScrollAnchor(rows, layout, node.scrollTop) : null
+      const measurementChanges: TimelineMeasurementChange[] = []
       let changed = false
 
       for (const [key, nextMeasuredHeight] of pending) {
         const index = layout.indexByKey.get(key)
         if (index == null) continue
-        const row = timelineRowsRef.current[index]
+        const row = rows[index]
         if (!row) continue
         const previousHeight = rowHeightsRef.current.get(key) ?? estimateTimelineRowHeight(row)
         if (nextMeasuredHeight === previousHeight) continue
 
         rowHeightsRef.current.set(key, nextMeasuredHeight)
         changed = true
-        if (allowScrollAdjust && !isFollowing && node && layout.tops[index] < node.scrollTop) {
-          scrollDelta += nextMeasuredHeight - previousHeight
-        }
+        measurementChanges.push({ index, previousHeight, nextHeight: nextMeasuredHeight })
       }
 
       pending.clear()
 
+      const scrollDelta = allowScrollAdjust && !isFollowing
+        ? computeTimelineScrollCompensation(measurementChanges, anchor)
+        : 0
       if (node && allowScrollAdjust && !isFollowing && scrollDelta !== 0) {
         suppressFollowEvalUntilRef.current = performance.now() + 200
+        markProgrammaticTimelineScroll()
         node.scrollTop += scrollDelta
         setTimelineScrollTop(node.scrollTop)
       }
@@ -3676,7 +4072,7 @@ export default function MessageView({
         setRowMeasurementVersion((version) => version + 1)
       }
     })
-  }, [])
+  }, [markProgrammaticTimelineScroll])
 
   useLayoutEffect(() => {
     if (!autoFollow || !hasTranscriptTimeline || loading) return
@@ -3689,9 +4085,15 @@ export default function MessageView({
   // change; virtualTimeline re-runs on every scroll but only does a scan of
   // the visible window — no new objects for off-screen rows.
   const rowLayout = useMemo(() => {
-    return buildTimelineRowLayout(transcriptTimelineRows, rowHeightsRef.current)
+    return buildTimelineRowLayout(transcriptTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight)
   }, [rowMeasurementVersion, transcriptTimelineRows])
   rowLayoutRef.current = rowLayout
+
+  useLayoutEffect(() => {
+    if (timelineHeightOverride !== null || !pendingTimelineAnchorRestoreRef.current) return
+    pendingTimelineAnchorRestoreRef.current = false
+    restoreTimelineScrollAnchor()
+  }, [restoreTimelineScrollAnchor, rowLayout, timelineHeightOverride])
 
   const handleVisualizerSelectMessage = useCallback((messageId: string) => {
     setShowVisualizer(false)
@@ -3712,6 +4114,7 @@ export default function MessageView({
 
       const targetTop = Math.max(layout.tops[rowIndex] - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
       suppressFollowEvalUntilRef.current = performance.now() + 300
+      markProgrammaticTimelineScroll()
       node.scrollTop = targetTop
       setTimelineScrollTop(targetTop)
     }
@@ -3724,7 +4127,7 @@ export default function MessageView({
         }
       })
     })
-  }, [scrollMountedTimelineRowIntoView])
+  }, [markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
 
   // Used by TaskRail to scroll the transcript to a task's most recent event.
   // Same scroll/highlight behavior as the visualizer-select path but without
@@ -3743,6 +4146,7 @@ export default function MessageView({
       if (rowIndex < 0) return
       const targetTop = Math.max(layout.tops[rowIndex] - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
       suppressFollowEvalUntilRef.current = performance.now() + 300
+      markProgrammaticTimelineScroll()
       node.scrollTop = targetTop
       setTimelineScrollTop(targetTop)
     }
@@ -3753,7 +4157,7 @@ export default function MessageView({
         if (!scrollMountedTimelineRowIntoView(messageId)) scrollToMessage()
       })
     })
-  }, [scrollMountedTimelineRowIntoView])
+  }, [markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
 
   useLayoutEffect(() => {
     if (!timelineTargetMessageId || loading) return
@@ -3770,9 +4174,10 @@ export default function MessageView({
     autoFollowRef.current = false
     setAutoFollow(false)
     setTimelineScrollTop(targetTop)
+    markProgrammaticTimelineScroll()
     node.scrollTop = targetTop
     setHighlightedMessageId(timelineTargetMessageId)
-  }, [loading, rowLayout, targetMessageRequestId, transcriptTimelineRows, timelineTargetMessageId])
+  }, [loading, markProgrammaticTimelineScroll, rowLayout, targetMessageRequestId, transcriptTimelineRows, timelineTargetMessageId])
 
   useEffect(() => {
     if (!highlightedMessageId) return
@@ -3783,26 +4188,34 @@ export default function MessageView({
   }, [highlightedMessageId])
 
   const virtualTimeline = useMemo(() => {
-    const { tops, heights, totalHeight } = rowLayout
+    const { tops, heights } = rowLayout
     const n = transcriptTimelineRows.length
-    const viewportHeight = timelineViewportHeight || 800
-    const rangeStart = Math.max(0, timelineScrollTop - TIMELINE_OVERSCAN_PX)
-    const rangeEnd = timelineScrollTop + viewportHeight + TIMELINE_OVERSCAN_PX
-
-    let startIndex = Math.max(0, upperBound(tops, n, rangeStart) - 1)
-    while (startIndex > 0 && tops[startIndex - 1] + heights[startIndex - 1] >= rangeStart) {
-      startIndex -= 1
-    }
-    let endIndex = upperBound(tops, n, rangeEnd)
-    endIndex = Math.max(endIndex, startIndex + 1)
+    const window = getVirtualTimelineWindow({
+      layout: rowLayout,
+      rowCount: n,
+      scrollTop: timelineScrollTop,
+      viewportHeight: timelineViewportHeight || 800,
+      overscanPx: TIMELINE_OVERSCAN_PX,
+    })
 
     const visibleRows: Array<{ row: TimelineRow; top: number; height: number }> = []
-    for (let i = startIndex; i < Math.min(endIndex, n); i++) {
+    for (let i = window.startIndex; i < window.endIndex; i++) {
       visibleRows.push({ row: transcriptTimelineRows[i], top: tops[i], height: heights[i] })
     }
 
-    return { totalHeight, visibleRows }
+    return { totalHeight: window.totalHeight, visibleRows }
   }, [rowLayout, transcriptTimelineRows, timelineScrollTop, timelineViewportHeight])
+  const timelineRenderedHeight = useMemo(() => {
+    const lastVisibleRow = virtualTimeline.visibleRows.at(-1)
+    const visibleBottom = lastVisibleRow
+      ? lastVisibleRow.top + lastVisibleRow.height + TIMELINE_BOTTOM_GUTTER_PX
+      : 0
+    return resolveTimelineRenderedHeight({
+      measuredTotalHeight: virtualTimeline.totalHeight,
+      activeScrollHeight: timelineHeightOverride,
+      visibleBottom,
+    })
+  }, [timelineHeightOverride, virtualTimeline.totalHeight, virtualTimeline.visibleRows])
 
   useLayoutEffect(() => {
     if (!timelineTargetMessageId || highlightedMessageId !== timelineTargetMessageId || loading) return
@@ -3834,6 +4247,7 @@ export default function MessageView({
       const target = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
       if (Math.abs(node.scrollTop - target) < 1) return
       suppressFollowEvalUntilRef.current = performance.now() + 200
+      markProgrammaticTimelineScroll()
       node.scrollTop = target
       setTimelineScrollTop(target)
     }
@@ -3841,7 +4255,7 @@ export default function MessageView({
     observer.observe(content)
     observer.observe(node)
     return () => observer.disconnect()
-  }, [hasLiveTimeline, session?.sessionId, showVisualizer])
+  }, [hasLiveTimeline, markProgrammaticTimelineScroll, session?.sessionId, showVisualizer])
 
   // When autoFollow is first enabled, pin once.
   useEffect(() => {
@@ -5129,7 +5543,7 @@ export default function MessageView({
                 position: 'absolute',
                 left: 9,
                 top: 10,
-                height: Math.max(virtualTimeline.totalHeight - 10, 0),
+                height: Math.max(timelineRenderedHeight - 10, 0),
                 width: 2,
                 borderRadius: 999,
                 background: 'linear-gradient(to bottom, color-mix(in srgb, var(--border-2) 92%, var(--text-2)) 0%, var(--border-2) 70%, transparent 100%)',
@@ -5139,7 +5553,7 @@ export default function MessageView({
             />
             <div
               ref={timelineContentRef}
-              style={{ position: 'relative', minHeight: virtualTimeline.totalHeight, height: virtualTimeline.totalHeight }}
+              style={{ position: 'relative', minHeight: timelineRenderedHeight, height: timelineRenderedHeight }}
             >
               <MessageDensityProvider density={density}>
                 <LiveSubagentTextContext.Provider value={liveSubagentText}>
@@ -5471,6 +5885,54 @@ export default function MessageView({
                   </NativeSelect>
                 </label>
               )}
+              {activeProvider === 'opencode' && composerAgentOptions.length > 0 && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 160px', minWidth: 136 }}>
+                  <Label style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    color: 'var(--text-3)',
+                    letterSpacing: '0.05em',
+                  }}>
+                    AGENT
+                  </Label>
+                  <NativeSelect
+                    value={selectedAgent}
+                    onChange={(event) => setSelectedAgent(event.target.value)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                    title="OpenCode primary agent — mirrors the native agent selector"
+                  >
+                    {composerAgentOptions.map((agent) => (
+                      <NativeSelectOption key={agent.value} value={agent.value}>
+                        {agent.label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </label>
+              )}
+              {activeProvider === 'copilot' && composerModeOptions.length > 0 && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 160px', minWidth: 138 }}>
+                  <Label style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    color: 'var(--text-3)',
+                    letterSpacing: '0.05em',
+                  }}>
+                    MODE
+                  </Label>
+                  <NativeSelect
+                    value={selectedCopilotMode}
+                    onChange={(event) => commitCopilotModeSelection(event.target.value)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                    title="GitHub Copilot interaction mode"
+                  >
+                    {composerModeOptions.map((mode) => (
+                      <NativeSelectOption key={mode.value} value={mode.value}>
+                        {mode.label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </label>
+              )}
               {session?.provider === 'claude' && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 160px', minWidth: 140 }}>
                   <Label style={{
@@ -5670,7 +6132,9 @@ export default function MessageView({
                         </div>
                       )}
                     </div>
-                    {(['once', 'always', 'reject'] as const).map((response) => (
+                    {(['once', 'always', 'reject'] as const)
+                      .filter((response) => response !== 'always' || permission.canApproveAlways !== false)
+                      .map((response) => (
                       <Button
                         key={response}
                         onClick={() => respondToPermission(permission.id, response)}
@@ -5709,6 +6173,9 @@ export default function MessageView({
                 <NativeSelectOption value="image">IMAGE</NativeSelectOption>
                 <NativeSelectOption value="mention">MENTION</NativeSelectOption>
                 <NativeSelectOption value="skill">SKILL</NativeSelectOption>
+                {activeProvider === 'opencode' && (
+                  <NativeSelectOption value="agent">AGENT</NativeSelectOption>
+                )}
               </NativeSelect>
               <Input
                 value={attachmentPath}
@@ -5720,7 +6187,7 @@ export default function MessageView({
                   }
                 }}
                 disabled={sendBusy}
-                placeholder="Attach path or URL"
+                placeholder={attachmentType === 'agent' ? 'Agent name' : 'Attach path or URL'}
                 style={{
                   flex: '1 1 220px',
                   minWidth: 180,
@@ -5817,13 +6284,17 @@ export default function MessageView({
               {mentionQuery && mentionResults.length > 0 && (
                 <div style={composerPopoverStyle}>
                   <div style={{ ...composerPopoverHintStyle, color: `var(${composerConfig.cssAccentVar})` }}>
-                    {composerConfig.label} files · ↑↓ select · ⏎ insert · esc cancel
+                    {composerConfig.label} {activeProvider === 'opencode' ? 'files/agents' : 'files'} · ↑↓ select · ⏎ insert · esc cancel
                   </div>
                   {mentionResults.map((entry, index) => {
                     const active = index === mentionActiveIndex
+                    const label = entry.kind === 'agent' ? `@${entry.name}` : entry.basename
+                    const detail = entry.kind === 'agent'
+                      ? [entry.mode, entry.description].filter(Boolean).join(' · ')
+                      : entry.path
                     return (
                       <button
-                        key={entry.path}
+                        key={entry.kind === 'agent' ? `agent:${entry.name}` : `file:${entry.path}`}
                         type="button"
                         ref={(node) => { mentionItemRefs.current[index] = node }}
                         onMouseDown={(event) => {
@@ -5837,8 +6308,8 @@ export default function MessageView({
                           color: active ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2, var(--text))',
                         }}
                       >
-                        <span style={{ fontWeight: active ? 600 : 400 }}>{entry.basename}</span>
-                        <span style={{ marginLeft: 8, color: 'var(--text-3)', fontSize: 10 }}>{entry.path}</span>
+                        <span style={{ fontWeight: active ? 600 : 400 }}>{label}</span>
+                        <span style={{ marginLeft: 8, color: 'var(--text-3)', fontSize: 10 }}>{detail}</span>
                       </button>
                     )
                   })}

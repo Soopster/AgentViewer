@@ -7,6 +7,13 @@ import type {
   CodexSkillsListResponse,
   CodexThreadTokenUsage,
 } from './codexProtocol'
+import type {
+  ThreadStatusChangedNotification,
+  ThreadTokenUsageUpdatedNotification,
+  TurnCompletedNotification,
+  TurnPlanUpdatedNotification,
+  TurnStartedNotification,
+} from './codex-schema/v2'
 
 // Mirror of lib/opencodeHarness.ts for the codex app-server. The codex
 // client already maintains a single long-lived child process with one
@@ -31,12 +38,34 @@ export type CodexHarnessEvent =
   | { type: 'connected' }
   | { type: 'disconnected' }
 
+export type CodexPlanStep = { step: string; status: string }
+
+export type CodexPlanSnapshot = {
+  plan: CodexPlanStep[]
+  explanation: string | null
+}
+
 export type CodexThreadSnapshot = {
   status?: string
   latestTurnId?: string
   latestTurnStatus?: string
   tokenUsage?: CodexThreadTokenUsage
   model?: string
+  plan?: CodexPlanSnapshot
+}
+
+function normalizePlanSteps(value: unknown): CodexPlanStep[] {
+  if (!Array.isArray(value)) return []
+  const out: CodexPlanStep[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue
+    const record = entry as Record<string, unknown>
+    const step = typeof record.step === 'string' ? record.step : ''
+    const status = typeof record.status === 'string' ? record.status : 'pending'
+    if (!step) continue
+    out.push({ step, status })
+  }
+  return out
 }
 
 export type CodexProjectDiagnostics = {
@@ -201,8 +230,13 @@ class CodexHarness {
         break
       }
       case 'thread/status/changed': {
-        const status = (notification.params as { status?: unknown }).status
-        if (typeof status === 'string') existing.status = status
+        // ThreadStatus is a discriminated union ({type:'idle'|'active'|...});
+        // the previous `typeof status === 'string'` check silently never
+        // assigned anything because params.status is an object.
+        const params = notification.params as ThreadStatusChangedNotification
+        existing.status = params.status.type === 'active' && params.status.activeFlags.length > 0
+          ? `active:${params.status.activeFlags.join(',')}`
+          : params.status.type
         break
       }
       case 'thread/closed': {
@@ -214,20 +248,31 @@ class CodexHarness {
         break
       }
       case 'turn/started': {
-        const params = notification.params as { turn?: { id?: string; status?: string }; turnId?: string }
-        existing.latestTurnId = params.turn?.id ?? params.turnId ?? existing.latestTurnId
-        existing.latestTurnStatus = params.turn?.status ?? 'running'
+        const params = notification.params as TurnStartedNotification
+        existing.latestTurnId = params.turn.id ?? existing.latestTurnId
+        existing.latestTurnStatus = params.turn.status ?? 'inProgress'
         break
       }
       case 'turn/completed': {
-        const params = notification.params as { turn?: { id?: string; status?: string }; turnId?: string }
-        existing.latestTurnId = params.turn?.id ?? params.turnId ?? existing.latestTurnId
-        existing.latestTurnStatus = params.turn?.status ?? 'completed'
+        const params = notification.params as TurnCompletedNotification
+        existing.latestTurnId = params.turn.id ?? existing.latestTurnId
+        existing.latestTurnStatus = params.turn.status ?? 'completed'
         break
       }
       case 'thread/tokenUsage/updated': {
-        const params = notification.params as { tokenUsage?: CodexThreadTokenUsage }
+        const params = notification.params as ThreadTokenUsageUpdatedNotification
         if (params.tokenUsage) existing.tokenUsage = params.tokenUsage
+        break
+      }
+      case 'turn/plan/updated': {
+        const params = notification.params as TurnPlanUpdatedNotification
+        const steps = normalizePlanSteps(params.plan)
+        // turn/plan/updated arrives multiple times per turn; the latest payload
+        // is the authoritative state. An empty array clears the plan.
+        existing.plan = {
+          plan: steps,
+          explanation: params.explanation ?? existing.plan?.explanation ?? null,
+        }
         break
       }
       default:

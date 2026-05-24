@@ -11,6 +11,7 @@ import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
 import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
 import type { Todo as OpenCodeTodo } from '@opencode-ai/sdk'
+import type { CodexPlanStep } from '@/lib/taskRegistry'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
@@ -267,6 +268,10 @@ export default function Home() {
   // tab swap doesn't show another session's todos.
   const [sessionTodos, setSessionTodos] = useState<OpenCodeTodo[]>([])
   const [todosForSessionId, setTodosForSessionId] = useState<string | null>(null)
+  // Codex `turn/plan/updated` mirrors OpenCode todos — structured plan
+  // steps surface in the Tasks panel.
+  const [sessionPlan, setSessionPlan] = useState<{ plan: CodexPlanStep[]; explanation: string | null }>({ plan: [], explanation: null })
+  const [planForSessionId, setPlanForSessionId] = useState<string | null>(null)
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
@@ -316,6 +321,9 @@ export default function Home() {
     [provider, selectedProject],
   )
   const openCodeTodosForView = todosForSessionId === selectedSession?.sessionId ? sessionTodos : undefined
+  const codexPlanForView = planForSessionId === selectedSession?.sessionId && sessionPlan.plan.length > 0
+    ? sessionPlan
+    : undefined
 
   const toggleMessagePane = useCallback(() => {
     setMessagePaneCollapsed((prev) => {
@@ -545,7 +553,11 @@ export default function Home() {
       setSessionTodos([])
       setTodosForSessionId(null)
     }
-  }, [selectedSession?.sessionId, todosForSessionId])
+    if (planForSessionId && planForSessionId !== activeSessionId) {
+      setSessionPlan({ plan: [], explanation: null })
+      setPlanForSessionId(null)
+    }
+  }, [selectedSession?.sessionId, todosForSessionId, planForSessionId])
 
   // Stream active single-session updates; fall back to the old poll loop if SSE drops.
   useEffect(() => {
@@ -614,6 +626,22 @@ export default function Home() {
           if (!payload.sessionId || payload.sessionId !== session.sessionId) return
           setTodosForSessionId(payload.sessionId)
           setSessionTodos(Array.isArray(payload.todos) ? payload.todos : [])
+        } catch { /* ignore malformed stream payloads */ }
+      })
+
+      source.addEventListener('plan', (event) => {
+        try {
+          const payload = JSON.parse((event as MessageEvent<string>).data) as {
+            sessionId?: string
+            plan?: CodexPlanStep[]
+            explanation?: string | null
+          }
+          if (!payload.sessionId || payload.sessionId !== session.sessionId) return
+          setPlanForSessionId(payload.sessionId)
+          setSessionPlan({
+            plan: Array.isArray(payload.plan) ? payload.plan : [],
+            explanation: typeof payload.explanation === 'string' ? payload.explanation : null,
+          })
         } catch { /* ignore malformed stream payloads */ }
       })
 
@@ -1064,6 +1092,7 @@ export default function Home() {
                   onCloseTab={closeTab}
                   taskPanelOpenRequest={taskPanelOpenRequest}
                   openCodeTodos={openCodeTodosForView}
+                  codexPlan={codexPlanForView}
                 />
               </ViewTransition>
               {commandPaletteOpen ? (

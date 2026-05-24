@@ -76,13 +76,13 @@ import {
   getTranscriptCardsSync,
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import type { ContextUsage, ProviderSelection, RunningSessionRef, SendAttachment, SendState, Session, ToolResultBlock } from '../../lib/types'
+import type { ContextUsage, ProviderSelection, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, ToolResultBlock } from '../../lib/types'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
-import { readViewSessionSlashCommands, createNewViewSession } from '../../lib/sessionBackend'
+import { readViewSessionSlashCommands, readViewSessionComposerOptions, createNewViewSession } from '../../lib/sessionBackend'
 import { compactStableFingerprint } from '../../lib/compactFingerprint'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
@@ -408,7 +408,9 @@ function detectMentionAtCursor(text: string, cursor: number): { start: number; q
 function activeMentionAttachments(text: string, attachments: SendAttachment[]): SendAttachment[] {
   if (attachments.length === 0) return []
   return attachments.filter((attachment) => (
-    attachment.path && text.includes(`@${attachment.path}`)
+    attachment.type === 'agent'
+      ? Boolean(attachment.displayName && text.includes(`@${attachment.displayName}`))
+      : Boolean(attachment.path && text.includes(`@${attachment.path}`))
   ))
 }
 // NOTE: OpenTUI's mergeKeyBindings hashes by `name:ctrl:shift:meta:super` —
@@ -923,6 +925,17 @@ function liveMessageSessionKey(message: ThreadedMessage): string | null {
   return `${message.provider ?? 'claude'}:${message.sessionId}`
 }
 
+function hasLiveAssistantMessage(messages: ThreadedMessage[], key: string): boolean {
+  return messages.some((message) => liveMessageSessionKey(message) === key && message.role === 'assistant')
+}
+
+function hasPersistedAssistantAfterBaseline(rawMessages: Array<{ type?: string }>, baselineCount: number): boolean {
+  const start = rawMessages.length > baselineCount
+    ? baselineCount
+    : Math.max(baselineCount - 1, 0)
+  return rawMessages.slice(start).some((message) => message.type === 'assistant')
+}
+
 function makeLiveUserMessage(session: Session, text: string): ThreadedMessage {
   return {
     role: 'user',
@@ -933,11 +946,48 @@ function makeLiveUserMessage(session: Session, text: string): ThreadedMessage {
   }
 }
 
+function makeLiveAssistantTextMessage(session: Session, text: string, uuid: string, timestamp?: string): ThreadedMessage {
+  return {
+    role: 'assistant',
+    uuid,
+    sessionId: session.sessionId,
+    provider: session.provider ?? 'claude',
+    timestamp,
+    blocks: [{ type: 'text', text }],
+  }
+}
+
+function extractCopilotFinalAssistantMessage(payload: unknown, session: Session): ThreadedMessage | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  if (record.type !== 'copilot_event') return null
+  const event = record.event
+  if (!event || typeof event !== 'object') return null
+  const eventRecord = event as Record<string, unknown>
+  if (eventRecord.type !== 'assistant.message') return null
+  const data = eventRecord.data
+  if (!data || typeof data !== 'object') return null
+  const dataRecord = data as Record<string, unknown>
+  const content = typeof dataRecord.content === 'string' ? dataRecord.content : ''
+  if (!content.trim()) return null
+  const messageId = typeof dataRecord.messageId === 'string' && dataRecord.messageId
+    ? dataRecord.messageId
+    : typeof eventRecord.id === 'string' && eventRecord.id
+    ? eventRecord.id
+    : `fallback:${Date.now()}`
+  const timestamp = typeof eventRecord.timestamp === 'string' ? eventRecord.timestamp : undefined
+  return makeLiveAssistantTextMessage(session, content, `live-copilot:${messageId}`, timestamp)
+}
+
 type OpenCodeLiveSubagentInfo = {
   agentId: string
   name: string
   type: 'agent' | 'subtask'
 }
+
+type TuiMentionResult =
+  | { kind: 'file'; path: string; basename: string }
+  | { kind: 'agent'; name: string; description?: string; mode?: string }
 
 function extractOpenCodeLiveSubagent(payload: unknown): OpenCodeLiveSubagentInfo | null {
   if (!payload || typeof payload !== 'object') return null
@@ -1722,7 +1772,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
   { id: 'tools',      label: 'Toggle tool calls',      key: 'X',  category: 'View'       },
   { id: 'effort',     label: 'Cycle reasoning effort', key: 'E',  category: 'Session'    },
-  { id: 'mode',       label: 'Cycle permission mode',  key: 'M',  category: 'Session'    },
+  { id: 'mode',       label: 'Cycle provider mode',    key: 'M',  category: 'Session'    },
   { id: 'model',      label: 'Pick model',             key: '⌥M', category: 'Session'    },
   // App
   { id: 'refresh',    label: 'Refresh sessions',       key: 'r',  category: 'App'        },
@@ -2153,7 +2203,9 @@ export default function OpenTuiApp() {
   const composerDraftStorageKeyRef = useRef<string | null>(null)
   const [composerLiveTodos, setComposerLiveTodos] = useState<import('../../lib/taskRegistry').OpenCodeTodo[]>([])
   const [composerMention, setComposerMention] = useState<{ start: number; query: string } | null>(null)
-  const [composerMentionResults, setComposerMentionResults] = useState<Array<{ path: string; basename: string }>>([])
+  const [composerMentionResults, setComposerMentionResults] = useState<TuiMentionResult[]>([])
+  const [composerAgentOptions, setComposerAgentOptions] = useState<SessionComposerAgentOption[]>([])
+  const [composerMentionAgents, setComposerMentionAgents] = useState<SessionComposerAgentOption[]>([])
   const [composerMentionIndex, setComposerMentionIndex] = useState(0)
   const [composerMentionDismissedStart, setComposerMentionDismissedStart] = useState<number | null>(null)
   const [composerMentionAttachments, setComposerMentionAttachments] = useState<SendAttachment[]>([])
@@ -2177,6 +2229,8 @@ export default function OpenTuiApp() {
   // / `default` mean "let the SDK keep whatever the session was using".
   const [tuiEffort, setTuiEffort] = useState<'auto' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>('auto')
   const [tuiPermissionMode, setTuiPermissionMode] = useState<'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'>('default')
+  const [tuiCopilotMode, setTuiCopilotMode] = useState<'interactive' | 'plan' | 'autopilot'>('interactive')
+  const [tuiOpenCodeAgent, setTuiOpenCodeAgent] = useState('')
   const [tuiModelOverride, setTuiModelOverride] = useState<Record<string, string>>({})
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [modelPickerOptions, setModelPickerOptions] = useState<Array<{ name: string; value: string; description: string }>>([])
@@ -2220,6 +2274,7 @@ export default function OpenTuiApp() {
   const composerTextareaRef = useRef<TextareaRenderable | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const liveTranscriptBaselineRef = useRef(new Map<string, { count: number; lastFingerprint: string | null }>())
+  const liveTranscriptMessagesRef = useRef<ThreadedMessage[]>([])
   const awaitingPersistedTurnRef = useRef(false)
   const liveTextFlushFrameRef = useRef<number | null>(null)
   const pendingLiveTextRef = useRef('')
@@ -2249,6 +2304,7 @@ export default function OpenTuiApp() {
   useEffect(() => { showToolCallsRef.current = showToolCalls }, [showToolCalls])
   useEffect(() => { composerActiveRef.current = composerActive }, [composerActive])
   useEffect(() => { composerDraftRef.current = composerDraft }, [composerDraft])
+  useEffect(() => { liveTranscriptMessagesRef.current = liveTranscriptMessages }, [liveTranscriptMessages])
   useEffect(() => { searchModeRef.current = searchMode }, [searchMode])
   useEffect(() => { sessionSearchModeRef.current = sessionSearchMode }, [sessionSearchMode])
   useEffect(() => { exitConfirmOpenRef.current = exitConfirmOpen }, [exitConfirmOpen])
@@ -2475,13 +2531,22 @@ export default function OpenTuiApp() {
       sessionDetail.rawMessages.length > baseline.count
       || lastFingerprint !== baseline.lastFingerprint
     if (!persistedTurnArrived) return
+    const liveAssistantVisible = Boolean(composerLiveText.trim())
+      || hasLiveAssistantMessage(liveTranscriptMessagesForSession, key)
+    if (liveAssistantVisible && !hasPersistedAssistantAfterBaseline(sessionDetail.rawMessages, baseline.count)) {
+      setLiveTranscriptMessages((prev) => {
+        const next = prev.filter((message) => !(liveMessageSessionKey(message) === key && message.role === 'user'))
+        return next.length === prev.length ? prev : next
+      })
+      return
+    }
 
     liveTranscriptBaselineRef.current.delete(key)
     setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== key))
     liveToolIndexesRef.current.clear()
     setComposerLiveText('')
     setAwaitingPersistedTurn(false)
-  }, [selectedSessionIdentity, selectedSessionTarget, sessionDetail])
+  }, [composerLiveText, liveTranscriptMessagesForSession, selectedSessionIdentity, selectedSessionTarget, sessionDetail])
 
   // (Auto-open of the composer on a pending session was removed: with
   // composerActive=true, the global key handler's `N` / `c` / `q` shortcuts
@@ -2655,11 +2720,17 @@ export default function OpenTuiApp() {
     if (composerCurrentModel) parts.push(`model:${composerCurrentModel}`)
     if (composerContextUsage) parts.push(`ctx:${composerContextUsage}`)
     if (tuiEffort !== 'auto') parts.push(`effort:${tuiEffort}`)
+    if (composerTargetSession?.provider === 'opencode' && tuiOpenCodeAgent) {
+      parts.push(`agent:${tuiOpenCodeAgent}`)
+    }
     if (composerTargetSession?.provider === 'claude' && tuiPermissionMode !== 'default') {
       parts.push(`mode:${tuiPermissionMode}`)
     }
+    if (composerTargetSession?.provider === 'copilot' && tuiCopilotMode !== 'interactive') {
+      parts.push(`mode:${tuiCopilotMode}`)
+    }
     return parts.length > 0 ? `· ${parts.join(' · ')}` : ''
-  }, [composerContextUsage, composerCurrentModel, composerTargetSession?.provider, tuiEffort, tuiPermissionMode])
+  }, [composerContextUsage, composerCurrentModel, composerTargetSession?.provider, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent, tuiPermissionMode])
   const composerFirstLine = composerDraft.split('\n')[0] ?? ''
   const composerSlashOpen = composerFirstLine.startsWith('/') && !composerSlashDismissed
   const composerSlashCommands: SlashCommandSuggestion[] = useMemo(() => {
@@ -2679,20 +2750,44 @@ export default function OpenTuiApp() {
   useEffect(() => {
     if (!selectedSession) {
       setComposerLiveSlashCommands([])
+      setComposerAgentOptions([])
+      setComposerMentionAgents([])
+      setTuiOpenCodeAgent('')
       return
     }
     let cancelled = false
     void (async () => {
       try {
-        const live = await readViewSessionSlashCommands(selectedSession.sessionId, selectedSession.provider)
+        const [live, composerOptions] = await Promise.all([
+          readViewSessionSlashCommands(selectedSession.sessionId, selectedSession.provider),
+          readViewSessionComposerOptions(selectedSession.sessionId, selectedSession.provider),
+        ])
         if (cancelled) return
         setComposerLiveSlashCommands(live.map((entry) => ({
           command: entry.command,
           description: entry.description,
           argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
         })))
+        const agentOptions = composerOptions.agents ?? []
+        setComposerAgentOptions(agentOptions)
+        setComposerMentionAgents(composerOptions.mentionAgents ?? [])
+        if (selectedSession.provider === 'opencode') {
+          const currentAgent = composerOptions.currentAgent
+          setTuiOpenCodeAgent(
+            currentAgent && agentOptions.some((agent) => agent.value === currentAgent)
+              ? currentAgent
+              : agentOptions[0]?.value ?? '',
+          )
+        } else {
+          setTuiOpenCodeAgent('')
+        }
       } catch {
-        if (!cancelled) setComposerLiveSlashCommands([])
+        if (!cancelled) {
+          setComposerLiveSlashCommands([])
+          setComposerAgentOptions([])
+          setComposerMentionAgents([])
+          setTuiOpenCodeAgent('')
+        }
       }
     })()
     return () => { cancelled = true }
@@ -2709,9 +2804,27 @@ export default function OpenTuiApp() {
       setComposerMentionResults([])
       return
     }
+    const agentMatches: TuiMentionResult[] = selectedSession?.provider === 'opencode'
+      ? composerMentionAgents
+          .filter((agent) => {
+            const query = composerMention.query.toLowerCase()
+            if (!query) return true
+            return agent.value.toLowerCase().includes(query)
+              || agent.label.toLowerCase().includes(query)
+              || (agent.description?.toLowerCase().includes(query) ?? false)
+          })
+          .slice(0, 8)
+          .map((agent) => ({
+            kind: 'agent' as const,
+            name: agent.value,
+            description: agent.description,
+            mode: agent.mode,
+          }))
+      : []
     const cwd = selectedSession?.cwd
     if (!cwd) {
-      setComposerMentionResults([])
+      setComposerMentionResults(agentMatches)
+      setComposerMentionIndex(0)
       return
     }
     let cancelled = false
@@ -2721,31 +2834,35 @@ export default function OpenTuiApp() {
           const all = await listProjectFiles(cwd, runGitCommand)
           if (cancelled) return
           const query = composerMention.query.toLowerCase()
-          const matches: Array<{ path: string; basename: string }> = []
+          const fileMatches: Array<{ path: string; basename: string }> = []
           for (const entry of all) {
-            if (matches.length >= 12) break
-            if (!query) { matches.push(entry); continue }
+            if (fileMatches.length >= 12) break
+            if (!query) { fileMatches.push(entry); continue }
             const lower = entry.path.toLowerCase()
             const base = entry.basename.toLowerCase()
             if (base === query || base.startsWith(query) || base.includes(query) || lower.includes(query)) {
-              matches.push(entry)
+              fileMatches.push(entry)
             }
           }
-          if (matches.length < 12 && query) {
+          if (fileMatches.length < 12 && query) {
             for (const entry of all) {
-              if (matches.length >= 12) break
-              if (matches.includes(entry)) continue
+              if (fileMatches.length >= 12) break
+              if (fileMatches.includes(entry)) continue
               let qi = 0
               for (let i = 0; i < entry.path.length && qi < query.length; i += 1) {
                 if (entry.path[i] === query[qi]) qi += 1
               }
-              if (qi === query.length) matches.push(entry)
+              if (qi === query.length) fileMatches.push(entry)
             }
           }
+          const matches: TuiMentionResult[] = [
+            ...agentMatches,
+            ...fileMatches.map((entry) => ({ kind: 'file' as const, ...entry })),
+          ]
           setComposerMentionResults(matches)
           setComposerMentionIndex(0)
         } catch {
-          if (!cancelled) setComposerMentionResults([])
+          if (!cancelled) setComposerMentionResults(agentMatches)
         }
       })()
     }, 60)
@@ -2753,21 +2870,35 @@ export default function OpenTuiApp() {
       cancelled = true
       clearTimeout(handle)
     }
-  }, [composerMention, selectedSession?.cwd])
+  }, [composerMention, composerMentionAgents, selectedSession?.cwd, selectedSession?.provider])
 
-  const insertMentionAtCursor = useCallback((entry: { path: string; basename: string }) => {
+  const insertMentionAtCursor = useCallback((entry: TuiMentionResult) => {
     const renderable = composerTextareaRef.current
     if (!renderable || !composerMention) return
     const text = renderable.plainText
     const cursor = renderable.cursorOffset
     const before = text.slice(0, composerMention.start)
     const after = text.slice(cursor)
-    const insertion = `@${entry.path} `
+    const insertion = entry.kind === 'agent'
+      ? `@${entry.name} `
+      : `@${entry.path} `
     const next = `${before}${insertion}${after}`
     renderable.setText(next)
     renderable.cursorOffset = before.length + insertion.length
     setComposerDraft(next)
     setComposerMentionAttachments((prev) => {
+      if (entry.kind === 'agent') {
+        if (prev.some((attachment) => attachment.type === 'agent' && attachment.displayName === entry.name)) return prev
+        return [
+          ...prev,
+          {
+            id: `agent-${entry.name}`,
+            type: 'agent',
+            displayName: entry.name,
+            text: `@${entry.name}`,
+          },
+        ]
+      }
       if (prev.some((attachment) => attachment.path === entry.path)) return prev
       return [
         ...prev,
@@ -3331,11 +3462,20 @@ export default function OpenTuiApp() {
           detail.rawMessages.length > liveBaseline.count
           || lastFingerprint !== liveBaseline.lastFingerprint
         if (persistedTurnArrived) {
-          liveTranscriptBaselineRef.current.delete(cacheKeyForGuards)
-          setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== cacheKeyForGuards))
-          liveToolIndexesRef.current.clear()
-          setComposerLiveText('')
-          setAwaitingPersistedTurn(false)
+          const liveAssistantVisible = Boolean(pendingLiveTextRef.current.trim())
+            || hasLiveAssistantMessage(liveTranscriptMessagesRef.current, cacheKeyForGuards)
+          if (liveAssistantVisible && !hasPersistedAssistantAfterBaseline(detail.rawMessages, liveBaseline.count)) {
+            setLiveTranscriptMessages((prev) => {
+              const next = prev.filter((message) => !(liveMessageSessionKey(message) === cacheKeyForGuards && message.role === 'user'))
+              return next.length === prev.length ? prev : next
+            })
+          } else {
+            liveTranscriptBaselineRef.current.delete(cacheKeyForGuards)
+            setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== cacheKeyForGuards))
+            liveToolIndexesRef.current.clear()
+            setComposerLiveText('')
+            setAwaitingPersistedTurn(false)
+          }
         }
       }
       if (typeof session.lastModified === 'number') {
@@ -3942,6 +4082,7 @@ export default function OpenTuiApp() {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
     const sendStartedAt = Date.now()
     let replyAccumulator = ''
+    let copilotFinalMessageSeen = false
 
     try {
       const overrideModel = tuiModelOverride[sessionKey(targetSession)]
@@ -3955,7 +4096,13 @@ export default function OpenTuiApp() {
           cwd: targetSession.cwd ?? undefined,
           attachments: sendAttachments.length > 0 ? sendAttachments : undefined,
           model: overrideModel || undefined,
+          agent: targetSession.provider === 'opencode' && tuiOpenCodeAgent
+            ? tuiOpenCodeAgent
+            : undefined,
           effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+          mode: targetSession.provider === 'copilot' && tuiCopilotMode !== 'interactive'
+            ? tuiCopilotMode
+            : undefined,
           permissionMode: targetSession.provider === 'claude' && tuiPermissionMode !== 'default'
             ? tuiPermissionMode
             : undefined,
@@ -4134,6 +4281,17 @@ export default function OpenTuiApp() {
             pendingLiveTextRef.current = ''
             setComposerLiveText('')
           }
+        } else if (targetSession.provider === 'copilot') {
+          const threaded = extractCopilotFinalAssistantMessage(parsed, targetSession)
+          if (threaded) {
+            copilotFinalMessageSeen = true
+            const finalText = extractStreamingAssistantText(parsed)
+            if (finalText) replyAccumulator = finalText
+            pendingLiveTextRef.current = ''
+            setComposerLiveText('')
+            setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, threaded))
+            return
+          }
         }
 
         if (targetSession.provider === 'codex' && codexCompletionIsText) {
@@ -4187,6 +4345,17 @@ export default function OpenTuiApp() {
         for (const frame of frames) {
           handleFrame(frame)
         }
+      }
+
+      if (targetSession.provider === 'copilot' && !copilotFinalMessageSeen && replyAccumulator.trim()) {
+        setLiveTranscriptMessages((prev) => upsertThreadedMessage(
+          prev,
+          makeLiveAssistantTextMessage(
+            targetSession,
+            replyAccumulator,
+            `live-copilot:fallback:${sendStartedAt}`,
+          ),
+        ))
       }
 
       setSentHistory((prev) => [...prev, trimmed])
@@ -4284,6 +4453,8 @@ export default function OpenTuiApp() {
     renderer,
     taskBudgetTokens,
     tuiEffort,
+    tuiCopilotMode,
+    tuiOpenCodeAgent,
     tuiPermissionMode,
     tuiModelOverride,
     composerMentionAttachments,
@@ -4911,6 +5082,27 @@ export default function OpenTuiApp() {
         break
       }
       case 'mode': {
+        const target = composerTargetSession ?? selectedSession
+        if (target?.provider === 'opencode') {
+          if (composerAgentOptions.length === 0) break
+          setTuiOpenCodeAgent((current) => {
+            const index = Math.max(0, composerAgentOptions.findIndex((agent) => agent.value === current))
+            return composerAgentOptions[(index + 1) % composerAgentOptions.length]?.value ?? current
+          })
+          break
+        }
+        if (target?.provider === 'copilot') {
+          const order = ['interactive', 'plan', 'autopilot'] as const
+          setTuiCopilotMode((current) => {
+            const next = order[(order.indexOf(current) + 1) % order.length]!
+            void runTuiSessionAction(target, {
+              action: 'setMode',
+              mode: next,
+            }).catch(() => { /* swallow; next send carries body.mode */ })
+            return next
+          })
+          break
+        }
         const order = ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const
         setTuiPermissionMode((current) => {
           const next = order[(order.indexOf(current) + 1) % order.length]!
@@ -6600,17 +6792,21 @@ export default function OpenTuiApp() {
             flexDirection="column"
           >
             <text fg={composerAccentColor} wrapMode="none">
-              {fitText(`${composerConfig.label} files · ⌃P/⌃N select · tab insert · esc cancel  (${composerMentionIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+              {fitText(`${composerConfig.label} ${composerProvider === 'opencode' ? 'files/agents' : 'files'} · ⌃P/⌃N select · tab insert · esc cancel  (${composerMentionIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
             </text>
             {composerMentionResults.slice(start, end).map((entry, offset) => {
               const index = start + offset
               const active = index === composerMentionIndex
+              const label = entry.kind === 'agent' ? `@${entry.name}` : entry.basename
+              const detail = entry.kind === 'agent'
+                ? [entry.mode, entry.description].filter(Boolean).join(' · ')
+                : entry.path
               return (
-                <box key={entry.path} flexDirection="row" height={1} width={rowWidth}>
+                <box key={entry.kind === 'agent' ? `agent:${entry.name}` : `file:${entry.path}`} flexDirection="row" height={1} width={rowWidth}>
                   <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
-                  <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(entry.basename, basenameWidth)}</text>
+                  <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(label, basenameWidth)}</text>
                   <text fg={theme.dim} wrapMode="none">  </text>
-                  <text fg={theme.dim} wrapMode="none">{fitText(entry.path, pathWidth)}</text>
+                  <text fg={theme.dim} wrapMode="none">{fitText(detail, pathWidth)}</text>
                 </box>
               )
             })}

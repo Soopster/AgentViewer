@@ -71,7 +71,7 @@ const CODEX: ProviderComposerConfig = {
   placeholderNoSession: 'Pick a Codex thread to send a message',
   // Match the bindings implemented by this composer: `/` for commands, `@` for file paths,
   // and Shift+Enter for newline.
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / for commands · @ for file paths',
+  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · @ files',
   footerHintSending: 'Esc to interrupt · ⇥ to queue · turn running…',
   sendVerb: 'Send',
   // Verbatim from codex-rs chatwidget.rs PLACEHOLDERS so rotating examples match what Codex shows.
@@ -104,7 +104,7 @@ const OPENCODE: ProviderComposerConfig = {
   placeholderIdle: 'Ask anything — opencode will plan, edit, and run. `!cmd` runs shell.',
   placeholderStreaming: 'Draft your next prompt for opencode…',
   placeholderNoSession: 'Pick an opencode session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · @ files · ↑↓ history',
+  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · @ files/agents · ↑↓ history',
   footerHintSending: 'Esc cancel · streaming…',
   sendVerb: 'Send',
   examples: [
@@ -130,7 +130,7 @@ const COPILOT: ProviderComposerConfig = {
   placeholderIdle: 'How can Copilot help with this repo?',
   placeholderStreaming: 'Draft your next question for Copilot…',
   placeholderNoSession: 'Pick a Copilot session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ↑↓ history',
+  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · mode picker · ↑↓ history',
   footerHintSending: 'Esc cancel · thinking…',
   sendVerb: 'Ask',
   examples: [

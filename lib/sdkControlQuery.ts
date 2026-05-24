@@ -1,4 +1,4 @@
-import { query, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import { query, startup, type Query, type SDKUserMessage, type WarmQuery } from '@anthropic-ai/claude-agent-sdk'
 
 // Keep the streaming-input iterator open for the lifetime of the query so
 // the SDK doesn't tear down the subprocess while we're still issuing control
@@ -6,7 +6,10 @@ import { query, type Query, type SDKUserMessage } from '@anthropic-ai/claude-age
 // closes the query — pre-0.3 it kept the subprocess warm even after an empty
 // generator returned. Resolved via close() on the Query, which interrupts the
 // pending promise.
-function openPrompt(): AsyncIterable<SDKUserMessage> {
+//
+// Exported so other call sites (e.g. `readClaudeSupportedModels`) can use
+// the same never-yielding prompt pattern without duplicating the helper.
+export function openPrompt(): AsyncIterable<SDKUserMessage> {
   return {
     [Symbol.asyncIterator]() {
       return {
@@ -29,4 +32,55 @@ export function createSessionControlQuery(sessionId: string, model = 'claude-son
       enableFileCheckpointing: true,
     },
   })
+}
+
+// ── Pre-warmed Query slot for readClaudeSupportedModels ──────────────────────
+//
+// WarmQuery binds a pre-spawned CLI subprocess to a specific Options shape at
+// startup() time; WarmQuery.query() can only be called once (single-shot).
+// readClaudeSupportedModels is our one caller that always uses the same fixed
+// options (no resume, no cwd, maxTurns:0, persistSession:false) and runs only
+// the control-plane RPCs initializationResult() and supportedModels() — so it
+// can fully consume a warm slot.
+//
+// Flow: prime once at app boot via instrumentation.ts → first read consumes
+// the slot (skipping the ~1–3s spawn) → background re-warm refills it so the
+// next call is hot too.
+
+const READ_MODELS_WARM_OPTIONS = {
+  model: 'claude-sonnet-4-6',
+  persistSession: false,
+  maxTurns: 0,
+  enableFileCheckpointing: true,
+} as const
+
+let readModelsWarmSlot: Promise<WarmQuery | null> | null = null
+
+function spawnReadModelsWarm(): Promise<WarmQuery | null> {
+  return startup({ options: { ...READ_MODELS_WARM_OPTIONS } })
+    .catch((err: unknown) => {
+      console.warn('[sdk] startup() warmup failed:', err instanceof Error ? err.message : err)
+      return null
+    })
+}
+
+/** Kick off the warmup. Called once at app boot. Idempotent. */
+export function primeReadModelsWarmQuery(): void {
+  if (readModelsWarmSlot) return
+  readModelsWarmSlot = spawnReadModelsWarm()
+}
+
+/**
+ * Consume the warm slot (returns null if not warmed or warmup failed) and
+ * immediately re-warm in the background so the next call also benefits.
+ * Callers must construct the Query via `warm.query(openPrompt())` and close
+ * it themselves — the slot owner just hands off the pre-spawned subprocess.
+ */
+export async function consumeReadModelsWarmQuery(): Promise<WarmQuery | null> {
+  const slot = readModelsWarmSlot
+  // Eagerly re-warm so the *next* readClaudeSupportedModels call is hot too.
+  // Whether the current consumption succeeds or not, the next slot starts
+  // spinning up now.
+  readModelsWarmSlot = spawnReadModelsWarm()
+  return slot ? slot : null
 }

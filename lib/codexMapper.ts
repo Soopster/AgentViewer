@@ -39,7 +39,15 @@ function stringify(value: unknown): string {
   }
 }
 
+function msToIsoTimestamp(ms: number | null | undefined): string | undefined {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return undefined
+  return new Date(ms).toISOString()
+}
+
 function uuidV7ToIsoTimestamp(value: string): string | undefined {
+  // Last-resort fallback for records predating Turn.startedAt /
+  // {Item,Turn}{Started,Completed}AtMs notification fields. UUID v7
+  // encodes a unix-ms timestamp in the first 48 bits.
   const compact = value.replace(/-/g, '')
   if (!/^[0-9a-fA-F]{12,}$/.test(compact)) return undefined
   const milliseconds = Number.parseInt(compact.slice(0, 12), 16)
@@ -288,7 +296,13 @@ export function normalizeCodexStreamThreadedMessage(payload: unknown, fallbackSe
 
   if (!itemId || !itemType || !turnId || !threadId) return null
 
-  const timestamp = uuidV7ToIsoTimestamp(itemId) ?? uuidV7ToIsoTimestamp(turnId)
+  // ItemStarted/CompletedNotification carry an exact millisecond timestamp;
+  // prefer it, then fall back to v7-UUID extraction for any payload that
+  // somehow lacks the field.
+  const timestampMs = record.type === 'codex_item_completed'
+    ? (typeof record.completedAtMs === 'number' ? record.completedAtMs : undefined)
+    : (typeof record.startedAtMs === 'number' ? record.startedAtMs : undefined)
+  const timestamp = msToIsoTimestamp(timestampMs) ?? uuidV7ToIsoTimestamp(itemId) ?? uuidV7ToIsoTimestamp(turnId)
   const messages = mapItemToMessages(threadId, turnId, item as CodexThreadItem, timestamp, {
     includeToolResults: record.type === 'codex_item_completed',
   })
@@ -335,15 +349,26 @@ export function mapCodexThreadToMessages(thread: CodexThread): SessionMessage[] 
   const turns = [...thread.turns]
 
   for (const turn of turns) {
-    const turnTimestamp = uuidV7ToIsoTimestamp(turn.id)
+    // Turn.startedAt is in seconds (per schema). Fall back to v7-UUID
+    // extraction for rollouts from older codex versions that didn't
+    // persist the field.
+    const turnTimestamp = msToIsoTimestamp(turn.startedAt != null ? turn.startedAt * 1000 : undefined)
+      ?? uuidV7ToIsoTimestamp(turn.id)
     const items = [...turn.items]
     for (const item of items) {
+      // ThreadItem has no per-item timestamp in the archive, so its v7
+      // UUID is still the only finer-grained signal we can use; fall
+      // back to the turn timestamp if even that doesn't parse.
       const itemTimestamp = uuidV7ToIsoTimestamp(item.id) ?? turnTimestamp
       messages.push(...mapItemToMessages(thread.id, turn.id, item, itemTimestamp))
     }
 
     if (turn.error) {
-      messages.push(makeMessage(thread.id, `${turn.id}:error`, 'assistant', `Turn failed\n\n${turn.error}`, turn.id, turnTimestamp))
+      // turn.error is TurnError { message, additionalDetails, codexErrorInfo },
+      // not a string — stringifying it directly used to render as
+      // "[object Object]".
+      const errorText = [turn.error.message, turn.error.additionalDetails ?? ''].filter(Boolean).join('\n\n')
+      messages.push(makeMessage(thread.id, `${turn.id}:error`, 'assistant', `Turn failed\n\n${errorText}`, turn.id, turnTimestamp))
     }
   }
 
@@ -351,9 +376,9 @@ export function mapCodexThreadToMessages(thread: CodexThread): SessionMessage[] 
 }
 
 export function mapCodexTokenUsageToContextUsage(tokenUsage: CodexThreadTokenUsage, model: string): ContextUsage {
-  const total = tokenUsage.total ?? {}
+  const total = tokenUsage.total ?? null
   const maxTokens = tokenUsage.modelContextWindow ?? 0
-  const totalTokens = total.totalTokens ?? 0
+  const totalTokens = total?.totalTokens ?? 0
 
   return {
     totalTokens,
@@ -361,10 +386,10 @@ export function mapCodexTokenUsageToContextUsage(tokenUsage: CodexThreadTokenUsa
     percentage: maxTokens > 0 ? Math.min(100, (totalTokens / maxTokens) * 100) : 0,
     model,
     categories: [
-      { name: 'Input', tokens: total.inputTokens ?? 0, color: 'var(--cyan)' },
-      { name: 'Cached', tokens: total.cachedInputTokens ?? 0, color: 'var(--green)' },
-      { name: 'Output', tokens: total.outputTokens ?? 0, color: 'var(--violet)' },
-      { name: 'Reasoning', tokens: total.reasoningOutputTokens ?? 0, color: 'var(--amber)' },
+      { name: 'Input', tokens: total?.inputTokens ?? 0, color: 'var(--cyan)' },
+      { name: 'Cached', tokens: total?.cachedInputTokens ?? 0, color: 'var(--green)' },
+      { name: 'Output', tokens: total?.outputTokens ?? 0, color: 'var(--violet)' },
+      { name: 'Reasoning', tokens: total?.reasoningOutputTokens ?? 0, color: 'var(--amber)' },
     ],
   }
 }
@@ -399,12 +424,19 @@ export function mapCodexDiagnosticsToSections(params: {
   skills: CodexSkillsListResponse['data']
   apps: Array<{ name: string }>
 }): SessionDiagnosticSection[] {
+  // Thread.status is a discriminated union ({type:'idle'|'active'|...});
+  // interpolating it directly used to print "[object Object]".
+  const status = params.thread.status
+  const statusLabel = status.type === 'active' && status.activeFlags.length > 0
+    ? `active(${status.activeFlags.join(',')})`
+    : status.type
+
   const sections: SessionDiagnosticSection[] = [
     {
       id: 'runtime',
       title: 'RUNTIME',
       items: [
-        `status · ${params.thread.status}`,
+        `status · ${statusLabel}`,
         `cwd · ${params.thread.cwd}`,
         `model · ${params.currentModel ?? 'unknown'}`,
         `provider · ${params.thread.modelProvider}`,

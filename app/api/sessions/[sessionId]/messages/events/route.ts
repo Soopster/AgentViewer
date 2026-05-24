@@ -4,6 +4,7 @@ import { listViewSessionMessages } from '@/lib/sessionBackend'
 import { subscribeToOpenCodeEvents } from '@/lib/opencodeHarness'
 import { subscribeToCodexEvents } from '@/lib/codexHarness'
 import type { AgentProvider, SessionMessage } from '@/lib/types'
+import type { ErrorNotification, TurnPlanUpdatedNotification } from '@/lib/codex-schema/v2'
 
 export const maxDuration = 300
 
@@ -458,6 +459,12 @@ async function pumpCodex({ sessionId, provider, limit, backfill, offset, enqueue
   }
 
   const subscription = subscribeToCodexEvents({ threadId: sessionId })
+  // Replay the cached structured plan so a late subscriber sees the panel
+  // populated without having to wait for the next update_plan call.
+  const cached = subscription.snapshot
+  if (cached?.plan && cached.plan.plan.length > 0) {
+    enqueue('plan', { sessionId, plan: cached.plan.plan, explanation: cached.plan.explanation })
+  }
   let consumeAborted = false
   const consume = (async () => {
     for await (const event of subscription.events) {
@@ -478,9 +485,27 @@ async function pumpCodex({ sessionId, provider, limit, backfill, offset, enqueue
         scheduleRefetch()
         continue
       }
+      if (method === 'turn/plan/updated') {
+        const params = event.notification.params as TurnPlanUpdatedNotification
+        // params.plan is Array<TurnPlanStep> with step:string, status enum;
+        // still guard the field shape because the wire payload is untyped.
+        const steps = params.plan
+          .map((entry) => ({
+            step: entry.step,
+            status: entry.status,
+          }))
+          .filter((s) => s.step.length > 0)
+        enqueue('plan', {
+          sessionId,
+          plan: steps,
+          explanation: params.explanation,
+        })
+        continue
+      }
       if (method === 'error') {
-        const data = event.notification.params as { message?: unknown }
-        enqueue('error', { error: typeof data?.message === 'string' ? data.message : 'Codex error' })
+        // ErrorNotification carries a TurnError on `.error`, not a flat message.
+        const params = event.notification.params as ErrorNotification
+        enqueue('error', { error: params.error?.message ?? 'Codex error' })
         close()
         return
       }

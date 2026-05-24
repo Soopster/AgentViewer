@@ -90,7 +90,9 @@ export function parseCreatedTaskId(text: string): string | undefined {
 
 function normalizeStatus(value: unknown): TaskStatus | undefined {
   if (value === 'pending') return 'pending'
-  if (value === 'in_progress' || value === 'running') return 'in_progress'
+  // Codex's TurnPlanStepStatus serializes as camelCase ("inProgress");
+  // Claude/OpenCode/Pi use snake_case. Accept both.
+  if (value === 'in_progress' || value === 'inProgress' || value === 'running') return 'in_progress'
   if (value === 'paused') return 'paused'
   if (value === 'completed') return 'completed'
   if (value === 'failed') return 'failed'
@@ -469,6 +471,35 @@ export function buildTaskRegistry(messages: ThreadedMessage[]): TaskRegistry {
     }
   }
 
+  return registry
+}
+
+export type CodexPlanStep = { step: string; status: string }
+
+/**
+ * Builds a TaskRegistry from a Codex `turn/plan/updated` payload. Codex's
+ * `update_plan` tool reports a flat list of steps with simple statuses
+ * (pending / in_progress / completed) — the same shape that drives Claude's
+ * TodoWrite card.
+ */
+export function buildTaskRegistryFromCodexPlan(steps: CodexPlanStep[]): TaskRegistry {
+  const registry: TaskRegistry = new Map()
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]
+    if (!step.step) continue
+    const status = normalizeStatus(step.status)
+    if (!status) continue
+    const id = `codex-plan:${i}`
+    upsert(registry, id, {
+      subject: step.step,
+      status,
+    }, id, undefined, {
+      kind: 'updated',
+      status,
+      subject: step.step,
+      details: 'Codex update_plan',
+    })
+  }
   return registry
 }
 

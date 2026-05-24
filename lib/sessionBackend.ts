@@ -28,15 +28,24 @@ import {
   tagSession,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import { acquireClaudeSession, peekClaudeSession, recycleClaudeSession } from './claudePool'
-import type { ContentBlockParam as ClaudeContentBlockParam, MessageParam as ClaudeMessageParam } from '@anthropic-ai/sdk/resources'
-import type {
-  GetAuthStatusResponse as CopilotGetAuthStatusResponse,
-  GetStatusResponse as CopilotGetStatusResponse,
-  MessageOptions as CopilotMessageOptions,
-  ModelInfo as CopilotModelInfo,
-  SessionEvent as CopilotSessionEvent,
-  SessionMetadata as CopilotSessionMetadata,
+import {
+  acquireClaudeSession,
+  adoptClaudeSession,
+  createInputStream,
+  peekClaudeSession,
+  recycleClaudeSession,
+} from './claudePool'
+import type { ContentBlockParam as ClaudeContentBlockParam } from '@anthropic-ai/sdk/resources'
+import {
+  approveAll,
+  type GetAuthStatusResponse as CopilotGetAuthStatusResponse,
+  type GetStatusResponse as CopilotGetStatusResponse,
+  type MessageOptions as CopilotMessageOptions,
+  type ModelInfo as CopilotModelInfo,
+  type PermissionRequest as CopilotPermissionRequest,
+  type PermissionRequestResult as CopilotPermissionRequestResult,
+  type SessionEvent as CopilotSessionEvent,
+  type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
 import { clearRunningSession, getRunningSession, setRunningSession } from './sessionRuntime'
 import { getProviderCapabilities } from './provider'
@@ -45,6 +54,8 @@ import type {
   AgentProvider,
   ContextUsage,
   Session,
+  SessionComposerAgentOption,
+  SessionComposerOptions,
   SessionDiagnosticSection,
   SessionInfo,
   SessionMessage,
@@ -52,7 +63,7 @@ import type {
   SendAttachment,
   ReasoningEffortLevel,
 } from './types'
-import { createSessionControlQuery } from './sdkControlQuery'
+import { consumeReadModelsWarmQuery, createSessionControlQuery, openPrompt } from './sdkControlQuery'
 import { acquireCopilotSession, evictCopilotSession, getCopilotClient } from './copilotClient'
 import {
   deriveCopilotState,
@@ -86,6 +97,12 @@ import type {
   CodexTurnStartResponse,
   CodexUserInput,
 } from './codexProtocol'
+import type {
+  ErrorNotification,
+  ThreadTokenUsageUpdatedNotification,
+  TurnCompletedNotification,
+  TurnStartedNotification,
+} from './codex-schema/v2'
 import {
   mapCodexDiagnosticsToSections,
   mapCodexModelsToSessionModels,
@@ -117,6 +134,7 @@ import type {
   ConfigProvidersResponse as OpenCodeConfigProvidersResponse,
   Event as OpenCodeEvent,
   FileDiff as OpenCodeFileDiff,
+  AgentPartInput as OpenCodeAgentPartInput,
   FilePartInput as OpenCodeFilePartInput,
   FormatterStatus as OpenCodeFormatterStatus,
   LspStatus as OpenCodeLspStatus,
@@ -405,7 +423,7 @@ function parseAttachments(body: Record<string, unknown>): SendAttachment[] {
     if (!entry || typeof entry !== 'object') return []
     const record = entry as Record<string, unknown>
     const type = typeof record.type === 'string' ? record.type : ''
-    if (!['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob'].includes(type)) return []
+    if (!['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob', 'agent'].includes(type)) return []
     return [{
       id: typeof record.id === 'string' ? record.id : undefined,
       type: type as SendAttachment['type'],
@@ -444,6 +462,10 @@ function attachmentPath(attachment: SendAttachment): string | undefined {
 
 function attachmentName(attachment: SendAttachment): string {
   const path = attachmentPath(attachment)
+  if (attachment.type === 'agent') {
+    const textName = attachment.text?.trim().replace(/^@/, '')
+    return attachment.displayName || textName || path || 'agent'
+  }
   return attachment.displayName || (path ? basename(path) : attachment.type)
 }
 
@@ -532,27 +554,6 @@ async function buildClaudePromptParts(userMessage: string, attachments: SendAtta
   return { text, imageBlocks }
 }
 
-async function buildClaudePrompt(userMessage: string, attachments: SendAttachment[]): Promise<string | AsyncIterable<{ type: 'user'; message: ClaudeMessageParam; parent_tool_use_id: null }>> {
-  const { text, imageBlocks } = await buildClaudePromptParts(userMessage, attachments)
-  if (imageBlocks.length === 0) return text
-
-  async function* messages() {
-    yield {
-      type: 'user' as const,
-      message: {
-        role: 'user' as const,
-        content: [
-          { type: 'text' as const, text },
-          ...imageBlocks,
-        ],
-      },
-      parent_tool_use_id: null,
-    }
-  }
-
-  return messages()
-}
-
 async function buildClaudeUserMessage(userMessage: string, attachments: SendAttachment[]): Promise<SDKUserMessage> {
   const { text, imageBlocks } = await buildClaudePromptParts(userMessage, attachments)
   return {
@@ -621,11 +622,25 @@ function buildCopilotAttachments(attachments: SendAttachment[]): NonNullable<Cop
   return result
 }
 
-function buildOpenCodeParts(userMessage: string, attachments: SendAttachment[]): Array<OpenCodeTextPartInput | OpenCodeFilePartInput> {
-  const text = `${userMessage}${attachmentsAsPromptText(attachments, ['file', 'image', 'blob', 'mention'])}`.trim()
-  const parts: Array<OpenCodeTextPartInput | OpenCodeFilePartInput> = [{ type: 'text', text }]
+function buildOpenCodeParts(userMessage: string, attachments: SendAttachment[]): Array<OpenCodeTextPartInput | OpenCodeFilePartInput | OpenCodeAgentPartInput> {
+  const text = `${userMessage}${attachmentsAsPromptText(attachments, ['file', 'image', 'blob', 'mention', 'agent'])}`.trim()
+  const parts: Array<OpenCodeTextPartInput | OpenCodeFilePartInput | OpenCodeAgentPartInput> = [{ type: 'text', text }]
   for (const attachment of attachments) {
     const path = attachmentPath(attachment)
+    if (attachment.type === 'agent') {
+      const name = attachmentName(attachment)
+      const value = attachment.text?.trim() || `@${name}`
+      parts.push({
+        type: 'agent',
+        name,
+        source: {
+          value,
+          start: 0,
+          end: value.length,
+        },
+      })
+      continue
+    }
     if (!path || (attachment.type !== 'file' && attachment.type !== 'image' && attachment.type !== 'mention')) continue
     const name = attachmentName(attachment)
     const resolved = isHttpUrl(path) ? path : absoluteAttachmentPath(path)
@@ -658,6 +673,21 @@ function codexContextUsageToEventData(contextUsage: ContextUsage): string {
   return `event: context-usage\ndata: ${JSON.stringify(contextUsage)}\n\n`
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`))
+    }, timeoutMs)
+    if (typeof timer === 'object' && timer && 'unref' in timer) {
+      (timer as { unref: () => void }).unref()
+    }
+  })
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer != null) clearTimeout(timer)
+  })
+}
+
 function formatOpenCodeEvent(event: OpenCodeEvent): string {
   return JSON.stringify({ type: 'opencode_event', event })
 }
@@ -671,6 +701,138 @@ function parseOpenCodeSlashCommand(message: string): { command: string; argument
     command: match[1]!,
     arguments: match[2]?.trim() ?? '',
   }
+}
+
+function copilotCommandResultEvent(data: Record<string, unknown>): string {
+  return `event: command-result\ndata: ${JSON.stringify({ provider: 'copilot', ...data })}\n\n`
+}
+
+const COPILOT_COMPOSER_MODES = [
+  {
+    value: 'interactive',
+    label: 'INTERACTIVE',
+    description: 'Respond conversationally and make changes as needed.',
+  },
+  {
+    value: 'plan',
+    label: 'PLAN',
+    description: 'Prepare a plan before changing files.',
+  },
+  {
+    value: 'autopilot',
+    label: 'AUTOPILOT',
+    description: 'Work autonomously toward task completion.',
+  },
+] satisfies NonNullable<SessionComposerOptions['modes']>
+
+function parseCopilotMode(value: unknown): 'interactive' | 'plan' | 'autopilot' | undefined {
+  return value === 'interactive' || value === 'plan' || value === 'autopilot'
+    ? value
+    : undefined
+}
+
+function copilotPermissionDecision(response: string): Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }> {
+  return response === 'once'
+    ? { kind: 'approve-once' }
+    : response === 'always'
+    ? { kind: 'approve-for-session' }
+    : { kind: 'reject' }
+}
+
+type PendingCopilotPermission = {
+  resolve: (result: Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }>) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
+const pendingCopilotPermissions = new Map<string, PendingCopilotPermission>()
+
+function pendingCopilotPermissionKey(sessionId: string, permissionId: string): string {
+  return `${sessionId}:${permissionId}`
+}
+
+function copilotPermissionRequestedEvent(sessionId: string, requestId: string, permissionRequest: CopilotPermissionRequest): string {
+  return JSON.stringify({
+    type: 'copilot_event',
+    event: {
+      id: requestId,
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      type: 'permission.requested',
+      data: {
+        requestId,
+        permissionRequest,
+      },
+    },
+  })
+}
+
+function createCopilotPermissionBridge(
+  sessionId: string,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  encoder: TextEncoder,
+  activeIds: Set<string>,
+): (request: CopilotPermissionRequest) => Promise<Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }>> {
+  return (request) => {
+    const requestId = `agent-viewer-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    activeIds.add(requestId)
+    controller.enqueue(encoder.encode(`data: ${copilotPermissionRequestedEvent(sessionId, requestId, request)}\n\n`))
+    return new Promise((resolve) => {
+      const key = pendingCopilotPermissionKey(sessionId, requestId)
+      const timer = setTimeout(() => {
+        pendingCopilotPermissions.delete(key)
+        activeIds.delete(requestId)
+        resolve({ kind: 'user-not-available' })
+      }, 5 * 60 * 1000)
+      if (typeof timer === 'object' && timer && 'unref' in timer) {
+        (timer as { unref: () => void }).unref()
+      }
+      pendingCopilotPermissions.set(key, {
+        resolve: (result) => {
+          clearTimeout(timer)
+          activeIds.delete(requestId)
+          resolve(result)
+        },
+        timer,
+      })
+    })
+  }
+}
+
+function resolvePendingCopilotPermissions(sessionId: string, ids: Set<string>, result: Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }>): void {
+  for (const id of Array.from(ids)) {
+    const key = pendingCopilotPermissionKey(sessionId, id)
+    const pending = pendingCopilotPermissions.get(key)
+    if (!pending) continue
+    pendingCopilotPermissions.delete(key)
+    clearTimeout(pending.timer)
+    ids.delete(id)
+    pending.resolve(result)
+  }
+}
+
+function openCodeAgentOption(agent: OpenCodeAgent): SessionComposerAgentOption {
+  const metadata = agent as OpenCodeAgent & { hidden?: boolean; native?: boolean }
+  return {
+    value: agent.name,
+    label: agent.name,
+    description: agent.description ?? undefined,
+    mode: agent.mode,
+    native: metadata.native ?? agent.builtIn,
+  }
+}
+
+function isOpenCodeAgentHidden(agent: OpenCodeAgent): boolean {
+  return (agent as OpenCodeAgent & { hidden?: boolean }).hidden === true
+}
+
+function lastOpenCodeUserAgent(messages: Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const info = messages[i]?.info
+    if (info?.role === 'user' && typeof info.agent === 'string' && info.agent.trim()) {
+      return info.agent
+    }
+  }
+  return null
 }
 
 function formatCopilotEvent(event: CopilotSessionEvent): string {
@@ -687,7 +849,51 @@ async function findCopilotSessionMetadata(sessionId: string): Promise<CopilotSes
 
 async function readCopilotSessionEvents(sessionId: string): Promise<CopilotSessionEvent[]> {
   const session = await acquireCopilotSession(sessionId)
-  return session.getMessages()
+  return readCopilotHistoryFromSession(session)
+}
+
+async function readCopilotHistoryFromSession(session: Awaited<ReturnType<typeof acquireCopilotSession>>): Promise<CopilotSessionEvent[]> {
+  const historyReader = session as typeof session & {
+    getEvents?: () => Promise<CopilotSessionEvent[]>
+    getMessages?: () => Promise<CopilotSessionEvent[]>
+  }
+  if (typeof historyReader.getEvents === 'function') {
+    return historyReader.getEvents()
+  }
+  if (typeof historyReader.getMessages === 'function') {
+    return historyReader.getMessages()
+  }
+  throw new Error('Copilot session does not expose a history reader')
+}
+
+function isCopilotAssistantMessage(event: CopilotSessionEvent): event is Extract<CopilotSessionEvent, { type: 'assistant.message' }> {
+  return event.type === 'assistant.message'
+}
+
+function findCopilotHistoryCompletion(
+  events: CopilotSessionEvent[],
+  baselineCount: number,
+  allowFinalMessageFallback: boolean,
+): Extract<CopilotSessionEvent, { type: 'assistant.message' }> | null {
+  const currentEvents = events.slice(Math.max(0, baselineCount))
+  const userIndex = currentEvents.findIndex((event) => event.type === 'user.message')
+  if (userIndex === -1) return null
+  const turnEvents = currentEvents.slice(userIndex)
+  const error = turnEvents.find((event) => event.type === 'session.error') as Extract<CopilotSessionEvent, { type: 'session.error' }> | undefined
+  if (error) {
+    const err = new Error(error.data.message)
+    if (error.data.stack) err.stack = error.data.stack
+    throw err
+  }
+  const hasCompletionSignal = turnEvents.some((event) =>
+    event.type === 'session.idle' || (event.type as string) === 'session.task_complete'
+  )
+  const assistant = turnEvents.findLast(isCopilotAssistantMessage)
+  if (!assistant) return null
+  const hasToolRequests = Array.isArray(assistant.data.toolRequests) && assistant.data.toolRequests.length > 0
+  return hasCompletionSignal || (allowFinalMessageFallback && !hasToolRequests)
+    ? assistant
+    : null
 }
 
 async function listCopilotSessions({ limit, offset, dir, includeWorktrees }: ListParams): Promise<Session[]> {
@@ -1181,6 +1387,38 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     }
   }
 
+  if (resolvedProvider === 'copilot') {
+    if (action === 'respondPermission') {
+      const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
+      const response = typeof body.response === 'string' ? body.response : ''
+      if (!permissionId) throw new Error('permissionId is required')
+      if (response !== 'once' && response !== 'always' && response !== 'reject') {
+        throw new Error('response must be once, always, or reject')
+      }
+      const result = copilotPermissionDecision(response)
+      const pending = pendingCopilotPermissions.get(pendingCopilotPermissionKey(sessionId, permissionId))
+      if (pending) {
+        pendingCopilotPermissions.delete(pendingCopilotPermissionKey(sessionId, permissionId))
+        clearTimeout(pending.timer)
+        pending.resolve(result)
+        return { ok: true }
+      }
+      const session = await acquireCopilotSession(sessionId)
+      const handled = await session.rpc.permissions.handlePendingPermissionRequest({
+        requestId: permissionId,
+        result,
+      })
+      return { ok: handled.success }
+    }
+    if (action === 'setMode') {
+      const mode = parseCopilotMode(body.mode)
+      if (!mode) throw new Error('mode must be interactive, plan, or autopilot')
+      const session = await acquireCopilotSession(sessionId)
+      await session.rpc.mode.set({ mode })
+      return { ok: true, mode }
+    }
+  }
+
   if (resolvedProvider === 'claude') {
     // Phase 2: prefer the warm pool entry's persistent Query for control RPCs
     // — avoids spinning a fresh CLI subprocess just to swap a model or
@@ -1294,13 +1532,20 @@ async function readCodexMessagesAll(sessionId: string): Promise<SessionMessage[]
   const lastTurn = turns.at(-1)
   const lastItem = lastTurn?.items.at(-1)
   const lastItemSignature = lastItem ? JSON.stringify(lastItem) : ''
+  // ThreadStatus is a discriminated union; TurnError is an object — both
+  // need flat keys for cache fingerprinting or they'd stringify to "[object
+  // Object]" and miss invalidations.
+  const threadStatusKey = thread.status.type === 'active'
+    ? `active:${thread.status.activeFlags.join(',')}`
+    : thread.status.type
+  const turnErrorKey = lastTurn?.error?.message ?? ''
   const signature = [
     thread.updatedAt,
-    thread.status,
+    threadStatusKey,
     turns.length,
     lastTurn?.id ?? '',
     lastTurn?.status ?? '',
-    lastTurn?.error ?? '',
+    turnErrorKey,
     lastTurn?.items.length ?? 0,
     lastItemSignature,
   ].join(':')
@@ -1656,15 +1901,39 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     taskBudgetTotal,
   } = args
 
-  const prompt = await buildClaudePrompt(userMessage, attachments)
+  // Build the user message in the same SDKUserMessage shape the pool uses,
+  // and push it onto a queue-based input stream. Two reasons:
+  //   1) The stream stays open after turn 1 ends, so the SDK's Query
+  //      iterator stays open and we can hand the Query off to the pool.
+  //   2) The pool can keep pushing future turns onto the same stream.
+  const pushMessage = await buildClaudeUserMessage(userMessage, attachments)
+  const { pushUserMessage, endInput, iterable } = createInputStream()
+  pushUserMessage(pushMessage)
+
   const encoder = new TextEncoder()
   const abortController = new AbortController()
-  signal.addEventListener('abort', () => abortController.abort())
+  // Named handler so we can detach it on successful adoption — otherwise a
+  // post-turn client disconnect would abort the Query we just gave to the pool.
+  const propagateAbort = () => abortController.abort()
+  signal.addEventListener('abort', propagateAbort)
+
+  // Snapshot of the options we constructed the Query with — passed to the
+  // pool on adopt so future acquires can compatibility-check against it.
+  const adoptOptions = {
+    sessionId,
+    cwd: cwdOverride,
+    model,
+    permissionMode,
+    effort,
+    resumeSessionAt,
+    forkSession: forkSessionOnSend,
+    taskBudgetTokens: taskBudgetTotal,
+  }
 
   const stream = new ReadableStream({
     async start(controller) {
       const q = query({
-        prompt,
+        prompt: iterable,
         options: {
           ...(isPendingSession ? {} : { resume: sessionId }),
           ...(cwdOverride ? { cwd: cwdOverride } : {}),
@@ -1696,6 +1965,8 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       })
 
       let emittedSessionEvent = false
+      let realizedSessionId: string | undefined
+      let adopted = false
 
       try {
         try {
@@ -1706,9 +1977,33 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         for await (const msg of q) {
           if (!emittedSessionEvent && msg.session_id) {
             emittedSessionEvent = true
+            realizedSessionId = msg.session_id
             controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: msg.session_id })}\n\n`))
           }
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
+          // Break after the result so we can adopt the Query into the pool.
+          // The pool's pump loop takes over consuming for any tail messages
+          // (notably prompt_suggestion, which the SDK emits after `result`)
+          // and for future turns.
+          if (msg.type === 'result') break
+        }
+
+        // Adopt into the pool when we can: a clean result was seen, the
+        // session_id is known, and the client hasn't disconnected. Skipping
+        // adoption falls back to the legacy close-after-turn-1 behavior.
+        if (
+          realizedSessionId
+          && !abortController.signal.aborted
+        ) {
+          signal.removeEventListener('abort', propagateAbort)
+          adoptClaudeSession({
+            sessionId: realizedSessionId,
+            query: q,
+            pushUserMessage,
+            endInput,
+            options: { ...adoptOptions, sessionId: realizedSessionId },
+          })
+          adopted = true
         }
       } catch (err) {
         if (!abortController.signal.aborted) {
@@ -1716,7 +2011,10 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         }
       } finally {
         clearRunningSession(sessionId)
-        q.close()
+        if (!adopted) {
+          signal.removeEventListener('abort', propagateAbort)
+          q.close()
+        }
         controller.close()
       }
     },
@@ -1856,15 +2154,30 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
 }
 
 async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
-  const q = query({
-    prompt: 'ping',
-    options: {
-      model: 'claude-sonnet-4-6',
-      persistSession: false,
-      maxTurns: 1,
-      enableFileCheckpointing: true,
-    },
-  })
+  // Prefer the pre-warmed slot primed by instrumentation.ts → skips the
+  // ~1–3s subprocess spawn for the first call after boot. The slot
+  // automatically re-warms in the background after consumption so the next
+  // call is hot too. Falls back to a fresh query() when the slot is empty
+  // (warmup failed, or this is the second concurrent call before re-warm
+  // finished).
+  //
+  // `maxTurns: 0` + a never-yielding prompt iterator stops the SDK from
+  // starting an actual model turn — the subprocess spins up, services the
+  // `initializationResult` / `supportedModels` control RPCs, and shuts down
+  // via `q.close()`. The legacy `prompt: 'ping'` + `maxTurns: 1` pattern
+  // would burn a full API round-trip on every cache miss.
+  const warm = await consumeReadModelsWarmQuery()
+  const q = warm
+    ? warm.query(openPrompt())
+    : query({
+        prompt: openPrompt(),
+        options: {
+          model: 'claude-sonnet-4-6',
+          persistSession: false,
+          maxTurns: 0,
+          enableFileCheckpointing: true,
+        },
+      })
 
   try {
     const initialization = await q.initializationResult()
@@ -1921,6 +2234,10 @@ function formatCodexNotification(notification: CodexNotification): string | null
 }
 
 function getCodexNotificationTurnId(notification: CodexNotification): string | null {
+  // Most notifications expose turnId directly; turn/started, turn/completed
+  // carry it indirectly via params.turn.id (per TurnStartedNotification /
+  // TurnCompletedNotification). The shape varies across the union, so this
+  // accessor stays loose-typed by design.
   const params = notification.params as { turnId?: unknown; turn?: { id?: unknown } | null }
   if (typeof params.turnId === 'string' && params.turnId) return params.turnId
   if (typeof params.turn?.id === 'string' && params.turn.id) return params.turn.id
@@ -1964,6 +2281,9 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
     ? effort
     : undefined
   const attachments = parseAttachments(body)
+  const bangShell = userMessage.startsWith('!') && attachments.length === 0
+    ? userMessage.slice(1).trim()
+    : null
   const client = getCodexClient()
   const encoder = new TextEncoder()
 
@@ -2054,10 +2374,19 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           }
           if (notification.method === 'thread/tokenUsage/updated') {
             const usage = mapCodexTokenUsageToContextUsage(
-              (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
+              (notification.params as ThreadTokenUsageUpdatedNotification).tokenUsage,
               currentModel,
             )
             safeEnqueue(codexContextUsageToEventData(usage))
+            continue
+          }
+          if (notification.method === 'error') {
+            const params = notification.params as ErrorNotification
+            const message = params.error?.message || 'Codex turn failed'
+            safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`)
+            if (!params.willRetry) {
+              scheduleCompletionClose(unsubscribe)
+            }
             continue
           }
           if (completionSeen) scheduleCompletionClose(unsubscribe)
@@ -2079,7 +2408,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
             if (!targetTurnId && notificationTurnId) activateTargetTurn(notificationTurnId)
             if (!targetTurnId || notificationTurnId !== targetTurnId) continue
             const usage = mapCodexTokenUsageToContextUsage(
-              (notification.params as { tokenUsage: CodexThreadTokenUsage }).tokenUsage,
+              (notification.params as ThreadTokenUsageUpdatedNotification).tokenUsage,
               currentModel,
             )
             safeEnqueue(codexContextUsageToEventData(usage))
@@ -2091,6 +2420,9 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
               activateTargetTurn(notificationTurnId)
             } else if (isCodexRealtimeNotification(notification)) {
               flushNotification(notification)
+              if (bangShell !== null && notification.method === 'item/completed') {
+                scheduleCompletionClose(unsubscribe)
+              }
               continue
             } else {
               bufferedNotifications.push(notification)
@@ -2102,6 +2434,22 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
 
           if (notification.method === 'turn/completed') {
             scheduleCompletionClose(unsubscribe)
+            continue
+          }
+
+          // The codex app-server reports mid-turn failures as `error`
+          // notifications. The legacy path stringified them as a generic
+          // codex_error data frame which the client never narrowed to an
+          // error. Promote them to the canonical `event: error` SSE frame
+          // so MessageView surfaces them the same way every other provider
+          // does.
+          if (notification.method === 'error') {
+            const params = notification.params as ErrorNotification
+            const message = params.error?.message || 'Codex turn failed'
+            safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`)
+            if (!params.willRetry) {
+              scheduleCompletionClose(unsubscribe)
+            }
             continue
           }
 
@@ -2129,6 +2477,15 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         const resume = await resumeCodexThread(sessionId).catch(() => null)
         currentModel = model ?? resume?.model ?? currentModel
         safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`)
+
+        if (bangShell !== null) {
+          if (!bangShell) throw new Error('Enter a shell command after !')
+          await client.request('thread/shellCommand', {
+            threadId: sessionId,
+            command: bangShell,
+          })
+          return
+        }
 
         const started = await client.request<CodexTurnStartResponse>('turn/start', {
           threadId: sessionId,
@@ -2355,8 +2712,11 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
   const userMessage = String(body.message ?? '').trim()
   const selectedModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null
   const effort = parseEffort(body)
-  const attachments = buildCopilotAttachments(parseAttachments(body))
-  const client = await getCopilotClient()
+  const selectedMode = parseCopilotMode(body.mode)
+  const manualPermissions = body.manualPermissions === true
+  const nativeCommands = body.nativeCommands === true
+  const parsedAttachments = parseAttachments(body)
+  const attachments = buildCopilotAttachments(parsedAttachments)
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({
@@ -2365,6 +2725,15 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
       let unsubscribe: (() => void) | null = null
       let closed = false
       let emittedError = false
+      let manualPermissionHandlerInstalled = false
+      let completedTurn = false
+      let turnTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+      let finalMessageFallbackTimer: ReturnType<typeof setTimeout> | null = null
+      let historyPollCancelled = false
+      let finishTurn: (() => void) | null = null
+      let failTurn: ((error: Error) => void) | null = null
+      const streamedAssistantMessageIds = new Set<string>()
+      const bridgedPermissionIds = new Set<string>()
 
       const close = () => {
         if (closed) return
@@ -2372,12 +2741,57 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         controller.close()
       }
 
+      const clearFinalMessageFallback = () => {
+        if (finalMessageFallbackTimer == null) return
+        clearTimeout(finalMessageFallbackTimer)
+        finalMessageFallbackTimer = null
+      }
+
+      const scheduleFinalMessageFallback = (event: Extract<CopilotSessionEvent, { type: 'assistant.message' }>) => {
+        if (selectedMode === 'autopilot') return
+        if (Array.isArray(event.data.toolRequests) && event.data.toolRequests.length > 0) return
+        clearFinalMessageFallback()
+        finalMessageFallbackTimer = setTimeout(() => {
+          finalMessageFallbackTimer = null
+          finishTurn?.()
+        }, 1500)
+        if (typeof finalMessageFallbackTimer === 'object' && finalMessageFallbackTimer && 'unref' in finalMessageFallbackTimer) {
+          (finalMessageFallbackTimer as { unref: () => void }).unref()
+        }
+      }
+
+      const sleep = (ms: number) => new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, ms)
+        if (typeof timer === 'object' && timer && 'unref' in timer) {
+          (timer as { unref: () => void }).unref()
+        }
+      })
+
       try {
-        const models = await client.listModels().catch(() => [] as CopilotModelInfo[])
-        const modelsById = new Map(models.map((model) => [model.id, model]))
+        const modelsById = new Map<string, CopilotModelInfo>()
+
+        const turnComplete = new Promise<void>((resolve, reject) => {
+          finishTurn = () => {
+            clearFinalMessageFallback()
+            resolve()
+          }
+          failTurn = (error) => {
+            clearFinalMessageFallback()
+            reject(error)
+          }
+        })
 
         const handleEvent = (event: CopilotSessionEvent) => {
           if (closed) return
+          if (event.type === 'assistant.message') {
+            streamedAssistantMessageIds.add(event.data.messageId)
+            scheduleFinalMessageFallback(event)
+          } else if (event.type === 'assistant.turn_start') {
+            clearFinalMessageFallback()
+          } else if ((event.type as string) === 'session.idle' || (event.type as string) === 'session.task_complete') {
+            finishTurn?.()
+          }
+
           if (event.type === 'assistant.usage') {
             const usage = mapCopilotUsageToContextUsage(event, modelsById)
             controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
@@ -2385,6 +2799,9 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
           if (event.type === 'session.error') {
             emittedError = true
+            const error = new Error(event.data.message)
+            if (event.data.stack) error.stack = event.data.stack
+            failTurn?.(error)
             controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: event.data.message })}\n\n`))
             return
           }
@@ -2395,8 +2812,19 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         // Warm session pool: re-use a single Copilot session per id across
         // sends and bind a fresh listener for this turn only. The native CLI
         // keeps the JSON-RPC connection alive between turns; this matches.
-        session = await acquireCopilotSession(sessionId)
+        session = await withTimeout(acquireCopilotSession(sessionId), 20000, 'Copilot session resume')
+        if (manualPermissions) {
+          session.registerPermissionHandler(createCopilotPermissionBridge(sessionId, controller, encoder, bridgedPermissionIds))
+          manualPermissionHandlerInstalled = true
+        } else {
+          session.registerPermissionHandler(approveAll)
+        }
         unsubscribe = session.on(handleEvent)
+        const historyBaselineCount = await withTimeout(
+          readCopilotHistoryFromSession(session),
+          5000,
+          'Copilot history baseline',
+        ).then((events) => events.length).catch(() => null)
 
         controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`))
 
@@ -2406,6 +2834,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         })
 
         signal.addEventListener('abort', () => {
+          resolvePendingCopilotPermissions(sessionId, bridgedPermissionIds, { kind: 'user-not-available' })
           const running = getRunningSession(sessionId)
           if (running?.provider === 'copilot') {
             void running.interrupt().catch(() => {})
@@ -2416,15 +2845,152 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           ? effort
           : undefined
 
-        if (selectedModel || copilotEffort) {
-          const current = await session.rpc.model.getCurrent().catch(() => ({ modelId: undefined }))
-          const nextModel = selectedModel ?? current.modelId
+        if (selectedModel) {
+          await withTimeout(
+            session.setModel(selectedModel, copilotEffort ? { reasoningEffort: copilotEffort } : undefined),
+            15000,
+            'Copilot model switch',
+          )
+        } else if (copilotEffort) {
+          const current = await withTimeout(session.rpc.model.getCurrent(), 5000, 'Copilot current model').catch(() => ({ modelId: undefined }))
+          const nextModel = current.modelId
           if (nextModel && (current.modelId !== nextModel || copilotEffort)) {
-            await session.setModel(nextModel, copilotEffort ? { reasoningEffort: copilotEffort } : undefined)
+            await withTimeout(
+              session.setModel(nextModel, copilotEffort ? { reasoningEffort: copilotEffort } : undefined),
+              15000,
+              'Copilot model switch',
+            )
           }
         }
 
-        await session.sendAndWait({ prompt: userMessage, attachments: attachments.length > 0 ? attachments : undefined }, 300_000)
+        if (selectedMode) {
+          await withTimeout(session.rpc.mode.set({ mode: selectedMode }), 5000, 'Copilot mode switch')
+        }
+
+        let promptToSend = userMessage
+        const slashCommand = nativeCommands && parsedAttachments.length === 0
+          ? parseOpenCodeSlashCommand(userMessage)
+          : null
+        if (slashCommand) {
+          const commandName = slashCommand.command.toLowerCase()
+          if (commandName === 'help') {
+            controller.enqueue(encoder.encode(copilotCommandResultEvent({
+              message: 'Copilot commands: /mode [interactive|plan|autopilot], /model [model].',
+            })))
+            return
+          }
+          if (commandName === 'mode') {
+            const requestedMode = parseCopilotMode(slashCommand.arguments.split(/\s+/)[0])
+            if (!requestedMode) {
+              const currentMode = await withTimeout(session.rpc.mode.get(), 5000, 'Copilot mode read').catch(() => 'interactive')
+              controller.enqueue(encoder.encode(copilotCommandResultEvent({
+                message: `Copilot mode is ${parseCopilotMode(currentMode) ?? 'interactive'}. Use /mode interactive, /mode plan, or /mode autopilot.`,
+                mode: parseCopilotMode(currentMode) ?? 'interactive',
+              })))
+              return
+            }
+            await withTimeout(session.rpc.mode.set({ mode: requestedMode }), 5000, 'Copilot mode switch')
+            controller.enqueue(encoder.encode(copilotCommandResultEvent({
+              message: `Copilot mode set to ${requestedMode}.`,
+              mode: requestedMode,
+            })))
+            return
+          }
+          if (commandName === 'model') {
+            const requestedModel = slashCommand.arguments.trim()
+            if (!requestedModel) {
+              const current = await withTimeout(session.rpc.model.getCurrent(), 5000, 'Copilot current model').catch(() => ({ modelId: undefined }))
+              controller.enqueue(encoder.encode(copilotCommandResultEvent({
+                message: current.modelId ? `Copilot model is ${current.modelId}.` : 'No Copilot model is selected.',
+              })))
+              return
+            }
+            await withTimeout(
+              session.setModel(requestedModel, copilotEffort ? { reasoningEffort: copilotEffort } : undefined),
+              15000,
+              'Copilot model switch',
+            )
+            controller.enqueue(encoder.encode(copilotCommandResultEvent({
+              message: `Copilot model set to ${requestedModel}.`,
+            })))
+            return
+          }
+
+          const commandsRpc = (session.rpc as typeof session.rpc & {
+            commands?: typeof session.rpc.commands & {
+              invoke?: (params: { name: string; input?: string }) => Promise<unknown>
+            }
+          }).commands
+          if (commandsRpc?.invoke) {
+            const result = await withTimeout(
+              commandsRpc.invoke({
+                name: slashCommand.command,
+                input: slashCommand.arguments || undefined,
+              }),
+              10000,
+              'Copilot slash command',
+            )
+            const resultRecord = result && typeof result === 'object' && !Array.isArray(result)
+              ? result as Record<string, unknown>
+              : null
+            if (resultRecord?.kind === 'agent-prompt' && typeof resultRecord.prompt === 'string') {
+              const mode = parseCopilotMode(resultRecord.mode)
+              if (mode) await session.rpc.mode.set({ mode })
+              promptToSend = resultRecord.prompt
+            } else if (resultRecord?.kind === 'text' && typeof resultRecord.text === 'string') {
+              controller.enqueue(encoder.encode(copilotCommandResultEvent({
+                message: resultRecord.text,
+              })))
+              return
+            } else if (resultRecord?.kind === 'completed') {
+              controller.enqueue(encoder.encode(copilotCommandResultEvent({
+                message: typeof resultRecord.message === 'string' && resultRecord.message.trim()
+                  ? resultRecord.message
+                  : `/${slashCommand.command} completed.`,
+              })))
+              return
+            } else if (resultRecord?.kind === 'select-subcommand') {
+              controller.enqueue(encoder.encode(copilotCommandResultEvent({
+                message: `/${slashCommand.command} needs a subcommand in the native Copilot UI.`,
+              })))
+              return
+            }
+          }
+        }
+
+        turnTimeoutTimer = setTimeout(() => {
+          failTurn?.(new Error('Timeout after 300000ms waiting for Copilot turn completion'))
+        }, 300_000)
+        if (typeof turnTimeoutTimer === 'object' && turnTimeoutTimer && 'unref' in turnTimeoutTimer) {
+          (turnTimeoutTimer as { unref: () => void }).unref()
+        }
+        await session.send({ prompt: promptToSend, attachments: attachments.length > 0 ? attachments : undefined })
+        const historyCompletion = historyBaselineCount == null
+          ? new Promise<never>(() => {})
+          : (async () => {
+            while (!historyPollCancelled && !closed) {
+              await sleep(1000)
+              if (historyPollCancelled || closed || !session) return
+              const events = await withTimeout(
+                readCopilotHistoryFromSession(session),
+                5000,
+                'Copilot history poll',
+              ).catch(() => null)
+              if (!events) continue
+              const finalMessage = findCopilotHistoryCompletion(
+                events,
+                historyBaselineCount,
+                selectedMode !== 'autopilot',
+              )
+              if (!finalMessage) continue
+              if (!streamedAssistantMessageIds.has(finalMessage.data.messageId)) {
+                controller.enqueue(encoder.encode(`data: ${formatCopilotEvent(finalMessage)}\n\n`))
+              }
+              return
+            }
+          })()
+        await Promise.race([turnComplete, historyCompletion])
+        completedTurn = true
       } catch (err) {
         if (!emittedError) {
           controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
@@ -2432,8 +2998,21 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         // If the session itself is hosed, evict so the next send reconnects.
         await evictCopilotSession(sessionId).catch(() => {})
       } finally {
+        if (turnTimeoutTimer != null) {
+          clearTimeout(turnTimeoutTimer)
+          turnTimeoutTimer = null
+        }
+        historyPollCancelled = true
+        clearFinalMessageFallback()
+        resolvePendingCopilotPermissions(sessionId, bridgedPermissionIds, { kind: 'user-not-available' })
+        if (manualPermissionHandlerInstalled) {
+          session?.registerPermissionHandler(approveAll)
+        }
         clearRunningSession(sessionId)
         try { unsubscribe?.() } catch { /* ignore */ }
+        if (completedTurn) {
+          await evictCopilotSession(sessionId).catch(() => {})
+        }
         close()
       }
     },
@@ -2500,6 +3079,25 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           if (closed) return
           const payload = JSON.stringify({ type: 'pi_event', event })
           controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
+
+          // pi-ai's terminal AssistantMessage carries stopReason "error" |
+          // "aborted" with errorMessage when the LLM call fails (rate limit,
+          // network, refusal). agent_end still fires cleanly, so without
+          // this branch the user just sees an empty turn — no error toast.
+          // Gate on the terminal events only so a transient stopReason on
+          // an in-flight message_update can't trip a false positive.
+          if (event.type === 'message_end' || event.type === 'turn_end') {
+            const message = event.message
+            if (message.role === 'assistant'
+              && (message.stopReason === 'error' || message.stopReason === 'aborted')
+            ) {
+              const errorMessage = message.errorMessage
+                || (message.stopReason === 'aborted' ? 'Pi turn aborted' : 'Pi turn failed')
+              controller.enqueue(encoder.encode(
+                `event: error\ndata: ${JSON.stringify({ error: errorMessage })}\n\n`,
+              ))
+            }
+          }
 
           if (event.type === 'agent_end') {
             clearRunningSession(sessionId)
@@ -2772,6 +3370,48 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
   }
 }
 
+export async function readViewSessionComposerOptions(sessionId: string, providerOverride?: AgentProvider): Promise<SessionComposerOptions> {
+  const provider = await resolveProvider(providerOverride)
+  if (provider === 'opencode') {
+    try {
+      const session = await getOpenCodeSession(sessionId)
+      const query = openCodeDirectoryQuery(session)
+      const [project, messages] = await Promise.all([
+        getOpenCodeProjectDiagnostics(query?.directory),
+        getOpenCodeSessionMessages(sessionId).catch(() => [] as Array<{ info: OpenCodeMessage; parts: OpenCodePart[] }>),
+      ])
+      const selectableAgents = project.agents
+        .filter((agent) => !isOpenCodeAgentHidden(agent) && agent.mode !== 'subagent')
+        .map(openCodeAgentOption)
+      const mentionAgents = project.agents
+        .filter((agent) => !isOpenCodeAgentHidden(agent) && agent.mode !== 'primary')
+        .map(openCodeAgentOption)
+      const currentAgent = lastOpenCodeUserAgent(messages)
+        ?? selectableAgents.find((agent) => agent.value === 'build')?.value
+        ?? selectableAgents[0]?.value
+        ?? null
+      return {
+        agents: selectableAgents,
+        mentionAgents,
+        currentAgent,
+      }
+    } catch {
+      return { agents: [], mentionAgents: [], currentAgent: null }
+    }
+  }
+
+  if (provider === 'copilot') {
+    const session = await acquireCopilotSession(sessionId)
+    const currentMode = await session.rpc.mode.get().catch(() => 'interactive')
+    return {
+      modes: COPILOT_COMPOSER_MODES,
+      currentMode: parseCopilotMode(currentMode) ?? 'interactive',
+    }
+  }
+
+  return {}
+}
+
 export async function readViewSessionSlashCommands(sessionId: string, providerOverride?: AgentProvider): Promise<Array<{ command: string; description: string; argumentHint?: string }>> {
   const provider = await resolveProvider(providerOverride)
   if (provider === 'claude') {
@@ -2813,6 +3453,39 @@ export async function readViewSessionSlashCommands(sessionId: string, providerOv
       return list.map((command) => ({
         command: command.name.startsWith('/') ? command.name : `/${command.name}`,
         description: command.description ?? '',
+      }))
+    } catch {
+      return []
+    }
+  }
+  if (provider === 'copilot') {
+    try {
+      const session = await acquireCopilotSession(sessionId)
+      const commandsRpc = (session.rpc as typeof session.rpc & {
+        commands?: {
+          list?: (params?: {
+            includeBuiltins?: boolean
+            includeSkills?: boolean
+            includeClientCommands?: boolean
+          }) => Promise<{
+            commands: Array<{
+              name: string
+              description?: string
+              input?: { hint?: string }
+            }>
+          }>
+        }
+      }).commands
+      if (!commandsRpc?.list) return []
+      const response = await commandsRpc.list({
+        includeBuiltins: true,
+        includeSkills: true,
+        includeClientCommands: true,
+      })
+      return response.commands.map((command) => ({
+        command: command.name.startsWith('/') ? command.name : `/${command.name}`,
+        description: command.description ?? '',
+        argumentHint: command.input?.hint && command.input.hint.trim() ? command.input.hint.trim() : undefined,
       }))
     } catch {
       return []

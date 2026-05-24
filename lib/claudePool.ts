@@ -236,13 +236,20 @@ class ClaudePool {
   }
 
   private async applyLiveChanges(entry: InternalEntry, opts: ClaudePoolAcquireOptions): Promise<void> {
+    // If a live setModel / setPermissionMode is rejected by the SDK we
+    // recycle the entry rather than silently keeping the old value. The
+    // recycled entry is replaced on the next acquire() with a fresh spawn
+    // that bakes the requested options in at construction time — that
+    // either succeeds (giving the caller what they asked for) or surfaces a
+    // real error to the caller. Swallowing leaves the snapshot stale and
+    // the UX confused.
     if (opts.model && opts.model !== entry.state.model) {
       try {
         await entry.query.setModel(opts.model)
         entry.state.model = opts.model
       } catch {
-        // Fall through; if setModel is rejected by the SDK we keep the old model.
-        // Caller may force a recycle by triggering an incompatible-option path next time.
+        this.recycleInternal(entry, 'set-model-failed')
+        return
       }
     }
     if (opts.permissionMode && opts.permissionMode !== entry.state.permissionMode) {
@@ -250,7 +257,7 @@ class ClaudePool {
         await entry.query.setPermissionMode(opts.permissionMode)
         entry.state.permissionMode = opts.permissionMode
       } catch {
-        /* see above */
+        this.recycleInternal(entry, 'set-permission-mode-failed')
       }
     }
   }
@@ -325,6 +332,68 @@ class ClaudePool {
     const entry = this.entries.get(sessionId)
     if (!entry || !entry.alive) return null
     return this.toPublic(entry)
+  }
+
+  /**
+   * Adopt a Query/input-stream pair that was already constructed outside the
+   * pool (specifically: by createClaudeStreamCold for turn 1 of a brand-new
+   * or freshly-resumed/forked/rewound session). The cold path already drained
+   * the turn-1 messages; the pool's pump loop takes over for the tail and
+   * future turns.
+   *
+   * Caller responsibilities:
+   *   • Stop reading from `query` before calling this — the pump loop owns
+   *     the iterator from here.
+   *   • Detach any AbortController that would tear `query` down (the cold
+   *     path's request-signal abort listener) before adopting.
+   *   • Pass the *realized* session id from the SDK (which differs from the
+   *     pending UUID we generated).
+   *   • Pass `state.resumeSessionAt` / `state.forkSession` as undefined —
+   *     those options are one-shot and don't apply to subsequent turns; the
+   *     next acquire's compatibility check would otherwise force a recycle.
+   *
+   * If an entry already exists for `sessionId`, the old one is recycled
+   * first so we don't leak its subprocess.
+   */
+  adopt(args: {
+    sessionId: string
+    query: Query
+    pushUserMessage: (msg: SDKUserMessage) => void
+    endInput: () => void
+    options: ClaudePoolAcquireOptions
+  }): void {
+    const { sessionId, query: q, pushUserMessage, endInput, options } = args
+    const existing = this.entries.get(sessionId)
+    if (existing) this.recycleInternal(existing, 'pre-adopt-replace')
+    this.ensureCapacity()
+
+    const entry: InternalEntry = {
+      sessionId,
+      query: q,
+      state: {
+        cwd: options.cwd,
+        model: options.model,
+        permissionMode: options.permissionMode,
+        effort: options.effort,
+        // The one-shot options below don't apply to future turns of the
+        // adopted session — the Query has already moved past them. Storing
+        // them as undefined keeps compatible() happy on the next acquire.
+        resumeSessionAt: undefined,
+        forkSession: undefined,
+        taskBudgetTokens: options.taskBudgetTokens,
+      },
+      buffer: [],
+      subscriber: null,
+      pushUserMessage,
+      endInput,
+      turnTail: Promise.resolve(),
+      lastActivityAt: Date.now(),
+      alive: true,
+    }
+
+    this.entries.set(sessionId, entry)
+    this.ensureSweep()
+    void this.pumpQueryToSubscriber(entry)
   }
 
   private async runTurn(
@@ -442,7 +511,11 @@ class ClaudePool {
   }
 }
 
-function createInputStream(): {
+/**
+ * Shared by the pool and createClaudeStreamCold (so the cold-path Query can
+ * later be adopted into the pool without rebuilding its input plumbing).
+ */
+export function createInputStream(): {
   pushUserMessage: (msg: SDKUserMessage) => void
   endInput: () => void
   iterable: AsyncIterable<SDKUserMessage>
@@ -522,6 +595,20 @@ export function recycleClaudeSession(sessionId: string): void {
  */
 export function peekClaudeSession(sessionId: string): ClaudePoolEntry | null {
   return getPool().peek(sessionId)
+}
+
+/**
+ * Adopt a Query/input-stream pair built outside the pool — see
+ * `ClaudePool.adopt` for caller responsibilities.
+ */
+export function adoptClaudeSession(args: {
+  sessionId: string
+  query: Query
+  pushUserMessage: (msg: SDKUserMessage) => void
+  endInput: () => void
+  options: ClaudePoolAcquireOptions
+}): void {
+  return getPool().adopt(args)
 }
 
 /**

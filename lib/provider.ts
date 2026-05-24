@@ -49,7 +49,7 @@ export const COPILOT_CAPABILITIES: SessionCapabilities = {
   unshareSession: false,
   summarizeSession: false,
   unrevertSession: false,
-  respondToPermission: false,
+  respondToPermission: true,
 }
 
 export const PI_CAPABILITIES: SessionCapabilities = {
