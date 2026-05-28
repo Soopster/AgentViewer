@@ -64,7 +64,7 @@ import type {
   ReasoningEffortLevel,
 } from './types'
 import { consumeReadModelsWarmQuery, createSessionControlQuery, openPrompt } from './sdkControlQuery'
-import { acquireCopilotSession, evictCopilotSession, getCopilotClient } from './copilotClient'
+import { acquireCopilotSession, evictCopilotSession, getCopilotClient, setCopilotPermissionHandler } from './copilotClient'
 import {
   deriveCopilotState,
   mapCopilotDiagnosticsToSections,
@@ -723,12 +723,31 @@ const COPILOT_COMPOSER_MODES = [
     label: 'AUTOPILOT',
     description: 'Work autonomously toward task completion.',
   },
+  {
+    value: 'shell',
+    label: 'SHELL',
+    description: 'Use Copilot shell-focused mode for the next turn.',
+  },
 ] satisfies NonNullable<SessionComposerOptions['modes']>
 
-function parseCopilotMode(value: unknown): 'interactive' | 'plan' | 'autopilot' | undefined {
-  return value === 'interactive' || value === 'plan' || value === 'autopilot'
+type CopilotAgentMode = NonNullable<CopilotMessageOptions['agentMode']>
+type CopilotPersistentMode = Exclude<CopilotAgentMode, 'shell'>
+
+function parseCopilotMode(value: unknown): CopilotAgentMode | undefined {
+  return value === 'interactive' || value === 'plan' || value === 'autopilot' || value === 'shell'
     ? value
     : undefined
+}
+
+function parseCopilotModeResponse(value: unknown): CopilotAgentMode | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return parseCopilotMode((value as { mode?: unknown }).mode)
+  }
+  return parseCopilotMode(value)
+}
+
+function isCopilotPersistentMode(mode: CopilotAgentMode): mode is CopilotPersistentMode {
+  return mode !== 'shell'
 }
 
 function copilotPermissionDecision(response: string): Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }> {
@@ -899,12 +918,12 @@ function findCopilotHistoryCompletion(
 async function listCopilotSessions({ limit, offset, dir, includeWorktrees }: ListParams): Promise<Session[]> {
   const client = await getCopilotClient()
   const response = dir && !includeWorktrees
-    ? await client.listSessions({ cwd: dir })
+    ? await client.listSessions({ workingDirectory: dir })
     : await client.listSessions()
 
   const filtered = dir
     ? response.filter((session) => {
-        const cwd = session.context?.cwd
+        const cwd = session.context?.workingDirectory
         if (!cwd) return false
         return includeWorktrees ? sameProjectPath(dir, cwd) : normalizeProjectPath(cwd) === normalizeProjectPath(dir)
       })
@@ -1212,7 +1231,7 @@ export async function readViewSessionInfo(sessionId: string, providerOverride?: 
     ])
 
     const [events, currentModel] = await Promise.all([
-      session.getMessages(),
+      session.getEvents(),
       session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
     ])
 
@@ -1412,9 +1431,11 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     }
     if (action === 'setMode') {
       const mode = parseCopilotMode(body.mode)
-      if (!mode) throw new Error('mode must be interactive, plan, or autopilot')
-      const session = await acquireCopilotSession(sessionId)
-      await session.rpc.mode.set({ mode })
+      if (!mode) throw new Error('mode must be interactive, plan, autopilot, or shell')
+      if (isCopilotPersistentMode(mode)) {
+        const session = await acquireCopilotSession(sessionId)
+        await session.rpc.mode.set({ mode })
+      }
       return { ok: true, mode }
     }
   }
@@ -2712,7 +2733,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
   const userMessage = String(body.message ?? '').trim()
   const selectedModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null
   const effort = parseEffort(body)
-  const selectedMode = parseCopilotMode(body.mode)
+  let turnAgentMode = parseCopilotMode(body.mode)
   const manualPermissions = body.manualPermissions === true
   const nativeCommands = body.nativeCommands === true
   const parsedAttachments = parseAttachments(body)
@@ -2748,7 +2769,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
       }
 
       const scheduleFinalMessageFallback = (event: Extract<CopilotSessionEvent, { type: 'assistant.message' }>) => {
-        if (selectedMode === 'autopilot') return
+        if (turnAgentMode === 'autopilot') return
         if (Array.isArray(event.data.toolRequests) && event.data.toolRequests.length > 0) return
         clearFinalMessageFallback()
         finalMessageFallbackTimer = setTimeout(() => {
@@ -2814,10 +2835,10 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         // keeps the JSON-RPC connection alive between turns; this matches.
         session = await withTimeout(acquireCopilotSession(sessionId), 20000, 'Copilot session resume')
         if (manualPermissions) {
-          session.registerPermissionHandler(createCopilotPermissionBridge(sessionId, controller, encoder, bridgedPermissionIds))
+          setCopilotPermissionHandler(sessionId, createCopilotPermissionBridge(sessionId, controller, encoder, bridgedPermissionIds))
           manualPermissionHandlerInstalled = true
         } else {
-          session.registerPermissionHandler(approveAll)
+          setCopilotPermissionHandler(sessionId, approveAll)
         }
         unsubscribe = session.on(handleEvent)
         const historyBaselineCount = await withTimeout(
@@ -2863,10 +2884,6 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           }
         }
 
-        if (selectedMode) {
-          await withTimeout(session.rpc.mode.set({ mode: selectedMode }), 5000, 'Copilot mode switch')
-        }
-
         let promptToSend = userMessage
         const slashCommand = nativeCommands && parsedAttachments.length === 0
           ? parseOpenCodeSlashCommand(userMessage)
@@ -2875,7 +2892,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           const commandName = slashCommand.command.toLowerCase()
           if (commandName === 'help') {
             controller.enqueue(encoder.encode(copilotCommandResultEvent({
-              message: 'Copilot commands: /mode [interactive|plan|autopilot], /model [model].',
+              message: 'Copilot commands: /mode [interactive|plan|autopilot|shell], /model [model].',
             })))
             return
           }
@@ -2883,13 +2900,16 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
             const requestedMode = parseCopilotMode(slashCommand.arguments.split(/\s+/)[0])
             if (!requestedMode) {
               const currentMode = await withTimeout(session.rpc.mode.get(), 5000, 'Copilot mode read').catch(() => 'interactive')
+              const parsedCurrentMode = parseCopilotModeResponse(currentMode) ?? 'interactive'
               controller.enqueue(encoder.encode(copilotCommandResultEvent({
-                message: `Copilot mode is ${parseCopilotMode(currentMode) ?? 'interactive'}. Use /mode interactive, /mode plan, or /mode autopilot.`,
-                mode: parseCopilotMode(currentMode) ?? 'interactive',
+                message: `Copilot mode is ${parsedCurrentMode}. Use /mode interactive, /mode plan, /mode autopilot, or /mode shell.`,
+                mode: parsedCurrentMode,
               })))
               return
             }
-            await withTimeout(session.rpc.mode.set({ mode: requestedMode }), 5000, 'Copilot mode switch')
+            if (isCopilotPersistentMode(requestedMode)) {
+              await withTimeout(session.rpc.mode.set({ mode: requestedMode }), 5000, 'Copilot mode switch')
+            }
             controller.enqueue(encoder.encode(copilotCommandResultEvent({
               message: `Copilot mode set to ${requestedMode}.`,
               mode: requestedMode,
@@ -2931,11 +2951,11 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
               'Copilot slash command',
             )
             const resultRecord = result && typeof result === 'object' && !Array.isArray(result)
-              ? result as Record<string, unknown>
+              ? result as unknown as Record<string, unknown>
               : null
             if (resultRecord?.kind === 'agent-prompt' && typeof resultRecord.prompt === 'string') {
               const mode = parseCopilotMode(resultRecord.mode)
-              if (mode) await session.rpc.mode.set({ mode })
+              if (mode) turnAgentMode = mode
               promptToSend = resultRecord.prompt
             } else if (resultRecord?.kind === 'text' && typeof resultRecord.text === 'string') {
               controller.enqueue(encoder.encode(copilotCommandResultEvent({
@@ -2964,7 +2984,12 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         if (typeof turnTimeoutTimer === 'object' && turnTimeoutTimer && 'unref' in turnTimeoutTimer) {
           (turnTimeoutTimer as { unref: () => void }).unref()
         }
-        await session.send({ prompt: promptToSend, attachments: attachments.length > 0 ? attachments : undefined })
+        const messageOptions: CopilotMessageOptions = {
+          prompt: promptToSend,
+          attachments: attachments.length > 0 ? attachments : undefined,
+        }
+        if (turnAgentMode) messageOptions.agentMode = turnAgentMode
+        await session.send(messageOptions)
         const historyCompletion = historyBaselineCount == null
           ? new Promise<never>(() => {})
           : (async () => {
@@ -2980,7 +3005,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
               const finalMessage = findCopilotHistoryCompletion(
                 events,
                 historyBaselineCount,
-                selectedMode !== 'autopilot',
+                turnAgentMode !== 'autopilot',
               )
               if (!finalMessage) continue
               if (!streamedAssistantMessageIds.has(finalMessage.data.messageId)) {
@@ -3006,7 +3031,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         clearFinalMessageFallback()
         resolvePendingCopilotPermissions(sessionId, bridgedPermissionIds, { kind: 'user-not-available' })
         if (manualPermissionHandlerInstalled) {
-          session?.registerPermissionHandler(approveAll)
+          setCopilotPermissionHandler(sessionId, approveAll)
         }
         clearRunningSession(sessionId)
         try { unsubscribe?.() } catch { /* ignore */ }
@@ -3405,7 +3430,7 @@ export async function readViewSessionComposerOptions(sessionId: string, provider
     const currentMode = await session.rpc.mode.get().catch(() => 'interactive')
     return {
       modes: COPILOT_COMPOSER_MODES,
-      currentMode: parseCopilotMode(currentMode) ?? 'interactive',
+      currentMode: parseCopilotModeResponse(currentMode) ?? 'interactive',
     }
   }
 
@@ -3563,11 +3588,11 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
     ])
 
     const [events, currentModel, mode, tools, quota] = await Promise.all([
-      session.getMessages(),
+      session.getEvents(),
       session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
       session.rpc.mode.get().catch(() => ({ mode: undefined })),
       client.rpc.tools.list({ model: undefined }).catch(() => ({ tools: [] as Array<{ name: string; description?: string }> })),
-      client.rpc.account.getQuota().catch(() => ({ quotaSnapshots: {} as Record<string, {
+      client.rpc.account.getQuota({}).catch(() => ({ quotaSnapshots: {} as Record<string, {
         entitlementRequests: number
         usedRequests: number
         remainingPercentage: number
@@ -3577,10 +3602,11 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
       }> })),
     ])
 
-    const quotaItems = Object.entries(quota.quotaSnapshots).map(([name, snapshot]) => {
+    const quotaItems = Object.entries(quota.quotaSnapshots).flatMap(([name, snapshot]) => {
+      if (!snapshot) return []
       const remaining = Math.round(snapshot.remainingPercentage * 100)
       const reset = snapshot.resetDate ? ` · resets ${snapshot.resetDate}` : ''
-      return `${name} · ${snapshot.usedRequests}/${snapshot.entitlementRequests} used · ${remaining}% remaining${reset}`
+      return [`${name} · ${snapshot.usedRequests}/${snapshot.entitlementRequests} used · ${remaining}% remaining${reset}`]
     })
 
     return {

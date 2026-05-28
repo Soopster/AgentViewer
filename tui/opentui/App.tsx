@@ -9,7 +9,7 @@ import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComp
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
 import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
-import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react'
+import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
   formatProviderLabel,
   formatSessionProject,
@@ -201,6 +201,7 @@ const TASK_PANEL_RESIZE_STEP = 4
 const SESSION_CACHE_LIMIT = 2
 const EXIT_CLEANUP_TIMEOUT_MS = 1500
 const MESSAGE_SCROLL_ACCEL = new MacOSScrollAccel()
+const TERMINAL_SELECTION_COPY_WINDOW_MS = 15_000
 
 type PaneFocus = 'sessions' | 'messages'
 
@@ -1977,7 +1978,7 @@ function TranscriptCardInner({
               : theme.dim
         return (
           <box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
-            <text fg={color}>{fitText(landmark.text, landmarkWidth)}</text>
+            <text fg={color} selectable>{fitText(landmark.text, landmarkWidth)}</text>
           </box>
         )
       })}
@@ -2000,13 +2001,13 @@ function TranscriptCardInner({
                 fg={bubbleTextColor}
                 streaming={false}
                 width={markdownWidth}
-                tableOptions={{ widthMode: 'content', borders: true, borderColor: theme.border }}
+                tableOptions={{ widthMode: 'content', borders: true, borderColor: theme.border, selectable: true }}
               />
             </box>
           ) : markdownFallbackLines ? (
             <box paddingX={1}>
               {markdownFallbackLines.map((line, lineIndex) => (
-                <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={bubbleTextColor}>
+                <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={bubbleTextColor} selectable>
                   {fitText(line, markdownWidth)}
                 </text>
               ))}
@@ -2019,7 +2020,7 @@ function TranscriptCardInner({
                   paddingX={1}
                   backgroundColor={transcriptBackground(line, theme) ?? cardBg}
                 >
-                  <text fg={imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme)} wrapMode="none">
+                  <text fg={imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme)} wrapMode="none" selectable>
                     {fitText(line.text, bodyInnerWidth)}
                   </text>
                 </box>
@@ -2038,13 +2039,13 @@ function TranscriptCardInner({
                   const codeWidth = Math.max(markdownWidth - gutterWidth - (lineNumbers ? 1 : 0), 12)
                   return (
                     <box key={cb.key} paddingX={1} marginTop={1}>
-                      <text fg={theme.dim}>{fitText(codeBlockLabel(cb), markdownWidth)}</text>
+                      <text fg={theme.dim} selectable>{fitText(codeBlockLabel(cb), markdownWidth)}</text>
                       {syntaxStyle ? (
                         lineNumbers ? (
                           <box flexDirection="row">
                             <box width={gutterWidth} flexDirection="column">
                               {lineNumbers.map((num, lineIndex) => (
-                                <text key={`${cb.key}:gutter:${lineIndex}`} fg={theme.dim} wrapMode="none">
+                                <text key={`${cb.key}:gutter:${lineIndex}`} fg={theme.dim} wrapMode="none" selectable>
                                   {fitText(num, gutterWidth)}
                                 </text>
                               ))}
@@ -2054,6 +2055,7 @@ function TranscriptCardInner({
                               filetype={cb.filetype}
                               syntaxStyle={syntaxStyle}
                               drawUnstyledText={true}
+                              selectable
                               style={{ height: renderHeight }}
                               width={codeWidth}
                             />
@@ -2064,6 +2066,7 @@ function TranscriptCardInner({
                             filetype={cb.filetype}
                             syntaxStyle={syntaxStyle}
                             drawUnstyledText={true}
+                            selectable
                             style={{ height: renderHeight }}
                             width={markdownWidth}
                           />
@@ -2072,16 +2075,16 @@ function TranscriptCardInner({
                         visibleCode.split('\n').map((line, lineIndex) => (
                           <box key={`${cb.key}:fallback:${lineIndex}`} flexDirection="row">
                             {lineNumbers ? (
-                              <text fg={theme.dim}>{fitText(lineNumbers[lineIndex] ?? '', gutterWidth)}</text>
+                              <text fg={theme.dim} selectable>{fitText(lineNumbers[lineIndex] ?? '', gutterWidth)}</text>
                             ) : null}
-                            <text fg={theme.text}>
+                            <text fg={theme.text} selectable>
                               {fitText(line, lineNumbers ? codeWidth : markdownWidth)}
                             </text>
                           </box>
                         ))
                       )}
                       {hiddenLineCount > 0 ? (
-                        <text fg={theme.dim}>{fitText(`... ${hiddenLineCount} more lines`, markdownWidth)}</text>
+                        <text fg={theme.dim} selectable>{fitText(`... ${hiddenLineCount} more lines`, markdownWidth)}</text>
                       ) : null}
                     </box>
                   )
@@ -2229,7 +2232,7 @@ export default function OpenTuiApp() {
   // / `default` mean "let the SDK keep whatever the session was using".
   const [tuiEffort, setTuiEffort] = useState<'auto' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>('auto')
   const [tuiPermissionMode, setTuiPermissionMode] = useState<'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'>('default')
-  const [tuiCopilotMode, setTuiCopilotMode] = useState<'interactive' | 'plan' | 'autopilot'>('interactive')
+  const [tuiCopilotMode, setTuiCopilotMode] = useState<'interactive' | 'plan' | 'autopilot' | 'shell'>('interactive')
   const [tuiOpenCodeAgent, setTuiOpenCodeAgent] = useState('')
   const [tuiModelOverride, setTuiModelOverride] = useState<Record<string, string>>({})
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
@@ -2272,6 +2275,7 @@ export default function OpenTuiApp() {
   const composerAbortRef = useRef<AbortController | null>(null)
   const activeComposerSendCleanupRef = useRef<Promise<void> | null>(null)
   const composerTextareaRef = useRef<TextareaRenderable | null>(null)
+  const terminalSelectionRef = useRef<{ text: string; capturedAt: number } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const liveTranscriptBaselineRef = useRef(new Map<string, { count: number; lastFingerprint: string | null }>())
   const liveTranscriptMessagesRef = useRef<ThreadedMessage[]>([])
@@ -4100,7 +4104,7 @@ export default function OpenTuiApp() {
             ? tuiOpenCodeAgent
             : undefined,
           effort: tuiEffort === 'auto' ? undefined : tuiEffort,
-          mode: targetSession.provider === 'copilot' && tuiCopilotMode !== 'interactive'
+          mode: targetSession.provider === 'copilot'
             ? tuiCopilotMode
             : undefined,
           permissionMode: targetSession.provider === 'claude' && tuiPermissionMode !== 'default'
@@ -4168,6 +4172,27 @@ export default function OpenTuiApp() {
         }
         if (frame.event === 'opencode-todos' && Array.isArray(parsed)) {
           setComposerLiveTodos(parsed as import('../../lib/taskRegistry').OpenCodeTodo[])
+          return
+        }
+        if (frame.event === 'command-result' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const result = parsed as { message?: unknown; mode?: unknown }
+          if (
+            result.mode === 'interactive'
+            || result.mode === 'plan'
+            || result.mode === 'autopilot'
+            || result.mode === 'shell'
+          ) {
+            setTuiCopilotMode(result.mode)
+          }
+          if (typeof result.message === 'string' && result.message.trim()) {
+            const text = result.message.trim()
+            if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
+            setNotice({ tone: 'info', text })
+            noticeTimeoutRef.current = setTimeout(() => {
+              setNotice((current) => current?.text === text ? null : current)
+              noticeTimeoutRef.current = null
+            }, 2000)
+          }
           return
         }
         if (!parsed) return
@@ -5001,7 +5026,37 @@ export default function OpenTuiApp() {
     }, 2000)
   }, [])
 
+  useSelectionHandler((selection) => {
+    const text = selection.getSelectedText()
+    if (!text.trim()) return
+    terminalSelectionRef.current = { text, capturedAt: Date.now() }
+  })
+
+  usePaste((event) => {
+    if (!composerActiveRef.current) return
+    const renderable = composerTextareaRef.current
+    if (!renderable) return
+    event.preventDefault()
+    renderable.handlePaste(event)
+  })
+
   const copySelectedMessage = useCallback(async () => {
+    const terminalSelection = terminalSelectionRef.current
+    if (
+      terminalSelection
+      && Date.now() - terminalSelection.capturedAt <= TERMINAL_SELECTION_COPY_WINDOW_MS
+      && terminalSelection.text.trim()
+    ) {
+      try {
+        await writeClipboard(terminalSelection.text)
+        terminalSelectionRef.current = null
+        showNotice('info', 'Copied terminal selection to clipboard')
+      } catch (err) {
+        showNotice('error', err instanceof Error ? err.message : 'Failed to copy selection')
+      }
+      return
+    }
+
     const card = cursorIndex >= 0 ? transcriptCards[cursorIndex] : null
     if (!card) {
       showNotice('error', 'No message selected')
@@ -5092,7 +5147,7 @@ export default function OpenTuiApp() {
           break
         }
         if (target?.provider === 'copilot') {
-          const order = ['interactive', 'plan', 'autopilot'] as const
+          const order = ['interactive', 'plan', 'autopilot', 'shell'] as const
           setTuiCopilotMode((current) => {
             const next = order[(order.indexOf(current) + 1) % order.length]!
             void runTuiSessionAction(target, {

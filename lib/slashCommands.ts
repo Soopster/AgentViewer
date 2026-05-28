@@ -102,7 +102,7 @@ const SLASH_COMMANDS_BY_PROVIDER: Record<AgentProvider, SlashCommandSuggestion[]
   copilot: [
     { command: '/help', description: 'List commands' },
     { command: '/model', description: 'Switch the active model', argumentHint: '[model]' },
-    { command: '/mode', description: 'Switch Copilot interaction mode', argumentHint: '[interactive|plan|autopilot]' },
+    { command: '/mode', description: 'Switch Copilot interaction mode', argumentHint: '[interactive|plan|autopilot|shell]' },
   ],
   pi: [
     { command: '/help', description: 'Show available actions' },

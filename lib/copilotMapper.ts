@@ -2,7 +2,6 @@ import type {
   GetAuthStatusResponse,
   GetStatusResponse,
   ModelInfo,
-  SessionContext,
   SessionEvent,
   SessionMetadata,
 } from '@github/copilot-sdk'
@@ -130,7 +129,7 @@ function mergeUsage(
   }
 }
 
-function sessionContextFromEvents(events: SessionEvent[]): SessionContext | undefined {
+function sessionContextFromEvents(events: SessionEvent[]) {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]
     if (event.type === 'session.resume' && event.data.context) return event.data.context
@@ -275,7 +274,7 @@ export function mapCopilotSessionToSession(
     summary: metadata.summary ?? metadata.sessionId,
     customTitle: stored.title ?? undefined,
     lastModified: metadata.modifiedTime.getTime(),
-    cwd: metadata.context?.cwd,
+    cwd: metadata.context?.workingDirectory,
     tag: stored.tag ?? null,
     createdAt: metadata.startTime.getTime(),
     provider: 'copilot',

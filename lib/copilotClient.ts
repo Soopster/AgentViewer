@@ -1,8 +1,10 @@
 import {
   CopilotClient,
+  RuntimeConnection,
   approveAll,
   type CopilotClientOptions,
   type CopilotSession,
+  type PermissionHandler,
   type ResumeSessionConfig,
 } from '@github/copilot-sdk'
 
@@ -35,27 +37,34 @@ function createClientOptions(): CopilotClientOptions {
   const cliUrl = normalizedEnv(process.env.COPILOT_CLI_URL)
   const cliPath = normalizedEnv(process.env.COPILOT_CLI_PATH)
   const options: CopilotClientOptions = {
-    autoStart: true,
+    connection: cliUrl
+      ? RuntimeConnection.forUri(cliUrl)
+      : RuntimeConnection.forStdio(cliPath ? { path: cliPath } : undefined),
     logLevel: 'error',
-  }
-
-  if (cliUrl) {
-    options.cliUrl = cliUrl
-  } else {
-    options.useStdio = true
-  }
-
-  if (cliPath) {
-    options.cliPath = cliPath
   }
 
   // Opt in to Mission Control via env. Default off because agent-viewer is a
   // local observer; remote sessions would surface in GitHub web/mobile.
   if (isEnvFlagEnabled(process.env.COPILOT_REMOTE) && !cliUrl) {
-    options.remote = true
+    options.enableRemoteSessions = true
   }
 
   return options
+}
+
+// The Copilot SDK only accepts a permission handler at resume time, but our
+// warm session pool resumes once and reuses the session across turns — some
+// turns auto-approve, others route through an interactive bridge. We resume
+// with a stable dispatcher that reads the current handler from this map so a
+// turn can swap behavior without forcing a re-resume.
+const copilotPermissionHandlers = new Map<string, PermissionHandler>()
+
+export function setCopilotPermissionHandler(sessionId: string, handler: PermissionHandler): void {
+  copilotPermissionHandlers.set(sessionId, handler)
+}
+
+export function clearCopilotPermissionHandler(sessionId: string): void {
+  copilotPermissionHandlers.delete(sessionId)
 }
 
 let clientPromise: Promise<CopilotClient> | null = null
@@ -91,8 +100,9 @@ async function resumeCopilotSession(
   const client = await getCopilotClient()
   try {
     return await client.resumeSession(sessionId, {
-      onPermissionRequest: approveAll,
-      disableResume: true,
+      onPermissionRequest: (request, invocation) =>
+        (copilotPermissionHandlers.get(sessionId) ?? approveAll)(request, invocation),
+      suppressResumeEvent: true,
       // We're a read-mostly observer; suppress duplicate telemetry events
       // that would otherwise fire on every resume from session list polls.
       enableSessionTelemetry: false,
@@ -122,6 +132,7 @@ function scheduleCopilotEviction(sessionId: string): void {
     if (!current) return
     if (Date.now() - current.lastUsed < COPILOT_SESSION_TTL_MS) return
     copilotSessionPool.delete(sessionId)
+    clearCopilotPermissionHandler(sessionId)
     await current.session.disconnect().catch(() => {})
   }, COPILOT_SESSION_TTL_MS)
   if (typeof entry.timer === 'object' && entry.timer && 'unref' in entry.timer) {
@@ -137,7 +148,7 @@ export async function acquireCopilotSession(sessionId: string): Promise<CopilotS
     return cached.session
   }
   const session = await resumeCopilotSession(sessionId, {
-    disableResume: false,
+    suppressResumeEvent: false,
     streaming: true,
   })
   const entry: CopilotPoolEntry = {
@@ -155,5 +166,6 @@ export async function evictCopilotSession(sessionId: string): Promise<void> {
   if (!entry) return
   clearTimeout(entry.timer)
   copilotSessionPool.delete(sessionId)
+  clearCopilotPermissionHandler(sessionId)
   await entry.session.disconnect().catch(() => {})
 }

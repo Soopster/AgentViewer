@@ -2655,7 +2655,7 @@ export default function MessageView({
           forkSession: Boolean(resumeFromMessageId),
           provider: session.provider,
           agent: session.provider === 'opencode' && selectedAgent ? selectedAgent : undefined,
-          mode: session.provider === 'copilot' && selectedCopilotMode !== 'interactive' ? selectedCopilotMode : undefined,
+          mode: session.provider === 'copilot' ? selectedCopilotMode : undefined,
           manualPermissions: session.provider === 'copilot' ? true : undefined,
           nativeCommands: session.provider === 'copilot' ? true : undefined,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
