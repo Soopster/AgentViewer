@@ -162,7 +162,7 @@ function messageUsage(info: Message): ApiMessage['usage'] | undefined {
   }
 }
 
-export function encodeOpenCodeModelValue(model: OpenCodeModelRef): string {
+function encodeOpenCodeModelValue(model: OpenCodeModelRef): string {
   return JSON.stringify(model)
 }
 

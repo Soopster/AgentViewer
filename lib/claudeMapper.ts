@@ -159,7 +159,7 @@ function readString(record: Record<string, unknown>, ...keys: string[]): string 
   return undefined
 }
 
-export function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | null {
+function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | null {
   const record = asObject(value)
   const type = record.type
   if (typeof record.uuid !== 'string' || typeof record.session_id !== 'string') return null
@@ -204,7 +204,7 @@ export function normalizeClaudeHistoryMessages(messages: unknown[]): SessionMess
     .filter((message): message is SessionMessage => Boolean(message))
 }
 
-export function normalizeClaudeStreamMessage(value: unknown): SessionMessage | null {
+function normalizeClaudeStreamMessage(value: unknown): SessionMessage | null {
   const record = asObject(value)
   if (typeof record.uuid !== 'string' || typeof record.session_id !== 'string') return null
 

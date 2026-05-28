@@ -2,6 +2,7 @@
 
 import { lazy, memo, Suspense, use, useEffect, useMemo, useState, createContext } from 'react'
 import { pathBasename as basename } from '@/lib/projectPaths'
+import { LiveSubagentTextContext, TaskActiveFormsContext } from './messageItemShared'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
@@ -960,7 +961,7 @@ function McpResultSection({ result }: { result: ToolResultBlock }) {
         </ReactMarkdown>
       </div>
       {collapsible && (
-        <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+        <button type="button" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
           {expanded ? '▲ collapse' : `▼ ${lineCount - APPROX_LINE_LIMIT} more lines`}
         </button>
       )}
@@ -1701,6 +1702,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
       {canViewTranscript && (
         <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
           <button
+            type="button"
             onClick={handleTranscriptToggle}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -1929,6 +1931,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
       {canViewTranscript && (
         <div style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
           <button
+            type="button"
             onClick={handleTranscriptToggle}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -2244,7 +2247,7 @@ function WebSearchCard({ thread }: { thread: ToolThread }) {
               ))}
             </div>
             {results.length > PREVIEW && (
-              <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+              <button type="button" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
                 {expanded ? '▲ collapse' : `▼ ${results.length - PREVIEW} more result${results.length - PREVIEW !== 1 ? 's' : ''}`}
               </button>
             )}
@@ -2914,7 +2917,7 @@ function CronCard({ thread }: { thread: ToolThread }) {
               </div>
             ))}
             {(hidden > 0 || expanded) && (
-              <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+              <button type="button" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
                 {expanded ? '▲ collapse' : `▼ ${hidden} more`}
               </button>
             )}
@@ -3165,7 +3168,7 @@ function ReadResultSection({ raw, filePath, summary }: { raw: string; filePath?:
             : null
       )}
       {totalLines > LIMIT && (
-        <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+        <button type="button" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
           {expanded ? '▲ collapse' : `▼ ${hidden} more lines`}
         </button>
       )}
@@ -3253,7 +3256,7 @@ function GenericResultSection({ raw, isError = false, note }: { raw: string; isE
       )}
 
       {totalTextLines > LIMIT && (
-        <button onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
+        <button type="button" onClick={() => setExpanded(v => !v)} style={EXPAND_BTN}>
           {expanded ? '▲ collapse' : `▼ ${hidden} more lines`}
         </button>
       )}
@@ -4293,44 +4296,6 @@ function densityConfig(d: MessageDensity): DensityConfig {
 
 const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanced'))
 const SessionContext = createContext<string | undefined>(undefined)
-export const LiveSubagentTextContext = createContext<Record<string, string>>({})
-export const TaskActiveFormsContext = createContext<Map<string, string>>(new Map())
-
-/**
- * Scan threaded messages for TaskCreate/TaskUpdate calls and build a
- * taskId → activeForm map reflecting the most recent activeForm set for each
- * task. Used by the TaskList renderer to substitute the present-continuous form
- * when a task is in_progress.
- */
-export function buildTaskActiveFormsForWeb(messages: ThreadedMessage[]): Map<string, string> {
-  const map = new Map<string, string>()
-  for (const m of messages) {
-    for (const b of m.blocks) {
-      if (b.type !== 'tool_thread') continue
-      const name = b.toolUse.name
-      if (name === 'TaskCreate') {
-        const inp = b.toolUse.input as { activeForm?: string }
-        const af = typeof inp.activeForm === 'string' ? inp.activeForm.trim() : ''
-        if (!af || !b.result) continue
-        const text = typeof b.result.content === 'string'
-          ? b.result.content
-          : Array.isArray(b.result.content)
-          ? b.result.content.map((c) => (c && typeof c === 'object' && 'text' in c && typeof (c as { text: unknown }).text === 'string') ? (c as { text: string }).text : '').join('')
-          : ''
-        try {
-          const parsed = JSON.parse(text) as { task?: { id?: string } }
-          const id = parsed?.task?.id
-          if (typeof id === 'string' && id) map.set(id, af)
-        } catch { /* skip */ }
-      } else if (name === 'TaskUpdate') {
-        const inp = b.toolUse.input as { taskId?: string; activeForm?: string }
-        const af = typeof inp.activeForm === 'string' ? inp.activeForm.trim() : ''
-        if (typeof inp.taskId === 'string' && af) map.set(inp.taskId, af)
-      }
-    }
-  }
-  return map
-}
 
 export function MessageDensityProvider({ density, children }: { density: MessageDensity; children: React.ReactNode }) {
   const value = useMemo(() => densityConfig(density), [density])

@@ -560,6 +560,7 @@ export default function Home() {
   }, [selectedSession?.sessionId, todosForSessionId, planForSessionId])
 
   // Stream active single-session updates; fall back to the old poll loop if SSE drops.
+  // eslint-disable-next-line react-doctor/effect-needs-cleanup -- cleanup is returned below; it calls eventSource.close(), the canonical EventSource teardown (releases all addEventListener handlers)
   useEffect(() => {
     if (!selectedSession || selectedProject || loadingMessages) return
     if (selectedSession.isPending) return
@@ -1035,6 +1036,7 @@ export default function Home() {
             }}
           >
             <button
+              type="button"
               onClick={toggleMessagePane}
               title="Expand message pane"
               className="av-hover-control"
@@ -1056,6 +1058,7 @@ export default function Home() {
           <SidebarInset style={{ position: 'relative' }}>
             <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden', position: 'relative', flex: 1 }}>
               <button
+                type="button"
                 onClick={toggleMessagePane}
                 title="Collapse message pane"
                 className="av-hover-control"

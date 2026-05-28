@@ -386,7 +386,7 @@ function computeInsights(data: CrossSessionAnalytics): Insight[] {
   // 6. Tool reliability.
   if (data.toolErrors.length > 0) {
     const worstByCount = data.toolErrors[0]
-    const worstByRate = [...data.toolErrors].sort((a, b) => b.rate - a.rate)[0]
+    const worstByRate = data.toolErrors.toSorted((a, b) => b.rate - a.rate)[0]
     if (worstByCount.errors > 0) {
       out.push({
         icon: '!',
@@ -872,6 +872,7 @@ export default function AnalyticsPage() {
             {PRESETS.map((p) => (
               <button
                 key={p.id}
+                type="button"
                 onClick={() => setPreset(p.id)}
                 style={presetButtonStyle(preset === p.id)}
               >
@@ -879,6 +880,7 @@ export default function AnalyticsPage() {
               </button>
             ))}
             <button
+              type="button"
               onClick={() => setPreset('custom')}
               style={presetButtonStyle(preset === 'custom')}
             >

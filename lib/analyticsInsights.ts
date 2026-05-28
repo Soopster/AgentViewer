@@ -19,14 +19,14 @@ export const INSIGHT_SEVERITY_WEIGHT: Record<InsightSeverity, number> = {
 
 export function median(values: number[]): number | null {
   if (values.length === 0) return null
-  const sorted = [...values].sort((a, b) => a - b)
+  const sorted = values.toSorted((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
   return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!
 }
 
 export function percentile(values: number[], p: number): number | null {
   if (values.length === 0) return null
-  const sorted = [...values].sort((a, b) => a - b)
+  const sorted = values.toSorted((a, b) => a - b)
   const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * p))
   return sorted[idx]!
 }
@@ -310,8 +310,8 @@ export function buildInsights(a: Analytics): Insight[] {
   // Context inflation
   if (a.messageSizes.length >= 9) {
     const third = Math.floor(a.messageSizes.length / 3)
-    const early = [...a.messageSizes.slice(0, third)].sort((a, b) => a - b)
-    const late  = [...a.messageSizes.slice(-third)].sort((a, b) => a - b)
+    const early = a.messageSizes.slice(0, third).toSorted((a, b) => a - b)
+    const late  = a.messageSizes.slice(-third).toSorted((a, b) => a - b)
     const medEarly = early[Math.floor(early.length / 2)]!
     const medLate  = late[Math.floor(late.length / 2)]!
     if (medEarly > 0 && medLate > medEarly * 2)
@@ -328,7 +328,7 @@ export function buildInsights(a: Analytics): Insight[] {
 
   // Tool error concentration
   if (a.toolErrors >= 3) {
-    const mostErrored = [...a.tools].sort((x, y) => y.errors - x.errors)[0]
+    const mostErrored = a.tools.toSorted((x, y) => y.errors - x.errors)[0]
     if (mostErrored && mostErrored.errors >= 2 && mostErrored.errors / a.toolErrors >= 0.5)
       out.push({ severity: 'warn', icon: '🎯', title: `${mostErrored.name} error-prone`,
         detail: `${mostErrored.name} caused ${mostErrored.errors} of ${a.toolErrors} tool errors (${((mostErrored.errors / a.toolErrors) * 100).toFixed(0)}%).` })
@@ -364,8 +364,8 @@ export function buildInsights(a: Analytics): Insight[] {
     const latencies = a.timeline.map((p) => p.latencyMs).filter((v): v is number => v !== null && v >= 0)
     if (latencies.length >= 6) {
       const third = Math.floor(latencies.length / 3)
-      const earlyMed = [...latencies.slice(0, third)].sort((a, b) => a - b)[Math.floor(third / 2)]!
-      const lateMed  = [...latencies.slice(-third)].sort((a, b) => a - b)[Math.floor(third / 2)]!
+      const earlyMed = latencies.slice(0, third).toSorted((a, b) => a - b)[Math.floor(third / 2)]!
+      const lateMed  = latencies.slice(-third).toSorted((a, b) => a - b)[Math.floor(third / 2)]!
       if (earlyMed > 0 && lateMed > earlyMed * 2 && lateMed > 10_000)
         out.push({ severity: 'warn', icon: '🐌', title: 'Responses slowing down',
           detail: `Later turns took ${(lateMed / earlyMed).toFixed(1)}× longer than early turns (${fmtDuration(earlyMed)} → ${fmtDuration(lateMed)} median).` })

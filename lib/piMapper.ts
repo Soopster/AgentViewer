@@ -22,7 +22,7 @@ type PiModelRef = {
   modelID: string
 }
 
-export function encodePiModelValue(model: PiModelRef): string {
+function encodePiModelValue(model: PiModelRef): string {
   return JSON.stringify(model)
 }
 

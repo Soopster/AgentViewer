@@ -84,7 +84,7 @@ export async function getCopilotClient(): Promise<CopilotClient> {
   return clientPromise
 }
 
-export async function resumeCopilotSession(
+async function resumeCopilotSession(
   sessionId: string,
   overrides: Partial<ResumeSessionConfig> = {},
 ): Promise<CopilotSession> {

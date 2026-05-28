@@ -150,7 +150,7 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
 }
 
 export const THEMES: Theme[] = Object.keys(THEME_META) as Theme[]
-export const VALID_THEMES: Set<string> = new Set(THEMES)
+const VALID_THEMES: Set<string> = new Set(THEMES)
 export const THEME_GROUPS: Array<{ category: ThemeCategory; label: string; themes: Theme[] }> = [
   { category: 'light', label: 'Light', themes: THEMES.filter((theme) => THEME_META[theme].category === 'light') },
   { category: 'dark', label: 'Dark', themes: THEMES.filter((theme) => THEME_META[theme].category === 'dark') },

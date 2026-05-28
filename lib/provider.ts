@@ -1,6 +1,6 @@
 import type { AgentProvider, ProviderSelection, SessionCapabilities } from './types'
 
-export const CLAUDE_CAPABILITIES: SessionCapabilities = {
+const CLAUDE_CAPABILITIES: SessionCapabilities = {
   messageFork: true,
   resumeAtMessage: true,
   fileRewind: true,

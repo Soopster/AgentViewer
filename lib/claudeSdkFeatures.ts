@@ -260,7 +260,7 @@ export function formatClaudeReadRange(summary: ClaudeReadFileSummary): string | 
   return `lines ${summary.startLine}-${endLine}`
 }
 
-export function getClaudeBackgroundTasks(payload: SystemMessagePayload): ClaudeBackgroundTaskSummary[] {
+function getClaudeBackgroundTasks(payload: SystemMessagePayload): ClaudeBackgroundTaskSummary[] {
   const raw = payload.background_tasks
   if (!Array.isArray(raw)) return []
   return raw.flatMap((entry) => {
@@ -284,7 +284,7 @@ export function getClaudeBackgroundTasks(payload: SystemMessagePayload): ClaudeB
   })
 }
 
-export function getClaudeSessionCrons(payload: SystemMessagePayload): ClaudeSessionCronSummary[] {
+function getClaudeSessionCrons(payload: SystemMessagePayload): ClaudeSessionCronSummary[] {
   const raw = payload.session_crons
   if (!Array.isArray(raw)) return []
   return raw.flatMap((entry) => {
@@ -307,7 +307,7 @@ export function formatClaudeRuntimeCounts(payload: SystemMessagePayload): string
   return parts
 }
 
-export function formatClaudeBackgroundTaskSummary(task: ClaudeBackgroundTaskSummary, index?: number): string {
+function formatClaudeBackgroundTaskSummary(task: ClaudeBackgroundTaskSummary, index?: number): string {
   const prefix = index == null ? '' : `${index + 1}. `
   const serverTool = [task.server, task.tool].filter(Boolean).join('/')
   const detail = task.command ?? task.agent_type ?? (serverTool || task.name) ?? ''
@@ -316,7 +316,7 @@ export function formatClaudeBackgroundTaskSummary(task: ClaudeBackgroundTaskSumm
   return `${prefix}${label}: ${task.description}${suffix}`
 }
 
-export function formatClaudeSessionCronSummary(cron: ClaudeSessionCronSummary, index?: number): string {
+function formatClaudeSessionCronSummary(cron: ClaudeSessionCronSummary, index?: number): string {
   const prefix = index == null ? '' : `${index + 1}. `
   const mode = cron.recurring ? 'recurring' : 'one-shot'
   return `${prefix}${mode} ${cron.schedule}: ${cron.prompt}`

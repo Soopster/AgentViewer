@@ -49,7 +49,7 @@ export function buildTimelineRowLayout<Row extends TimelineLayoutRow>(
   return { tops, heights, totalHeight, indexByKey }
 }
 
-export function upperBound(values: Float64Array, length: number, target: number): number {
+function upperBound(values: Float64Array, length: number, target: number): number {
   let low = 0
   let high = length
 

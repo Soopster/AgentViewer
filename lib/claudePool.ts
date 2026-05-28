@@ -616,7 +616,7 @@ export function adoptClaudeSession(args: {
  * pre-shaped one (e.g. text + image blocks). Used by the SSE adapter to
  * normalise whatever buildClaudePrompt produced.
  */
-export function toSdkUserMessage(prompt: string | { message: SDKUserMessage['message'] }): SDKUserMessage {
+function toSdkUserMessage(prompt: string | { message: SDKUserMessage['message'] }): SDKUserMessage {
   if (typeof prompt === 'string') {
     return {
       type: 'user',

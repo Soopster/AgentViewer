@@ -10,7 +10,7 @@ export type SlashCommandSuggestion = {
 // provider's own CLI shows in its in-line slash menu, so the composer feels
 // native even when the SDK can't enumerate commands itself. Live results from
 // the SDK (when available) are merged on top so they always win.
-export const SLASH_COMMANDS_BY_PROVIDER: Record<AgentProvider, SlashCommandSuggestion[]> = {
+const SLASH_COMMANDS_BY_PROVIDER: Record<AgentProvider, SlashCommandSuggestion[]> = {
   claude: [
     { command: '/help', description: 'Show available commands' },
     { command: '/clear', description: 'Start a fresh conversation' },

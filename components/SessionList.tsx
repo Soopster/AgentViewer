@@ -818,7 +818,7 @@ function SessionListInner({
       | { type: 'header'; key: string; projectDir: string; projectName: string; count: number; projectSessions: Session[] }
       | { type: 'session'; key: string; session: Session }
     >
-    const sorted = [...filteredSessions].sort(
+    const sorted = filteredSessions.toSorted(
       (a, b) => sessionActivityMs(b.session) - sessionActivityMs(a.session),
     )
     const projectSessionsByDir = new Map<string, Session[]>()

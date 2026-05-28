@@ -20,7 +20,7 @@ export type GitPaneId = 0 | 1 | 2 | 3 | 4
 
 export type GitCommandRunner = (cwd: string, args: string[]) => Promise<string>
 
-export const ALLOWED_GIT_COMMANDS = new Set([
+const ALLOWED_GIT_COMMANDS = new Set([
   'rev-parse',
   'status',
   'branch',
@@ -38,7 +38,7 @@ export function isAllowedGitCommand(args: unknown): args is string[] {
     && args.every((arg) => typeof arg === 'string')
 }
 
-export function parseGitStatus(statusRaw: string): GitStatusEntry[] {
+function parseGitStatus(statusRaw: string): GitStatusEntry[] {
   return statusRaw
     ? statusRaw.split('\n').filter(Boolean).map((line) => ({
         x: line[0] ?? ' ',

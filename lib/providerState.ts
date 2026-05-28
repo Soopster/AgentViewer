@@ -4,7 +4,7 @@ import type { ProviderSelection } from './types'
 
 const PROVIDER_FILE = path.join(process.cwd(), '.agent-viewer-data', 'provider.json')
 
-export function getDefaultProvider(): ProviderSelection {
+function getDefaultProvider(): ProviderSelection {
   if (process.env.AGENT_VIEWER_PROVIDER === 'all') return 'all'
   if (process.env.AGENT_VIEWER_PROVIDER === 'codex') return 'codex'
   if (process.env.AGENT_VIEWER_PROVIDER === 'opencode') return 'opencode'

@@ -35,7 +35,8 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 import { ChartNetwork, Filter, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
-import MessageItem, { LiveSubagentTextContext, MessageDensityProvider, TaskActiveFormsContext, buildTaskActiveFormsForWeb, type MessageDensity } from './MessageItem'
+import MessageItem, { MessageDensityProvider, type MessageDensity } from './MessageItem'
+import { LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb } from './messageItemShared'
 import { TaskRail } from './TaskRail'
 import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos, type CodexPlanStep } from '@/lib/taskRegistry'
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
@@ -4767,6 +4768,7 @@ export default function MessageView({
         {!isProject && cliCommand && (
           <div ref={cliPopoverRef} style={{ position: 'relative', flexShrink: 0 }}>
             <button
+              type="button"
               onClick={() => setCliPopoverOpen(v => !v)}
               title="Get CLI command to resume this session"
               className="av-hover-control"
@@ -4824,6 +4826,7 @@ export default function MessageView({
                   {cliCommand}
                 </code>
                 <button
+                  type="button"
                   style={{
                     alignSelf: 'flex-end',
                     height: 24,
@@ -5651,6 +5654,7 @@ export default function MessageView({
           }}
         >
           <button
+            type="button"
             onClick={() => setComposerCollapsed(false)}
             title="Expand composer"
             style={{
@@ -5687,6 +5691,7 @@ export default function MessageView({
         }}
       >
         <button
+          type="button"
           onClick={() => setComposerCollapsed(true)}
           title="Collapse composer"
           style={{

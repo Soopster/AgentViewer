@@ -113,7 +113,7 @@ async function createRuntime(): Promise<OpenCodeRuntime> {
   }
 }
 
-export async function getOpenCodeRuntime(): Promise<OpenCodeRuntime> {
+async function getOpenCodeRuntime(): Promise<OpenCodeRuntime> {
   runtimePromise ??= createRuntime()
   return runtimePromise
 }

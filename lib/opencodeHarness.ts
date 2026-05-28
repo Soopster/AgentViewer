@@ -532,7 +532,7 @@ export function subscribeToOpenCodeEvents(options: { sessionId?: string } = {}) 
   return getHarness().subscribe(options)
 }
 
-export function getOpenCodeSessionSnapshot(sessionId: string): SessionSnapshot | undefined {
+function getOpenCodeSessionSnapshot(sessionId: string): SessionSnapshot | undefined {
   return globalThis.__openCodeHarness?.getSnapshot(sessionId)
 }
 

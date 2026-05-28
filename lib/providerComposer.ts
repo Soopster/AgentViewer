@@ -174,7 +174,7 @@ const PI: ProviderComposerConfig = {
   ],
 }
 
-export const PROVIDER_COMPOSER: Record<AgentProvider, ProviderComposerConfig> = {
+const PROVIDER_COMPOSER: Record<AgentProvider, ProviderComposerConfig> = {
   claude: CLAUDE,
   codex: CODEX,
   opencode: OPENCODE,

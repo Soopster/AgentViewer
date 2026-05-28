@@ -48,6 +48,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose }: Props) {
         return (
           <ViewTransition key={tabKey} enter="fade-in" exit="fade-out" default="none">
           <button
+            type="button"
             onClick={() => onSelect(session)}
             title={title}
             className={isActive ? 'av-session-tab av-hover-control av-active' : 'av-session-tab av-hover-control'}

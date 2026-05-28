@@ -100,6 +100,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
           {([0, 1, 2, 3, 4, 5, 6] as PaneId[]).map((p) => (
             <button
               key={p}
+              type="button"
               onClick={() => setPane(p)}
               onMouseEnter={() => setHoveredPane(p)}
               onMouseLeave={() => setHoveredPane(null)}
@@ -124,6 +125,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
             tab / 0-6 switch · esc close
           </span>
           <button
+            type="button"
             onClick={onClose}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = 'var(--surface-3)'
@@ -482,8 +484,8 @@ function TokensPane({ a }: { a: Analytics }) {
   const cacheSeries  = a.timeline.map((p) => p.cacheReadTokens)
   let sum = 0
   const cumulative = a.timeline.map((p) => (sum += p.outputTokens))
-  const topTurnsData = [...a.timeline]
-    .sort((x, y) => y.outputTokens - x.outputTokens)
+  const topTurnsData = a.timeline
+    .toSorted((x, y) => y.outputTokens - x.outputTokens)
     .slice(0, 10)
     .map((p) => ({ label: p.ts ? new Date(p.ts).toLocaleTimeString() : `#${p.index + 1}`, tokens: p.outputTokens }))
 

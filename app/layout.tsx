@@ -15,7 +15,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* eslint-disable-next-line react/no-danger */}
+        {/* Intentional blocking inline script: must run synchronously before first paint to prevent theme FOUC. Content is a static literal, not user input. */}
+        {/* eslint-disable-next-line react-doctor/no-danger, react-doctor/nextjs-no-native-script */}
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body>{children}</body>

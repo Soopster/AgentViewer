@@ -616,6 +616,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
             </div>
           </div>
           <button
+            type="button"
             onClick={() => {
               setLoading(true)
               void fetchGitData(cwd)
@@ -639,6 +640,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
             <RefreshCw size={15} />
           </button>
           <button
+            type="button"
             onClick={onClose}
             title="Close"
             style={{
@@ -672,6 +674,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
           {([1, 2, 3, 4] as PaneId[]).map((p) => (
             <button
               key={p}
+              type="button"
               onClick={() => setPane(p)}
               style={{
                 height: 34,
@@ -708,6 +711,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
           <span style={{ flex: 1 }} />
           {leftPaneHidden ? (
             <button
+              type="button"
               onClick={() => {
                 setPresetLeftPaneWidth('normal')
                 setFocusSide('left')
@@ -734,6 +738,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
           ) : (
             <>
               <button
+                type="button"
                 onClick={() => setPresetLeftPaneWidth(leftPaneExpanded ? 'normal' : 'expanded')}
                 title={leftPaneExpanded ? 'Restore file pane width' : 'Expand file pane'}
                 style={{
@@ -752,6 +757,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                 <Maximize2 size={15} />
               </button>
               <button
+                type="button"
                 onClick={() => setLeftPaneMode('hidden')}
                 title="Hide file pane"
                 style={{
@@ -852,6 +858,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                   return (
                     <button
                       key={node.path}
+                      type="button"
                       data-cursor={isCursor ? '' : undefined}
                       onMouseEnter={() => setHoveredRow(rowId)}
                       onMouseLeave={() => setHoveredRow(null)}
@@ -929,6 +936,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                   return (
                     <button
                       key={branch}
+                      type="button"
                       data-cursor={isSel ? '' : undefined}
                       onMouseEnter={() => setHoveredRow(rowId)}
                       onMouseLeave={() => setHoveredRow(null)}
@@ -971,6 +979,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                   return (
                     <button
                       key={commit}
+                      type="button"
                       data-cursor={isSel ? '' : undefined}
                       onMouseEnter={() => setHoveredRow(rowId)}
                       onMouseLeave={() => setHoveredRow(null)}
@@ -1061,6 +1070,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                     const disabled = mode === 'rich' && !richDiffAvailable
                     return (
                       <button
+                        type="button"
                         key={mode}
                         onClick={() => {
                           if (!disabled) setDiffViewMode(mode)

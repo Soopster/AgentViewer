@@ -471,8 +471,8 @@ function TokensPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette;
 
       <box marginTop={1} flexDirection="column">
         <text fg={theme.muted}>Top token-producing turns</text>
-        {[...a.timeline]
-          .sort((x, y) => y.outputTokens - x.outputTokens)
+        {a.timeline
+          .toSorted((x, y) => y.outputTokens - x.outputTokens)
           .slice(0, 8)
           .map((p) => {
             const maxOut = Math.max(1, ...outputSeries)

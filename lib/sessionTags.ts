@@ -4,7 +4,7 @@ function normalizeTag(tag: string): string {
   return tag.trim().replace(/^#+/, '')
 }
 
-export function normalizeSessionTags(tags: string[]): string[] {
+function normalizeSessionTags(tags: string[]): string[] {
   const seen = new Set<string>()
   const normalized: string[] = []
 

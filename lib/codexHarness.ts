@@ -328,7 +328,7 @@ export function subscribeToCodexEvents(options: { threadId?: string } = {}) {
   return getHarness().subscribe(options)
 }
 
-export function getCodexThreadSnapshot(threadId: string): CodexThreadSnapshot | undefined {
+function getCodexThreadSnapshot(threadId: string): CodexThreadSnapshot | undefined {
   return globalThis.__codexHarness?.getSnapshot(threadId)
 }
 

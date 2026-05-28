@@ -362,7 +362,7 @@ const INDEX_REBUILD_MESSAGE_LIMIT = 100_000
 const INDEX_REBUILD_MESSAGE_CONCURRENCY = 4
 
 function sortMessagesChronologically(messages: SessionMessage[]): SessionMessage[] {
-  return [...messages].sort((a, b) => {
+  return messages.toSorted((a, b) => {
     const aTimestamp = a.timestamp ? Date.parse(a.timestamp) : Number.NaN
     const bTimestamp = b.timestamp ? Date.parse(b.timestamp) : Number.NaN
     if (!Number.isNaN(aTimestamp) && !Number.isNaN(bTimestamp) && aTimestamp !== bTimestamp) {
@@ -910,7 +910,7 @@ async function listCopilotSessions({ limit, offset, dir, includeWorktrees }: Lis
       })
     : response
 
-  const sorted = [...filtered].sort((a, b) => b.modifiedTime.getTime() - a.modifiedTime.getTime())
+  const sorted = filtered.toSorted((a, b) => b.modifiedTime.getTime() - a.modifiedTime.getTime())
   const page = sorted.slice(offset, offset + limit)
   const stored = await getCopilotStoredMetadataForSessions(page.map((session) => session.sessionId))
   return page.map((session) => mapCopilotSessionToSession(session, stored[session.sessionId] ?? { title: null, tag: null }))
@@ -1119,7 +1119,7 @@ function openCodeDirectoryQuery(session: OpenCodeSession): { directory?: string 
 
 async function listPiSessionsForView({ limit, offset, dir }: ListParams): Promise<Session[]> {
   const sessions = await listPiSessions(dir || undefined)
-  const sorted = [...sessions].sort((a, b) => b.modified.getTime() - a.modified.getTime())
+  const sorted = sessions.toSorted((a, b) => b.modified.getTime() - a.modified.getTime())
   const page = sorted.slice(offset, offset + limit)
   const stored = await getPiStoredMetadataForSessions(page.map((s) => s.id))
   return page.map((s) => mapPiSessionToSession(s, stored[s.id] ?? { title: null, tag: null }))
