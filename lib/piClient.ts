@@ -73,9 +73,12 @@ export function getPiSessionEntries(sessionId: string): SessionEntry[] {
   return sm.getBranch()
 }
 
-export async function createPiAgentSession(cwd: string): Promise<AgentSession> {
+export async function createPiAgentSession(cwd: string, options: { id?: string } = {}): Promise<AgentSession> {
   try {
-    const result = await createAgentSession({ cwd })
+    const sessionManager = options.id
+      ? SessionManager.create(cwd, process.env.PI_SESSION_DIR, { id: options.id })
+      : undefined
+    const result = await createAgentSession(sessionManager ? { sessionManager } : { cwd })
     const id = result.session.sessionId
     const file = result.session.sessionFile
     if (file) {

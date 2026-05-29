@@ -177,9 +177,10 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
       }]
     }
     case 'bashExecution': {
-      const be = msg as { role: 'bashExecution'; command: string; output: string; exitCode: number | undefined; cancelled: boolean; truncated: boolean; timestamp: number }
+      const be = msg as { role: 'bashExecution'; command: string; output: string; exitCode: number | undefined; cancelled: boolean; truncated: boolean; timestamp: number; excludeFromContext?: boolean }
       const output = be.output ? `\n${be.output}` : ''
       const exitLabel = be.exitCode !== undefined ? ` (exit ${be.exitCode})` : ''
+      const contextLabel = be.excludeFromContext ? ' [excluded from context]' : ''
       return [{
         type: 'assistant',
         uuid: `pi-${sessionId}-${index}-bash`,
@@ -193,7 +194,7 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
             type: 'tool_use',
             id: `bash-${index}`,
             name: 'bash',
-            input: { command: be.command },
+            input: { command: be.command, excludeFromContext: be.excludeFromContext || undefined },
           }],
         },
       }, {
@@ -208,7 +209,7 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
           content: [{
             type: 'tool_result',
             tool_use_id: `bash-${index}`,
-            content: `$ ${be.command}${output}${exitLabel}`,
+            content: `$ ${be.command}${contextLabel}${output}${exitLabel}`,
             is_error: (be.exitCode !== undefined && be.exitCode !== 0) || undefined,
           }],
         },

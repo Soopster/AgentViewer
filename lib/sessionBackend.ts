@@ -26,6 +26,9 @@ import {
   query,
   renameSession,
   tagSession,
+  type CanUseTool,
+  type PermissionResult,
+  type PermissionUpdate,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import {
@@ -146,6 +149,7 @@ import type {
 } from '@opencode-ai/sdk'
 import { normalizeProjectPath, sameProjectPath } from './projectPaths'
 import {
+  createPiAgentSession,
   evictPiAgentSession,
   forkPiSession,
   getPiSessionEntries,
@@ -669,6 +673,14 @@ async function buildPiImages(attachments: SendAttachment[]): Promise<Array<{ typ
   return images
 }
 
+function parsePiDirectShell(message: string): { command: string; excludeFromContext: boolean } | null {
+  const trimmed = message.trim()
+  if (!trimmed.startsWith('!')) return null
+  const excludeFromContext = trimmed.startsWith('!!')
+  const command = trimmed.slice(excludeFromContext ? 2 : 1).trim()
+  return { command, excludeFromContext }
+}
+
 function codexContextUsageToEventData(contextUsage: ContextUsage): string {
   return `event: context-usage\ndata: ${JSON.stringify(contextUsage)}\n\n`
 }
@@ -826,6 +838,138 @@ function resolvePendingCopilotPermissions(sessionId: string, ids: Set<string>, r
     clearTimeout(pending.timer)
     ids.delete(id)
     pending.resolve(result)
+  }
+}
+
+type PendingClaudePermission = {
+  resolve: (result: PermissionResult) => void
+  timer: ReturnType<typeof setTimeout>
+  suggestions?: PermissionUpdate[]
+  toolUseID: string
+}
+
+const pendingClaudePermissions = new Map<string, PendingClaudePermission>()
+
+function pendingClaudePermissionKey(sessionId: string, permissionId: string): string {
+  return `${sessionId}:${permissionId}`
+}
+
+function claudePermissionDecision(
+  response: string,
+  pending: Pick<PendingClaudePermission, 'suggestions' | 'toolUseID'>,
+): PermissionResult {
+  if (response === 'reject') {
+    return {
+      behavior: 'deny',
+      message: 'User denied permission',
+      toolUseID: pending.toolUseID,
+      decisionClassification: 'user_reject',
+    }
+  }
+  return {
+    behavior: 'allow',
+    toolUseID: pending.toolUseID,
+    decisionClassification: response === 'always' ? 'user_permanent' : 'user_temporary',
+    ...(response === 'always' && pending.suggestions?.length
+      ? { updatedPermissions: pending.suggestions }
+      : {}),
+  }
+}
+
+function claudePermissionEvent(type: 'permission.requested' | 'permission.completed', data: Record<string, unknown>): string {
+  return JSON.stringify({
+    type: 'claude_permission',
+    event: {
+      timestamp: new Date().toISOString(),
+      type,
+      data,
+    },
+  })
+}
+
+function createClaudePermissionBridge(
+  sessionId: string,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  encoder: TextEncoder,
+  activeIds: Set<string>,
+): CanUseTool {
+  const enqueuePermissionEvent = (type: 'permission.requested' | 'permission.completed', data: Record<string, unknown>) => {
+    try {
+      controller.enqueue(encoder.encode(`data: ${claudePermissionEvent(type, data)}\n\n`))
+    } catch {
+      // The client may disconnect while Claude is still resolving a tool permission.
+    }
+  }
+
+  return (toolName, input, options) => {
+    const requestId = options.toolUseID || `claude-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    activeIds.add(requestId)
+    enqueuePermissionEvent('permission.requested', {
+      requestId,
+      toolName,
+      input,
+      title: options.title,
+      displayName: options.displayName,
+      description: options.description,
+      blockedPath: options.blockedPath,
+      decisionReason: options.decisionReason,
+      suggestions: options.suggestions,
+    })
+
+    return new Promise((resolve) => {
+      const key = pendingClaudePermissionKey(sessionId, requestId)
+      const deny = (message: string): PermissionResult => ({
+        behavior: 'deny',
+        message,
+        toolUseID: options.toolUseID,
+        decisionClassification: 'user_reject',
+      })
+      const cleanup = () => {
+        pendingClaudePermissions.delete(key)
+        activeIds.delete(requestId)
+        options.signal.removeEventListener('abort', onAbort)
+      }
+      const onAbort = () => {
+        cleanup()
+        resolve(deny('Permission request was cancelled'))
+      }
+      const timer = setTimeout(() => {
+        cleanup()
+        resolve(deny('Permission request timed out'))
+      }, 5 * 60 * 1000)
+      if (typeof timer === 'object' && timer && 'unref' in timer) {
+        (timer as { unref: () => void }).unref()
+      }
+      options.signal.addEventListener('abort', onAbort, { once: true })
+      pendingClaudePermissions.set(key, {
+        toolUseID: options.toolUseID,
+        suggestions: options.suggestions,
+        timer,
+        resolve: (result) => {
+          clearTimeout(timer)
+          cleanup()
+          enqueuePermissionEvent('permission.completed', { requestId })
+          resolve(result)
+        },
+      })
+    })
+  }
+}
+
+function resolvePendingClaudePermissions(sessionId: string, ids: Set<string>, message: string): void {
+  for (const id of Array.from(ids)) {
+    const key = pendingClaudePermissionKey(sessionId, id)
+    const pending = pendingClaudePermissions.get(key)
+    if (!pending) continue
+    pendingClaudePermissions.delete(key)
+    clearTimeout(pending.timer)
+    ids.delete(id)
+    pending.resolve({
+      behavior: 'deny',
+      message,
+      toolUseID: pending.toolUseID,
+      decisionClassification: 'user_reject',
+    })
   }
 }
 
@@ -1445,6 +1589,19 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     // — avoids spinning a fresh CLI subprocess just to swap a model or
     // reconnect an MCP server. Falls back to createSessionControlQuery only
     // when the session isn't pooled (no recent send → no warm Query).
+    if (action === 'respondPermission') {
+      const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
+      const response = typeof body.response === 'string' ? body.response : ''
+      if (!permissionId) throw new Error('permissionId is required')
+      if (response !== 'once' && response !== 'always' && response !== 'reject') {
+        throw new Error('response must be once, always, or reject')
+      }
+      const key = pendingClaudePermissionKey(sessionId, permissionId)
+      const pending = pendingClaudePermissions.get(key)
+      if (!pending) throw new Error('Permission request is no longer pending')
+      pending.resolve(claudePermissionDecision(response, pending))
+      return { ok: true }
+    }
     if (action === 'setModel') {
       const model = typeof body.model === 'string' ? body.model.trim() : ''
       if (!model) throw new Error('model is required')
@@ -1840,6 +1997,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   const userMessage = String(body.message ?? '').trim()
   const explicitModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined
   const isPendingSession = Boolean(body.isPendingSession)
+  const manualPermissions = body.manualPermissions === true
   const permissionMode = parseClaudePermissionMode(body)
   // For pending (newly created) sessions there is no prior model on disk, so we
   // need an explicit default. For existing/resumed sessions we leave model
@@ -1859,7 +2017,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   // conversation root), or rewind (changes the resume point). These mutate
   // the conversation root or don't have a stable id to key the pool on, so we
   // run the legacy single-shot query() and let the pool catch up on turn 2.
-  const useColdPath = isPendingSession || forkSessionOnSend || Boolean(resumeSessionAt)
+  const useColdPath = isPendingSession || forkSessionOnSend || Boolean(resumeSessionAt) || manualPermissions
 
   if (useColdPath) {
     return createClaudeStreamCold({
@@ -1869,6 +2027,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
       attachments,
       isPendingSession,
       permissionMode,
+      manualPermissions,
       model,
       effort,
       resumeSessionAt,
@@ -1898,6 +2057,7 @@ type ClaudeStreamColdArgs = {
   attachments: SendAttachment[]
   isPendingSession: boolean
   permissionMode: ClaudePermissionMode | undefined
+  manualPermissions: boolean
   model: string | undefined
   effort: ReasoningEffortLevel | undefined
   resumeSessionAt: string | undefined
@@ -1914,6 +2074,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     attachments,
     isPendingSession,
     permissionMode,
+    manualPermissions,
     model,
     effort,
     resumeSessionAt,
@@ -1953,6 +2114,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
 
   const stream = new ReadableStream({
     async start(controller) {
+      const bridgedPermissionIds = new Set<string>()
       const q = query({
         prompt: iterable,
         options: {
@@ -1960,6 +2122,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           ...(cwdOverride ? { cwd: cwdOverride } : {}),
           ...(model ? { model } : {}),
           ...(permissionMode ? { permissionMode } : {}),
+          ...(manualPermissions ? { canUseTool: createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds) } : {}),
           effort: effort === 'off' || effort === 'minimal' ? undefined : effort,
           thinking: effort === 'off'
             ? { type: 'disabled' }
@@ -2015,6 +2178,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         if (
           realizedSessionId
           && !abortController.signal.aborted
+          && !manualPermissions
         ) {
           signal.removeEventListener('abort', propagateAbort)
           adoptClaudeSession({
@@ -2032,6 +2196,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         }
       } finally {
         clearRunningSession(sessionId)
+        resolvePendingClaudePermissions(sessionId, bridgedPermissionIds, 'Permission request ended before a response was received')
         if (!adopted) {
           signal.removeEventListener('abort', propagateAbort)
           q.close()
@@ -3054,9 +3219,12 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
 async function createPiStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
+  const isPendingSession = Boolean(body.isPendingSession)
+  const cwdOverride = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined
   const selectedModel = decodePiModelValue(typeof body.model === 'string' ? body.model : null)
   const effort = parseEffort(body)
   const attachments = parseAttachments(body)
+  const directShell = parsePiDirectShell(userMessage)
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({
@@ -3070,7 +3238,9 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
       }
 
       try {
-        const agentSession = await openPiAgentSession(sessionId)
+        const agentSession = isPendingSession
+          ? await createPiAgentSession(cwdOverride ?? process.cwd(), { id: sessionId })
+          : await openPiAgentSession(sessionId)
         const targetSessionId = agentSession.sessionId
         if (selectedModel) {
           const model = agentSession.modelRegistry.find(selectedModel.providerID, selectedModel.modelID)
@@ -3087,6 +3257,31 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         const images = await buildPiImages(attachments)
 
         controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: targetSessionId })}\n\n`))
+
+        if (directShell) {
+          if (!directShell.command) {
+            throw new Error('Pi shell command cannot be empty')
+          }
+          if (attachments.length > 0) {
+            throw new Error('Pi shell commands do not support attachments')
+          }
+          setRunningSession(sessionId, {
+            provider: 'pi',
+            interrupt: async () => { agentSession.abortBash() },
+          })
+          signal.addEventListener('abort', () => {
+            const running = getRunningSession(sessionId)
+            if (running?.provider === 'pi') {
+              void running.interrupt().catch(() => {})
+            }
+          })
+          await agentSession.executeBash(directShell.command, undefined, {
+            excludeFromContext: directShell.excludeFromContext,
+          })
+          clearRunningSession(sessionId)
+          close()
+          return
+        }
 
         setRunningSession(sessionId, {
           provider: 'pi',
@@ -3287,9 +3482,8 @@ export async function createNewViewSession({
   }
 
   if (provider === 'pi') {
-    const { createPiAgentSession } = await import('./piClient')
-    const session = await createPiAgentSession(resolvedCwd)
-    return { sessionId: session.sessionId, provider, cwd: resolvedCwd, isPending: false }
+    const { randomUUID } = await import('node:crypto')
+    return { sessionId: randomUUID(), provider, cwd: resolvedCwd, isPending: true }
   }
 
   throw new Error(`Create is not supported for ${provider} sessions`)

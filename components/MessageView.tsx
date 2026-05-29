@@ -509,6 +509,43 @@ function extractCopilotPermissionCompletion(payload: unknown): string | null {
   return data ? stringField(data, 'requestId') ?? null : null
 }
 
+function extractClaudePermission(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'claude_permission') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.requested') return null
+  const data = asRecord(eventRecord.data)
+  if (!data) return null
+  const id = stringField(data, 'requestId')
+  if (!id) return null
+  const input = asRecord(data.input)
+  const command = input ? stringField(input, 'command') : undefined
+  const path = input ? (stringField(input, 'file_path') ?? stringField(input, 'path')) : undefined
+  const detail = stringField(data, 'description')
+    ?? stringField(data, 'blockedPath')
+    ?? command
+    ?? path
+    ?? stringField(data, 'decisionReason')
+  const suggestions = data.suggestions
+  return {
+    id,
+    title: stringField(data, 'title')
+      ?? stringField(data, 'displayName')
+      ?? `Claude requests ${stringField(data, 'toolName') ?? 'tool'} permission`,
+    detail,
+    canApproveAlways: Array.isArray(suggestions) && suggestions.length > 0,
+  }
+}
+
+function extractClaudePermissionCompletion(payload: unknown): string | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'claude_permission') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.completed') return null
+  const data = asRecord(eventRecord.data)
+  return data ? stringField(data, 'requestId') ?? null : null
+}
+
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
   const normalized = buffer.replace(/\r\n/g, '\n')
   const frames: SseFrame[] = []
@@ -2656,7 +2693,7 @@ export default function MessageView({
           provider: session.provider,
           agent: session.provider === 'opencode' && selectedAgent ? selectedAgent : undefined,
           mode: session.provider === 'copilot' ? selectedCopilotMode : undefined,
-          manualPermissions: session.provider === 'copilot' ? true : undefined,
+          manualPermissions: session.provider === 'copilot' || session.provider === 'claude' ? true : undefined,
           nativeCommands: session.provider === 'copilot' ? true : undefined,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
           isPendingSession: session.isPending === true ? true : undefined,
@@ -2775,14 +2812,14 @@ export default function MessageView({
                 return rest
               })
             }
-            const pendingPermission = extractOpenCodePermission(parsed) ?? extractCopilotPermission(parsed)
+            const pendingPermission = extractOpenCodePermission(parsed) ?? extractCopilotPermission(parsed) ?? extractClaudePermission(parsed)
             if (pendingPermission) {
               setPendingPermissions((prev) => [
                 ...prev.filter((permission) => permission.id !== pendingPermission.id),
                 pendingPermission,
               ])
             }
-            const repliedPermissionId = extractOpenCodePermissionReply(parsed) ?? extractCopilotPermissionCompletion(parsed)
+            const repliedPermissionId = extractOpenCodePermissionReply(parsed) ?? extractCopilotPermissionCompletion(parsed) ?? extractClaudePermissionCompletion(parsed)
             if (repliedPermissionId) {
               setPendingPermissions((prev) => prev.filter((permission) => permission.id !== repliedPermissionId))
             }
