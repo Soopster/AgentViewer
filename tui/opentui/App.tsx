@@ -2651,13 +2651,18 @@ export default function OpenTuiApp() {
     () => transcriptCards.filter((card) => card.autoFold && !resolvedExpandedKeys.has(card.key)).length,
     [resolvedExpandedKeys, transcriptCards],
   )
-  const shouldEnableSyntaxHighlighting = useMemo(() => {
-    if (composerSendState === 'sending' && composerLiveText) return true
-    return transcriptCards.some((card) => {
+  // Split the live-stream fast path out of the O(transcript) scan so the
+  // expensive `.some()` only recomputes when expanded keys or cards change —
+  // not on every RAF flush that mutates composerLiveText while a turn streams.
+  const liveSyntaxActive = composerSendState === 'sending' && Boolean(composerLiveText)
+  const expandedSyntaxActive = useMemo(
+    () => transcriptCards.some((card) => {
       if (!resolvedExpandedKeys.has(card.key)) return false
       return Boolean(card.markdownContent || (card.codeBlocks && card.codeBlocks.length > 0))
-    })
-  }, [resolvedExpandedKeys, transcriptCards, composerSendState, composerLiveText])
+    }),
+    [resolvedExpandedKeys, transcriptCards],
+  )
+  const shouldEnableSyntaxHighlighting = liveSyntaxActive || expandedSyntaxActive
   const syntaxStyle = useMemo(
     () => shouldEnableSyntaxHighlighting ? buildSyntaxStyle(theme) : null,
     [shouldEnableSyntaxHighlighting, theme],
@@ -2947,7 +2952,10 @@ export default function OpenTuiApp() {
     () => Object.values(liveSubagentText).some((t) => t.trim().length > 0),
     [liveSubagentText],
   )
-  const activeRunningToolCount = liveToolActivities.filter((a) => a.status === 'running').length
+  const activeRunningToolCount = useMemo(
+    () => liveToolActivities.reduce((n, a) => (a.status === 'running' ? n + 1 : n), 0),
+    [liveToolActivities],
+  )
   const hasComposerStatusMessage = Boolean(
     composerError || (composerSendState === 'sending') || awaitingPersistedTurn
   )
@@ -4017,6 +4025,84 @@ export default function OpenTuiApp() {
       // rename failed silently — session list will show original title on next poll
     }
   }, [renameSessionKey, selectedSession, provider, refreshSessions])
+
+  // Build the sidebar row elements once per relevant-state change instead of
+  // on every App render. The per-row formatting (fitText/timeAgo/joinMeta/
+  // formatSessionTitle/getProviderAccent) is O(sessions) and previously re-ran
+  // on every 2s poll, keystroke, and live-stream RAF flush; a stable element
+  // array also lets OpenTUI's reconciler bail on the whole subtree when nothing
+  // here changed. `timeAgo` output refreshes whenever sidebarEntries does (the
+  // 5s sessions poll produces a new array), which is frequent enough.
+  const sidebarRowElements = useMemo(() => sidebarEntries.map((entry) => {
+    if (entry.type === 'project') {
+      const countLabel = `${entry.count}`
+      const dashes = '─'.repeat(Math.max(sidebarInnerWidth - 2 - entry.projectName.length - countLabel.length - 3, 1))
+      return (
+        <box
+          key={entry.key}
+          id={`sidebar:${entry.key}`}
+          paddingX={1}
+          marginTop={1}
+          backgroundColor={theme.surface2}
+        >
+          <text fg={theme.cyan} wrapMode="none">
+            {fitText(`${entry.projectName} ${dashes} ${countLabel}`, sidebarInnerWidth - 2)}
+          </text>
+        </box>
+      )
+    }
+
+    const selected = entry.absoluteIndex === selectedIndex
+    const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
+    const activityTime = entry.session.lastModified ?? entry.session.createdAt
+    const ago = timeAgo(activityTime)
+
+    const metaLine = joinMeta([formatProviderLabel(entry.session.provider), ago])
+
+    return (
+      <box
+        key={entry.key}
+        id={`sidebar:${entry.key}`}
+        flexDirection="column"
+        backgroundColor={selected ? theme.surface3 : theme.surface}
+        marginBottom={density === 'comfortable' ? 1 : 0}
+      >
+        {sessionKey(entry.session) === renameSessionKey ? (
+          <box paddingX={1} backgroundColor={theme.surface3}>
+            <input
+              focused
+              value={renameDraft}
+              maxLength={80}
+              onInput={(v: string) => setRenameDraft(v)}
+              onSubmit={commitRename}
+            />
+          </box>
+        ) : (
+          <box paddingX={1} backgroundColor={selected ? theme.surface3 : theme.surface}>
+            <text fg={selected ? theme.text : theme.muted} wrapMode="none">
+              {fitText(formatSessionTitle(entry.session), sidebarInnerWidth - 2)}
+            </text>
+          </box>
+        )}
+        <box paddingX={1} backgroundColor={selected ? theme.surface3 : theme.surface}>
+          <text fg={selected ? sessionAccent : theme.dim} wrapMode="none">
+            {fitText(metaLine, sidebarInnerWidth - 2)}
+          </text>
+        </box>
+      </box>
+    )
+  }), [sidebarEntries, selectedIndex, theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename])
+
+  // Stable scrollbar config objects so the two long-lived <scrollbox>
+  // renderables don't see a fresh prop reference on every render.
+  const sidebarScrollbarOptions = useMemo(
+    () => ({ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface } }),
+    [theme.muted, theme.surface],
+  )
+  const transcriptScrollbarOptions = useMemo(
+    () => ({ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }),
+    [theme.muted, theme.surface2],
+  )
 
   const flushLiveText = useCallback(() => {
     liveTextFlushFrameRef.current = null
@@ -6153,72 +6239,9 @@ export default function OpenTuiApp() {
                   backgroundColor={theme.surface}
                   scrollY
                   viewportCulling
-                  scrollbarOptions={{
-                    trackOptions: {
-                      foregroundColor: theme.muted,
-                      backgroundColor: theme.surface,
-                    },
-                  }}
+                  scrollbarOptions={sidebarScrollbarOptions}
                 >
-                  {sidebarEntries.map((entry) => {
-                    if (entry.type === 'project') {
-                      const countLabel = `${entry.count}`
-                      const dashes = '─'.repeat(Math.max(sidebarInnerWidth - 2 - entry.projectName.length - countLabel.length - 3, 1))
-                      return (
-                        <box
-                          key={entry.key}
-                          id={`sidebar:${entry.key}`}
-                          paddingX={1}
-                          marginTop={1}
-                          backgroundColor={theme.surface2}
-                        >
-                          <text fg={theme.cyan} wrapMode="none">
-                            {fitText(`${entry.projectName} ${dashes} ${countLabel}`, sidebarInnerWidth - 2)}
-                          </text>
-                        </box>
-                      )
-                    }
-
-                    const selected = entry.absoluteIndex === selectedIndex
-                    const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
-                    const activityTime = entry.session.lastModified ?? entry.session.createdAt
-                    const ago = timeAgo(activityTime)
-
-                    const metaLine = joinMeta([formatProviderLabel(entry.session.provider), ago])
-
-                    return (
-                      <box
-                        key={entry.key}
-                        id={`sidebar:${entry.key}`}
-                        flexDirection="column"
-                        backgroundColor={selected ? theme.surface3 : theme.surface}
-                        marginBottom={density === 'comfortable' ? 1 : 0}
-                      >
-                        {sessionKey(entry.session) === renameSessionKey ? (
-                          <box paddingX={1} backgroundColor={theme.surface3}>
-                            <input
-                              focused
-                              value={renameDraft}
-                              maxLength={80}
-                              onInput={(v: string) => setRenameDraft(v)}
-                              onSubmit={commitRename}
-                            />
-                          </box>
-                        ) : (
-                          <box paddingX={1} backgroundColor={selected ? theme.surface3 : theme.surface}>
-                            <text fg={selected ? theme.text : theme.muted} wrapMode="none">
-                              {fitText(formatSessionTitle(entry.session), sidebarInnerWidth - 2)}
-                            </text>
-                          </box>
-                        )}
-                        <box paddingX={1} backgroundColor={selected ? theme.surface3 : theme.surface}>
-                          <text fg={selected ? sessionAccent : theme.dim} wrapMode="none">
-                            {fitText(metaLine, sidebarInnerWidth - 2)}
-                          </text>
-                        </box>
-                      </box>
-                    )
-                  })}
+                  {sidebarRowElements}
                 </scrollbox>
               )}
             </box>
@@ -6379,12 +6402,7 @@ export default function OpenTuiApp() {
                 scrollY
                 scrollAcceleration={MESSAGE_SCROLL_ACCEL}
                 viewportCulling
-                scrollbarOptions={{
-                  trackOptions: {
-                    foregroundColor: theme.muted,
-                    backgroundColor: theme.surface2,
-                  },
-                }}
+                scrollbarOptions={transcriptScrollbarOptions}
                 >
                 <box height={TRANSCRIPT_TOP_MARGIN} />
                 {transcriptChildren}
