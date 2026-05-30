@@ -413,8 +413,11 @@ function timeAgo(value?: string | number): string {
   return `${days}d`
 }
 
-const COMPOSER_MIN_HEIGHT = 4
+const COMPOSER_MIN_HEIGHT = 6
 const COMPOSER_MAX_HEIGHT = 12
+const COMPOSER_DOCK_CHROME_HEIGHT = 3
+const COMPOSER_WINDOW_MAX_WIDTH = 96
+const COMPOSER_WINDOW_MAX_HEIGHT = 36
 type ComposerKeyBinding = { name: string; action: TextareaAction; shift?: boolean; alt?: boolean; meta?: boolean; ctrl?: boolean }
 const TUI_SLASH_HINTS: Record<string, string[]> = {
   claude: ['/clear', '/compact', '/help', '/model', '/cost', '/review'],
@@ -1793,6 +1796,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'tasks-full', label: 'Task lineage popover',   key: '⇧L', category: 'Transcript' },
   // Session
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
+  { id: 'composer-window', label: 'Open composer window', key: '^O', category: 'Session'    },
   { id: 'new',        label: 'New agent session',      key: 'N',  category: 'Session'    },
   { id: 'reuse',      label: 'Reuse last prompt',      key: 'R',  category: 'Session'    },
   { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
@@ -2253,6 +2257,7 @@ export default function OpenTuiApp() {
   const [renameDraft, setRenameDraft] = useState('')
   const renameDraftRef = useRef(renameDraft)
   const [composerActive, setComposerActive] = useState(false)
+  const [composerWindowOpen, setComposerWindowOpen] = useState(false)
   const [composerDraft, setComposerDraft] = useState('')
   const composerDraftStorageKeyRef = useRef<string | null>(null)
   const [composerLiveTodos, setComposerLiveTodos] = useState<import('../../lib/taskRegistry').OpenCodeTodo[]>([])
@@ -2326,6 +2331,7 @@ export default function OpenTuiApp() {
   const composerAbortRef = useRef<AbortController | null>(null)
   const activeComposerSendCleanupRef = useRef<Promise<void> | null>(null)
   const composerTextareaRef = useRef<TextareaRenderable | null>(null)
+  const composerCursorOffsetRef = useRef<number | null>(null)
   const terminalSelectionRef = useRef<{ text: string; capturedAt: number } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const liveTranscriptBaselineRef = useRef(new Map<string, { count: number; lastFingerprint: string | null }>())
@@ -2363,6 +2369,18 @@ export default function OpenTuiApp() {
   useEffect(() => { searchModeRef.current = searchMode }, [searchMode])
   useEffect(() => { sessionSearchModeRef.current = sessionSearchMode }, [sessionSearchMode])
   useEffect(() => { exitConfirmOpenRef.current = exitConfirmOpen }, [exitConfirmOpen])
+  useEffect(() => {
+    if (!composerActive && composerWindowOpen) setComposerWindowOpen(false)
+  }, [composerActive, composerWindowOpen])
+  useLayoutEffect(() => {
+    if (!composerActive) return
+    const offset = composerCursorOffsetRef.current
+    if (offset == null) return
+    const renderable = composerTextareaRef.current
+    if (!renderable) return
+    renderable.cursorOffset = Math.min(offset, renderable.plainText.length)
+    composerCursorOffsetRef.current = null
+  }, [composerActive, composerWindowOpen])
   useEffect(() => { awaitingPersistedTurnRef.current = awaitingPersistedTurn }, [awaitingPersistedTurn])
   useEffect(() => {
     setActiveTheme(themeMode)
@@ -2749,7 +2767,9 @@ export default function OpenTuiApp() {
     const idx = sidebarEntries.findIndex((e) => e.type === 'session' && e.absoluteIndex === selectedIndex)
     return idx >= 0 ? idx : 0
   }, [sidebarEntries, selectedIndex])
-  const composerHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, (composerDraft.length === 0 ? 1 : composerDraft.split('\n').length) + 3))
+  const composerHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, (composerDraft.length === 0 ? 1 : composerDraft.split('\n').length) + COMPOSER_DOCK_CHROME_HEIGHT))
+  const composerDockHeight = composerWindowOpen ? 0 : composerHeight
+  const composerDockTextareaHeight = Math.max(2, composerDockHeight - COMPOSER_DOCK_CHROME_HEIGHT)
   const composerCurrentModel = useMemo(() => {
     if (!composerTargetSession) return null
     const targetKey = sessionKey(composerTargetSession)
@@ -2988,11 +3008,47 @@ export default function OpenTuiApp() {
     setComposerDraft(next)
     setComposerSlashIndex(0)
   }, [])
+
+  const handleComposerContentChange = useCallback(() => {
+    const renderable = composerTextareaRef.current
+    const text = renderable?.plainText ?? ''
+    const cursor = renderable?.cursorOffset ?? text.length
+    setComposerDraft(text)
+    if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, text)
+    if (historyIndex !== -1 && text !== sentHistory[historyIndex]) setHistoryIndex(-1)
+    if (composerError) setComposerError(null)
+    if (composerSendState === 'error') setComposerSendState('idle')
+    const mention = detectMentionAtCursor(text, cursor)
+    const dismissedStart = composerMentionDismissedStart
+    if (!mention || (dismissedStart !== null && mention.start !== dismissedStart)) {
+      if (dismissedStart !== null) setComposerMentionDismissedStart(null)
+    }
+    setComposerMention((prev) => {
+      if (!mention) return prev ? null : prev
+      if (dismissedStart !== null && mention.start === dismissedStart) return prev ? null : prev
+      if (prev && prev.start === mention.start && prev.query === mention.query) return prev
+      setComposerMentionIndex(0)
+      return mention
+    })
+    const firstLine = text.split('\n')[0] ?? ''
+    if (!firstLine.startsWith('/')) {
+      setComposerSlashIndex(0)
+      if (composerSlashDismissed) setComposerSlashDismissed(false)
+    }
+  }, [
+    composerError,
+    composerMentionDismissedStart,
+    composerSendState,
+    composerSlashDismissed,
+    historyIndex,
+    sentHistory,
+  ])
+
   const composerMentionVisibleCount = Math.min(composerMentionResults.length, 5)
   const composerSlashVisibleCount = Math.min(composerSlashCommands.length, 5)
-  const composerPopoverHeight = (composerActive && composerMention && composerMentionVisibleCount > 0)
+  const composerPopoverHeight = (!composerWindowOpen && composerActive && composerMention && composerMentionVisibleCount > 0)
     ? composerMentionVisibleCount + 3
-    : (composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention)
+    : (!composerWindowOpen && composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention)
     ? composerSlashVisibleCount + 3
     : 0
   // Status indicators (requesting spinner, subagent tail, live-prompt
@@ -3030,7 +3086,7 @@ export default function OpenTuiApp() {
     height
     - 3
     - (searchMode || sessionSearchMode ? 4 : 1)
-    - composerHeight
+    - composerDockHeight
     - composerPopoverHeight
     - composerStatusBlockHeight,
     8,
@@ -3040,9 +3096,42 @@ export default function OpenTuiApp() {
   const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
   const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0) - effectiveTaskPanelWidth - (taskPanelOpen ? 1 : 0), 40)
   const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10)
+  const composerDockTextareaWidth = Math.max(width - 4, 20)
   const composerVisualLineCount = composerDraft.length === 0
     ? 1
     : composerDraft.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / textareaInnerWidth)), 0)
+  const composerWindowWidth = Math.max(
+    20,
+    Math.min(
+      Math.max(width - 4, 20),
+      Math.max(72, Math.min(COMPOSER_WINDOW_MAX_WIDTH, Math.floor(width * 0.84))),
+    ),
+  )
+  const composerWindowHeight = Math.max(
+    10,
+    Math.min(
+      Math.max(height - 4, 10),
+      Math.max(16, Math.min(COMPOSER_WINDOW_MAX_HEIGHT, Math.floor(height * 0.72))),
+    ),
+  )
+  const composerWindowLeft = Math.max(1, Math.floor((width - composerWindowWidth) / 2))
+  const composerWindowTop = Math.max(1, Math.floor((height - composerWindowHeight) / 2))
+  const composerWindowContentWidth = Math.max(composerWindowWidth - 4, 16)
+  const composerWindowTextareaWidth = Math.max(composerWindowContentWidth - 2, 12)
+  const composerWindowVisualLineCount = composerDraft.length === 0
+    ? 1
+    : composerDraft.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / composerWindowTextareaWidth)), 0)
+  const composerWindowSuggestionHeight = (composerActive && composerMention && composerMentionVisibleCount > 0)
+    ? composerMentionVisibleCount + 3
+    : (composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention)
+    ? composerSlashVisibleCount + 3
+    : 0
+  const composerWindowHeaderHeight = 2
+  const composerWindowFooterHeight = 2
+  const composerWindowEditorHeight = Math.max(
+    4,
+    composerWindowHeight - composerWindowHeaderHeight - composerWindowFooterHeight - composerWindowSuggestionHeight - 2,
+  )
 
   const isPreviewMode = tabsEnabled && !!selectedSessionKey && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
   const visibleTabSessions = useMemo(() => (
@@ -5109,7 +5198,7 @@ export default function OpenTuiApp() {
 
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b ${tabsEnabled ? 'hide' : 'show'} tabs  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  r refresh  ? commands  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b ${tabsEnabled ? 'hide' : 'show'} tabs  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
     [width, transcriptView, density, tabsEnabled, showToolCalls],
@@ -5165,6 +5254,22 @@ export default function OpenTuiApp() {
       noticeTimeoutRef.current = null
     }, 2000)
   }, [])
+
+  const rememberComposerCursor = useCallback(() => {
+    composerCursorOffsetRef.current = composerTextareaRef.current?.cursorOffset ?? null
+  }, [])
+
+  const openComposerWindow = useCallback(() => {
+    rememberComposerCursor()
+    setComposerActive(true)
+    setComposerWindowOpen(true)
+  }, [rememberComposerCursor])
+
+  const toggleComposerWindow = useCallback(() => {
+    rememberComposerCursor()
+    setComposerActive(true)
+    setComposerWindowOpen((open) => !open)
+  }, [rememberComposerCursor])
 
   useSelectionHandler((selection) => {
     const text = selection.getSelectedText()
@@ -5389,6 +5494,9 @@ export default function OpenTuiApp() {
       case 'composer':
         setComposerActive(true)
         break
+      case 'composer-window':
+        openComposerWindow()
+        break
       case 'thinking':
         setThinkingMode((current) => !current)
         break
@@ -5427,7 +5535,7 @@ export default function OpenTuiApp() {
   }, [
     activeTabIndex, closeCommandPalette, copyCliCommand, copySelectedMessage, density, focusMode, focusedPane, jumpToResumeMarker,
     showNotice, tabsEnabled, sidebarSort,
-    jumpToTranscriptTail, jumpToUnreadBoundary, openTabSessions, provider, railVisible,
+    jumpToTranscriptTail, jumpToUnreadBoundary, openComposerWindow, openTabSessions, provider, railVisible,
     refreshSessions, refreshSelectedSessionDetail, requestExit, selectTabSession, selectedSessionKey,
     selectedSession, selectedSessionTarget, sessions, themeMode, toggleExpansion, transcriptView,
   ])
@@ -5653,7 +5761,12 @@ export default function OpenTuiApp() {
           return
         }
         handled(() => {
-          setComposerActive(false)
+          if (composerWindowOpen) {
+            rememberComposerCursor()
+            setComposerWindowOpen(false)
+          } else {
+            setComposerActive(false)
+          }
         })
         return
       }
@@ -5661,8 +5774,13 @@ export default function OpenTuiApp() {
       if (isCtrl('c') && composerSendState === 'sending') {
         handled(() => {
           cancelComposerSend()
+          setComposerWindowOpen(false)
           setComposerActive(false)
         })
+        return
+      }
+      if (isCtrl('o')) {
+        handled(toggleComposerWindow)
         return
       }
       if (composerMention && composerMentionResults.length > 0) {
@@ -5737,6 +5855,11 @@ export default function OpenTuiApp() {
         })
         return
       }
+      return
+    }
+
+    if (isCtrl('o')) {
+      handled(openComposerWindow)
       return
     }
 
@@ -6267,6 +6390,150 @@ export default function OpenTuiApp() {
   const providerOptions = PROVIDER_SELECT_OPTIONS
   const providerAccent = getProviderAccent(provider)
   const providerSummary = provider.toUpperCase()
+  const composerPlaceholder = composerTargetSession
+    ? (composerSendState === 'sending'
+        ? composerConfig.placeholderStreaming
+        : composerExample)
+    : composerConfig.placeholderNoSession
+  const composerBaseTextareaStyle = {
+    backgroundColor: theme.surface,
+    textColor: theme.text,
+    focusedBackgroundColor: theme.surface,
+    focusedTextColor: theme.text,
+    placeholderColor: theme.dim,
+  }
+  const composerDockTextareaStyle = {
+    ...composerBaseTextareaStyle,
+    flexGrow: 1,
+  }
+  const composerDockStats = composerDraft.length === 0
+    ? `${composerConfig.glyph} ${composerConfig.label}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+    : `${composerVisualLineCount} line${composerVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+  const composerWindowStats = composerDraft.length === 0
+    ? `${composerConfig.glyph} ${composerConfig.label}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+    : `${composerWindowVisualLineCount} line${composerWindowVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+  const composerDockFooterHint = composerSendState === 'sending'
+    ? composerConfig.footerHintSending
+    : `${composerIdleFooterHint} · ⌃O expand`
+  const composerDockFooterHintWidth = Math.min(62, Math.max(18, Math.floor(composerDockTextareaWidth * 0.42)))
+  const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
+  const composerWindowFooterHint = composerSendState === 'sending'
+    ? `${composerConfig.footerHintSending} · ⌃O dock`
+    : '⏎ send · ⇧⏎ newline · ⌃O dock · Esc close'
+  const submitComposerFromDock = () => {
+    void sendComposerMessage(composerTextareaRef.current?.plainText ?? composerDraft)
+  }
+  const submitComposerFromWindow = () => {
+    const draft = composerTextareaRef.current?.plainText ?? composerDraft
+    if (draft.trim() && composerTargetSession) {
+      rememberComposerCursor()
+      setComposerWindowOpen(false)
+    }
+    void sendComposerMessage(draft)
+  }
+  const renderComposerTextarea = (
+    onSubmit: () => void,
+    options?: { height?: number; width?: number },
+  ) => (
+    <textarea
+      ref={composerTextareaRef}
+      focused={composerActive}
+      width={options?.width}
+      height={options?.height}
+      placeholder={composerPlaceholder}
+      initialValue={composerDraft}
+      keyBindings={composerKeyBindings}
+      onContentChange={handleComposerContentChange}
+      onSubmit={onSubmit}
+      style={options?.height ? composerBaseTextareaStyle : composerDockTextareaStyle}
+    />
+  )
+  const renderComposerMentionPanel = (panelWidth: number, rowWidth: number) => {
+    if (!composerActive || !composerMention || composerMentionVisibleCount <= 0) return null
+    const basenameWidth = Math.max(Math.min(28, Math.floor(rowWidth * 0.4)), 8)
+    const pathWidth = Math.max(rowWidth - basenameWidth - 4, 4)
+    const total = composerMentionResults.length
+    const start = Math.max(0, Math.min(composerMentionIndex - Math.floor((composerMentionVisibleCount - 1) / 2), total - composerMentionVisibleCount))
+    const end = Math.min(total, start + composerMentionVisibleCount)
+    const hasMoreBelow = end < total
+    const hasMoreAbove = start > 0
+    return (
+      <box
+        width={panelWidth}
+        height={composerMentionVisibleCount + 3}
+        paddingX={1}
+        backgroundColor={theme.surface2}
+        border
+        borderStyle="single"
+        borderColor={theme.border2}
+        flexDirection="column"
+      >
+        <text fg={composerAccentColor} wrapMode="none">
+          {fitText(`${composerConfig.label} ${composerProvider === 'opencode' ? 'files/agents' : 'files'} · ⌃P/⌃N select · tab insert · esc cancel  (${composerMentionIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+        </text>
+        {composerMentionResults.slice(start, end).map((entry, offset) => {
+          const index = start + offset
+          const active = index === composerMentionIndex
+          const label = entry.kind === 'agent' ? `@${entry.name}` : entry.basename
+          const detail = entry.kind === 'agent'
+            ? [entry.mode, entry.description].filter(Boolean).join(' · ')
+            : entry.path
+          return (
+            <box key={entry.kind === 'agent' ? `agent:${entry.name}` : `file:${entry.path}`} flexDirection="row" height={1} width={rowWidth}>
+              <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
+              <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(label, basenameWidth)}</text>
+              <text fg={theme.dim} wrapMode="none">  </text>
+              <text fg={theme.dim} wrapMode="none">{fitText(detail, pathWidth)}</text>
+            </box>
+          )
+        })}
+      </box>
+    )
+  }
+  const renderComposerSlashPanel = (panelWidth: number, rowWidth: number) => {
+    if (!composerActive || !composerSlashOpen || composerSlashVisibleCount <= 0 || composerMention) return null
+    const hasHint = composerSlashCommands.some((entry) => Boolean(entry.argumentHint))
+    const commandRatio = hasHint ? 0.45 : 0.3
+    const commandCap = hasHint ? 36 : 22
+    const commandWidth = Math.max(Math.min(commandCap, Math.floor(rowWidth * commandRatio)), 8)
+    const descWidth = Math.max(rowWidth - commandWidth - 4, 4)
+    const total = composerSlashCommands.length
+    const start = Math.max(0, Math.min(composerSlashIndex - Math.floor((composerSlashVisibleCount - 1) / 2), total - composerSlashVisibleCount))
+    const end = Math.min(total, start + composerSlashVisibleCount)
+    const hasMoreBelow = end < total
+    const hasMoreAbove = start > 0
+    return (
+      <box
+        width={panelWidth}
+        height={composerSlashVisibleCount + 3}
+        paddingX={1}
+        backgroundColor={theme.surface2}
+        border
+        borderStyle="single"
+        borderColor={theme.border2}
+        flexDirection="column"
+      >
+        <text fg={composerAccentColor} wrapMode="none">
+          {fitText(`${composerConfig.label} commands · ⌃P/⌃N select · tab insert · esc cancel  (${composerSlashIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+        </text>
+        {composerSlashCommands.slice(start, end).map((entry, offset) => {
+          const index = start + offset
+          const active = index === composerSlashIndex
+          const commandText = entry.argumentHint
+            ? fitText(`${entry.command} ${entry.argumentHint}`, commandWidth)
+            : fitText(entry.command, commandWidth)
+          return (
+            <box key={entry.command} flexDirection="row" height={1} width={rowWidth}>
+              <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
+              <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{commandText}</text>
+              <text fg={theme.dim} wrapMode="none">  </text>
+              <text fg={theme.dim} wrapMode="none">{fitText(entry.description, descWidth)}</text>
+            </box>
+          )
+        })}
+      </box>
+    )
+  }
 
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
@@ -6898,162 +7165,39 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {composerActive && composerMention && composerMentionVisibleCount > 0 ? (() => {
-        const rowWidth = Math.max(width - 4, 20)
-        const basenameWidth = Math.max(Math.min(28, Math.floor(rowWidth * 0.4)), 8)
-        const pathWidth = Math.max(rowWidth - basenameWidth - 4, 4)
-        const total = composerMentionResults.length
-        const start = Math.max(0, Math.min(composerMentionIndex - Math.floor((composerMentionVisibleCount - 1) / 2), total - composerMentionVisibleCount))
-        const end = Math.min(total, start + composerMentionVisibleCount)
-        const hasMoreBelow = end < total
-        const hasMoreAbove = start > 0
-        return (
-          <box
-            width={width}
-            height={composerMentionVisibleCount + 3}
-            paddingX={1}
-            backgroundColor={theme.surface2}
-            border
-            borderStyle="single"
-            borderColor={theme.border2}
-            flexDirection="column"
-          >
-            <text fg={composerAccentColor} wrapMode="none">
-              {fitText(`${composerConfig.label} ${composerProvider === 'opencode' ? 'files/agents' : 'files'} · ⌃P/⌃N select · tab insert · esc cancel  (${composerMentionIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
-            </text>
-            {composerMentionResults.slice(start, end).map((entry, offset) => {
-              const index = start + offset
-              const active = index === composerMentionIndex
-              const label = entry.kind === 'agent' ? `@${entry.name}` : entry.basename
-              const detail = entry.kind === 'agent'
-                ? [entry.mode, entry.description].filter(Boolean).join(' · ')
-                : entry.path
-              return (
-                <box key={entry.kind === 'agent' ? `agent:${entry.name}` : `file:${entry.path}`} flexDirection="row" height={1} width={rowWidth}>
-                  <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
-                  <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(label, basenameWidth)}</text>
-                  <text fg={theme.dim} wrapMode="none">  </text>
-                  <text fg={theme.dim} wrapMode="none">{fitText(detail, pathWidth)}</text>
-                </box>
-              )
-            })}
-          </box>
-        )
-      })() : null}
+      {!composerWindowOpen ? renderComposerMentionPanel(width, Math.max(width - 4, 20)) : null}
 
-      {composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention ? (() => {
-        const rowWidth = Math.max(width - 4, 20)
-        // Allow extra width when any visible entry carries an argumentHint so
-        // the inline `/cmd [arg]` form has room to render without clipping.
-        const hasHint = composerSlashCommands.some((entry) => Boolean(entry.argumentHint))
-        const commandRatio = hasHint ? 0.45 : 0.3
-        const commandCap = hasHint ? 36 : 22
-        const commandWidth = Math.max(Math.min(commandCap, Math.floor(rowWidth * commandRatio)), 8)
-        const descWidth = Math.max(rowWidth - commandWidth - 4, 4)
-        const total = composerSlashCommands.length
-        const start = Math.max(0, Math.min(composerSlashIndex - Math.floor((composerSlashVisibleCount - 1) / 2), total - composerSlashVisibleCount))
-        const end = Math.min(total, start + composerSlashVisibleCount)
-        const hasMoreBelow = end < total
-        const hasMoreAbove = start > 0
-        return (
-          <box
-            width={width}
-            height={composerSlashVisibleCount + 3}
-            paddingX={1}
-            backgroundColor={theme.surface2}
-            border
-            borderStyle="single"
-            borderColor={theme.border2}
-            flexDirection="column"
-          >
-            <text fg={composerAccentColor} wrapMode="none">
-              {fitText(`${composerConfig.label} commands · ⌃P/⌃N select · tab insert · esc cancel  (${composerSlashIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
-            </text>
-            {composerSlashCommands.slice(start, end).map((entry, offset) => {
-              const index = start + offset
-              const active = index === composerSlashIndex
-              const commandText = entry.argumentHint
-                ? fitText(`${entry.command} ${entry.argumentHint}`, commandWidth)
-                : fitText(entry.command, commandWidth)
-              return (
-                <box key={entry.command} flexDirection="row" height={1} width={rowWidth}>
-                  <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
-                  <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{commandText}</text>
-                  <text fg={theme.dim} wrapMode="none">  </text>
-                  <text fg={theme.dim} wrapMode="none">{fitText(entry.description, descWidth)}</text>
-                </box>
-              )
-            })}
-          </box>
-        )
-      })() : null}
+      {!composerWindowOpen ? renderComposerSlashPanel(width, Math.max(width - 4, 20)) : null}
 
-      <box
-        paddingX={1}
-        backgroundColor={theme.surface}
-        border
-        borderStyle="single"
-        borderColor={composerActive ? composerAccentColor : theme.border}
-        height={composerHeight}
-        flexDirection="column"
-      >
-        <textarea
-          ref={composerTextareaRef}
-          focused={composerActive}
-          placeholder={composerTargetSession
-            ? (composerSendState === 'sending'
-                ? composerConfig.placeholderStreaming
-                : composerExample)
-            : composerConfig.placeholderNoSession}
-          initialValue={composerDraft}
-          keyBindings={composerKeyBindings}
-          onContentChange={() => {
-            const renderable = composerTextareaRef.current
-            const text = renderable?.plainText ?? ''
-            const cursor = renderable?.cursorOffset ?? text.length
-            setComposerDraft(text)
-            if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, text)
-            if (historyIndex !== -1 && text !== sentHistory[historyIndex]) setHistoryIndex(-1)
-            if (composerError) setComposerError(null)
-            if (composerSendState === 'error') setComposerSendState('idle')
-            const mention = detectMentionAtCursor(text, cursor)
-            const dismissedStart = composerMentionDismissedStart
-            if (!mention || (dismissedStart !== null && mention.start !== dismissedStart)) {
-              if (dismissedStart !== null) setComposerMentionDismissedStart(null)
-            }
-            setComposerMention((prev) => {
-              if (!mention) return prev ? null : prev
-              if (dismissedStart !== null && mention.start === dismissedStart) return prev ? null : prev
-              if (prev && prev.start === mention.start && prev.query === mention.query) return prev
-              setComposerMentionIndex(0)
-              return mention
-            })
-            const firstLine = text.split('\n')[0] ?? ''
-            if (!firstLine.startsWith('/')) {
-              setComposerSlashIndex(0)
-              if (composerSlashDismissed) setComposerSlashDismissed(false)
-            }
-          }}
-          onSubmit={() => {
-            void sendComposerMessage()
-          }}
-          style={{ flexGrow: 1, backgroundColor: theme.surface, textColor: theme.text, focusedBackgroundColor: theme.surface, focusedTextColor: theme.text, placeholderColor: theme.dim }}
-        />
-        <box flexDirection="row" alignItems="center" justifyContent="space-between">
-          <text fg={composerSlashHint ? composerAccentColor : theme.dim}>
-            {composerSlashHint
-              ? composerSlashHint
-              : composerDraft.length === 0
-              ? `${composerConfig.glyph} ${composerConfig.label}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
-              : `${composerVisualLineCount} line${composerVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`}
-          </text>
-          <text fg={composerSendState === 'sending' ? theme.dim : composerAccentColor}>
-            {composerSendState === 'sending'
-              ? composerConfig.footerHintSending
-              : composerIdleFooterHint}
-          </text>
+      {!composerWindowOpen ? (
+        <box
+          paddingX={1}
+          backgroundColor={theme.surface}
+          border
+          borderStyle="single"
+          borderColor={composerActive ? composerAccentColor : theme.border}
+          height={composerDockHeight}
+          flexDirection="column"
+        >
+          {renderComposerTextarea(submitComposerFromDock, {
+            height: composerDockTextareaHeight,
+            width: composerDockTextareaWidth,
+          })}
+          <box height={1} flexDirection="row" alignItems="center">
+            <box width={composerDockFooterStatsWidth} overflow="hidden">
+              <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
+                {fitText(composerSlashHint ? composerSlashHint : composerDockStats, composerDockFooterStatsWidth)}
+              </text>
+            </box>
+            <box flexGrow={1} />
+            <box width={composerDockFooterHintWidth} overflow="hidden">
+              <text fg={composerSendState === 'sending' ? theme.dim : composerAccentColor} wrapMode="none">
+                {fitText(composerDockFooterHint, composerDockFooterHintWidth)}
+              </text>
+            </box>
+          </box>
         </box>
-      </box>
+      ) : null}
 
       {!searchMode ? (
         <box backgroundColor={theme.surface} paddingX={1}>
@@ -7132,6 +7276,88 @@ export default function OpenTuiApp() {
           }}
           onKeyHandlerReady={(handler) => { taskPopoverKeyHandlerRef.current = handler }}
         />
+      ) : null}
+
+      {composerWindowOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={59}
+        />
+      ) : null}
+
+      {composerWindowOpen ? (
+        <box
+          position="absolute"
+          top={composerWindowTop}
+          left={composerWindowLeft}
+          width={composerWindowWidth}
+          height={composerWindowHeight}
+          border
+          borderStyle="single"
+          borderColor={composerActive ? composerAccentColor : theme.border2}
+          backgroundColor={theme.surface}
+          zIndex={60}
+          flexDirection="column"
+          title=" Composer "
+          titleAlignment="left"
+        >
+          <box
+            height={composerWindowHeaderHeight}
+            paddingX={1}
+            border={['bottom']}
+            borderStyle="single"
+            borderColor={theme.border}
+            flexDirection="row"
+            alignItems="center"
+          >
+            <text fg={composerAccentColor} wrapMode="none">
+              {fitText(`${composerConfig.glyph} ${composerConfig.label}`, Math.min(28, composerWindowContentWidth))}
+            </text>
+            <box flexGrow={1} />
+            <text fg={theme.dim} wrapMode="none">
+              {fitText(composerWindowStats, Math.max(composerWindowContentWidth - 30, 12))}
+            </text>
+          </box>
+
+          <box
+            height={composerWindowEditorHeight}
+            paddingX={1}
+            paddingY={1}
+            flexDirection="column"
+            overflow="hidden"
+          >
+            {renderComposerTextarea(submitComposerFromWindow, {
+              height: Math.max(composerWindowEditorHeight - 2, 2),
+              width: composerWindowTextareaWidth,
+            })}
+          </box>
+
+          {renderComposerMentionPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
+          {renderComposerSlashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
+
+          <box
+            height={composerWindowFooterHeight}
+            paddingX={1}
+            border={['top']}
+            borderStyle="single"
+            borderColor={theme.border}
+            flexDirection="row"
+            alignItems="center"
+          >
+            <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
+              {fitText(composerSlashHint || composerWindowStats, Math.max(composerWindowContentWidth - 42, 10))}
+            </text>
+            <box flexGrow={1} />
+            <text fg={composerSendState === 'sending' ? theme.dim : composerAccentColor} wrapMode="none">
+              {fitText(composerWindowFooterHint, Math.min(40, composerWindowContentWidth))}
+            </text>
+          </box>
+        </box>
       ) : null}
 
       {diagnosticsOpen ? (() => {

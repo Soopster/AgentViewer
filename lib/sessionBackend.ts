@@ -115,6 +115,7 @@ import type {
 } from './codexProtocol'
 import type {
   ErrorNotification,
+  ThreadStatusChangedNotification,
   ThreadTokenUsageUpdatedNotification,
   TurnCompletedNotification,
   TurnStartedNotification,
@@ -2961,6 +2962,12 @@ function isCodexRealtimeNotification(notification: CodexNotification): boolean {
   }
 }
 
+function isCodexIdleStatusNotification(notification: CodexNotification, sessionId: string): boolean {
+  if (notification.method !== 'thread/status/changed') return false
+  const params = notification.params as ThreadStatusChangedNotification
+  return params.threadId === sessionId && params.status.type === 'idle'
+}
+
 async function createCodexStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
@@ -2989,6 +2996,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       let downstreamClosed = false
       let completionSeen = false
       let bufferedTurnCompleted = false
+      let turnStartRequested = false
       let completionCloseTimer: ReturnType<typeof setTimeout> | null = null
 
       const safeEnqueue = (chunk: string) => {
@@ -3085,6 +3093,10 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
             }
             continue
           }
+          if (isCodexIdleStatusNotification(notification, sessionId)) {
+            scheduleCompletionClose(unsubscribe)
+            continue
+          }
           if (completionSeen) scheduleCompletionClose(unsubscribe)
           flushNotification(notification)
         }
@@ -3120,6 +3132,8 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
                 scheduleCompletionClose(unsubscribe)
               }
               continue
+            } else if (notification.method === 'thread/status/changed' && !turnStartRequested) {
+              continue
             } else {
               bufferedNotifications.push(notification)
               continue
@@ -3127,6 +3141,11 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           }
 
           if (notificationTurnId && notificationTurnId !== targetTurnId) continue
+
+          if (isCodexIdleStatusNotification(notification, sessionId)) {
+            scheduleCompletionClose(unsubscribe)
+            continue
+          }
 
           if (notification.method === 'turn/completed') {
             scheduleCompletionClose(unsubscribe)
@@ -3187,6 +3206,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           return
         }
 
+        turnStartRequested = true
         const started = await client.request<CodexTurnStartResponse>('turn/start', {
           threadId: sessionId,
           model: model ?? undefined,
