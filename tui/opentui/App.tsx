@@ -84,10 +84,44 @@ import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSugge
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
 import { readViewSessionSlashCommands, readViewSessionComposerOptions, createNewViewSession } from '../../lib/sessionBackend'
 import { compactStableFingerprint } from '../../lib/compactFingerprint'
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 
 registerExtraTreeSitterParsers()
+
+// ── Optional render-frame timing (set AGENT_VIEWER_PERF=1) ───────────────────
+// A fullscreen TUI can't log to stdout/stderr without corrupting the render, so
+// frame timings are appended to a file. Each render stamps the start time in the
+// component body; a post-commit effect measures the render→commit duration and,
+// once per second, appends a summary line: commits observed, how many blew the
+// 60fps (16.67ms) budget, and the slowest. Zero runtime cost unless enabled.
+const PERF_LOG = process.env.AGENT_VIEWER_PERF === '1'
+const PERF_LOG_PATH = process.env.AGENT_VIEWER_PERF_LOG
+  ?? join(process.cwd(), '.agent-viewer-data', 'tui-perf.log')
+const FRAME_BUDGET_MS = 1000 / 60
+
+if (PERF_LOG) {
+  try { mkdirSync(dirname(PERF_LOG_PATH), { recursive: true }) } catch { /* logging is best-effort */ }
+}
+
+const perfWindow = { frames: 0, slow: 0, maxDur: 0, startedAt: 0 }
+function recordFramePerf(durationMs: number): void {
+  const now = performance.now()
+  if (perfWindow.startedAt === 0) perfWindow.startedAt = now
+  perfWindow.frames++
+  if (durationMs > FRAME_BUDGET_MS) perfWindow.slow++
+  if (durationMs > perfWindow.maxDur) perfWindow.maxDur = durationMs
+  if (now - perfWindow.startedAt >= 1000) {
+    const line = `${new Date().toISOString()} commits=${perfWindow.frames} over-budget=${perfWindow.slow} max=${perfWindow.maxDur.toFixed(2)}ms\n`
+    try { appendFileSync(PERF_LOG_PATH, line) } catch { /* never break the UI for logging */ }
+    perfWindow.frames = 0
+    perfWindow.slow = 0
+    perfWindow.maxDur = 0
+    perfWindow.startedAt = now
+  }
+}
 
 function Spinner({ label, fg }: { label: string; fg: string }) {
   const [frame, setFrame] = useState(0)
@@ -2128,6 +2162,14 @@ const TranscriptCard = React.memo(TranscriptCardInner)
 export default function OpenTuiApp() {
   const renderer = useRenderer()
   const { width, height } = useTerminalDimensions()
+
+  // Frame-timing canary (no-op unless AGENT_VIEWER_PERF=1). Stamp at the top of
+  // every render; the effect below reads it after commit.
+  const renderStartRef = useRef(0)
+  if (PERF_LOG) renderStartRef.current = performance.now()
+  useEffect(() => {
+    if (PERF_LOG) recordFramePerf(performance.now() - renderStartRef.current)
+  })
 
   const [provider, setProvider] = useState<ProviderSelection>('claude')
   const [themeMode, setThemeMode] = useState<TuiThemeMode>('light')
