@@ -721,6 +721,10 @@ function extractStreamingAssistantText(payload: unknown): string | null {
     return null
   }
 
+  if (record.type === 'pi_bash_delta' && typeof record.delta === 'string') {
+    return record.delta
+  }
+
   if (record.type === 'assistant') {
     const message = record.message
     if (!message || typeof message !== 'object') return null

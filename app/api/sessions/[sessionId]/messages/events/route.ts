@@ -4,6 +4,7 @@ import { listViewSessionMessageWindow } from '@/lib/sessionBackend'
 import { subscribeToOpenCodeEvents } from '@/lib/opencodeHarness'
 import { subscribeToCodexEvents } from '@/lib/codexHarness'
 import { subscribeToClaudeEvents } from '@/lib/claudeHarness'
+import { subscribeToLiveSessionEvents } from '@/lib/liveSessionHarness'
 import type { AgentProvider, SessionMessage } from '@/lib/types'
 import type { ErrorNotification, TurnPlanUpdatedNotification } from '@/lib/codex-schema/v2'
 
@@ -15,6 +16,7 @@ const DEFAULT_BACKFILL = 20
 const MAX_BACKFILL = 100
 const MESSAGE_STREAM_POLL_MS = 1500
 const HEARTBEAT_MS = 20_000
+const GENERIC_REFETCH_DEBOUNCE_MS = 80
 
 // OpenCode opens a persistent event subscription via the harness, so we
 // drive message refreshes off the live event stream instead of timed
@@ -71,21 +73,6 @@ function messageSignature(message: SessionMessage): string {
 function messageWindowSignature(offset: number, messages: SessionMessage[]): string {
   if (messages.length === 0) return `${offset}:0:`
   return `${offset}:${messages.length}:${messages.map(messageSignature).join('|')}`
-}
-
-function wait(ms: number, signal: AbortSignal): Promise<boolean> {
-  if (signal.aborted) return Promise.resolve(false)
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort)
-      resolve(true)
-    }, ms)
-    const onAbort = () => {
-      clearTimeout(timeout)
-      resolve(false)
-    }
-    signal.addEventListener('abort', onAbort, { once: true })
-  })
 }
 
 function sseFrame(event: string, data: unknown): string {
@@ -189,52 +176,16 @@ export async function GET(
         return
       }
 
-      const pump = async () => {
-        let lastSignature = ''
-        let lastHeartbeat = Date.now()
-
-        while (!closed && !request.signal.aborted) {
-          try {
-            const window = await listViewSessionMessageWindow(
-              sessionId,
-              { offset, limit, tail: false },
-              provider,
-            )
-            if (window.messages.length === 0 && window.total < offset) {
-              const replacement = await readReplacementWindow(sessionId, provider, limit)
-              enqueue('messages', replacement)
-              lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
-              offset = Math.max(0, replacement.offset + replacement.messages.length - backfill)
-              continue
-            }
-            const signature = messageWindowSignature(window.offset, window.messages)
-            if (window.messages.length > 0 && signature !== lastSignature) {
-              enqueue('messages', messageWindowPayload(sessionId, provider, window))
-              lastSignature = signature
-              offset = Math.max(0, window.offset + window.messages.length - backfill)
-              if (window.offset + window.messages.length < window.total) {
-                continue
-              }
-            }
-
-            const now = Date.now()
-            if (now - lastHeartbeat >= HEARTBEAT_MS) {
-              enqueue('heartbeat', { ts: now })
-              lastHeartbeat = now
-            }
-
-            const shouldContinue = await wait(MESSAGE_STREAM_POLL_MS, request.signal)
-            if (!shouldContinue) break
-          } catch (err) {
-            enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })
-            break
-          }
-        }
-
-        close()
-      }
-
-      void pump()
+      void pumpGenericLiveSession({
+        sessionId,
+        provider,
+        limit,
+        backfill,
+        offset,
+        enqueue,
+        close,
+        signal: request.signal,
+      })
     },
     cancel() {
       closed = true
@@ -260,6 +211,135 @@ type OpenCodePumpInput = {
   enqueue: (event: string, data: unknown) => void
   close: () => void
   signal: AbortSignal
+}
+
+type GenericPumpInput = Omit<OpenCodePumpInput, 'provider'> & {
+  provider: AgentProvider | undefined
+}
+
+async function pumpGenericLiveSession({ sessionId, provider, limit, backfill, offset, enqueue, close, signal }: GenericPumpInput): Promise<void> {
+  let lastSignature = ''
+  let cursorOffset = offset
+  let lastHeartbeat = Date.now()
+  let inFlight = false
+  let pending = false
+  let refetchTimer: ReturnType<typeof setTimeout> | undefined
+  let fallbackTimer: ReturnType<typeof setTimeout> | undefined
+  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined
+
+  const refetch = async () => {
+    if (inFlight) {
+      pending = true
+      return
+    }
+    inFlight = true
+    try {
+      const window = await listViewSessionMessageWindow(
+        sessionId,
+        { offset: cursorOffset, limit, tail: false },
+        provider,
+      )
+      if (window.messages.length === 0 && window.total < cursorOffset) {
+        const replacement = await readReplacementWindow(sessionId, provider, limit)
+        enqueue('messages', replacement)
+        lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
+        cursorOffset = Math.max(0, replacement.offset + replacement.messages.length - backfill)
+        return
+      }
+      const signature = messageWindowSignature(window.offset, window.messages)
+      if (window.messages.length > 0 && signature !== lastSignature) {
+        enqueue('messages', messageWindowPayload(sessionId, provider, window))
+        lastSignature = signature
+        cursorOffset = Math.max(0, window.offset + window.messages.length - backfill)
+        if (window.offset + window.messages.length < window.total) {
+          pending = true
+        }
+      }
+    } catch (err) {
+      enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })
+      close()
+      return
+    } finally {
+      inFlight = false
+    }
+    if (pending && !signal.aborted) {
+      pending = false
+      void refetch()
+    }
+  }
+
+  const scheduleRefetch = () => {
+    if (signal.aborted) return
+    if (refetchTimer) return
+    refetchTimer = setTimeout(() => {
+      refetchTimer = undefined
+      void refetch()
+    }, GENERIC_REFETCH_DEBOUNCE_MS)
+  }
+
+  const scheduleFallback = () => {
+    if (fallbackTimer) clearTimeout(fallbackTimer)
+    fallbackTimer = setTimeout(() => {
+      if (signal.aborted) return
+      void refetch()
+      scheduleFallback()
+    }, MESSAGE_STREAM_POLL_MS)
+  }
+
+  const scheduleHeartbeat = () => {
+    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+    heartbeatTimer = setTimeout(() => {
+      if (signal.aborted) return
+      const now = Date.now()
+      if (now - lastHeartbeat >= HEARTBEAT_MS) {
+        enqueue('heartbeat', { ts: now })
+        lastHeartbeat = now
+      }
+      scheduleHeartbeat()
+    }, HEARTBEAT_MS)
+  }
+
+  const subscription = subscribeToLiveSessionEvents({ sessionId, provider })
+  let consumeAborted = false
+  const consume = (async () => {
+    for await (const event of subscription.events) {
+      if (consumeAborted) break
+      switch (event.type) {
+        case 'activity':
+        case 'turn-start':
+        case 'turn-end':
+        case 'recycled':
+          scheduleRefetch()
+          break
+        case 'connected':
+        default:
+          break
+      }
+    }
+  })()
+
+  const onAbort = () => {
+    consumeAborted = true
+    subscription.close()
+    if (refetchTimer) clearTimeout(refetchTimer)
+    if (fallbackTimer) clearTimeout(fallbackTimer)
+    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+    close()
+  }
+  if (signal.aborted) {
+    onAbort()
+    return
+  }
+  signal.addEventListener('abort', onAbort, { once: true })
+
+  await refetch()
+  scheduleFallback()
+  scheduleHeartbeat()
+
+  await consume.catch(() => {})
+  if (!signal.aborted) {
+    onAbort()
+  }
 }
 
 async function pumpOpenCode({ sessionId, provider, limit, backfill, offset, enqueue, close, signal }: OpenCodePumpInput): Promise<void> {

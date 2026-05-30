@@ -44,6 +44,12 @@ import {
   broadcastClaudeTurnEnd,
   broadcastClaudeTurnStart,
 } from './claudeHarness'
+import {
+  broadcastLiveSessionActivity,
+  broadcastLiveSessionRecycled,
+  broadcastLiveSessionTurnEnd,
+  broadcastLiveSessionTurnStart,
+} from './liveSessionHarness'
 import type { ContentBlockParam as ClaudeContentBlockParam } from '@anthropic-ai/sdk/resources'
 import {
   approveAll,
@@ -814,14 +820,21 @@ function copilotPermissionRequestedEvent(sessionId: string, requestId: string, p
 
 function createCopilotPermissionBridge(
   sessionId: string,
-  controller: ReadableStreamDefaultController<Uint8Array>,
-  encoder: TextEncoder,
+  enqueue: (chunk: string) => void,
   activeIds: Set<string>,
+  isClientAvailable: () => boolean,
 ): (request: CopilotPermissionRequest) => Promise<Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }>> {
   return (request) => {
+    if (!isClientAvailable()) {
+      return Promise.resolve({ kind: 'user-not-available' })
+    }
     const requestId = `agent-viewer-${Date.now()}-${Math.random().toString(36).slice(2)}`
     activeIds.add(requestId)
-    controller.enqueue(encoder.encode(`data: ${copilotPermissionRequestedEvent(sessionId, requestId, request)}\n\n`))
+    enqueue(`data: ${copilotPermissionRequestedEvent(sessionId, requestId, request)}\n\n`)
+    if (!isClientAvailable()) {
+      activeIds.delete(requestId)
+      return Promise.resolve({ kind: 'user-not-available' })
+    }
     return new Promise((resolve) => {
       const key = pendingCopilotPermissionKey(sessionId, requestId)
       const timer = setTimeout(() => {
@@ -3020,16 +3033,20 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
   const nativeCommands = body.nativeCommands === true
   const parsedAttachments = parseAttachments(body)
   const attachments = buildCopilotAttachments(parsedAttachments)
+  const detachOnClientAbort = body.detachOnClientAbort === true
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({
     async start(controller) {
       let session: Awaited<ReturnType<typeof acquireCopilotSession>> | null = null
       let unsubscribe: (() => void) | null = null
-      let closed = false
+      let cleanedUp = false
+      let downstreamClosed = false
+      let requestAborted = false
       let emittedError = false
       let manualPermissionHandlerInstalled = false
       let completedTurn = false
+      let broadcastedTurnStart = false
       let turnTimeoutTimer: ReturnType<typeof setTimeout> | null = null
       let finalMessageFallbackTimer: ReturnType<typeof setTimeout> | null = null
       let historyPollCancelled = false
@@ -3038,10 +3055,25 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
       const streamedAssistantMessageIds = new Set<string>()
       const bridgedPermissionIds = new Set<string>()
 
+      const safeEnqueue = (chunk: string) => {
+        if (downstreamClosed) return
+        try {
+          controller.enqueue(encoder.encode(chunk))
+        } catch {
+          downstreamClosed = true
+        }
+      }
+
       const close = () => {
-        if (closed) return
-        closed = true
-        controller.close()
+        if (cleanedUp) return
+        cleanedUp = true
+        if (downstreamClosed) return
+        downstreamClosed = true
+        try {
+          controller.close()
+        } catch {
+          /* downstream already closed */
+        }
       }
 
       const clearFinalMessageFallback = () => {
@@ -3085,7 +3117,8 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         })
 
         const handleEvent = (event: CopilotSessionEvent) => {
-          if (closed) return
+          if (cleanedUp) return
+          broadcastLiveSessionActivity('copilot', sessionId)
           if (event.type === 'assistant.message') {
             streamedAssistantMessageIds.add(event.data.messageId)
             scheduleFinalMessageFallback(event)
@@ -3097,7 +3130,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
           if (event.type === 'assistant.usage') {
             const usage = mapCopilotUsageToContextUsage(event, modelsById)
-            controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+            safeEnqueue(codexContextUsageToEventData(usage))
           }
 
           if (event.type === 'session.error') {
@@ -3105,11 +3138,11 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
             const error = new Error(event.data.message)
             if (event.data.stack) error.stack = event.data.stack
             failTurn?.(error)
-            controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: event.data.message })}\n\n`))
+            safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: event.data.message })}\n\n`)
             return
           }
 
-          controller.enqueue(encoder.encode(`data: ${formatCopilotEvent(event)}\n\n`))
+          safeEnqueue(`data: ${formatCopilotEvent(event)}\n\n`)
         }
 
         // Warm session pool: re-use a single Copilot session per id across
@@ -3117,7 +3150,12 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         // keeps the JSON-RPC connection alive between turns; this matches.
         session = await withTimeout(acquireCopilotSession(sessionId), 20000, 'Copilot session resume')
         if (manualPermissions) {
-          setCopilotPermissionHandler(sessionId, createCopilotPermissionBridge(sessionId, controller, encoder, bridgedPermissionIds))
+          setCopilotPermissionHandler(sessionId, createCopilotPermissionBridge(
+            sessionId,
+            safeEnqueue,
+            bridgedPermissionIds,
+            () => !downstreamClosed && !cleanedUp,
+          ))
           manualPermissionHandlerInstalled = true
         } else {
           setCopilotPermissionHandler(sessionId, approveAll)
@@ -3129,7 +3167,9 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           'Copilot history baseline',
         ).then((events) => events.length).catch(() => null)
 
-        controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`))
+        safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`)
+        broadcastLiveSessionTurnStart('copilot', sessionId)
+        broadcastedTurnStart = true
 
         setRunningSession(sessionId, {
           provider: 'copilot',
@@ -3137,6 +3177,12 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         })
 
         signal.addEventListener('abort', () => {
+          requestAborted = true
+          if (detachOnClientAbort) {
+            downstreamClosed = true
+            resolvePendingCopilotPermissions(sessionId, bridgedPermissionIds, { kind: 'user-not-available' })
+            return
+          }
           resolvePendingCopilotPermissions(sessionId, bridgedPermissionIds, { kind: 'user-not-available' })
           const running = getRunningSession(sessionId)
           if (running?.provider === 'copilot') {
@@ -3173,9 +3219,9 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         if (slashCommand) {
           const commandName = slashCommand.command.toLowerCase()
           if (commandName === 'help') {
-            controller.enqueue(encoder.encode(copilotCommandResultEvent({
+            safeEnqueue(copilotCommandResultEvent({
               message: 'Copilot commands: /mode [interactive|plan|autopilot|shell], /model [model].',
-            })))
+            }))
             return
           }
           if (commandName === 'mode') {
@@ -3183,28 +3229,28 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
             if (!requestedMode) {
               const currentMode = await withTimeout(session.rpc.mode.get(), 5000, 'Copilot mode read').catch(() => 'interactive')
               const parsedCurrentMode = parseCopilotModeResponse(currentMode) ?? 'interactive'
-              controller.enqueue(encoder.encode(copilotCommandResultEvent({
+              safeEnqueue(copilotCommandResultEvent({
                 message: `Copilot mode is ${parsedCurrentMode}. Use /mode interactive, /mode plan, /mode autopilot, or /mode shell.`,
                 mode: parsedCurrentMode,
-              })))
+              }))
               return
             }
             if (isCopilotPersistentMode(requestedMode)) {
               await withTimeout(session.rpc.mode.set({ mode: requestedMode }), 5000, 'Copilot mode switch')
             }
-            controller.enqueue(encoder.encode(copilotCommandResultEvent({
+            safeEnqueue(copilotCommandResultEvent({
               message: `Copilot mode set to ${requestedMode}.`,
               mode: requestedMode,
-            })))
+            }))
             return
           }
           if (commandName === 'model') {
             const requestedModel = slashCommand.arguments.trim()
             if (!requestedModel) {
               const current = await withTimeout(session.rpc.model.getCurrent(), 5000, 'Copilot current model').catch(() => ({ modelId: undefined }))
-              controller.enqueue(encoder.encode(copilotCommandResultEvent({
+              safeEnqueue(copilotCommandResultEvent({
                 message: current.modelId ? `Copilot model is ${current.modelId}.` : 'No Copilot model is selected.',
-              })))
+              }))
               return
             }
             await withTimeout(
@@ -3212,9 +3258,9 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
               15000,
               'Copilot model switch',
             )
-            controller.enqueue(encoder.encode(copilotCommandResultEvent({
+            safeEnqueue(copilotCommandResultEvent({
               message: `Copilot model set to ${requestedModel}.`,
-            })))
+            }))
             return
           }
 
@@ -3240,21 +3286,21 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
               if (mode) turnAgentMode = mode
               promptToSend = resultRecord.prompt
             } else if (resultRecord?.kind === 'text' && typeof resultRecord.text === 'string') {
-              controller.enqueue(encoder.encode(copilotCommandResultEvent({
+              safeEnqueue(copilotCommandResultEvent({
                 message: resultRecord.text,
-              })))
+              }))
               return
             } else if (resultRecord?.kind === 'completed') {
-              controller.enqueue(encoder.encode(copilotCommandResultEvent({
+              safeEnqueue(copilotCommandResultEvent({
                 message: typeof resultRecord.message === 'string' && resultRecord.message.trim()
                   ? resultRecord.message
                   : `/${slashCommand.command} completed.`,
-              })))
+              }))
               return
             } else if (resultRecord?.kind === 'select-subcommand') {
-              controller.enqueue(encoder.encode(copilotCommandResultEvent({
+              safeEnqueue(copilotCommandResultEvent({
                 message: `/${slashCommand.command} needs a subcommand in the native Copilot UI.`,
-              })))
+              }))
               return
             }
           }
@@ -3275,9 +3321,9 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         const historyCompletion = historyBaselineCount == null
           ? new Promise<never>(() => {})
           : (async () => {
-            while (!historyPollCancelled && !closed) {
+            while (!historyPollCancelled && !cleanedUp) {
               await sleep(1000)
-              if (historyPollCancelled || closed || !session) return
+              if (historyPollCancelled || cleanedUp || !session) return
               const events = await withTimeout(
                 readCopilotHistoryFromSession(session),
                 5000,
@@ -3291,7 +3337,8 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
               )
               if (!finalMessage) continue
               if (!streamedAssistantMessageIds.has(finalMessage.data.messageId)) {
-                controller.enqueue(encoder.encode(`data: ${formatCopilotEvent(finalMessage)}\n\n`))
+                broadcastLiveSessionActivity('copilot', sessionId)
+                safeEnqueue(`data: ${formatCopilotEvent(finalMessage)}\n\n`)
               }
               return
             }
@@ -3299,8 +3346,8 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         await Promise.race([turnComplete, historyCompletion])
         completedTurn = true
       } catch (err) {
-        if (!emittedError) {
-          controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
+        if (!emittedError && !requestAborted) {
+          safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
         }
         // If the session itself is hosed, evict so the next send reconnects.
         await evictCopilotSession(sessionId).catch(() => {})
@@ -3319,6 +3366,10 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         try { unsubscribe?.() } catch { /* ignore */ }
         if (completedTurn) {
           await evictCopilotSession(sessionId).catch(() => {})
+          broadcastLiveSessionRecycled('copilot', sessionId)
+        }
+        if (broadcastedTurnStart) {
+          broadcastLiveSessionTurnEnd('copilot', sessionId)
         }
         close()
       }
@@ -3342,23 +3393,44 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
   const effort = parseEffort(body)
   const attachments = parseAttachments(body)
   const directShell = parsePiDirectShell(userMessage)
+  const detachOnClientAbort = body.detachOnClientAbort === true
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({
     async start(controller) {
-      let closed = false
+      let cleanedUp = false
+      let downstreamClosed = false
+      let requestAborted = false
+      let broadcastedTurnStart = false
+      let targetSessionId = sessionId
       let unsubscribePi: (() => void) | undefined
+
+      const safeEnqueue = (chunk: string) => {
+        if (downstreamClosed) return
+        try {
+          controller.enqueue(encoder.encode(chunk))
+        } catch {
+          downstreamClosed = true
+        }
+      }
+
       const close = () => {
-        if (closed) return
-        closed = true
-        controller.close()
+        if (cleanedUp) return
+        cleanedUp = true
+        if (downstreamClosed) return
+        downstreamClosed = true
+        try {
+          controller.close()
+        } catch {
+          /* downstream already closed */
+        }
       }
 
       try {
         const agentSession = isPendingSession
           ? await createPiAgentSession(cwdOverride ?? process.cwd(), { id: sessionId })
           : await openPiAgentSession(sessionId)
-        const targetSessionId = agentSession.sessionId
+        targetSessionId = agentSession.sessionId
         if (selectedModel) {
           const model = agentSession.modelRegistry.find(selectedModel.providerID, selectedModel.modelID)
           if (!model) {
@@ -3373,7 +3445,9 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         }
         const images = await buildPiImages(attachments)
 
-        controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: targetSessionId })}\n\n`))
+        safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId: targetSessionId })}\n\n`)
+        broadcastLiveSessionTurnStart('pi', targetSessionId)
+        broadcastedTurnStart = true
 
         if (directShell) {
           if (!directShell.command) {
@@ -3387,15 +3461,30 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             interrupt: async () => { agentSession.abortBash() },
           })
           signal.addEventListener('abort', () => {
+            requestAborted = true
+            if (detachOnClientAbort) {
+              downstreamClosed = true
+              return
+            }
             const running = getRunningSession(sessionId)
             if (running?.provider === 'pi') {
               void running.interrupt().catch(() => {})
             }
           })
-          await agentSession.executeBash(directShell.command, undefined, {
+          await agentSession.executeBash(directShell.command, (chunk) => {
+            broadcastLiveSessionActivity('pi', targetSessionId)
+            safeEnqueue(`data: ${JSON.stringify({
+              type: 'pi_bash_delta',
+              command: directShell.command,
+              delta: chunk,
+              excludeFromContext: directShell.excludeFromContext,
+            })}\n\n`)
+          }, {
             excludeFromContext: directShell.excludeFromContext,
           })
           clearRunningSession(sessionId)
+          broadcastLiveSessionActivity('pi', targetSessionId)
+          broadcastLiveSessionTurnEnd('pi', targetSessionId)
           close()
           return
         }
@@ -3406,6 +3495,11 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         })
 
         signal.addEventListener('abort', () => {
+          requestAborted = true
+          if (detachOnClientAbort) {
+            downstreamClosed = true
+            return
+          }
           const running = getRunningSession(sessionId)
           if (running?.provider === 'pi') {
             void running.interrupt().catch(() => {})
@@ -3413,9 +3507,10 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         })
 
         unsubscribePi = agentSession.agent.subscribe((event) => {
-          if (closed) return
+          if (cleanedUp) return
+          broadcastLiveSessionActivity('pi', targetSessionId)
           const payload = JSON.stringify({ type: 'pi_event', event })
-          controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
+          safeEnqueue(`data: ${payload}\n\n`)
 
           // pi-ai's terminal AssistantMessage carries stopReason "error" |
           // "aborted" with errorMessage when the LLM call fails (rate limit,
@@ -3430,15 +3525,14 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             ) {
               const errorMessage = message.errorMessage
                 || (message.stopReason === 'aborted' ? 'Pi turn aborted' : 'Pi turn failed')
-              controller.enqueue(encoder.encode(
-                `event: error\ndata: ${JSON.stringify({ error: errorMessage })}\n\n`,
-              ))
+              safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: errorMessage })}\n\n`)
             }
           }
 
           if (event.type === 'agent_end') {
             clearRunningSession(sessionId)
             unsubscribePi?.()
+            broadcastLiveSessionTurnEnd('pi', targetSessionId)
             close()
           }
         })
@@ -3447,8 +3541,13 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         await agentSession.prompt(text, images.length > 0 ? { images } : undefined)
       } catch (err) {
         unsubscribePi?.()
-        controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
+        if (!requestAborted) {
+          safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
+        }
         clearRunningSession(sessionId)
+        if (broadcastedTurnStart) {
+          broadcastLiveSessionTurnEnd('pi', targetSessionId)
+        }
         close()
       }
     },
