@@ -8,14 +8,17 @@ import {
 import { buildTaskRegistry } from '../../lib/taskRegistry'
 import { buildTaskActiveForms, formatTranscriptCard, type TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
-import type { Session, SessionMessage } from '../../lib/types'
+import type { Session, SessionInfo, SessionMessage } from '../../lib/types'
+import { readTuiSessionDetailSource } from '../../lib/tui/service'
 import { sameSessionMessageContent, threadedMessageFingerprint } from './messageFingerprint'
 
-type ThreadRequest = {
-  kind: 'thread'
+// Reads the session from disk/SDK *inside the worker*, then threads + formats.
+// Keeping the read here means the full transcript (and the read/normalize/sort
+// CPU) never touches the main thread — only the finished payload crosses back.
+type DetailRequest = {
+  kind: 'detail'
   id: number
   session: Session
-  messages: SessionMessage[]
   density: TuiDensity
   showToolCalls: boolean
 }
@@ -27,10 +30,17 @@ type FormatRequest = {
   density: TuiDensity
   showToolCalls: boolean
 }
-type WorkerRequest = ThreadRequest | FormatRequest
+type WorkerRequest = DetailRequest | FormatRequest
 
 type WorkerResponse =
-  | { id: number; ok: true; threadedMessages: ThreadedMessage[]; transcriptCards: TuiTranscriptCard[] }
+  | {
+      id: number
+      ok: true
+      info: SessionInfo | null
+      rawMessages: SessionMessage[]
+      threadedMessages: ThreadedMessage[]
+      transcriptCards: TuiTranscriptCard[]
+    }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[] }
   | { id: number; ok: false; error: string }
 
@@ -190,10 +200,11 @@ self.onmessage = async (event) => {
       self.postMessage({ id: data.id, ok: true, transcriptCards })
       return
     }
-    const threadedMessages = threadMessages(data.session, data.messages)
+    const { info, rawMessages } = await readTuiSessionDetailSource(data.session)
+    const threadedMessages = threadMessages(data.session, rawMessages)
     const sessionCacheKey = cacheKey(data.session)
     const transcriptCards = formatCards(sessionCacheKey, threadedMessages, data.density, data.showToolCalls)
-    self.postMessage({ id: data.id, ok: true, threadedMessages, transcriptCards })
+    self.postMessage({ id: data.id, ok: true, info, rawMessages, threadedMessages, transcriptCards })
   } catch (err) {
     self.postMessage({
       id: data.id,

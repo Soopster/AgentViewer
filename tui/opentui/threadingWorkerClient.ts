@@ -1,16 +1,16 @@
 import type { ThreadedMessage } from '../../lib/threading'
 import type { TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
-import type { Session, SessionMessage } from '../../lib/types'
-import { sameSessionMessageContent } from './messageFingerprint'
+import type { Session, SessionInfo, SessionMessage } from '../../lib/types'
 
-export type TranscriptPayload = {
+export type SessionDetailPayload = {
+  info: SessionInfo | null
+  rawMessages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
   transcriptCards: TuiTranscriptCard[]
 }
 
 type ThreadingClientCache = {
-  messages: SessionMessage[]
   threadedMessages: ThreadedMessage[]
   // LRU card cache keyed by `${density}|${showToolCalls ? 1 : 0}`. Kept tiny
   // because each entry can contain one formatted card per transcript message.
@@ -19,8 +19,8 @@ type ThreadingClientCache = {
 
 type Pending =
   | {
-      kind: 'thread'
-      resolve: (payload: TranscriptPayload) => void
+      kind: 'detail'
+      resolve: (payload: SessionDetailPayload) => void
       reject: (error: Error) => void
     }
   | {
@@ -30,7 +30,14 @@ type Pending =
     }
 
 type WorkerResponse =
-  | { id: number; ok: true; threadedMessages: ThreadedMessage[]; transcriptCards: TuiTranscriptCard[] }
+  | {
+      id: number
+      ok: true
+      info: SessionInfo | null
+      rawMessages: SessionMessage[]
+      threadedMessages: ThreadedMessage[]
+      transcriptCards: TuiTranscriptCard[]
+    }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[] }
   | { id: number; ok: false; error: string }
 
@@ -78,14 +85,6 @@ function touchThreadingCache(key: string, cache: ThreadingClientCache): void {
   }
 }
 
-function sameMessageSequence(messages: SessionMessage[], prevMessages: SessionMessage[]): boolean {
-  if (messages.length !== prevMessages.length) return false
-  for (let i = 0; i < messages.length; i++) {
-    if (!sameSessionMessageContent(messages[i], prevMessages[i])) return false
-  }
-  return true
-}
-
 function ensureWorker(): Worker {
   if (worker) return worker
   const url = new URL('./threadingWorker.ts', import.meta.url)
@@ -99,8 +98,13 @@ function ensureWorker(): Worker {
       entry.reject(new Error(data.error))
       return
     }
-    if (entry.kind === 'thread' && 'threadedMessages' in data) {
-      entry.resolve({ threadedMessages: data.threadedMessages, transcriptCards: data.transcriptCards })
+    if (entry.kind === 'detail' && 'rawMessages' in data) {
+      entry.resolve({
+        info: data.info,
+        rawMessages: data.rawMessages,
+        threadedMessages: data.threadedMessages,
+        transcriptCards: data.transcriptCards,
+      })
     } else if (entry.kind === 'format') {
       entry.resolve(data.transcriptCards)
     }
@@ -119,39 +123,28 @@ function ensureWorker(): Worker {
   return w
 }
 
-export function buildAndFormatTranscriptAsync(
+/**
+ * Read a session from disk/SDK, thread it, and format its cards — all inside
+ * the worker. Only the finished payload crosses back, so the read +
+ * normalize/sort and threading CPU never runs on the main render thread. The
+ * App's mtime guard already skips this call when the session file is unchanged;
+ * the worker's own incremental-threading + card caches handle the rest.
+ */
+export function readAndBuildTranscriptAsync(
   session: Session,
-  messages: SessionMessage[],
   density: TuiDensity,
   showToolCalls: boolean,
-): Promise<TranscriptPayload> {
+): Promise<SessionDetailPayload> {
   const key = cacheKey(session)
-  const cached = threadingCacheByKey.get(key)
-  if (cached && sameMessageSequence(messages, cached.messages)) {
-    const variant = cached.cardsByVariant.get(variantKey(density, showToolCalls))
-    if (variant) {
-      touchThreadingCache(key, cached)
-      return Promise.resolve({
-        threadedMessages: cached.threadedMessages,
-        transcriptCards: variant,
-      })
-    }
-  }
-
   const id = ++requestCounter
   const w = ensureWorker()
-  return new Promise<TranscriptPayload>((resolve, reject) => {
+  return new Promise<SessionDetailPayload>((resolve, reject) => {
     pending.set(id, {
-      kind: 'thread',
+      kind: 'detail',
       resolve: (payload) => {
-        const existing = threadingCacheByKey.get(key)
-        const cardsByVariant = existing?.threadedMessages === payload.threadedMessages
-          ? existing.cardsByVariant
-          : new Map<string, TuiTranscriptCard[]>()
         const cacheEntry = {
-          messages,
           threadedMessages: payload.threadedMessages,
-          cardsByVariant,
+          cardsByVariant: new Map<string, TuiTranscriptCard[]>(),
         }
         rememberCardsVariant(cacheEntry, density, showToolCalls, payload.transcriptCards)
         touchThreadingCache(key, cacheEntry)
@@ -159,7 +152,7 @@ export function buildAndFormatTranscriptAsync(
       },
       reject,
     })
-    w.postMessage({ kind: 'thread', id, session, messages, density, showToolCalls })
+    w.postMessage({ kind: 'detail', id, session, density, showToolCalls })
   })
 }
 

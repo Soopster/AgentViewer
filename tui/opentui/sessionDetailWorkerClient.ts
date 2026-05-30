@@ -1,18 +1,17 @@
 import type { TuiSessionDetail } from '../../lib/tui/service'
-import { readTuiSessionDetailSource } from '../../lib/tui/service'
 import type { Session } from '../../lib/types'
 import type { TuiDensity } from '../theme'
-import { buildAndFormatTranscriptAsync } from './threadingWorkerClient'
+import { readAndBuildTranscriptAsync } from './threadingWorkerClient'
 
 export async function readTuiSessionDetailAsync(
   session: Session,
   density: TuiDensity,
   showToolCalls: boolean,
 ): Promise<TuiSessionDetail> {
-  const { info, rawMessages } = await readTuiSessionDetailSource(session)
-  const { threadedMessages } = await buildAndFormatTranscriptAsync(
+  // Read + normalize + thread + format all happen in the worker; only the
+  // finished payload crosses back to the main thread.
+  const { info, rawMessages, threadedMessages } = await readAndBuildTranscriptAsync(
     session,
-    rawMessages,
     density,
     showToolCalls,
   )
