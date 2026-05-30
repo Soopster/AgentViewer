@@ -92,6 +92,25 @@ import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
+const COMPOSER_WAITING_SPINNER_FRAMES = [
+  ['|', '/', '-', '\\'],
+  ['.', 'o', 'O', 'o'],
+  ['◐', '◓', '◑', '◒'],
+  ['▖', '▘', '▝', '▗'],
+  ['◜', '◝', '◞', '◟'],
+] as const
+const COMPOSER_WAITING_MESSAGES = [
+  'Adding context',
+  'Composing the reply',
+  'Shaping the next move',
+  'Reading the room',
+  'Checking the map',
+  'Threading the details',
+  'Warming the context',
+  'Letting the agent work',
+  'Lining up the response',
+  'Waiting on the model',
+] as const
 
 registerExtraTreeSitterParsers()
 
@@ -134,6 +153,40 @@ function Spinner({ label, fg }: { label: string; fg: string }) {
     return () => clearInterval(id)
   }, [])
   return <text fg={fg}>{`${SPINNER_FRAMES[frame]} ${label}`}</text>
+}
+
+function ComposerWaitingStatus({
+  startedAt,
+  seed,
+  suffix,
+  fg,
+  width,
+}: {
+  startedAt: number | null
+  seed: string
+  suffix: string | null
+  fg: string
+  width: number
+}) {
+  const [frame, setFrame] = useState(0)
+  const [now, setNow] = useState(() => Date.now())
+  const hash = stableHash(seed)
+  const frames = COMPOSER_WAITING_SPINNER_FRAMES[hash % COMPOSER_WAITING_SPINNER_FRAMES.length] ?? COMPOSER_WAITING_SPINNER_FRAMES[0]
+  const message = COMPOSER_WAITING_MESSAGES[hash % COMPOSER_WAITING_MESSAGES.length] ?? COMPOSER_WAITING_MESSAGES[0]
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setFrame((current) => current + 1)
+      setNow(Date.now())
+    }, 120)
+    return () => clearInterval(id)
+  }, [])
+
+  const elapsed = formatElapsedClock(startedAt == null ? 0 : Math.max(now - startedAt, 0))
+  const status = suffix
+    ? `${frames[frame % frames.length]} ${message}... (${elapsed} · ${suffix})`
+    : `${frames[frame % frames.length]} ${message}... (${elapsed})`
+  return <text fg={fg} wrapMode="none">{fitText(status, width)}</text>
 }
 
 const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'all']
@@ -397,6 +450,26 @@ function fitText(value: string, width: number): string {
   if (value.length <= width) return value.padEnd(width, ' ')
   if (width === 1) return value.slice(0, 1)
   return `${value.slice(0, width - 1)}…`
+}
+
+function stableHash(value: string): number {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+function formatElapsedClock(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const seconds = totalSeconds % 60
+  const totalMinutes = Math.floor(totalSeconds / 60)
+  const minutes = totalMinutes % 60
+  const hours = Math.floor(totalMinutes / 60)
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`
+  if (totalMinutes > 0) return `${totalMinutes}m ${String(seconds).padStart(2, '0')}s`
+  return `${seconds}s`
 }
 
 function formatModelChipValue(value: string): string {
@@ -1259,6 +1332,10 @@ function sessionMessageFingerprint(message: import('../../lib/types').SessionMes
   ].join('|')
   sessionMessageFingerprintCache.set(message, fingerprint)
   return fingerprint
+}
+
+function sessionMessageSequenceFingerprint(messages: import('../../lib/types').SessionMessage[]): string {
+  return `${messages.length}:${messages.map((message) => sessionMessageFingerprint(message) ?? '').join('\n')}`
 }
 
 function isDurableSessionMessage(message: import('../../lib/types').SessionMessage): boolean {
@@ -2370,6 +2447,8 @@ export default function OpenTuiApp() {
   const [composerHistoryIndex, setComposerHistoryIndex] = useState(0)
   const [composerLiveSlashCommands, setComposerLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
+  const [composerSendStartedAt, setComposerSendStartedAt] = useState<number | null>(null)
+  const [composerWaitingSeed, setComposerWaitingSeed] = useState('')
   const [composerError, setComposerError] = useState<string | null>(null)
   const [composerLiveText, setComposerLiveText] = useState('')
   const [liveTranscriptMessages, setLiveTranscriptMessages] = useState<ThreadedMessage[]>([])
@@ -2432,7 +2511,7 @@ export default function OpenTuiApp() {
   const composerCursorOffsetRef = useRef<number | null>(null)
   const terminalSelectionRef = useRef<{ text: string; capturedAt: number } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
-  const liveTranscriptBaselineRef = useRef(new Map<string, { count: number; lastFingerprint: string | null }>())
+  const liveTranscriptBaselineRef = useRef(new Map<string, { count: number; lastFingerprint: string | null; sequenceFingerprint: string }>())
   const liveTranscriptMessagesRef = useRef<ThreadedMessage[]>([])
   const awaitingPersistedTurnRef = useRef(false)
   const liveTextFlushFrameRef = useRef<number | null>(null)
@@ -2703,9 +2782,11 @@ export default function OpenTuiApp() {
     if (!baseline) return
     const durableMessages = sessionDetail.rawMessages.filter(isDurableSessionMessage)
     const lastFingerprint = sessionMessageFingerprint(durableMessages.at(-1))
+    const sequenceFingerprint = sessionMessageSequenceFingerprint(durableMessages)
     const persistedTurnArrived =
       durableMessages.length > baseline.count
       || lastFingerprint !== baseline.lastFingerprint
+      || sequenceFingerprint !== baseline.sequenceFingerprint
     if (!persistedTurnArrived) return
     const liveAssistantVisible = Boolean(composerLiveText.trim())
       || hasLiveAssistantMessage(liveTranscriptMessagesForSession, key)
@@ -2914,6 +2995,9 @@ export default function OpenTuiApp() {
     }
     return parts.length > 0 ? `· ${parts.join(' · ')}` : ''
   }, [composerContextUsage, composerCurrentModel, composerTargetSession?.provider, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent, tuiPermissionMode])
+  const composerWaitingSuffix = composerKnobsChip ? composerKnobsChip.replace(/^·\s*/, '') : null
+  const composerWaitingStatusSeed = composerWaitingSeed
+    || `${composerTargetSession?.provider ?? 'unknown'}:${composerTargetSession?.sessionId ?? 'pending'}:${composerDraft}`
   const composerFirstLine = composerDraft.split('\n')[0] ?? ''
   const composerSlashOpen = composerFirstLine.startsWith('/') && !composerSlashDismissed
   const composerSlashCommands: SlashCommandSuggestion[] = useMemo(() => {
@@ -3242,12 +3326,14 @@ export default function OpenTuiApp() {
     [liveToolActivities],
   )
   const hasComposerStatusMessage = Boolean(
-    composerError || (composerSendState === 'sending') || awaitingPersistedTurn
+    composerError
+    || awaitingPersistedTurn
+    || queuedComposerSend
+    || (composerSendState === 'sending' && (composerLiveText || activeRunningToolCount > 0))
   )
   const composerStatusBlockHeight = (() => {
     let rows = 0
-    if (composerSendState === 'sending' && liveStatus === 'requesting' && !composerLiveText && activeRunningToolCount === 0) rows += 2
-    if (composerSendState === 'sending' && liveStatus !== 'requesting' && activeRunningToolCount === 0 && !composerLiveText) rows += 2
+    if (composerSendState === 'sending' && !composerLiveText && activeRunningToolCount === 0) rows += 2
     if (hasSubagentTail) rows += 2
     if (liveToolActivities.length > 0 && activeRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
@@ -3793,9 +3879,11 @@ export default function OpenTuiApp() {
       if (liveBaseline) {
         const durableMessages = detail.rawMessages.filter(isDurableSessionMessage)
         const lastFingerprint = sessionMessageFingerprint(durableMessages.at(-1))
+        const sequenceFingerprint = sessionMessageSequenceFingerprint(durableMessages)
         const persistedTurnArrived =
           durableMessages.length > liveBaseline.count
           || lastFingerprint !== liveBaseline.lastFingerprint
+          || sequenceFingerprint !== liveBaseline.sequenceFingerprint
         if (persistedTurnArrived) {
           const liveAssistantVisible = Boolean(pendingLiveTextRef.current.trim())
             || hasLiveAssistantMessage(liveTranscriptMessagesRef.current, cacheKeyForGuards)
@@ -3828,6 +3916,7 @@ export default function OpenTuiApp() {
             prev !== null &&
             prev.rawMessages.length === detail.rawMessages.length &&
             sessionMessageFingerprint(prev.rawMessages.at(-1)) === sessionMessageFingerprint(detail.rawMessages.at(-1)) &&
+            sessionMessageSequenceFingerprint(prev.rawMessages) === sessionMessageSequenceFingerprint(detail.rawMessages) &&
             prev.info?.currentModel === detail.info?.currentModel &&
             prev.info?.customTitle === detail.info?.customTitle
           ) {
@@ -4453,6 +4542,7 @@ export default function OpenTuiApp() {
 
     const targetSession = composerTargetSession
     const controller = new AbortController()
+    const sendStartedAt = Date.now()
     let resolveTurnCleanup: () => void = () => {}
     const turnCleanupPromise = new Promise<void>((resolve) => {
       resolveTurnCleanup = resolve
@@ -4460,6 +4550,8 @@ export default function OpenTuiApp() {
     activeComposerSendCleanupRef.current = turnCleanupPromise
     composerAbortRef.current = controller
     setComposerSendState('sending')
+    setComposerSendStartedAt(sendStartedAt)
+    setComposerWaitingSeed(`${targetSession.provider ?? 'claude'}:${targetSession.sessionId}:${sendStartedAt}:${trimmed}`)
     setComposerError(null)
     flushLiveText() // flush any stale pending text
     pendingLiveTextRef.current = ''
@@ -4485,6 +4577,7 @@ export default function OpenTuiApp() {
     liveTranscriptBaselineRef.current.set(targetKey, {
       count: baselineMessages.length,
       lastFingerprint: sessionMessageFingerprint(baselineMessages.at(-1)),
+      sequenceFingerprint: sessionMessageSequenceFingerprint(baselineMessages),
     })
     liveToolIndexesRef.current.clear()
     setLiveTranscriptMessages((prev) => [
@@ -4496,7 +4589,6 @@ export default function OpenTuiApp() {
     setUnreadBoundaryKey(null)
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
-    const sendStartedAt = Date.now()
     let replyAccumulator = ''
     let codexLiveMessageAccumulator = ''
     let copilotFinalMessageSeen = false
@@ -4898,6 +4990,7 @@ export default function OpenTuiApp() {
       setLiveStatus(null)
       setLiveSubagentText({})
       setLiveToolActivities([])
+      setComposerSendStartedAt(null)
       clearSessionRunning(runningRef)
       if (activeComposerSendCleanupRef.current === turnCleanupPromise) {
         activeComposerSendCleanupRef.current = null
@@ -5446,12 +5539,10 @@ export default function OpenTuiApp() {
         ? `Queued · sends after current turn: "${queuedComposerSend.text.slice(0, 60)}${queuedComposerSend.text.length > 60 ? '…' : ''}"`
         : composerSendState === 'sending'
           ? activeRunningToolCount > 0
-            ? `Turn running; using ${activeRunningToolCount} tool${activeRunningToolCount === 1 ? '' : 's'}.`
+            ? `Using ${activeRunningToolCount} tool${activeRunningToolCount === 1 ? '' : 's'}.`
             : composerLiveText
-              ? 'Turn running; streaming assistant response.'
-              : liveStatus === 'requesting'
-                ? 'Turn running; waiting for provider response.'
-                : 'Turn running.'
+              ? 'Streaming assistant response.'
+              : null
           : null
   const composerTargetMessage = composerAutoTargetingRunning && composerTargetSession
     ? `Auto-targeting running ${String(composerTargetSession.provider ?? 'claude').toUpperCase()} session ${composerTargetSession.sessionId.slice(-8)}`
@@ -7583,17 +7674,15 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {composerSendState === 'sending' && liveStatus === 'requesting' && !composerLiveText && activeRunningToolCount === 0 ? (
+      {composerSendState === 'sending' && !composerLiveText && activeRunningToolCount === 0 ? (
         <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
-          <text fg={theme.cyan} wrapMode="none">
-            {fitText('● requesting…', Math.max(width - 4, 20))}
-          </text>
-        </box>
-      ) : composerSendState === 'sending' && liveStatus !== 'requesting' && activeRunningToolCount === 0 && !composerLiveText ? (
-        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
-          <text fg={theme.cyan} wrapMode="none">
-            {fitText('● turn running…', Math.max(width - 4, 20))}
-          </text>
+          <ComposerWaitingStatus
+            startedAt={composerSendStartedAt}
+            seed={composerWaitingStatusSeed}
+            suffix={composerWaitingSuffix}
+            fg={theme.cyan}
+            width={Math.max(width - 4, 20)}
+          />
         </box>
       ) : null}
 

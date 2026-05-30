@@ -21,6 +21,7 @@ import type {
   ThreadRollbackResponse,
   ThreadStartResponse,
   ThreadTokenUsage,
+  ThreadTurnsListResponse,
 } from './codex-schema/v2'
 
 import type {
@@ -70,6 +71,7 @@ export type CodexThreadResumeResponse = ThreadResumeResponse
 export type CodexThreadForkResponse = ThreadForkResponse
 export type CodexThreadRollbackResponse = ThreadRollbackResponse
 export type CodexTurnStartResponse = { turn: Turn }
+export type CodexThreadTurnsListResponse = ThreadTurnsListResponse
 
 // ThreadListResponse adds `backwardsCursor` to the historical shape we used.
 // Re-export verbatim so consumers see the new field.

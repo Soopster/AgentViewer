@@ -110,6 +110,7 @@ import type {
   CodexThreadResumeResponse,
   CodexThreadRollbackResponse,
   CodexThreadTokenUsage,
+  CodexThreadTurnsListResponse,
   CodexTurnStartResponse,
   CodexUserInput,
 } from './codexProtocol'
@@ -1620,6 +1621,40 @@ async function readCodexThread(sessionId: string, includeTurns: boolean) {
   return response.thread
 }
 
+async function listCodexTurnsFull(sessionId: string): Promise<CodexThread['turns']> {
+  const client = getCodexClient()
+  const turns: CodexThread['turns'] = []
+  let cursor: string | null = null
+
+  do {
+    const response: CodexThreadTurnsListResponse = await client.request('thread/turns/list', {
+      threadId: sessionId,
+      cursor,
+      limit: 200,
+      sortDirection: 'asc',
+      itemsView: 'full',
+    })
+    turns.push(...response.data)
+    cursor = response.nextCursor
+  } while (cursor)
+
+  return turns
+}
+
+async function readCodexThreadWithFullTurns(sessionId: string): Promise<CodexThread> {
+  const thread = await readCodexThread(sessionId, false)
+  try {
+    const turns = await listCodexTurnsFull(sessionId)
+    return { ...thread, turns }
+  } catch (err) {
+    if (isCodexMissingRolloutError(err)) return { ...thread, turns: [] }
+    // Older app-server builds populated `thread/read(includeTurns)` before
+    // the paginated turns API existed. Keep that as a fallback, but prefer
+    // `itemsView: "full"` above because it matches live Codex CLI state.
+    return readCodexThread(sessionId, true)
+  }
+}
+
 function isCodexMissingRolloutError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err)
   return (
@@ -2109,35 +2144,27 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
 async function readCodexMessagesAll(sessionId: string): Promise<SessionMessage[]> {
   let thread: CodexThread
   try {
-    thread = await readCodexThread(sessionId, true)
+    thread = await readCodexThreadWithFullTurns(sessionId)
   } catch (err) {
     if (isCodexMissingRolloutError(err)) return []
     throw err
   }
   const turns = thread.turns
-  const lastTurn = turns.at(-1)
-  const lastItem = lastTurn?.items.at(-1)
-  // Recursive structural hash instead of a full JSON.stringify of the (often
-  // multi-KB) trailing item — the serialized string was allocated on every
-  // read, including cache-hit ticks. compactStableFingerprint matches (and
-  // exceeds) JSON.stringify's invalidation sensitivity without the big string.
-  const lastItemSignature = lastItem ? compactStableFingerprint(lastItem) : ''
   // ThreadStatus is a discriminated union; TurnError is an object — both
   // need flat keys for cache fingerprinting or they'd stringify to "[object
   // Object]" and miss invalidations.
   const threadStatusKey = thread.status.type === 'active'
     ? `active:${thread.status.activeFlags.join(',')}`
     : thread.status.type
-  const turnErrorKey = lastTurn?.error?.message ?? ''
+  // Codex may update an earlier assistant item after a tool-heavy turn has
+  // already appended later tool/result items. Fingerprint the whole turn
+  // sequence so those in-place item updates invalidate the mapped transcript.
+  const turnsSignature = compactStableFingerprint(turns)
   const signature = [
     thread.updatedAt,
     threadStatusKey,
     turns.length,
-    lastTurn?.id ?? '',
-    lastTurn?.status ?? '',
-    turnErrorKey,
-    lastTurn?.items.length ?? 0,
-    lastItemSignature,
+    turnsSignature,
   ].join(':')
   const cached = readMappedMessagesCache(`codex:${sessionId}`, signature)
   if (cached) return cached
