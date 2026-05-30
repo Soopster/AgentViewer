@@ -81,6 +81,11 @@ export type SessionMessage = {
   turnId?: string
   taskDescription?: string
   requestId?: string
+  /**
+   * True when Agent Viewer is surfacing an in-memory live overlay before the
+   * provider has flushed the message into its durable session history.
+   */
+  ephemeral?: boolean
 }
 
 export type Session = {

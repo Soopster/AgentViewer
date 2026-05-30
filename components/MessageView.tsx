@@ -1199,18 +1199,23 @@ function sessionMessageFingerprint(message: SessionMessage | undefined): string 
   ].join('|')
 }
 
+function isDurableSessionMessage(message: SessionMessage): boolean {
+  return message.ephemeral !== true
+}
+
 function buildPendingMessageBaseline(messages: SessionMessage[], sessionId: string): PendingMessageBaseline {
+  const durableMessages = messages.filter(isDurableSessionMessage)
   const keys = new Set<string>()
   const fingerprintsByKey = new Map<string, string | null>()
-  for (const message of messages) {
+  for (const message of durableMessages) {
     const key = sessionMessageThreadedKey(message)
     keys.add(key)
     fingerprintsByKey.set(key, sessionMessageFingerprint(message))
   }
   return {
-    count: messages.length,
-    lastUuid: messages.at(-1)?.uuid ?? null,
-    lastFingerprint: sessionMessageFingerprint(messages.at(-1)),
+    count: durableMessages.length,
+    lastUuid: durableMessages.at(-1)?.uuid ?? null,
+    lastFingerprint: sessionMessageFingerprint(durableMessages.at(-1)),
     sessionId,
     keys,
     fingerprintsByKey,
@@ -2636,13 +2641,14 @@ export default function MessageView({
     const baseline = pendingMessageBaselineRef.current
     if (!baseline || baseline.sessionId !== session.sessionId) return
 
-    const currentLastMessage = messages.at(-1)
+    const durableMessages = messages.filter(isDurableSessionMessage)
+    const currentLastMessage = durableMessages.at(-1)
     const currentLastUuid = currentLastMessage?.uuid ?? null
     const currentLastFingerprint = sessionMessageFingerprint(currentLastMessage)
-    const changedMessages = messagesChangedSinceBaseline(messages, baseline)
+    const changedMessages = messagesChangedSinceBaseline(durableMessages, baseline)
     const persistedTurnArrived =
       changedMessages.length > 0
-      || messages.length !== baseline.count
+      || durableMessages.length !== baseline.count
       || currentLastUuid !== baseline.lastUuid
       || currentLastFingerprint !== baseline.lastFingerprint
     const persistedAssistantArrived = changedMessages.some((message) => message.type === 'assistant')

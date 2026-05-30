@@ -968,11 +968,12 @@ function hasLiveAssistantMessage(messages: ThreadedMessage[], key: string): bool
   return messages.some((message) => liveMessageSessionKey(message) === key && message.role === 'assistant')
 }
 
-function hasPersistedAssistantAfterBaseline(rawMessages: Array<{ type?: string }>, baselineCount: number): boolean {
-  const start = rawMessages.length > baselineCount
+function hasPersistedAssistantAfterBaseline(rawMessages: import('../../lib/types').SessionMessage[], baselineCount: number): boolean {
+  const durableMessages = rawMessages.filter(isDurableSessionMessage)
+  const start = durableMessages.length > baselineCount
     ? baselineCount
     : Math.max(baselineCount - 1, 0)
-  return rawMessages.slice(start).some((message) => message.type === 'assistant')
+  return durableMessages.slice(start).some((message) => message.type === 'assistant')
 }
 
 function makeLiveUserMessage(session: Session, text: string): ThreadedMessage {
@@ -1179,6 +1180,10 @@ function sessionMessageFingerprint(message: import('../../lib/types').SessionMes
   ].join('|')
   sessionMessageFingerprintCache.set(message, fingerprint)
   return fingerprint
+}
+
+function isDurableSessionMessage(message: import('../../lib/types').SessionMessage): boolean {
+  return message.ephemeral !== true
 }
 
 type SidebarEntry =
@@ -2576,9 +2581,10 @@ export default function OpenTuiApp() {
     const key = sessionKey(selectedSessionTarget)
     const baseline = liveTranscriptBaselineRef.current.get(key)
     if (!baseline) return
-    const lastFingerprint = sessionMessageFingerprint(sessionDetail.rawMessages.at(-1))
+    const durableMessages = sessionDetail.rawMessages.filter(isDurableSessionMessage)
+    const lastFingerprint = sessionMessageFingerprint(durableMessages.at(-1))
     const persistedTurnArrived =
-      sessionDetail.rawMessages.length > baseline.count
+      durableMessages.length > baseline.count
       || lastFingerprint !== baseline.lastFingerprint
     if (!persistedTurnArrived) return
     const liveAssistantVisible = Boolean(composerLiveText.trim())
@@ -3515,9 +3521,10 @@ export default function OpenTuiApp() {
       if (requestId !== detailRequestRef.current) return
       const liveBaseline = liveTranscriptBaselineRef.current.get(cacheKeyForGuards)
       if (liveBaseline) {
-        const lastFingerprint = sessionMessageFingerprint(detail.rawMessages.at(-1))
+        const durableMessages = detail.rawMessages.filter(isDurableSessionMessage)
+        const lastFingerprint = sessionMessageFingerprint(durableMessages.at(-1))
         const persistedTurnArrived =
-          detail.rawMessages.length > liveBaseline.count
+          durableMessages.length > liveBaseline.count
           || lastFingerprint !== liveBaseline.lastFingerprint
         if (persistedTurnArrived) {
           const liveAssistantVisible = Boolean(pendingLiveTextRef.current.trim())
@@ -4202,9 +4209,10 @@ export default function OpenTuiApp() {
     const targetKey = sessionKey(targetSession)
     const baselineDetail = sessionDetailCacheRef.current.get(targetKey)
       ?? (selectedSessionKeyRef.current === targetKey ? sessionDetail : null)
+    const baselineMessages = baselineDetail?.rawMessages.filter(isDurableSessionMessage) ?? []
     liveTranscriptBaselineRef.current.set(targetKey, {
-      count: baselineDetail?.rawMessages.length ?? 0,
-      lastFingerprint: sessionMessageFingerprint(baselineDetail?.rawMessages.at(-1)),
+      count: baselineMessages.length,
+      lastFingerprint: sessionMessageFingerprint(baselineMessages.at(-1)),
     })
     liveToolIndexesRef.current.clear()
     setLiveTranscriptMessages((prev) => [

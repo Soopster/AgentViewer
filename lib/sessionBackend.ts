@@ -62,7 +62,7 @@ import {
   type SessionEvent as CopilotSessionEvent,
   type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
-import { clearRunningSession, getRunningSession, setRunningSession } from './sessionRuntime'
+import { clearRunningSession, getRunningSession, interruptRunningSession, setRunningSession } from './sessionRuntime'
 import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
 import type {
@@ -1023,20 +1023,35 @@ function copilotLiveTranscriptSignature(events: CopilotSessionEvent[]): string {
 
 function mergeCopilotSessionEvents(persisted: CopilotSessionEvent[], live: CopilotSessionEvent[]): CopilotSessionEvent[] {
   if (live.length === 0) return persisted
+  return [...persisted, ...filterCopilotLiveEvents(persisted, live)].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+}
 
+function filterCopilotLiveEvents(persisted: CopilotSessionEvent[], live: CopilotSessionEvent[]): CopilotSessionEvent[] {
   const persistedIds = new Set(persisted.map((event) => event.id))
   const persistedAssistantIds = new Set(
     persisted
       .filter((event): event is CopilotAssistantMessageEvent => event.type === 'assistant.message')
       .map((event) => event.data.messageId),
   )
-  const merged = [...persisted]
+  const filtered: CopilotSessionEvent[] = []
   for (const event of live) {
     if (persistedIds.has(event.id)) continue
     if (event.type === 'assistant.message' && persistedAssistantIds.has(event.data.messageId)) continue
-    merged.push(event)
+    filtered.push(event)
   }
-  return merged.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+  return filtered
+}
+
+function sessionMessageIdentity(message: SessionMessage): string {
+  return `${message.provider ?? 'claude'}:${message.uuid}`
+}
+
+function markLiveSessionMessages(messages: SessionMessage[], liveKeys: Set<string>): SessionMessage[] {
+  if (liveKeys.size === 0) return messages
+  return messages.map((message) => liveKeys.has(sessionMessageIdentity(message))
+    ? { ...message, ephemeral: true }
+    : message
+  )
 }
 
 type PiLiveTranscriptEntry = {
@@ -1569,10 +1584,11 @@ async function syncMessagesBestEffort(
   messages: SessionMessage[],
 ): Promise<void> {
   const key = `${provider}:${sessionId}`
-  const signature = messagesPersistSignature(messages)
+  const durableMessages = messages.filter((message) => message.ephemeral !== true)
+  const signature = messagesPersistSignature(durableMessages)
   if (persistedMessagesSignature.get(key) === signature) return
   try {
-    await syncPersistedSessionMessages(provider, sessionId, messages)
+    await syncPersistedSessionMessages(provider, sessionId, durableMessages)
     persistedMessagesSignature.set(key, signature)
   } catch {
     // Persistence is opportunistic and must not break live provider reads.
@@ -2131,12 +2147,17 @@ async function readOpenCodeMessagesAll(sessionId: string): Promise<SessionMessag
 async function readCopilotMessagesAll(sessionId: string): Promise<SessionMessage[]> {
   const persistedEvents = await readCopilotSessionEvents(sessionId)
   const liveEvents = getCopilotLiveTranscriptEvents(sessionId)
-  const events = mergeCopilotSessionEvents(persistedEvents, liveEvents)
+  const filteredLiveEvents = filterCopilotLiveEvents(persistedEvents, liveEvents)
+  const events = mergeCopilotSessionEvents(persistedEvents, filteredLiveEvents)
   const last = events.at(-1) as { id?: string; type?: string } | undefined
-  const signature = `${events.length}:${last?.id ?? ''}:${last?.type ?? ''}:${copilotLiveTranscriptSignature(liveEvents)}`
+  const liveKeys = new Set(mapCopilotEventsToSessionMessages(sessionId, filteredLiveEvents).map(sessionMessageIdentity))
+  const signature = `${events.length}:${last?.id ?? ''}:${last?.type ?? ''}:${copilotLiveTranscriptSignature(filteredLiveEvents)}`
   const cached = readMappedMessagesCache(`copilot:${sessionId}`, signature)
   if (cached) return cached
-  const messages = sortMessagesChronologically(mapCopilotEventsToSessionMessages(sessionId, events))
+  const messages = markLiveSessionMessages(
+    sortMessagesChronologically(mapCopilotEventsToSessionMessages(sessionId, events)),
+    liveKeys,
+  )
   return writeMappedMessagesCache(`copilot:${sessionId}`, signature, messages)
 }
 
@@ -2148,8 +2169,19 @@ function readPiMessagesAll(sessionId: string): SessionMessage[] {
   const signature = `${raw.length}:${last?.id ?? ''}:${last?.role ?? ''}:${piLiveTranscriptSignature(live)}`
   const cached = readMappedMessagesCache(`pi:${sessionId}`, signature)
   if (cached) return cached
+  const livePrefixes = new Set(live.map((_, index) => `pi-${sessionId}-${raw.length + index}`))
+  const liveKeys = new Set<string>()
   const messages = sortMessagesChronologically(mapPiMessagesToSessionMessages(sessionId, mergedRaw))
-  return writeMappedMessagesCache(`pi:${sessionId}`, signature, messages)
+  for (const message of messages) {
+    for (const prefix of livePrefixes) {
+      if (message.uuid === prefix || message.uuid.startsWith(`${prefix}-`)) {
+        liveKeys.add(sessionMessageIdentity(message))
+        break
+      }
+    }
+  }
+  const markedMessages = markLiveSessionMessages(messages, liveKeys)
+  return writeMappedMessagesCache(`pi:${sessionId}`, signature, markedMessages)
 }
 
 export async function listViewSessionMessageWindow(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessageWindow> {
@@ -4079,11 +4111,7 @@ export async function createNewViewSession({
 }
 
 export async function interruptViewSession(sessionId: string): Promise<void> {
-  const running = getRunningSession(sessionId)
-  if (!running) {
-    throw new Error('No running session for this session')
-  }
-  await running.interrupt()
+  await interruptRunningSession(sessionId)
 }
 
 export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; contextUsage: ContextUsage | null }> {
