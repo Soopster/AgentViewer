@@ -8,6 +8,13 @@ export type OpenCodeTodo = {
   priority: string
 }
 
+export type CodexTodo = {
+  id?: string
+  step: string
+  status: string
+  activeForm?: string
+}
+
 export type TaskStatus = 'pending' | 'in_progress' | 'paused' | 'completed' | 'failed' | 'stopped'
 export type TaskEventKind = 'created' | 'updated' | 'listed' | 'read' | 'started' | 'progress' | 'notified'
 
@@ -96,7 +103,7 @@ function normalizeStatus(value: unknown): TaskStatus | undefined {
   if (value === 'paused') return 'paused'
   if (value === 'completed') return 'completed'
   if (value === 'failed') return 'failed'
-  if (value === 'stopped' || value === 'killed') return 'stopped'
+  if (value === 'stopped' || value === 'killed' || value === 'cancelled') return 'stopped'
   return undefined
 }
 
@@ -139,6 +146,114 @@ function addUsagePatch(patch: Patch, source: Record<string, unknown>): void {
   if (durationMs != null) patch.durationMs = durationMs
 }
 
+type CodexTodoSnapshotItem = {
+  id?: string
+  subject: string
+  status: TaskStatus
+  activeForm?: string
+}
+
+function readCodexTodoEntries(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value
+
+  const record = asRecord(value)
+  if (!record) return []
+
+  for (const key of ['plan', 'todos', 'tasks']) {
+    if (Array.isArray(record[key])) return record[key] as unknown[]
+  }
+
+  for (const key of ['arguments', 'input', 'value']) {
+    const nested = typeof record[key] === 'string'
+      ? safeParse<unknown>(record[key])
+      : record[key]
+    const entries = readCodexTodoEntries(nested)
+    if (entries.length > 0) return entries
+  }
+
+  return []
+}
+
+function normalizeCodexTodoSnapshot(value: unknown): CodexTodoSnapshotItem[] {
+  return readCodexTodoEntries(value).flatMap((entry) => {
+    const record = asRecord(entry)
+    if (!record) return []
+
+    const subject = readStringField(record, 'step', 'content', 'subject', 'title', 'description')
+    if (!subject) return []
+
+    const status = normalizeStatus(record.status)
+    if (!status) return []
+
+    const item: CodexTodoSnapshotItem = { subject, status }
+    const id = readStringField(record, 'id', 'taskId', 'task_id')
+    const activeForm = readStringField(record, 'activeForm', 'active_form')
+    if (id) item.id = id
+    if (activeForm) item.activeForm = activeForm
+    return [item]
+  })
+}
+
+function parseCodexTodoMarkdown(text: string): CodexTodoSnapshotItem[] {
+  if (!/\[(?: |x|X|~|-)\]/.test(text)) return []
+
+  const planHeading = text.search(/^##\s+(?:Plan|Todos?)\s*$/im)
+  if (planHeading < 0) return []
+
+  const body = text.slice(planHeading)
+  const items: CodexTodoSnapshotItem[] = []
+
+  for (const rawLine of body.split(/\r?\n/)) {
+    const match = rawLine.match(/^\s*(?:(?:[-*]|\d+\.)\s*)?\[( |x|X|~|-)\]\s+(.+?)\s*$/)
+    if (!match) continue
+
+    const marker = match[1]
+    const subject = match[2].trim()
+    if (!subject) continue
+
+    const status: TaskStatus = marker === 'x' || marker === 'X'
+      ? 'completed'
+      : marker === '~' || marker === '-'
+      ? 'in_progress'
+      : 'pending'
+    items.push({ subject, status })
+  }
+
+  return items
+}
+
+function upsertCodexTodoSnapshot(
+  registry: TaskRegistry,
+  items: CodexTodoSnapshotItem[],
+  uuid: string,
+  timestamp: string | undefined,
+  idPrefix: string,
+  details: string,
+): void {
+  const seen = new Set<string>()
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index]
+    const idPart = item.id ?? String(index)
+    const id = `${idPrefix}:${idPart}`
+    seen.add(id)
+    upsert(registry, id, {
+      subject: item.subject,
+      status: item.status,
+      activeForm: item.activeForm,
+    }, uuid, timestamp, {
+      kind: 'updated',
+      status: item.status,
+      subject: item.subject,
+      activeForm: item.activeForm,
+      details,
+    })
+  }
+
+  for (const id of [...registry.keys()]) {
+    if (id.startsWith(`${idPrefix}:`) && !seen.has(id)) registry.delete(id)
+  }
+}
+
 function uniqueIds(...lists: Array<string[] | undefined>): string[] {
   const seen = new Set<string>()
   const out: string[] = []
@@ -152,6 +267,14 @@ function uniqueIds(...lists: Array<string[] | undefined>): string[] {
     }
   }
   return out
+}
+
+function isCodexTodoToolName(name: string): boolean {
+  return name === 'update_plan' || name.endsWith('.update_plan')
+}
+
+function codexTodoIdPrefix(message: ThreadedMessage): string {
+  return message.sessionId ? `codex-todo:${message.sessionId}` : 'codex-todo'
 }
 
 type Patch = Partial<Omit<TaskState, 'id' | 'latestEventUuid' | 'firstSeenAt' | 'lastUpdatedAt' | 'createdEventUuid' | 'events'>>
@@ -279,10 +402,8 @@ function upsertFromSystemEvent(
 
 /**
  * Walk a threaded message list and reconstruct the current state of every task
- * the agent has touched. Tasks are derived from the Claude Agent SDK's task
- * tools: TaskCreate (insert), TaskUpdate (patch / delete), TaskList
- * (authoritative status/owner/blockedBy snapshot), TaskGet (description +
- * forward-dependency `blocks`).
+ * the agent has touched. Tasks are derived from Claude Agent SDK task tools,
+ * Codex TODO snapshots (`update_plan` / plan text), and provider system events.
  *
  * The result reflects every event seen up to the end of the message list, with
  * each task's `latestEventUuid` pointing at the most recent message that
@@ -298,6 +419,21 @@ export function buildTaskRegistry(messages: ThreadedMessage[]): TaskRegistry {
 
       if (block.type === 'claude_system') {
         upsertFromSystemEvent(registry, (block as ClaudeSystemBlock).payload, uuid, ts)
+        continue
+      }
+
+      if (message.provider === 'codex' && block.type === 'text') {
+        const items = parseCodexTodoMarkdown(block.text)
+        if (items.length > 0) {
+          upsertCodexTodoSnapshot(
+            registry,
+            items,
+            uuid,
+            ts,
+            codexTodoIdPrefix(message),
+            'Codex Todos',
+          )
+        }
         continue
       }
 
@@ -445,6 +581,18 @@ export function buildTaskRegistry(messages: ThreadedMessage[]): TaskRegistry {
         continue
       }
 
+      if (message.provider === 'codex' && isCodexTodoToolName(name)) {
+        upsertCodexTodoSnapshot(
+          registry,
+          normalizeCodexTodoSnapshot(thread.toolUse.input),
+          uuid,
+          ts,
+          codexTodoIdPrefix(message),
+          'Codex update_plan',
+        )
+        continue
+      }
+
       if (name === 'TodoWrite') {
         const inp = thread.toolUse.input as { todos?: Array<{ content: string; status: string; activeForm?: string }> }
         const todos = inp.todos ?? []
@@ -474,32 +622,23 @@ export function buildTaskRegistry(messages: ThreadedMessage[]): TaskRegistry {
   return registry
 }
 
-export type CodexPlanStep = { step: string; status: string }
+export type CodexPlanStep = CodexTodo
 
 /**
- * Builds a TaskRegistry from a Codex `turn/plan/updated` payload. Codex's
- * `update_plan` tool reports a flat list of steps with simple statuses
- * (pending / in_progress / completed) — the same shape that drives Claude's
- * TodoWrite card.
+ * Builds a TaskRegistry from Codex TODO snapshots (`turn/plan/updated` and
+ * `update_plan`). Codex reports a flat list of steps with simple statuses
+ * (pending / inProgress / completed).
  */
 export function buildTaskRegistryFromCodexPlan(steps: CodexPlanStep[]): TaskRegistry {
   const registry: TaskRegistry = new Map()
-  for (let i = 0; i < steps.length; i++) {
-    const step = steps[i]
-    if (!step.step) continue
-    const status = normalizeStatus(step.status)
-    if (!status) continue
-    const id = `codex-plan:${i}`
-    upsert(registry, id, {
-      subject: step.step,
-      status,
-    }, id, undefined, {
-      kind: 'updated',
-      status,
-      subject: step.step,
-      details: 'Codex update_plan',
-    })
-  }
+  upsertCodexTodoSnapshot(
+    registry,
+    normalizeCodexTodoSnapshot({ plan: steps }),
+    'codex-todos',
+    undefined,
+    'codex-todo',
+    'Codex Todos',
+  )
   return registry
 }
 
