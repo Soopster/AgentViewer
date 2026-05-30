@@ -96,6 +96,7 @@ import {
   setCopilotStoredTitle,
 } from './copilotMetadata'
 import { getCodexClient } from './codexClient'
+import { compactStableFingerprint } from './compactFingerprint'
 import type {
   CodexAppsListResponse,
   CodexExperimentalFeatureListResponse,
@@ -439,6 +440,12 @@ function parseEffort(body: Record<string, unknown>): ReasoningEffortLevel | unde
   const effort = typeof body.effort === 'string' ? body.effort.trim() : ''
   return REASONING_EFFORT_LEVELS.includes(effort as typeof REASONING_EFFORT_LEVELS[number])
     ? effort as typeof REASONING_EFFORT_LEVELS[number]
+    : undefined
+}
+
+function parseTurnRequestId(body: Record<string, unknown>): string | undefined {
+  return typeof body.turnRequestId === 'string' && body.turnRequestId.trim()
+    ? body.turnRequestId.trim()
     : undefined
 }
 
@@ -2109,7 +2116,11 @@ async function readCodexMessagesAll(sessionId: string): Promise<SessionMessage[]
   const turns = thread.turns
   const lastTurn = turns.at(-1)
   const lastItem = lastTurn?.items.at(-1)
-  const lastItemSignature = lastItem ? JSON.stringify(lastItem) : ''
+  // Recursive structural hash instead of a full JSON.stringify of the (often
+  // multi-KB) trailing item — the serialized string was allocated on every
+  // read, including cache-hit ticks. compactStableFingerprint matches (and
+  // exceeds) JSON.stringify's invalidation sensitivity without the big string.
+  const lastItemSignature = lastItem ? compactStableFingerprint(lastItem) : ''
   // ThreadStatus is a discriminated union; TurnError is an object — both
   // need flat keys for cache fingerprinting or they'd stringify to "[object
   // Object]" and miss invalidations.
@@ -2420,6 +2431,7 @@ function parseClaudePermissionMode(body: Record<string, unknown>): ClaudePermiss
 
 async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
+  const turnRequestId = parseTurnRequestId(body)
   const explicitModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined
   const isPendingSession = Boolean(body.isPendingSession)
   const manualPermissions = body.manualPermissions === true
@@ -2461,6 +2473,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
       forkSessionOnSend,
       cwdOverride,
       taskBudgetTotal,
+      turnRequestId,
     })
   }
 
@@ -2474,6 +2487,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     effort,
     cwdOverride,
     taskBudgetTotal,
+    turnRequestId,
   })
 }
 
@@ -2492,6 +2506,7 @@ type ClaudeStreamColdArgs = {
   forkSessionOnSend: boolean
   cwdOverride: string | undefined
   taskBudgetTotal: number | undefined
+  turnRequestId: string | undefined
 }
 
 async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Response> {
@@ -2510,6 +2525,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     forkSessionOnSend,
     cwdOverride,
     taskBudgetTotal,
+    turnRequestId,
   } = args
 
   // Build the user message in the same SDKUserMessage shape the pool uses,
@@ -2596,6 +2612,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
 
       setRunningSession(sessionId, {
         provider: 'claude',
+        requestId: turnRequestId,
         interrupt: () => q.interrupt(),
       })
 
@@ -2701,6 +2718,7 @@ type ClaudeStreamPooledArgs = {
   effort: ReasoningEffortLevel | undefined
   cwdOverride: string | undefined
   taskBudgetTotal: number | undefined
+  turnRequestId: string | undefined
 }
 
 async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<Response> {
@@ -2714,6 +2732,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
     effort,
     cwdOverride,
     taskBudgetTotal,
+    turnRequestId,
   } = args
 
   let pushMessage: SDKUserMessage
@@ -2750,6 +2769,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
 
       setRunningSession(entry.sessionId, {
         provider: 'claude',
+        requestId: turnRequestId,
         interrupt: () => entry.query.interrupt(),
       })
 
@@ -2943,6 +2963,7 @@ function isCodexRealtimeNotification(notification: CodexNotification): boolean {
 
 async function createCodexStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
+  const turnRequestId = parseTurnRequestId(body)
   const model = typeof body.model === 'string' ? body.model : null
   const effort = parseEffort(body)
   // Codex's app-server accepts `low`/`medium`/`high` for reasoningEffort
@@ -3036,6 +3057,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
 
         setRunningSession(sessionId, {
           provider: 'codex',
+          requestId: turnRequestId,
           interrupt: () => client.request('turn/interrupt', { threadId: sessionId, turnId }),
         })
 
@@ -3193,6 +3215,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
 
 async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
+  const turnRequestId = parseTurnRequestId(body)
   const selectedModel = decodeOpenCodeModelValue(typeof body.model === 'string' ? body.model : null)
   const attachments = parseAttachments(body)
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
@@ -3296,6 +3319,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
 
         setRunningSession(sessionId, {
           provider: 'opencode',
+          requestId: turnRequestId,
           interrupt: () => client.session.abort({
             ...OPENCODE_OPTIONS,
             path: { id: targetSessionId },
@@ -3304,6 +3328,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
         if (targetSessionId !== sessionId) {
           setRunningSession(targetSessionId, {
             provider: 'opencode',
+            requestId: turnRequestId,
             interrupt: () => client.session.abort({
               ...OPENCODE_OPTIONS,
               path: { id: targetSessionId },
@@ -3410,6 +3435,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
 
 async function createCopilotStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
+  const turnRequestId = parseTurnRequestId(body)
   const selectedModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null
   const effort = parseEffort(body)
   let turnAgentMode = parseCopilotMode(body.mode)
@@ -3558,6 +3584,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
         setRunningSession(sessionId, {
           provider: 'copilot',
+          requestId: turnRequestId,
           interrupt: () => session?.abort() ?? Promise.resolve(),
         })
 
@@ -3773,6 +3800,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
 async function createPiStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
+  const turnRequestId = parseTurnRequestId(body)
   const isPendingSession = Boolean(body.isPendingSession)
   const cwdOverride = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined
   const selectedModel = decodePiModelValue(typeof body.model === 'string' ? body.model : null)
@@ -3844,6 +3872,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           }
           setRunningSession(sessionId, {
             provider: 'pi',
+            requestId: turnRequestId,
             interrupt: async () => { agentSession.abortBash() },
           })
           signal.addEventListener('abort', () => {
@@ -3893,6 +3922,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
 
         setRunningSession(sessionId, {
           provider: 'pi',
+          requestId: turnRequestId,
           interrupt: () => agentSession.abort(),
         })
 
@@ -4110,8 +4140,8 @@ export async function createNewViewSession({
   throw new Error(`Create is not supported for ${provider} sessions`)
 }
 
-export async function interruptViewSession(sessionId: string): Promise<void> {
-  await interruptRunningSession(sessionId)
+export async function interruptViewSession(sessionId: string, turnRequestId?: string): Promise<void> {
+  await interruptRunningSession(sessionId, turnRequestId)
 }
 
 export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; contextUsage: ContextUsage | null }> {

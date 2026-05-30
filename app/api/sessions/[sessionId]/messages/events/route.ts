@@ -52,14 +52,23 @@ function hashString(value: string): string {
   return (hash >>> 0).toString(36)
 }
 
+// SessionMessage objects are immutable across reads: the mapped-message LRU
+// cache returns the same array (same object refs) on an unchanged transcript,
+// and any change rebuilds a fresh array of fresh objects. So a given reference
+// always yields the same signature — cache by identity to avoid re-serializing
+// every unchanged window message on idle/heartbeat refetch ticks. The WeakMap
+// self-collects when an evicted cache array drops its objects.
+const messageSigCache = new WeakMap<SessionMessage, string>()
 function messageSignature(message: SessionMessage): string {
+  const cached = messageSigCache.get(message)
+  if (cached !== undefined) return cached
   let payload = ''
   try {
     payload = JSON.stringify(message.message)
   } catch {
     payload = String(message.message)
   }
-  return [
+  const signature = [
     message.uuid,
     message.type,
     message.timestamp ?? '',
@@ -68,6 +77,8 @@ function messageSignature(message: SessionMessage): string {
     message.parent_tool_use_id ?? '',
     hashString(payload),
   ].join(':')
+  messageSigCache.set(message, signature)
+  return signature
 }
 
 function messageWindowSignature(offset: number, messages: SessionMessage[]): string {

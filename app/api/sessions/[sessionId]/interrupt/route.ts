@@ -9,9 +9,12 @@ export async function POST(
   const { sessionId } = await params
   const body = await request.json().catch(() => ({}))
   const provider = isAgentProvider(body?.provider) ? body.provider : undefined
+  const turnRequestId = typeof body?.turnRequestId === 'string' && body.turnRequestId.trim()
+    ? body.turnRequestId.trim()
+    : undefined
   try {
     void provider
-    await interruptViewSession(sessionId)
+    await interruptViewSession(sessionId, turnRequestId)
     return NextResponse.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

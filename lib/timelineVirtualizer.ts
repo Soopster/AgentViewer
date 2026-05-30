@@ -49,6 +49,41 @@ export function buildTimelineRowLayout<Row extends TimelineLayoutRow>(
   return { tops, heights, totalHeight, indexByKey }
 }
 
+// Compose a layout for [...baseRows, ...extraRows] by reusing a prebuilt
+// `base` layout for the prefix and appending only `extraRows`. The result is
+// byte-for-byte identical to buildTimelineRowLayout over the concatenation, but
+// it skips the per-row measured-height lookup + estimate for the (large,
+// invariant) prefix — only a typed-array memcpy + Map clone. Used to avoid
+// rebuilding the whole transcript's layout on every live-streaming frame, where
+// only a tiny live suffix actually changes.
+export function appendTimelineRowLayout<Row extends TimelineLayoutRow>(
+  base: TimelineRowLayout,
+  extraRows: readonly Row[],
+  measuredHeights: ReadonlyMap<string, number>,
+  estimateHeight: (row: Row) => number,
+): TimelineRowLayout {
+  if (extraRows.length === 0) return base
+  const baseN = base.tops.length
+  const n = baseN + extraRows.length
+  const tops = new Float64Array(n)
+  const heights = new Float64Array(n)
+  tops.set(base.tops)
+  heights.set(base.heights)
+  const indexByKey = new Map(base.indexByKey)
+  let totalHeight = base.totalHeight
+
+  for (let i = 0; i < extraRows.length; i++) {
+    const row = extraRows[i]
+    const idx = baseN + i
+    tops[idx] = totalHeight
+    heights[idx] = measuredHeights.get(row.key) ?? estimateHeight(row)
+    indexByKey.set(row.key, idx)
+    totalHeight += heights[idx]
+  }
+
+  return { tops, heights, totalHeight, indexByKey }
+}
+
 function upperBound(values: Float64Array, length: number, target: number): number {
   let low = 0
   let high = length

@@ -45,6 +45,7 @@ import CodeThemeToggle from './CodeThemeToggle'
 import TabBar from './TabBar'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
 import {
+  appendTimelineRowLayout,
   buildTimelineRowLayout,
   computeTimelineScrollCompensation,
   findTimelineScrollAnchor,
@@ -155,9 +156,6 @@ type TimelineRow = {
   allowFork?: boolean
   allowResume?: boolean
   allowEdit?: boolean
-  highlighted?: boolean
-  forkingMessageId?: string | null
-  resumeFromMessageId?: string | null
 }
 
 type TranscriptFilter = 'all' | 'user' | 'assistant' | 'system' | 'tools' | 'errors' | 'thinking' | 'media'
@@ -1589,6 +1587,9 @@ function timelineRowMatchesTranscriptFilters(row: TimelineRow, filters: ActiveTr
 
 const TimelineMessageRow = memo(function TimelineMessageRow({
   row,
+  highlighted,
+  forking,
+  resumeTarget,
   onForkFromMessage,
   onToggleResume,
   onReusePrompt,
@@ -1596,6 +1597,12 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   onEditFromMessage,
 }: {
   row: TimelineRow
+  // Per-row interaction state passed as booleans (not baked into the row
+  // object) so a highlight/fork/resume change re-renders only the affected
+  // rows instead of rebuilding the whole rows array + virtual layout.
+  highlighted: boolean
+  forking: boolean
+  resumeTarget: boolean
   onForkFromMessage: (messageId: string) => void
   onToggleResume: (messageId: string) => void
   onReusePrompt: (text: string) => void
@@ -1636,10 +1643,10 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
       style={{
         opacity: row.dimmed ? 0.92 : 1,
         borderRadius: 10,
-        boxShadow: row.highlighted
+        boxShadow: highlighted
           ? '0 0 0 2px rgba(56,217,245,0.55), 0 0 36px rgba(56,217,245,0.18)'
           : 'none',
-        background: row.highlighted ? 'rgba(56,217,245,0.06)' : 'transparent',
+        background: highlighted ? 'rgba(56,217,245,0.06)' : 'transparent',
         transition: 'box-shadow 180ms ease, background 180ms ease',
       }}
     >
@@ -1725,18 +1732,18 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
               type="button"
               className="timeline-row-action timeline-row-action--fork"
               onClick={() => onForkFromMessage(row.message.uuid)}
-              disabled={row.forkingMessageId === row.message.uuid}
+              disabled={forking}
             >
-              {row.forkingMessageId === row.message.uuid ? 'FORKING…' : 'FORK HERE'}
+              {forking ? 'FORKING…' : 'FORK HERE'}
             </button>
           )}
           {row.showForkControls && row.allowResume && (
             <button
               type="button"
-              className={`timeline-row-action timeline-row-action--resume${row.resumeFromMessageId === row.message.uuid ? ' timeline-row-action--resume-active' : ''}`}
+              className={`timeline-row-action timeline-row-action--resume${resumeTarget ? ' timeline-row-action--resume-active' : ''}`}
               onClick={() => onToggleResume(row.message.uuid)}
             >
-              {row.resumeFromMessageId === row.message.uuid ? 'RESUME TARGET' : 'RESUME HERE'}
+              {resumeTarget ? 'RESUME TARGET' : 'RESUME HERE'}
             </button>
           )}
           {canEdit && (
@@ -1909,6 +1916,9 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   row,
   top,
   isLast,
+  highlighted,
+  forking,
+  resumeTarget,
   onMeasure,
   onLastRowRef,
   onForkFromMessage,
@@ -1920,6 +1930,9 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   row: TimelineRow
   top: number
   isLast: boolean
+  highlighted: boolean
+  forking: boolean
+  resumeTarget: boolean
   onMeasure: (key: string, height: number) => void
   onLastRowRef: (node: HTMLDivElement | null) => void
   onForkFromMessage: (messageId: string) => void
@@ -1966,6 +1979,9 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
     >
       <TimelineMessageRow
         row={row}
+        highlighted={highlighted}
+        forking={forking}
+        resumeTarget={resumeTarget}
         onForkFromMessage={onForkFromMessage}
         onToggleResume={onToggleResume}
         onReusePrompt={onReusePrompt}
@@ -2057,6 +2073,7 @@ export default function MessageView({
     window.localStorage.setItem('agentViewer:density', density)
     rowHeightsRef.current.clear()
     setRowMeasurementVersion((version) => version + 1)
+    setPersistedMeasurementVersion((version) => version + 1)
   }, [density])
   const [composerCollapsed, setComposerCollapsed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
@@ -2087,6 +2104,10 @@ export default function MessageView({
   const [timelineViewportHeight, setTimelineViewportHeight] = useState(0)
   const [timelineHeightOverride, setTimelineHeightOverride] = useState<number | null>(null)
   const [rowMeasurementVersion, setRowMeasurementVersion] = useState(0)
+  // Bumps only when a PERSISTED row's measured height changes (or rows reset),
+  // never on live-row height growth. Keys the persisted base layout so a
+  // streaming turn doesn't rebuild the whole transcript layout each frame.
+  const [persistedMeasurementVersion, setPersistedMeasurementVersion] = useState(0)
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const [sentHistory, setSentHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
@@ -2105,6 +2126,7 @@ export default function MessageView({
   const timelineContentRef = useRef<HTMLDivElement | null>(null)
   const lastTimelineRowRef = useRef<HTMLDivElement | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const activeTurnRequestIdRef = useRef<string | null>(null)
   const inputTextRef = useRef(inputText)
   const suppressDraftSaveRef = useRef(false)
   const sendInFlightRef = useRef(false)
@@ -2114,11 +2136,20 @@ export default function MessageView({
   const liveAssistantTextRef = useRef('')
   const pendingLiveAssistantTextRef = useRef<string | null>(null)
   const liveAssistantFlushFrameRef = useRef<number | null>(null)
+  // Ref-backed source of truth for per-subagent streamed text. Deltas mutate
+  // this ref and a single RAF flushes a fresh snapshot into state, so a burst
+  // of subagent tokens collapses to one re-render per frame instead of one per
+  // token re-rendering every mounted AgentCard via LiveSubagentTextContext.
+  const liveSubagentTextRef = useRef<Record<string, string>>({})
+  const liveSubagentFlushFrameRef = useRef<number | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const rowHeightsRef = useRef<Map<string, number>>(new Map())
   const rowLayoutRef = useRef<TimelineRowLayout>(buildTimelineRowLayout([], new Map(), estimateTimelineRowHeight))
   const threadedCacheRef = useRef<Map<string, ThreadedMessage>>(new Map())
   const prevThreadingRef = useRef<IncrementalThreadingCache | null>(null)
+  // Last taskActiveForms Map, reused when contents are unchanged so the context
+  // value identity stays stable across idle polls.
+  const taskActiveFormsRef = useRef<Map<string, string>>(new Map())
   const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
   const measurementFrameRef = useRef<number | null>(null)
   const scrollRafRef = useRef<number | null>(null)
@@ -2231,6 +2262,41 @@ export default function MessageView({
       liveAssistantFlushFrameRef.current = window.requestAnimationFrame(flushLiveAssistantText)
     }
   }, [flushLiveAssistantText])
+
+  const flushLiveSubagentText = useCallback(() => {
+    liveSubagentFlushFrameRef.current = null
+    // Snapshot the ref into a fresh object so context consumers see one new
+    // identity per frame; the ref keeps mutating in place between flushes.
+    setLiveSubagentText({ ...liveSubagentTextRef.current })
+  }, [])
+
+  const scheduleLiveSubagentFlush = useCallback(() => {
+    if (liveSubagentFlushFrameRef.current == null) {
+      liveSubagentFlushFrameRef.current = window.requestAnimationFrame(flushLiveSubagentText)
+    }
+  }, [flushLiveSubagentText])
+
+  const queueLiveSubagentDelta = useCallback((parentId: string, delta: string) => {
+    const map = liveSubagentTextRef.current
+    map[parentId] = (map[parentId] ?? '') + delta
+    scheduleLiveSubagentFlush()
+  }, [scheduleLiveSubagentFlush])
+
+  const removeLiveSubagentEntry = useCallback((parentId: string) => {
+    const map = liveSubagentTextRef.current
+    if (!(parentId in map)) return
+    delete map[parentId]
+    scheduleLiveSubagentFlush()
+  }, [scheduleLiveSubagentFlush])
+
+  const clearLiveSubagentText = useCallback(() => {
+    if (liveSubagentFlushFrameRef.current != null) {
+      window.cancelAnimationFrame(liveSubagentFlushFrameRef.current)
+      liveSubagentFlushFrameRef.current = null
+    }
+    liveSubagentTextRef.current = {}
+    setLiveSubagentText({})
+  }, [])
 
   useEffect(() => {
     if (!cliPopoverOpen) return
@@ -2408,6 +2474,7 @@ export default function MessageView({
     liveTurnSessionHandoffRef.current = null
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
+    activeTurnRequestIdRef.current = null
     sendInFlightRef.current = false
     awaitingPersistedTurnRef.current = false
     setContextUsage(null)
@@ -2429,6 +2496,7 @@ export default function MessageView({
     clearLiveAssistantText()
     setLiveToolActivities([])
     setLiveThreadedMessages([])
+    clearLiveSubagentText()
     setAwaitingPersistedTurn(false)
     setSendState('idle')
     setSendError(null)
@@ -2449,6 +2517,7 @@ export default function MessageView({
     pendingTimelineAnchorRestoreRef.current = false
     setTimelineHeightOverride(null)
     setRowMeasurementVersion(0)
+    setPersistedMeasurementVersion(0)
     pendingMessageBaselineRef.current = null
     liveToolIndexesRef.current.clear()
     initialScrollDoneRef.current = false
@@ -2486,6 +2555,9 @@ export default function MessageView({
     }
     if (liveAssistantFlushFrameRef.current != null) {
       window.cancelAnimationFrame(liveAssistantFlushFrameRef.current)
+    }
+    if (liveSubagentFlushFrameRef.current != null) {
+      window.cancelAnimationFrame(liveSubagentFlushFrameRef.current)
     }
     if (userScrollingTimerRef.current != null) {
       window.clearTimeout(userScrollingTimerRef.current)
@@ -2659,6 +2731,7 @@ export default function MessageView({
       clearLiveAssistantText()
       setLiveToolActivities([])
       setLiveThreadedMessages([])
+      clearLiveSubagentText()
       awaitingPersistedTurnRef.current = false
       setAwaitingPersistedTurn(false)
       pendingMessageBaselineRef.current = null
@@ -2674,7 +2747,10 @@ export default function MessageView({
       fetch(`/api/sessions/${session.sessionId}/interrupt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: session.provider }),
+        body: JSON.stringify({
+          provider: session.provider,
+          turnRequestId: activeTurnRequestIdRef.current ?? undefined,
+        }),
       }).catch(() => {})
     }
     if (optimisticUserText) {
@@ -2682,6 +2758,7 @@ export default function MessageView({
     }
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
+    activeTurnRequestIdRef.current = null
     sendInFlightRef.current = false
     awaitingPersistedTurnRef.current = false
     setSendState('idle')
@@ -2690,6 +2767,7 @@ export default function MessageView({
     clearLiveAssistantText()
     setLiveToolActivities([])
     setLiveThreadedMessages([])
+    clearLiveSubagentText()
     setAwaitingPersistedTurn(false)
     pendingMessageBaselineRef.current = null
     liveToolIndexesRef.current.clear()
@@ -2738,7 +2816,7 @@ export default function MessageView({
     setLiveThreadedMessages([])
     setLivePromptSuggestion(null)
     setLiveStatus(null)
-    setLiveSubagentText({})
+    clearLiveSubagentText()
     awaitingPersistedTurnRef.current = false
     setAwaitingPersistedTurn(false)
     setAutoFollow(true)
@@ -2748,7 +2826,10 @@ export default function MessageView({
     window.requestAnimationFrame(resizeComposer)
 
     const controller = new AbortController()
+    const turnRequestId = globalThis.crypto?.randomUUID?.()
+      ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
     abortControllerRef.current = controller
+    activeTurnRequestIdRef.current = turnRequestId
 
     try {
       const res = await fetch(`/api/sessions/${session.sessionId}/messages`, {
@@ -2767,6 +2848,7 @@ export default function MessageView({
           manualPermissions: session.provider === 'copilot' || session.provider === 'claude' ? true : undefined,
           nativeCommands: session.provider === 'copilot' ? true : undefined,
           detachOnClientAbort: true,
+          turnRequestId,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
           isPendingSession: session.isPending === true ? true : undefined,
           cwd: session.cwd ?? undefined,
@@ -2864,6 +2946,7 @@ export default function MessageView({
             clearLiveAssistantText()
             setLiveToolActivities([])
             setLiveThreadedMessages([])
+            clearLiveSubagentText()
             continue
           }
 
@@ -2881,16 +2964,13 @@ export default function MessageView({
               if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && typeof event.delta.text === 'string') {
                 const parentId = parsed.parent_tool_use_id
                 const delta = event.delta.text
-                setLiveSubagentText((prev) => ({ ...prev, [parentId]: (prev[parentId] ?? '') + delta }))
+                queueLiveSubagentDelta(parentId, delta)
               }
             }
             if (parsed?.type === 'user' && typeof parsed.parent_tool_use_id === 'string' && parsed.parent_tool_use_id) {
-              const parentId = parsed.parent_tool_use_id
-              setLiveSubagentText((prev) => {
-                if (!(parentId in prev)) return prev
-                const { [parentId]: _, ...rest } = prev
-                return rest
-              })
+              // Route the clear through the same ref buffer so a buffered delta
+              // flushing after this removal can't resurrect the deleted text.
+              removeLiveSubagentEntry(parsed.parent_tool_use_id)
             }
             const pendingPermission = extractOpenCodePermission(parsed) ?? extractCopilotPermission(parsed) ?? extractClaudePermission(parsed)
             if (pendingPermission) {
@@ -3028,6 +3108,7 @@ export default function MessageView({
       clearLiveAssistantText()
       setLiveToolActivities([])
       setLiveThreadedMessages([])
+      clearLiveSubagentText()
       awaitingPersistedTurnRef.current = false
       setAwaitingPersistedTurn(false)
       pendingMessageBaselineRef.current = null
@@ -3035,6 +3116,7 @@ export default function MessageView({
       textareaRef.current?.focus()
     } finally {
       abortControllerRef.current = null
+      activeTurnRequestIdRef.current = null
       sendInFlightRef.current = false
     }
   }, [attachments, clearLiveAssistantText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotMode, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
@@ -3782,7 +3864,25 @@ export default function MessageView({
     () => (showTools ? threadedFull : stripToolCallBlocks(threadedFull)),
     [threadedFull, showTools],
   )
-  const taskActiveForms = useMemo(() => buildTaskActiveFormsForWeb(threaded), [threaded])
+  // buildTaskActiveFormsForWeb returns a fresh Map every time `threaded`
+  // changes identity (every poll that merges a delta), which would churn the
+  // TaskActiveFormsContext value and re-render all mounted TaskCards even when
+  // no task state changed. Reuse the prior Map instance when contents are
+  // value-equal so idle polls don't propagate through the context. Value-aware
+  // (not size/keys-only): a TaskUpdate reuses a taskId key with a new form.
+  const taskActiveForms = useMemo(() => {
+    const next = buildTaskActiveFormsForWeb(threaded)
+    const prev = taskActiveFormsRef.current
+    let same = prev.size === next.size
+    if (same) {
+      for (const [key, value] of next) {
+        if (prev.get(key) !== value) { same = false; break }
+      }
+    }
+    const result = same ? prev : next
+    taskActiveFormsRef.current = result
+    return result
+  }, [threaded])
   const taskRegistry = useMemo(() => {
     const registry = buildTaskRegistry(threaded)
     if (openCodeTodos && openCodeTodos.length > 0) {
@@ -3965,16 +4065,14 @@ export default function MessageView({
       allowFork: !!sessionCapabilities?.messageFork,
       allowResume: msg.role === 'assistant' && !!sessionCapabilities?.resumeAtMessage,
       allowEdit: !isProject && msg.role === 'user' && msg.uuid === lastUserMessageUuid && !!sessionCapabilities?.resumeAtMessage,
-      highlighted: highlightedMessageId === msg.uuid,
-      forkingMessageId,
-      resumeFromMessageId,
     }))
+  // highlightedMessageId / forkingMessageId / resumeFromMessageId are
+  // intentionally NOT deps: they are delivered to rows as per-row booleans at
+  // render time so an interaction doesn't rebuild this whole array (and the
+  // timelineRows / transcriptTimelineRows / virtualTimeline cascade below it).
   , [
-    forkingMessageId,
-    highlightedMessageId,
     isProject,
     lastUserMessageUuid,
-    resumeFromMessageId,
     sessionCapabilities?.messageFork,
     sessionCapabilities?.resumeAtMessage,
     visibleThreaded,
@@ -4124,12 +4222,15 @@ export default function MessageView({
   useEffect(() => {
     const activeKeys = new Set(transcriptTimelineRows.map((row) => row.key))
     let changed = false
+    let persistedChanged = false
     for (const key of rowHeightsRef.current.keys()) {
       if (activeKeys.has(key)) continue
       rowHeightsRef.current.delete(key)
       changed = true
+      if (!key.startsWith('live:')) persistedChanged = true
     }
     if (changed) setRowMeasurementVersion((version) => version + 1)
+    if (persistedChanged) setPersistedMeasurementVersion((version) => version + 1)
   }, [transcriptTimelineRows])
 
   const setLastTimelineRow = useCallback((node: HTMLDivElement | null) => {
@@ -4160,6 +4261,7 @@ export default function MessageView({
       const anchor = node ? findTimelineScrollAnchor(rows, layout, node.scrollTop) : null
       const measurementChanges: TimelineMeasurementChange[] = []
       let changed = false
+      let persistedChanged = false
 
       for (const [key, nextMeasuredHeight] of pending) {
         const index = layout.indexByKey.get(key)
@@ -4171,6 +4273,7 @@ export default function MessageView({
 
         rowHeightsRef.current.set(key, nextMeasuredHeight)
         changed = true
+        if (!key.startsWith('live:')) persistedChanged = true
         measurementChanges.push({ index, previousHeight, nextHeight: nextMeasuredHeight })
       }
 
@@ -4189,6 +4292,9 @@ export default function MessageView({
       if (changed) {
         setRowMeasurementVersion((version) => version + 1)
       }
+      if (persistedChanged) {
+        setPersistedMeasurementVersion((version) => version + 1)
+      }
     })
   }, [markProgrammaticTimelineScroll])
 
@@ -4198,13 +4304,35 @@ export default function MessageView({
     alignLastTimelineRowToViewportBottom()
   }, [alignLastTimelineRowToViewportBottom, autoFollow, hasTranscriptTimeline, loading, rowMeasurementVersion, scrollTimelineToBottom, transcriptTimelineRows.length])
 
+  // Layout for the persisted prefix only. Keyed on persistedMeasurementVersion
+  // (not rowMeasurementVersion) so a streaming turn — which bumps the live
+  // row's measured height every few frames — does NOT re-run the O(n) height
+  // accumulation over the entire transcript. Rebuilds only on a real poll
+  // delta (persistedTimelineRows identity) or a persisted-row resize.
+  const baseLayout = useMemo(() => {
+    return buildTimelineRowLayout(persistedTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight)
+  }, [persistedMeasurementVersion, persistedTimelineRows])
+
   // Separate the expensive O(n) height accumulation from the scroll-reactive
   // visibility window. rowLayout only recomputes when rows or measurements
   // change; virtualTimeline re-runs on every scroll but only does a scan of
   // the visible window — no new objects for off-screen rows.
   const rowLayout = useMemo(() => {
-    return buildTimelineRowLayout(transcriptTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight)
-  }, [rowMeasurementVersion, transcriptTimelineRows])
+    // transcriptTimelineRows returns the SAME reference as timelineRows exactly
+    // when no filter/search applies (and timelineRows === [...persisted,
+    // ...live]). Gate on that referential equality rather than hasTranscriptFocus
+    // — the latter reads the IMMEDIATE search box while transcriptTimelineRows
+    // is filtered from the DEFERRED value, so they desync during the
+    // useDeferredValue lag (e.g. clearing the box) and would pair filtered rows
+    // with a full-list layout. When they differ, a filter is genuinely active
+    // and the base prefix can't be reused — rebuild the full layout.
+    if (transcriptTimelineRows !== timelineRows) {
+      return buildTimelineRowLayout(transcriptTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight)
+    }
+    // Otherwise reuse baseLayout for the persisted prefix and append only the
+    // live suffix.
+    return appendTimelineRowLayout(baseLayout, liveTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight)
+  }, [baseLayout, liveTimelineRows, rowMeasurementVersion, timelineRows, transcriptTimelineRows])
   rowLayoutRef.current = rowLayout
 
   useLayoutEffect(() => {
@@ -5686,6 +5814,9 @@ export default function MessageView({
                           row={row}
                           top={top}
                           isLast={row.key === lastRowKey}
+                          highlighted={highlightedMessageId === row.message.uuid}
+                          forking={forkingMessageId === row.message.uuid}
+                          resumeTarget={resumeFromMessageId === row.message.uuid}
                           onMeasure={handleTimelineRowMeasure}
                           onLastRowRef={setLastTimelineRow}
                           onForkFromMessage={handleForkFromMessage}

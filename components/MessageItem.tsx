@@ -1513,8 +1513,19 @@ function extractToolNames(content: SubagentMessage['message']['content']): strin
   return content.filter((b) => b.type === 'tool_use' && b.name).map((b) => b.name ?? '')
 }
 
+const AGENT_STATUS_COLORS: Record<string, string> = {
+  completed: 'var(--green)', async_launched: 'var(--cyan)',
+  sub_agent_entered: 'var(--amber)', unknown: 'var(--text-3)', pending: 'var(--text-3)',
+}
+const AGENT_STATUS_LABELS: Record<string, string> = {
+  completed: 'done', async_launched: 'launched', sub_agent_entered: 'entered',
+}
+
 function AgentCard({ thread }: { thread: ToolThread }) {
   const sessionId = use(SessionContext)
+  // Read live text straight from context (changes every streamed token); keep
+  // it OUT of the parse memo below so a sibling subagent's token doesn't
+  // re-parse this card's completed-result JSON.
   const liveSubagentText = use(LiveSubagentTextContext)
   const liveText = liveSubagentText[thread.toolUse.id] ?? ''
   const [open, setOpen] = useState(false)
@@ -1528,26 +1539,29 @@ function AgentCard({ thread }: { thread: ToolThread }) {
     model?: string; run_in_background?: boolean; max_turns?: number
   }
   const c   = toolColor('Agent')
-  const raw = thread.result ? resultToString(thread.result.content) : ''
 
-  let parsed: Record<string, unknown> | null = null
-  try { if (raw) parsed = JSON.parse(raw) } catch { /* not JSON */ }
+  // resultToString + JSON.parse over a completed subagent's (potentially
+  // multi-KB) result is expensive; memoize on the result identity so the
+  // per-token LiveSubagentTextContext fan-out re-render stays O(1).
+  const parsedResult = useMemo(() => {
+    const raw = thread.result ? resultToString(thread.result.content) : ''
+    let parsed: Record<string, unknown> | null = null
+    try { if (raw) parsed = JSON.parse(raw) } catch { /* not JSON */ }
+    return {
+      status: (parsed?.status as string) ?? (thread.result ? 'unknown' : 'pending'),
+      resultText: (parsed?.content as Array<{ text?: string }>)?.[0]?.text ?? (parsed?.message as string) ?? '',
+      totalTokens: parsed?.totalTokens as number | undefined,
+      totalToolUseCount: parsed?.totalToolUseCount as number | undefined,
+      totalDurationMs: parsed?.totalDurationMs as number | undefined,
+      outputFile: parsed?.outputFile as string | undefined,
+      agentId: parsed?.agentId as string | undefined,
+      toolStats: parsed?.toolStats as { readCount?: number; searchCount?: number; bashCount?: number; editFileCount?: number; linesAdded?: number; linesRemoved?: number } | undefined,
+    }
+  }, [thread.result])
 
-  const status = (parsed?.status as string) ?? (thread.result ? 'unknown' : 'pending')
-  const statusColors: Record<string, string> = {
-    completed: 'var(--green)', async_launched: 'var(--cyan)',
-    sub_agent_entered: 'var(--amber)', unknown: 'var(--text-3)', pending: 'var(--text-3)',
-  }
-  const statusLabels: Record<string, string> = {
-    completed: 'done', async_launched: 'launched', sub_agent_entered: 'entered',
-  }
-  const resultText       = (parsed?.content as Array<{ text?: string }>)?.[0]?.text ?? (parsed?.message as string) ?? ''
-  const totalTokens       = parsed?.totalTokens        as number | undefined
-  const totalToolUseCount = parsed?.totalToolUseCount   as number | undefined
-  const totalDurationMs   = parsed?.totalDurationMs     as number | undefined
-  const outputFile        = parsed?.outputFile          as string | undefined
-  const agentId           = parsed?.agentId             as string | undefined
-  const toolStats         = parsed?.toolStats           as { readCount?: number; searchCount?: number; bashCount?: number; editFileCount?: number; linesAdded?: number; linesRemoved?: number } | undefined
+  const { status, resultText, totalTokens, totalToolUseCount, totalDurationMs, outputFile, agentId, toolStats } = parsedResult
+  const statusColors = AGENT_STATUS_COLORS
+  const statusLabels = AGENT_STATUS_LABELS
 
   const canViewTranscript = !!agentId && !!sessionId && (status === 'completed' || status === 'async_launched')
 

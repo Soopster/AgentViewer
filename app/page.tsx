@@ -43,6 +43,13 @@ type ProjectMessageBatch = {
 
 const MESSAGE_POLL_BACKFILL = 20
 const MESSAGE_STREAM_LIMIT = 200 + MESSAGE_POLL_BACKFILL
+// Ceiling on the retained client transcript for a single live session. The
+// streaming merge path otherwise grows without bound (only the project feed is
+// trimmed), and every derivation off `messages` (threaded, row layout) scales
+// with it. Set far above the 2000-message initial tail window so normal
+// sessions never trim; only multi-thousand-turn live sessions hit it. Skipped
+// entirely for deep-linked full-transcript loads (see fullTranscriptLoadedRef).
+const SINGLE_SESSION_MESSAGE_MEMORY_LIMIT = 8000
 const MESSAGE_POLL_FALLBACK_MS = 2000
 const MESSAGE_STREAM_RETRY_INITIAL_MS = 2000
 const MESSAGE_STREAM_RETRY_MAX_MS = 30000
@@ -159,12 +166,24 @@ function stabilizeSessionIdentities(prev: Session[], next: Session[]): Session[]
   return reusedAll ? prev : stabilized
 }
 
+// SessionMessage objects are immutable once created (mappers build fresh
+// objects on every change; mergeMessages returns the SAME object when
+// unchanged), so a given reference always hashes to the same signature.
+// Cache by identity so stable existing-side messages aren't deep-hashed on
+// every poll/SSE tick — the bulk of per-tick main-thread CPU during long
+// streaming replies into a ~220-message window. WeakMap self-collects when a
+// session switch drops the references.
+const apiSignatureCache = new WeakMap<SessionMessage, string>()
 function apiMessageSignature(message: SessionMessage): string {
+  const cached = apiSignatureCache.get(message)
+  if (cached !== undefined) return cached
   const originKind = message.origin?.kind ?? ''
   const turnId = message.turnId ?? ''
   const timestamp = message.timestamp ?? ''
   const payload = compactStableFingerprint(message.message)
-  return [message.type, timestamp, originKind, turnId, payload].join('|')
+  const signature = [message.type, timestamp, originKind, turnId, payload].join('|')
+  apiSignatureCache.set(message, signature)
+  return signature
 }
 
 function mergeSortedMessages(existing: SessionMessage[], incoming: SessionMessage[]): SessionMessage[] {
@@ -298,6 +317,9 @@ export default function Home() {
   // message window. This is not always messages.length because session loads
   // use tail windows for long transcripts.
   const msgCountRef = useRef(0)
+  // True when the active transcript was loaded in full via the deep-link
+  // (all=1) path, so the head-trim below must NOT evict the anchored history.
+  const fullTranscriptLoadedRef = useRef(false)
   const projectMessageCountsRef = useRef<Map<string, number>>(new Map())
   // Guards to prevent concurrent poll ticks from overlapping when a fetch takes > interval
   const pollInFlightRef = useRef(false)
@@ -469,12 +491,24 @@ export default function Home() {
     if (incoming.length === 0) {
       if (replaceWindow) {
         msgCountRef.current = total
+        fullTranscriptLoadedRef.current = false
         setMessages([])
       }
       return
     }
+    // A replacement/shrunk window is a fresh bounded tail — the full-transcript
+    // invariant no longer holds, so trimming may resume.
+    if (replaceWindow) fullTranscriptLoadedRef.current = false
     msgCountRef.current = replaceWindow ? nextOffset : Math.max(msgCountRef.current, nextOffset)
-    setMessages((prev) => replaceWindow ? incoming : mergeMessages(prev, incoming))
+    setMessages((prev) => {
+      if (replaceWindow) return incoming
+      const merged = mergeMessages(prev, incoming)
+      // Preserve mergeMessages' identity bail-out (unchanged → same array) so
+      // React skips the re-render; only allocate a slice when we actually trim.
+      if (merged === prev) return prev
+      if (fullTranscriptLoadedRef.current || merged.length <= SINGLE_SESSION_MESSAGE_MEMORY_LIMIT) return merged
+      return merged.slice(merged.length - SINGLE_SESSION_MESSAGE_MEMORY_LIMIT)
+    })
   }, [])
 
   const pollSelectedSessionMessages = useCallback(async (session: Session) => {
@@ -777,6 +811,10 @@ export default function Home() {
     })
     projectMessageCountsRef.current.clear()
     msgCountRef.current = 0
+    // Clear before the pending-session early-return below so a stale `true`
+    // from a previously deep-linked session can't disable trimming here. The
+    // non-pending path re-sets it from nextTargetMessageId after the load.
+    fullTranscriptLoadedRef.current = false
     setLoadingMessages(true)
     setMessages([])
     sessionLoadAbortRef.current?.abort()
@@ -791,6 +829,7 @@ export default function Home() {
       const loadedWindow = await fetchSessionMessages(session, nextTargetMessageId, abortController.signal)
       if (abortController.signal.aborted) return
       msgCountRef.current = loadedWindow.offset + loadedWindow.messages.length
+      fullTranscriptLoadedRef.current = Boolean(nextTargetMessageId)
       setMessages(loadedWindow.messages)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
