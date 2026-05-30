@@ -38,6 +38,12 @@ import {
   peekClaudeSession,
   recycleClaudeSession,
 } from './claudePool'
+import {
+  broadcastClaudeMessage,
+  broadcastClaudeRecycled,
+  broadcastClaudeTurnEnd,
+  broadcastClaudeTurnStart,
+} from './claudeHarness'
 import type { ContentBlockParam as ClaudeContentBlockParam } from '@anthropic-ai/sdk/resources'
 import {
   approveAll,
@@ -268,11 +274,14 @@ function writeMappedMessagesCache(key: string, signature: string, messages: Sess
   return messages
 }
 
-function sliceForParams(messages: SessionMessage[], params: MessageListParams): SessionMessage[] {
+function windowForParams(messages: SessionMessage[], params: MessageListParams): SessionMessageWindow {
+  const total = messages.length
   if (params.tail) {
-    return messages.slice(Math.max(messages.length - params.limit, 0))
+    const offset = Math.max(total - params.limit, 0)
+    return { offset, total, messages: messages.slice(offset) }
   }
-  return messages.slice(params.offset, params.offset + params.limit)
+  const offset = Math.max(params.offset, 0)
+  return { offset, total, messages: messages.slice(offset, offset + params.limit) }
 }
 
 const OPENCODE_OPTIONS = {
@@ -299,6 +308,12 @@ type MessageListParams = {
   limit: number
   offset: number
   tail?: boolean
+}
+
+export type SessionMessageWindow = {
+  offset: number
+  total: number
+  messages: SessionMessage[]
 }
 
 type ProjectMessageBatchParams = {
@@ -906,6 +921,7 @@ function createClaudePermissionBridge(
     activeIds.add(requestId)
     enqueuePermissionEvent('permission.requested', {
       requestId,
+      sessionId,
       toolName,
       input,
       title: options.title,
@@ -1597,7 +1613,14 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         throw new Error('response must be once, always, or reject')
       }
       const key = pendingClaudePermissionKey(sessionId, permissionId)
-      const pending = pendingClaudePermissions.get(key)
+      let pending = pendingClaudePermissions.get(key)
+      if (!pending) {
+        for (const [pendingKey, candidate] of pendingClaudePermissions) {
+          if (!pendingKey.endsWith(`:${permissionId}`)) continue
+          pending = candidate
+          break
+        }
+      }
       if (!pending) throw new Error('Permission request is no longer pending')
       pending.resolve(claudePermissionDecision(response, pending))
       return { ok: true }
@@ -1764,32 +1787,37 @@ function readPiMessagesAll(sessionId: string): SessionMessage[] {
   return writeMappedMessagesCache(`pi:${sessionId}`, signature, messages)
 }
 
-export async function listViewSessionMessages(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessage[]> {
+export async function listViewSessionMessageWindow(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessageWindow> {
   const provider = await resolveProvider(providerOverride)
   let messages: SessionMessage[]
   if (provider === 'codex') {
     messages = await readCodexMessagesAll(sessionId)
     await syncMessagesBestEffort(provider, sessionId, messages)
-    return sliceForParams(messages, params)
+    return windowForParams(messages, params)
   }
   if (provider === 'opencode') {
     messages = await readOpenCodeMessagesAll(sessionId)
     await syncMessagesBestEffort(provider, sessionId, messages)
-    return sliceForParams(messages, params)
+    return windowForParams(messages, params)
   }
   if (provider === 'copilot') {
     messages = await readCopilotMessagesAll(sessionId)
     await syncMessagesBestEffort(provider, sessionId, messages)
-    return sliceForParams(messages, params)
+    return windowForParams(messages, params)
   }
   if (provider === 'pi') {
     messages = readPiMessagesAll(sessionId)
     await syncMessagesBestEffort(provider, sessionId, messages)
-    return sliceForParams(messages, params)
+    return windowForParams(messages, params)
   }
   messages = await readClaudeSessionMessages(sessionId)
   await syncMessagesBestEffort(provider, sessionId, messages)
-  return sliceForParams(messages, params)
+  return windowForParams(messages, params)
+}
+
+export async function listViewSessionMessages(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessage[]> {
+  const { messages } = await listViewSessionMessageWindow(sessionId, params, providerOverride)
+  return messages
 }
 
 export async function getViewSubagentMessages(
@@ -1998,6 +2026,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   const explicitModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined
   const isPendingSession = Boolean(body.isPendingSession)
   const manualPermissions = body.manualPermissions === true
+  const detachOnClientAbort = body.detachOnClientAbort === true
   const permissionMode = parseClaudePermissionMode(body)
   // For pending (newly created) sessions there is no prior model on disk, so we
   // need an explicit default. For existing/resumed sessions we leave model
@@ -2028,6 +2057,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
       isPendingSession,
       permissionMode,
       manualPermissions,
+      detachOnClientAbort,
       model,
       effort,
       resumeSessionAt,
@@ -2058,6 +2088,7 @@ type ClaudeStreamColdArgs = {
   isPendingSession: boolean
   permissionMode: ClaudePermissionMode | undefined
   manualPermissions: boolean
+  detachOnClientAbort: boolean
   model: string | undefined
   effort: ReasoningEffortLevel | undefined
   resumeSessionAt: string | undefined
@@ -2075,6 +2106,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     isPendingSession,
     permissionMode,
     manualPermissions,
+    detachOnClientAbort,
     model,
     effort,
     resumeSessionAt,
@@ -2094,10 +2126,6 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
 
   const encoder = new TextEncoder()
   const abortController = new AbortController()
-  // Named handler so we can detach it on successful adoption — otherwise a
-  // post-turn client disconnect would abort the Query we just gave to the pool.
-  const propagateAbort = () => abortController.abort()
-  signal.addEventListener('abort', propagateAbort)
 
   // Snapshot of the options we constructed the Query with — passed to the
   // pool on adopt so future acquires can compatibility-check against it.
@@ -2115,6 +2143,32 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
   const stream = new ReadableStream({
     async start(controller) {
       const bridgedPermissionIds = new Set<string>()
+      let downstreamClosed = false
+      let clientDetached = false
+      const safeEnqueue = (chunk: string) => {
+        if (downstreamClosed) return
+        try {
+          controller.enqueue(encoder.encode(chunk))
+        } catch {
+          downstreamClosed = true
+        }
+      }
+      // Named handler so we can detach it on successful adoption — otherwise a
+      // post-turn client disconnect would abort the Query we just gave to the pool.
+      const propagateAbort = () => {
+        if (detachOnClientAbort) {
+          clientDetached = true
+          downstreamClosed = true
+          resolvePendingClaudePermissions(sessionId, bridgedPermissionIds, 'Client disconnected before permission response')
+          return
+        }
+        abortController.abort()
+      }
+      if (signal.aborted) {
+        propagateAbort()
+      } else {
+        signal.addEventListener('abort', propagateAbort)
+      }
       const q = query({
         prompt: iterable,
         options: {
@@ -2151,20 +2205,37 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       let emittedSessionEvent = false
       let realizedSessionId: string | undefined
       let adopted = false
+      let broadcastSessionId: string | undefined
+      let broadcastTurnStarted = false
+      const fallbackBroadcastSessionId = isPendingSession || forkSessionOnSend ? undefined : sessionId
+      const noteClaudeBroadcastSession = (nextSessionId: string | undefined): string | undefined => {
+        if (!nextSessionId) return undefined
+        if (!broadcastSessionId) broadcastSessionId = nextSessionId
+        if (!broadcastTurnStarted) {
+          try { broadcastClaudeTurnStart(broadcastSessionId) } catch { /* never let an observer break the send stream */ }
+          broadcastTurnStarted = true
+        }
+        return broadcastSessionId
+      }
 
       try {
         try {
           const usage = await q.getContextUsage()
-          controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+          safeEnqueue(codexContextUsageToEventData(usage))
         } catch {}
 
         for await (const msg of q) {
-          if (!emittedSessionEvent && msg.session_id) {
+          const messageSessionId = typeof msg.session_id === 'string' && msg.session_id ? msg.session_id : undefined
+          if (!emittedSessionEvent && messageSessionId) {
             emittedSessionEvent = true
-            realizedSessionId = msg.session_id
-            controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: msg.session_id })}\n\n`))
+            realizedSessionId = messageSessionId
+            safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId: messageSessionId })}\n\n`)
           }
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
+          const eventSessionId = noteClaudeBroadcastSession(messageSessionId ?? fallbackBroadcastSessionId)
+          if (eventSessionId) {
+            try { broadcastClaudeMessage(eventSessionId, msg.type) } catch { /* observer-only signal */ }
+          }
+          safeEnqueue(`data: ${JSON.stringify(msg)}\n\n`)
           // Break after the result so we can adopt the Query into the pool.
           // The pool's pump loop takes over consuming for any tail messages
           // (notably prompt_suggestion, which the SDK emits after `result`)
@@ -2191,8 +2262,8 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           adopted = true
         }
       } catch (err) {
-        if (!abortController.signal.aborted) {
-          controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
+        if (!abortController.signal.aborted && !clientDetached) {
+          safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
         }
       } finally {
         clearRunningSession(sessionId)
@@ -2201,7 +2272,15 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           signal.removeEventListener('abort', propagateAbort)
           q.close()
         }
-        controller.close()
+        if (broadcastSessionId && broadcastTurnStarted) {
+          try { broadcastClaudeTurnEnd(broadcastSessionId) } catch { /* observer-only signal */ }
+        }
+        if (broadcastSessionId && !adopted) {
+          try { broadcastClaudeRecycled(broadcastSessionId) } catch { /* observer-only signal */ }
+        }
+        if (!downstreamClosed) {
+          try { controller.close() } catch { /* downstream already closed */ }
+        }
       }
     },
   })
@@ -2479,6 +2558,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
   const bangShell = userMessage.startsWith('!') && attachments.length === 0
     ? userMessage.slice(1).trim()
     : null
+  const detachOnClientAbort = body.detachOnClientAbort === true
   const client = getCodexClient()
   const encoder = new TextEncoder()
 
@@ -2487,23 +2567,24 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       let targetTurnId: string | null = null
       const bufferedNotifications: CodexNotification[] = []
       let currentModel = model ?? 'codex'
-      let closed = false
+      let cleanedUp = false
+      let downstreamClosed = false
       let completionSeen = false
       let bufferedTurnCompleted = false
       let completionCloseTimer: ReturnType<typeof setTimeout> | null = null
 
       const safeEnqueue = (chunk: string) => {
-        if (closed) return
+        if (cleanedUp || downstreamClosed) return
         try {
           controller.enqueue(encoder.encode(chunk))
         } catch {
-          closed = true
+          downstreamClosed = true
         }
       }
 
       const safeClose = () => {
-        if (closed) return
-        closed = true
+        if (downstreamClosed) return
+        downstreamClosed = true
         try {
           controller.close()
         } catch {
@@ -2512,7 +2593,8 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       }
 
       const closeStream = (unsubscribe: () => void) => {
-        if (closed) return
+        if (cleanedUp) return
+        cleanedUp = true
         if (completionCloseTimer) {
           clearTimeout(completionCloseTimer)
           completionCloseTimer = null
@@ -2523,7 +2605,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       }
 
       const scheduleCompletionClose = (unsubscribe: () => void) => {
-        if (closed) return
+        if (cleanedUp) return
         completionSeen = true
         if (completionCloseTimer) clearTimeout(completionCloseTimer)
         completionCloseTimer = setTimeout(() => closeStream(unsubscribe), 400)
@@ -2662,6 +2744,10 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       }
 
       signal.addEventListener('abort', () => {
+        if (detachOnClientAbort) {
+          downstreamClosed = true
+          return
+        }
         const running = getRunningSession(sessionId)
         if (running?.provider === 'codex') {
           void running.interrupt().catch(() => {})
@@ -2725,38 +2811,61 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
   const slashCommand = attachments.length === 0
     ? parseOpenCodeSlashCommand(userMessage)
     : null
+  const detachOnClientAbort = body.detachOnClientAbort === true
   const client = await getOpenCodeClient()
   const encoder = new TextEncoder()
-  const abortController = new AbortController()
-
-  signal.addEventListener('abort', () => {
-    abortController.abort()
-    const running = getRunningSession(sessionId)
-    if (running?.provider === 'opencode') {
-      void running.interrupt().catch(() => {})
-    }
-  })
 
   const stream = new ReadableStream({
     async start(controller) {
       let targetSessionId = sessionId
-      let closed = false
+      let cleanedUp = false
+      let downstreamClosed = false
+      let requestAborted = false
       let consumeEvents: Promise<void> | null = null
       // Subscribe to the shared event harness — one upstream connection
       // per process, multiplexed by session. Filter on the original session
       // id first; if we end up forking we'll resubscribe to the new id.
       let subscription = subscribeToOpenCodeEvents({ sessionId })
+
+      const safeEnqueue = (chunk: string) => {
+        if (cleanedUp || downstreamClosed) return
+        try {
+          controller.enqueue(encoder.encode(chunk))
+        } catch {
+          downstreamClosed = true
+        }
+      }
+
       const close = () => {
-        if (closed) return
-        closed = true
+        if (cleanedUp) return
+        cleanedUp = true
         subscription.close()
-        controller.close()
+        if (!downstreamClosed) {
+          downstreamClosed = true
+          try {
+            controller.close()
+          } catch {
+            /* downstream already closed */
+          }
+        }
       }
 
       // Push an SSE comment immediately so any intermediate proxy starts
       // forwarding the response without waiting for the first real frame.
       // Mirrors how curl-friendly SSE servers prime the pipe.
-      controller.enqueue(encoder.encode(':ok\n\n'))
+      safeEnqueue(':ok\n\n')
+
+      signal.addEventListener('abort', () => {
+        requestAborted = true
+        if (detachOnClientAbort) {
+          downstreamClosed = true
+          return
+        }
+        const running = getRunningSession(sessionId)
+        if (running?.provider === 'opencode') {
+          void running.interrupt().catch(() => {})
+        }
+      }, { once: true })
 
       try {
         if (resumeSessionAt) {
@@ -2772,20 +2881,20 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
           subscription = subscribeToOpenCodeEvents({ sessionId: targetSessionId })
         }
 
-        controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: targetSessionId })}\n\n`))
+        safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId: targetSessionId })}\n\n`)
 
         // Replay cached state so the client doesn't have to wait for the
         // next live event tick to render a stale permission prompt or busy
         // indicator — this is what opencode-web does on every subscribe.
         const cached = subscription.snapshot
         if (cached?.status) {
-          controller.enqueue(encoder.encode(`event: opencode-status\ndata: ${JSON.stringify(cached.status)}\n\n`))
+          safeEnqueue(`event: opencode-status\ndata: ${JSON.stringify(cached.status)}\n\n`)
         }
         if (cached?.todos && cached.todos.length > 0) {
-          controller.enqueue(encoder.encode(`event: opencode-todos\ndata: ${JSON.stringify(cached.todos)}\n\n`))
+          safeEnqueue(`event: opencode-todos\ndata: ${JSON.stringify(cached.todos)}\n\n`)
         }
         for (const permission of cached?.permissions ?? []) {
-          controller.enqueue(encoder.encode(`data: ${formatOpenCodeEvent({ type: 'permission.updated', properties: permission } as OpenCodeEvent)}\n\n`))
+          safeEnqueue(`data: ${formatOpenCodeEvent({ type: 'permission.updated', properties: permission } as OpenCodeEvent)}\n\n`)
         }
 
         setRunningSession(sessionId, {
@@ -2814,27 +2923,27 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
             if (event.type === 'message.updated' && event.properties.info.role === 'assistant') {
               const usage = mapOpenCodeContextUsage(event.properties.info)
               if (usage) {
-                controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+                safeEnqueue(codexContextUsageToEventData(usage))
               }
             }
 
             if (event.type === 'session.status') {
-              controller.enqueue(encoder.encode(`event: opencode-status\ndata: ${JSON.stringify(event.properties.status)}\n\n`))
+              safeEnqueue(`event: opencode-status\ndata: ${JSON.stringify(event.properties.status)}\n\n`)
             }
 
             if (event.type === 'todo.updated') {
-              controller.enqueue(encoder.encode(`event: opencode-todos\ndata: ${JSON.stringify(event.properties.todos)}\n\n`))
+              safeEnqueue(`event: opencode-todos\ndata: ${JSON.stringify(event.properties.todos)}\n\n`)
             }
 
             if (event.type === 'session.error') {
               const message = event.properties.error?.data && 'message' in event.properties.error.data
                 ? String(event.properties.error.data.message)
                 : 'Unknown OpenCode session error'
-              controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`))
+              safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`)
               break
             }
 
-            controller.enqueue(encoder.encode(`data: ${formatOpenCodeEvent(event)}\n\n`))
+            safeEnqueue(`data: ${formatOpenCodeEvent(event)}\n\n`)
 
             if (event.type === 'session.idle' && event.properties.sessionID === targetSessionId) {
               break
@@ -2877,11 +2986,10 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
 
         await consumeEvents
       } catch (err) {
-        if (!abortController.signal.aborted) {
-          controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`))
+        if (!requestAborted) {
+          safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
         }
       } finally {
-        abortController.abort()
         subscription.close()
         await consumeEvents?.catch(() => {})
         clearRunningSession(sessionId)

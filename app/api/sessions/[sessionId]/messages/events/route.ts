@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
 import { isAgentProvider } from '@/lib/provider'
-import { listViewSessionMessages } from '@/lib/sessionBackend'
+import { listViewSessionMessageWindow } from '@/lib/sessionBackend'
 import { subscribeToOpenCodeEvents } from '@/lib/opencodeHarness'
 import { subscribeToCodexEvents } from '@/lib/codexHarness'
 import { subscribeToClaudeEvents } from '@/lib/claudeHarness'
@@ -92,6 +92,25 @@ function sseFrame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 }
 
+function messageWindowPayload(
+  sessionId: string,
+  provider: AgentProvider | undefined,
+  window: Awaited<ReturnType<typeof listViewSessionMessageWindow>>,
+  replace = false,
+) {
+  return {
+    sessionId,
+    provider,
+    ...window,
+    ...(replace ? { replace: true } : {}),
+  }
+}
+
+async function readReplacementWindow(sessionId: string, provider: AgentProvider | undefined, limit: number) {
+  const window = await listViewSessionMessageWindow(sessionId, { offset: 0, limit, tail: true }, provider)
+  return messageWindowPayload(sessionId, provider, window, true)
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> },
@@ -176,16 +195,26 @@ export async function GET(
 
         while (!closed && !request.signal.aborted) {
           try {
-            const messages = await listViewSessionMessages(
+            const window = await listViewSessionMessageWindow(
               sessionId,
               { offset, limit, tail: false },
               provider,
             )
-            const signature = messageWindowSignature(offset, messages)
-            if (messages.length > 0 && signature !== lastSignature) {
-              enqueue('messages', { offset, messages })
+            if (window.messages.length === 0 && window.total < offset) {
+              const replacement = await readReplacementWindow(sessionId, provider, limit)
+              enqueue('messages', replacement)
+              lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
+              offset = Math.max(0, replacement.offset + replacement.messages.length - backfill)
+              continue
+            }
+            const signature = messageWindowSignature(window.offset, window.messages)
+            if (window.messages.length > 0 && signature !== lastSignature) {
+              enqueue('messages', messageWindowPayload(sessionId, provider, window))
               lastSignature = signature
-              offset = Math.max(0, offset + messages.length - backfill)
+              offset = Math.max(0, window.offset + window.messages.length - backfill)
+              if (window.offset + window.messages.length < window.total) {
+                continue
+              }
             }
 
             const now = Date.now()
@@ -254,16 +283,26 @@ async function pumpOpenCode({ sessionId, provider, limit, backfill, offset, enqu
     }
     inFlight = true
     try {
-      const messages = await listViewSessionMessages(
+      const window = await listViewSessionMessageWindow(
         sessionId,
         { offset: cursorOffset, limit, tail: false },
         provider,
       )
-      const signature = messageWindowSignature(cursorOffset, messages)
-      if (messages.length > 0 && signature !== lastSignature) {
-        enqueue('messages', { offset: cursorOffset, messages })
+      if (window.messages.length === 0 && window.total < cursorOffset) {
+        const replacement = await readReplacementWindow(sessionId, provider, limit)
+        enqueue('messages', replacement)
+        lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
+        cursorOffset = Math.max(0, replacement.offset + replacement.messages.length - backfill)
+        return
+      }
+      const signature = messageWindowSignature(window.offset, window.messages)
+      if (window.messages.length > 0 && signature !== lastSignature) {
+        enqueue('messages', messageWindowPayload(sessionId, provider, window))
         lastSignature = signature
-        cursorOffset = Math.max(0, cursorOffset + messages.length - backfill)
+        cursorOffset = Math.max(0, window.offset + window.messages.length - backfill)
+        if (window.offset + window.messages.length < window.total) {
+          pending = true
+        }
       }
     } catch (err) {
       enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })
@@ -414,16 +453,26 @@ async function pumpClaude({ sessionId, provider, limit, backfill, offset, enqueu
     }
     inFlight = true
     try {
-      const messages = await listViewSessionMessages(
+      const window = await listViewSessionMessageWindow(
         sessionId,
         { offset: cursorOffset, limit, tail: false },
         provider,
       )
-      const signature = messageWindowSignature(cursorOffset, messages)
-      if (messages.length > 0 && signature !== lastSignature) {
-        enqueue('messages', { offset: cursorOffset, messages })
+      if (window.messages.length === 0 && window.total < cursorOffset) {
+        const replacement = await readReplacementWindow(sessionId, provider, limit)
+        enqueue('messages', replacement)
+        lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
+        cursorOffset = Math.max(0, replacement.offset + replacement.messages.length - backfill)
+        return
+      }
+      const signature = messageWindowSignature(window.offset, window.messages)
+      if (window.messages.length > 0 && signature !== lastSignature) {
+        enqueue('messages', messageWindowPayload(sessionId, provider, window))
         lastSignature = signature
-        cursorOffset = Math.max(0, cursorOffset + messages.length - backfill)
+        cursorOffset = Math.max(0, window.offset + window.messages.length - backfill)
+        if (window.offset + window.messages.length < window.total) {
+          pending = true
+        }
       }
     } catch (err) {
       enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })
@@ -550,16 +599,26 @@ async function pumpCodex({ sessionId, provider, limit, backfill, offset, enqueue
     }
     inFlight = true
     try {
-      const messages = await listViewSessionMessages(
+      const window = await listViewSessionMessageWindow(
         sessionId,
         { offset: cursorOffset, limit, tail: false },
         provider,
       )
-      const signature = messageWindowSignature(cursorOffset, messages)
-      if (messages.length > 0 && signature !== lastSignature) {
-        enqueue('messages', { offset: cursorOffset, messages })
+      if (window.messages.length === 0 && window.total < cursorOffset) {
+        const replacement = await readReplacementWindow(sessionId, provider, limit)
+        enqueue('messages', replacement)
+        lastSignature = messageWindowSignature(replacement.offset, replacement.messages)
+        cursorOffset = Math.max(0, replacement.offset + replacement.messages.length - backfill)
+        return
+      }
+      const signature = messageWindowSignature(window.offset, window.messages)
+      if (window.messages.length > 0 && signature !== lastSignature) {
+        enqueue('messages', messageWindowPayload(sessionId, provider, window))
         lastSignature = signature
-        cursorOffset = Math.max(0, cursorOffset + messages.length - backfill)
+        cursorOffset = Math.max(0, window.offset + window.messages.length - backfill)
+        if (window.offset + window.messages.length < window.total) {
+          pending = true
+        }
       }
     } catch (err) {
       enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })

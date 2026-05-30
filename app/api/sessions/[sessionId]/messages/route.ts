@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isAgentProvider } from '@/lib/provider'
-import { listViewSessionMessages, streamViewSessionTurn } from '@/lib/sessionBackend'
+import { listViewSessionMessageWindow, streamViewSessionTurn } from '@/lib/sessionBackend'
 
 export { maxDuration } from '@/lib/sessionBackend'
 
@@ -20,8 +20,8 @@ export async function GET(
   const provider = isAgentProvider(providerParam) ? providerParam : undefined
 
   try {
-    const messages = await listViewSessionMessages(sessionId, { limit, offset, tail }, provider)
-    return NextResponse.json({ messages }, {
+    const window = await listViewSessionMessageWindow(sessionId, { limit, offset, tail }, provider)
+    return NextResponse.json({ sessionId, provider, ...window }, {
       headers: { 'Cache-Control': 'private, max-age=2, stale-while-revalidate=8' },
     })
   } catch (err) {

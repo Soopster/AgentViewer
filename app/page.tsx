@@ -54,8 +54,18 @@ const PROJECT_MESSAGE_TOTAL_MEMORY_LIMIT = 2500
 const PROJECT_MESSAGE_PER_SESSION_MEMORY_LIMIT = 200
 
 type MessageStreamPayload = {
+  sessionId?: string
+  provider?: AgentProvider
   offset?: number
+  total?: number
   messages?: SessionMessage[]
+  replace?: boolean
+}
+
+function numericOffset(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : fallback
 }
 
 function withProviderQuery(path: string, provider?: AgentProvider | 'all'): string {
@@ -263,6 +273,7 @@ export default function Home() {
   const [targetMessage, setTargetMessage] = useState<MessageTarget | null>(null)
   const [sessionListScrollRequest, setSessionListScrollRequest] = useState<SessionListScrollRequest | null>(null)
   const [messages, setMessages] = useState<SessionMessage[]>([])
+  const selectedTabKeyRef = useRef<string | null>(null)
   // OpenCode `todo.updated` events arrive via the messages SSE stream and
   // are surfaced as a pinned card in MessageView. Keyed by sessionId so a
   // tab swap doesn't show another session's todos.
@@ -283,7 +294,9 @@ export default function Home() {
   const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
   const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
   const documentVisible = useDocumentVisible()
-  // Tracks how many messages we've already loaded so polling can fetch only new ones
+  // Tracks the absolute transcript offset immediately after the latest loaded
+  // message window. This is not always messages.length because session loads
+  // use tail windows for long transcripts.
   const msgCountRef = useRef(0)
   const projectMessageCountsRef = useRef<Map<string, number>>(new Map())
   // Guards to prevent concurrent poll ticks from overlapping when a fetch takes > interval
@@ -304,6 +317,7 @@ export default function Home() {
       null,
     [openTabSessions, sessions, selectedTabKey],
   )
+  selectedTabKeyRef.current = selectedTabKey
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
   const messageAreaKey = selectedTabKey ?? (selectedProject ? `proj:${selectedProject.dir}` : '')
@@ -363,7 +377,11 @@ export default function Home() {
     )
     const data = await response.json()
     if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
-    return (data.messages ?? []) as SessionMessage[]
+    return {
+      offset: numericOffset(data.offset),
+      total: numericOffset(data.total, numericOffset(data.offset) + ((data.messages ?? []) as SessionMessage[]).length),
+      messages: (data.messages ?? []) as SessionMessage[],
+    }
   }, [])
 
   const loadSessionsForProvider = useCallback(async (
@@ -438,6 +456,27 @@ export default function Home() {
     return nextProvider
   }, [])
 
+  const applySessionMessagePayload = useCallback((payload: MessageStreamPayload, expectedSession: Session) => {
+    if (selectedTabKeyRef.current !== projectSessionKey(expectedSession)) return
+    if (payload.sessionId && payload.sessionId !== expectedSession.sessionId) return
+    if (payload.provider && payload.provider !== (expectedSession.provider ?? 'claude')) return
+
+    const incoming = Array.isArray(payload.messages) ? payload.messages : []
+    const offset = numericOffset(payload.offset, Math.max(0, msgCountRef.current - incoming.length))
+    const nextOffset = offset + incoming.length
+    const total = numericOffset(payload.total, nextOffset)
+    const replaceWindow = payload.replace === true || total < msgCountRef.current
+    if (incoming.length === 0) {
+      if (replaceWindow) {
+        msgCountRef.current = total
+        setMessages([])
+      }
+      return
+    }
+    msgCountRef.current = replaceWindow ? nextOffset : Math.max(msgCountRef.current, nextOffset)
+    setMessages((prev) => replaceWindow ? incoming : mergeMessages(prev, incoming))
+  }, [])
+
   const pollSelectedSessionMessages = useCallback(async (session: Session) => {
     if (pollInFlightRef.current) return
     pollInFlightRef.current = true
@@ -445,16 +484,11 @@ export default function Home() {
     try {
       const r = await fetch(withProviderQuery(`/api/sessions/${session.sessionId}/messages?offset=${offset}&limit=${MESSAGE_STREAM_LIMIT}`, session.provider))
       const data = await r.json()
-      if (!data.error && data.messages?.length > 0) {
-        setMessages((prev) => mergeMessages(prev, data.messages as SessionMessage[]))
-      }
+      if (!data.error) applySessionMessagePayload(data as MessageStreamPayload, session)
     } catch { /* ignore transient errors */ } finally {
       pollInFlightRef.current = false
     }
-  }, [])
-
-  // Keep ref in sync with state (avoids stale closures inside setInterval)
-  useEffect(() => { msgCountRef.current = messages.length }, [messages.length])
+  }, [applySessionMessagePayload])
 
   // Initial session load
   useEffect(() => {
@@ -537,6 +571,7 @@ export default function Home() {
     if (openTabSessions.some((s) => projectSessionKey(s) === selectedTabKey)) return
     if (sessions.some((s) => projectSessionKey(s) === selectedTabKey)) return
     setSelectedTabKey(null)
+    msgCountRef.current = 0
     setMessages([])
   }, [openTabSessions, selectedTabKey, sessions])
 
@@ -615,9 +650,7 @@ export default function Home() {
       source.addEventListener('messages', (event) => {
         try {
           const payload = JSON.parse((event as MessageEvent<string>).data) as MessageStreamPayload
-          if (payload.messages && payload.messages.length > 0) {
-            setMessages((prev) => mergeMessages(prev, payload.messages as SessionMessage[]))
-          }
+          applySessionMessagePayload(payload, session)
         } catch { /* ignore malformed stream payloads */ }
       })
 
@@ -667,6 +700,7 @@ export default function Home() {
     }
   }, [
     loadingMessages,
+    applySessionMessagePayload,
     pollSelectedSessionMessages,
     selectedProject,
     selectedSession?.isPending,
@@ -742,6 +776,7 @@ export default function Home() {
       )
     })
     projectMessageCountsRef.current.clear()
+    msgCountRef.current = 0
     setLoadingMessages(true)
     setMessages([])
     sessionLoadAbortRef.current?.abort()
@@ -753,9 +788,10 @@ export default function Home() {
     const abortController = new AbortController()
     sessionLoadAbortRef.current = abortController
     try {
-      const loadedMessages = await fetchSessionMessages(session, nextTargetMessageId, abortController.signal)
+      const loadedWindow = await fetchSessionMessages(session, nextTargetMessageId, abortController.signal)
       if (abortController.signal.aborted) return
-      setMessages(loadedMessages)
+      msgCountRef.current = loadedWindow.offset + loadedWindow.messages.length
+      setMessages(loadedWindow.messages)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
       console.error('Failed to load messages:', err)
@@ -796,6 +832,7 @@ export default function Home() {
         startTransition(() => {
           setSelectedTabKey(null)
           setTargetMessage(null)
+          msgCountRef.current = 0
           setMessages([])
         })
       }
@@ -808,6 +845,7 @@ export default function Home() {
       setSelectedTabKey(null)
       setTargetMessage(null)
     })
+    msgCountRef.current = 0
     setLoadingMessages(true)
     setMessages([])
     try {
@@ -920,6 +958,7 @@ export default function Home() {
     if (selectedTabKey && (deletedTabKey ? selectedTabKey === deletedTabKey : openTabSessions.some((session) => session.sessionId === sessionId))) {
       setSelectedTabKey(null)
       setTargetMessage(null)
+      msgCountRef.current = 0
       setMessages([])
     }
   }, [openTabSessions, selectedTabKey])
@@ -976,6 +1015,7 @@ export default function Home() {
       setSelectedProject(null)
       setTargetMessage(null)
       setSessionListScrollRequest(null)
+      msgCountRef.current = 0
       setMessages([])
       setLoadingMessages(false)
       setLoadingSessions(true)

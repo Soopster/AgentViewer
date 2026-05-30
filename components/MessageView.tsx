@@ -113,6 +113,7 @@ type RollbackPreview = {
 
 type PendingPermission = {
   id: string
+  sessionId?: string
   title: string
   detail?: string
   canApproveAlways?: boolean
@@ -121,6 +122,15 @@ type PendingPermission = {
 type FailedSend = {
   text: string
   attachments: SendAttachment[]
+}
+
+type PendingMessageBaseline = {
+  count: number
+  lastUuid: string | null
+  lastFingerprint: string | null
+  sessionId: string
+  keys: Set<string>
+  fingerprintsByKey: Map<string, string | null>
 }
 
 type ComposerDraft = {
@@ -529,6 +539,7 @@ function extractClaudePermission(payload: unknown): PendingPermission | null {
   const suggestions = data.suggestions
   return {
     id,
+    sessionId: stringField(data, 'sessionId'),
     title: stringField(data, 'title')
       ?? stringField(data, 'displayName')
       ?? `Claude requests ${stringField(data, 'toolName') ?? 'tool'} permission`,
@@ -1182,6 +1193,50 @@ function sessionMessageFingerprint(message: SessionMessage | undefined): string 
     message.origin?.kind ?? '',
     compactStableFingerprint(message.message),
   ].join('|')
+}
+
+function buildPendingMessageBaseline(messages: SessionMessage[], sessionId: string): PendingMessageBaseline {
+  const keys = new Set<string>()
+  const fingerprintsByKey = new Map<string, string | null>()
+  for (const message of messages) {
+    const key = sessionMessageThreadedKey(message)
+    keys.add(key)
+    fingerprintsByKey.set(key, sessionMessageFingerprint(message))
+  }
+  return {
+    count: messages.length,
+    lastUuid: messages.at(-1)?.uuid ?? null,
+    lastFingerprint: sessionMessageFingerprint(messages.at(-1)),
+    sessionId,
+    keys,
+    fingerprintsByKey,
+  }
+}
+
+function retargetPendingMessageBaseline(
+  baseline: PendingMessageBaseline,
+  sessionId: string,
+  resetKnownMessages = false,
+): PendingMessageBaseline {
+  if (resetKnownMessages) {
+    return {
+      count: 0,
+      lastUuid: null,
+      lastFingerprint: null,
+      sessionId,
+      keys: new Set(),
+      fingerprintsByKey: new Map(),
+    }
+  }
+  return { ...baseline, sessionId }
+}
+
+function messagesChangedSinceBaseline(messages: SessionMessage[], baseline: PendingMessageBaseline): SessionMessage[] {
+  return messages.filter((message) => {
+    const key = sessionMessageThreadedKey(message)
+    const previousFingerprint = baseline.fingerprintsByKey.get(key)
+    return previousFingerprint === undefined || previousFingerprint !== sessionMessageFingerprint(message)
+  })
 }
 
 function estimateWrappedLines(text: string, charsPerLine = ESTIMATED_CHARS_PER_LINE): number {
@@ -2045,7 +2100,8 @@ export default function MessageView({
   const suppressDraftSaveRef = useRef(false)
   const sendInFlightRef = useRef(false)
   const awaitingPersistedTurnRef = useRef(false)
-  const pendingMessageBaselineRef = useRef<{ count: number; lastUuid: string | null; lastFingerprint: string | null; sessionId: string } | null>(null)
+  const pendingMessageBaselineRef = useRef<PendingMessageBaseline | null>(null)
+  const liveTurnSessionHandoffRef = useRef<string | null>(null)
   const liveAssistantTextRef = useRef('')
   const pendingLiveAssistantTextRef = useRef<string | null>(null)
   const liveAssistantFlushFrameRef = useRef<number | null>(null)
@@ -2331,6 +2387,16 @@ export default function MessageView({
 
   // Reset context usage when switching sessions
   useEffect(() => {
+    const handoffSessionId = liveTurnSessionHandoffRef.current
+    if (
+      handoffSessionId
+      && session?.sessionId === handoffSessionId
+      && (sendInFlightRef.current || awaitingPersistedTurnRef.current)
+    ) {
+      liveTurnSessionHandoffRef.current = null
+      return
+    }
+    liveTurnSessionHandoffRef.current = null
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
     sendInFlightRef.current = false
@@ -2569,13 +2635,13 @@ export default function MessageView({
     const currentLastMessage = messages.at(-1)
     const currentLastUuid = currentLastMessage?.uuid ?? null
     const currentLastFingerprint = sessionMessageFingerprint(currentLastMessage)
+    const changedMessages = messagesChangedSinceBaseline(messages, baseline)
     const persistedTurnArrived =
-      messages.length > baseline.count
+      changedMessages.length > 0
+      || messages.length !== baseline.count
       || currentLastUuid !== baseline.lastUuid
       || currentLastFingerprint !== baseline.lastFingerprint
-    const persistedAssistantArrived = messages
-      .slice(Math.min(baseline.count, messages.length))
-      .some((message) => message.type === 'assistant')
+    const persistedAssistantArrived = changedMessages.some((message) => message.type === 'assistant')
     const liveAssistantVisible = liveAssistantTextRef.current.trim().length > 0 || liveThreadedMessages.length > 0
 
     if (persistedTurnArrived && (persistedAssistantArrived || !liveAssistantVisible)) {
@@ -2666,12 +2732,7 @@ export default function MessageView({
     awaitingPersistedTurnRef.current = false
     setAwaitingPersistedTurn(false)
     setAutoFollow(true)
-    pendingMessageBaselineRef.current = {
-      count: messages.length,
-      lastUuid: messages.at(-1)?.uuid ?? null,
-      lastFingerprint: sessionMessageFingerprint(messages.at(-1)),
-      sessionId: session.sessionId,
-    }
+    pendingMessageBaselineRef.current = buildPendingMessageBaseline(messages, session.sessionId)
     liveToolIndexesRef.current.clear()
 
     window.requestAnimationFrame(resizeComposer)
@@ -2695,6 +2756,7 @@ export default function MessageView({
           mode: session.provider === 'copilot' ? selectedCopilotMode : undefined,
           manualPermissions: session.provider === 'copilot' || session.provider === 'claude' ? true : undefined,
           nativeCommands: session.provider === 'copilot' ? true : undefined,
+          detachOnClientAbort: true,
           taskBudgetTokens: taskBudgetTokens ?? undefined,
           isPendingSession: session.isPending === true ? true : undefined,
           cwd: session.cwd ?? undefined,
@@ -2732,12 +2794,20 @@ export default function MessageView({
             try {
               const parsed = JSON.parse(frame.data)
               if (resumeFromMessageId && parsed.sessionId && parsed.sessionId !== session.sessionId) {
+                liveTurnSessionHandoffRef.current = parsed.sessionId
+                if (pendingMessageBaselineRef.current) {
+                  pendingMessageBaselineRef.current = retargetPendingMessageBaseline(pendingMessageBaselineRef.current, parsed.sessionId)
+                }
                 onFork?.(parsed.sessionId)
                 setSessionActionNotice('Forked a continuation from the selected point.')
               } else if (session.isPending && parsed.sessionId) {
                 // Swap to the real SDK session id silently. Real CLI shows no
                 // "new session created" banner — the streaming reply itself
                 // signals that the session is live.
+                liveTurnSessionHandoffRef.current = parsed.sessionId
+                if (pendingMessageBaselineRef.current) {
+                  pendingMessageBaselineRef.current = retargetPendingMessageBaseline(pendingMessageBaselineRef.current, parsed.sessionId, true)
+                }
                 onFork?.(parsed.sessionId)
               }
             } catch { /* ignore */ }
@@ -3494,24 +3564,27 @@ export default function MessageView({
     }
   }, [session, sessionActionLoading])
 
-  const respondToPermission = useCallback(async (permissionId: string, response: 'once' | 'always' | 'reject') => {
+  const respondToPermission = useCallback(async (permission: PendingPermission, response: 'once' | 'always' | 'reject') => {
     if (!session || sessionActionLoading) return
-    setSessionActionLoading(`permission:${permissionId}`)
+    setSessionActionLoading(`permission:${permission.id}`)
     setSessionActionError(null)
     try {
-      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
+      const targetSessionId = permission.sessionId ?? session.sessionId
+      const res = await fetch(`/api/sessions/${targetSessionId}/actions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'respondPermission',
-          permissionId,
+          permissionId: permission.id,
           response,
           provider: session.provider,
         }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
-      setPendingPermissions((prev) => prev.filter((permission) => permission.id !== permissionId))
+      setPendingPermissions((prev) => prev.filter((entry) =>
+        entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
+      ))
     } catch (err) {
       setSessionActionError(err instanceof Error ? err.message : 'Failed to respond to permission')
     } finally {
@@ -3797,10 +3870,7 @@ export default function MessageView({
   const visiblePersistedMessageKeys = useMemo(() => {
     const baseline = pendingMessageBaselineRef.current
     if (!showLiveTimelineOverlay || !baseline || baseline.sessionId !== session?.sessionId) return null
-    const keys = new Set<string>()
-    const limit = Math.min(baseline.count, messages.length)
-    for (let i = 0; i < limit; i += 1) keys.add(sessionMessageThreadedKey(messages[i]))
-    return keys
+    return new Set(baseline.keys)
   }, [messages, session?.sessionId, showLiveTimelineOverlay])
   const visibleThreaded = useMemo(() => {
     if (!visiblePersistedMessageKeys) return threaded
@@ -6179,7 +6249,7 @@ export default function MessageView({
                       .map((response) => (
                       <Button
                         key={response}
-                        onClick={() => respondToPermission(permission.id, response)}
+                        onClick={() => respondToPermission(permission, response)}
                         disabled={sessionActionLoading === `permission:${permission.id}`}
                         variant="outline"
                         size="sm"
