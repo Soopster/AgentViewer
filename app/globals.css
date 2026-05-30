@@ -81,6 +81,11 @@
   --t-glob:      #a885f8;
   --t-agent:     #f472b6;
   --t-other:     #7b8db0;
+
+  /* Bookmark accent. Defaults to each theme's --amber (which every theme block
+     overrides), so it stays theme-aware without per-theme duplication. Set
+     --t-bookmark directly in a theme block to give bookmarks a custom colour. */
+  --t-bookmark:  var(--amber);
 }
 
 /* ── Design tokens ── light ──────────────────────────────────────────────── */
@@ -1237,9 +1242,67 @@ body {
   color: var(--green);
 }
 
+.timeline-row-action--bookmark:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--t-bookmark) 42%, transparent);
+  color: var(--t-bookmark);
+}
+
+.timeline-row-action--bookmark-active {
+  background: color-mix(in srgb, var(--t-bookmark) 16%, transparent);
+  border-color: color-mix(in srgb, var(--t-bookmark) 48%, transparent);
+  color: var(--t-bookmark);
+}
+
 .timeline-row-action:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* Always-on bookmark marker. Sits where the hover action bar appears and
+   fades out on hover so the (interactive) action bar can take its place. */
+.timeline-row-bookmark-flag {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  z-index: 4;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--t-bookmark);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--t-bookmark) 45%, transparent);
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.timeline-row:hover .timeline-row-bookmark-flag,
+.timeline-row:focus-within .timeline-row-bookmark-flag {
+  opacity: 0;
+}
+
+/* Global bookmarks browser (BookmarksPanel) */
+@keyframes av-spin {
+  to { transform: rotate(360deg); }
+}
+
+.av-spin {
+  animation: av-spin 0.9s linear infinite;
+}
+
+.av-bookmark-row:hover {
+  background: color-mix(in srgb, var(--cyan) 8%, transparent) !important;
+}
+
+.av-bookmark-remove {
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.av-bookmark-row:hover .av-bookmark-remove {
+  opacity: 1;
+}
+
+.av-bookmark-remove:hover {
+  color: var(--red, #f87171);
+  border-color: color-mix(in srgb, var(--red, #f87171) 45%, var(--border));
 }
 
 /* Message row: stack dot-free, align to bottom for bubble tails */
@@ -1813,6 +1876,17 @@ body {
   border-color: color-mix(in srgb, var(--cyan) 42%, var(--border));
   background: color-mix(in srgb, var(--cyan) 12%, var(--surface-2));
   color: var(--cyan);
+}
+
+.av-session-viz-filterbar button.av-session-viz-bookmark-filter.av-active {
+  border-color: color-mix(in srgb, var(--t-bookmark) 46%, var(--border));
+  background: color-mix(in srgb, var(--t-bookmark) 14%, var(--surface-2));
+  color: var(--t-bookmark);
+}
+
+.av-session-viz-filterbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .av-session-viz-result-count {

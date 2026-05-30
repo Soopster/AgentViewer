@@ -49,6 +49,9 @@ import {
   readTuiTabsEnabled,
   readTuiTheme,
   readTuiTranscriptView,
+  readTuiSessionBookmarkIds,
+  readTuiAllBookmarks,
+  toggleTuiSessionBookmark,
   runTuiSessionAction,
   streamTuiSessionTurn,
   interruptTuiSessionTurn,
@@ -67,6 +70,7 @@ import {
   type TuiSessionDetail,
   type TuiSidebarSort,
 } from '../../lib/tui/service'
+import type { MessageBookmark } from '../../lib/messageBookmarks'
 import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '../../lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
@@ -133,6 +137,13 @@ function Spinner({ label, fg }: { label: string; fg: string }) {
 }
 
 const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'all']
+const TUI_PROVIDER_TAG: Record<string, string> = {
+  claude: 'claude',
+  codex: 'codex',
+  opencode: 'opencode',
+  copilot: 'copilot',
+  pi: 'pi',
+}
 const LIGHT_MODES: TuiThemeMode[] = [
   'light',
   'paper',
@@ -418,6 +429,7 @@ const COMPOSER_MAX_HEIGHT = 12
 const COMPOSER_DOCK_CHROME_HEIGHT = 3
 const COMPOSER_WINDOW_MAX_WIDTH = 96
 const COMPOSER_WINDOW_MAX_HEIGHT = 36
+const CODEX_LIVE_ASSISTANT_UUID = 'live-codex-assistant'
 type ComposerKeyBinding = { name: string; action: TextareaAction; shift?: boolean; alt?: boolean; meta?: boolean; ctrl?: boolean }
 const TUI_SLASH_HINTS: Record<string, string[]> = {
   claude: ['/clear', '/compact', '/help', '/model', '/cost', '/review'],
@@ -781,6 +793,70 @@ function shouldReplaceLiveAssistantText(payload: unknown): boolean {
   const event = record.event
   if (!event || typeof event !== 'object') return false
   return (event as Record<string, unknown>).type === 'assistant.message'
+}
+
+function extractCodexVisibleAssistantText(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+
+  if (record.type === 'codex_agent_message_delta' && typeof record.delta === 'string') {
+    return record.delta
+  }
+
+  if (record.type === 'codex_plan_delta' && typeof record.delta === 'string') {
+    return record.delta
+  }
+
+  if (record.type === 'codex_turn_plan_updated') {
+    return extractCodexTurnPlanText(record)
+  }
+
+  if (record.type === 'codex_realtime_transcript_delta') {
+    return record.role === 'assistant' && typeof record.delta === 'string'
+      ? record.delta
+      : null
+  }
+
+  if (record.type === 'codex_realtime_transcript_done') {
+    return record.role === 'assistant' && typeof record.text === 'string'
+      ? record.text
+      : null
+  }
+
+  if (record.type === 'codex_realtime_transcript') {
+    return record.role === 'assistant' && typeof record.text === 'string'
+      ? record.text
+      : null
+  }
+
+  if (record.type === 'codex_realtime_item_added') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return null
+    const itemRecord = item as Record<string, unknown>
+    if (itemRecord.type === 'agentMessage' && typeof itemRecord.text === 'string') return itemRecord.text
+    if (itemRecord.type === 'plan' && typeof itemRecord.text === 'string') return `## Plan\n\n${itemRecord.text}`
+    return null
+  }
+
+  if (record.type === 'codex_item_completed') {
+    const item = record.item
+    if (!item || typeof item !== 'object') return null
+    const itemRecord = item as Record<string, unknown>
+    if (itemRecord.type === 'agentMessage' && typeof itemRecord.text === 'string') return itemRecord.text
+    if (itemRecord.type === 'plan' && typeof itemRecord.text === 'string') return `## Plan\n\n${itemRecord.text}`
+  }
+
+  return null
+}
+
+function shouldReplaceCodexVisibleAssistantText(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false
+  const record = payload as Record<string, unknown>
+  if (record.type === 'codex_turn_plan_updated') return true
+  if (record.type === 'codex_realtime_transcript') return true
+  if (record.type === 'codex_realtime_transcript_done') return true
+  if (record.type === 'codex_realtime_item_added') return true
+  return record.type === 'codex_item_completed'
 }
 
 function stringifyLiveValue(value: unknown): string {
@@ -1792,6 +1868,9 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'search',     label: 'Search messages',        key: '/',  category: 'Transcript' },
   { id: 'fold',       label: 'Fold/expand card',       key: 'e',  category: 'Transcript' },
   { id: 'copy',       label: 'Copy selected message',  key: 'y',  category: 'Transcript' },
+  { id: 'bookmark-toggle', label: 'Bookmark message',  key: 'b',  category: 'Transcript' },
+  { id: 'bookmark-jump',   label: 'Jump to next bookmark', key: '[ ]', category: 'Transcript' },
+  { id: 'bookmark-all',    label: 'Browse all bookmarks', key: '⇧B', category: 'Transcript' },
   { id: 'tasks',      label: 'Open task panel',         key: '⇧T', category: 'Transcript' },
   { id: 'tasks-full', label: 'Task lineage popover',   key: '⇧L', category: 'Transcript' },
   // Session
@@ -1926,6 +2005,7 @@ type TranscriptCardProps = {
   isSelected: boolean
   isSearchHit: boolean
   isActiveMatch: boolean
+  bookmarked: boolean
   thinkingMode: boolean
   imessageStyle: boolean
 }
@@ -1942,6 +2022,7 @@ function TranscriptCardInner({
   isSelected,
   isSearchHit,
   isActiveMatch,
+  bookmarked,
   thinkingMode,
   imessageStyle,
 }: TranscriptCardProps) {
@@ -1977,18 +2058,21 @@ function TranscriptCardInner({
         ? theme.cyan
         : isInsight
           ? theme.violet
-          : isSelected
-            ? theme.border2
-            : card.role === 'user'
-              ? accent
-              : theme.border
+          : bookmarked
+            ? theme.amber
+            : isSelected
+              ? theme.border2
+              : card.role === 'user'
+                ? accent
+                : theme.border
   const maxTitleWidth = Math.max(rightPaneWidth - 6, 20)
   const titleMeta = joinMeta([
     headerMeta,
     isSearchHit ? 'match' : null,
     isSelected ? card.usageSummary ?? null : null,
   ])
-  const cardTitleFull = `${marker} ${categoryEmoji}${card.label}${titleMeta ? `  ${titleMeta}` : ''}`
+  const bookmarkGlyph = bookmarked ? '★ ' : ''
+  const cardTitleFull = `${marker} ${bookmarkGlyph}${categoryEmoji}${card.label}${titleMeta ? `  ${titleMeta}` : ''}`
   const cardTitle = cardTitleFull.length > maxTitleWidth
     ? cardTitleFull.slice(0, maxTitleWidth - 1) + '…'
     : cardTitleFull
@@ -2237,6 +2321,18 @@ export default function OpenTuiApp() {
   const [transcriptCursorKey, setTranscriptCursorKey] = useState<string | null>(null)
   const [expandedCardKeys, setExpandedCardKeys] = useState<Set<string>>(() => new Set())
   const [collapsedCardKeys, setCollapsedCardKeys] = useState<Set<string>>(() => new Set())
+  // Bookmarked message uuids (== card keys) for the active session. The ref
+  // keeps the toggle handler stable across renders.
+  const [bookmarkKeys, setBookmarkKeys] = useState<Set<string>>(() => new Set())
+  const bookmarkKeysRef = useRef<Set<string>>(bookmarkKeys)
+  bookmarkKeysRef.current = bookmarkKeys
+  // Global bookmarks overlay (cross-session/provider browser).
+  const [bookmarksOverlayOpen, setBookmarksOverlayOpen] = useState(false)
+  const [bookmarksOverlay, setBookmarksOverlay] = useState<MessageBookmark[]>([])
+  const [bookmarksOverlayIndex, setBookmarksOverlayIndex] = useState(0)
+  // When jumping to a bookmark in another session, remember where to land once
+  // that session's transcript has loaded.
+  const pendingBookmarkCursorRef = useRef<{ sessionKey: string; uuid: string } | null>(null)
   const [followTail, setFollowTail] = useState(true)
   const [pendingNewCount, setPendingNewCount] = useState(0)
   const [unreadBoundaryKey, setUnreadBoundaryKey] = useState<string | null>(null)
@@ -2270,6 +2366,8 @@ export default function OpenTuiApp() {
   const [composerMentionAttachments, setComposerMentionAttachments] = useState<SendAttachment[]>([])
   const [composerSlashIndex, setComposerSlashIndex] = useState(0)
   const [composerSlashDismissed, setComposerSlashDismissed] = useState(false)
+  const [composerHistoryOpen, setComposerHistoryOpen] = useState(false)
+  const [composerHistoryIndex, setComposerHistoryIndex] = useState(0)
   const [composerLiveSlashCommands, setComposerLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
   const [composerError, setComposerError] = useState<string | null>(null)
@@ -2552,6 +2650,10 @@ export default function OpenTuiApp() {
     const seen = new Set(live.map((m) => m.uuid))
     return [...live, ...persisted.filter((m) => !seen.has(m.uuid))]
   }, [sessionDetail?.threadedMessages, liveTranscriptMessagesForSession])
+  const codexLiveAssistantTextVisible = useMemo(
+    () => liveTranscriptMessagesForSession.some((message) => message.uuid === CODEX_LIVE_ASSISTANT_UUID),
+    [liveTranscriptMessagesForSession],
+  )
 
   // Card formatting runs in the threading worker. The worker client keeps only
   // the most recent card variant; if it has been evicted, this render path can
@@ -3009,6 +3111,78 @@ export default function OpenTuiApp() {
     setComposerSlashIndex(0)
   }, [])
 
+  const selectComposerHistoryEntry = useCallback((displayIndex: number) => {
+    if (sentHistory.length === 0) return
+    const nextDisplayIndex = clamp(displayIndex, 0, sentHistory.length - 1)
+    const sourceIndex = sentHistory.length - 1 - nextDisplayIndex
+    const replacement = sentHistory[sourceIndex] ?? ''
+    setComposerHistoryIndex(nextDisplayIndex)
+    setHistoryIndex(sourceIndex)
+    composerTextareaRef.current?.setText(replacement)
+    if (composerTextareaRef.current) composerTextareaRef.current.cursorOffset = replacement.length
+    setComposerDraft(replacement)
+  }, [sentHistory])
+
+  const openComposerHistory = useCallback((displayIndex = 0) => {
+    if (sentHistory.length === 0) return
+    if (!composerHistoryOpen && historyIndex === -1) {
+      setDraftBeforeHistory(composerTextareaRef.current?.plainText ?? composerDraft)
+    }
+    setComposerMention(null)
+    setComposerMentionResults([])
+    setComposerHistoryOpen(true)
+    selectComposerHistoryEntry(displayIndex)
+  }, [composerDraft, composerHistoryOpen, historyIndex, selectComposerHistoryEntry, sentHistory.length])
+
+  const commitComposerHistory = useCallback(() => {
+    setComposerHistoryOpen(false)
+    setComposerHistoryIndex(0)
+  }, [])
+
+  const cancelComposerHistory = useCallback(() => {
+    setComposerHistoryOpen(false)
+    setComposerHistoryIndex(0)
+    composerTextareaRef.current?.setText(draftBeforeHistory)
+    if (composerTextareaRef.current) composerTextareaRef.current.cursorOffset = draftBeforeHistory.length
+    setComposerDraft(draftBeforeHistory)
+    setHistoryIndex(-1)
+  }, [draftBeforeHistory])
+
+  const moveComposerHistory = useCallback((delta: number) => {
+    if (sentHistory.length === 0) return
+    if (!composerHistoryOpen) {
+      if (delta > 0) {
+        const currentDisplayIndex = historyIndex === -1
+          ? -1
+          : sentHistory.length - 1 - historyIndex
+        openComposerHistory(Math.max(currentDisplayIndex + 1, 0))
+      } else if (historyIndex !== -1) {
+        const currentDisplayIndex = sentHistory.length - 1 - historyIndex
+        if (currentDisplayIndex <= 0) {
+          cancelComposerHistory()
+        } else {
+          openComposerHistory(currentDisplayIndex - 1)
+        }
+      }
+      return
+    }
+
+    const nextDisplayIndex = composerHistoryIndex + delta
+    if (nextDisplayIndex < 0) {
+      cancelComposerHistory()
+      return
+    }
+    selectComposerHistoryEntry(nextDisplayIndex)
+  }, [
+    cancelComposerHistory,
+    composerHistoryIndex,
+    composerHistoryOpen,
+    historyIndex,
+    openComposerHistory,
+    selectComposerHistoryEntry,
+    sentHistory.length,
+  ])
+
   const handleComposerContentChange = useCallback(() => {
     const renderable = composerTextareaRef.current
     const text = renderable?.plainText ?? ''
@@ -3046,10 +3220,13 @@ export default function OpenTuiApp() {
 
   const composerMentionVisibleCount = Math.min(composerMentionResults.length, 5)
   const composerSlashVisibleCount = Math.min(composerSlashCommands.length, 5)
+  const composerHistoryVisibleCount = Math.min(sentHistory.length, 6)
   const composerPopoverHeight = (!composerWindowOpen && composerActive && composerMention && composerMentionVisibleCount > 0)
     ? composerMentionVisibleCount + 3
-    : (!composerWindowOpen && composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention)
+    : (!composerWindowOpen && composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention && !composerHistoryOpen)
     ? composerSlashVisibleCount + 3
+    : (!composerWindowOpen && composerActive && composerHistoryOpen && composerHistoryVisibleCount > 0 && !composerMention)
+    ? composerHistoryVisibleCount + 3
     : 0
   // Status indicators (requesting spinner, subagent tail, live-prompt
   // suggestion, composer status, auto-targeting note) render as siblings
@@ -3123,8 +3300,10 @@ export default function OpenTuiApp() {
     : composerDraft.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / composerWindowTextareaWidth)), 0)
   const composerWindowSuggestionHeight = (composerActive && composerMention && composerMentionVisibleCount > 0)
     ? composerMentionVisibleCount + 3
-    : (composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention)
+    : (composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention && !composerHistoryOpen)
     ? composerSlashVisibleCount + 3
+    : (composerActive && composerHistoryOpen && composerHistoryVisibleCount > 0 && !composerMention)
+    ? composerHistoryVisibleCount + 3
     : 0
   const composerWindowHeaderHeight = 2
   const composerWindowFooterHeight = 2
@@ -3362,6 +3541,7 @@ export default function OpenTuiApp() {
           isSelected={isSelected}
           isSearchHit={isSearchHit}
           isActiveMatch={isActiveMatch}
+          bookmarked={bookmarkKeys.has(card.key)}
           thinkingMode={thinkingMode}
           imessageStyle={imessageStyle}
         />
@@ -3375,6 +3555,7 @@ export default function OpenTuiApp() {
     resolvedExpandedKeys,
     searchMatchSet,
     activeMatchTargetIndex,
+    bookmarkKeys,
     theme,
     densityState,
     syntaxStyle,
@@ -4265,6 +4446,8 @@ export default function OpenTuiApp() {
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
       setComposerMentionAttachments([])
+      setComposerHistoryOpen(false)
+      setComposerHistoryIndex(0)
       return
     }
 
@@ -4315,6 +4498,7 @@ export default function OpenTuiApp() {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
     const sendStartedAt = Date.now()
     let replyAccumulator = ''
+    let codexLiveMessageAccumulator = ''
     let copilotFinalMessageSeen = false
 
     try {
@@ -4528,8 +4712,15 @@ export default function OpenTuiApp() {
           }
         } else if (targetSession.provider === 'codex') {
           const threaded = normalizeCodexStreamThreadedMessage(parsed, targetSession.sessionId)
-          if (threaded) {
-            setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, threaded))
+          if (threaded || codexCompletionIsText) {
+            setLiveTranscriptMessages((prev) => {
+              const withoutStreamingText = codexCompletionIsText
+                ? prev.filter((message) => message.uuid !== CODEX_LIVE_ASSISTANT_UUID)
+                : prev
+              return threaded
+                ? upsertThreadedMessage(withoutStreamingText, threaded)
+                : withoutStreamingText
+            })
           }
           if (codexCompletionIsText) {
             pendingLiveTextRef.current = ''
@@ -4572,6 +4763,22 @@ export default function OpenTuiApp() {
 
         const replace = shouldReplaceLiveAssistantText(parsed)
         replyAccumulator = replace ? delta : `${replyAccumulator}${delta}`
+        if (targetSession.provider === 'codex') {
+          const visibleText = extractCodexVisibleAssistantText(parsed)
+          if (visibleText) {
+            codexLiveMessageAccumulator = shouldReplaceCodexVisibleAssistantText(parsed)
+              ? visibleText
+              : `${codexLiveMessageAccumulator}${visibleText}`
+            setLiveTranscriptMessages((prev) => upsertThreadedMessage(
+              prev,
+              makeLiveAssistantTextMessage(
+                targetSession,
+                codexLiveMessageAccumulator,
+                CODEX_LIVE_ASSISTANT_UUID,
+              ),
+            ))
+          }
+        }
         pendingLiveTextRef.current = replace ? delta : `${pendingLiveTextRef.current}${delta}`
         liveTextTargetSessionRef.current = targetSession
         if (liveTextFlushFrameRef.current == null) {
@@ -4615,6 +4822,8 @@ export default function OpenTuiApp() {
       setSentHistory((prev) => [...prev, trimmed])
       setHistoryIndex(-1)
       setDraftBeforeHistory('')
+      setComposerHistoryOpen(false)
+      setComposerHistoryIndex(0)
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
       if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, '')
@@ -5037,6 +5246,31 @@ export default function OpenTuiApp() {
     transcriptIndexByKey,
   ])
 
+  // Load the active session's bookmarks whenever the selection changes.
+  useEffect(() => {
+    const target = selectedSessionTarget
+    if (!target) { setBookmarkKeys(new Set()); return }
+    let cancelled = false
+    void readTuiSessionBookmarkIds({ sessionId: target.sessionId, provider: target.provider } as Session)
+      .then((ids) => { if (!cancelled) setBookmarkKeys(new Set(ids)) })
+      .catch(() => { if (!cancelled) setBookmarkKeys(new Set()) })
+    return () => { cancelled = true }
+  }, [selectedSessionIdentity])
+
+  // Land on a bookmark target once its session transcript has loaded. Runs
+  // after the cursor-reconcile effect above, so it wins the final cursor state.
+  useEffect(() => {
+    const pending = pendingBookmarkCursorRef.current
+    if (!pending || pending.sessionKey !== selectedSessionKey) return
+    const idx = transcriptIndexByKey.get(pending.uuid)
+    if (idx === undefined || idx < 0) return
+    pendingBookmarkCursorRef.current = null
+    setTranscriptCursorKey(transcriptCards[idx].key)
+    setFollowTail(false)
+    setPendingNewCount(0)
+    setUnreadBoundaryKey(null)
+  }, [selectedSessionKey, transcriptCards, transcriptIndexByKey])
+
 
   useEffect(() => {
     if (!selectedSessionKey || !restoredReaderState.loaded || restoredReaderState.sessionKey !== selectedSessionKey) {
@@ -5198,10 +5432,10 @@ export default function OpenTuiApp() {
 
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b ${tabsEnabled ? 'hide' : 'show'} tabs  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  r refresh  ? commands  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b bookmark  [ ] jump marks  S-B all marks  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
-    [width, transcriptView, density, tabsEnabled, showToolCalls],
+    [width, transcriptView, density, showToolCalls],
   )
 
   const composerStatusMessage = composerError
@@ -5319,6 +5553,96 @@ export default function OpenTuiApp() {
       showNotice('error', err instanceof Error ? err.message : 'Failed to copy to clipboard')
     }
   }, [cursorIndex, showNotice, transcriptCards])
+
+  // Toggle a bookmark on the card under the transcript cursor.
+  const toggleBookmarkForCursor = useCallback(async () => {
+    const target = selectedSessionTarget
+    if (!target) { showNotice('error', 'No session selected'); return }
+    const card = cursorIndex >= 0 ? transcriptCards[cursorIndex] : null
+    if (!card) { showNotice('error', 'No message selected'); return }
+    if (card.key.startsWith('live-')) { showNotice('error', 'Cannot bookmark a streaming message'); return }
+    const uuid = card.key
+    const next = !bookmarkKeysRef.current.has(uuid)
+    setBookmarkKeys((prev) => {
+      const updated = new Set(prev)
+      if (next) updated.add(uuid)
+      else updated.delete(uuid)
+      return updated
+    })
+    try {
+      const meta = next
+        ? {
+            role: card.role,
+            label: card.role === 'user' ? 'user' : 'assistant',
+            preview: (card.compactSummary || card.searchText || '').replace(/\s+/g, ' ').trim().slice(0, 200) || undefined,
+            sessionTitle: readerTitle || undefined,
+            messageTimestamp: card.timestamp,
+          }
+        : undefined
+      const ids = await toggleTuiSessionBookmark(
+        { sessionId: target.sessionId, provider: target.provider } as Session,
+        uuid,
+        next,
+        meta,
+      )
+      setBookmarkKeys(new Set(ids))
+      showNotice('info', next ? 'Bookmarked message' : 'Removed bookmark')
+    } catch (err) {
+      setBookmarkKeys((prev) => {
+        const updated = new Set(prev)
+        if (next) updated.delete(uuid)
+        else updated.add(uuid)
+        return updated
+      })
+      showNotice('error', err instanceof Error ? err.message : 'Failed to update bookmark')
+    }
+  }, [cursorIndex, readerTitle, selectedSessionTarget, showNotice, transcriptCards])
+
+  // Jump to the next/previous bookmarked card in the active session.
+  const jumpToBookmark = useCallback((direction: 1 | -1) => {
+    if (transcriptCards.length === 0) return
+    const marks = bookmarkKeysRef.current
+    if (marks.size === 0) { showNotice('info', 'No bookmarks in this session'); return }
+    const start = cursorIndex >= 0 ? cursorIndex : 0
+    const count = transcriptCards.length
+    for (let step = 1; step <= count; step += 1) {
+      const idx = (((start + direction * step) % count) + count) % count
+      const card = transcriptCards[idx]
+      if (card && marks.has(card.key)) {
+        jumpToTranscriptIndex(idx)
+        return
+      }
+    }
+  }, [cursorIndex, jumpToTranscriptIndex, showNotice, transcriptCards])
+
+  const openBookmarksOverlay = useCallback(async () => {
+    setBookmarksOverlayOpen(true)
+    setBookmarksOverlayIndex(0)
+    try {
+      const all = await readTuiAllBookmarks()
+      setBookmarksOverlay(all)
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Failed to load bookmarks')
+    }
+  }, [showNotice])
+
+  // Navigate to a bookmark from the global overlay — switching session (and
+  // provider) when needed, then landing on the message once it has loaded.
+  const openBookmarkRecord = useCallback((record: MessageBookmark) => {
+    setBookmarksOverlayOpen(false)
+    const targetSession = { sessionId: record.sessionId, provider: record.provider } as Session
+    const targetKey = sessionKey(targetSession)
+    if (targetKey === selectedSessionKeyRef.current) {
+      const idx = transcriptIndexByKey.get(record.uuid)
+      if (idx !== undefined && idx >= 0) jumpToTranscriptIndex(idx)
+      else pendingBookmarkCursorRef.current = { sessionKey: targetKey, uuid: record.uuid }
+      setFocusedPane('messages')
+      return
+    }
+    pendingBookmarkCursorRef.current = { sessionKey: targetKey, uuid: record.uuid }
+    selectTabSession(targetSession)
+    setFocusedPane('messages')
+  }, [jumpToTranscriptIndex, selectTabSession, transcriptIndexByKey])
 
   const copyCliCommand = useCallback(async () => {
     const session = selectedSession
@@ -5450,6 +5774,17 @@ export default function OpenTuiApp() {
         setFocusedPane('messages')
         void copySelectedMessage()
         break
+      case 'bookmark-toggle':
+        setFocusedPane('messages')
+        void toggleBookmarkForCursor()
+        break
+      case 'bookmark-jump':
+        setFocusedPane('messages')
+        jumpToBookmark(1)
+        break
+      case 'bookmark-all':
+        void openBookmarksOverlay()
+        break
       case 'tasks':
         setTaskPanelOpen(true)
         break
@@ -5538,6 +5873,7 @@ export default function OpenTuiApp() {
     jumpToTranscriptTail, jumpToUnreadBoundary, openComposerWindow, openTabSessions, provider, railVisible,
     refreshSessions, refreshSelectedSessionDetail, requestExit, selectTabSession, selectedSessionKey,
     selectedSession, selectedSessionTarget, sessions, themeMode, toggleExpansion, transcriptView,
+    toggleBookmarkForCursor, jumpToBookmark, openBookmarksOverlay,
   ])
 
   useKeyboard((key) => {
@@ -5597,6 +5933,29 @@ export default function OpenTuiApp() {
 
     if (analyticsOpen) {
       handled(() => { analyticsKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (bookmarksOverlayOpen) {
+      handled(() => {
+        if (key.name === 'escape' || key.name === 'q' || isShifted('B') || isCtrl('c')) {
+          setBookmarksOverlayOpen(false)
+          return
+        }
+        if (bookmarksOverlay.length === 0) return
+        if (key.name === 'j' || key.name === 'down') {
+          setBookmarksOverlayIndex((i) => Math.min(i + 1, bookmarksOverlay.length - 1))
+          return
+        }
+        if (key.name === 'k' || key.name === 'up') {
+          setBookmarksOverlayIndex((i) => Math.max(i - 1, 0))
+          return
+        }
+        if (key.name === 'return') {
+          const record = bookmarksOverlay[bookmarksOverlayIndex]
+          if (record) openBookmarkRecord(record)
+        }
+      })
       return
     }
 
@@ -5760,6 +6119,10 @@ export default function OpenTuiApp() {
           })
           return
         }
+        if (composerHistoryOpen) {
+          handled(cancelComposerHistory)
+          return
+        }
         handled(() => {
           if (composerWindowOpen) {
             rememberComposerCursor()
@@ -5782,6 +6145,46 @@ export default function OpenTuiApp() {
       if (isCtrl('o')) {
         handled(toggleComposerWindow)
         return
+      }
+      if (composerHistoryOpen) {
+        if (key.name === 'tab' || key.name === 'return') {
+          handled(commitComposerHistory)
+          return
+        }
+        if (key.name === 'n' && key.ctrl) {
+          handled(() => moveComposerHistory(-1))
+          return
+        }
+        if (key.name === 'p' && key.ctrl) {
+          handled(() => moveComposerHistory(1))
+          return
+        }
+        if (key.name === 'down' || key.name === 'j') {
+          handled(() => moveComposerHistory(1))
+          return
+        }
+        if (key.name === 'up' || key.name === 'k') {
+          handled(() => moveComposerHistory(-1))
+          return
+        }
+        if (key.name === 'g' && !key.shift) {
+          handled(() => selectComposerHistoryEntry(0))
+          return
+        }
+        if (key.name === 'g' && key.shift) {
+          handled(() => selectComposerHistoryEntry(sentHistory.length - 1))
+          return
+        }
+        if (
+          (!key.ctrl && !key.meta && sequence.length === 1 && sequence >= ' ')
+          || key.name === 'backspace'
+          || key.name === 'delete'
+        ) {
+          setComposerHistoryOpen(false)
+          setComposerHistoryIndex(0)
+          setHistoryIndex(-1)
+          return
+        }
       }
       if (composerMention && composerMentionResults.length > 0) {
         if (key.name === 'tab' || (key.name === 'return' && key.ctrl)) {
@@ -5826,33 +6229,11 @@ export default function OpenTuiApp() {
         return
       }
       if (key.name === 'p' && key.ctrl) {
-        handled(() => {
-          if (sentHistory.length === 0) return
-          const nextIndex = historyIndex === -1
-            ? sentHistory.length - 1
-            : Math.max(historyIndex - 1, 0)
-          if (historyIndex === -1) setDraftBeforeHistory(composerDraft)
-          setHistoryIndex(nextIndex)
-          const replacement = sentHistory[nextIndex] ?? ''
-          composerTextareaRef.current?.setText(replacement)
-          setComposerDraft(replacement)
-        })
+        handled(() => moveComposerHistory(1))
         return
       }
       if (key.name === 'n' && key.ctrl && historyIndex !== -1) {
-        handled(() => {
-          const nextIndex = historyIndex + 1
-          if (nextIndex >= sentHistory.length) {
-            setHistoryIndex(-1)
-            composerTextareaRef.current?.setText(draftBeforeHistory)
-            setComposerDraft(draftBeforeHistory)
-          } else {
-            setHistoryIndex(nextIndex)
-            const replacement = sentHistory[nextIndex] ?? ''
-            composerTextareaRef.current?.setText(replacement)
-            setComposerDraft(replacement)
-          }
-        })
+        handled(() => moveComposerHistory(-1))
         return
       }
       return
@@ -5917,6 +6298,12 @@ export default function OpenTuiApp() {
       return
     }
 
+    // Global bookmarks browser (cross-session)
+    if (isShifted('B')) {
+      handled(() => { void openBookmarksOverlay() })
+      return
+    }
+
     if (showRail && isCtrl('r') && selectedSession) {
       handled(() => {
         setRenameSessionKey(sessionKey(selectedSession))
@@ -5961,6 +6348,18 @@ export default function OpenTuiApp() {
         setSidebarSort(next)
         void writeTuiSidebarSort(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store sidebar sort'))
       })
+      return
+    }
+
+    // In the transcript, [ and ] jump between bookmarks. In the sidebar they
+    // resize the rail (handled by the showRail blocks just below).
+    if (effectiveFocus === 'messages' && sequence === ']') {
+      handled(() => jumpToBookmark(1))
+      return
+    }
+
+    if (effectiveFocus === 'messages' && sequence === '[') {
+      handled(() => jumpToBookmark(-1))
       return
     }
 
@@ -6099,6 +6498,13 @@ export default function OpenTuiApp() {
     if (effectiveFocus === 'messages' && key.name === 'm') {
       handled(() => {
         jumpToResumeMarker()
+      })
+      return
+    }
+
+    if (effectiveFocus === 'messages' && key.name === 'b' && !key.shift) {
+      handled(() => {
+        void toggleBookmarkForCursor()
       })
       return
     }
@@ -6534,6 +6940,47 @@ export default function OpenTuiApp() {
       </box>
     )
   }
+  const renderComposerHistoryPanel = (panelWidth: number, rowWidth: number) => {
+    if (!composerActive || !composerHistoryOpen || composerHistoryVisibleCount <= 0 || composerMention) return null
+    const total = sentHistory.length
+    const start = Math.max(0, Math.min(composerHistoryIndex - Math.floor((composerHistoryVisibleCount - 1) / 2), total - composerHistoryVisibleCount))
+    const end = Math.min(total, start + composerHistoryVisibleCount)
+    const hasMoreBelow = end < total
+    const hasMoreAbove = start > 0
+    const metaWidth = Math.max(Math.min(22, Math.floor(rowWidth * 0.28)), 10)
+    const textWidth = Math.max(rowWidth - metaWidth - 4, 8)
+    return (
+      <box
+        width={panelWidth}
+        height={composerHistoryVisibleCount + 3}
+        paddingX={1}
+        backgroundColor={theme.surface2}
+        border
+        borderStyle="single"
+        borderColor={theme.border2}
+        flexDirection="column"
+      >
+        <text fg={composerAccentColor} wrapMode="none">
+          {fitText(`history · ⌃P older · ⌃N newer · tab/enter use · esc cancel  (${composerHistoryIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+        </text>
+        {sentHistory.slice().reverse().slice(start, end).map((entry, offset) => {
+          const index = start + offset
+          const active = index === composerHistoryIndex
+          const compact = entry.replace(/\s+/g, ' ').trim() || '(empty prompt)'
+          const lineCount = entry.length === 0 ? 1 : entry.split('\n').length
+          const meta = `${lineCount} line${lineCount === 1 ? '' : 's'} · ${entry.length} chars`
+          return (
+            <box key={`history:${total - 1 - index}:${entry.length}:${offset}`} flexDirection="row" height={1} width={rowWidth}>
+              <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
+              <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(compact, textWidth)}</text>
+              <text fg={theme.dim} wrapMode="none">  </text>
+              <text fg={theme.dim} wrapMode="none">{fitText(meta, metaWidth)}</text>
+            </box>
+          )
+        })}
+      </box>
+    )
+  }
 
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
@@ -6728,7 +7175,7 @@ export default function OpenTuiApp() {
                 <box height={TRANSCRIPT_TOP_MARGIN} />
                 {transcriptChildren}
 
-                {composerSendState === 'sending' && composerLiveText ? (
+                {composerSendState === 'sending' && composerLiveText && !codexLiveAssistantTextVisible ? (
                   <box
                     key="live-stream-text"
                     flexDirection="column"
@@ -7007,6 +7454,56 @@ export default function OpenTuiApp() {
           )
         })() : null}
 
+        {bookmarksOverlayOpen ? (() => {
+          const overlayW = Math.min(width - 6, 88)
+          const labelW = overlayW - 4
+          const maxRows = Math.max(Math.min(bookmarksOverlay.length, (focusMode ? height - 6 : height - 8)), 1)
+          const startIdx = clamp(bookmarksOverlayIndex - Math.floor(maxRows / 2), 0, Math.max(0, bookmarksOverlay.length - maxRows))
+          const visible = bookmarksOverlay.slice(startIdx, startIdx + maxRows)
+          return (
+            <box
+              position="absolute"
+              top={focusMode ? 2 : 4}
+              left={Math.max(Math.floor((width - overlayW) / 2), 2)}
+              width={overlayW}
+              border
+              borderStyle="single"
+              borderColor={theme.amber}
+              backgroundColor={theme.surface}
+              zIndex={32}
+              flexDirection="column"
+            >
+              <box paddingX={1} paddingTop={1} backgroundColor={theme.surface2}>
+                <text fg={theme.amber}>{fitText(`★ BOOKMARKS  ·  ${bookmarksOverlay.length} saved  ·  j/k move  ·  enter open  ·  esc close`, overlayW - 4)}</text>
+              </box>
+              {bookmarksOverlay.length === 0 ? (
+                <box paddingX={1} paddingY={1}>
+                  <text fg={theme.dim}>No bookmarks yet — press b on a message to save one.</text>
+                </box>
+              ) : visible.map((record, i) => {
+                const absoluteIndex = startIdx + i
+                const isSelected = absoluteIndex === bookmarksOverlayIndex
+                const tag = TUI_PROVIDER_TAG[record.provider] ?? record.provider
+                const title = record.sessionTitle || 'Untitled session'
+                const preview = (record.preview || '').replace(/\s+/g, ' ').trim()
+                return (
+                  <box key={`${record.provider}:${record.sessionId}:${record.uuid}`} paddingX={1} backgroundColor={isSelected ? theme.surface3 : theme.surface} flexDirection="column">
+                    <box flexDirection="row">
+                      <text fg={isSelected ? theme.cyan : theme.amber} wrapMode="none">{`${isSelected ? '> ' : '  '}[${tag}] `}</text>
+                      <text fg={isSelected ? theme.text : theme.muted} wrapMode="none">{fitText(title, labelW - tag.length - 6)}</text>
+                    </box>
+                    {preview ? (
+                      <box paddingLeft={2}>
+                        <text fg={theme.dim} wrapMode="none">{fitText(preview, labelW - 2)}</text>
+                      </box>
+                    ) : null}
+                  </box>
+                )
+              })}
+            </box>
+          )
+        })() : null}
+
       </box>
 
       {searchMode ? (
@@ -7167,7 +7664,9 @@ export default function OpenTuiApp() {
 
       {!composerWindowOpen ? renderComposerMentionPanel(width, Math.max(width - 4, 20)) : null}
 
-      {!composerWindowOpen ? renderComposerSlashPanel(width, Math.max(width - 4, 20)) : null}
+      {!composerWindowOpen && !composerHistoryOpen ? renderComposerSlashPanel(width, Math.max(width - 4, 20)) : null}
+
+      {!composerWindowOpen ? renderComposerHistoryPanel(width, Math.max(width - 4, 20)) : null}
 
       {!composerWindowOpen ? (
         <box
@@ -7338,7 +7837,8 @@ export default function OpenTuiApp() {
           </box>
 
           {renderComposerMentionPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
-          {renderComposerSlashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
+          {!composerHistoryOpen ? renderComposerSlashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12)) : null}
+          {renderComposerHistoryPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
 
           <box
             height={composerWindowFooterHeight}

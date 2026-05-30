@@ -41,6 +41,13 @@ import {
   runViewSessionAction,
   streamViewSessionTurn,
 } from '../sessionBackend'
+import {
+  getSessionBookmarkIds,
+  listAllBookmarks,
+  setMessageBookmark,
+  type MessageBookmark,
+  type SetMessageBookmarkInput,
+} from '../messageBookmarks'
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 
@@ -267,4 +274,28 @@ export async function runTuiSessionAction(
     body,
     provider: session.provider as AgentProvider | undefined,
   })
+}
+
+export async function readTuiSessionBookmarkIds(session: Session): Promise<string[]> {
+  return getSessionBookmarkIds(session.provider as AgentProvider | undefined, session.sessionId)
+}
+
+export async function toggleTuiSessionBookmark(
+  session: Session,
+  uuid: string,
+  bookmarked: boolean,
+  meta?: SetMessageBookmarkInput['meta'],
+): Promise<string[]> {
+  const next = await setMessageBookmark({
+    provider: session.provider as AgentProvider | undefined,
+    sessionId: session.sessionId,
+    uuid,
+    bookmarked,
+    meta,
+  })
+  return next.map((record) => record.uuid)
+}
+
+export async function readTuiAllBookmarks(): Promise<MessageBookmark[]> {
+  return listAllBookmarks()
 }

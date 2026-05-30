@@ -1590,8 +1590,10 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   highlighted,
   forking,
   resumeTarget,
+  bookmarked,
   onForkFromMessage,
   onToggleResume,
+  onToggleBookmark,
   onReusePrompt,
   onQuoteMessage,
   onEditFromMessage,
@@ -1603,8 +1605,10 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   highlighted: boolean
   forking: boolean
   resumeTarget: boolean
+  bookmarked: boolean
   onForkFromMessage: (messageId: string) => void
   onToggleResume: (messageId: string) => void
+  onToggleBookmark: (messageId: string) => void
   onReusePrompt: (text: string) => void
   onQuoteMessage: (text: string) => void
   onEditFromMessage: (messageId: string, text: string) => void
@@ -1616,7 +1620,12 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   const canReuse = isUserMessage && copyText.length > 0
   const canEdit = isUserMessage && copyText.length > 0 && !!row.allowEdit
   const canQuote = !isUserMessage && copyText.length > 0
-  const showActions = canCopy || canReuse || canQuote || canEdit || (row.showForkControls && (row.allowFork || row.allowResume))
+  const canBookmark = !row.message.uuid.startsWith('live-')
+  const showActions = canCopy || canReuse || canQuote || canEdit || canBookmark || (row.showForkControls && (row.allowFork || row.allowResume))
+  const handleBookmark = useCallback(() => {
+    if (!canBookmark) return
+    onToggleBookmark(row.message.uuid)
+  }, [canBookmark, onToggleBookmark, row.message.uuid])
   const handleCopy = useCallback(() => {
     if (!canCopy) return
     void navigator.clipboard.writeText(copyText).then(() => {
@@ -1641,15 +1650,34 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   return (
     <div
       style={{
+        position: 'relative',
         opacity: row.dimmed ? 0.92 : 1,
         borderRadius: 10,
+        // The cyan ring is the transient nav/target highlight; the amber ring
+        // is the persistent bookmark accent. Both use theme-aware colours so
+        // bookmarks read correctly on every theme. Highlight wins when both.
         boxShadow: highlighted
           ? '0 0 0 2px rgba(56,217,245,0.55), 0 0 36px rgba(56,217,245,0.18)'
-          : 'none',
-        background: highlighted ? 'rgba(56,217,245,0.06)' : 'transparent',
+          : bookmarked
+            ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent), 0 0 22px color-mix(in srgb, var(--t-bookmark) 14%, transparent)'
+            : 'none',
+        background: highlighted
+          ? 'rgba(56,217,245,0.06)'
+          : bookmarked
+            ? 'color-mix(in srgb, var(--t-bookmark) 7%, transparent)'
+            : 'transparent',
         transition: 'box-shadow 180ms ease, background 180ms ease',
       }}
     >
+      {bookmarked && (
+        <span
+          className="timeline-row-bookmark-flag"
+          aria-hidden
+          title="Bookmarked"
+        >
+          ★
+        </span>
+      )}
       {row.previewBadge && (
         <div style={{
           display: 'flex',
@@ -1727,6 +1755,16 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
       )}
       {showActions && (
         <div className="timeline-row-actions">
+          {canBookmark && (
+            <button
+              type="button"
+              className={`timeline-row-action timeline-row-action--bookmark${bookmarked ? ' timeline-row-action--bookmark-active' : ''}`}
+              onClick={handleBookmark}
+              title={bookmarked ? 'Remove bookmark' : 'Bookmark this message'}
+            >
+              {bookmarked ? '★ SAVED' : '☆ BOOKMARK'}
+            </button>
+          )}
           {row.showForkControls && row.allowFork && (
             <button
               type="button"
@@ -1919,10 +1957,12 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   highlighted,
   forking,
   resumeTarget,
+  bookmarked,
   onMeasure,
   onLastRowRef,
   onForkFromMessage,
   onToggleResume,
+  onToggleBookmark,
   onReusePrompt,
   onQuoteMessage,
   onEditFromMessage,
@@ -1933,10 +1973,12 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   highlighted: boolean
   forking: boolean
   resumeTarget: boolean
+  bookmarked: boolean
   onMeasure: (key: string, height: number) => void
   onLastRowRef: (node: HTMLDivElement | null) => void
   onForkFromMessage: (messageId: string) => void
   onToggleResume: (messageId: string) => void
+  onToggleBookmark: (messageId: string) => void
   onReusePrompt: (text: string) => void
   onQuoteMessage: (text: string) => void
   onEditFromMessage: (messageId: string, text: string) => void
@@ -1982,8 +2024,10 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
         highlighted={highlighted}
         forking={forking}
         resumeTarget={resumeTarget}
+        bookmarked={bookmarked}
         onForkFromMessage={onForkFromMessage}
         onToggleResume={onToggleResume}
+        onToggleBookmark={onToggleBookmark}
         onReusePrompt={onReusePrompt}
         onQuoteMessage={onQuoteMessage}
         onEditFromMessage={onEditFromMessage}
@@ -2055,6 +2099,13 @@ export default function MessageView({
   const [transcriptFilters, setTranscriptFilters] = useState<ActiveTranscriptFilter[]>([])
   const [transcriptSearch, setTranscriptSearch] = useState('')
   const deferredTranscriptSearch = useDeferredValue(transcriptSearch)
+  // Bookmarked message uuids for the active session (local-only, mirrored via
+  // /api/sessions/[id]/bookmarks). bookmarkIdsRef keeps the toggle callback
+  // stable without re-creating it on every bookmark change.
+  const [bookmarkIds, setBookmarkIds] = useState<Set<string>>(() => new Set())
+  const bookmarkIdsRef = useRef<Set<string>>(bookmarkIds)
+  bookmarkIdsRef.current = bookmarkIds
+  const [bookmarksOnly, setBookmarksOnly] = useState(false)
   const [showTools, setShowTools] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true
     return window.localStorage.getItem('agentViewer:showTools') !== 'false'
@@ -2369,6 +2420,67 @@ export default function MessageView({
       .then(data => { if (!data.error) setSessionInfo(data.info) })
       .catch(() => {})
   }, [session?.provider, session?.sessionId])
+
+  // Load message bookmarks for the active session. Reset the "bookmarks only"
+  // filter on every session switch so a stale focus doesn't carry over.
+  useEffect(() => {
+    setBookmarksOnly(false)
+    if (!session || session.isPending) { setBookmarkIds(new Set()); return }
+    let cancelled = false
+    fetch(withProviderQuery(`/api/sessions/${session.sessionId}/bookmarks`, session.provider))
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled || !Array.isArray(data?.ids)) return
+        setBookmarkIds(new Set(data.ids as string[]))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [session?.provider, session?.sessionId, session?.isPending])
+
+  // Build the metadata stored alongside a bookmark so the global browser can
+  // render a useful row (title, snippet, role) without re-reading the session.
+  const buildBookmarkMeta = useCallback((uuid: string) => {
+    const row = timelineRowsRef.current.find((candidate) => candidate.message.uuid === uuid)
+    const preview = row ? messageToCopyText(row.message).replace(/\s+/g, ' ').trim().slice(0, 200) : ''
+    const sessionTitle = sessionInfo?.customTitle || sessionInfo?.summary || session?.customTitle || session?.summary || session?.firstPrompt
+    return {
+      role: row?.message.role,
+      label: row?.message.role === 'user' ? 'user' : 'assistant',
+      preview: preview || undefined,
+      sessionTitle: sessionTitle || undefined,
+      messageTimestamp: row?.message.timestamp,
+    }
+  }, [session?.customTitle, session?.summary, session?.firstPrompt, sessionInfo?.customTitle, sessionInfo?.summary])
+
+  const toggleBookmark = useCallback((uuid: string) => {
+    if (!session) return
+    const next = !bookmarkIdsRef.current.has(uuid)
+    setBookmarkIds((prev) => {
+      const updated = new Set(prev)
+      if (next) updated.add(uuid)
+      else updated.delete(uuid)
+      return updated
+    })
+    const meta = next ? buildBookmarkMeta(uuid) : undefined
+    fetch(`/api/sessions/${session.sessionId}/bookmarks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: session.provider, uuid, bookmarked: next, meta }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data?.ids)) setBookmarkIds(new Set(data.ids as string[]))
+      })
+      .catch(() => {
+        // Revert the optimistic update on failure.
+        setBookmarkIds((prev) => {
+          const updated = new Set(prev)
+          if (next) updated.delete(uuid)
+          else updated.add(uuid)
+          return updated
+        })
+      })
+  }, [session, buildBookmarkMeta])
 
   // Fetches the live model list + current model from the active provider.
   // Used both on session change and after each turn — `/model X` slashes
@@ -4139,14 +4251,17 @@ export default function MessageView({
   }, [liveTimelineRows, persistedTimelineRows])
   const normalizedTranscriptSearch = deferredTranscriptSearch.trim().toLowerCase()
   const transcriptTimelineRows = useMemo<TimelineRow[]>(() => {
-    if (transcriptFilters.length === 0 && normalizedTranscriptSearch === '') return timelineRows
+    // Preserve referential identity with timelineRows when nothing is focused —
+    // the scroll-anchor logic below relies on this equality.
+    if (transcriptFilters.length === 0 && normalizedTranscriptSearch === '' && !bookmarksOnly) return timelineRows
     return timelineRows.filter((row) => {
+      if (bookmarksOnly && !bookmarkIds.has(row.message.uuid)) return false
       if (!timelineRowMatchesTranscriptFilters(row, transcriptFilters)) return false
       if (!normalizedTranscriptSearch) return true
       return timelineRowSearchText(row).includes(normalizedTranscriptSearch)
     })
-  }, [normalizedTranscriptSearch, timelineRows, transcriptFilters])
-  const hasTranscriptFocus = transcriptFilters.length > 0 || transcriptSearch.trim().length > 0
+  }, [normalizedTranscriptSearch, timelineRows, transcriptFilters, bookmarksOnly, bookmarkIds])
+  const hasTranscriptFocus = transcriptFilters.length > 0 || transcriptSearch.trim().length > 0 || bookmarksOnly
   const visualizerRows = useMemo<MessageVisualizerRow[]>(
     () => showVisualizer
       ? timelineRows.map((row) => ({
@@ -5491,6 +5606,16 @@ export default function MessageView({
                       {filter.label}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    aria-pressed={bookmarksOnly}
+                    disabled={bookmarkIds.size === 0 && !bookmarksOnly}
+                    className={cn('av-session-viz-bookmark-filter', bookmarksOnly && 'av-active')}
+                    title={bookmarkIds.size === 0 ? 'No bookmarks in this session yet' : 'Show only bookmarked messages'}
+                    onClick={() => setBookmarksOnly((value) => !value)}
+                  >
+                    {bookmarksOnly ? '★' : '☆'} Bookmarks{bookmarkIds.size > 0 ? ` (${bookmarkIds.size})` : ''}
+                  </button>
                 </div>
                 <div className="av-session-viz-result-count">
                   {transcriptTimelineRows.length} shown
@@ -5523,12 +5648,23 @@ export default function MessageView({
                         <X aria-hidden="true" />
                       </button>
                     )}
+                    {bookmarksOnly && (
+                      <button
+                        type="button"
+                        className="av-session-viz-focus-chip"
+                        onClick={() => setBookmarksOnly(false)}
+                      >
+                        ★ Bookmarks only
+                        <X aria-hidden="true" />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="av-session-viz-clear-focus"
                       onClick={() => {
                         setTranscriptFilters([])
                         setTranscriptSearch('')
+                        setBookmarksOnly(false)
                       }}
                     >
                       Clear all
@@ -5817,10 +5953,12 @@ export default function MessageView({
                           highlighted={highlightedMessageId === row.message.uuid}
                           forking={forkingMessageId === row.message.uuid}
                           resumeTarget={resumeFromMessageId === row.message.uuid}
+                          bookmarked={bookmarkIds.has(row.message.uuid)}
                           onMeasure={handleTimelineRowMeasure}
                           onLastRowRef={setLastTimelineRow}
                           onForkFromMessage={handleForkFromMessage}
                           onToggleResume={toggleResumeFromMessage}
+                          onToggleBookmark={toggleBookmark}
                           onReusePrompt={handleReusePrompt}
                           onQuoteMessage={handleQuoteMessage}
                           onEditFromMessage={handleEditFromMessage}

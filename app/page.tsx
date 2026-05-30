@@ -15,6 +15,7 @@ import type { CodexPlanStep } from '@/lib/taskRegistry'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
+const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
 type ProjectSelection = {
@@ -311,6 +312,7 @@ export default function Home() {
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
+  const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
   const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
   const documentVisible = useDocumentVisible()
   // Tracks the absolute transcript offset immediately after the latest loaded
@@ -1199,6 +1201,7 @@ export default function Home() {
                   onToggleMessagePane={toggleMessagePane}
                   onOpenGit={openGitPopover}
                   onOpenTasks={openTaskPanel}
+                  onOpenBookmarks={() => setBookmarksPanelOpen(true)}
                 />
               ) : null}
             </div>
@@ -1209,6 +1212,15 @@ export default function Home() {
             open={gitPopoverOpen}
             onClose={() => setGitPopoverOpen(false)}
             cwd={activeProjectDir}
+          />
+        ) : null}
+        {bookmarksPanelOpen ? (
+          <BookmarksPanel
+            open={bookmarksPanelOpen}
+            onClose={() => setBookmarksPanelOpen(false)}
+            onSelect={({ sessionId, provider: bookmarkProvider, uuid }) => {
+              selectCommandPaletteSession({ sessionId, provider: bookmarkProvider } as Session, uuid)
+            }}
           />
         ) : null}
       </div>

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
+import { BarChart3, Bookmark, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -37,6 +37,7 @@ type CommandPaletteProps = {
   onToggleMessagePane: () => void
   onOpenGit: () => void
   onOpenTasks: () => void
+  onOpenBookmarks: () => void
 }
 
 type PaletteItem = {
@@ -308,6 +309,7 @@ export default function CommandPalette({
   onToggleMessagePane,
   onOpenGit,
   onOpenTasks,
+  onOpenBookmarks,
 }: CommandPaletteProps) {
   const { state: sidebarState, toggleSidebar } = useSidebar()
   const [query, setQuery] = useState('')
@@ -486,6 +488,17 @@ export default function CommandPalette({
         },
       },
       {
+        id: 'open-bookmarks',
+        label: 'View all bookmarks',
+        description: 'Browse every bookmarked message across all sessions and providers',
+        icon: <Bookmark size={16} />,
+        shortcut: 'Bookmarks',
+        group: 'actions',
+        keywords: ['bookmark', 'bookmarks', 'saved', 'star', 'starred', 'favorite', 'favourites', 'pin'],
+        score: 0,
+        run: onOpenBookmarks,
+      },
+      {
         id: 'scope-all',
         label: 'Show all projects',
         description: 'Clear the project scope filter',
@@ -538,7 +551,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenGit, canOpenTasks, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenGit, canOpenTasks, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {
