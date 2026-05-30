@@ -3,6 +3,7 @@ import { isAgentProvider } from '@/lib/provider'
 import { listViewSessionMessages } from '@/lib/sessionBackend'
 import { subscribeToOpenCodeEvents } from '@/lib/opencodeHarness'
 import { subscribeToCodexEvents } from '@/lib/codexHarness'
+import { subscribeToClaudeEvents } from '@/lib/claudeHarness'
 import type { AgentProvider, SessionMessage } from '@/lib/types'
 import type { ErrorNotification, TurnPlanUpdatedNotification } from '@/lib/codex-schema/v2'
 
@@ -143,6 +144,20 @@ export async function GET(
 
       if (provider === 'codex') {
         void pumpCodex({
+          sessionId,
+          provider,
+          limit,
+          backfill,
+          offset,
+          enqueue,
+          close,
+          signal: request.signal,
+        })
+        return
+      }
+
+      if (provider === 'claude') {
+        void pumpClaude({
           sessionId,
           provider,
           limit,
@@ -359,6 +374,138 @@ async function pumpOpenCode({ sessionId, provider, limit, backfill, offset, enqu
 
   // Prime the connection with the current message window and start the
   // periodic fallback tick.
+  await refetch()
+  scheduleFallback()
+  scheduleHeartbeat()
+
+  await consume.catch(() => {})
+  if (!signal.aborted) {
+    onAbort()
+  }
+}
+
+// Claude shares the harness/refetch pattern with codex/opencode. The claudePool
+// fans every message of a session's live Query out through the Claude harness,
+// so we refetch the canonical persisted window on each broadcast instead of the
+// fixed 1500ms poll the generic pump used. This makes the transcript update in
+// real time for *any* observer (a second tab, a page reloaded mid-turn), not
+// just the tab that started the turn over the POST send stream.
+const CLAUDE_REFETCH_DEBOUNCE_MS = 80
+// Slower than codex/opencode's 30s: the pool isn't the only writer to a Claude
+// session — the user can run the `claude` CLI against the same session id out
+// of band — so a moderate safety-net poll still surfaces external writes
+// promptly without the chattiness of the old 1500ms loop.
+const CLAUDE_FALLBACK_POLL_MS = 4000
+
+async function pumpClaude({ sessionId, provider, limit, backfill, offset, enqueue, close, signal }: OpenCodePumpInput): Promise<void> {
+  let lastSignature = ''
+  let cursorOffset = offset
+  let lastHeartbeat = Date.now()
+  let inFlight = false
+  let pending = false
+  let refetchTimer: ReturnType<typeof setTimeout> | undefined
+  let fallbackTimer: ReturnType<typeof setTimeout> | undefined
+  let heartbeatTimer: ReturnType<typeof setTimeout> | undefined
+
+  const refetch = async () => {
+    if (inFlight) {
+      pending = true
+      return
+    }
+    inFlight = true
+    try {
+      const messages = await listViewSessionMessages(
+        sessionId,
+        { offset: cursorOffset, limit, tail: false },
+        provider,
+      )
+      const signature = messageWindowSignature(cursorOffset, messages)
+      if (messages.length > 0 && signature !== lastSignature) {
+        enqueue('messages', { offset: cursorOffset, messages })
+        lastSignature = signature
+        cursorOffset = Math.max(0, cursorOffset + messages.length - backfill)
+      }
+    } catch (err) {
+      enqueue('error', { error: err instanceof Error ? err.message : 'Unknown error' })
+      close()
+      return
+    } finally {
+      inFlight = false
+    }
+    if (pending && !signal.aborted) {
+      pending = false
+      void refetch()
+    }
+  }
+
+  const scheduleRefetch = () => {
+    if (signal.aborted) return
+    if (refetchTimer) return
+    refetchTimer = setTimeout(() => {
+      refetchTimer = undefined
+      void refetch()
+    }, CLAUDE_REFETCH_DEBOUNCE_MS)
+  }
+
+  const scheduleFallback = () => {
+    if (fallbackTimer) clearTimeout(fallbackTimer)
+    fallbackTimer = setTimeout(() => {
+      if (signal.aborted) return
+      void refetch()
+      scheduleFallback()
+    }, CLAUDE_FALLBACK_POLL_MS)
+  }
+
+  const scheduleHeartbeat = () => {
+    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+    heartbeatTimer = setTimeout(() => {
+      if (signal.aborted) return
+      const now = Date.now()
+      if (now - lastHeartbeat >= HEARTBEAT_MS) {
+        enqueue('heartbeat', { ts: now })
+        lastHeartbeat = now
+      }
+      scheduleHeartbeat()
+    }, HEARTBEAT_MS)
+  }
+
+  const subscription = subscribeToClaudeEvents({ sessionId })
+
+  let consumeAborted = false
+  const consume = (async () => {
+    for await (const event of subscription.events) {
+      if (consumeAborted) break
+      switch (event.type) {
+        // Live activity on the session's Query, a turn boundary, or the pool
+        // entry dying — in every case the persisted window may have changed,
+        // so refetch (debounced) and let the signature bail-out drop no-ops.
+        case 'message':
+        case 'turn-start':
+        case 'turn-end':
+        case 'recycled':
+          scheduleRefetch()
+          break
+        case 'connected':
+        default:
+          break
+      }
+    }
+  })()
+
+  const onAbort = () => {
+    consumeAborted = true
+    subscription.close()
+    if (refetchTimer) clearTimeout(refetchTimer)
+    if (fallbackTimer) clearTimeout(fallbackTimer)
+    if (heartbeatTimer) clearTimeout(heartbeatTimer)
+    close()
+  }
+  if (signal.aborted) {
+    onAbort()
+    return
+  }
+  signal.addEventListener('abort', onAbort, { once: true })
+
   await refetch()
   scheduleFallback()
   scheduleHeartbeat()

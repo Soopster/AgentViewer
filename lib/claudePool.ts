@@ -6,6 +6,12 @@ import {
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import type { ReasoningEffortLevel } from './types'
+import {
+  broadcastClaudeMessage,
+  broadcastClaudeRecycled,
+  broadcastClaudeTurnEnd,
+  broadcastClaudeTurnStart,
+} from './claudeHarness'
 
 // Phase 1 of the claudeSessionPool migration. Mirrors lib/codexHarness.ts in
 // shape: a process-wide singleton (kept on globalThis to survive Next.js HMR)
@@ -207,6 +213,15 @@ class ClaudePool {
     try {
       for await (const message of entry.query) {
         if (!entry.alive) break
+        // Fan messages out to harness observers (second tabs, a page reloaded
+        // mid-turn) so the events SSE can refetch the canonical window in real
+        // time — independent of the single turn subscriber. Skip `stream_event`
+        // partial-message deltas: they don't add rows to the persisted JSONL,
+        // so refetching on them would just re-read the file and signature-bail.
+        // Completed assistant/user/result/system messages are what move the log.
+        if (message.type !== 'stream_event') {
+          try { broadcastClaudeMessage(entry.sessionId, message.type) } catch { /* never let a subscriber stall the pump */ }
+        }
         const sub = entry.subscriber
         if (sub) {
           sub.push(message)
@@ -273,6 +288,9 @@ class ClaudePool {
     if (this.entries.get(entry.sessionId) === entry) {
       this.entries.delete(entry.sessionId)
     }
+    // Nudge harness observers to do a final refetch so any tail messages
+    // persisted right before the entry died still surface.
+    try { broadcastClaudeRecycled(entry.sessionId) } catch { /* swallow */ }
   }
 
   private ensureCapacity(): void {
@@ -486,6 +504,7 @@ class ClaudePool {
     entry.lastActivityAt = Date.now()
     try {
       entry.pushUserMessage(message)
+      try { broadcastClaudeTurnStart(entry.sessionId) } catch { /* swallow */ }
     } catch (err) {
       entry.subscriber = null
       clearTimeout(hardTimer)
@@ -506,6 +525,7 @@ class ClaudePool {
       options.signal.removeEventListener('abort', abortHandler)
       entry.subscriber = null
       entry.lastActivityAt = Date.now()
+      try { broadcastClaudeTurnEnd(entry.sessionId) } catch { /* swallow */ }
       releaseMutex()
     }
   }

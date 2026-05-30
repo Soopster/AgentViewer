@@ -2277,6 +2277,15 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
         interrupt: () => entry.query.interrupt(),
       })
 
+      // Decouple the turn lifecycle from this HTTP request. A client disconnect
+      // (tab closed, navigation, network blip) must NOT interrupt an in-flight
+      // turn — the pool keeps draining the Query, the turn completes, messages
+      // persist, and the Claude harness keeps observers' transcripts live so a
+      // reconnect immediately resumes streaming. Explicit cancellation is a
+      // separate, deliberate action that flows through the /interrupt route
+      // (→ getRunningSession().interrupt()), not a side effect of disconnecting.
+      const turnAbort = new AbortController()
+
       // We already know the session id — emit immediately so the client doesn't
       // have to wait for the SDK's init message.
       controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: entry.sessionId })}\n\n`))
@@ -2291,12 +2300,12 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
 
       try {
         await entry.run(pushMessage, {
-          signal,
+          signal: turnAbort.signal,
           onMessage: (msg) => {
             try {
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
             } catch {
-              /* downstream closed; ignore */
+              /* downstream closed; ignore — the turn keeps running in the pool */
             }
           },
           onError: (err) => {
