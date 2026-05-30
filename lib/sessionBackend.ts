@@ -159,6 +159,7 @@ import type {
   Session as OpenCodeSession,
   TextPartInput as OpenCodeTextPartInput,
 } from '@opencode-ai/sdk'
+import type { AgentEvent as PiAgentEvent, AgentMessage as PiAgentMessage } from '@earendil-works/pi-agent-core'
 import { normalizeProjectPath, sameProjectPath } from './projectPaths'
 import {
   createPiAgentSession,
@@ -1036,6 +1037,184 @@ function mergeCopilotSessionEvents(persisted: CopilotSessionEvent[], live: Copil
     merged.push(event)
   }
   return merged.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+}
+
+type PiLiveTranscriptEntry = {
+  activeAssistantKey?: string
+  messages: Map<string, PiAgentMessage>
+  timer?: ReturnType<typeof setTimeout>
+  updatedAt: number
+}
+
+const PI_LIVE_TRANSCRIPT_TTL_MS = 5 * 60 * 1000
+const piLiveTranscripts = new Map<string, PiLiveTranscriptEntry>()
+
+function getPiLiveTranscriptEntry(sessionId: string): PiLiveTranscriptEntry {
+  let entry = piLiveTranscripts.get(sessionId)
+  if (!entry) {
+    entry = {
+      messages: new Map(),
+      updatedAt: Date.now(),
+    }
+    piLiveTranscripts.set(sessionId, entry)
+  }
+  if (entry.timer) {
+    clearTimeout(entry.timer)
+    entry.timer = undefined
+  }
+  entry.updatedAt = Date.now()
+  return entry
+}
+
+function schedulePiLiveTranscriptCleanup(sessionId: string): void {
+  const entry = piLiveTranscripts.get(sessionId)
+  if (!entry) return
+  if (entry.timer) clearTimeout(entry.timer)
+  entry.timer = setTimeout(() => {
+    piLiveTranscripts.delete(sessionId)
+  }, PI_LIVE_TRANSCRIPT_TTL_MS)
+  if (typeof entry.timer === 'object' && entry.timer && 'unref' in entry.timer) {
+    (entry.timer as { unref: () => void }).unref()
+  }
+}
+
+function piAgentMessageFingerprint(message: PiAgentMessage): string {
+  try {
+    return JSON.stringify(message)
+  } catch {
+    const role = (message as { role?: unknown }).role
+    const timestamp = (message as { timestamp?: unknown }).timestamp
+    return `${String(role ?? '')}:${String(timestamp ?? '')}`
+  }
+}
+
+function piAgentMessageDuplicateKey(message: PiAgentMessage): string {
+  const record = message as unknown as Record<string, unknown>
+  const role = typeof record.role === 'string' ? record.role : ''
+  if (role === 'bashExecution') {
+    const command = typeof record.command === 'string' ? record.command : ''
+    return command ? `bashExecution:${command}` : piAgentMessageFingerprint(message)
+  }
+  if (role === 'toolResult') {
+    const toolCallId = typeof record.toolCallId === 'string' ? record.toolCallId : ''
+    return toolCallId ? `toolResult:${toolCallId}` : piAgentMessageFingerprint(message)
+  }
+  return piAgentMessageFingerprint(message)
+}
+
+function piLiveMessageKey(message: PiAgentMessage, fallback: string): string {
+  const record = message as unknown as Record<string, unknown>
+  const role = typeof record.role === 'string' ? record.role : 'message'
+  if (role === 'assistant') {
+    const responseId = typeof record.responseId === 'string' && record.responseId ? record.responseId : ''
+    const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
+    const model = typeof record.model === 'string' ? record.model : ''
+    return `assistant:${responseId || timestamp || model || fallback}`
+  }
+  if (role === 'toolResult') {
+    const toolCallId = typeof record.toolCallId === 'string' && record.toolCallId ? record.toolCallId : ''
+    const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
+    return `toolResult:${toolCallId || timestamp || fallback}`
+  }
+  if (role === 'bashExecution') {
+    const command = typeof record.command === 'string' && record.command ? record.command : ''
+    const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
+    return `bashExecution:${command || timestamp || fallback}`
+  }
+  if (role === 'user') {
+    const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
+    return `user:${timestamp || fallback}`
+  }
+  const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
+  return `${role}:${timestamp || fallback}`
+}
+
+function recordPiLiveMessage(sessionId: string, message: PiAgentMessage, fallback: string): void {
+  const entry = getPiLiveTranscriptEntry(sessionId)
+  let key = piLiveMessageKey(message, fallback)
+  if ((message as { role?: unknown }).role === 'assistant') {
+    if (entry.activeAssistantKey && entry.activeAssistantKey !== key) {
+      entry.messages.delete(entry.activeAssistantKey)
+    }
+    entry.activeAssistantKey = key
+  }
+  entry.messages.set(key, message)
+}
+
+function recordPiLiveBashMessage(
+  sessionId: string,
+  params: {
+    command: string
+    output: string
+    excludeFromContext: boolean
+    exitCode?: number
+    cancelled?: boolean
+    truncated?: boolean
+  },
+): void {
+  recordPiLiveMessage(sessionId, {
+    role: 'bashExecution',
+    command: params.command,
+    output: params.output,
+    exitCode: params.exitCode,
+    cancelled: params.cancelled ?? false,
+    truncated: params.truncated ?? false,
+    timestamp: Date.now(),
+    excludeFromContext: params.excludeFromContext,
+  } as unknown as PiAgentMessage, `bash:${params.command}`)
+}
+
+function recordPiLiveTranscriptEvent(sessionId: string, event: PiAgentEvent): void {
+  switch (event.type) {
+    case 'message_start':
+    case 'message_update':
+    case 'message_end':
+      recordPiLiveMessage(sessionId, event.message, event.type)
+      if (event.type === 'message_end' && event.message.role === 'assistant') {
+        const entry = getPiLiveTranscriptEntry(sessionId)
+        entry.activeAssistantKey = undefined
+      }
+      break
+    case 'turn_end':
+      recordPiLiveMessage(sessionId, event.message, 'turn_end')
+      for (const result of event.toolResults) {
+        recordPiLiveMessage(sessionId, result, `turn_end:${result.toolCallId}`)
+      }
+      break
+    case 'agent_end':
+      schedulePiLiveTranscriptCleanup(sessionId)
+      break
+    default:
+      break
+  }
+}
+
+function getPiLiveTranscriptMessages(sessionId: string, persisted: PiAgentMessage[]): PiAgentMessage[] {
+  const entry = piLiveTranscripts.get(sessionId)
+  if (!entry) return []
+  const persistedFingerprints = new Set(persisted.map(piAgentMessageFingerprint))
+  const persistedDuplicateKeys = new Set(persisted.map(piAgentMessageDuplicateKey))
+  const liveMessages: PiAgentMessage[] = []
+  for (const message of entry.messages.values()) {
+    if (persistedFingerprints.has(piAgentMessageFingerprint(message))) continue
+    if (persistedDuplicateKeys.has(piAgentMessageDuplicateKey(message))) continue
+    liveMessages.push(message)
+  }
+  return liveMessages.sort((a, b) => {
+    const at = typeof (a as { timestamp?: unknown }).timestamp === 'number' ? (a as { timestamp: number }).timestamp : 0
+    const bt = typeof (b as { timestamp?: unknown }).timestamp === 'number' ? (b as { timestamp: number }).timestamp : 0
+    return at - bt
+  })
+}
+
+function piLiveTranscriptSignature(messages: PiAgentMessage[]): string {
+  if (messages.length === 0) return ''
+  return messages.map((message) => {
+    const record = message as unknown as Record<string, unknown>
+    const role = typeof record.role === 'string' ? record.role : ''
+    const timestamp = typeof record.timestamp === 'number' ? record.timestamp : ''
+    return `${role}:${timestamp}:${piAgentMessageFingerprint(message)}`
+  }).join('|')
 }
 
 type PendingClaudePermission = {
@@ -1963,11 +2142,13 @@ async function readCopilotMessagesAll(sessionId: string): Promise<SessionMessage
 
 function readPiMessagesAll(sessionId: string): SessionMessage[] {
   const raw = getPiSessionMessages(sessionId)
+  const live = getPiLiveTranscriptMessages(sessionId, raw)
+  const mergedRaw = live.length > 0 ? [...raw, ...live] : raw
   const last = raw.at(-1) as { id?: string; role?: string } | undefined
-  const signature = `${raw.length}:${last?.id ?? ''}:${last?.role ?? ''}`
+  const signature = `${raw.length}:${last?.id ?? ''}:${last?.role ?? ''}:${piLiveTranscriptSignature(live)}`
   const cached = readMappedMessagesCache(`pi:${sessionId}`, signature)
   if (cached) return cached
-  const messages = sortMessagesChronologically(mapPiMessagesToSessionMessages(sessionId, raw))
+  const messages = sortMessagesChronologically(mapPiMessagesToSessionMessages(sessionId, mergedRaw))
   return writeMappedMessagesCache(`pi:${sessionId}`, signature, messages)
 }
 
@@ -3644,7 +3825,14 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
               void running.interrupt().catch(() => {})
             }
           })
-          await agentSession.executeBash(directShell.command, (chunk) => {
+          let directShellOutput = ''
+          const bashResult = await agentSession.executeBash(directShell.command, (chunk) => {
+            directShellOutput += chunk
+            recordPiLiveBashMessage(targetSessionId, {
+              command: directShell.command,
+              output: directShellOutput,
+              excludeFromContext: directShell.excludeFromContext,
+            })
             broadcastLiveSessionActivity('pi', targetSessionId)
             safeEnqueue(`data: ${JSON.stringify({
               type: 'pi_bash_delta',
@@ -3655,9 +3843,18 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           }, {
             excludeFromContext: directShell.excludeFromContext,
           })
+          recordPiLiveBashMessage(targetSessionId, {
+            command: directShell.command,
+            output: typeof bashResult.output === 'string' ? bashResult.output : directShellOutput,
+            excludeFromContext: directShell.excludeFromContext,
+            exitCode: typeof bashResult.exitCode === 'number' ? bashResult.exitCode : undefined,
+            cancelled: Boolean(bashResult.cancelled),
+            truncated: Boolean(bashResult.truncated),
+          })
           clearRunningSession(sessionId)
           broadcastLiveSessionActivity('pi', targetSessionId)
           broadcastLiveSessionTurnEnd('pi', targetSessionId)
+          schedulePiLiveTranscriptCleanup(targetSessionId)
           close()
           return
         }
@@ -3681,6 +3878,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
 
         unsubscribePi = agentSession.agent.subscribe((event) => {
           if (cleanedUp) return
+          recordPiLiveTranscriptEvent(targetSessionId, event)
           broadcastLiveSessionActivity('pi', targetSessionId)
           const payload = JSON.stringify({ type: 'pi_event', event })
           safeEnqueue(`data: ${payload}\n\n`)
@@ -3706,6 +3904,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             clearRunningSession(sessionId)
             unsubscribePi?.()
             broadcastLiveSessionTurnEnd('pi', targetSessionId)
+            schedulePiLiveTranscriptCleanup(targetSessionId)
             close()
           }
         })
@@ -3720,6 +3919,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         clearRunningSession(sessionId)
         if (broadcastedTurnStart) {
           broadcastLiveSessionTurnEnd('pi', targetSessionId)
+          schedulePiLiveTranscriptCleanup(targetSessionId)
         }
         close()
       }
