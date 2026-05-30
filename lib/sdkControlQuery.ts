@@ -30,6 +30,12 @@ export function createSessionControlQuery(sessionId: string, model = 'claude-son
       model,
       maxTurns: 0,
       enableFileCheckpointing: true,
+      // Read-only control queries (context usage, supported commands, MCP
+      // toggles, dry-run rewinds — all maxTurns:0, never sending a turn). Without
+      // this, resuming rewrites the session JSONL and bumps its mtime, so merely
+      // *viewing* a session reorders it to the top of the list. See
+      // READ_MODELS_WARM_OPTIONS, which sets this for the same reason.
+      persistSession: false,
     },
   })
 }
