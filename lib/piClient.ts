@@ -84,6 +84,16 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
     if (file) {
       sessionPathCache.set(id, file)
     }
+    // Seed the pool so openPiAgentSession hits the cache on the 2nd message instead of
+    // calling createAgentSession again (which would re-run resourceLoader.reload() and
+    // package resolution, causing spurious npm install output on every new session).
+    const entry: PiPoolEntry = {
+      session: result.session,
+      lastUsed: Date.now(),
+      timer: setTimeout(() => {}, 0),
+    }
+    piSessionPool.set(id, entry)
+    schedulePiEviction(id)
     return result.session
   } catch (error) {
     throw wrapPiError(error)
