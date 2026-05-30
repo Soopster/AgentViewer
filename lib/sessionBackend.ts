@@ -869,6 +869,175 @@ function resolvePendingCopilotPermissions(sessionId: string, ids: Set<string>, r
   }
 }
 
+type CopilotAssistantMessageEvent = Extract<CopilotSessionEvent, { type: 'assistant.message' }>
+type CopilotAssistantMessageDeltaEvent = Extract<CopilotSessionEvent, { type: 'assistant.message_delta' }>
+type CopilotAssistantMessageStartEvent = Extract<CopilotSessionEvent, { type: 'assistant.message_start' }>
+
+type CopilotLiveDraft = {
+  agentId?: string
+  content: string
+  messageId: string
+  parentId: string | null
+  phase?: string
+  timestamp: string
+  turnId?: string
+}
+
+type CopilotLiveTranscriptEntry = {
+  currentTurnId?: string
+  drafts: Map<string, CopilotLiveDraft>
+  events: Map<string, CopilotSessionEvent>
+  timer?: ReturnType<typeof setTimeout>
+  updatedAt: number
+}
+
+const COPILOT_LIVE_TRANSCRIPT_TTL_MS = 5 * 60 * 1000
+const copilotLiveTranscripts = new Map<string, CopilotLiveTranscriptEntry>()
+
+function getCopilotLiveTranscriptEntry(sessionId: string): CopilotLiveTranscriptEntry {
+  let entry = copilotLiveTranscripts.get(sessionId)
+  if (!entry) {
+    entry = {
+      drafts: new Map(),
+      events: new Map(),
+      updatedAt: Date.now(),
+    }
+    copilotLiveTranscripts.set(sessionId, entry)
+  }
+  if (entry.timer) {
+    clearTimeout(entry.timer)
+    entry.timer = undefined
+  }
+  entry.updatedAt = Date.now()
+  return entry
+}
+
+function scheduleCopilotLiveTranscriptCleanup(sessionId: string): void {
+  const entry = copilotLiveTranscripts.get(sessionId)
+  if (!entry) return
+  if (entry.timer) clearTimeout(entry.timer)
+  entry.timer = setTimeout(() => {
+    copilotLiveTranscripts.delete(sessionId)
+  }, COPILOT_LIVE_TRANSCRIPT_TTL_MS)
+  if (typeof entry.timer === 'object' && entry.timer && 'unref' in entry.timer) {
+    (entry.timer as { unref: () => void }).unref()
+  }
+}
+
+function copilotLiveEventKey(event: CopilotSessionEvent): string {
+  if (event.type === 'assistant.message') return `assistant.message:${event.data.messageId}`
+  return `${event.type}:${event.id}`
+}
+
+function makeCopilotLiveAssistantMessageEvent(draft: CopilotLiveDraft): CopilotAssistantMessageEvent {
+  return {
+    agentId: draft.agentId,
+    data: {
+      content: draft.content,
+      messageId: draft.messageId,
+      phase: draft.phase,
+      turnId: draft.turnId,
+    },
+    ephemeral: true,
+    id: `agent-viewer-live:${draft.messageId}`,
+    parentId: draft.parentId,
+    timestamp: draft.timestamp,
+    type: 'assistant.message',
+  } as CopilotAssistantMessageEvent
+}
+
+function recordCopilotLiveDraftStart(sessionId: string, event: CopilotAssistantMessageStartEvent): void {
+  const entry = getCopilotLiveTranscriptEntry(sessionId)
+  const existing = entry.drafts.get(event.data.messageId)
+  entry.drafts.set(event.data.messageId, {
+    agentId: event.agentId,
+    content: existing?.content ?? '',
+    messageId: event.data.messageId,
+    parentId: event.parentId,
+    phase: event.data.phase,
+    timestamp: existing?.timestamp ?? event.timestamp,
+    turnId: entry.currentTurnId,
+  })
+}
+
+function recordCopilotLiveDraftDelta(sessionId: string, event: CopilotAssistantMessageDeltaEvent): void {
+  const entry = getCopilotLiveTranscriptEntry(sessionId)
+  const existing = entry.drafts.get(event.data.messageId)
+  entry.drafts.set(event.data.messageId, {
+    agentId: event.agentId ?? existing?.agentId,
+    content: `${existing?.content ?? ''}${event.data.deltaContent}`,
+    messageId: event.data.messageId,
+    parentId: existing?.parentId ?? event.parentId,
+    phase: existing?.phase,
+    timestamp: event.timestamp,
+    turnId: existing?.turnId ?? entry.currentTurnId,
+  })
+}
+
+function recordCopilotLiveTranscriptEvent(sessionId: string, event: CopilotSessionEvent): void {
+  const entry = getCopilotLiveTranscriptEntry(sessionId)
+
+  if (event.type === 'assistant.turn_start') {
+    entry.currentTurnId = event.data.turnId
+  } else if (event.type === 'assistant.turn_end' && entry.currentTurnId === event.data.turnId) {
+    entry.currentTurnId = undefined
+    scheduleCopilotLiveTranscriptCleanup(sessionId)
+  }
+
+  if (event.type === 'assistant.message_start') {
+    recordCopilotLiveDraftStart(sessionId, event)
+    return
+  }
+  if (event.type === 'assistant.message_delta') {
+    recordCopilotLiveDraftDelta(sessionId, event)
+    return
+  }
+  if (event.type === 'assistant.message') {
+    entry.drafts.delete(event.data.messageId)
+  }
+
+  entry.events.set(copilotLiveEventKey(event), event)
+}
+
+function getCopilotLiveTranscriptEvents(sessionId: string): CopilotSessionEvent[] {
+  const entry = copilotLiveTranscripts.get(sessionId)
+  if (!entry) return []
+  const events = Array.from(entry.events.values())
+  for (const draft of entry.drafts.values()) {
+    if (!draft.content) continue
+    events.push(makeCopilotLiveAssistantMessageEvent(draft))
+  }
+  return events.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+}
+
+function copilotLiveTranscriptSignature(events: CopilotSessionEvent[]): string {
+  if (events.length === 0) return ''
+  return events.map((event) => {
+    if (event.type === 'assistant.message') {
+      return `${event.type}:${event.data.messageId}:${event.data.content.length}:${event.data.content.slice(-64)}`
+    }
+    return `${event.type}:${event.id}`
+  }).join('|')
+}
+
+function mergeCopilotSessionEvents(persisted: CopilotSessionEvent[], live: CopilotSessionEvent[]): CopilotSessionEvent[] {
+  if (live.length === 0) return persisted
+
+  const persistedIds = new Set(persisted.map((event) => event.id))
+  const persistedAssistantIds = new Set(
+    persisted
+      .filter((event): event is CopilotAssistantMessageEvent => event.type === 'assistant.message')
+      .map((event) => event.data.messageId),
+  )
+  const merged = [...persisted]
+  for (const event of live) {
+    if (persistedIds.has(event.id)) continue
+    if (event.type === 'assistant.message' && persistedAssistantIds.has(event.data.messageId)) continue
+    merged.push(event)
+  }
+  return merged.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+}
+
 type PendingClaudePermission = {
   resolve: (result: PermissionResult) => void
   timer: ReturnType<typeof setTimeout>
@@ -1781,9 +1950,11 @@ async function readOpenCodeMessagesAll(sessionId: string): Promise<SessionMessag
 }
 
 async function readCopilotMessagesAll(sessionId: string): Promise<SessionMessage[]> {
-  const events = await readCopilotSessionEvents(sessionId)
+  const persistedEvents = await readCopilotSessionEvents(sessionId)
+  const liveEvents = getCopilotLiveTranscriptEvents(sessionId)
+  const events = mergeCopilotSessionEvents(persistedEvents, liveEvents)
   const last = events.at(-1) as { id?: string; type?: string } | undefined
-  const signature = `${events.length}:${last?.id ?? ''}:${last?.type ?? ''}`
+  const signature = `${events.length}:${last?.id ?? ''}:${last?.type ?? ''}:${copilotLiveTranscriptSignature(liveEvents)}`
   const cached = readMappedMessagesCache(`copilot:${sessionId}`, signature)
   if (cached) return cached
   const messages = sortMessagesChronologically(mapCopilotEventsToSessionMessages(sessionId, events))
@@ -3118,6 +3289,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
         const handleEvent = (event: CopilotSessionEvent) => {
           if (cleanedUp) return
+          recordCopilotLiveTranscriptEvent(sessionId, event)
           broadcastLiveSessionActivity('copilot', sessionId)
           if (event.type === 'assistant.message') {
             streamedAssistantMessageIds.add(event.data.messageId)
@@ -3370,6 +3542,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         }
         if (broadcastedTurnStart) {
           broadcastLiveSessionTurnEnd('copilot', sessionId)
+          scheduleCopilotLiveTranscriptCleanup(sessionId)
         }
         close()
       }
