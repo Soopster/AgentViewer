@@ -90,9 +90,10 @@ import { extractPendingPermission, extractPermissionReply, type PendingPermissio
 import { readViewSessionSlashCommands, readViewSessionComposerOptions, createNewViewSession } from '../../lib/sessionBackend'
 import { compactStableFingerprint } from '../../lib/compactFingerprint'
 import { appendFileSync, mkdirSync } from 'node:fs'
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rm, stat } from 'node:fs/promises'
 import { release, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // Stable-reference event handler — reads the latest closure on every call
 // without appearing in any deps array. Mirrors React's upcoming useEffectEvent
@@ -376,6 +377,21 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 type ClipboardImage = { data: string; mimeType: string; displayName: string }
+type ComposerPromptPart =
+  | { id: string; kind: 'text'; marker: string; text: string }
+  | { id: string; kind: 'attachment'; marker: string; attachment: SendAttachment }
+type ComposerDraftSnapshot = {
+  text: string
+  attachments: SendAttachment[]
+  promptParts: ComposerPromptPart[]
+}
+type ComposerPromptPartRange = ComposerPromptPart & { start: number; end: number }
+type ComposerSubmission = {
+  visibleText: string
+  messageText: string
+  attachments: SendAttachment[]
+  promptParts: ComposerPromptPart[]
+}
 
 function parseFileUrlList(value: string): string[] {
   return value
@@ -399,6 +415,34 @@ function clipboardImageMimeTypeForPath(path: string): string | null {
   if (lower.endsWith('.gif')) return 'image/gif'
   if (lower.endsWith('.webp')) return 'image/webp'
   return null
+}
+
+function pastedFileMimeTypeForPath(path: string): string {
+  const imageMime = clipboardImageMimeTypeForPath(path)
+  if (imageMime) return imageMime
+  const lower = path.toLowerCase()
+  if (lower.endsWith('.svg')) return 'image/svg+xml'
+  if (lower.endsWith('.pdf')) return 'application/pdf'
+  if (lower.endsWith('.json')) return 'application/json'
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'text/markdown'
+  return 'text/plain'
+}
+
+function normalizePastedFilePath(value: string, cwd: string | null | undefined): string | null {
+  const raw = value.trim().replace(/^['"]+|['"]+$/g, '')
+  if (!raw || raw.includes('\n')) return null
+  let path = raw
+  if (path.startsWith('file://')) {
+    try {
+      path = fileURLToPath(path)
+    } catch {
+      return null
+    }
+  } else if (process.platform !== 'win32') {
+    path = path.replace(/\\(.)/g, '$1')
+  }
+  if (/^https?:\/\//i.test(path)) return null
+  return isAbsolute(path) ? path : resolve(cwd || process.cwd(), path)
 }
 
 function appleScriptStringLiteral(value: string): string {
@@ -907,6 +951,18 @@ function attachmentCountLabel(attachments: SendAttachment[]): string | null {
   if (imageCount > 0) parts.push(`${imageCount} image${imageCount === 1 ? '' : 's'}`)
   if (otherCount > 0) parts.push(`${otherCount} attachment${otherCount === 1 ? '' : 's'}`)
   return parts.join(' · ')
+}
+
+function composerSnapshotText(snapshot: ComposerDraftSnapshot): string {
+  return snapshot.text
+}
+
+function compactComposerEntryText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim() || '(empty prompt)'
+}
+
+function composerEntryLineCount(text: string): number {
+  return text.length === 0 ? 1 : text.split('\n').length
 }
 // NOTE: OpenTUI's mergeKeyBindings hashes by `name:ctrl:shift:meta:super` —
 // `alt` is NOT part of the key. Listing `{ name: 'return', alt: true, ... }`
@@ -2510,6 +2566,9 @@ const COMMANDS: PaletteCommand[] = [
   // Session
   { id: 'composer',   label: 'Open composer',          key: 'c',  category: 'Session'    },
   { id: 'composer-window', label: 'Open composer window', key: '^O', category: 'Session'    },
+  { id: 'composer-stash', label: 'Stash composer prompt', key: 'stash', category: 'Session' },
+  { id: 'composer-stash-pop', label: 'Pop composer stash', key: 'pop', category: 'Session' },
+  { id: 'composer-stash-list', label: 'List composer stash', key: 'list', category: 'Session' },
   { id: 'new',        label: 'New agent session',      key: 'N',  category: 'Session'    },
   { id: 'reuse',      label: 'Reuse last prompt',      key: 'R',  category: 'Session'    },
   { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
@@ -3039,6 +3098,10 @@ export default function OpenTuiApp() {
   const [composerMentionIndex, setComposerMentionIndex] = useState(0)
   const [composerMentionDismissedStart, setComposerMentionDismissedStart] = useState<number | null>(null)
   const [composerMentionAttachments, setComposerMentionAttachments] = useState<SendAttachment[]>([])
+  const [composerPromptParts, setComposerPromptParts] = useState<ComposerPromptPart[]>([])
+  const [composerStash, setComposerStash] = useState<ComposerDraftSnapshot[]>([])
+  const [composerStashOpen, setComposerStashOpen] = useState(false)
+  const [composerStashIndex, setComposerStashIndex] = useState(0)
   const [composerSlashIndex, setComposerSlashIndex] = useState(0)
   const [composerSlashDismissed, setComposerSlashDismissed] = useState(false)
   const [composerHistoryOpen, setComposerHistoryOpen] = useState(false)
@@ -3079,9 +3142,13 @@ export default function OpenTuiApp() {
   const [modelPickerIndex, setModelPickerIndex] = useState(0)
   const [modelPickerLoading, setModelPickerLoading] = useState(false)
   const [modelPickerError, setModelPickerError] = useState<string | null>(null)
-  const [sentHistory, setSentHistory] = useState<string[]>([])
+  const [sentHistory, setSentHistory] = useState<ComposerDraftSnapshot[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
-  const [draftBeforeHistory, setDraftBeforeHistory] = useState('')
+  const [draftBeforeHistory, setDraftBeforeHistory] = useState<ComposerDraftSnapshot>({
+    text: '',
+    attachments: [],
+    promptParts: [],
+  })
   const [thinkingMode, setThinkingMode] = useState(false)
 
   // Store full Session objects so tabs retain provider context across
@@ -3748,6 +3815,105 @@ export default function OpenTuiApp() {
     }
   }, [composerMention, composerMentionAgents, selectedSession?.cwd, selectedSession?.provider])
 
+  const ensureComposerPastePartTypeId = useEffectEvent((renderable: TextareaRenderable): number => {
+    let typeId = composerPastePartTypeIdRef.current
+    if (typeId == null) {
+      typeId = renderable.extmarks.registerType('composer-paste')
+      composerPastePartTypeIdRef.current = typeId
+    }
+    return typeId
+  })
+
+  const restoreComposerPromptPartExtmarks = useEffectEvent((parts: ComposerPromptPart[], text: string) => {
+    const renderable = composerTextareaRef.current
+    if (!renderable) return
+    renderable.extmarks.clear()
+    if (parts.length === 0) return
+    const typeId = ensureComposerPastePartTypeId(renderable)
+    const styleId = renderable.syntaxStyle?.getStyleId('extmark.paste') ?? undefined
+    let cursor = 0
+    for (const part of parts) {
+      const start = text.indexOf(part.marker, cursor)
+      if (start === -1) continue
+      const end = start + part.marker.length
+      renderable.extmarks.create({
+        start,
+        end,
+        virtual: true,
+        styleId,
+        typeId,
+        data: { partId: part.id },
+      })
+      cursor = end
+    }
+  })
+
+  const makeComposerSnapshot = useEffectEvent((): ComposerDraftSnapshot => ({
+    text: composerTextareaRef.current?.plainText ?? composerDraft,
+    attachments: [...composerMentionAttachments],
+    promptParts: [...composerPromptParts],
+  }))
+
+  const applyComposerSnapshot = useEffectEvent((snapshot: ComposerDraftSnapshot) => {
+    const text = snapshot.text
+    composerTextareaRef.current?.setText(text)
+    if (composerTextareaRef.current) composerTextareaRef.current.cursorOffset = text.length
+    setComposerDraft(text)
+    setComposerMentionAttachments(snapshot.attachments)
+    setComposerPromptParts(snapshot.promptParts)
+    restoreComposerPromptPartExtmarks(snapshot.promptParts, text)
+  })
+
+  const activeComposerPromptPartRanges = useEffectEvent((text: string, parts: ComposerPromptPart[]): ComposerPromptPartRange[] => {
+    const renderable = composerTextareaRef.current
+    const typeId = composerPastePartTypeIdRef.current
+    const byId = new Map(parts.map((part) => [part.id, part]))
+    if (renderable && typeId != null) {
+      return renderable.extmarks
+        .getAllForTypeId(typeId)
+        .flatMap((extmark: { start: number; end: number; data?: { partId?: unknown } }) => {
+          const partId = typeof extmark.data?.partId === 'string' ? extmark.data.partId : ''
+          const part = byId.get(partId)
+          if (!part) return []
+          const marker = text.slice(extmark.start, extmark.end) || part.marker
+          return [{ ...part, marker, start: extmark.start, end: extmark.end }]
+        })
+        .sort((a, b) => a.start - b.start)
+    }
+
+    let cursor = 0
+    const ranges: ComposerPromptPartRange[] = []
+    for (const part of parts) {
+      const start = text.indexOf(part.marker, cursor)
+      if (start === -1) continue
+      const end = start + part.marker.length
+      ranges.push({ ...part, start, end })
+      cursor = end
+    }
+    return ranges
+  })
+
+  const prepareComposerSubmission = useEffectEvent((visibleText: string, attachments: SendAttachment[], parts: ComposerPromptPart[]): ComposerSubmission => {
+    const promptPartRanges = activeComposerPromptPartRanges(visibleText, parts)
+    let messageText = visibleText
+    for (const part of [...promptPartRanges].sort((a, b) => b.start - a.start)) {
+      if (part.kind !== 'text') continue
+      messageText = `${messageText.slice(0, part.start)}${part.text}${messageText.slice(part.end)}`
+    }
+    const promptPartAttachments = promptPartRanges
+      .filter((part): part is ComposerPromptPartRange & { kind: 'attachment' } => part.kind === 'attachment')
+      .map((part) => ({ ...part.attachment, text: part.marker }))
+    const promptAttachmentIds = new Set(promptPartAttachments.map((attachment) => attachment.id).filter(Boolean))
+    const mentionAttachments = activeMentionAttachments(visibleText, attachments)
+      .filter((attachment) => !attachment.id || !promptAttachmentIds.has(attachment.id))
+    return {
+      visibleText,
+      messageText: messageText.trim(),
+      attachments: [...mentionAttachments, ...promptPartAttachments],
+      promptParts: promptPartRanges.map(({ start: _start, end: _end, ...part }) => part),
+    }
+  })
+
   const insertMentionAtCursor = useEffectEvent((entry: TuiMentionResult) => {
     const renderable = composerTextareaRef.current
     if (!renderable || !composerMention) return
@@ -3808,21 +3974,20 @@ export default function OpenTuiApp() {
     if (sentHistory.length === 0) return
     const nextDisplayIndex = clamp(displayIndex, 0, sentHistory.length - 1)
     const sourceIndex = sentHistory.length - 1 - nextDisplayIndex
-    const replacement = sentHistory[sourceIndex] ?? ''
+    const replacement = sentHistory[sourceIndex] ?? { text: '', attachments: [], promptParts: [] }
     setComposerHistoryIndex(nextDisplayIndex)
     setHistoryIndex(sourceIndex)
-    composerTextareaRef.current?.setText(replacement)
-    if (composerTextareaRef.current) composerTextareaRef.current.cursorOffset = replacement.length
-    setComposerDraft(replacement)
+    applyComposerSnapshot(replacement)
   })
 
   const openComposerHistory = useEffectEvent((displayIndex = 0) => {
     if (sentHistory.length === 0) return
     if (!composerHistoryOpen && historyIndex === -1) {
-      setDraftBeforeHistory(composerTextareaRef.current?.plainText ?? composerDraft)
+      setDraftBeforeHistory(makeComposerSnapshot())
     }
     setComposerMention(null)
     setComposerMentionResults([])
+    setComposerStashOpen(false)
     setComposerHistoryOpen(true)
     selectComposerHistoryEntry(displayIndex)
   })
@@ -3835,9 +4000,7 @@ export default function OpenTuiApp() {
   const cancelComposerHistory = useEffectEvent(() => {
     setComposerHistoryOpen(false)
     setComposerHistoryIndex(0)
-    composerTextareaRef.current?.setText(draftBeforeHistory)
-    if (composerTextareaRef.current) composerTextareaRef.current.cursorOffset = draftBeforeHistory.length
-    setComposerDraft(draftBeforeHistory)
+    applyComposerSnapshot(draftBeforeHistory)
     setHistoryIndex(-1)
   })
 
@@ -3874,7 +4037,7 @@ export default function OpenTuiApp() {
     const cursor = renderable?.cursorOffset ?? text.length
     setComposerDraft(text)
     if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, text)
-    if (historyIndex !== -1 && text !== sentHistory[historyIndex]) setHistoryIndex(-1)
+    if (historyIndex !== -1 && text !== (sentHistory[historyIndex]?.text ?? '')) setHistoryIndex(-1)
     if (composerError) setComposerError(null)
     if (composerSendState === 'error') setComposerSendState('idle')
     const mention = detectMentionAtCursor(text, cursor)
@@ -3899,12 +4062,15 @@ export default function OpenTuiApp() {
   const composerMentionVisibleCount = Math.min(composerMentionResults.length, 5)
   const composerSlashVisibleCount = Math.min(composerSlashCommands.length, 5)
   const composerHistoryVisibleCount = Math.min(sentHistory.length, 6)
+  const composerStashVisibleCount = Math.min(composerStash.length, 6)
   const composerPopoverHeight = (!composerWindowOpen && composerActive && composerMention && composerMentionVisibleCount > 0)
     ? composerMentionVisibleCount + 3
-    : (!composerWindowOpen && composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention && !composerHistoryOpen)
+    : (!composerWindowOpen && composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention && !composerHistoryOpen && !composerStashOpen)
     ? composerSlashVisibleCount + 3
     : (!composerWindowOpen && composerActive && composerHistoryOpen && composerHistoryVisibleCount > 0 && !composerMention)
     ? composerHistoryVisibleCount + 3
+    : (!composerWindowOpen && composerActive && composerStashOpen && composerStashVisibleCount > 0 && !composerMention)
+    ? composerStashVisibleCount + 3
     : 0
   // Status indicators (requesting spinner, subagent tail, live-prompt
   // suggestion, composer status, auto-targeting note) render as siblings
@@ -3993,10 +4159,12 @@ export default function OpenTuiApp() {
     : composerDraft.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / composerWindowTextareaWidth)), 0)
   const composerWindowSuggestionHeight = (composerActive && composerMention && composerMentionVisibleCount > 0)
     ? composerMentionVisibleCount + 3
-    : (composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention && !composerHistoryOpen)
+    : (composerActive && composerSlashOpen && composerSlashVisibleCount > 0 && !composerMention && !composerHistoryOpen && !composerStashOpen)
     ? composerSlashVisibleCount + 3
     : (composerActive && composerHistoryOpen && composerHistoryVisibleCount > 0 && !composerMention)
     ? composerHistoryVisibleCount + 3
+    : (composerActive && composerStashOpen && composerStashVisibleCount > 0 && !composerMention)
+    ? composerStashVisibleCount + 3
     : 0
   const composerWindowHeaderHeight = 2
   const composerWindowFooterHeight = 2
@@ -5162,9 +5330,18 @@ export default function OpenTuiApp() {
   }, [])
 
   const sendComposerMessage = useCallback(async (draftOverride?: string, attachmentsOverride?: SendAttachment[]) => {
-    const trimmed = (draftOverride ?? composerDraft).trim()
-    if (!trimmed || !composerTargetSession) return
-    const sendAttachments = attachmentsOverride ?? activeMentionAttachments(trimmed, composerMentionAttachments)
+    const visibleText = draftOverride ?? composerDraft
+    const submission = attachmentsOverride
+      ? {
+          visibleText,
+          messageText: visibleText.trim(),
+          attachments: attachmentsOverride,
+          promptParts: [],
+        }
+      : prepareComposerSubmission(visibleText, composerMentionAttachments, composerPromptParts)
+    const trimmed = submission.messageText
+    if ((!trimmed && submission.attachments.length === 0) || !composerTargetSession) return
+    const sendAttachments = submission.attachments
     // Native CLIs queue a follow-up prompt while the active turn streams.
     // Mirror that here: when sending, stash this draft and flush it after.
     if (composerSendState === 'sending') {
@@ -5172,6 +5349,8 @@ export default function OpenTuiApp() {
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
       setComposerMentionAttachments([])
+      setComposerPromptParts([])
+      composerTextareaRef.current?.extmarks.clear()
       setComposerHistoryOpen(false)
       setComposerHistoryIndex(0)
       return
@@ -5587,18 +5766,24 @@ export default function OpenTuiApp() {
         ))
       }
 
-      setSentHistory((prev) => [...prev, trimmed])
+      setSentHistory((prev) => [...prev, {
+        text: submission.visibleText.trim(),
+        attachments: sendAttachments,
+        promptParts: submission.promptParts,
+      }])
       setHistoryIndex(-1)
-      setDraftBeforeHistory('')
+      setDraftBeforeHistory({ text: '', attachments: [], promptParts: [] })
       setComposerHistoryOpen(false)
       setComposerHistoryIndex(0)
       composerTextareaRef.current?.setText('')
+      composerTextareaRef.current?.extmarks.clear()
       setComposerDraft('')
       if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, '')
       setComposerMention(null)
       setComposerMentionResults([])
       setComposerMentionDismissedStart(null)
       setComposerMentionAttachments([])
+      setComposerPromptParts([])
       setComposerSlashIndex(0)
       setComposerSlashDismissed(false)
       setComposerSendState('idle')
@@ -5690,6 +5875,8 @@ export default function OpenTuiApp() {
     tuiPermissionMode,
     tuiModelOverride,
     composerMentionAttachments,
+    composerPromptParts,
+    prepareComposerSubmission,
     sessionDetail,
   ])
 
@@ -6277,18 +6464,14 @@ export default function OpenTuiApp() {
     setComposerWindowOpen((open) => !open)
   })
 
-  const insertComposerPasteMarker = useEffectEvent((marker: string) => {
+  const insertComposerPasteMarker = useEffectEvent((marker: string, partId: string) => {
     const renderable = composerTextareaRef.current
-    if (!renderable || !marker) return
+    if (!renderable || !marker || !partId) return
     const textToInsert = `${marker} `
     const start = renderable.cursorOffset
     renderable.insertText(textToInsert)
     const end = start + marker.length
-    let typeId = composerPastePartTypeIdRef.current
-    if (typeId == null) {
-      typeId = renderable.extmarks.registerType('composer-paste')
-      composerPastePartTypeIdRef.current = typeId
-    }
+    const typeId = ensureComposerPastePartTypeId(renderable)
     const styleId = renderable.syntaxStyle?.getStyleId('extmark.paste') ?? undefined
     renderable.extmarks.create({
       start,
@@ -6296,6 +6479,7 @@ export default function OpenTuiApp() {
       virtual: true,
       styleId,
       typeId,
+      data: { partId },
     })
     const next = renderable.plainText
     setComposerDraft(next)
@@ -6304,22 +6488,90 @@ export default function OpenTuiApp() {
     setComposerHistoryIndex(0)
   })
 
+  const attachComposerAttachment = useEffectEvent((attachment: SendAttachment, marker: string, noticeText: string) => {
+    const id = attachment.id || `paste-${Date.now()}-${composerPromptParts.length}`
+    const nextAttachment = { ...attachment, id, text: marker }
+    insertComposerPasteMarker(marker, id)
+    setComposerMentionAttachments((prev) => [...prev, nextAttachment])
+    setComposerPromptParts((prev) => [...prev, {
+      id,
+      kind: 'attachment',
+      marker,
+      attachment: nextAttachment,
+    }])
+    showNotice('info', noticeText)
+  })
+
   const attachComposerImage = useEffectEvent((image: ClipboardImage) => {
     const visibleDraft = composerTextareaRef.current?.plainText ?? composerDraft
-    const marker = `[Image ${imageAttachmentCount(activeMentionAttachments(visibleDraft, composerMentionAttachments)) + 1}]`
-    insertComposerPasteMarker(marker)
-    setComposerMentionAttachments((prev) => [
-      ...prev,
-      {
-        id: `paste-${Date.now()}-${prev.length}`,
-        type: 'blob',
-        mimeType: image.mimeType,
-        data: image.data,
-        displayName: image.displayName,
-        text: marker,
-      },
-    ])
-    showNotice('info', `Attached ${image.displayName}`)
+    const activeAttachments = prepareComposerSubmission(visibleDraft, composerMentionAttachments, composerPromptParts).attachments
+    const marker = `[Image ${imageAttachmentCount(activeAttachments) + 1}]`
+    attachComposerAttachment({
+      id: `paste-${Date.now()}-${composerPromptParts.length}`,
+      type: 'blob',
+      mimeType: image.mimeType,
+      data: image.data,
+      displayName: image.displayName,
+    }, marker, `Attached ${image.displayName}`)
+  })
+
+  const insertCompactPastedText = useEffectEvent((text: string, marker: string) => {
+    const id = `paste-text-${Date.now()}-${composerPromptParts.length}`
+    insertComposerPasteMarker(marker, id)
+    setComposerPromptParts((prev) => [...prev, {
+      id,
+      kind: 'text',
+      marker,
+      text,
+    }])
+  })
+
+  const pasteFilePathToComposer = useEffectEvent(async (text: string): Promise<boolean> => {
+    const cwd = composerTargetSession?.cwd ?? selectedSession?.cwd ?? null
+    const filePath = normalizePastedFilePath(text, cwd)
+    if (!filePath) return false
+    try {
+      const info = await stat(filePath)
+      if (!info.isFile()) return false
+    } catch {
+      return false
+    }
+    const mimeType = pastedFileMimeTypeForPath(filePath)
+    const filename = basename(filePath)
+    if (mimeType === 'image/svg+xml') {
+      const content = await readFile(filePath, 'utf8').catch(() => null)
+      if (!content) return false
+      insertCompactPastedText(content, `[SVG: ${filename || 'image'}]`)
+      return true
+    }
+    if (mimeType.startsWith('image/')) {
+      const visibleDraft = composerTextareaRef.current?.plainText ?? composerDraft
+      const activeAttachments = prepareComposerSubmission(visibleDraft, composerMentionAttachments, composerPromptParts).attachments
+      const marker = `[Image ${imageAttachmentCount(activeAttachments) + 1}]`
+      attachComposerAttachment({
+        id: `paste-file-${Date.now()}-${composerPromptParts.length}`,
+        type: 'image',
+        path: filePath,
+        displayName: filename,
+        mimeType,
+      }, marker, `Attached ${filename}`)
+      return true
+    }
+    if (mimeType === 'application/pdf') {
+      const visibleDraft = composerTextareaRef.current?.plainText ?? composerDraft
+      const activeAttachments = prepareComposerSubmission(visibleDraft, composerMentionAttachments, composerPromptParts).attachments
+      const pdfCount = activeAttachments.filter((attachment) => attachment.mimeType === 'application/pdf').length
+      const marker = `[PDF ${pdfCount + 1}]`
+      attachComposerAttachment({
+        id: `paste-file-${Date.now()}-${composerPromptParts.length}`,
+        type: 'file',
+        path: filePath,
+        displayName: filename,
+        mimeType,
+      }, marker, `Attached ${filename}`)
+      return true
+    }
+    return false
   })
 
   const insertComposerTextAtCursor = useEffectEvent((textToInsert: string) => {
@@ -6336,6 +6588,19 @@ export default function OpenTuiApp() {
     setComposerHistoryIndex(0)
   })
 
+  const pasteTextToComposer = useEffectEvent(async (textToInsert: string) => {
+    const normalizedText = textToInsert.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    if (!normalizedText) return
+    if (await pasteFilePathToComposer(normalizedText)) return
+    const pastedContent = normalizedText.trim()
+    const lineCount = (pastedContent.match(/\n/g)?.length ?? 0) + 1
+    if (pastedContent && (lineCount >= 3 || pastedContent.length > 150)) {
+      insertCompactPastedText(pastedContent, `[Pasted ~${lineCount} lines]`)
+      return
+    }
+    insertComposerTextAtCursor(normalizedText)
+  })
+
   const pasteSystemClipboardToComposer = useEffectEvent(async () => {
     try {
       const image = await readClipboardImage()
@@ -6348,10 +6613,80 @@ export default function OpenTuiApp() {
         showNotice('error', 'Clipboard has no supported image or text')
         return
       }
-      insertComposerTextAtCursor(text)
+      await pasteTextToComposer(text)
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Failed to paste from clipboard')
     }
+  })
+
+  const clearComposerDraft = useEffectEvent(() => {
+    composerTextareaRef.current?.setText('')
+    composerTextareaRef.current?.extmarks.clear()
+    setComposerDraft('')
+    setComposerMentionAttachments([])
+    setComposerPromptParts([])
+    setComposerMention(null)
+    setComposerMentionResults([])
+    setComposerMentionDismissedStart(null)
+    setComposerSlashIndex(0)
+    setComposerSlashDismissed(false)
+    setComposerHistoryOpen(false)
+    setComposerHistoryIndex(0)
+    setComposerStashOpen(false)
+    setComposerStashIndex(0)
+    if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, '')
+  })
+
+  const stashComposerPrompt = useEffectEvent(() => {
+    const snapshot = makeComposerSnapshot()
+    if (!snapshot.text.trim() && snapshot.attachments.length === 0 && snapshot.promptParts.length === 0) {
+      showNotice('info', 'Composer is empty')
+      return
+    }
+    setComposerStash((prev) => [...prev, snapshot])
+    clearComposerDraft()
+    showNotice('info', 'Stashed composer prompt')
+  })
+
+  const popComposerStash = useEffectEvent(() => {
+    const popped = composerStash[composerStash.length - 1] ?? null
+    if (!popped) {
+      showNotice('info', 'Composer stash is empty')
+      return
+    }
+    setComposerStash((prev) => prev.slice(0, -1))
+    setComposerActive(true)
+    applyComposerSnapshot(popped)
+    showNotice('info', 'Restored composer stash')
+  })
+
+  const openComposerStashList = useEffectEvent(() => {
+    if (composerStash.length === 0) {
+      showNotice('info', 'Composer stash is empty')
+      return
+    }
+    setComposerActive(true)
+    setComposerMention(null)
+    setComposerMentionResults([])
+    setComposerHistoryOpen(false)
+    setComposerStashOpen(true)
+    setComposerStashIndex(0)
+  })
+
+  const selectComposerStashEntry = useEffectEvent((displayIndex: number) => {
+    if (composerStash.length === 0) return
+    setComposerStashIndex(clamp(displayIndex, 0, composerStash.length - 1))
+  })
+
+  const commitComposerStashEntry = useEffectEvent(() => {
+    const sourceIndex = composerStash.length - 1 - composerStashIndex
+    const entry = composerStash[sourceIndex]
+    if (!entry) return
+    setComposerStash((prev) => prev.filter((_, index) => index !== sourceIndex))
+    setComposerStashOpen(false)
+    setComposerStashIndex(0)
+    applyComposerSnapshot(entry)
+    showNotice('info', 'Restored composer stash')
   })
 
   useSelectionHandler((selection) => {
@@ -6365,8 +6700,7 @@ export default function OpenTuiApp() {
 
   usePaste((event) => {
     if (!composerActiveRef.current) return
-    const renderable = composerTextareaRef.current
-    if (!renderable) return
+    if (!composerTextareaRef.current) return
     const imageMimeType = pasteImageMimeType(event.metadata?.mimeType) ?? inferPastedImageMimeType(event.bytes)
     if (imageMimeType) {
       event.preventDefault()
@@ -6379,7 +6713,9 @@ export default function OpenTuiApp() {
       return
     }
     event.preventDefault()
-    renderable.handlePaste(event)
+    event.stopPropagation()
+    const text = Buffer.from(event.bytes).toString('utf8')
+    void pasteTextToComposer(text)
   })
 
   const copySelectedMessage = useEffectEvent(async () => {
@@ -6695,6 +7031,15 @@ export default function OpenTuiApp() {
       case 'composer-window':
         openComposerWindow()
         break
+      case 'composer-stash':
+        stashComposerPrompt()
+        break
+      case 'composer-stash-pop':
+        popComposerStash()
+        break
+      case 'composer-stash-list':
+        openComposerStashList()
+        break
       case 'thinking':
         setThinkingMode((current) => !current)
         break
@@ -7007,6 +7352,13 @@ export default function OpenTuiApp() {
           handled(cancelComposerHistory)
           return
         }
+        if (composerStashOpen) {
+          handled(() => {
+            setComposerStashOpen(false)
+            setComposerStashIndex(0)
+          })
+          return
+        }
         handled(() => {
           // Native CLIs interrupt the running turn with Esc. Do that first; a
           // second Esc (now idle) closes the window/composer.
@@ -7073,6 +7425,36 @@ export default function OpenTuiApp() {
           setComposerHistoryOpen(false)
           setComposerHistoryIndex(0)
           setHistoryIndex(-1)
+          return
+        }
+      }
+      if (composerStashOpen) {
+        if (key.name === 'tab' || key.name === 'return') {
+          handled(commitComposerStashEntry)
+          return
+        }
+        if (key.name === 'n' && key.ctrl) {
+          handled(() => selectComposerStashEntry(composerStashIndex + 1))
+          return
+        }
+        if (key.name === 'p' && key.ctrl) {
+          handled(() => selectComposerStashEntry(composerStashIndex - 1))
+          return
+        }
+        if (key.name === 'down' || key.name === 'j') {
+          handled(() => selectComposerStashEntry(composerStashIndex + 1))
+          return
+        }
+        if (key.name === 'up' || key.name === 'k') {
+          handled(() => selectComposerStashEntry(composerStashIndex - 1))
+          return
+        }
+        if (key.name === 'g' && !key.shift) {
+          handled(() => selectComposerStashEntry(0))
+          return
+        }
+        if (key.name === 'g' && key.shift) {
+          handled(() => selectComposerStashEntry(composerStash.length - 1))
           return
         }
       }
@@ -7700,8 +8082,8 @@ export default function OpenTuiApp() {
         : composerExample)
     : composerConfig.placeholderNoSession
   const composerActiveAttachments = useMemo(
-    () => activeMentionAttachments(composerDraft, composerMentionAttachments),
-    [composerDraft, composerMentionAttachments],
+    () => prepareComposerSubmission(composerDraft, composerMentionAttachments, composerPromptParts).attachments,
+    [composerDraft, composerMentionAttachments, composerPromptParts, prepareComposerSubmission],
   )
   const composerAttachmentLabel = attachmentCountLabel(composerActiveAttachments)
   const composerBaseTextareaStyle = {
@@ -7870,11 +8252,56 @@ export default function OpenTuiApp() {
         {sentHistory.slice().reverse().slice(start, end).map((entry, offset) => {
           const index = start + offset
           const active = index === composerHistoryIndex
-          const compact = entry.replace(/\s+/g, ' ').trim() || '(empty prompt)'
-          const lineCount = entry.length === 0 ? 1 : entry.split('\n').length
-          const meta = `${lineCount} line${lineCount === 1 ? '' : 's'} · ${entry.length} chars`
+          const text = composerSnapshotText(entry)
+          const compact = compactComposerEntryText(text)
+          const lineCount = composerEntryLineCount(text)
+          const attachmentLabel = attachmentCountLabel(entry.attachments)
+          const meta = `${lineCount} line${lineCount === 1 ? '' : 's'} · ${text.length} chars${attachmentLabel ? ` · ${attachmentLabel}` : ''}`
           return (
-            <box key={`history:${total - 1 - index}:${entry.length}:${offset}`} flexDirection="row" height={1} width={rowWidth}>
+            <box key={`history:${total - 1 - index}:${text.length}:${offset}`} flexDirection="row" height={1} width={rowWidth}>
+              <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
+              <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(compact, textWidth)}</text>
+              <text fg={theme.dim} wrapMode="none">  </text>
+              <text fg={theme.dim} wrapMode="none">{fitText(meta, metaWidth)}</text>
+            </box>
+          )
+        })}
+      </box>
+    )
+  }
+  const renderComposerStashPanel = (panelWidth: number, rowWidth: number) => {
+    if (!composerActive || !composerStashOpen || composerStashVisibleCount <= 0 || composerMention) return null
+    const total = composerStash.length
+    const start = Math.max(0, Math.min(composerStashIndex - Math.floor((composerStashVisibleCount - 1) / 2), total - composerStashVisibleCount))
+    const end = Math.min(total, start + composerStashVisibleCount)
+    const hasMoreBelow = end < total
+    const hasMoreAbove = start > 0
+    const metaWidth = Math.max(Math.min(22, Math.floor(rowWidth * 0.28)), 10)
+    const textWidth = Math.max(rowWidth - metaWidth - 4, 8)
+    return (
+      <box
+        width={panelWidth}
+        height={composerStashVisibleCount + 3}
+        paddingX={1}
+        backgroundColor={theme.surface2}
+        border
+        borderStyle="single"
+        borderColor={theme.border2}
+        flexDirection="column"
+      >
+        <text fg={composerAccentColor} wrapMode="none">
+          {fitText(`stash · ⌃P older · ⌃N newer · tab/enter restore · esc close  (${composerStashIndex + 1}/${total})${hasMoreAbove ? ' ↑' : ''}${hasMoreBelow ? ' ↓' : ''}`, rowWidth)}
+        </text>
+        {composerStash.slice().reverse().slice(start, end).map((entry, offset) => {
+          const index = start + offset
+          const active = index === composerStashIndex
+          const text = composerSnapshotText(entry)
+          const compact = compactComposerEntryText(text)
+          const lineCount = composerEntryLineCount(text)
+          const attachmentLabel = attachmentCountLabel(entry.attachments)
+          const meta = `${lineCount} line${lineCount === 1 ? '' : 's'} · ${text.length} chars${attachmentLabel ? ` · ${attachmentLabel}` : ''}`
+          return (
+            <box key={`stash:${total - 1 - index}:${text.length}:${offset}`} flexDirection="row" height={1} width={rowWidth}>
               <text fg={active ? composerAccentColor : theme.dim} wrapMode="none">{active ? '▸ ' : '  '}</text>
               <text fg={active ? composerAccentColor : theme.text} wrapMode="none">{fitText(compact, textWidth)}</text>
               <text fg={theme.dim} wrapMode="none">  </text>
@@ -8667,9 +9094,10 @@ export default function OpenTuiApp() {
 
       {!composerWindowOpen ? renderComposerMentionPanel(width, Math.max(width - 4, 20)) : null}
 
-      {!composerWindowOpen && !composerHistoryOpen ? renderComposerSlashPanel(width, Math.max(width - 4, 20)) : null}
+      {!composerWindowOpen && !composerHistoryOpen && !composerStashOpen ? renderComposerSlashPanel(width, Math.max(width - 4, 20)) : null}
 
       {!composerWindowOpen ? renderComposerHistoryPanel(width, Math.max(width - 4, 20)) : null}
+      {!composerWindowOpen ? renderComposerStashPanel(width, Math.max(width - 4, 20)) : null}
 
       {!composerWindowOpen ? (
         <box
@@ -8840,8 +9268,9 @@ export default function OpenTuiApp() {
           </box>
 
           {renderComposerMentionPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
-          {!composerHistoryOpen ? renderComposerSlashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12)) : null}
+          {!composerHistoryOpen && !composerStashOpen ? renderComposerSlashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12)) : null}
           {renderComposerHistoryPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
+          {renderComposerStashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
 
           <box
             height={composerWindowFooterHeight}
