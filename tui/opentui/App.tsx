@@ -2370,6 +2370,7 @@ export default function OpenTuiApp() {
   const [providerMenuIndex, setProviderMenuIndex] = useState(0)
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [themeMenuIndex, setThemeMenuIndex] = useState(0)
+  const [themeMenuGroup, setThemeMenuGroup] = useState<'light' | 'dark'>('dark')
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteQuery, setCommandPaletteQuery] = useState('')
   const [commandPaletteIndex, setCommandPaletteIndex] = useState(0)
@@ -4092,6 +4093,7 @@ export default function OpenTuiApp() {
   const openThemeMenu = useCallback(() => {
     themeMenuOriginRef.current = themeMode
     setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
+    setThemeMenuGroup(LIGHT_MODES.includes(themeMode) ? 'light' : 'dark')
     setThemeMenuOpen(true)
   }, [themeMode])
 
@@ -4207,12 +4209,6 @@ export default function OpenTuiApp() {
     if (!q) return COMMANDS
     return COMMANDS.filter((cmd) => cmd.label.toLowerCase().includes(q))
   }, [commandPaletteQuery])
-
-  useEffect(() => {
-    if (!themeMenuOpen) return
-    const previewTheme = THEMES[themeMenuIndex]
-    if (previewTheme && previewTheme !== themeMode) setThemeMode(previewTheme)
-  }, [themeMenuIndex, themeMenuOpen, themeMode])
 
   useEffect(() => {
     currentThemeRef.current = themeMode
@@ -6129,25 +6125,22 @@ export default function OpenTuiApp() {
     }
 
     if (themeMenuOpen) {
-      if (key.name === 'j' || key.name === 'down') {
-        handled(() => setThemeMenuIndex((i) => Math.min(i + 1, THEMES.length - 1)))
-        return
-      }
-      if (key.name === 'k' || key.name === 'up') {
-        handled(() => setThemeMenuIndex((i) => Math.max(i - 1, 0)))
-        return
-      }
-      if (key.name === 'return') {
+      if (key.name === 'left' || key.name === 'right') {
         handled(() => {
-          const nextTheme = THEMES[themeMenuIndex]
-          if (nextTheme) chooseTheme(nextTheme)
+          const newGroup = key.name === 'left' ? 'light' : 'dark'
+          setThemeMenuGroup(newGroup)
+          const groupThemes = newGroup === 'light' ? LIGHT_MODES : DARK_MODES
+          const origin = themeMenuOriginRef.current
+          const target = (origin && groupThemes.includes(origin)) ? origin : groupThemes[0]
+          if (target) {
+            setThemeMenuIndex(THEMES.indexOf(target))
+            setThemeMode(target)
+          }
         })
         return
       }
       if (key.name === 'escape' || key.name === 't') {
-        handled(() => {
-          closeThemeMenu()
-        })
+        handled(closeThemeMenu)
         return
       }
       if (key.name === 'q' || isCtrl('c')) {
@@ -7322,127 +7315,129 @@ export default function OpenTuiApp() {
           </box>
         ) : null}
 
-        {providerMenuOpen ? (
-          <box
-            position="absolute"
-            top={focusMode ? 1 : 3}
-            right={2}
-            width={34}
-            height={14}
-            border
-            borderStyle="single"
-            borderColor={theme.border2}
-            backgroundColor={theme.surface}
-            zIndex={20}
-            flexDirection="column"
-          >
-            <box paddingX={1} paddingTop={1}>
-              <text fg={theme.text}>PROVIDERS</text>
-            </box>
-            <box flexGrow={1} paddingX={1} paddingBottom={1}>
-              <select
-                style={{ height: 10 }}
-                focused
-                options={providerOptions}
-                selectedIndex={providerMenuIndex}
-                selectedBackgroundColor={theme.surface3}
-                selectedTextColor={theme.text}
-                textColor={theme.muted}
-                descriptionColor={theme.dim}
-                selectedDescriptionColor={theme.cyan}
-                backgroundColor={theme.surface}
-                focusedBackgroundColor={theme.surface}
-                showScrollIndicator={false}
-                itemSpacing={0}
-                onChange={(index) => setProviderMenuIndex(index)}
-                onSelect={(_, option) => {
-                  const nextProvider = option?.value as ProviderSelection | undefined
-                  if (nextProvider) void chooseProvider(nextProvider)
-                }}
-              />
-            </box>
-          </box>
-        ) : null}
+        {(() => {
+          // All floating select overlays share this palette so light-themed
+          // backgrounds never wash out the overlay text.
+          const ot = LIGHT_MODES.includes(themeMode) ? getThemePalette('dark') : theme
+          return (<>
+            {providerMenuOpen ? (
+              <box
+                position="absolute"
+                top={focusMode ? 1 : 3}
+                right={2}
+                width={34}
+                height={14}
+                border
+                borderStyle="single"
+                borderColor={ot.border2}
+                backgroundColor={ot.surface}
+                zIndex={20}
+                flexDirection="column"
+              >
+                <box paddingX={1} paddingTop={1}>
+                  <text fg={ot.text}>PROVIDERS</text>
+                </box>
+                <box flexGrow={1} paddingX={1} paddingBottom={1}>
+                  <select
+                    style={{ height: 10 }}
+                    focused
+                    options={providerOptions}
+                    selectedIndex={providerMenuIndex}
+                    selectedBackgroundColor={ot.surface3}
+                    selectedTextColor={ot.text}
+                    textColor={ot.muted}
+                    descriptionColor={ot.dim}
+                    selectedDescriptionColor={ot.cyan}
+                    backgroundColor={ot.surface}
+                    focusedBackgroundColor={ot.surface}
+                    showScrollIndicator={false}
+                    itemSpacing={0}
+                    onChange={(index) => setProviderMenuIndex(index)}
+                    onSelect={(_, option) => {
+                      const nextProvider = option?.value as ProviderSelection | undefined
+                      if (nextProvider) void chooseProvider(nextProvider)
+                    }}
+                  />
+                </box>
+              </box>
+            ) : null}
 
-        {modelPickerOpen ? (
-          <box
-            position="absolute"
-            top={focusMode ? 1 : 3}
-            right={2}
-            width={48}
-            height={16}
-            border
-            borderStyle="single"
-            borderColor={theme.border2}
-            backgroundColor={theme.surface}
-            zIndex={20}
-            flexDirection="column"
-          >
-            <box paddingX={1} paddingTop={1}>
-              <text fg={theme.text}>MODELS</text>
-            </box>
-            <box flexGrow={1} paddingX={1} paddingBottom={1}>
-              {modelPickerLoading ? (
-                <text fg={theme.dim} wrapMode="none">Loading…</text>
-              ) : modelPickerError ? (
-                <text fg={theme.red} wrapMode="none">{modelPickerError}</text>
-              ) : modelPickerOptions.length === 0 ? (
-                <text fg={theme.dim} wrapMode="none">No models available</text>
-              ) : (
-                <select
-                  style={{ height: 12 }}
-                  focused
-                  options={modelPickerOptions}
-                  selectedIndex={modelPickerIndex}
-                  selectedBackgroundColor={theme.surface3}
-                  selectedTextColor={theme.text}
-                  textColor={theme.muted}
-                  descriptionColor={theme.dim}
-                  selectedDescriptionColor={theme.cyan}
-                  backgroundColor={theme.surface}
-                  focusedBackgroundColor={theme.surface}
-                  showScrollIndicator={false}
-                  itemSpacing={0}
-                  onChange={(index) => setModelPickerIndex(index)}
-                  onSelect={(_, option) => {
-                    const target = selectedSession ?? composerTargetSession
-                    const value = typeof option?.value === 'string' ? option.value : ''
-                    if (target && value) {
-                      setTuiModelOverride((prev) => ({ ...prev, [sessionKey(target)]: value }))
-                      // Push live to the warm pool when the target is a non-pending
-                      // Claude session; cold sessions ignore and the next send applies it.
-                      pushClaudeControl(target, { action: 'setModel', model: value })
-                    }
-                    setModelPickerOpen(false)
-                  }}
-                />
-              )}
-            </box>
-          </box>
-        ) : null}
+            {modelPickerOpen ? (
+              <box
+                position="absolute"
+                top={focusMode ? 1 : 3}
+                right={2}
+                width={48}
+                height={16}
+                border
+                borderStyle="single"
+                borderColor={ot.border2}
+                backgroundColor={ot.surface}
+                zIndex={20}
+                flexDirection="column"
+              >
+                <box paddingX={1} paddingTop={1}>
+                  <text fg={ot.text}>MODELS</text>
+                </box>
+                <box flexGrow={1} paddingX={1} paddingBottom={1}>
+                  {modelPickerLoading ? (
+                    <text fg={ot.dim} wrapMode="none">Loading…</text>
+                  ) : modelPickerError ? (
+                    <text fg={ot.red} wrapMode="none">{modelPickerError}</text>
+                  ) : modelPickerOptions.length === 0 ? (
+                    <text fg={ot.dim} wrapMode="none">No models available</text>
+                  ) : (
+                    <select
+                      style={{ height: 12 }}
+                      focused
+                      options={modelPickerOptions}
+                      selectedIndex={modelPickerIndex}
+                      selectedBackgroundColor={ot.surface3}
+                      selectedTextColor={ot.text}
+                      textColor={ot.muted}
+                      descriptionColor={ot.dim}
+                      selectedDescriptionColor={ot.cyan}
+                      backgroundColor={ot.surface}
+                      focusedBackgroundColor={ot.surface}
+                      showScrollIndicator={false}
+                      itemSpacing={0}
+                      onChange={(index) => setModelPickerIndex(index)}
+                      onSelect={(_, option) => {
+                        const target = selectedSession ?? composerTargetSession
+                        const value = typeof option?.value === 'string' ? option.value : ''
+                        if (target && value) {
+                          setTuiModelOverride((prev) => ({ ...prev, [sessionKey(target)]: value }))
+                          pushClaudeControl(target, { action: 'setModel', model: value })
+                        }
+                        setModelPickerOpen(false)
+                      }}
+                    />
+                  )}
+                </box>
+              </box>
+            ) : null}
+          </>)
+        })()}
 
         {themeMenuOpen ? (() => {
-          type ThemeRow =
-            | { kind: 'header'; label: string }
-            | { kind: 'gap' }
-            | { kind: 'theme'; mode: TuiThemeMode; globalIndex: number }
-          const rows: ThemeRow[] = []
-          THEME_GROUPS.forEach((group, groupIndex) => {
-            if (groupIndex > 0) rows.push({ kind: 'gap' })
-            rows.push({ kind: 'header', label: group.label })
-            for (const mode of group.themes) {
-              rows.push({ kind: 'theme', mode, globalIndex: THEMES.indexOf(mode) })
-            }
-          })
-          const menuHeight = Math.max(12, Math.min(height - 4, 30))
-          const visibleRows = Math.max(3, menuHeight - 5)
-          const cursorRow = rows.findIndex((row) => row.kind === 'theme' && row.globalIndex === themeMenuIndex)
-          let offset = 0
-          if (cursorRow >= 0 && cursorRow >= visibleRows) {
-            offset = Math.min(cursorRow - visibleRows + 1, rows.length - visibleRows)
-          }
-          offset = Math.max(0, offset)
-          const sliced = rows.slice(offset, offset + visibleRows)
+          const originTheme = themeMenuOriginRef.current
+          // Use the origin palette when it's dark; fall back to 'dark' when the
+          // origin is a light theme so the overlay is always readable.
+          const overlayTheme = originTheme && !LIGHT_MODES.includes(originTheme)
+            ? getThemePalette(originTheme)
+            : getThemePalette('dark')
+          const menuHeight = Math.max(14, Math.min(height - 4, 32))
+          const groupThemes = themeMenuGroup === 'light' ? LIGHT_MODES : DARK_MODES
+          const currentTheme = THEMES[themeMenuIndex]
+          const localIndex = Math.max(
+            currentTheme && groupThemes.includes(currentTheme) ? groupThemes.indexOf(currentTheme) : 0,
+            0,
+          )
+          const groupOptions = groupThemes.map((mode) => ({
+            name: THEME_LABELS[mode] + (mode === originTheme ? ' ✓' : ''),
+            description: THEME_DESCRIPTIONS[mode],
+            value: mode,
+          }))
           return (
             <box
               position="absolute"
@@ -7452,46 +7447,45 @@ export default function OpenTuiApp() {
               height={menuHeight}
               border
               borderStyle="single"
-              borderColor={theme.border2}
-              backgroundColor={theme.surface}
+              borderColor={overlayTheme.border2}
+              backgroundColor={overlayTheme.surface}
               zIndex={20}
               flexDirection="column"
             >
-              <box paddingX={1} paddingTop={1}>
-                <text fg={theme.text}>THEME</text>
+              <box paddingX={2} paddingBottom={1} flexDirection="row">
+                <text fg={themeMenuGroup === 'light' ? overlayTheme.cyan : overlayTheme.muted} wrapMode="none">LIGHT</text>
+                <text fg={overlayTheme.dim} wrapMode="none">  |  </text>
+                <text fg={themeMenuGroup === 'dark' ? overlayTheme.cyan : overlayTheme.muted} wrapMode="none">DARK</text>
+                <text fg={overlayTheme.dim} wrapMode="none">   ← →</text>
               </box>
-              <box flexGrow={1} paddingX={1} paddingBottom={1} flexDirection="column">
-                {sliced.map((row, i) => {
-                  if (row.kind === 'gap') {
-                    return <box key={`gap-${i}`} height={1} />
-                  }
-                  if (row.kind === 'header') {
-                    return (
-                      <box key={`h-${row.label}-${i}`} paddingX={1}>
-                        <text fg={theme.dim} wrapMode="none">{row.label}</text>
-                      </box>
-                    )
-                  }
-                  const selected = row.globalIndex === themeMenuIndex
-                  const active = row.mode === themeMode
-                  return (
-                    <box
-                      key={row.mode}
-                      paddingX={1}
-                      backgroundColor={selected ? theme.surface3 : theme.surface}
-                      flexDirection="row"
-                    >
-                      <box flexGrow={1}>
-                        <text fg={selected ? theme.text : active ? theme.cyan : theme.muted} wrapMode="none">
-                          {fitText(THEME_LABELS[row.mode], 24)}
-                        </text>
-                      </box>
-                      <text fg={active ? theme.cyan : theme.dim} wrapMode="none">
-                        {active ? '✓' : ' '}
-                      </text>
-                    </box>
-                  )
-                })}
+              <box flexGrow={1} paddingX={1} paddingBottom={1}>
+                <select
+                  style={{ height: menuHeight - 6 }}
+                  focused
+                  options={groupOptions}
+                  selectedIndex={localIndex}
+                  selectedBackgroundColor={overlayTheme.surface3}
+                  selectedTextColor={overlayTheme.text}
+                  textColor={overlayTheme.muted}
+                  descriptionColor={overlayTheme.dim}
+                  selectedDescriptionColor={overlayTheme.cyan}
+                  backgroundColor={overlayTheme.surface}
+                  focusedBackgroundColor={overlayTheme.surface}
+                  showScrollIndicator={false}
+                  showDescription={false}
+                  itemSpacing={0}
+                  onChange={(index) => {
+                    const next = groupThemes[index]
+                    if (next) {
+                      setThemeMenuIndex(THEMES.indexOf(next))
+                      setThemeMode(next)
+                    }
+                  }}
+                  onSelect={(_, option) => {
+                    const next = option?.value as TuiThemeMode | undefined
+                    if (next) chooseTheme(next)
+                  }}
+                />
               </box>
             </box>
           )
