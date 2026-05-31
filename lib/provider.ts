@@ -23,7 +23,7 @@ export const CODEX_CAPABILITIES: SessionCapabilities = {
   unshareSession: false,
   summarizeSession: false,
   unrevertSession: false,
-  respondToPermission: false,
+  respondToPermission: true,
 }
 
 export const OPENCODE_CAPABILITIES: SessionCapabilities = {

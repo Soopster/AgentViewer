@@ -1,0 +1,276 @@
+// Shared permission/approval parsing for every provider, consumed by both the
+// web composer (components/MessageView.tsx) and the OpenTUI composer
+// (tui/opentui/App.tsx) so the two surfaces agree on how a pending approval is
+// extracted from the SSE stream and what payload it carries.
+//
+// Pure functions only — no React, no Node/DOM APIs — so it loads in both the
+// Next.js and Bun/OpenTUI bundles.
+
+import type { AgentProvider } from './types'
+
+export type PendingPermission = {
+  id: string
+  sessionId?: string
+  provider?: AgentProvider
+  title: string
+  detail?: string
+  canApproveAlways?: boolean
+  // Structured payload so the approval surface can show the same context the
+  // native CLI does — the full command, an edit's diff, the target paths/url,
+  // and the model's stated reason — instead of one ellipsized line.
+  toolName?: string
+  command?: string
+  diff?: string
+  paths?: string[]
+  url?: string
+  reason?: string
+}
+
+export type PermissionResponse = 'once' | 'always' | 'reject'
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+export function copilotPermissionSummary(permission: Record<string, unknown>): { title: string; detail?: string; canApproveAlways?: boolean } {
+  const kind = stringField(permission, 'kind') ?? 'permission'
+  const canApproveAlways = permission.canOfferSessionApproval === true
+  const intention = stringField(permission, 'intention')
+  switch (kind) {
+    case 'commands':
+    case 'shell':
+      return { title: 'Copilot wants to run a command', detail: stringField(permission, 'fullCommandText') ?? intention, canApproveAlways }
+    case 'write':
+      return { title: 'Copilot wants to write a file', detail: [stringField(permission, 'fileName'), intention].filter(Boolean).join(' - ') || undefined, canApproveAlways }
+    case 'read':
+    case 'path': {
+      const paths = Array.isArray(permission.paths) ? permission.paths.filter((path): path is string => typeof path === 'string') : []
+      return { title: 'Copilot wants to read files', detail: stringField(permission, 'path') ?? (paths.length > 0 ? paths.join(', ') : intention), canApproveAlways }
+    }
+    case 'url':
+      return { title: 'Copilot wants to access a URL', detail: stringField(permission, 'url') ?? intention, canApproveAlways }
+    case 'mcp':
+      return { title: 'Copilot wants to use an MCP tool', detail: [stringField(permission, 'serverName'), stringField(permission, 'toolTitle') ?? stringField(permission, 'toolName')].filter(Boolean).join(' / ') || undefined, canApproveAlways }
+    case 'custom-tool':
+      return { title: 'Copilot wants to use a tool', detail: [stringField(permission, 'toolName'), stringField(permission, 'toolDescription')].filter(Boolean).join(' - ') || undefined, canApproveAlways }
+    case 'memory':
+      return { title: 'Copilot wants to update memory', detail: stringField(permission, 'fact') ?? stringField(permission, 'subject'), canApproveAlways }
+    case 'hook':
+      return { title: 'Copilot wants approval', detail: stringField(permission, 'hookMessage') ?? stringField(permission, 'toolName'), canApproveAlways }
+    case 'extension-management':
+      return { title: 'Copilot wants to manage an extension', detail: [stringField(permission, 'operation'), stringField(permission, 'extensionName')].filter(Boolean).join(' - ') || undefined, canApproveAlways }
+    case 'extension-permission-access':
+      return { title: 'Copilot wants extension permission access', detail: stringField(permission, 'extensionName'), canApproveAlways }
+    default:
+      return { title: `Copilot requests ${kind} permission`, detail: intention, canApproveAlways }
+  }
+}
+
+// Build a simple +/- diff body from an edit/write tool input so the approval
+// surface can show what will change (lines starting with +/- are colored).
+export function buildPermissionDiff(toolName: string | undefined, input: Record<string, unknown> | null): string | undefined {
+  if (!input) return undefined
+  const oldStr = stringField(input, 'old_string')
+  const newStr = stringField(input, 'new_string')
+  if (typeof oldStr === 'string' && typeof newStr === 'string') {
+    const minus = oldStr.split('\n').map((line) => `- ${line}`).join('\n')
+    const plus = newStr.split('\n').map((line) => `+ ${line}`).join('\n')
+    return `${minus}\n${plus}`
+  }
+  const content = stringField(input, 'content')
+  if (typeof content === 'string' && (!toolName || /write/i.test(toolName))) {
+    return content.split('\n').map((line) => `+ ${line}`).join('\n')
+  }
+  return undefined
+}
+
+// Pull whatever structured fields a Copilot permission carries, independent of
+// its `kind`. These fields only appear when relevant, so reading them all is safe.
+export function copilotPermissionPayload(permission: Record<string, unknown>): Pick<PendingPermission, 'command' | 'diff' | 'paths' | 'url'> {
+  const command = stringField(permission, 'fullCommandText') ?? stringField(permission, 'commandText')
+  const diff = stringField(permission, 'diff')
+  const url = stringField(permission, 'url')
+  const rawPaths = permission.paths
+  const single = stringField(permission, 'path') ?? stringField(permission, 'fileName')
+  const paths = Array.isArray(rawPaths)
+    ? rawPaths.filter((entry): entry is string => typeof entry === 'string')
+    : single
+    ? [single]
+    : undefined
+  return { command, diff, url, paths }
+}
+
+export function extractOpenCodePermission(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'opencode_event') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.updated') return null
+  const permissionRecord = asRecord(eventRecord.properties)
+  if (!permissionRecord) return null
+  const id = stringField(permissionRecord, 'id')
+  if (!id) return null
+  const pattern = permissionRecord.pattern
+  const patternText = Array.isArray(pattern)
+    ? pattern.filter((entry): entry is string => typeof entry === 'string').join(', ')
+    : typeof pattern === 'string'
+    ? pattern
+    : undefined
+  const toolName = stringField(permissionRecord, 'type')
+  const metadata = asRecord(permissionRecord.metadata)
+  const diff = metadata ? stringField(metadata, 'diff') : undefined
+  const filepath = metadata ? stringField(metadata, 'filepath') : undefined
+  const metaCommand = metadata ? stringField(metadata, 'command') : undefined
+  const isShell = typeof toolName === 'string' && /bash|shell|command/i.test(toolName)
+  return {
+    id,
+    provider: 'opencode',
+    toolName,
+    title: stringField(permissionRecord, 'title') ?? 'Permission requested',
+    detail: patternText,
+    command: metaCommand ?? (isShell ? patternText : undefined),
+    diff,
+    paths: filepath ? [filepath] : undefined,
+  }
+}
+
+export function extractOpenCodePermissionReply(payload: unknown): string | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'opencode_event') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.replied') return null
+  const properties = asRecord(eventRecord.properties)
+  return properties ? stringField(properties, 'permissionID') ?? null : null
+}
+
+export function extractCopilotPermission(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'copilot_event') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.requested') return null
+  const data = asRecord(eventRecord.data)
+  if (!data || data.resolvedByHook === true) return null
+  const id = stringField(data, 'requestId')
+  if (!id) return null
+  const permission = asRecord(data.promptRequest) ?? asRecord(data.permissionRequest)
+  if (!permission) return { id, provider: 'copilot', title: 'Copilot requests permission' }
+  return {
+    id,
+    provider: 'copilot',
+    toolName: stringField(permission, 'kind'),
+    reason: stringField(permission, 'intention'),
+    ...copilotPermissionSummary(permission),
+    ...copilotPermissionPayload(permission),
+  }
+}
+
+export function extractCopilotPermissionCompletion(payload: unknown): string | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'copilot_event') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.completed') return null
+  const data = asRecord(eventRecord.data)
+  return data ? stringField(data, 'requestId') ?? null : null
+}
+
+export function extractClaudePermission(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'claude_permission') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.requested') return null
+  const data = asRecord(eventRecord.data)
+  if (!data) return null
+  const id = stringField(data, 'requestId')
+  if (!id) return null
+  const toolName = stringField(data, 'toolName')
+  const input = asRecord(data.input)
+  const command = input ? stringField(input, 'command') : undefined
+  const url = input ? stringField(input, 'url') : undefined
+  const path = input ? (stringField(input, 'file_path') ?? stringField(input, 'path')) : undefined
+  const diff = buildPermissionDiff(toolName, input)
+  const reason = stringField(data, 'description') ?? stringField(data, 'decisionReason') ?? stringField(data, 'blockedPath')
+  const detail = reason ?? command ?? path
+  const suggestions = data.suggestions
+  return {
+    id,
+    sessionId: stringField(data, 'sessionId'),
+    provider: 'claude',
+    toolName,
+    title: stringField(data, 'title') ?? stringField(data, 'displayName') ?? `Claude requests ${toolName ?? 'tool'} permission`,
+    detail,
+    command,
+    url,
+    diff,
+    paths: path ? [path] : undefined,
+    reason,
+    canApproveAlways: Array.isArray(suggestions) && suggestions.length > 0,
+  }
+}
+
+export function extractClaudePermissionCompletion(payload: unknown): string | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'claude_permission') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'permission.completed') return null
+  const data = asRecord(eventRecord.data)
+  return data ? stringField(data, 'requestId') ?? null : null
+}
+
+// Codex sends exec/patch/permission approval requests mid-turn. createCodexStream
+// surfaces them as `codex_approval` frames; the user's decision is POSTed back via
+// respondPermission (mapped to the codex decision vocabulary server-side).
+export function extractCodexApproval(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'codex_approval') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'approval.requested') return null
+  const id = stringField(eventRecord, 'requestId')
+  const method = stringField(eventRecord, 'method')
+  if (!id || !method) return null
+  const params = asRecord(eventRecord.params) ?? {}
+  const command = stringField(params, 'command')
+  const cwd = stringField(params, 'cwd')
+  const reason = stringField(params, 'reason')
+  const title = method.includes('commandExecution')
+    ? 'Codex wants to run a command'
+    : method.includes('fileChange')
+    ? 'Codex wants to apply a file change'
+    : method.includes('permissions')
+    ? 'Codex requests additional permissions'
+    : 'Codex requests approval'
+  return {
+    id,
+    sessionId: stringField(eventRecord, 'threadId'),
+    provider: 'codex',
+    toolName: method,
+    title,
+    reason: reason ?? undefined,
+    command: command ?? undefined,
+    paths: cwd ? [`cwd: ${cwd}`] : undefined,
+    detail: command ?? reason ?? undefined,
+    canApproveAlways: true,
+  }
+}
+
+// Convenience: try every provider's extractor in turn. Returns the pending
+// permission a frame describes, or null.
+export function extractPendingPermission(payload: unknown): PendingPermission | null {
+  return extractOpenCodePermission(payload)
+    ?? extractCopilotPermission(payload)
+    ?? extractClaudePermission(payload)
+    ?? extractCodexApproval(payload)
+}
+
+// Convenience: try every provider's "this permission was resolved" extractor.
+// Returns the resolved permission id, or null.
+export function extractPermissionReply(payload: unknown): string | null {
+  return extractOpenCodePermissionReply(payload)
+    ?? extractCopilotPermissionCompletion(payload)
+    ?? extractClaudePermissionCompletion(payload)
+}

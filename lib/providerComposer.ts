@@ -153,10 +153,10 @@ const PI: ProviderComposerConfig = {
   glyph: '·',
   cssAccentVar: '--red',
   cssAccentRgb: '244,114,182',
-  placeholderIdle: 'What\'s on your mind? — Pi will write and run code with you.',
+  placeholderIdle: 'What\'s on your mind? — Pi will write and run code with you. `!cmd` runs bash.',
   placeholderStreaming: 'Draft your next message for Pi…',
   placeholderNoSession: 'Pick a Pi session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ↑↓ history',
+  footerHintIdle: '⏎ send · ⇧⏎ newline · ! bash · !! bash (no context) · / commands · ↑↓ history',
   footerHintSending: 'Esc cancel · responding…',
   sendVerb: 'Send',
   examples: [
@@ -166,7 +166,7 @@ const PI: ProviderComposerConfig = {
   ],
   tuiAccentKey: 'pink',
   welcomeTitle: '· Pi',
-  welcomeSubtitle: '/help · /clear · chat with Pi about anything',
+  welcomeSubtitle: '! to run a shell command · / for commands · drop files to attach',
   welcomeBullets: [
     'build a quick prototype for X',
     'fix this error trace',

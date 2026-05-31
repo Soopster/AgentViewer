@@ -49,11 +49,21 @@ export type CodexJsonRpcRequest = {
 }
 
 export type CodexJsonRpcResponse = {
-  id?: string
+  // The app-server echoes our string ids on responses, but server→client
+  // *requests* (which also carry an id) use the server's own numeric id space.
+  id?: string | number
   result?: unknown
   error?: { code?: number; message?: string; data?: unknown }
   method?: string
   params?: unknown
+}
+
+// A request the app-server sends to us (e.g. an exec/patch approval). Carries
+// both an id (we must echo it on the response) and a method.
+export type CodexServerRequest = {
+  id: string | number
+  method: string
+  params: Record<string, unknown>
 }
 
 // ── Schema re-exports (kept under our Codex* names so call sites don't churn) ──

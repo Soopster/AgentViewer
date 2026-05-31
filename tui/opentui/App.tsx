@@ -86,6 +86,7 @@ import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
+import { extractPendingPermission, extractPermissionReply, type PendingPermission, type PermissionResponse } from '../../lib/permissions'
 import { readViewSessionSlashCommands, readViewSessionComposerOptions, createNewViewSession } from '../../lib/sessionBackend'
 import { compactStableFingerprint } from '../../lib/compactFingerprint'
 import { appendFileSync, mkdirSync } from 'node:fs'
@@ -607,6 +608,17 @@ type TuiLiveToolActivity = {
   status: 'running' | 'done'
 }
 
+type PermissionOption = { response: PermissionResponse; label: string }
+
+// Ordered decisions for the approval overlay. 'always' is hidden when the
+// provider can't offer a session-scoped grant for this request.
+function permissionOptionsFor(permission: PendingPermission): PermissionOption[] {
+  const options: PermissionOption[] = [{ response: 'once', label: 'Allow' }]
+  if (permission.canApproveAlways !== false) options.push({ response: 'always', label: 'Always' })
+  options.push({ response: 'reject', label: 'Reject' })
+  return options
+}
+
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
   const normalized = buffer.replace(/\r\n/g, '\n')
   const frames: SseFrame[] = []
@@ -678,6 +690,76 @@ function extractCodexTurnPlanText(payload: Record<string, unknown>): string | nu
   return `${explanation ? `${explanation}\n\n` : ''}## Plan\n\n${steps.join('\n')}`
 }
 
+// Append-only reasoning/thinking deltas, kept separate from the answer so the
+// composer can stream them as a distinct dim channel (matching the native CLIs).
+function extractStreamingReasoningText(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+
+  if ((record.type === 'codex_reasoning_delta' || record.type === 'codex_reasoning_summary_delta')
+    && typeof record.delta === 'string') {
+    return record.delta
+  }
+
+  if (record.type === 'stream_event') {
+    if (typeof record.parent_tool_use_id === 'string' && record.parent_tool_use_id) return null
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'content_block_delta') return null
+    const delta = eventRecord.delta
+    if (!delta || typeof delta !== 'object') return null
+    const deltaRecord = delta as Record<string, unknown>
+    return deltaRecord.type === 'thinking_delta' && typeof deltaRecord.thinking === 'string'
+      ? deltaRecord.thinking
+      : null
+  }
+
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message_update') return null
+    const assistantMessageEvent = eventRecord.assistantMessageEvent
+    if (!assistantMessageEvent || typeof assistantMessageEvent !== 'object') return null
+    const updateRecord = assistantMessageEvent as Record<string, unknown>
+    return updateRecord.type === 'thinking_delta' && typeof updateRecord.delta === 'string'
+      ? updateRecord.delta
+      : null
+  }
+
+  if (record.type === 'opencode_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message.part.delta') return null
+    const properties = eventRecord.properties
+    if (!properties || typeof properties !== 'object') return null
+    const propertiesRecord = properties as Record<string, unknown>
+    const field = typeof propertiesRecord.field === 'string' ? propertiesRecord.field : ''
+    return field === 'reasoning' && typeof propertiesRecord.delta === 'string'
+      ? propertiesRecord.delta
+      : null
+  }
+
+  if (record.type === 'copilot_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'assistant.reasoning_delta') return null
+    const data = eventRecord.data
+    if (!data || typeof data !== 'object') return null
+    const dataRecord = data as Record<string, unknown>
+    return typeof dataRecord.deltaContent === 'string'
+      ? dataRecord.deltaContent
+      : typeof dataRecord.delta === 'string'
+      ? dataRecord.delta
+      : null
+  }
+
+  return null
+}
+
 function extractStreamingAssistantText(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
@@ -686,8 +768,9 @@ function extractStreamingAssistantText(payload: unknown): string | null {
     return record.delta
   }
 
-  if ((record.type === 'codex_plan_delta' || record.type === 'codex_reasoning_delta' || record.type === 'codex_reasoning_summary_delta')
-    && typeof record.delta === 'string') {
+  // Reasoning deltas are handled by extractStreamingReasoningText and rendered
+  // on a separate dim channel; only the plan delta stays in the answer here.
+  if (record.type === 'codex_plan_delta' && typeof record.delta === 'string') {
     return record.delta
   }
 
@@ -2598,14 +2681,22 @@ export default function OpenTuiApp() {
   const [composerLiveSlashCommands, setComposerLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
   const [composerSendStartedAt, setComposerSendStartedAt] = useState<number | null>(null)
+  // Pending tool-approval requests surfaced from the live SSE stream (Claude
+  // canUseTool, Copilot/OpenCode permission events, Codex approvals). The
+  // overlay below the composer lets the user allow/reject them, matching native.
+  const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
+  const [permissionActionLoading, setPermissionActionLoading] = useState<string | null>(null)
+  const [permissionOptionIndex, setPermissionOptionIndex] = useState(0)
   const [composerWaitingSeed, setComposerWaitingSeed] = useState('')
   const [composerError, setComposerError] = useState<string | null>(null)
   const [composerLiveText, setComposerLiveText] = useState('')
+  // Reasoning streams on its own dim channel (see liveReasoning render below).
+  const [composerLiveReasoning, setComposerLiveReasoning] = useState('')
   const [liveTranscriptMessages, setLiveTranscriptMessages] = useState<ThreadedMessage[]>([])
   // Queued prompt waiting for the active turn to finish (CLI-style queue).
   const [queuedComposerSend, setQueuedComposerSend] = useState<{ text: string; attachments: SendAttachment[] } | null>(null)
   const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
-  const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | null>(null)
+  const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | 'retrying' | null>(null)
   const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
   const [liveToolActivities, setLiveToolActivities] = useState<TuiLiveToolActivity[]>([])
   const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
@@ -2666,6 +2757,7 @@ export default function OpenTuiApp() {
   const awaitingPersistedTurnRef = useRef(false)
   const liveTextFlushFrameRef = useRef<number | null>(null)
   const pendingLiveTextRef = useRef('')
+  const pendingLiveReasoningRef = useRef('')
   const liveTextTargetSessionRef = useRef<Session | null>(null)
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadingDetailRef = useRef(false)
@@ -3478,6 +3570,19 @@ export default function OpenTuiApp() {
     }
     if (awaitingPersistedTurn) rows += 2
     if (composerAutoTargetingRunning && composerTargetSession) rows += 1
+    if ((liveStatus === 'retrying' || liveStatus === 'compacting') && composerSendState === 'sending') rows += 2
+    if (composerSendState === 'sending' && composerLiveReasoning.trim()) rows += 2
+    if (pendingPermissions.length > 0) {
+      const permission = pendingPermissions[0]!
+      // border(2) + outer padding(1) + title(1) + options(1) + hint(1)
+      let permRows = 6
+      if (permission.reason) permRows += 1
+      if (permission.command) permRows += 1
+      if (permission.url) permRows += 1
+      if (permission.paths && permission.paths.length > 0) permRows += 1
+      if (permission.diff) permRows += Math.min(permission.diff.split('\n').length, 12)
+      rows += permRows
+    }
     return rows
   })()
   const mainContentHeight = Math.max(
@@ -4386,6 +4491,11 @@ export default function OpenTuiApp() {
     })
     return rows
   }, [commandPaletteQuery, filteredCommands])
+  const commandPaletteTopOffset = focusMode ? 2 : 4
+  const commandPaletteBodyRows = Math.max(1, Math.min(
+    paletteDisplayRows.length || 1,
+    mainContentHeight - commandPaletteTopOffset - 8,
+  ))
 
   const chooseProvider = useCallback(async (
     nextProvider: ProviderSelection,
@@ -4493,6 +4603,13 @@ export default function OpenTuiApp() {
 
   const cancelComposerSend = useEffectEvent(() => {
     const target = composerTargetSession
+    // Turns are decoupled from the client connection (they survive disconnect),
+    // so aborting the local fetch alone leaves the agent running on the server —
+    // it would finish in the background and reappear on the next poll. Interrupt
+    // the server-side turn too, matching the native CLI's Esc/Ctrl+C behavior.
+    if (target && !target.isPending) {
+      void interruptTuiSessionTurn({ sessionId: target.sessionId }).catch(() => { /* best effort */ })
+    }
     if (composerAbortRef.current) {
       composerAbortRef.current.abort()
     }
@@ -4508,12 +4625,35 @@ export default function OpenTuiApp() {
       liveTextFlushFrameRef.current = null
     }
     pendingLiveTextRef.current = ''
+    pendingLiveReasoningRef.current = ''
     liveTextTargetSessionRef.current = null
     setComposerSendState('idle')
     setComposerLiveText('')
+    setComposerLiveReasoning('')
     setLiveStatus(null)
     setLiveSubagentText({})
     setLiveToolActivities([])
+    setPendingPermissions([])
+    setPermissionOptionIndex(0)
+  })
+
+  const respondToTuiPermission = useEffectEvent(async (permission: PendingPermission, response: PermissionResponse) => {
+    const target = composerTargetSession
+    if (!target || permissionActionLoading) return
+    setPermissionActionLoading(permission.id)
+    try {
+      await runTuiSessionAction(
+        { ...target, sessionId: permission.sessionId ?? target.sessionId },
+        { action: 'respondPermission', permissionId: permission.id, response, provider: target.provider },
+      )
+      setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
+      setPermissionOptionIndex(0)
+    } catch (err) {
+      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
+      setNotice({ tone: 'error', text: err instanceof Error ? err.message : 'Failed to respond to permission' })
+    } finally {
+      setPermissionActionLoading(null)
+    }
   })
 
   // Keep the ref in sync on every render so commitRename always reads the latest draft,
@@ -4645,13 +4785,13 @@ export default function OpenTuiApp() {
     () => ({ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }),
     [theme.muted, theme.surface2],
   )
-
   const flushLiveText = useCallback(() => {
     liveTextFlushFrameRef.current = null
     const text = pendingLiveTextRef.current
     const session = liveTextTargetSessionRef.current
     if (!session) return
     setComposerLiveText(text)
+    setComposerLiveReasoning(pendingLiveReasoningRef.current)
   }, [])
 
   const sendComposerMessage = useCallback(async (draftOverride?: string, attachmentsOverride?: SendAttachment[]) => {
@@ -4685,16 +4825,20 @@ export default function OpenTuiApp() {
     setComposerError(null)
     flushLiveText() // flush any stale pending text
     pendingLiveTextRef.current = ''
+    pendingLiveReasoningRef.current = ''
     liveTextTargetSessionRef.current = targetSession
     if (liveTextFlushFrameRef.current != null) {
       cancelAnimationFrame(liveTextFlushFrameRef.current)
       liveTextFlushFrameRef.current = null
     }
     setComposerLiveText('')
+    setComposerLiveReasoning('')
     setLivePromptSuggestion(null)
     setLiveStatus(null)
     setLiveSubagentText({})
     setLiveToolActivities([])
+    setPendingPermissions([])
+    setPermissionOptionIndex(0)
     const runningRef: RunningSessionRef = {
       sessionId: targetSession.sessionId,
       provider: targetSession.provider ?? 'claude',
@@ -4745,6 +4889,9 @@ export default function OpenTuiApp() {
           permissionMode: targetSession.provider === 'claude' && tuiPermissionMode !== 'default'
             ? tuiPermissionMode
             : undefined,
+          // Claude/Copilot only emit interactive tool-approval prompts when the
+          // client opts in. OpenCode/Codex surface them automatically.
+          manualPermissions: targetSession.provider === 'claude' || targetSession.provider === 'copilot' ? true : undefined,
         },
         controller.signal,
       )
@@ -4833,12 +4980,32 @@ export default function OpenTuiApp() {
         if (!parsed) return
         const parsedRecord = parsed as Record<string, unknown>
 
+        const pendingPermission = extractPendingPermission(parsed)
+        if (pendingPermission) {
+          setPendingPermissions((prev) => {
+            const next = [...prev.filter((entry) => entry.id !== pendingPermission.id), pendingPermission]
+            setPermissionOptionIndex(0)
+            return next
+          })
+        }
+        const repliedPermissionId = extractPermissionReply(parsed)
+        if (repliedPermissionId) {
+          setPendingPermissions((prev) => prev.filter((entry) => entry.id !== repliedPermissionId))
+        }
+
         if (parsedRecord.type === 'prompt_suggestion' && typeof parsedRecord.suggestion === 'string') {
           setLivePromptSuggestion(parsedRecord.suggestion)
         }
         if (parsedRecord.type === 'system' && parsedRecord.subtype === 'status') {
           const status = parsedRecord.status === 'requesting' || parsedRecord.status === 'compacting' ? parsedRecord.status : null
-          setLiveStatus(status as 'requesting' | 'compacting' | null)
+          setLiveStatus(status)
+        }
+        // Pi surfaces auto-retry / auto-compaction as non-fatal progress so the
+        // turn doesn't look hung while it recovers (mirrors native Pi).
+        if (parsedRecord.type === 'pi_status') {
+          if (parsedRecord.status === 'retry_start') setLiveStatus('retrying')
+          else if (parsedRecord.status === 'compaction_start') setLiveStatus('compacting')
+          else if (parsedRecord.status === 'retry_end' || parsedRecord.status === 'compaction_end') setLiveStatus(null)
         }
         if (parsedRecord.type === 'stream_event' && typeof parsedRecord.parent_tool_use_id === 'string' && parsedRecord.parent_tool_use_id) {
           const event = parsedRecord.event as Record<string, unknown> | undefined
@@ -4965,6 +5132,18 @@ export default function OpenTuiApp() {
           const finalText = extractStreamingAssistantText(parsed)
           if (finalText) replyAccumulator = finalText
           return
+        }
+
+        // Reasoning streams on its own channel; capture it before the answer
+        // bail-out so a thinking-only frame still updates the dim preview.
+        const reasoningDelta = extractStreamingReasoningText(parsed)
+        if (reasoningDelta) {
+          setLiveStatus(null)
+          pendingLiveReasoningRef.current = `${pendingLiveReasoningRef.current}${reasoningDelta}`
+          liveTextTargetSessionRef.current = targetSession
+          if (liveTextFlushFrameRef.current == null) {
+            liveTextFlushFrameRef.current = requestAnimationFrame(flushLiveText)
+          }
         }
 
         const delta = extractStreamingAssistantText(parsed)
@@ -6290,7 +6469,7 @@ export default function OpenTuiApp() {
         return
       }
       if (key.name === 'j' || key.name === 'down') {
-        handled(() => setCommandPaletteIndex((i) => Math.min(i + 1, filteredCommands.length - 1)))
+        handled(() => setCommandPaletteIndex((i) => Math.min(i + 1, Math.max(0, filteredCommands.length - 1))))
         return
       }
       if (key.name === 'k' || key.name === 'up') {
@@ -6321,6 +6500,33 @@ export default function OpenTuiApp() {
       return
     }
 
+    // A pending tool approval blocks the turn — capture option nav / confirm /
+    // number shortcuts so the user can allow or reject it. Other keys (scroll,
+    // Ctrl+C interrupt) still fall through.
+    if (pendingPermissions.length > 0 && !permissionActionLoading) {
+      const activePermission = pendingPermissions[0]!
+      const options = permissionOptionsFor(activePermission)
+      if (key.name === 'left') {
+        handled(() => setPermissionOptionIndex((i) => Math.max(0, i - 1)))
+        return
+      }
+      if (key.name === 'right' || key.name === 'tab') {
+        handled(() => setPermissionOptionIndex((i) => Math.min(options.length - 1, i + 1)))
+        return
+      }
+      if (key.name === 'return') {
+        const option = options[Math.min(permissionOptionIndex, options.length - 1)]
+        if (option) handled(() => { void respondToTuiPermission(activePermission, option.response) })
+        return
+      }
+      const digit = Number.parseInt(sequence, 10)
+      if (!Number.isNaN(digit) && digit >= 1 && digit <= options.length) {
+        const option = options[digit - 1]!
+        handled(() => { void respondToTuiPermission(activePermission, option.response) })
+        return
+      }
+    }
+
     if (composerActive) {
       if (key.name === 'escape') {
         if (composerMention && composerMentionResults.length > 0) {
@@ -6343,6 +6549,12 @@ export default function OpenTuiApp() {
           return
         }
         handled(() => {
+          // Native CLIs interrupt the running turn with Esc. Do that first; a
+          // second Esc (now idle) closes the window/composer.
+          if (composerSendState === 'sending') {
+            cancelComposerSend()
+            return
+          }
           if (composerWindowOpen) {
             rememberComposerCursor()
             setComposerWindowOpen(false)
@@ -7633,10 +7845,21 @@ export default function OpenTuiApp() {
         {commandPaletteOpen ? (() => {
           const paletteW = Math.min(width - 8, 64)
           const labelW = paletteW - 10
+          // Keep the absolute overlay bounded with a deterministic row window.
+          // Stable slot keys avoid stale terminal cells as the window moves.
+          const selectedRowIndex = paletteDisplayRows.findIndex((row) => row.kind === 'cmd' && row.cmdIndex === commandPaletteIndex)
+          const maxStart = Math.max(0, paletteDisplayRows.length - commandPaletteBodyRows)
+          const startIdx = clamp((selectedRowIndex === -1 ? 0 : selectedRowIndex) - Math.floor(commandPaletteBodyRows / 2), 0, maxStart)
+          const visibleRows = paletteDisplayRows.slice(startIdx, startIdx + commandPaletteBodyRows)
+          const hiddenAbove = startIdx
+          const hiddenBelow = Math.max(0, paletteDisplayRows.length - (startIdx + commandPaletteBodyRows))
+          const positionHint = filteredCommands.length > 0
+            ? `  ${Math.min(commandPaletteIndex + 1, filteredCommands.length)}/${filteredCommands.length}`
+            : ''
           return (
             <box
               position="absolute"
-              top={focusMode ? 2 : 4}
+              top={commandPaletteTopOffset}
               left={Math.max(Math.floor((width - paletteW) / 2), 2)}
               width={paletteW}
               border
@@ -7647,19 +7870,33 @@ export default function OpenTuiApp() {
               flexDirection="column"
             >
               <box paddingX={1} paddingTop={1} paddingBottom={1}>
-                <text fg={theme.dim}>{fitText(`> ${commandPaletteQuery}█  j/k  enter  esc`, paletteW - 4)}</text>
+                <text fg={theme.dim}>{fitText(`> ${commandPaletteQuery}█  j/k  enter  esc${positionHint}`, paletteW - 4)}</text>
               </box>
-              {paletteDisplayRows.map((row, i) => {
+              {hiddenAbove > 0 ? (
+                <box paddingX={1}>
+                  <text fg={theme.dim} wrapMode="none">{`▲ ${hiddenAbove} more`}</text>
+                </box>
+              ) : null}
+              {filteredCommands.length === 0 ? (
+                <box paddingX={1}>
+                  <text fg={theme.dim}>no matches</text>
+                </box>
+              ) : visibleRows.map((row, i) => {
                 if (row.kind === 'header') {
                   return (
-                    <box key={`h-${row.label}-${i}`} paddingX={1} backgroundColor={theme.surface2}>
+                    <box key={`palette-row:${i}`} paddingX={1} backgroundColor={theme.surface2}>
                       <text fg={theme.dim}>{row.label.toUpperCase()}</text>
                     </box>
                   )
                 }
                 const isSelected = row.cmdIndex === commandPaletteIndex
                 return (
-                  <box key={row.cmd.id} paddingX={1} backgroundColor={isSelected ? theme.surface3 : theme.surface} flexDirection="row">
+                  <box
+                    key={`palette-row:${i}`}
+                    paddingX={1}
+                    backgroundColor={isSelected ? theme.surface3 : theme.surface}
+                    flexDirection="row"
+                  >
                     <box flexGrow={1}>
                       <text fg={isSelected ? theme.text : theme.muted} wrapMode="none">
                         {fitText(row.cmd.label, labelW)}
@@ -7669,9 +7906,9 @@ export default function OpenTuiApp() {
                   </box>
                 )
               })}
-              {filteredCommands.length === 0 ? (
-                <box paddingX={1} paddingBottom={1}>
-                  <text fg={theme.dim}>no matches</text>
+              {hiddenBelow > 0 ? (
+                <box paddingX={1}>
+                  <text fg={theme.dim} wrapMode="none">{`▼ ${hiddenBelow} more`}</text>
                 </box>
               ) : null}
             </box>
@@ -7804,6 +8041,77 @@ export default function OpenTuiApp() {
               />
             </box>
           </box>
+        </box>
+      ) : null}
+
+      {pendingPermissions.length > 0 ? (() => {
+        const permission = pendingPermissions[0]!
+        const options = permissionOptionsFor(permission)
+        const selectedIndex = Math.min(permissionOptionIndex, options.length - 1)
+        const innerWidth = Math.max(width - 8, 20)
+        const diffLines = permission.diff ? permission.diff.split('\n').slice(0, 12) : []
+        return (
+          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+            <box borderStyle="single" borderColor={theme.amber} flexDirection="column" paddingX={1}>
+              <text fg={theme.amber} wrapMode="none">{fitText(`● ${permission.title}`, innerWidth)}</text>
+              {permission.reason ? (
+                <text fg={theme.dim} wrapMode="word">{permission.reason}</text>
+              ) : null}
+              {permission.command ? (
+                <text fg={theme.text} wrapMode="none">{fitText(`$ ${permission.command}`, innerWidth)}</text>
+              ) : null}
+              {permission.url ? (
+                <text fg={theme.cyan} wrapMode="none">{fitText(`URL: ${permission.url}`, innerWidth)}</text>
+              ) : null}
+              {permission.paths && permission.paths.length > 0 ? (
+                <text fg={theme.dim} wrapMode="none">{fitText(permission.paths.join(', '), innerWidth)}</text>
+              ) : null}
+              {diffLines.map((line, index) => (
+                <text
+                  key={`perm-diff:${index}`}
+                  fg={line.startsWith('+') ? theme.green : line.startsWith('-') ? theme.red : theme.dim}
+                  wrapMode="none"
+                >
+                  {fitText(line || ' ', innerWidth)}
+                </text>
+              ))}
+              <box flexDirection="row" gap={2} paddingTop={1}>
+                {options.map((option, index) => {
+                  const selected = index === selectedIndex
+                  const color = option.response === 'reject' ? theme.red : theme.green
+                  return (
+                    <text key={option.response} fg={selected ? color : theme.dim} wrapMode="none">
+                      {`${selected ? '▶' : ' '} [${index + 1}] ${option.label}`}
+                    </text>
+                  )
+                })}
+              </box>
+              <text fg={theme.dim} wrapMode="none">
+                {permissionActionLoading ? 'responding…' : '←/→ select · enter confirm · 1/2/3 quick'}
+              </text>
+            </box>
+          </box>
+        )
+      })() : null}
+
+      {(liveStatus === 'retrying' || liveStatus === 'compacting') && composerSendState === 'sending' ? (
+        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+          <text fg={theme.amber} wrapMode="none">
+            {fitText(
+              liveStatus === 'retrying'
+                ? '● Retrying after a transient error…'
+                : '● Compacting conversation to free up context…',
+              Math.max(width - 4, 20),
+            )}
+          </text>
+        </box>
+      ) : null}
+
+      {composerSendState === 'sending' && composerLiveReasoning.trim() ? (
+        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+          <text fg={theme.dim} wrapMode="none">
+            {fitText(`✻ thinking · ${composerLiveReasoning.replace(/\s+/g, ' ').trim().slice(-100)}`, Math.max(width - 4, 20))}
+          </text>
         </box>
       ) : null}
 

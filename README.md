@@ -1,20 +1,31 @@
 # Agent Viewer
 
-Agent Viewer is a local developer tool for browsing, searching, inspecting, and continuing coding-agent conversations. It has two frontends over the same local provider backend:
+Agent Viewer is a local tool for browsing, searching, and continuing coding-agent conversations. It presents the same underlying session data in two frontends:
 
-- a Next.js web UI
-- an OpenTUI terminal UI
+- a Next.js web app
+- an OpenTUI terminal app
 
-The app is built for local use against local agent runtimes. It reads local session stores, starts or connects to local provider SDKs, and stores only viewer metadata under `.agent-viewer-data/`.
+It is designed for a single local developer machine. The app reads provider sessions from local SDKs and CLIs, keeps viewer-specific state under `.agent-viewer-data/`, and avoids direct browser access to provider runtimes.
 
-Supported providers:
+## Current Shape
 
-- Claude, through `@anthropic-ai/claude-agent-sdk`
-- Codex, through `codex app-server --listen stdio://`
-- OpenCode, through `@opencode-ai/sdk`
-- GitHub Copilot, through `@github/copilot-sdk`
-- Pi, through `@mariozechner/pi-coding-agent`
-- `all`, which combines sessions from every provider
+The project currently centers on a shared provider backend plus two UIs:
+
+- `app/` and `components/` power the browser UI.
+- `tui/opentui/` is the primary terminal UI.
+- `tui/` still contains the legacy Ink terminal UI for fallback and comparison.
+- `lib/sessionBackend.ts` is the main orchestration layer that adapts each provider into one shared session model.
+- `lib/sessionPersistence.ts` mirrors sessions and messages into a local SQLite index for search and stats.
+- `lib/codex-schema/` is generated Codex protocol code, not hand-maintained application logic.
+
+Supported providers today are:
+
+- Claude
+- Codex
+- OpenCode
+- GitHub Copilot
+- Pi
+- `all`, which merges sessions across providers
 
 ## Quick Start
 
@@ -32,68 +43,49 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-Run the terminal app:
+Run the primary terminal app:
 
 ```bash
 npm run tui
 ```
 
-The terminal app uses OpenTUI and requires Bun on `PATH`.
+`npm run tui` uses OpenTUI and requires Bun on `PATH`.
 
-## Requirements
-
-- Node.js 20+
-- npm
-- Bun for the OpenTUI terminal UI
-- At least one supported local provider runtime or session store
-
-Provider-specific requirements are listed below. The web UI does not require Bun unless you run the TUI.
-
-## Packaged CLI
-
-The package exposes an `agent-viewer` binary.
-
-```bash
-npx agent-viewer
-```
-
-By default this launches the OpenTUI terminal UI through Bun.
-
-```bash
-npx agent-viewer web
-```
-
-This launches the Next.js web UI on `127.0.0.1`.
-
-Useful options:
-
-```bash
-npx agent-viewer web --port 3001
-npx agent-viewer --legacy
-npx agent-viewer --help
-```
-
-`--legacy` launches the older Ink terminal UI. On Windows, the CLI can use either `bun.exe` or a PowerShell shim such as `bun.ps1`.
-
-## What The App Does
+## What You Can Do
 
 - Browse sessions by provider or across all providers.
-- Group sessions by project and view project-level timelines.
-- Scope the session list to the active project and optionally include worktrees.
-- Search session titles, tags, working directories, and first prompts from the sidebar.
-- Open multiple session tabs in the message pane.
-- Read live-updating timelines with SSE streaming and polling fallback.
-- Send messages, interrupt running sends, and keep per-session composer drafts.
-- Select models and reasoning effort where the provider supports it.
-- Attach provider-mapped inputs such as files, directories, selections, images, mentions, skills, and blobs.
-- Rename sessions and manage tags, using provider-native metadata where available and local metadata otherwise.
-- Use provider-specific actions such as fork, resume from message, rewind, rollback, delete, share, summarize, unrevert, and permission response when supported.
-- Inspect diagnostics, model lists, context usage, and analytics.
-- Export sessions to HTML.
-- Use the command palette with `Ctrl/Command+K` for sessions, projects, provider switches, themes, sidebar/message-pane toggles, Git, indexed message search, and index rebuilds.
-- Switch application themes and syntax-highlighting themes independently.
+- Search session titles, tags, working directories, and indexed message text.
+- Open multiple session tabs and inspect live-updating transcripts.
+- Send messages, interrupt active turns, and keep per-session drafts.
+- Rename sessions, manage tags, and use provider-specific actions when supported.
+- Switch models, reasoning settings, themes, density, and focus modes where the provider or UI supports them.
+- Inspect diagnostics, context usage, analytics, Git state, and exports.
+- Rebuild the local search index from the command palette or the API.
 
-Controls are capability-driven. If a provider does not support an action, the UI hides or disables that action for that session.
+The UI is capability-driven. If a provider cannot do something, the action is hidden or disabled for that session instead of failing late.
+
+## Architecture
+
+The repository is organized around a few stable boundaries:
+
+- `app/api/` contains the browser-facing API routes.
+- `components/` contains the React UI for the web app.
+- `lib/*Client.ts` handles provider-specific SDK or CLI access.
+- `lib/*Mapper.ts` converts provider-native data into the shared view model.
+- `lib/provider.ts` defines per-provider capabilities.
+- `lib/providerComposer.ts` defines provider-specific composer copy and prompts.
+- `lib/sessionBackend.ts` is the central facade used by API routes and shared services.
+- `lib/sessionPersistence.ts` manages the SQLite-backed local index.
+- `tui/opentui/` contains the current terminal runtime.
+- `tui/App.tsx` remains as the legacy Ink runtime.
+- `bin/agent-viewer.mjs` is the packaged `npx agent-viewer` entrypoint.
+
+Some implementation choices matter:
+
+- Browser components should call API routes, not provider SDKs directly.
+- Provider SDKs and CLIs stay server-side because they rely on Node APIs like filesystem and process access.
+- Session identity should always include the provider, because IDs can overlap across runtimes.
+- New provider work usually touches the provider type, capability table, client, mapper, `sessionBackend.ts`, and the provider selection lists in the web and TUI layers.
 
 ## Provider Setup
 
@@ -103,7 +95,7 @@ You can choose the startup provider with:
 AGENT_VIEWER_PROVIDER=claude npm run dev
 ```
 
-Valid values are `claude`, `codex`, `opencode`, `copilot`, `pi`, and `all`. The in-app provider picker persists its value to `.agent-viewer-data/provider.json`.
+Valid values are `claude`, `codex`, `opencode`, `copilot`, `pi`, and `all`. The in-app provider picker persists the choice to `.agent-viewer-data/provider.json`.
 
 ### Claude
 
@@ -119,7 +111,7 @@ Codex uses the local `codex` CLI by spawning:
 codex app-server --listen stdio://
 ```
 
-The `codex` binary must be on `PATH`. The viewer uses the app-server protocol for thread listing, reading, sending, model selection, diagnostics, fork/continuation APIs where available, and rollback. Codex titles are written through the app-server; tags are stored locally by Agent Viewer.
+The `codex` binary must be on `PATH`. The viewer uses the app-server protocol for thread listing, reading, sending, model selection, diagnostics, fork or continuation APIs where available, and rollback. Codex titles are written through the app-server; tags are stored locally by Agent Viewer.
 
 ### OpenCode
 
@@ -127,9 +119,9 @@ OpenCode uses `@opencode-ai/sdk`.
 
 If a server is already running, the viewer tries these URLs in order:
 
-- `OPENCODE_BASE_URL`
-- `OPENCODE_SERVER_URL`
-- `http://127.0.0.1:4096`
+1. `OPENCODE_BASE_URL`
+2. `OPENCODE_SERVER_URL`
+3. `http://127.0.0.1:4096`
 
 If none is reachable, it attempts to start a managed OpenCode server. Optional settings:
 
@@ -176,7 +168,7 @@ Agent Viewer stores local state in:
 This directory is intentionally not part of source control. It is used for:
 
 - selected provider state
-- local title or tag metadata for providers that need viewer-side metadata
+- local title or tag metadata for providers that need viewer-side storage
 - the SQLite session and message index
 - migrated legacy JSON index data
 
@@ -196,84 +188,24 @@ GET  /api/session-index/stats?provider=all
 POST /api/session-index/rebuild
 ```
 
-The command palette can also rebuild the index.
-
-## Architecture
-
-The main pieces are:
-
-- `app/`: Next.js App Router pages and API routes.
-- `components/`: browser UI components, including the sidebar, session list, message view, command palette, analytics popover, Git popover, and theme controls.
-- `lib/sessionBackend.ts`: the central provider orchestration layer used by API routes.
-- `lib/*Client.ts`: provider connection code for Codex, OpenCode, Copilot, and Pi.
-- `lib/*Mapper.ts`: provider-to-view-model normalization.
-- `lib/provider.ts`: provider capability definitions.
-- `lib/sessionPersistence.ts`: SQLite-backed session/message index and search.
-- `lib/tui/service.ts`: TUI-facing service wrapper over the same provider backend.
-- `tui/opentui/`: current terminal UI.
-- `tui/`: legacy Ink UI and shared TUI formatting/theme helpers.
-- `bin/agent-viewer.mjs`: packaged CLI entrypoint.
-
-Important implementation notes:
-
-- Browser components should call API routes instead of importing provider SDKs directly.
-- Provider SDKs and CLIs stay server-side because they use Node APIs such as filesystem access and process spawning.
-- Session identity should include the provider, because session IDs can collide across providers.
-- New provider work usually needs updates to provider types/capabilities, a client, a mapper, `sessionBackend.ts`, provider picker lists, and TUI provider lists.
-
-## API Overview
-
-Primary API routes:
-
-```text
-GET/PATCH /api/provider
-GET       /api/sessions
-POST      /api/sessions/project/messages
-GET/PATCH/DELETE /api/sessions/[sessionId]
-GET/POST  /api/sessions/[sessionId]/messages
-GET       /api/sessions/[sessionId]/messages/events
-POST      /api/sessions/[sessionId]/interrupt
-POST      /api/sessions/[sessionId]/fork
-POST      /api/sessions/[sessionId]/rewind
-POST      /api/sessions/[sessionId]/actions
-GET       /api/sessions/[sessionId]/models
-GET       /api/sessions/[sessionId]/diagnostics
-GET       /api/sessions/[sessionId]/subagents/[agentId]/messages
-GET       /api/session-index/search
-GET       /api/session-index/stats
-POST      /api/session-index/rebuild
-POST      /api/git
-```
-
-Most session routes accept a `provider` query parameter or body field. Use it whenever the active provider might be `all`.
-
 ## Scripts
 
 ```bash
-npm run dev
-npm run build
-npm run start
-npm run tui
-npm run tui:dev
-npm run tui:check
-npm run tui:ink
+npm run dev        # Next.js development server
+npm run build      # production build
+npm run start      # production server
+npm run tui        # OpenTUI terminal app
+npm run tui:dev    # OpenTUI with watch mode
+npm run tui:check  # type-check the OpenTUI surface
+npm run tui:ink    # legacy Ink terminal app
 npm run tui:ink:dev
+npm run tui:smoke  # OpenTUI render smoke check
+npm run doctor     # React diagnostics helper
 ```
-
-Script details:
-
-- `dev`: start the Next.js development server.
-- `build`: create a production Next.js build.
-- `start`: run the production Next.js server.
-- `tui`: run the OpenTUI app with Bun.
-- `tui:dev`: run the OpenTUI app with Bun watch mode.
-- `tui:check`: type-check the OpenTUI TypeScript config.
-- `tui:ink`: run the legacy Ink UI.
-- `tui:ink:dev`: run the legacy Ink UI in Node watch mode.
 
 ## TUI Status
 
-OpenTUI is the default terminal runtime. It supports provider selection, session navigation, transcript reading, tabs, search, folding, density and focus controls, theme selection, analytics, Git status, clipboard copy, refresh, and provider-backed sends where wired by the shared TUI service.
+OpenTUI is the default terminal runtime. It supports provider selection, session navigation, transcript reading, tabs, search, folding, density and focus controls, theme selection, analytics, Git status, clipboard copy, refresh, and provider-backed sends where wired through the shared TUI service.
 
 The legacy Ink UI remains available through:
 
@@ -293,6 +225,6 @@ npx agent-viewer --legacy
 
 ## Notes
 
-- Agent Viewer is intended for a single local developer environment, not hosted multi-user use.
+- Agent Viewer is intended for one local developer environment, not hosted multi-user use.
 - Some behavior is provider-specific because the underlying SDKs and CLIs expose different capabilities.
 - Local viewer metadata can be deleted by removing `.agent-viewer-data/`; provider-owned session data remains in the provider's own storage.

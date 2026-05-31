@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { once } from 'node:events'
-import { CodexJsonRpcResponse, type CodexJsonRpcRequest, type CodexNotification } from './codexProtocol'
+import { CodexJsonRpcResponse, type CodexJsonRpcRequest, type CodexNotification, type CodexServerRequest } from './codexProtocol'
 
 type PendingRequest = {
   resolve: (value: unknown) => void
@@ -8,12 +8,14 @@ type PendingRequest = {
 }
 
 type NotificationListener = (notification: CodexNotification) => void
+type ServerRequestListener = (request: CodexServerRequest) => void
 
 class CodexAppServerClient {
   private child: ChildProcessWithoutNullStreams | null = null
   private nextId = 1
   private pending = new Map<string, PendingRequest>()
   private listeners = new Set<NotificationListener>()
+  private requestListeners = new Set<ServerRequestListener>()
   private stdoutBuffer = ''
   private initializePromise: Promise<void> | null = null
   private exitPromise: Promise<void> | null = null
@@ -66,10 +68,23 @@ class CodexAppServerClient {
         continue
       }
 
-      if (message.id) {
-        const pending = this.pending.get(message.id)
+      if (message.id !== undefined && message.id !== null) {
+        // A message carrying BOTH an id and a method is a server→client request
+        // (e.g. an exec/patch approval). The app-server blocks the turn until we
+        // reply with `respond(id, result)`, so route it to request listeners
+        // rather than dropping it as an unmatched response (which hangs the turn).
+        if (message.method) {
+          const request: CodexServerRequest = {
+            id: message.id,
+            method: message.method,
+            params: (message.params ?? {}) as Record<string, unknown>,
+          }
+          for (const listener of this.requestListeners) listener(request)
+          continue
+        }
+        const pending = this.pending.get(String(message.id))
         if (!pending) continue
-        this.pending.delete(message.id)
+        this.pending.delete(String(message.id))
         if (message.error) {
           pending.reject(new Error(message.error.message || 'Codex app-server request failed'))
         } else {
@@ -130,6 +145,32 @@ class CodexAppServerClient {
     return () => {
       this.listeners.delete(listener)
     }
+  }
+
+  // Subscribe to server→client requests (approvals, elicitations, user input).
+  subscribeServerRequests(listener: ServerRequestListener): () => void {
+    this.requestListeners.add(listener)
+    return () => {
+      this.requestListeners.delete(listener)
+    }
+  }
+
+  // Reply to a server→client request. `id` must be echoed verbatim from the
+  // request. This unblocks the turn waiting on the approval.
+  respond(id: string | number, result: unknown): void {
+    const child = this.ensureProcess()
+    const payload = { jsonrpc: '2.0', id, result }
+    child.stdin.write(`${JSON.stringify(payload)}\n`, 'utf8', () => {
+      // Best-effort: if the pipe is gone the turn has already ended.
+    })
+  }
+
+  // Reply to a server→client request with a JSON-RPC error (used when we can't
+  // satisfy a request type), which the app-server treats as a refusal/abort.
+  respondError(id: string | number, code: number, message: string): void {
+    const child = this.ensureProcess()
+    const payload = { jsonrpc: '2.0', id, error: { code, message } }
+    child.stdin.write(`${JSON.stringify(payload)}\n`, 'utf8', () => {})
   }
 }
 

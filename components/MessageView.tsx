@@ -115,9 +115,19 @@ type RollbackPreview = {
 type PendingPermission = {
   id: string
   sessionId?: string
+  provider?: Session['provider']
   title: string
   detail?: string
   canApproveAlways?: boolean
+  // Structured payload so the approval card can show the same context the
+  // native CLI does — the full command, an edit's diff, the target paths/url,
+  // and the model's stated reason — instead of one ellipsized line.
+  toolName?: string
+  command?: string
+  diff?: string
+  paths?: string[]
+  url?: string
+  reason?: string
 }
 
 type FailedSend = {
@@ -368,6 +378,9 @@ function stringField(record: Record<string, unknown>, key: string): string | und
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
+// NOTE: the permission extractors below mirror lib/permissions.ts (the shared
+// source the OpenTUI composer consumes). Keep the two in sync until this file is
+// migrated to import from lib/permissions.ts directly.
 function copilotPermissionSummary(permission: Record<string, unknown>): { title: string; detail?: string; canApproveAlways?: boolean } {
   const kind = stringField(permission, 'kind') ?? 'permission'
   const canApproveAlways = permission.canOfferSessionApproval === true
@@ -448,6 +461,40 @@ function copilotPermissionSummary(permission: Record<string, unknown>): { title:
   }
 }
 
+// Build a simple +/- diff body from an edit/write tool input so the approval
+// card can show what will change (lines starting with +/- are colored on render).
+function buildPermissionDiff(toolName: string | undefined, input: Record<string, unknown> | null): string | undefined {
+  if (!input) return undefined
+  const oldStr = stringField(input, 'old_string')
+  const newStr = stringField(input, 'new_string')
+  if (typeof oldStr === 'string' && typeof newStr === 'string') {
+    const minus = oldStr.split('\n').map((line) => `- ${line}`).join('\n')
+    const plus = newStr.split('\n').map((line) => `+ ${line}`).join('\n')
+    return `${minus}\n${plus}`
+  }
+  const content = stringField(input, 'content')
+  if (typeof content === 'string' && (!toolName || /write/i.test(toolName))) {
+    return content.split('\n').map((line) => `+ ${line}`).join('\n')
+  }
+  return undefined
+}
+
+// Pull whatever structured fields a Copilot permission carries, independent of
+// its `kind`. These fields only appear when relevant, so reading them all is safe.
+function copilotPermissionPayload(permission: Record<string, unknown>): Pick<PendingPermission, 'command' | 'diff' | 'paths' | 'url'> {
+  const command = stringField(permission, 'fullCommandText') ?? stringField(permission, 'commandText')
+  const diff = stringField(permission, 'diff')
+  const url = stringField(permission, 'url')
+  const rawPaths = permission.paths
+  const single = stringField(permission, 'path') ?? stringField(permission, 'fileName')
+  const paths = Array.isArray(rawPaths)
+    ? rawPaths.filter((entry): entry is string => typeof entry === 'string')
+    : single
+    ? [single]
+    : undefined
+  return { command, diff, url, paths }
+}
+
 function extractOpenCodePermission(payload: unknown): PendingPermission | null {
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
@@ -462,15 +509,28 @@ function extractOpenCodePermission(payload: unknown): PendingPermission | null {
   const id = typeof permissionRecord.id === 'string' ? permissionRecord.id : null
   if (!id) return null
   const pattern = permissionRecord.pattern
-  const detail = Array.isArray(pattern)
-    ? pattern.join(', ')
+  const patternText = Array.isArray(pattern)
+    ? pattern.filter((entry): entry is string => typeof entry === 'string').join(', ')
     : typeof pattern === 'string'
     ? pattern
     : undefined
+  const toolName = stringField(permissionRecord, 'type')
+  const metadata = asRecord(permissionRecord.metadata)
+  const diff = metadata ? stringField(metadata, 'diff') : undefined
+  const filepath = metadata ? stringField(metadata, 'filepath') : undefined
+  const metaCommand = metadata ? stringField(metadata, 'command') : undefined
+  // For shell permissions opencode's pattern is the command shape; surface it as
+  // the command when no explicit command is in metadata.
+  const isShell = typeof toolName === 'string' && /bash|shell|command/i.test(toolName)
   return {
     id,
+    provider: 'opencode',
+    toolName,
     title: typeof permissionRecord.title === 'string' ? permissionRecord.title : 'Permission requested',
-    detail,
+    detail: patternText,
+    command: metaCommand ?? (isShell ? patternText : undefined),
+    diff,
+    paths: filepath ? [filepath] : undefined,
   }
 }
 
@@ -500,11 +560,16 @@ function extractCopilotPermission(payload: unknown): PendingPermission | null {
   const permission = asRecord(data.promptRequest) ?? asRecord(data.permissionRequest)
   if (!permission) return {
     id,
+    provider: 'copilot',
     title: 'Copilot requests permission',
   }
   return {
     id,
+    provider: 'copilot',
+    toolName: stringField(permission, 'kind'),
+    reason: stringField(permission, 'intention'),
     ...copilotPermissionSummary(permission),
+    ...copilotPermissionPayload(permission),
   }
 }
 
@@ -526,22 +591,33 @@ function extractClaudePermission(payload: unknown): PendingPermission | null {
   if (!data) return null
   const id = stringField(data, 'requestId')
   if (!id) return null
+  const toolName = stringField(data, 'toolName')
   const input = asRecord(data.input)
   const command = input ? stringField(input, 'command') : undefined
+  const url = input ? stringField(input, 'url') : undefined
   const path = input ? (stringField(input, 'file_path') ?? stringField(input, 'path')) : undefined
-  const detail = stringField(data, 'description')
-    ?? stringField(data, 'blockedPath')
-    ?? command
-    ?? path
+  const diff = buildPermissionDiff(toolName, input)
+  const reason = stringField(data, 'description')
     ?? stringField(data, 'decisionReason')
+    ?? stringField(data, 'blockedPath')
+  // Keep a one-line detail as a fallback for surfaces that don't render the
+  // structured payload yet.
+  const detail = reason ?? command ?? path
   const suggestions = data.suggestions
   return {
     id,
     sessionId: stringField(data, 'sessionId'),
+    provider: 'claude',
+    toolName,
     title: stringField(data, 'title')
       ?? stringField(data, 'displayName')
-      ?? `Claude requests ${stringField(data, 'toolName') ?? 'tool'} permission`,
+      ?? `Claude requests ${toolName ?? 'tool'} permission`,
     detail,
+    command,
+    url,
+    diff,
+    paths: path ? [path] : undefined,
+    reason,
     canApproveAlways: Array.isArray(suggestions) && suggestions.length > 0,
   }
 }
@@ -553,6 +629,42 @@ function extractClaudePermissionCompletion(payload: unknown): string | null {
   if (!eventRecord || eventRecord.type !== 'permission.completed') return null
   const data = asRecord(eventRecord.data)
   return data ? stringField(data, 'requestId') ?? null : null
+}
+
+// Codex sends exec/patch/permission approval requests mid-turn. createCodexStream
+// surfaces them as `codex_approval` frames; the user's decision is POSTed back via
+// respondPermission (mapped to the codex decision vocabulary server-side).
+function extractCodexApproval(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'codex_approval') return null
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'approval.requested') return null
+  const id = stringField(eventRecord, 'requestId')
+  const method = stringField(eventRecord, 'method')
+  if (!id || !method) return null
+  const params = asRecord(eventRecord.params) ?? {}
+  const command = stringField(params, 'command')
+  const cwd = stringField(params, 'cwd')
+  const reason = stringField(params, 'reason')
+  const title = method.includes('commandExecution')
+    ? 'Codex wants to run a command'
+    : method.includes('fileChange')
+    ? 'Codex wants to apply a file change'
+    : method.includes('permissions')
+    ? 'Codex requests additional permissions'
+    : 'Codex requests approval'
+  return {
+    id,
+    sessionId: stringField(eventRecord, 'threadId'),
+    provider: 'codex',
+    toolName: method,
+    title,
+    reason: reason ?? undefined,
+    command: command ?? undefined,
+    paths: cwd ? [`cwd: ${cwd}`] : undefined,
+    detail: command ?? reason ?? undefined,
+    canApproveAlways: true,
+  }
 }
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
@@ -613,8 +725,10 @@ function extractStreamingAssistantText(payload: unknown): string | null {
     return record.delta
   }
 
-  if ((record.type === 'codex_plan_delta' || record.type === 'codex_reasoning_delta' || record.type === 'codex_reasoning_summary_delta')
-    && typeof record.delta === 'string') {
+  // Reasoning deltas (codex_reasoning_delta / _summary_delta) are handled by
+  // extractStreamingReasoningText and rendered on their own channel — only the
+  // plan delta stays in the answer stream here.
+  if (record.type === 'codex_plan_delta' && typeof record.delta === 'string') {
     return record.delta
   }
 
@@ -754,6 +868,76 @@ function extractStreamingAssistantText(payload: unknown): string | null {
     if (!message || typeof message !== 'object') return null
     const text = extractTextContent((message as Record<string, unknown>).content)
     return text || null
+  }
+
+  return null
+}
+
+// Append-only reasoning/thinking deltas, kept separate from the answer so the UI
+// can stream them as a distinct dim "thinking" block (matching the native CLIs).
+function extractStreamingReasoningText(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+
+  if ((record.type === 'codex_reasoning_delta' || record.type === 'codex_reasoning_summary_delta')
+    && typeof record.delta === 'string') {
+    return record.delta
+  }
+
+  if (record.type === 'stream_event') {
+    if (typeof record.parent_tool_use_id === 'string' && record.parent_tool_use_id) return null
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'content_block_delta') return null
+    const delta = eventRecord.delta
+    if (!delta || typeof delta !== 'object') return null
+    const deltaRecord = delta as Record<string, unknown>
+    return deltaRecord.type === 'thinking_delta' && typeof deltaRecord.thinking === 'string'
+      ? deltaRecord.thinking
+      : null
+  }
+
+  if (record.type === 'pi_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message_update') return null
+    const assistantMessageEvent = eventRecord.assistantMessageEvent
+    if (!assistantMessageEvent || typeof assistantMessageEvent !== 'object') return null
+    const updateRecord = assistantMessageEvent as Record<string, unknown>
+    return updateRecord.type === 'thinking_delta' && typeof updateRecord.delta === 'string'
+      ? updateRecord.delta
+      : null
+  }
+
+  if (record.type === 'opencode_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'message.part.delta') return null
+    const properties = eventRecord.properties
+    if (!properties || typeof properties !== 'object') return null
+    const propertiesRecord = properties as Record<string, unknown>
+    const field = typeof propertiesRecord.field === 'string' ? propertiesRecord.field : ''
+    return field === 'reasoning' && typeof propertiesRecord.delta === 'string'
+      ? propertiesRecord.delta
+      : null
+  }
+
+  if (record.type === 'copilot_event') {
+    const event = record.event
+    if (!event || typeof event !== 'object') return null
+    const eventRecord = event as Record<string, unknown>
+    if (eventRecord.type !== 'assistant.reasoning_delta') return null
+    const data = eventRecord.data
+    if (!data || typeof data !== 'object') return null
+    const dataRecord = data as Record<string, unknown>
+    return typeof dataRecord.deltaContent === 'string'
+      ? dataRecord.deltaContent
+      : typeof dataRecord.delta === 'string'
+      ? dataRecord.delta
+      : null
   }
 
   return null
@@ -2057,7 +2241,7 @@ export default function MessageView({
   const [sendState, setSendState] = useState<SendState>('idle')
   const [sendError, setSendError] = useState<string | null>(null)
   const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
-  const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | null>(null)
+  const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | 'retrying' | null>(null)
   const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
   const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
@@ -2070,6 +2254,9 @@ export default function MessageView({
   const [selectedCopilotMode, setSelectedCopilotMode] = useState('interactive')
   // Claude `/permissions` modes — passed through to body.permissionMode on send.
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'>('default')
+  // Codex `/approvals` policy — passed through to body.approvalPolicy on send.
+  // 'auto' leaves the app-server's configured default untouched.
+  const [selectedCodexApproval, setSelectedCodexApproval] = useState<'auto' | 'untrusted' | 'on-request' | 'on-failure' | 'never'>('auto')
   // Mirrors the CLI "queue next prompt while streaming" behavior. When a send
   // fires while one is in flight, the draft is captured here and flushed by an
   // effect once the active turn finishes.
@@ -2146,6 +2333,10 @@ export default function MessageView({
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
   const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
   const [liveAssistantText, setLiveAssistantText] = useState('')
+  // Reasoning/thinking streams on its own channel so it renders as a distinct
+  // dim block above the answer (like the native CLIs) instead of being folded
+  // into the reply text.
+  const [liveReasoningText, setLiveReasoningText] = useState('')
   const [liveToolActivities, setLiveToolActivities] = useState<LiveToolActivity[]>([])
   const [liveThreadedMessages, setLiveThreadedMessages] = useState<ThreadedMessage[]>([])
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
@@ -2187,6 +2378,9 @@ export default function MessageView({
   const liveAssistantTextRef = useRef('')
   const pendingLiveAssistantTextRef = useRef<string | null>(null)
   const liveAssistantFlushFrameRef = useRef<number | null>(null)
+  // Reasoning shares the assistant flush frame (one RAF flushes both buffers).
+  const liveReasoningTextRef = useRef('')
+  const pendingLiveReasoningTextRef = useRef<string | null>(null)
   // Ref-backed source of truth for per-subagent streamed text. Deltas mutate
   // this ref and a single RAF flushes a fresh snapshot into state, so a burst
   // of subagent tokens collapses to one re-render per frame instead of one per
@@ -2282,9 +2476,15 @@ export default function MessageView({
   const flushLiveAssistantText = useCallback(() => {
     liveAssistantFlushFrameRef.current = null
     const nextText = pendingLiveAssistantTextRef.current
-    if (nextText == null) return
-    pendingLiveAssistantTextRef.current = null
-    setLiveAssistantText(nextText)
+    if (nextText != null) {
+      pendingLiveAssistantTextRef.current = null
+      setLiveAssistantText(nextText)
+    }
+    const nextReasoning = pendingLiveReasoningTextRef.current
+    if (nextReasoning != null) {
+      pendingLiveReasoningTextRef.current = null
+      setLiveReasoningText(nextReasoning)
+    }
   }, [])
 
   const flushLiveAssistantTextNow = useCallback(() => {
@@ -2303,12 +2503,26 @@ export default function MessageView({
     liveAssistantTextRef.current = ''
     pendingLiveAssistantTextRef.current = null
     setLiveAssistantText('')
+    liveReasoningTextRef.current = ''
+    pendingLiveReasoningTextRef.current = null
+    setLiveReasoningText('')
   }, [])
 
   const queueLiveAssistantText = useCallback((deltaText: string, replace: boolean) => {
     const nextText = replace ? deltaText : `${liveAssistantTextRef.current}${deltaText}`
     liveAssistantTextRef.current = nextText
     pendingLiveAssistantTextRef.current = nextText
+    if (liveAssistantFlushFrameRef.current == null) {
+      liveAssistantFlushFrameRef.current = window.requestAnimationFrame(flushLiveAssistantText)
+    }
+  }, [flushLiveAssistantText])
+
+  // Reasoning is always append-only (no replace semantics like the codex
+  // realtime answer transcript), and piggybacks on the assistant flush frame.
+  const queueLiveReasoningText = useCallback((deltaText: string) => {
+    const nextText = `${liveReasoningTextRef.current}${deltaText}`
+    liveReasoningTextRef.current = nextText
+    pendingLiveReasoningTextRef.current = nextText
     if (liveAssistantFlushFrameRef.current == null) {
       liveAssistantFlushFrameRef.current = window.requestAnimationFrame(flushLiveAssistantText)
     }
@@ -2967,6 +3181,9 @@ export default function MessageView({
           permissionMode: session.provider === 'claude' && selectedPermissionMode !== 'default'
             ? selectedPermissionMode
             : undefined,
+          approvalPolicy: session.provider === 'codex' && selectedCodexApproval !== 'auto'
+            ? selectedCodexApproval
+            : undefined,
         }),
         signal: controller.signal,
       })
@@ -3071,6 +3288,13 @@ export default function MessageView({
               const next = parsed.status === 'requesting' || parsed.status === 'compacting' ? parsed.status : null
               setLiveStatus(next)
             }
+            // Pi surfaces auto-retry / auto-compaction as non-fatal progress so the
+            // turn doesn't look hung while it recovers (mirrors native Pi).
+            if (parsed?.type === 'pi_status') {
+              if (parsed.status === 'retry_start') setLiveStatus('retrying')
+              else if (parsed.status === 'compaction_start') setLiveStatus('compacting')
+              else if (parsed.status === 'retry_end' || parsed.status === 'compaction_end') setLiveStatus(null)
+            }
             if (parsed?.type === 'stream_event' && typeof parsed.parent_tool_use_id === 'string' && parsed.parent_tool_use_id) {
               const event = parsed.event
               if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && typeof event.delta.text === 'string') {
@@ -3084,7 +3308,7 @@ export default function MessageView({
               // flushing after this removal can't resurrect the deleted text.
               removeLiveSubagentEntry(parsed.parent_tool_use_id)
             }
-            const pendingPermission = extractOpenCodePermission(parsed) ?? extractCopilotPermission(parsed) ?? extractClaudePermission(parsed)
+            const pendingPermission = extractOpenCodePermission(parsed) ?? extractCopilotPermission(parsed) ?? extractClaudePermission(parsed) ?? extractCodexApproval(parsed)
             if (pendingPermission) {
               setPendingPermissions((prev) => [
                 ...prev.filter((permission) => permission.id !== pendingPermission.id),
@@ -3151,6 +3375,12 @@ export default function MessageView({
             if (deltaText) {
               setLiveStatus(null)
               queueLiveAssistantText(deltaText, shouldReplaceLiveAssistantText(parsed))
+            }
+
+            const reasoningDelta = extractStreamingReasoningText(parsed)
+            if (reasoningDelta) {
+              setLiveStatus(null)
+              queueLiveReasoningText(reasoningDelta)
             }
 
             const codexCompletionItem = parsed?.type === 'codex_item_completed' && parsed.item && typeof parsed.item === 'object'
@@ -3231,7 +3461,7 @@ export default function MessageView({
       activeTurnRequestIdRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, clearLiveAssistantText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotMode, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, clearLiveAssistantText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
@@ -4077,6 +4307,10 @@ export default function MessageView({
     ? queuedSend
       ? 'Turn complete; syncing transcript. Next message queued.'
       : 'Turn complete; syncing transcript.'
+    : liveStatus === 'retrying'
+    ? 'Retrying after a transient error…'
+    : liveStatus === 'compacting'
+    ? 'Compacting conversation to free up context…'
     : activeToolCount > 0
     ? `Turn running; using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}.`
     : liveStatus === 'requesting' && !liveAssistantText.trim()
@@ -4113,20 +4347,28 @@ export default function MessageView({
         uuid: 'live-assistant',
         sessionId: session?.sessionId,
         provider: session?.provider,
-        blocks: [{
-          type: 'text',
-          text: liveAssistantText.trim()
-            || (activeToolCount > 0
-              ? `Using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
-              : sendState === 'sending'
-              ? 'Working…'
-              : 'Waiting for saved response…'),
-        }],
+        blocks: [
+          ...(liveReasoningText.trim()
+            ? [{ type: 'thinking' as const, thinking: liveReasoningText.trim() }]
+            : []),
+          {
+            type: 'text' as const,
+            text: liveAssistantText.trim()
+              || (activeToolCount > 0
+                ? `Using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
+                : liveReasoningText.trim()
+                ? 'Thinking…'
+                : sendState === 'sending'
+                ? 'Working…'
+                : 'Waiting for saved response…'),
+          },
+        ],
       }
     : null), [
       activeToolCount,
       awaitingPersistedTurn,
       liveAssistantText,
+      liveReasoningText,
       sendState,
       session?.provider,
       session?.sessionId,
@@ -6347,6 +6589,30 @@ export default function MessageView({
                   </NativeSelect>
                 </label>
               )}
+              {session?.provider === 'codex' && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 180px', minWidth: 150 }}>
+                  <Label style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    color: 'var(--text-3)',
+                    letterSpacing: '0.05em',
+                  }}>
+                    APPROVALS
+                  </Label>
+                  <NativeSelect
+                    value={selectedCodexApproval}
+                    onChange={(event) => setSelectedCodexApproval(event.target.value as typeof selectedCodexApproval)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                    title="Codex approval policy — mirrors the CLI's /approvals (AskForApproval)"
+                  >
+                    <NativeSelectOption value="auto">CONFIG</NativeSelectOption>
+                    <NativeSelectOption value="untrusted">UNTRUSTED</NativeSelectOption>
+                    <NativeSelectOption value="on-request">ON REQUEST</NativeSelectOption>
+                    <NativeSelectOption value="on-failure">ON FAILURE</NativeSelectOption>
+                    <NativeSelectOption value="never">NEVER</NativeSelectOption>
+                  </NativeSelect>
+                </label>
+              )}
               {session?.provider === 'claude' && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 140px', minWidth: 120 }}>
                   <Label style={{
@@ -6505,50 +6771,89 @@ export default function MessageView({
                     key={permission.id}
                     style={{
                       display: 'flex',
-                      gap: 8,
-                      alignItems: 'center',
-                      padding: '7px 8px',
+                      flexDirection: 'column',
+                      gap: 6,
+                      padding: '8px 9px',
                       borderRadius: 6,
                       border: '1px solid rgba(234,170,64,0.24)',
                       background: 'rgba(234,170,64,0.07)',
                     }}
                   >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.06em' }}>
-                        {permission.title}
-                      </div>
-                      {permission.detail && (
-                        <div style={{ marginTop: 2, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {permission.detail}
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--yellow, #fbbf24)', letterSpacing: '0.06em' }}>
+                          {permission.title}
                         </div>
-                      )}
+                        {permission.reason ? (
+                          <div style={{ marginTop: 2, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                            {permission.reason}
+                          </div>
+                        ) : permission.detail ? (
+                          <div style={{ marginTop: 2, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {permission.detail}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        {(['once', 'always', 'reject'] as const)
+                          .filter((response) => response !== 'always' || permission.canApproveAlways !== false)
+                          .map((response) => (
+                          <Button
+                            key={response}
+                            onClick={() => respondToPermission(permission, response)}
+                            disabled={sessionActionLoading === `permission:${permission.id}`}
+                            variant="outline"
+                            size="sm"
+                            style={{
+                              height: 24,
+                              padding: '0 8px',
+                              borderRadius: 4,
+                              border: response === 'reject' ? '1px solid rgba(248,113,113,0.24)' : '1px solid rgba(45,212,160,0.24)',
+                              background: response === 'reject' ? 'rgba(248,113,113,0.08)' : 'rgba(45,212,160,0.08)',
+                              color: response === 'reject' ? 'var(--red, #f87171)' : 'var(--green)',
+                              fontFamily: "'IBM Plex Mono', monospace",
+                              fontSize: 9,
+                              letterSpacing: '0.06em',
+                              cursor: sessionActionLoading === `permission:${permission.id}` ? 'not-allowed' : 'pointer',
+                              opacity: sessionActionLoading === `permission:${permission.id}` ? 0.55 : 1,
+                            }}
+                          >
+                            {response === 'once' ? 'ALLOW' : response.toUpperCase()}
+                          </Button>
+                        ))}
+                      </div>
                     </div>
-                    {(['once', 'always', 'reject'] as const)
-                      .filter((response) => response !== 'always' || permission.canApproveAlways !== false)
-                      .map((response) => (
-                      <Button
-                        key={response}
-                        onClick={() => respondToPermission(permission, response)}
-                        disabled={sessionActionLoading === `permission:${permission.id}`}
-                        variant="outline"
-                        size="sm"
-                        style={{
-                          height: 24,
-                          padding: '0 8px',
-                          borderRadius: 4,
-                          border: response === 'reject' ? '1px solid rgba(248,113,113,0.24)' : '1px solid rgba(45,212,160,0.24)',
-                          background: response === 'reject' ? 'rgba(248,113,113,0.08)' : 'rgba(45,212,160,0.08)',
-                          color: response === 'reject' ? 'var(--red, #f87171)' : 'var(--green)',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          fontSize: 9,
-                          letterSpacing: '0.06em',
-                          cursor: sessionActionLoading === `permission:${permission.id}` ? 'not-allowed' : 'pointer',
-                          opacity: sessionActionLoading === `permission:${permission.id}` ? 0.55 : 1,
-                        }}
-                      >
-                        {response.toUpperCase()}
-                      </Button>
-                    ))}
+                    {permission.command && (
+                      <pre style={{ margin: 0, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-2)', background: 'rgba(0,0,0,0.18)', padding: '5px 7px', borderRadius: 4, maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {`$ ${permission.command}`}
+                      </pre>
+                    )}
+                    {permission.url && (
+                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', wordBreak: 'break-all' }}>
+                        {`URL: ${permission.url}`}
+                      </div>
+                    )}
+                    {permission.paths && permission.paths.length > 0 && (
+                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', wordBreak: 'break-all' }}>
+                        {permission.paths.join(', ')}
+                      </div>
+                    )}
+                    {permission.diff && (
+                      <pre style={{ margin: 0, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, background: 'rgba(0,0,0,0.18)', padding: '5px 7px', borderRadius: 4, maxHeight: 180, overflow: 'auto' }}>
+                        {permission.diff.split('\n').slice(0, 240).map((line, lineIndex) => (
+                          <div
+                            key={lineIndex}
+                            style={{
+                              color: line.startsWith('+') ? 'var(--green)' : line.startsWith('-') ? 'var(--red, #f87171)' : 'var(--text-3)',
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                            }}
+                          >
+                            {line || ' '}
+                          </div>
+                        ))}
+                      </pre>
+                    )}
                   </div>
                 ))}
               </div>

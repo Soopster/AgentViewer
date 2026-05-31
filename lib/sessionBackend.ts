@@ -103,6 +103,7 @@ import type {
   CodexModelListResponse,
   CodexMcpServerListResponse,
   CodexNotification,
+  CodexServerRequest,
   CodexThread,
   CodexThreadForkResponse,
   CodexThreadListResponse,
@@ -748,6 +749,13 @@ function parseOpenCodeSlashCommand(message: string): { command: string; argument
 
 function copilotCommandResultEvent(data: Record<string, unknown>): string {
   return `event: command-result\ndata: ${JSON.stringify({ provider: 'copilot', ...data })}\n\n`
+}
+
+// Generic command-result frame for any provider that executes a slash command
+// natively (e.g. /compact) instead of sending it as prompt text. The clients
+// render the `message` field as a session notice.
+function commandResultEvent(provider: AgentProvider, data: Record<string, unknown>): string {
+  return `event: command-result\ndata: ${JSON.stringify({ provider, ...data })}\n\n`
 }
 
 const COPILOT_COMPOSER_MODES = [
@@ -2138,6 +2146,17 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     }
   }
 
+  if (resolvedProvider === 'codex') {
+    if (action === 'respondPermission') {
+      const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
+      const response = typeof body.response === 'string' ? body.response : ''
+      if (!permissionId) throw new Error('permissionId is required')
+      if (!response) throw new Error('response is required')
+      respondCodexApproval(sessionId, permissionId, response)
+      return { ok: true }
+    }
+  }
+
   throw new Error(`Action ${action || '(missing)'} is not supported for ${resolvedProvider} sessions`)
 }
 
@@ -2457,6 +2476,29 @@ function parseClaudePermissionMode(body: Record<string, unknown>): ClaudePermiss
     : undefined
 }
 
+// A Claude `result` message can report a non-success terminal state
+// (max-turns / budget / execution error) or a recovered-but-errored API call
+// (subtype 'success' with is_error + api_error_status). The SDK surfaces these
+// inline in the CLI; without this the turn just goes quiet. Returns a
+// human-readable error string, or null when the result is a clean success.
+function claudeResultErrorMessage(msg: Record<string, unknown>): string | null {
+  if (msg.type !== 'result') return null
+  const subtype = typeof msg.subtype === 'string' ? msg.subtype : ''
+  if (subtype === 'error_max_turns') return 'Claude reached the maximum number of turns before finishing.'
+  if (subtype === 'error_max_budget_usd') return 'Claude reached the task budget before finishing.'
+  if (subtype === 'error_max_structured_output_retries') return 'Claude could not produce a valid structured response.'
+  if (subtype === 'error_during_execution') {
+    const errors = Array.isArray(msg.errors) ? msg.errors.filter((entry): entry is string => typeof entry === 'string') : []
+    return errors.length ? `Claude hit an error: ${errors.join('; ')}` : 'Claude hit an error during execution.'
+  }
+  if (subtype === 'success' && msg.is_error === true) {
+    const status = typeof msg.api_error_status === 'number' ? ` (HTTP ${msg.api_error_status})` : ''
+    const detail = typeof msg.result === 'string' && msg.result.trim() ? `: ${msg.result.trim()}` : ''
+    return `Claude API error${status}${detail}`
+  }
+  return null
+}
+
 async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
@@ -2617,6 +2659,11 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           ...(cwdOverride ? { cwd: cwdOverride } : {}),
           ...(model ? { model } : {}),
           ...(permissionMode ? { permissionMode } : {}),
+          // The SDK requires allowDangerouslySkipPermissions whenever
+          // permissionMode is 'bypassPermissions'; without it the query rejects
+          // on send and BYPASS appears broken. Mirror the CLI's
+          // --dangerously-skip-permissions guard.
+          ...(permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
           ...(manualPermissions ? { canUseTool: createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds) } : {}),
           effort: effort === 'off' || effort === 'minimal' ? undefined : effort,
           thinking: effort === 'off'
@@ -2682,7 +2729,11 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           // The pool's pump loop takes over consuming for any tail messages
           // (notably prompt_suggestion, which the SDK emits after `result`)
           // and for future turns.
-          if (msg.type === 'result') break
+          if (msg.type === 'result') {
+            const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
+            if (resultError) safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: resultError })}\n\n`)
+            break
+          }
         }
 
         // Adopt into the pool when we can: a clean result was seen, the
@@ -2828,6 +2879,10 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
           onMessage: (msg) => {
             try {
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
+              const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
+              if (resultError) {
+                controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: resultError })}\n\n`))
+              }
             } catch {
               /* downstream closed; ignore — the turn keeps running in the pool */
             }
@@ -2995,6 +3050,112 @@ function isCodexIdleStatusNotification(notification: CodexNotification, sessionI
   return params.threadId === sessionId && params.status.type === 'idle'
 }
 
+// ── Codex server-request (approval) bridge ─────────────────────────────────
+// The app-server sends exec/patch/permission approval *requests* mid-turn and
+// blocks the turn until the client replies. createCodexStream surfaces them as
+// `codex_approval` SSE frames; the respondPermission action replies via
+// getCodexClient().respond(). Without this the turn hangs forever (the request
+// was previously dropped as an unmatched response).
+
+type PendingCodexApproval = { rawId: string | number; method: string }
+
+const pendingCodexApprovals = new Map<string, PendingCodexApproval>()
+
+function pendingCodexApprovalKey(threadId: string, id: string): string {
+  return `${threadId}:${id}`
+}
+
+const CODEX_APPROVAL_METHODS = new Set([
+  'item/commandExecution/requestApproval',
+  'item/fileChange/requestApproval',
+  'item/permissions/requestApproval',
+  'item/tool/requestUserInput',
+  'mcpServer/elicitation/request',
+])
+
+function isCodexApprovalRequest(method: string): boolean {
+  return CODEX_APPROVAL_METHODS.has(method)
+}
+
+function codexApprovalThreadId(params: Record<string, unknown>): string | undefined {
+  return typeof params.threadId === 'string' ? params.threadId : undefined
+}
+
+function codexApprovalRequestedEvent(threadId: string, request: CodexServerRequest): string {
+  return JSON.stringify({
+    type: 'codex_approval',
+    event: {
+      type: 'approval.requested',
+      requestId: String(request.id),
+      method: request.method,
+      threadId,
+      params: request.params,
+    },
+  })
+}
+
+// Map a user decision to the per-method app-server response payload. Accepts the
+// generic once/always/reject vocabulary shared by every provider's permission
+// card, plus codex-native decision strings (accept/acceptForSession/decline/
+// cancel) for finer control. Returns undefined when the method doesn't use the
+// simple {decision} response (permissions/elicitation/user-input).
+function codexApprovalResult(method: string, response: string): { decision: string } | undefined {
+  const decision =
+    response === 'accept' || response === 'acceptForSession' || response === 'decline' || response === 'cancel'
+      ? response
+      : response === 'always'
+      ? 'acceptForSession'
+      : response === 'reject'
+      ? 'decline'
+      : 'accept'
+  switch (method) {
+    case 'item/commandExecution/requestApproval':
+    case 'item/fileChange/requestApproval':
+      return { decision }
+    default:
+      return undefined
+  }
+}
+
+function respondCodexApproval(threadId: string, permissionId: string, response: string): void {
+  const key = pendingCodexApprovalKey(threadId, permissionId)
+  const pending = pendingCodexApprovals.get(key)
+  if (!pending) throw new Error('Approval request is no longer pending')
+  pendingCodexApprovals.delete(key)
+  const client = getCodexClient()
+  const result = codexApprovalResult(pending.method, response)
+  if (result === undefined) {
+    client.respondError(pending.rawId, -32601, 'Approval type not supported by this client')
+    return
+  }
+  client.respond(pending.rawId, result)
+}
+
+// Decline any unanswered approvals for a thread when its turn ends/errors so the
+// app-server is never left blocked. Safe on a clean completion (no pending) and
+// idempotent if the server already cancelled the request.
+function declinePendingCodexApprovals(threadId: string): void {
+  const client = getCodexClient()
+  for (const [key, pending] of Array.from(pendingCodexApprovals)) {
+    if (!key.startsWith(`${threadId}:`)) continue
+    pendingCodexApprovals.delete(key)
+    const result = codexApprovalResult(pending.method, 'reject')
+    if (result === undefined) client.respondError(pending.rawId, -32601, 'Approval cancelled')
+    else client.respond(pending.rawId, result)
+  }
+}
+
+// AskForApproval string variants accepted from the composer's APPROVALS picker.
+// (The `granular` object variant isn't exposed in the UI.) Omitted → use the
+// app-server's configured default.
+const CODEX_APPROVAL_POLICIES = ['untrusted', 'on-failure', 'on-request', 'never'] as const
+type CodexApprovalPolicy = typeof CODEX_APPROVAL_POLICIES[number]
+
+function parseCodexApprovalPolicy(body: Record<string, unknown>): CodexApprovalPolicy | undefined {
+  const value = typeof body.approvalPolicy === 'string' ? body.approvalPolicy : ''
+  return (CODEX_APPROVAL_POLICIES as readonly string[]).includes(value) ? (value as CodexApprovalPolicy) : undefined
+}
+
 async function createCodexStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
@@ -3007,6 +3168,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
     ? effort
     : undefined
   const attachments = parseAttachments(body)
+  const approvalPolicy = parseCodexApprovalPolicy(body)
   const bangShell = userMessage.startsWith('!') && attachments.length === 0
     ? userMessage.slice(1).trim()
     : null
@@ -3082,8 +3244,23 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       const subscription = subscribeToCodexEvents({ threadId: sessionId })
       const cachedSnapshot = subscription.snapshot
       let consumeAborted = false
+      // Surface this thread's server→client approval requests as codex_approval
+      // SSE frames. The app-server blocks the turn until respondPermission replies.
+      const unsubscribeApprovals = client.subscribeServerRequests((request) => {
+        if (consumeAborted) return
+        if (!isCodexApprovalRequest(request.method)) return
+        const approvalThreadId = codexApprovalThreadId(request.params)
+        if (approvalThreadId && approvalThreadId !== sessionId) return
+        pendingCodexApprovals.set(pendingCodexApprovalKey(sessionId, String(request.id)), {
+          rawId: request.id,
+          method: request.method,
+        })
+        safeEnqueue(`data: ${codexApprovalRequestedEvent(sessionId, request)}\n\n`)
+      })
       const unsubscribe = () => {
         consumeAborted = true
+        unsubscribeApprovals()
+        declinePendingCodexApprovals(sessionId)
         subscription.close()
       }
       const activateTargetTurn = (turnId: string) => {
@@ -3233,11 +3410,25 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           return
         }
 
+        // Execute native Codex slash commands instead of leaking the literal
+        // "/command" into the model prompt. The thread goes idle after the
+        // command, which closes the stream via the existing idle handler.
+        const codexSlash = attachments.length === 0 ? parseOpenCodeSlashCommand(userMessage) : null
+        if (codexSlash && codexSlash.command.toLowerCase() === 'compact') {
+          await client.request('thread/compact/start', { threadId: sessionId })
+          safeEnqueue(commandResultEvent('codex', { message: 'Compacting the conversation…' }))
+          return
+        }
+
         turnStartRequested = true
         const started = await client.request<CodexTurnStartResponse>('turn/start', {
           threadId: sessionId,
           model: model ?? undefined,
           reasoningEffort: codexEffort,
+          // Override the app-server's approval policy only when the user picks one
+          // in the composer (otherwise the configured default is used). This is
+          // what makes the exec/patch approval prompts appear interactively.
+          ...(approvalPolicy ? { approvalPolicy } : {}),
           input: buildCodexInput(userMessage, attachments),
         })
 
@@ -3910,6 +4101,28 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         broadcastLiveSessionTurnStart('pi', targetSessionId)
         broadcastedTurnStart = true
 
+        // Execute native Pi slash commands instead of sending them as prompt text.
+        const piSlash = !directShell && attachments.length === 0 ? parseOpenCodeSlashCommand(userMessage) : null
+        if (piSlash && piSlash.command.toLowerCase() === 'compact') {
+          setRunningSession(sessionId, {
+            provider: 'pi',
+            requestId: turnRequestId,
+            interrupt: () => agentSession.abort(),
+          })
+          safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'compaction_start', reason: 'manual' })}\n\n`)
+          try {
+            await agentSession.compact(piSlash.arguments || undefined)
+            safeEnqueue(commandResultEvent('pi', { message: 'Compacted the conversation.' }))
+          } finally {
+            safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'compaction_end', reason: 'manual' })}\n\n`)
+            clearRunningSession(sessionId)
+            broadcastLiveSessionTurnEnd('pi', targetSessionId)
+            schedulePiLiveTranscriptCleanup(targetSessionId)
+            close()
+          }
+          return
+        }
+
         if (directShell) {
           if (!directShell.command) {
             throw new Error('Pi shell command cannot be empty')
@@ -3985,31 +4198,63 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           }
         })
 
-        unsubscribePi = agentSession.agent.subscribe((event) => {
+        // Subscribe to the AgentSession event stream (not the raw Agent): only
+        // AgentSession surfaces willRetry on agent_end plus auto_retry/compaction/
+        // queue progress. Subscribing to the raw Agent makes transient,
+        // auto-retried errors look fatal (false "Pi turn failed" toast) and closes
+        // the stream on the first agent_end — cutting off the retry the user never
+        // sees. Native Pi instead shows a quiet "retrying…" and recovers.
+        unsubscribePi = agentSession.subscribe((event) => {
           if (cleanedUp) return
-          recordPiLiveTranscriptEvent(targetSessionId, event)
-          broadcastLiveSessionActivity('pi', targetSessionId)
-          const payload = JSON.stringify({ type: 'pi_event', event })
-          safeEnqueue(`data: ${payload}\n\n`)
 
-          // pi-ai's terminal AssistantMessage carries stopReason "error" |
-          // "aborted" with errorMessage when the LLM call fails (rate limit,
-          // network, refusal). agent_end still fires cleanly, so without
-          // this branch the user just sees an empty turn — no error toast.
-          // Gate on the terminal events only so a transient stopReason on
-          // an in-flight message_update can't trip a false positive.
-          if (event.type === 'message_end' || event.type === 'turn_end') {
-            const message = event.message
-            if (message.role === 'assistant'
-              && (message.stopReason === 'error' || message.stopReason === 'aborted')
-            ) {
-              const errorMessage = message.errorMessage
-                || (message.stopReason === 'aborted' ? 'Pi turn aborted' : 'Pi turn failed')
-              safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: errorMessage })}\n\n`)
-            }
+          // Session-level progress is not part of the transcript. Surface it as
+          // non-fatal status frames so the composer can show "Retrying…" /
+          // "Compacting…" / the live queue instead of looking hung — never as an
+          // error, and never closing the stream.
+          switch (event.type) {
+            case 'auto_retry_start':
+              safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'retry_start', attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, message: event.errorMessage })}\n\n`)
+              return
+            case 'auto_retry_end':
+              safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'retry_end', success: event.success, attempt: event.attempt })}\n\n`)
+              return
+            case 'compaction_start':
+              safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'compaction_start', reason: event.reason })}\n\n`)
+              return
+            case 'compaction_end':
+              safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'compaction_end', reason: event.reason, aborted: event.aborted })}\n\n`)
+              return
+            case 'queue_update':
+              safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'queue_update', steering: event.steering, followUp: event.followUp })}\n\n`)
+              return
+            case 'session_info_changed':
+            case 'thinking_level_changed':
+              return
+            default:
+              break
           }
 
+          // A will-retry agent_end is interim — an auto-retry or auto-compaction
+          // will re-run the agent on the same prompt() call. Suppress it so the
+          // client keeps the turn live and waits for the terminal agent_end.
+          if (event.type === 'agent_end' && event.willRetry) return
+
+          // From here on `event` is a core transcript AgentEvent.
+          const agentEvent = event as PiAgentEvent
+          recordPiLiveTranscriptEvent(targetSessionId, agentEvent)
+          broadcastLiveSessionActivity('pi', targetSessionId)
+          safeEnqueue(`data: ${JSON.stringify({ type: 'pi_event', event: agentEvent })}\n\n`)
+
           if (event.type === 'agent_end') {
+            // Terminal turn end. Only a genuine 'error' stopReason (rate limit /
+            // network / refusal, retries exhausted) is a failure. A user abort
+            // surfaces as stopReason 'aborted' — a clean stop, not an error toast.
+            const lastAssistant = [...event.messages].reverse().find(
+              (message): message is Extract<PiAgentMessage, { role: 'assistant' }> => message.role === 'assistant',
+            )
+            if (lastAssistant?.stopReason === 'error') {
+              safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: lastAssistant.errorMessage || 'Pi turn failed' })}\n\n`)
+            }
             clearRunningSession(sessionId)
             unsubscribePi?.()
             broadcastLiveSessionTurnEnd('pi', targetSessionId)

@@ -170,6 +170,9 @@ class ClaudePool {
         ...(opts.cwd ? { cwd: opts.cwd } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+        // bypassPermissions is a no-op (and the SDK rejects the option) unless we
+        // also opt into the dangerous skip. Mirror `claude --dangerously-skip-permissions`.
+        ...(opts.permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
         ...effortOptions,
         enableFileCheckpointing: true,
         resumeSessionAt: opts.resumeSessionAt,
