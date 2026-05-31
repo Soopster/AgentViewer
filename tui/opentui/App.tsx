@@ -8,7 +8,7 @@ import { TaskPanelPopover } from './TaskPanelPopover'
 import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
-import type { ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
+import type { BaseRenderable, MarkdownRenderable, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
   formatProviderLabel,
@@ -1471,6 +1471,82 @@ function chooseSyntaxColor(theme: TuiThemePalette, preferred: string, fallbacks:
   return fallbacks.find((color) => !lowSignal.has(color.toLowerCase())) ?? preferred
 }
 
+type SelectionColors = {
+  selectionBg: string
+  selectionFg: string
+}
+
+function parseHexRgb(color: string): { r: number; g: number; b: number } | null {
+  const hex = color.trim().replace(/^#/, '')
+  if (hex.length === 3) {
+    const [r, g, b] = hex.split('').map((part) => Number.parseInt(`${part}${part}`, 16))
+    return [r, g, b].every(Number.isFinite) ? { r, g, b } : null
+  }
+  if (hex.length !== 6) return null
+  const r = Number.parseInt(hex.slice(0, 2), 16)
+  const g = Number.parseInt(hex.slice(2, 4), 16)
+  const b = Number.parseInt(hex.slice(4, 6), 16)
+  return [r, g, b].every(Number.isFinite) ? { r, g, b } : null
+}
+
+function rgbToHex({ r, g, b }: { r: number; g: number; b: number }): string {
+  const toHex = (value: number) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, '0')
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+}
+
+function mixHexColor(accent: string, base: string, accentWeight: number): string | null {
+  const accentRgb = parseHexRgb(accent)
+  const baseRgb = parseHexRgb(base)
+  if (!accentRgb || !baseRgb) return null
+  const baseWeight = 1 - accentWeight
+  return rgbToHex({
+    r: accentRgb.r * accentWeight + baseRgb.r * baseWeight,
+    g: accentRgb.g * accentWeight + baseRgb.g * baseWeight,
+    b: accentRgb.b * accentWeight + baseRgb.b * baseWeight,
+  })
+}
+
+function relativeLuminance(color: string): number | null {
+  const rgb = parseHexRgb(color)
+  if (!rgb) return null
+  const channel = (value: number) => {
+    const next = value / 255
+    return next <= 0.03928 ? next / 12.92 : ((next + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
+}
+
+function terminalSelectionColors(theme: TuiThemePalette): SelectionColors {
+  const lightTheme = (relativeLuminance(theme.bg) ?? relativeLuminance(theme.surface) ?? 0) > 0.5
+  const selectionBg = mixHexColor(theme.cyan, theme.surface, lightTheme ? 0.22 : 0.42) ?? theme.surface3
+  return {
+    selectionBg,
+    selectionFg: theme.text,
+  }
+}
+
+type SelectionColorTarget = BaseRenderable & {
+  selectionBg?: string
+  selectionFg?: string
+}
+
+function applySelectionColorsToTree(root: BaseRenderable | null, colors: SelectionColors): void {
+  if (!root) return
+  const stack: BaseRenderable[] = [root]
+  while (stack.length > 0) {
+    const node = stack.pop()
+    if (!node) continue
+    if ('selectionBg' in node) {
+      const target = node as SelectionColorTarget
+      target.selectionBg = colors.selectionBg
+      target.selectionFg = colors.selectionFg
+    }
+    for (const child of node.getChildren()) {
+      stack.push(child)
+    }
+  }
+}
+
 function buildSyntaxStyle(theme: TuiThemePalette): SyntaxStyle {
   const keywordColor = chooseSyntaxColor(theme, theme.violet, [theme.amber, theme.pink, theme.cyan])
   const functionColor = chooseSyntaxColor(theme, theme.cyan, [theme.green, theme.amber, theme.violet])
@@ -2120,6 +2196,42 @@ type TranscriptCardProps = {
   imessageStyle: boolean
 }
 
+type SelectableMarkdownProps = {
+  content: string
+  syntaxStyle: SyntaxStyle
+  fg: string
+  width: number
+  selectionColors: SelectionColors
+  borderColor: string
+}
+
+function SelectableMarkdown({
+  content,
+  syntaxStyle,
+  fg,
+  width,
+  selectionColors,
+  borderColor,
+}: SelectableMarkdownProps) {
+  const markdownRef = useRef<MarkdownRenderable | null>(null)
+
+  useLayoutEffect(() => {
+    applySelectionColorsToTree(markdownRef.current, selectionColors)
+  }, [content, syntaxStyle, selectionColors.selectionBg, selectionColors.selectionFg])
+
+  return (
+    <markdown
+      ref={markdownRef}
+      content={content}
+      syntaxStyle={syntaxStyle}
+      fg={fg}
+      streaming={false}
+      width={width}
+      tableOptions={{ widthMode: 'content', borders: true, borderColor, selectable: true }}
+    />
+  )
+}
+
 function TranscriptCardInner({
   card,
   display,
@@ -2201,6 +2313,7 @@ function TranscriptCardInner({
     && canRenderMarkdownWithSyntax(card.markdownContent),
   )
   const landmarkWidth = rightPaneWidth - 4
+  const selectionColors = terminalSelectionColors(theme)
 
   return (
     <box
@@ -2219,7 +2332,7 @@ function TranscriptCardInner({
               : theme.dim
         return (
           <box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
-            <text fg={color} selectable>{fitText(landmark.text, landmarkWidth)}</text>
+            <text fg={color} selectable {...selectionColors}>{fitText(landmark.text, landmarkWidth)}</text>
           </box>
         )
       })}
@@ -2236,19 +2349,19 @@ function TranscriptCardInner({
         <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={1}>
           {shouldRenderSyntaxMarkdown && card.markdownContent && syntaxStyle ? (
             <box paddingX={1}>
-              <markdown
+              <SelectableMarkdown
                 content={card.markdownContent}
                 syntaxStyle={syntaxStyle}
                 fg={bubbleTextColor}
-                streaming={false}
                 width={markdownWidth}
-                tableOptions={{ widthMode: 'content', borders: true, borderColor: theme.border, selectable: true }}
+                selectionColors={selectionColors}
+                borderColor={theme.border}
               />
             </box>
           ) : markdownFallbackLines ? (
             <box paddingX={1}>
               {markdownFallbackLines.map((line, lineIndex) => (
-                <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={bubbleTextColor} selectable>
+                <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={bubbleTextColor} selectable {...selectionColors}>
                   {fitText(line, markdownWidth)}
                 </text>
               ))}
@@ -2261,7 +2374,7 @@ function TranscriptCardInner({
                   paddingX={1}
                   backgroundColor={transcriptBackground(line, theme) ?? cardBg}
                 >
-                  <text fg={imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme)} wrapMode="none" selectable>
+                  <text fg={imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
                     {fitText(line.text, bodyInnerWidth)}
                   </text>
                 </box>
@@ -2280,13 +2393,13 @@ function TranscriptCardInner({
                   const codeWidth = Math.max(markdownWidth - gutterWidth - (lineNumbers ? 1 : 0), 12)
                   return (
                     <box key={cb.key} paddingX={1} marginTop={1}>
-                      <text fg={theme.dim} selectable>{fitText(codeBlockLabel(cb), markdownWidth)}</text>
+                      <text fg={theme.dim} selectable {...selectionColors}>{fitText(codeBlockLabel(cb), markdownWidth)}</text>
                       {syntaxStyle ? (
                         lineNumbers ? (
                           <box flexDirection="row">
                             <box width={gutterWidth} flexDirection="column">
                               {lineNumbers.map((num, lineIndex) => (
-                                <text key={`${cb.key}:gutter:${lineIndex}`} fg={theme.dim} wrapMode="none" selectable>
+                                <text key={`${cb.key}:gutter:${lineIndex}`} fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
                                   {fitText(num, gutterWidth)}
                                 </text>
                               ))}
@@ -2297,6 +2410,7 @@ function TranscriptCardInner({
                               syntaxStyle={syntaxStyle}
                               drawUnstyledText={true}
                               selectable
+                              {...selectionColors}
                               style={{ height: renderHeight }}
                               width={codeWidth}
                             />
@@ -2308,6 +2422,7 @@ function TranscriptCardInner({
                             syntaxStyle={syntaxStyle}
                             drawUnstyledText={true}
                             selectable
+                            {...selectionColors}
                             style={{ height: renderHeight }}
                             width={markdownWidth}
                           />
@@ -2316,16 +2431,16 @@ function TranscriptCardInner({
                         visibleCode.split('\n').map((line, lineIndex) => (
                           <box key={`${cb.key}:fallback:${lineIndex}`} flexDirection="row">
                             {lineNumbers ? (
-                              <text fg={theme.dim} selectable>{fitText(lineNumbers[lineIndex] ?? '', gutterWidth)}</text>
+                              <text fg={theme.dim} selectable {...selectionColors}>{fitText(lineNumbers[lineIndex] ?? '', gutterWidth)}</text>
                             ) : null}
-                            <text fg={theme.text} selectable>
+                            <text fg={theme.text} selectable {...selectionColors}>
                               {fitText(line, lineNumbers ? codeWidth : markdownWidth)}
                             </text>
                           </box>
                         ))
                       )}
                       {hiddenLineCount > 0 ? (
-                        <text fg={theme.dim} selectable>{fitText(`... ${hiddenLineCount} more lines`, markdownWidth)}</text>
+                        <text fg={theme.dim} selectable {...selectionColors}>{fitText(`... ${hiddenLineCount} more lines`, markdownWidth)}</text>
                       ) : null}
                     </box>
                   )
@@ -2346,6 +2461,7 @@ function TranscriptCardInner({
                 contextBg={theme.surface}
                 lineNumberBg={theme.surface}
                 lineNumberFg={theme.dim}
+                {...selectionColors}
                 fg={theme.text}
                 style={{ height: isExpanded ? Math.max(diffLineCount + 2, 4) : Math.min(densityState.bodyLines, Math.max(diffLineCount + 2, 4)) }}
               />
@@ -5480,7 +5596,12 @@ export default function OpenTuiApp() {
     if (!transcriptCursorKey) return
     if (followTail) return
     const timer = setTimeout(() => {
-      transcriptScrollRef.current?.scrollChildIntoView(`card:${transcriptCursorKey}`)
+      const scrollbox = transcriptScrollRef.current
+      scrollbox?.scrollChildIntoView(`card:${transcriptCursorKey}`)
+      const scrollTop = scrollbox?.scrollTop
+      if (typeof scrollTop === 'number') {
+        pausedTranscriptScrollTopRef.current = scrollTop
+      }
     }, 0)
     return () => clearTimeout(timer)
   }, [followTail, transcriptCursorKey])
@@ -5513,7 +5634,7 @@ export default function OpenTuiApp() {
     if (typeof scrollTop === 'number') {
       pausedTranscriptScrollTopRef.current = scrollTop
     }
-  }, [followTail, transcriptCards.length])
+  }, [followTail, pendingNewCount, transcriptCards.length, unreadBoundaryKey])
 
   useLayoutEffect(() => {
     if (followTail) {
@@ -5528,7 +5649,7 @@ export default function OpenTuiApp() {
     }
     prevFollowTailRef.current = followTail
     prevTranscriptLengthRef.current = transcriptCards.length
-  }, [followTail, transcriptCards.length])
+  }, [followTail, pendingNewCount, transcriptCards.length, unreadBoundaryKey])
 
   useLayoutEffect(() => {
     if (!followTail) return
@@ -5614,6 +5735,9 @@ export default function OpenTuiApp() {
     const text = selection.getSelectedText()
     if (!text.trim()) return
     terminalSelectionRef.current = { text, capturedAt: Date.now() }
+    // Auto-copy via OSC 52 so Cmd+C / Ctrl+Shift+C work immediately after
+    // dragging to select, without needing to press y.
+    renderer.copyToClipboardOSC52(text)
   })
 
   usePaste((event) => {
@@ -7195,10 +7319,12 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
-          {!followTail && pendingNewCount > 0 ? (
+          {!followTail ? (
             <box paddingX={1} marginTop={1}>
               <text fg={theme.amber}>
-                {fitText(`+${pendingNewCount} new messages waiting. Press u for first unread or f for live tail.`, rightPaneWidth - 4)}
+                {pendingNewCount > 0
+                  ? fitText(`+${pendingNewCount} new messages waiting. Press u for first unread or f for live tail.`, rightPaneWidth - 4)
+                  : ' '}
               </text>
             </box>
           ) : null}
