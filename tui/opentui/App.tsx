@@ -91,7 +91,7 @@ import { readViewSessionSlashCommands, readViewSessionComposerOptions, createNew
 import { compactStableFingerprint } from '../../lib/compactFingerprint'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { release, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 // Stable-reference event handler — reads the latest closure on every call
@@ -405,6 +405,10 @@ function appleScriptStringLiteral(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 }
 
+function isWslRuntime(): boolean {
+  return process.platform === 'linux' && release().includes('WSL')
+}
+
 function runClipboardCommand(command: string, args: readonly string[] = [], timeoutMs = 2500): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, [...args], {
@@ -445,10 +449,11 @@ function runClipboardCommand(command: string, args: readonly string[] = [], time
 
 async function readClipboardText(): Promise<string> {
   const platform = process.platform
+  const windowsClipboard = platform === 'win32' || isWslRuntime()
   const candidates = platform === 'darwin'
     ? [['pbpaste', []] as const]
-    : platform === 'win32'
-    ? [['powershell', ['-NoProfile', '-Command', 'Get-Clipboard -Raw']] as const]
+    : windowsClipboard
+    ? [['powershell.exe', ['-NonInteractive', '-NoProfile', '-Command', 'Get-Clipboard -Raw']] as const]
     : [
         ['wl-paste', ['--no-newline']] as const,
         ['xclip', ['-selection', 'clipboard', '-o']] as const,
@@ -569,6 +574,7 @@ exit(2)
 
 async function readClipboardImage(): Promise<ClipboardImage | null> {
   const platform = process.platform
+  const windowsClipboard = platform === 'win32' || isWslRuntime()
   if (platform === 'darwin') {
     const appleScriptImage = await readMacClipboardImageWithAppleScript()
     if (appleScriptImage) return appleScriptImage
@@ -591,20 +597,21 @@ async function readClipboardImage(): Promise<ClipboardImage | null> {
           base64Output: true,
         },
       ]
-    : platform === 'win32'
+    : windowsClipboard
     ? [{
-        command: 'powershell',
+        command: 'powershell.exe',
         args: [
+          '-NonInteractive',
           '-NoProfile',
-          '-Command',
+          '-command',
           "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img=[Windows.Forms.Clipboard]::GetImage(); if ($null -eq $img) { exit 2 }; $ms=New-Object IO.MemoryStream; $img.Save($ms,[Drawing.Imaging.ImageFormat]::Png); [Console]::Out.Write([Convert]::ToBase64String($ms.ToArray()))",
         ],
         mimeType: 'image/png',
         base64Output: true,
       }]
     : [
-        { command: 'wl-paste', args: ['--type', 'image/png'], mimeType: 'image/png' },
-        { command: 'wl-paste', args: ['--type', 'image/jpeg'], mimeType: 'image/jpeg' },
+        { command: 'wl-paste', args: ['-t', 'image/png'], mimeType: 'image/png' },
+        { command: 'wl-paste', args: ['-t', 'image/jpeg'], mimeType: 'image/jpeg' },
         { command: 'xclip', args: ['-selection', 'clipboard', '-t', 'image/png', '-o'], mimeType: 'image/png' },
         { command: 'xclip', args: ['-selection', 'clipboard', '-t', 'image/jpeg', '-o'], mimeType: 'image/jpeg' },
       ]
