@@ -852,7 +852,7 @@ function activeMentionAttachments(text: string, attachments: SendAttachment[]): 
   if (attachments.length === 0) return []
   return attachments.filter((attachment) => (
     attachment.type === 'blob' || attachment.type === 'image'
-      ? true
+      ? attachment.text ? text.includes(attachment.text) : true
       : attachment.type === 'agent'
       ? Boolean(attachment.displayName && text.includes(`@${attachment.displayName}`))
       : Boolean(attachment.path && text.includes(`@${attachment.path}`))
@@ -893,11 +893,15 @@ function pastedImageDisplayName(mimeType: string): string {
   return `pasted-image.${extension}`
 }
 
+function imageAttachmentCount(attachments: SendAttachment[]): number {
+  return attachments.filter((attachment) => (
+    (attachment.type === 'blob' && attachment.mimeType?.startsWith('image/')) || attachment.type === 'image'
+  )).length
+}
+
 function attachmentCountLabel(attachments: SendAttachment[]): string | null {
   if (attachments.length === 0) return null
-  const imageCount = attachments.filter((attachment) => (
-    attachment.type === 'blob' && attachment.mimeType?.startsWith('image/')
-  ) || attachment.type === 'image').length
+  const imageCount = imageAttachmentCount(attachments)
   const otherCount = attachments.length - imageCount
   const parts: string[] = []
   if (imageCount > 0) parts.push(`${imageCount} image${imageCount === 1 ? '' : 's'}`)
@@ -2036,6 +2040,14 @@ function buildSyntaxStyle(theme: TuiThemePalette): SyntaxStyle {
     'punctuation.bracket': { fg: RGBA.fromHex(theme.muted) },
     'punctuation.delimiter': { fg: RGBA.fromHex(theme.muted) },
     'punctuation.special': { fg: RGBA.fromHex(builtinColor) },
+    'extmark.paste': { fg: RGBA.fromHex(theme.bg), bg: RGBA.fromHex(theme.amber), bold: true },
+    default: { fg: RGBA.fromHex(theme.text) },
+  })
+}
+
+function buildComposerSyntaxStyle(theme: TuiThemePalette): SyntaxStyle {
+  return SyntaxStyle.fromStyles({
+    'extmark.paste': { fg: RGBA.fromHex(theme.bg), bg: RGBA.fromHex(theme.amber), bold: true },
     default: { fg: RGBA.fromHex(theme.text) },
   })
 }
@@ -3102,6 +3114,7 @@ export default function OpenTuiApp() {
   const composerAbortRef = useRef<AbortController | null>(null)
   const activeComposerSendCleanupRef = useRef<Promise<void> | null>(null)
   const composerTextareaRef = useRef<TextareaRenderable | null>(null)
+  const composerPastePartTypeIdRef = useRef<number | null>(null)
   const composerCursorOffsetRef = useRef<number | null>(null)
   const terminalSelectionRef = useRef<{ text: string; capturedAt: number } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
@@ -3222,6 +3235,7 @@ export default function OpenTuiApp() {
   }, [openTabSessions, selectedSessionKey])
 
   const theme = useMemo(() => getThemePalette(themeMode), [themeMode])
+  const composerSyntaxStyle = useMemo(() => buildComposerSyntaxStyle(theme), [theme])
   const densityState = useMemo(() => densityConfig(density), [density])
   const showRail = railVisible
   const effectiveFocus: PaneFocus = showRail ? focusedPane : 'messages'
@@ -6263,7 +6277,37 @@ export default function OpenTuiApp() {
     setComposerWindowOpen((open) => !open)
   })
 
+  const insertComposerPasteMarker = useEffectEvent((marker: string) => {
+    const renderable = composerTextareaRef.current
+    if (!renderable || !marker) return
+    const textToInsert = `${marker} `
+    const start = renderable.cursorOffset
+    renderable.insertText(textToInsert)
+    const end = start + marker.length
+    let typeId = composerPastePartTypeIdRef.current
+    if (typeId == null) {
+      typeId = renderable.extmarks.registerType('composer-paste')
+      composerPastePartTypeIdRef.current = typeId
+    }
+    const styleId = renderable.syntaxStyle?.getStyleId('extmark.paste') ?? undefined
+    renderable.extmarks.create({
+      start,
+      end,
+      virtual: true,
+      styleId,
+      typeId,
+    })
+    const next = renderable.plainText
+    setComposerDraft(next)
+    if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, next)
+    setComposerHistoryOpen(false)
+    setComposerHistoryIndex(0)
+  })
+
   const attachComposerImage = useEffectEvent((image: ClipboardImage) => {
+    const visibleDraft = composerTextareaRef.current?.plainText ?? composerDraft
+    const marker = `[Image ${imageAttachmentCount(activeMentionAttachments(visibleDraft, composerMentionAttachments)) + 1}]`
+    insertComposerPasteMarker(marker)
     setComposerMentionAttachments((prev) => [
       ...prev,
       {
@@ -6272,6 +6316,7 @@ export default function OpenTuiApp() {
         mimeType: image.mimeType,
         data: image.data,
         displayName: image.displayName,
+        text: marker,
       },
     ])
     showNotice('info', `Attached ${image.displayName}`)
@@ -7707,6 +7752,7 @@ export default function OpenTuiApp() {
       placeholder={composerPlaceholder}
       initialValue={composerDraft}
       keyBindings={composerKeyBindings}
+      syntaxStyle={composerSyntaxStyle}
       onContentChange={handleComposerContentChange}
       onSubmit={onSubmit}
       style={options?.height ? composerBaseTextareaStyle : composerDockTextareaStyle}
