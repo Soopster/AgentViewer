@@ -608,7 +608,9 @@ function buildCodexInput(userMessage: string, attachments: SendAttachment[]): Co
   const input: CodexUserInput[] = [{ type: 'text', text: userMessage, text_elements: [] }]
   for (const attachment of attachments) {
     const path = attachmentPath(attachment)
-    if (attachment.type === 'image' && path) {
+    if (attachment.type === 'blob' && attachment.data && attachment.mimeType?.startsWith('image/')) {
+      input.push({ type: 'image', url: `data:${attachment.mimeType};base64,${attachment.data}` })
+    } else if (attachment.type === 'image' && path) {
       input.push(isHttpUrl(path)
         ? { type: 'image', url: path }
         : { type: 'localImage', path: absoluteAttachmentPath(path) })
@@ -674,6 +676,15 @@ function buildOpenCodeParts(userMessage: string, attachments: SendAttachment[]):
           start: 0,
           end: value.length,
         },
+      })
+      continue
+    }
+    if (attachment.type === 'blob' && attachment.data && attachment.mimeType?.startsWith('image/')) {
+      parts.push({
+        type: 'file',
+        mime: attachment.mimeType,
+        filename: attachmentName(attachment),
+        url: `data:${attachment.mimeType};base64,${attachment.data}`,
       })
       continue
     }

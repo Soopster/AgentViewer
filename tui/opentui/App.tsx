@@ -90,6 +90,8 @@ import { extractPendingPermission, extractPermissionReply, type PendingPermissio
 import { readViewSessionSlashCommands, readViewSessionComposerOptions, createNewViewSession } from '../../lib/sessionBackend'
 import { compactStableFingerprint } from '../../lib/compactFingerprint'
 import { appendFileSync, mkdirSync } from 'node:fs'
+import { readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 // Stable-reference event handler — reads the latest closure on every call
@@ -373,6 +375,283 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(value, max))
 }
 
+type ClipboardImage = { data: string; mimeType: string; displayName: string }
+
+function parseFileUrlList(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        const url = new URL(line)
+        return url.protocol === 'file:' ? [decodeURIComponent(url.pathname)] : []
+      } catch {
+        return []
+      }
+    })
+}
+
+function clipboardImageMimeTypeForPath(path: string): string | null {
+  const lower = path.toLowerCase()
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  return null
+}
+
+function appleScriptStringLiteral(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
+
+function runClipboardCommand(command: string, args: readonly string[] = [], timeoutMs = 2500): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        CLANG_MODULE_CACHE_PATH: process.env.CLANG_MODULE_CACHE_PATH || '/tmp/agent-viewer-clang-module-cache',
+      },
+    })
+
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    const timeout = setTimeout(() => {
+      child.kill()
+      reject(new Error(`Clipboard command timed out: ${command}`))
+    }, timeoutMs)
+
+    child.on('error', (err) => {
+      clearTimeout(timeout)
+      reject(err)
+    })
+    child.stdout.on('data', (chunk) => {
+      stdout.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    })
+    child.on('close', (code) => {
+      clearTimeout(timeout)
+      if (code === 0) {
+        resolve(Buffer.concat(stdout))
+        return
+      }
+      reject(new Error(Buffer.concat(stderr).toString('utf8').trim() || `Clipboard command failed: ${command}`))
+    })
+  })
+}
+
+async function readClipboardText(): Promise<string> {
+  const platform = process.platform
+  const candidates = platform === 'darwin'
+    ? [['pbpaste', []] as const]
+    : platform === 'win32'
+    ? [['powershell', ['-NoProfile', '-Command', 'Get-Clipboard -Raw']] as const]
+    : [
+        ['wl-paste', ['--no-newline']] as const,
+        ['xclip', ['-selection', 'clipboard', '-o']] as const,
+        ['xsel', ['--clipboard', '--output']] as const,
+      ]
+
+  let lastError: Error | null = null
+  for (const [command, args] of candidates) {
+    try {
+      return (await runClipboardCommand(command, args)).toString('utf8')
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+    }
+  }
+  throw lastError ?? new Error('No clipboard command available')
+}
+
+async function readMacClipboardImageWithAppleScript(): Promise<ClipboardImage | null> {
+  const tmpfile = join(tmpdir(), `agent-viewer-clipboard-${process.pid}.png`)
+  try {
+    await runClipboardCommand('osascript', [
+      '-e',
+      'set imageData to the clipboard as "PNGf"',
+      '-e',
+      `set fileRef to open for access POSIX file ${appleScriptStringLiteral(tmpfile)} with write permission`,
+      '-e',
+      'set eof fileRef to 0',
+      '-e',
+      'write imageData to fileRef',
+      '-e',
+      'close access fileRef',
+    ], 3500)
+    const data = await readFile(tmpfile, 'base64')
+    if (!data) return null
+    return {
+      data,
+      mimeType: 'image/png',
+      displayName: pastedImageDisplayName('image/png'),
+    }
+  } catch {
+    return null
+  } finally {
+    await rm(tmpfile, { force: true }).catch(() => {})
+  }
+}
+
+async function readMacClipboardImageWithSwift(): Promise<ClipboardImage | null> {
+  const script = `
+import AppKit
+import Foundation
+
+func emit(_ mimeType: String, _ data: Data) -> Never {
+  print(mimeType)
+  print(data.base64EncodedString())
+  exit(0)
+}
+
+func emitImage(_ image: NSImage) -> Never? {
+  guard let tiff = image.tiffRepresentation,
+        let rep = NSBitmapImageRep(data: tiff),
+        let png = rep.representation(using: .png, properties: [:]) else {
+    return nil
+  }
+  emit("image/png", png)
+}
+
+let pasteboard = NSPasteboard.general
+
+if let png = pasteboard.data(forType: .png), !png.isEmpty {
+  emit("image/png", png)
+}
+
+if let tiff = pasteboard.data(forType: .tiff),
+   let rep = NSBitmapImageRep(data: tiff),
+   let png = rep.representation(using: .png, properties: [:]) {
+  emit("image/png", png)
+}
+
+if let image = NSImage(pasteboard: pasteboard) {
+  _ = emitImage(image)
+}
+
+if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] {
+  for url in urls where url.isFileURL {
+    let ext = url.pathExtension.lowercased()
+    let mimeType: String?
+    switch ext {
+    case "png": mimeType = "image/png"
+    case "jpg", "jpeg": mimeType = "image/jpeg"
+    case "gif": mimeType = "image/gif"
+    case "webp": mimeType = "image/webp"
+    default: mimeType = nil
+    }
+    if let mimeType, let data = try? Data(contentsOf: url), !data.isEmpty {
+      emit(mimeType, data)
+    }
+  }
+}
+
+exit(2)
+`
+
+  try {
+    const output = await runClipboardCommand('swift', ['-e', script], 10_000)
+    const lines = output.toString('utf8').trim().split(/\r?\n/)
+    const mimeType = lines.shift()?.trim()
+    const data = lines.join('').trim()
+    if (!mimeType?.startsWith('image/') || !data) return null
+    return {
+      data,
+      mimeType,
+      displayName: pastedImageDisplayName(mimeType),
+    }
+  } catch {
+    return null
+  }
+}
+
+async function readClipboardImage(): Promise<ClipboardImage | null> {
+  const platform = process.platform
+  if (platform === 'darwin') {
+    const appleScriptImage = await readMacClipboardImageWithAppleScript()
+    if (appleScriptImage) return appleScriptImage
+
+    const swiftImage = await readMacClipboardImageWithSwift()
+    if (swiftImage) return swiftImage
+  }
+  const candidates: Array<{ command: string; args: string[]; mimeType: string; base64Output?: boolean }> = platform === 'darwin'
+    ? [
+        { command: 'pngpaste', args: ['-'], mimeType: 'image/png' },
+        {
+          command: 'osascript',
+          args: [
+            '-l',
+            'JavaScript',
+            '-e',
+            "ObjC.import('AppKit'); const pb=$.NSPasteboard.generalPasteboard; let data=pb.dataForType($.NSPasteboardTypePNG) || pb.dataForType('public.png'); if (!data) { const tiff=pb.dataForType($.NSPasteboardTypeTIFF) || pb.dataForType('public.tiff'); if (tiff) { const rep=$.NSBitmapImageRep.imageRepWithData(tiff); if (rep) data=rep.representationUsingTypeProperties(4, $.NSDictionary.dictionary); } } if (!data) $.exit(2); console.log(ObjC.unwrap(data.base64EncodedStringWithOptions(0)));",
+          ],
+          mimeType: 'image/png',
+          base64Output: true,
+        },
+      ]
+    : platform === 'win32'
+    ? [{
+        command: 'powershell',
+        args: [
+          '-NoProfile',
+          '-Command',
+          "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img=[Windows.Forms.Clipboard]::GetImage(); if ($null -eq $img) { exit 2 }; $ms=New-Object IO.MemoryStream; $img.Save($ms,[Drawing.Imaging.ImageFormat]::Png); [Console]::Out.Write([Convert]::ToBase64String($ms.ToArray()))",
+        ],
+        mimeType: 'image/png',
+        base64Output: true,
+      }]
+    : [
+        { command: 'wl-paste', args: ['--type', 'image/png'], mimeType: 'image/png' },
+        { command: 'wl-paste', args: ['--type', 'image/jpeg'], mimeType: 'image/jpeg' },
+        { command: 'xclip', args: ['-selection', 'clipboard', '-t', 'image/png', '-o'], mimeType: 'image/png' },
+        { command: 'xclip', args: ['-selection', 'clipboard', '-t', 'image/jpeg', '-o'], mimeType: 'image/jpeg' },
+      ]
+
+  for (const candidate of candidates) {
+    try {
+      const output = await runClipboardCommand(candidate.command, candidate.args, 3500)
+      const data = candidate.base64Output
+        ? output.toString('utf8').trim()
+        : output.toString('base64')
+      if (!data) continue
+      return {
+        data,
+        mimeType: candidate.mimeType,
+        displayName: pastedImageDisplayName(candidate.mimeType),
+      }
+    } catch {
+      // Try the next clipboard backend/format.
+    }
+  }
+
+  if (platform === 'darwin') {
+    try {
+      const output = await runClipboardCommand('osascript', [
+        '-l',
+        'JavaScript',
+        '-e',
+        "ObjC.import('AppKit'); const pb=$.NSPasteboard.generalPasteboard; const urls=pb.readObjectsForClassesOptions($[$.NSURL.class], null); if (!urls || urls.count === 0) $.exit(2); for (let i=0; i<urls.count; i++) console.log(ObjC.unwrap(urls.objectAtIndex(i).absoluteString));",
+      ], 3500)
+      for (const path of parseFileUrlList(output.toString('utf8'))) {
+        const mimeType = clipboardImageMimeTypeForPath(path)
+        if (!mimeType) continue
+        const data = await readFile(path, 'base64')
+        return {
+          data,
+          mimeType,
+          displayName: path.split('/').pop() || pastedImageDisplayName(mimeType),
+        }
+      }
+    } catch {
+      // Clipboard does not contain image file URLs.
+    }
+  }
+
+  return null
+}
+
 async function writeClipboard(text: string): Promise<void> {
   const tryCommand = (command: string, args: readonly string[] = []): Promise<void> => (
     new Promise((resolve, reject) => {
@@ -565,10 +844,58 @@ function detectMentionAtCursor(text: string, cursor: number): { start: number; q
 function activeMentionAttachments(text: string, attachments: SendAttachment[]): SendAttachment[] {
   if (attachments.length === 0) return []
   return attachments.filter((attachment) => (
-    attachment.type === 'agent'
+    attachment.type === 'blob' || attachment.type === 'image'
+      ? true
+      : attachment.type === 'agent'
       ? Boolean(attachment.displayName && text.includes(`@${attachment.displayName}`))
       : Boolean(attachment.path && text.includes(`@${attachment.path}`))
   ))
+}
+
+function pasteImageMimeType(mimeType: string | undefined): string | null {
+  if (!mimeType) return null
+  const normalized = mimeType.split(';', 1)[0]?.trim().toLowerCase()
+  return normalized?.startsWith('image/') ? normalized : null
+}
+
+function inferPastedImageMimeType(bytes: Uint8Array): string | null {
+  if (bytes.length >= 8
+    && bytes[0] === 0x89
+    && bytes[1] === 0x50
+    && bytes[2] === 0x4e
+    && bytes[3] === 0x47
+    && bytes[4] === 0x0d
+    && bytes[5] === 0x0a
+    && bytes[6] === 0x1a
+    && bytes[7] === 0x0a) return 'image/png'
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
+  if (bytes.length >= 6) {
+    const signature = String.fromCharCode(...bytes.subarray(0, 6))
+    if (signature === 'GIF87a' || signature === 'GIF89a') return 'image/gif'
+  }
+  if (bytes.length >= 12) {
+    const riff = String.fromCharCode(...bytes.subarray(0, 4))
+    const webp = String.fromCharCode(...bytes.subarray(8, 12))
+    if (riff === 'RIFF' && webp === 'WEBP') return 'image/webp'
+  }
+  return null
+}
+
+function pastedImageDisplayName(mimeType: string): string {
+  const extension = mimeType.split('/')[1]?.replace(/[^a-z0-9.+-]/gi, '') || 'png'
+  return `pasted-image.${extension}`
+}
+
+function attachmentCountLabel(attachments: SendAttachment[]): string | null {
+  if (attachments.length === 0) return null
+  const imageCount = attachments.filter((attachment) => (
+    attachment.type === 'blob' && attachment.mimeType?.startsWith('image/')
+  ) || attachment.type === 'image').length
+  const otherCount = attachments.length - imageCount
+  const parts: string[] = []
+  if (imageCount > 0) parts.push(`${imageCount} image${imageCount === 1 ? '' : 's'}`)
+  if (otherCount > 0) parts.push(`${otherCount} attachment${otherCount === 1 ? '' : 's'}`)
+  return parts.join(' · ')
 }
 // NOTE: OpenTUI's mergeKeyBindings hashes by `name:ctrl:shift:meta:super` —
 // `alt` is NOT part of the key. Listing `{ name: 'return', alt: true, ... }`
@@ -1404,6 +1731,22 @@ function formatTimeGap(deltaMs: number): string | null {
   return `${Math.round(hours / 24)}d later`
 }
 
+function sessionActivityMs(session: Session): number {
+  const value = session.lastModified ?? session.createdAt
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0
+  if (typeof value === 'string') {
+    const ms = new Date(value).getTime()
+    return Number.isNaN(ms) ? 0 : ms
+  }
+  return 0
+}
+
+function compareSessionsByActivityDesc(a: Session, b: Session): number {
+  const byActivity = sessionActivityMs(b) - sessionActivityMs(a)
+  if (byActivity !== 0) return byActivity
+  return sessionKey(a).localeCompare(sessionKey(b))
+}
+
 function sessionKey(session: Pick<Session, 'sessionId' | 'provider'>): string {
   return `${session.provider ?? 'claude'}:${session.sessionId}`
 }
@@ -1464,20 +1807,23 @@ type SidebarEntry =
 
 function buildSidebarEntries(sessions: Session[], sort: TuiSidebarSort): SidebarEntry[] {
   const entries: SidebarEntry[] = []
+  const orderedSessions = sessions
+    .map((session, absoluteIndex) => ({ session, absoluteIndex }))
+    .sort((a, b) => compareSessionsByActivityDesc(a.session, b.session))
 
   if (sort === 'time') {
     // Sessions stay in global time-sort order. A project header is injected before
     // each run of consecutive sessions that share a project name.
     let prevProject = ''
-    for (let i = 0; i < sessions.length; i++) {
-      const session = sessions[i]
+    for (let i = 0; i < orderedSessions.length; i++) {
+      const { session, absoluteIndex } = orderedSessions[i]
       const projectName = formatSessionProject(session).toUpperCase()
       if (projectName !== prevProject) {
         // Measure the length of this consecutive run so the header can show a count.
         let run = 1
         while (
-          i + run < sessions.length
-          && formatSessionProject(sessions[i + run]).toUpperCase() === projectName
+          i + run < orderedSessions.length
+          && formatSessionProject(orderedSessions[i + run].session).toUpperCase() === projectName
         ) run++
         // Key includes the absolute index so the same project appearing multiple
         // times in time-order gets distinct keys (required by the reconciler).
@@ -1488,7 +1834,7 @@ function buildSidebarEntries(sessions: Session[], sort: TuiSidebarSort): Sidebar
         type: 'session',
         key: `session:${session.provider ?? 'claude'}:${session.sessionId}`,
         session,
-        absoluteIndex: i,
+        absoluteIndex,
       })
     }
     return entries
@@ -1498,7 +1844,7 @@ function buildSidebarEntries(sessions: Session[], sort: TuiSidebarSort): Sidebar
   // group. Groups are ordered by the most-recently modified session they contain.
   const groupOrder: string[] = []
   const groups = new Map<string, Array<{ session: Session; absoluteIndex: number }>>()
-  sessions.forEach((session, absoluteIndex) => {
+  orderedSessions.forEach(({ session, absoluteIndex }) => {
     const projectName = formatSessionProject(session).toUpperCase()
     if (!groups.has(projectName)) {
       groups.set(projectName, [])
@@ -5910,6 +6256,52 @@ export default function OpenTuiApp() {
     setComposerWindowOpen((open) => !open)
   })
 
+  const attachComposerImage = useEffectEvent((image: ClipboardImage) => {
+    setComposerMentionAttachments((prev) => [
+      ...prev,
+      {
+        id: `paste-${Date.now()}-${prev.length}`,
+        type: 'blob',
+        mimeType: image.mimeType,
+        data: image.data,
+        displayName: image.displayName,
+      },
+    ])
+    showNotice('info', `Attached ${image.displayName}`)
+  })
+
+  const insertComposerTextAtCursor = useEffectEvent((textToInsert: string) => {
+    const renderable = composerTextareaRef.current
+    if (!renderable || !textToInsert) return
+    const text = renderable.plainText
+    const cursor = renderable.cursorOffset
+    const next = `${text.slice(0, cursor)}${textToInsert}${text.slice(cursor)}`
+    renderable.setText(next)
+    renderable.cursorOffset = cursor + textToInsert.length
+    setComposerDraft(next)
+    if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, next)
+    setComposerHistoryOpen(false)
+    setComposerHistoryIndex(0)
+  })
+
+  const pasteSystemClipboardToComposer = useEffectEvent(async () => {
+    try {
+      const image = await readClipboardImage()
+      if (image) {
+        attachComposerImage(image)
+        return
+      }
+      const text = await readClipboardText()
+      if (!text) {
+        showNotice('error', 'Clipboard has no supported image or text')
+        return
+      }
+      insertComposerTextAtCursor(text)
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Failed to paste from clipboard')
+    }
+  })
+
   useSelectionHandler((selection) => {
     const text = selection.getSelectedText()
     if (!text.trim()) return
@@ -5923,6 +6315,17 @@ export default function OpenTuiApp() {
     if (!composerActiveRef.current) return
     const renderable = composerTextareaRef.current
     if (!renderable) return
+    const imageMimeType = pasteImageMimeType(event.metadata?.mimeType) ?? inferPastedImageMimeType(event.bytes)
+    if (imageMimeType) {
+      event.preventDefault()
+      event.stopPropagation()
+      attachComposerImage({
+        data: Buffer.from(event.bytes).toString('base64'),
+        mimeType: imageMimeType,
+        displayName: pastedImageDisplayName(imageMimeType),
+      })
+      return
+    }
     event.preventDefault()
     renderable.handlePaste(event)
   })
@@ -6528,6 +6931,10 @@ export default function OpenTuiApp() {
     }
 
     if (composerActive) {
+      if (isCtrl('v')) {
+        handled(() => { void pasteSystemClipboardToComposer() })
+        return
+      }
       if (key.name === 'escape') {
         if (composerMention && composerMentionResults.length > 0) {
           handled(() => {
@@ -6667,6 +7074,14 @@ export default function OpenTuiApp() {
         handled(() => moveComposerHistory(-1))
         return
       }
+      return
+    }
+
+    if (isCtrl('v')) {
+      handled(() => {
+        setComposerActive(true)
+        void pasteSystemClipboardToComposer()
+      })
       return
     }
 
@@ -7163,7 +7578,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (key.name === 'v') {
+    if (sequence === 'v' && !key.ctrl && !key.meta) {
       handled(() => {
         const next = cycleTranscriptViewValue(transcriptView)
         setTranscriptView(next)
@@ -7232,6 +7647,11 @@ export default function OpenTuiApp() {
         ? composerConfig.placeholderStreaming
         : composerExample)
     : composerConfig.placeholderNoSession
+  const composerActiveAttachments = useMemo(
+    () => activeMentionAttachments(composerDraft, composerMentionAttachments),
+    [composerDraft, composerMentionAttachments],
+  )
+  const composerAttachmentLabel = attachmentCountLabel(composerActiveAttachments)
   const composerBaseTextareaStyle = {
     backgroundColor: theme.surface,
     textColor: theme.text,
@@ -7244,11 +7664,11 @@ export default function OpenTuiApp() {
     flexGrow: 1,
   }
   const composerDockStats = composerDraft.length === 0
-    ? `${composerConfig.glyph} ${composerConfig.label}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
-    : `${composerVisualLineCount} line${composerVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+    ? `${composerConfig.glyph} ${composerConfig.label}${composerAttachmentLabel ? ` · ${composerAttachmentLabel}` : ''}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+    : `${composerVisualLineCount} line${composerVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerAttachmentLabel ? ` · ${composerAttachmentLabel}` : ''}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
   const composerWindowStats = composerDraft.length === 0
-    ? `${composerConfig.glyph} ${composerConfig.label}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
-    : `${composerWindowVisualLineCount} line${composerWindowVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+    ? `${composerConfig.glyph} ${composerConfig.label}${composerAttachmentLabel ? ` · ${composerAttachmentLabel}` : ''}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+    : `${composerWindowVisualLineCount} line${composerWindowVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerAttachmentLabel ? ` · ${composerAttachmentLabel}` : ''}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
   const composerDockFooterHint = composerSendState === 'sending'
     ? composerConfig.footerHintSending
     : `${composerIdleFooterHint} · ⌃O expand`
