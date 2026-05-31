@@ -91,6 +91,16 @@ import { compactStableFingerprint } from '../../lib/compactFingerprint'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
+// Stable-reference event handler — reads the latest closure on every call
+// without appearing in any deps array. Mirrors React's upcoming useEffectEvent
+// (RFC #220) and the implementation already used internally by @opentui/react.
+function useEffectEvent<T extends (...args: never[]) => unknown>(handler: T): T {
+  const handlerRef = React.useRef(handler)
+  React.useLayoutEffect(() => { handlerRef.current = handler })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return React.useCallback((...args: Parameters<T>) => (handlerRef.current as T)(...args), []) as T
+}
+
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 const COMPOSER_WAITING_SPINNER_FRAMES = [
   ['|', '/', '-', '\\'],
@@ -143,6 +153,29 @@ function recordFramePerf(durationMs: number): void {
     perfWindow.slow = 0
     perfWindow.maxDur = 0
     perfWindow.startedAt = now
+  }
+}
+
+class TuiErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props)
+    this.state = { error: null }
+  }
+  static getDerivedStateFromError(error: Error) { return { error } }
+  render() {
+    const { error } = this.state
+    if (error) {
+      return (
+        <box flexDirection="column" paddingX={2} paddingY={1}>
+          <text fg="#ff6b6b" wrapMode="word">Render error: {error.message}</text>
+          <text fg="#888888" wrapMode="none">Malformed transcript — scroll past this card or reload.</text>
+        </box>
+      )
+    }
+    return this.props.children
   }
 }
 
@@ -3140,7 +3173,7 @@ export default function OpenTuiApp() {
     }
   }, [composerMention, composerMentionAgents, selectedSession?.cwd, selectedSession?.provider])
 
-  const insertMentionAtCursor = useCallback((entry: TuiMentionResult) => {
+  const insertMentionAtCursor = useEffectEvent((entry: TuiMentionResult) => {
     const renderable = composerTextareaRef.current
     if (!renderable || !composerMention) return
     const text = renderable.plainText
@@ -3180,7 +3213,7 @@ export default function OpenTuiApp() {
     })
     setComposerMention(null)
     setComposerMentionResults([])
-  }, [composerMention])
+  })
 
   const insertSlashAtCursor = useCallback((command: string) => {
     const renderable = composerTextareaRef.current
@@ -3196,7 +3229,7 @@ export default function OpenTuiApp() {
     setComposerSlashIndex(0)
   }, [])
 
-  const selectComposerHistoryEntry = useCallback((displayIndex: number) => {
+  const selectComposerHistoryEntry = useEffectEvent((displayIndex: number) => {
     if (sentHistory.length === 0) return
     const nextDisplayIndex = clamp(displayIndex, 0, sentHistory.length - 1)
     const sourceIndex = sentHistory.length - 1 - nextDisplayIndex
@@ -3206,9 +3239,9 @@ export default function OpenTuiApp() {
     composerTextareaRef.current?.setText(replacement)
     if (composerTextareaRef.current) composerTextareaRef.current.cursorOffset = replacement.length
     setComposerDraft(replacement)
-  }, [sentHistory])
+  })
 
-  const openComposerHistory = useCallback((displayIndex = 0) => {
+  const openComposerHistory = useEffectEvent((displayIndex = 0) => {
     if (sentHistory.length === 0) return
     if (!composerHistoryOpen && historyIndex === -1) {
       setDraftBeforeHistory(composerTextareaRef.current?.plainText ?? composerDraft)
@@ -3217,23 +3250,23 @@ export default function OpenTuiApp() {
     setComposerMentionResults([])
     setComposerHistoryOpen(true)
     selectComposerHistoryEntry(displayIndex)
-  }, [composerDraft, composerHistoryOpen, historyIndex, selectComposerHistoryEntry, sentHistory.length])
+  })
 
   const commitComposerHistory = useCallback(() => {
     setComposerHistoryOpen(false)
     setComposerHistoryIndex(0)
   }, [])
 
-  const cancelComposerHistory = useCallback(() => {
+  const cancelComposerHistory = useEffectEvent(() => {
     setComposerHistoryOpen(false)
     setComposerHistoryIndex(0)
     composerTextareaRef.current?.setText(draftBeforeHistory)
     if (composerTextareaRef.current) composerTextareaRef.current.cursorOffset = draftBeforeHistory.length
     setComposerDraft(draftBeforeHistory)
     setHistoryIndex(-1)
-  }, [draftBeforeHistory])
+  })
 
-  const moveComposerHistory = useCallback((delta: number) => {
+  const moveComposerHistory = useEffectEvent((delta: number) => {
     if (sentHistory.length === 0) return
     if (!composerHistoryOpen) {
       if (delta > 0) {
@@ -3258,17 +3291,9 @@ export default function OpenTuiApp() {
       return
     }
     selectComposerHistoryEntry(nextDisplayIndex)
-  }, [
-    cancelComposerHistory,
-    composerHistoryIndex,
-    composerHistoryOpen,
-    historyIndex,
-    openComposerHistory,
-    selectComposerHistoryEntry,
-    sentHistory.length,
-  ])
+  })
 
-  const handleComposerContentChange = useCallback(() => {
+  const handleComposerContentChange = useEffectEvent(() => {
     const renderable = composerTextareaRef.current
     const text = renderable?.plainText ?? ''
     const cursor = renderable?.cursorOffset ?? text.length
@@ -3294,14 +3319,7 @@ export default function OpenTuiApp() {
       setComposerSlashIndex(0)
       if (composerSlashDismissed) setComposerSlashDismissed(false)
     }
-  }, [
-    composerError,
-    composerMentionDismissedStart,
-    composerSendState,
-    composerSlashDismissed,
-    historyIndex,
-    sentHistory,
-  ])
+  })
 
   const composerMentionVisibleCount = Math.min(composerMentionResults.length, 5)
   const composerSlashVisibleCount = Math.min(composerSlashCommands.length, 5)
@@ -3986,20 +4004,20 @@ export default function OpenTuiApp() {
     setUnreadBoundaryKey(null)
   }, [jumpToTranscriptIndex, transcriptCards])
 
-  const jumpToUnreadBoundary = useCallback(() => {
+  const jumpToUnreadBoundary = useEffectEvent(() => {
     if (unreadBoundaryIndex >= 0) {
       jumpToTranscriptIndex(unreadBoundaryIndex)
       return
     }
     jumpToTranscriptTail()
-  }, [jumpToTranscriptIndex, jumpToTranscriptTail, unreadBoundaryIndex])
+  })
 
-  const jumpToResumeMarker = useCallback(() => {
+  const jumpToResumeMarker = useEffectEvent(() => {
     const index = resumeMarkerKey ? (transcriptIndexByKey.get(resumeMarkerKey) ?? -1) : -1
     if (index >= 0) jumpToTranscriptIndex(index)
-  }, [jumpToTranscriptIndex, resumeMarkerKey, transcriptIndexByKey])
+  })
 
-  const moveSelection = useCallback((delta: number) => {
+  const moveSelection = useEffectEvent((delta: number) => {
     if (sessions.length === 0) return
     // Navigate in sidebar visual order (grouped by project), not raw time-sort order.
     const sessionEntries = sidebarEntries.filter((e): e is Extract<SidebarEntry, { type: 'session' }> => e.type === 'session')
@@ -4011,9 +4029,9 @@ export default function OpenTuiApp() {
       setSelectedSessionKey(sessionKey(nextEntry.session))
       setError(null)
     }
-  }, [selectedIndex, sessions.length, sidebarEntries])
+  })
 
-  const moveCursor = useCallback((delta: number) => {
+  const moveCursor = useEffectEvent((delta: number) => {
     if (transcriptCards.length === 0) return
     const nextIndex = clamp((cursorIndex >= 0 ? cursorIndex : 0) + delta, 0, transcriptCards.length - 1)
     setTranscriptCursorKey(transcriptCards[nextIndex].key)
@@ -4023,14 +4041,14 @@ export default function OpenTuiApp() {
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
     }
-  }, [cursorIndex, transcriptCards])
+  })
 
-  const moveViewport = useCallback((direction: -1 | 1) => {
+  const moveViewport = useEffectEvent((direction: -1 | 1) => {
     const step = Math.max(Math.floor((height - (focusMode ? 5 : 7)) / 3), 1)
     moveCursor(direction * step)
-  }, [focusMode, height, moveCursor])
+  })
 
-  const jumpToMatchingCard = useCallback((direction: -1 | 1, predicate: (card: TuiTranscriptCard) => boolean) => {
+  const jumpToMatchingCard = useEffectEvent((direction: -1 | 1, predicate: (card: TuiTranscriptCard) => boolean) => {
     if (transcriptCards.length === 0) return
     let index = cursorIndex >= 0 ? cursorIndex + direction : direction > 0 ? 0 : transcriptCards.length - 1
     while (index >= 0 && index < transcriptCards.length) {
@@ -4040,16 +4058,16 @@ export default function OpenTuiApp() {
       }
       index += direction
     }
-  }, [cursorIndex, jumpToTranscriptIndex, transcriptCards])
+  })
 
-  const jumpToSearchMatch = useCallback((matchOffset: number) => {
+  const jumpToSearchMatch = useEffectEvent((matchOffset: number) => {
     if (searchMatches.length === 0) return
     const nextMatchIndex = (searchMatchIndex + matchOffset + searchMatches.length) % searchMatches.length
     setSearchMatchIndex(nextMatchIndex)
     jumpToTranscriptIndex(searchMatches[nextMatchIndex] ?? 0)
-  }, [jumpToTranscriptIndex, searchMatchIndex, searchMatches])
+  })
 
-  const toggleExpansion = useCallback(() => {
+  const toggleExpansion = useEffectEvent(() => {
     const card = cursorIndex >= 0 ? transcriptCards[cursorIndex] : null
     if (!card) return
     const shouldAutoFold = transcriptView === 'conversation' && card.autoFold
@@ -4083,21 +4101,21 @@ export default function OpenTuiApp() {
       else next.delete(card.key)
       return next
     })
-  }, [cursorIndex, resolvedExpandedKeys, transcriptCards, transcriptView])
+  })
 
   const closeProviderMenu = useCallback(() => {
     setProviderMenuOpen(false)
     setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
   }, [provider])
 
-  const openThemeMenu = useCallback(() => {
+  const openThemeMenu = useEffectEvent(() => {
     themeMenuOriginRef.current = themeMode
     setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
     setThemeMenuGroup(LIGHT_MODES.includes(themeMode) ? 'light' : 'dark')
     setThemeMenuOpen(true)
-  }, [themeMode])
+  })
 
-  const closeThemeMenu = useCallback(() => {
+  const closeThemeMenu = useEffectEvent(() => {
     const originTheme = themeMenuOriginRef.current
     setThemeMenuOpen(false)
     if (originTheme) {
@@ -4107,7 +4125,7 @@ export default function OpenTuiApp() {
       setThemeMenuIndex(Math.max(THEMES.indexOf(themeMode), 0))
     }
     themeMenuOriginRef.current = null
-  }, [themeMode])
+  })
 
   const chooseTheme = useCallback((nextTheme: TuiThemeMode) => {
     setThemeMode(nextTheme)
@@ -4166,7 +4184,7 @@ export default function OpenTuiApp() {
   // Pop a small select overlay listing the active session's available models.
   // Reuses readTuiSessionMetadata which already returns the SDK-reported list
   // for any provider — keeps this one switch out of the TUI layer.
-  const openModelPicker = useCallback(async () => {
+  const openModelPicker = useEffectEvent(async () => {
     const target = selectedSession ?? composerTargetSession
     if (!target) {
       setNotice({ tone: 'info', text: 'Pick a session first' })
@@ -4196,7 +4214,7 @@ export default function OpenTuiApp() {
     } finally {
       setModelPickerLoading(false)
     }
-  }, [composerTargetSession, selectedSession, tuiModelOverride])
+  })
 
   const closeCommandPalette = useCallback(() => {
     setCommandPaletteOpen(false)
@@ -4295,16 +4313,16 @@ export default function OpenTuiApp() {
   // different provider than the one currently active, transparently switch
   // providers first (carrying the target session through) so cross-provider
   // tab navigation works without losing the tab's context.
-  const selectTabSession = useCallback((session: Session) => {
+  const selectTabSession = useEffectEvent((session: Session) => {
     const targetProvider: ProviderSelection = session.provider ?? 'claude'
     if (provider !== 'all' && targetProvider !== provider) {
       void chooseProvider(targetProvider, session)
       return
     }
     setSelectedSessionKey(sessionKey(session))
-  }, [chooseProvider, provider])
+  })
 
-  const refreshDiagnostics = useCallback(async () => {
+  const refreshDiagnostics = useEffectEvent(async () => {
     if (!selectedSession) return
     setDiagnosticsLoading(true)
     setDiagnosticsError(null)
@@ -4316,13 +4334,13 @@ export default function OpenTuiApp() {
     } finally {
       setDiagnosticsLoading(false)
     }
-  }, [selectedSession])
+  })
 
-  const openDiagnostics = useCallback(() => {
+  const openDiagnostics = useEffectEvent(() => {
     setDiagnosticsOpen(true)
     setDiagnosticsMcpIndex(0)
     void refreshDiagnostics()
-  }, [refreshDiagnostics])
+  })
 
   const closeDiagnostics = useCallback(() => {
     setDiagnosticsOpen(false)
@@ -4330,7 +4348,7 @@ export default function OpenTuiApp() {
     setDiagnosticsBusy(null)
   }, [])
 
-  const runDiagnosticsAction = useCallback(async (action: string, extra: Record<string, unknown>, busyKey: string) => {
+  const runDiagnosticsAction = useEffectEvent(async (action: string, extra: Record<string, unknown>, busyKey: string) => {
     if (!selectedSession || selectedSession.provider !== 'claude') return
     setDiagnosticsBusy(busyKey)
     setDiagnosticsError(null)
@@ -4342,7 +4360,7 @@ export default function OpenTuiApp() {
     } finally {
       setDiagnosticsBusy(null)
     }
-  }, [refreshDiagnostics, selectedSession])
+  })
 
   // Fire-and-forget push of model/permission changes through the actions
   // route, mirroring MessageView.tsx. For warm Claude sessions the server's
@@ -4357,7 +4375,7 @@ export default function OpenTuiApp() {
     void runTuiSessionAction(target, body).catch(() => { /* swallow */ })
   }, [])
 
-  const cancelComposerSend = useCallback(() => {
+  const cancelComposerSend = useEffectEvent(() => {
     const target = composerTargetSession
     if (composerAbortRef.current) {
       composerAbortRef.current.abort()
@@ -4380,13 +4398,13 @@ export default function OpenTuiApp() {
     setLiveStatus(null)
     setLiveSubagentText({})
     setLiveToolActivities([])
-  }, [composerTargetSession])
+  })
 
   // Keep the ref in sync on every render so commitRename always reads the latest draft,
   // regardless of which version of the callback is held by onSubmit or the keyboard handler.
   renameDraftRef.current = renameDraft
 
-  const commitRename = useCallback(async () => {
+  const commitRename = useEffectEvent(async () => {
     if (!renameSessionKey || !selectedSession) return
     const trimmed = renameDraftRef.current.trim()
     setRenameSessionKey(null)
@@ -4432,7 +4450,7 @@ export default function OpenTuiApp() {
     } catch {
       // rename failed silently — session list will show original title on next poll
     }
-  }, [renameSessionKey, selectedSession, provider, refreshSessions])
+  })
 
   // Build the sidebar row elements once per relevant-state change instead of
   // on every App render. The per-row formatting (fitText/timeAgo/joinMeta/
@@ -5423,14 +5441,14 @@ export default function OpenTuiApp() {
   // Promote the currently-previewed session to a real open tab.
   // We use the full `selectedSession` object so tabs retain provider context
   // even when the user later switches to a different provider.
-  const promotePreviewToTab = useCallback(() => {
+  const promotePreviewToTab = useEffectEvent(() => {
     if (!selectedSession) return
     const key = sessionKey(selectedSession)
     setOpenTabSessions((current) => {
       if (current.some((s) => sessionKey(s) === key)) return current
       return [...current, selectedSession]
     })
-  }, [selectedSession])
+  })
 
   // Keep open-tab metadata in sync when the current provider's sessions list
   // refreshes (e.g. title updates from polling). Tabs for *other* providers
@@ -5548,24 +5566,24 @@ export default function OpenTuiApp() {
     [composerConfig.footerHintIdle, sentHistory.length],
   )
 
-  const resizeSidebar = useCallback((delta: number) => {
+  const resizeSidebar = useEffectEvent((delta: number) => {
     const nextWidth = clamp(sidebarWidth + delta, MIN_SIDEBAR_WIDTH, maxSidebarWidth)
     if (nextWidth === sidebarWidth) return
     setSidebarWidthPreference(nextWidth)
     void writeTuiSidebarWidth(nextWidth).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to store sidebar width')
     })
-  }, [maxSidebarWidth, sidebarWidth])
+  })
 
   const maxTaskPanelWidth = taskPanelOpen
     ? Math.max(TASK_PANEL_MIN_WIDTH, width - 4 - sidebarWidth - (showRail ? 1 : 0) - MIN_READER_WIDTH - (taskPanelOpen ? 1 : 0))
     : TASK_PANEL_DEFAULT_WIDTH
-  const resizeTaskPanel = useCallback((delta: number) => {
+  const resizeTaskPanel = useEffectEvent((delta: number) => {
     const nextWidth = taskPanelOpen
       ? clamp(taskPanelWidth + delta, TASK_PANEL_MIN_WIDTH, maxTaskPanelWidth)
       : TASK_PANEL_DEFAULT_WIDTH + delta
     setTaskPanelWidth(Math.round(nextWidth / TASK_PANEL_RESIZE_STEP) * TASK_PANEL_RESIZE_STEP)
-  }, [taskPanelOpen, taskPanelWidth, maxTaskPanelWidth])
+  })
 
   const showNotice = useCallback((tone: NoticeTone, text: string) => {
     if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
@@ -5580,17 +5598,17 @@ export default function OpenTuiApp() {
     composerCursorOffsetRef.current = composerTextareaRef.current?.cursorOffset ?? null
   }, [])
 
-  const openComposerWindow = useCallback(() => {
+  const openComposerWindow = useEffectEvent(() => {
     rememberComposerCursor()
     setComposerActive(true)
     setComposerWindowOpen(true)
-  }, [rememberComposerCursor])
+  })
 
-  const toggleComposerWindow = useCallback(() => {
+  const toggleComposerWindow = useEffectEvent(() => {
     rememberComposerCursor()
     setComposerActive(true)
     setComposerWindowOpen((open) => !open)
-  }, [rememberComposerCursor])
+  })
 
   useSelectionHandler((selection) => {
     const text = selection.getSelectedText()
@@ -5606,7 +5624,7 @@ export default function OpenTuiApp() {
     renderable.handlePaste(event)
   })
 
-  const copySelectedMessage = useCallback(async () => {
+  const copySelectedMessage = useEffectEvent(async () => {
     const terminalSelection = terminalSelectionRef.current
     if (
       terminalSelection
@@ -5639,10 +5657,10 @@ export default function OpenTuiApp() {
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Failed to copy to clipboard')
     }
-  }, [cursorIndex, showNotice, transcriptCards])
+  })
 
   // Toggle a bookmark on the card under the transcript cursor.
-  const toggleBookmarkForCursor = useCallback(async () => {
+  const toggleBookmarkForCursor = useEffectEvent(async () => {
     const target = selectedSessionTarget
     if (!target) { showNotice('error', 'No session selected'); return }
     const card = cursorIndex >= 0 ? transcriptCards[cursorIndex] : null
@@ -5683,10 +5701,10 @@ export default function OpenTuiApp() {
       })
       showNotice('error', err instanceof Error ? err.message : 'Failed to update bookmark')
     }
-  }, [cursorIndex, readerTitle, selectedSessionTarget, showNotice, transcriptCards])
+  })
 
   // Jump to the next/previous bookmarked card in the active session.
-  const jumpToBookmark = useCallback((direction: 1 | -1) => {
+  const jumpToBookmark = useEffectEvent((direction: 1 | -1) => {
     if (transcriptCards.length === 0) return
     const marks = bookmarkKeysRef.current
     if (marks.size === 0) { showNotice('info', 'No bookmarks in this session'); return }
@@ -5700,9 +5718,9 @@ export default function OpenTuiApp() {
         return
       }
     }
-  }, [cursorIndex, jumpToTranscriptIndex, showNotice, transcriptCards])
+  })
 
-  const openBookmarksOverlay = useCallback(async () => {
+  const openBookmarksOverlay = useEffectEvent(async () => {
     setBookmarksOverlayOpen(true)
     setBookmarksOverlayIndex(0)
     try {
@@ -5711,11 +5729,11 @@ export default function OpenTuiApp() {
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Failed to load bookmarks')
     }
-  }, [showNotice])
+  })
 
   // Navigate to a bookmark from the global overlay — switching session (and
   // provider) when needed, then landing on the message once it has loaded.
-  const openBookmarkRecord = useCallback((record: MessageBookmark) => {
+  const openBookmarkRecord = useEffectEvent((record: MessageBookmark) => {
     setBookmarksOverlayOpen(false)
     const targetSession = { sessionId: record.sessionId, provider: record.provider } as Session
     const targetKey = sessionKey(targetSession)
@@ -5729,9 +5747,9 @@ export default function OpenTuiApp() {
     pendingBookmarkCursorRef.current = { sessionKey: targetKey, uuid: record.uuid }
     selectTabSession(targetSession)
     setFocusedPane('messages')
-  }, [jumpToTranscriptIndex, selectTabSession, transcriptIndexByKey])
+  })
 
-  const copyCliCommand = useCallback(async () => {
+  const copyCliCommand = useEffectEvent(async () => {
     const session = selectedSession
     if (!session) { showNotice('error', 'No session selected'); return }
     const cwd = sessionDetail?.info?.cwd ?? session.cwd
@@ -5743,9 +5761,9 @@ export default function OpenTuiApp() {
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Failed to copy')
     }
-  }, [selectedSession, sessionDetail, showNotice])
+  })
 
-  const executeCommandPalette = useCallback((id: string) => {
+  const executeCommandPalette = useEffectEvent((id: string) => {
     closeCommandPalette()
     switch (id) {
       case 'provider':
@@ -5954,14 +5972,7 @@ export default function OpenTuiApp() {
         requestExit()
         break
     }
-  }, [
-    activeTabIndex, closeCommandPalette, copyCliCommand, copySelectedMessage, density, focusMode, focusedPane, jumpToResumeMarker,
-    showNotice, tabsEnabled, sidebarSort,
-    jumpToTranscriptTail, jumpToUnreadBoundary, openComposerWindow, openTabSessions, provider, railVisible,
-    refreshSessions, refreshSelectedSessionDetail, requestExit, selectTabSession, selectedSessionKey,
-    selectedSession, selectedSessionTarget, sessions, themeMode, toggleExpansion, transcriptView,
-    toggleBookmarkForCursor, jumpToBookmark, openBookmarksOverlay,
-  ])
+  })
 
   useKeyboard((key) => {
     if (key.eventType === 'release') return
@@ -7257,7 +7268,9 @@ export default function OpenTuiApp() {
                 scrollbarOptions={transcriptScrollbarOptions}
                 >
                 <box height={TRANSCRIPT_TOP_MARGIN} />
-                {transcriptChildren}
+                <TuiErrorBoundary>
+                  {transcriptChildren}
+                </TuiErrorBoundary>
 
                 {composerSendState === 'sending' && composerLiveText && !codexLiveAssistantTextVisible ? (
                   <box
