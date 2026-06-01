@@ -249,6 +249,61 @@ function renderSplitSide(
   )
 }
 
+// ─── Inline note rendering helpers ───────────────────────────────────────────
+
+type DraftNote = { rowKey: string; lineLabel: string; text: string }
+
+function renderNoteDraft(draft: DraftNote, width: number, filePath: string | null, theme: TuiThemePalette) {
+  const header = [filePath ?? '', draft.lineLabel].filter(Boolean).join(' ')
+  const displayText = draft.text || 'Write a note…'
+  return (
+    <box width={width} flexDirection="column" border borderStyle="single" borderColor={theme.cyan} paddingX={1}>
+      <box>
+        <text fg={theme.cyan} wrapMode="none">
+          {fitTerminalText(`Draft note${header ? ` — ${header}` : ''}`, width - 4)}
+        </text>
+      </box>
+      <box height={2}>
+        <text fg={draft.text ? theme.text : theme.dim} wrapMode="none">
+          {`${displayText}${draft.text ? '▋' : ''}`}
+        </text>
+      </box>
+      <box flexDirection="row" paddingY={0}>
+        <box flexGrow={1} />
+        <text fg={theme.green} wrapMode="none">Save (^S)</text>
+        <text fg={theme.dim} wrapMode="none">{'  '}</text>
+        <text fg={theme.muted} wrapMode="none">Cancel (Esc)</text>
+      </box>
+    </box>
+  )
+}
+
+function renderNoteCard(
+  rowKey: string,
+  notes: Map<string, string>,
+  width: number,
+  filePath: string | null,
+  theme: TuiThemePalette,
+) {
+  const text = notes.get(rowKey)
+  if (!text) return null
+  const header = filePath ?? ''
+  return (
+    <box width={width} flexDirection="column" border borderStyle="single" borderColor={theme.violet} paddingX={1}>
+      <box flexDirection="row">
+        <text fg={theme.violet} wrapMode="none">
+          {fitTerminalText(`Note${header ? ` — ${header}` : ''}`, width - 6)}
+        </text>
+        <box flexGrow={1} />
+        <text fg={theme.dim} wrapMode="none"> x:del</text>
+      </box>
+      <box>
+        <text fg={theme.text} wrapMode="none">{text}</text>
+      </box>
+    </box>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // GitPopover component
 // ---------------------------------------------------------------------------
@@ -285,6 +340,9 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const [diffLayout, setDiffLayout] = useState<'stack' | 'split'>('stack')
   const [showLineNumbers, setShowLineNumbers] = useState(true)
   const [showHunkHeaders, setShowHunkHeaders] = useState(true)
+  const [diffCursorRow, setDiffCursorRow] = useState(0)
+  const [diffNotes, setDiffNotes] = useState<Map<string, string>>(new Map())
+  const [draftNote, setDraftNote] = useState<DraftNote | null>(null)
   const [leftPaneMode, setLeftPaneMode] = useState<LeftPaneMode>('normal')
   const [leftPaneWidth, setLeftPaneWidth] = useState(LEFT_PANE_DEFAULT_MAX_WIDTH)
   const [treeCursor, setTreeCursor] = useState(0)
@@ -297,6 +355,8 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const diffScrollRef = useRef<ScrollBoxRenderable>(null)
   const rightContentRequestRef = useRef(0)
   const rightContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Ref so handleKey can read rightDiffView without a circular dep issue
+  const rightDiffViewRef = useRef<ReturnType<typeof buildPierreDiffView>>(null)
 
   // Refresh on mount
   useEffect(() => {
@@ -472,7 +532,38 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     return () => { cancelled = true }
   }, [rightContent, pane, fileDiffMode, selectedFilePath, pierreAppearance])
 
+  // Reset diff cursor and any open draft when the viewed file changes.
+  useEffect(() => {
+    setDiffCursorRow(0)
+    setDraftNote(null)
+  }, [selectedFilePath, pane])
+
   const handleKey = useCallback((key: GitKeyEvent) => {
+    // While a draft note is open, all keyboard input goes to the note editor.
+    if (draftNote !== null) {
+      if (key.name === 'escape') { setDraftNote(null); return }
+      if ((key.ctrl && key.name === 's') || key.name === 'return') {
+        const trimmed = draftNote.text.trim()
+        setDiffNotes((prev) => {
+          const next = new Map(prev)
+          if (trimmed) next.set(draftNote.rowKey, trimmed)
+          else next.delete(draftNote.rowKey)
+          return next
+        })
+        setDraftNote(null)
+        return
+      }
+      if (key.name === 'backspace' || key.name === 'delete') {
+        setDraftNote((d) => d ? { ...d, text: d.text.slice(0, -1) } : null)
+        return
+      }
+      if (key.sequence && key.sequence.length === 1 && !key.ctrl) {
+        setDraftNote((d) => d ? { ...d, text: d.text + key.sequence } : null)
+        return
+      }
+      return
+    }
+
     if (key.name === 'escape') { onClose(); return }
 
     if (key.name === 'tab' && key.shift) {
@@ -522,14 +613,24 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       if (focusSide === 'left' && pane === 2) setTreeCursor((i) => Math.min(i + 1, visibleNodes.length - 1))
       else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.min(i + 1, data.branches.length - 1))
       else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.min(i + 1, data.commits.length - 1))
-      else diffScrollRef.current?.scrollBy(1)
+      else {
+        const rdv = rightDiffViewRef.current
+        const totalRows = pane === 2 && fileDiffMode === 'viewer'
+          ? (diffLayout === 'split' ? (rdv?.splitRows.length ?? 0) : (rdv?.rows.length ?? 0))
+          : 0
+        if (totalRows > 0) setDiffCursorRow((i) => Math.min(i + 1, totalRows - 1))
+        diffScrollRef.current?.scrollBy(1)
+      }
       return
     }
     if (key.name === 'k' || key.name === 'up') {
       if (focusSide === 'left' && pane === 2) setTreeCursor((i) => Math.max(i - 1, 0))
       else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.max(i - 1, 0))
       else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.max(i - 1, 0))
-      else diffScrollRef.current?.scrollBy(-1)
+      else {
+        setDiffCursorRow((i) => Math.max(i - 1, 0))
+        diffScrollRef.current?.scrollBy(-1)
+      }
       return
     }
 
@@ -602,7 +703,37 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       setShowHunkHeaders((v) => !v)
       return
     }
-  }, [data, expandedDirs, fileDiffMode, focusSide, leftPaneMode, onClose, pane, repoCwd, treeCursor, visibleNodes])
+    // a = add/edit note on current diff cursor row
+    if (key.sequence === 'a' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
+      const rdv = rightDiffViewRef.current
+      const rows = diffLayout === 'split' ? rdv?.splitRows : rdv?.rows
+      const row = rows?.[diffCursorRow]
+      if (!row) return
+      let lineLabel = ''
+      if (row.tone === 'split-change' || row.tone === 'split-context') {
+        const sr = row as TuiPierreSplitRow
+        const n = sr.right?.lineNum ?? sr.left?.lineNum
+        if (n) lineLabel = `L${n}`
+      } else {
+        const dr = row as TuiPierreDiffRow
+        const n = dr.newLine ?? dr.oldLine
+        if (n) lineLabel = `L${n}`
+      }
+      setDraftNote({ rowKey: row.key, lineLabel, text: diffNotes.get(row.key) ?? '' })
+      return
+    }
+    // x = delete note on current diff cursor row
+    if (key.sequence === 'x' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
+      const rdv = rightDiffViewRef.current
+      const rows = diffLayout === 'split' ? rdv?.splitRows : rdv?.rows
+      const row = rows?.[diffCursorRow]
+      if (row && diffNotes.has(row.key)) {
+        setDiffNotes((prev) => { const n = new Map(prev); n.delete(row.key); return n })
+      }
+      return
+    }
+  }, [data, diffCursorRow, diffLayout, diffNotes, draftNote, expandedDirs, fileDiffMode, focusSide,
+      leftPaneMode, onClose, pane, repoCwd, treeCursor, visibleNodes])
 
   // Register key handler with parent
   useEffect(() => {
@@ -635,7 +766,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
   const fileDiffLabel = fileDiffMode === 'viewer'
-    ? `v plain  ${diffHighlights ? '●' : '○'} syntax  s ${diffLayout}  n ${showLineNumbers ? '#' : 'no#'}  m ${showHunkHeaders ? '@@' : 'no@@'}`
+    ? `v plain  ${diffHighlights ? '●' : '○'} syntax  s ${diffLayout}  n ${showLineNumbers ? '#' : 'no#'}  m ${showHunkHeaders ? '@@' : 'no@@'}  a:note  x:del`
     : 'v parsed'
 
   function statusColor(x: string, y: string): string {
@@ -654,9 +785,13 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const diffTruncated = allDiffLines.length > MAX_DIFF_LINES
   const diffLines = diffTruncated ? allDiffLines.slice(0, MAX_DIFF_LINES) : allDiffLines
   const rightDiffView = useMemo(
-    () => (pane === 2 && fileDiffMode === 'viewer'
-      ? buildPierreDiffView(rightContent, selectedFilePath ?? 'git-diff', diffHighlights, pierreAppearance)
-      : null),
+    () => {
+      const v = pane === 2 && fileDiffMode === 'viewer'
+        ? buildPierreDiffView(rightContent, selectedFilePath ?? 'git-diff', diffHighlights, pierreAppearance)
+        : null
+      rightDiffViewRef.current = v
+      return v
+    },
     [diffHighlights, fileDiffMode, pane, pierreAppearance, rightContent, selectedFilePath],
   )
   const rightDiffRows = rightDiffView ? rightDiffView.rows.slice(0, MAX_DIFF_LINES) : []
@@ -873,40 +1008,52 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
             </box>
           ) : pane === 2 && fileDiffMode === 'viewer' && rightDiffView && diffLayout === 'stack' ? (
             <>
-              {rightDiffRows.map((row) => {
+              {rightDiffRows.map((row, idx) => {
                 if (!showHunkHeaders && row.tone === 'hunk') return null
+                const isCursor = focusSide === 'right' && idx === diffCursorRow
                 const rowFg = diffRowColor(row, theme)
+                const hasDraft = draftNote?.rowKey === row.key
+                const hasNote = diffNotes.has(row.key)
                 return (
-                  <box
-                    key={row.key}
-                    width={rightW}
-                    flexDirection="row"
-                    backgroundColor={diffRowBackground(row, theme)}
-                  >
-                    {showLineNumbers ? (
-                      <>
-                        <text fg={theme.dim} wrapMode="none">
-                          {fitTerminalText(formatDiffLineNumber(row.oldLine, rightDiffGutterWidth), rightDiffGutterWidth)}
-                        </text>
-                        <text fg={theme.dim} wrapMode="none"> </text>
-                        <text fg={theme.dim} wrapMode="none">
-                          {fitTerminalText(formatDiffLineNumber(row.newLine, rightDiffGutterWidth), rightDiffGutterWidth)}
-                        </text>
-                      </>
-                    ) : null}
-                    <text fg={rowFg} wrapMode="none">
-                      {fitTerminalText(` ${row.indicator ?? diffRowIndicator(row)} `, 3)}
-                    </text>
-                    {row.spans && row.spans.length > 0 ? (
-                      <text wrapMode="none">
-                        {renderDiffSpans(row.spans, rowFg, rightDiffTextWidth)}
+                  <React.Fragment key={row.key}>
+                    <box
+                      width={rightW}
+                      flexDirection="row"
+                      backgroundColor={diffRowBackground(row, theme)}
+                    >
+                      {showLineNumbers ? (
+                        <>
+                          <text fg={theme.dim} wrapMode="none">
+                            {fitTerminalText(formatDiffLineNumber(row.oldLine, rightDiffGutterWidth), rightDiffGutterWidth)}
+                          </text>
+                          <text fg={theme.dim} wrapMode="none"> </text>
+                          <text fg={theme.dim} wrapMode="none">
+                            {fitTerminalText(formatDiffLineNumber(row.newLine, rightDiffGutterWidth), rightDiffGutterWidth)}
+                          </text>
+                        </>
+                      ) : null}
+                      <text fg={isCursor ? theme.cyan : rowFg} wrapMode="none">
+                        {fitTerminalText(
+                          isCursor
+                            ? `▶${row.indicator ?? diffRowIndicator(row)} `
+                            : ` ${row.indicator ?? diffRowIndicator(row)} `,
+                          3,
+                        )}
                       </text>
-                    ) : (
-                      <text fg={rowFg} wrapMode="none">
-                        {fitTerminalText(row.text || ' ', rightDiffTextWidth)}
-                      </text>
-                    )}
-                  </box>
+                      {row.spans && row.spans.length > 0 ? (
+                        <text wrapMode="none">
+                          {renderDiffSpans(row.spans, rowFg, rightDiffTextWidth - (hasNote && !hasDraft ? 2 : 0))}
+                        </text>
+                      ) : (
+                        <text fg={rowFg} wrapMode="none">
+                          {fitTerminalText(row.text || ' ', rightDiffTextWidth - (hasNote && !hasDraft ? 2 : 0))}
+                        </text>
+                      )}
+                      {hasNote && !hasDraft ? <text fg={theme.violet} wrapMode="none"> ●</text> : null}
+                    </box>
+                    {hasDraft ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
+                    {hasNote && !hasDraft ? renderNoteCard(row.key, diffNotes, rightW, selectedFilePath, theme) : null}
+                  </React.Fragment>
                 )
               })}
               {rightDiffTruncated ? (
@@ -919,32 +1066,38 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
             </>
           ) : pane === 2 && fileDiffMode === 'viewer' && rightDiffView && diffLayout === 'split' ? (
             <>
-              {rightSplitRows.map((row) => {
+              {rightSplitRows.map((row, idx) => {
                 if (!showHunkHeaders && row.tone === 'hunk') return null
+                const isCursor = focusSide === 'right' && idx === diffCursorRow
+                const hasDraft = draftNote?.rowKey === row.key
+                const hasNote = diffNotes.has(row.key)
                 // Full-width header rows (file label, hunk header, tree summary)
                 if (row.tone !== 'split-change' && row.tone !== 'split-context') {
-                  const fg = row.tone === 'file' ? theme.cyan
-                    : row.tone === 'hunk' ? theme.cyan
-                    : row.tone === 'tree' ? theme.dim
-                    : theme.dim
-                  const bg = row.tone === 'hunk' ? theme.diffMetaBg
-                    : row.tone === 'file' ? theme.surface2
-                    : undefined
+                  const fg = row.tone === 'file' || row.tone === 'hunk' ? theme.cyan : theme.dim
+                  const bg = row.tone === 'hunk' ? theme.diffMetaBg : row.tone === 'file' ? theme.surface2 : undefined
                   return (
-                    <box key={row.key} width={rightW} backgroundColor={bg}>
-                      <text fg={fg} wrapMode="none">
-                        {fitTerminalText(row.text ?? '', rightW - 1)}
-                      </text>
-                    </box>
+                    <React.Fragment key={row.key}>
+                      <box width={rightW} backgroundColor={bg}>
+                        <text fg={isCursor ? theme.cyan : fg} wrapMode="none">
+                          {fitTerminalText((isCursor ? '▶ ' : '') + (row.text ?? ''), rightW - 1)}
+                        </text>
+                      </box>
+                      {hasDraft ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
+                      {hasNote && !hasDraft ? renderNoteCard(row.key, diffNotes, rightW, selectedFilePath, theme) : null}
+                    </React.Fragment>
                   )
                 }
                 // Paired change/context rows
                 return (
-                  <box key={row.key} width={rightW} flexDirection="row">
-                    {renderSplitSide(row.left, splitHalfW, splitLeftTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
-                    <text fg={theme.border}>│</text>
-                    {renderSplitSide(row.right, splitRightHalfW, splitRightTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
-                  </box>
+                  <React.Fragment key={row.key}>
+                    <box width={rightW} flexDirection="row">
+                      {renderSplitSide(row.left, splitHalfW, splitLeftTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
+                      <text fg={isCursor ? theme.cyan : theme.border}>│</text>
+                      {renderSplitSide(row.right, splitRightHalfW, splitRightTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
+                    </box>
+                    {hasDraft ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
+                    {hasNote && !hasDraft ? renderNoteCard(row.key, diffNotes, rightW, selectedFilePath, theme) : null}
+                  </React.Fragment>
                 )
               })}
               {rightSplitTruncated ? (
