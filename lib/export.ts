@@ -1,5 +1,5 @@
 import { marked, Renderer } from 'marked'
-import { diffLines } from 'diff'
+import { parseDiffFromFile, parsePatchFiles, type FileDiffMetadata } from '@pierre/diffs'
 import type { Session, SessionMessage, ToolResultBlock, ImageBlock } from './types'
 import { buildThreadedMessages } from './threading'
 import { getAssistantLabel } from './provider'
@@ -85,31 +85,52 @@ function formatTimestamp(ts: string): string {
 // ── Diff view ─────────────────────────────────────────────────────────────────
 
 function renderDiffView(oldStr: string, newStr: string): string {
-  const changes = diffLines(oldStr, newStr)
+  const fileDiff = parseDiffFromFile(
+    { name: 'previous', contents: oldStr },
+    { name: 'current', contents: newStr },
+  )
+  return renderFileDiffMetadata(fileDiff)
+}
+
+function renderPatchDiffView(patch: string): string {
+  try {
+    const files = parsePatchFiles(patch, 'export', false).flatMap((entry) => entry.files)
+    if (files.length > 0) return files.map(renderFileDiffMetadata).join('')
+  } catch {
+    // Fall through to escaped plain text for malformed or non-unified snippets.
+  }
+  return `<pre class="result-pre" style="border-top:none;max-height:420px">${escapeHtml(patch)}</pre>`
+}
+
+function renderFileDiffMetadata(fileDiff: FileDiffMetadata): string {
   const MAX_LINES = 500
   let lineCount = 0
   const rows: string[] = []
   let truncated = false
 
-  outer: for (const change of changes) {
-    const lines = change.value.split('\n')
-    if (lines[lines.length - 1] === '') lines.pop()
-
-    const isAdd = !!change.added
-    const isDel = !!change.removed
-    const rowCls  = isAdd ? ' diff-add' : isDel ? ' diff-del' : ''
-    const color   = isAdd ? '#2dd4a0'  : isDel ? '#f06060'  : '#3a4c6a'
-    const gutter  = isAdd ? 'rgba(45,212,160,0.15)' : isDel ? 'rgba(240,96,96,0.15)' : 'transparent'
-    const sign    = isAdd ? '+' : isDel ? '−' : ' '
-
-    for (const line of lines) {
-      if (++lineCount > MAX_LINES) { truncated = true; break outer }
-      rows.push(
-        `<div class="diff-line${rowCls}">` +
-        `<span class="diff-gutter" style="color:${color};background:${gutter}">${sign}</span>` +
-        `<span class="diff-line-content" style="color:${color}">${escapeHtml(line)}</span>` +
-        `</div>`
-      )
+  outer: for (const hunk of fileDiff.hunks) {
+    rows.push(`<div class="diff-hunk">${escapeHtml((hunk.hunkSpecs ?? `@@ -${hunk.deletionStart},${hunk.deletionCount} +${hunk.additionStart},${hunk.additionCount} @@`).trimEnd())}</div>`)
+    let oldLine = hunk.deletionStart
+    let newLine = hunk.additionStart
+    for (const content of hunk.hunkContent) {
+      if (content.type === 'context') {
+        for (let index = 0; index < content.lines; index++) {
+          if (++lineCount > MAX_LINES) { truncated = true; break outer }
+          const text = fileDiff.additionLines[content.additionLineIndex + index]
+            ?? fileDiff.deletionLines[content.deletionLineIndex + index]
+            ?? ''
+          rows.push(renderDiffLine(' ', oldLine++, newLine++, text, ''))
+        }
+      } else {
+        for (let index = 0; index < content.deletions; index++) {
+          if (++lineCount > MAX_LINES) { truncated = true; break outer }
+          rows.push(renderDiffLine('-', oldLine++, null, fileDiff.deletionLines[content.deletionLineIndex + index] ?? '', ' diff-del'))
+        }
+        for (let index = 0; index < content.additions; index++) {
+          if (++lineCount > MAX_LINES) { truncated = true; break outer }
+          rows.push(renderDiffLine('+', null, newLine++, fileDiff.additionLines[content.additionLineIndex + index] ?? '', ' diff-add'))
+        }
+      }
     }
   }
 
@@ -117,7 +138,30 @@ function renderDiffView(oldStr: string, newStr: string): string {
     rows.push(`<div style="padding:4px 10px;font-size:11px;color:#3a4c6a;font-family:'IBM Plex Mono',monospace">[… diff truncated at ${MAX_LINES} lines]</div>`)
   }
 
-  return `<div class="diff-view">${rows.join('')}</div>`
+  const name = (fileDiff.name || fileDiff.prevName || 'diff').replace(/^[ab]\//, '')
+  return (
+    `<div class="diff-view">` +
+    `<div class="diff-file">${escapeHtml(name)}</div>` +
+    rows.join('') +
+    `</div>`
+  )
+}
+
+function renderDiffLine(sign: string, oldLine: number | null, newLine: number | null, text: string, rowCls: string): string {
+  const color = sign === '+' ? '#2dd4a0' : sign === '-' ? '#f06060' : '#dde3f5'
+  const gutter = sign === '+'
+    ? 'rgba(45,212,160,0.15)'
+    : sign === '-'
+    ? 'rgba(240,96,96,0.15)'
+    : 'transparent'
+  return (
+    `<div class="diff-line${rowCls}">` +
+    `<span class="diff-gutter" style="background:${gutter}">${oldLine ?? ''}</span>` +
+    `<span class="diff-gutter" style="background:${gutter}">${newLine ?? ''}</span>` +
+    `<span class="diff-sign" style="color:${color};background:${gutter}">${sign}</span>` +
+    `<span class="diff-line-content" style="color:${color}">${escapeHtml(text.replace(/\r?\n$/, ''))}</span>` +
+    `</div>`
+  )
 }
 
 // ── Tool result section ───────────────────────────────────────────────────────
@@ -281,7 +325,7 @@ function renderFileChangeCard(thread: ToolThread): string {
           `<span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:${c};font-weight:500;letter-spacing:0.06em;flex-shrink:0">${escapeHtml(kind)}</span>` +
           `<span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#dde3f5;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(filePath)}</span>` +
           `</div>` +
-          `<pre class="result-pre" style="border-top:none;max-height:420px">${escapeHtml(change.diff ?? '')}</pre>` +
+          renderPatchDiffView(change.diff ?? '') +
           `</div>`
         )
       })
@@ -687,10 +731,13 @@ body {
 }
 
 .diff-view { font-family: 'IBM Plex Mono', monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; background: #0c1028; border-top: 1px solid #1e2a44; }
+.diff-file { padding: 5px 10px; color: #38d9f5; background: #151c38; border-bottom: 1px solid #1e2a44; font-size: 11px; font-weight: 700; }
+.diff-hunk { padding: 3px 10px; color: #38d9f5; background: rgba(56,217,245,0.07); border-bottom: 1px solid #1e2a44; white-space: pre; font-size: 11px; }
 .diff-line { display: flex; }
 .diff-add  { background: rgba(45,212,160,0.07); }
 .diff-del  { background: rgba(240,96,96,0.07); }
 .diff-gutter { width: 26px; flex-shrink: 0; text-align: center; font-size: 11px; line-height: 1.55em; border-right: 1px solid #1e2a44; user-select: none; }
+.diff-sign { width: 20px; flex-shrink: 0; text-align: center; font-size: 11px; line-height: 1.55em; border-right: 1px solid #1e2a44; user-select: none; }
 .diff-line-content { padding: 0 10px; white-space: pre; }
 
 .thinking-block { border: 1px solid rgba(139,128,240,0.2); border-left: 2px solid #8b80f0; border-radius: 6px; overflow: hidden; font-size: 13px; margin-top: 4px; }

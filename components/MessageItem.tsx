@@ -106,6 +106,7 @@ const LazyFencedCodeBlock = lazy(() => import('./CodeRenderers').then((mod) => (
 const LazyMermaidDiagram = lazy(() => import('./CodeRenderers').then((mod) => ({ default: mod.MermaidDiagram })))
 const LazyCodeViewer = lazy(() => import('./CodeRenderers').then((mod) => ({ default: mod.CodeViewer })))
 const LazyDiffView = lazy(() => import('./CodeRenderers').then((mod) => ({ default: mod.DiffView })))
+const LazyPierrePatchDiffView = lazy(() => import('./PierreDiffView').then((mod) => ({ default: mod.PierrePatchDiffView })))
 
 function normalizeCode(code: string): string {
   return code.endsWith('\n') ? code.slice(0, -1) : code
@@ -408,6 +409,14 @@ function DiffView(props: { oldStr: string; newStr: string; filePath?: string }) 
   )
 }
 
+function PatchDiffView({ patch, maxHeight = 420 }: { patch: string; maxHeight?: number }) {
+  return (
+    <Suspense fallback={<PlainCodeBlock code={patch} language="diff" maxHeight={maxHeight} />}>
+      <LazyPierrePatchDiffView patch={patch} maxHeight={maxHeight} />
+    </Suspense>
+  )
+}
+
 // ── Edit tool card ────────────────────────────────────────────────────────────
 
 function EditToolCard({ thread }: { thread: ToolThread }) {
@@ -620,7 +629,7 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
                       {filePath}
                     </span>
                   </div>
-                  <CodeViewer code={diffText} language="diff" maxHeight={420} />
+                  <PatchDiffView patch={diffText} maxHeight={420} />
                 </div>
               )
             })

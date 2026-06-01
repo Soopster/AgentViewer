@@ -1,11 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
-import { parsePatch } from 'diff'
-import type { StructuredPatch } from 'diff'
+import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Clock3, FileText, Folder, FolderOpen, GitBranch, Info, ListTree, Maximize2, PanelLeftClose, PanelLeftOpen, RefreshCw, X } from 'lucide-react'
 import type { GitData, GitStatusEntry } from '@/lib/gitProvider'
+import { PierrePatchDiffView } from './PierreDiffView'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -14,7 +13,6 @@ type TreeNode =
   | { kind: 'file'; path: string; name: string; depth: number; x: string; y: string }
 
 type PaneId = 1 | 2 | 3 | 4
-type DiffViewMode = 'rich' | 'plain'
 type LeftPaneMode = 'normal' | 'expanded' | 'hidden'
 
 const LEFT_PANE_MIN_WIDTH = 280
@@ -132,39 +130,6 @@ async function fetchGitContent({
 
 // ─── Style helpers ────────────────────────────────────────────────────────────
 
-function diffLineColor(line: string): string {
-  if (line.startsWith('+') && !line.startsWith('+++')) return 'var(--green)'
-  if (line.startsWith('-') && !line.startsWith('---')) return 'var(--red)'
-  if (line.startsWith('@@')) return 'var(--cyan)'
-  if (
-    line.startsWith('diff ') ||
-    line.startsWith('index ') ||
-    line.startsWith('---') ||
-    line.startsWith('+++')
-  )
-    return 'var(--text-3)'
-  return 'var(--text)'
-}
-
-function diffLineBg(line: string): string | undefined {
-  if (line.startsWith('+') && !line.startsWith('+++')) return 'rgba(45,212,160,0.07)'
-  if (line.startsWith('-') && !line.startsWith('---')) return 'rgba(240,96,96,0.09)'
-  return undefined
-}
-
-function canRenderRichDiff(content: string): boolean {
-  return content.includes('diff --git ') || content.includes('@@ ')
-}
-
-function parseDiffPatches(content: string): StructuredPatch[] {
-  if (!canRenderRichDiff(content)) return []
-  try {
-    return parsePatch(content)
-  } catch {
-    return []
-  }
-}
-
 function statusColor(x: string, y: string): string {
   if (x === '?' && y === '?') return 'var(--red)'
   if (x.trim()) return 'var(--green)'
@@ -205,7 +170,6 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
   const [branchIndex, setBranchIndex] = useState(0)
   const [commitIndex, setCommitIndex] = useState(0)
   const [rightContent, setRightContent] = useState('')
-  const [diffViewMode, setDiffViewMode] = useState<DiffViewMode>('rich')
   const [leftPaneMode, setLeftPaneMode] = useState<LeftPaneMode>('normal')
   const [leftPaneWidth, setLeftPaneWidth] = useState(LEFT_PANE_DEFAULT_WIDTH)
   const [contentLoading, setContentLoading] = useState(false)
@@ -240,8 +204,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
     }
     return pos
   }, [visibleNodes, treeCursor])
-  const richDiffPatches = useMemo(() => parseDiffPatches(rightContent), [rightContent])
-  const richDiffAvailable = pane === 2 && richDiffPatches.length > 0
+  const diffAvailable = pane === 2 && rightContent.trim().length > 0
   const leftPaneHidden = leftPaneMode === 'hidden'
   const leftPaneExpanded = leftPaneMode === 'expanded'
 
@@ -1050,53 +1013,6 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                   {statusLabel(selectedNode.x, selectedNode.y)}
                 </span>
               ) : null}
-              {pane === 2 ? (
-                <div
-                  role="group"
-                  aria-label="Diff view mode"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 3,
-                    padding: 3,
-                    borderRadius: 9,
-                    border: '1px solid var(--border)',
-                    background: 'var(--surface)',
-                    flexShrink: 0,
-                  }}
-                >
-                  {(['rich', 'plain'] as DiffViewMode[]).map((mode) => {
-                    const active = diffViewMode === mode
-                    const disabled = mode === 'rich' && !richDiffAvailable
-                    return (
-                      <button
-                        type="button"
-                        key={mode}
-                        onClick={() => {
-                          if (!disabled) setDiffViewMode(mode)
-                        }}
-                        disabled={disabled}
-                        title={disabled ? 'Rich diff is available for unified file diffs' : `${mode === 'rich' ? 'Rich' : 'Plain'} diff view`}
-                        style={{
-                          height: 26,
-                          minWidth: 54,
-                          border: 'none',
-                          borderRadius: 6,
-                          padding: '0 9px',
-                          background: active ? 'color-mix(in srgb, var(--cyan) 16%, var(--surface-3))' : 'transparent',
-                          color: disabled ? 'var(--text-3)' : active ? 'var(--cyan)' : 'var(--text-2)',
-                          cursor: disabled ? 'not-allowed' : 'pointer',
-                          opacity: disabled ? 0.45 : 1,
-                          fontSize: 11,
-                          fontWeight: 700,
-                        }}
-                      >
-                        {mode === 'rich' ? 'Rich' : 'Plain'}
-                      </button>
-                    )
-                  })}
-                </div>
-              ) : null}
             </div>
             <div
               ref={rightPanelRef}
@@ -1109,16 +1025,15 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                 >
                   Loading…
                 </div>
-              ) : richDiffAvailable && diffViewMode === 'rich' ? (
-                <RichDiffView patches={richDiffPatches} />
+              ) : diffAvailable ? (
+                <PierrePatchDiffView patch={rightContent} maxHeight={null} />
               ) : (
                 diffLines.map((line, i) => (
                   <div
                     key={i}
                     style={{
                       padding: '0 16px',
-                      color: diffLineColor(line),
-                      background: diffLineBg(line),
+                      color: 'var(--text)',
                       whiteSpace: 'pre',
                       fontFamily: "'IBM Plex Mono', monospace",
                       fontSize: 12,
@@ -1189,176 +1104,6 @@ function InfoCard({
       </div>
     </div>
   )
-}
-
-function RichDiffView({ patches }: { patches: StructuredPatch[] }) {
-  return (
-    <div style={{ padding: '0 8px 8px' }}>
-      {patches.map((patch, patchIndex) => {
-        const fileName = patch.newFileName || patch.oldFileName || `Patch ${patchIndex + 1}`
-        const normalizedFileName = fileName.replace(/^([ab])\//, '')
-        const changeLabel = patch.isCreate ? 'Added'
-          : patch.isDelete ? 'Deleted'
-            : patch.isRename ? 'Renamed'
-              : patch.isBinary ? 'Binary'
-                : 'Modified'
-        return (
-          <section
-            key={`${fileName}:${patchIndex}`}
-            style={{
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              background: 'var(--surface-2)',
-              overflow: 'hidden',
-              marginBottom: 8,
-            }}
-          >
-            <div
-              style={{
-                minHeight: 30,
-                padding: '5px 8px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                borderBottom: '1px solid var(--border)',
-                background: 'var(--surface-3)',
-              }}
-            >
-              <FileText size={13} style={{ color: 'var(--cyan)', flexShrink: 0 }} />
-              <span
-                title={normalizedFileName}
-                style={{
-                  minWidth: 0,
-                  flex: 1,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  color: 'var(--text)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11,
-                  fontWeight: 700,
-                }}
-              >
-                {normalizedFileName}
-              </span>
-              <span
-                style={{
-                  padding: '1px 6px',
-                  borderRadius: 999,
-                  background: 'var(--surface)',
-                  border: '1px solid var(--border)',
-                  color: patch.isCreate ? 'var(--green)' : patch.isDelete ? 'var(--red)' : 'var(--text-2)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 9,
-                  flexShrink: 0,
-                }}
-              >
-                {changeLabel}
-              </span>
-            </div>
-            {patch.isBinary ? (
-              <div style={{ padding: 10, color: 'var(--text-3)', fontSize: 11 }}>
-                Binary file changed.
-              </div>
-            ) : patch.hunks.length === 0 ? (
-              <div style={{ padding: 10, color: 'var(--text-3)', fontSize: 11 }}>
-                No textual hunks in this diff.
-              </div>
-            ) : (
-              patch.hunks.map((hunk, hunkIndex) => {
-                let oldLine = hunk.oldStart
-                let newLine = hunk.newStart
-                const lineGridTemplate = patch.isCreate
-                  ? '38px minmax(0, 1fr)'
-                  : patch.isDelete
-                    ? '38px minmax(0, 1fr)'
-                    : '38px 38px minmax(0, 1fr)'
-                return (
-                  <div key={`${fileName}:${hunkIndex}`}>
-                    <div
-                      style={{
-                        padding: '4px 8px',
-                        background: 'color-mix(in srgb, var(--cyan) 9%, var(--surface-2))',
-                        color: 'var(--cyan)',
-                        borderTop: hunkIndex === 0 ? 'none' : '1px solid var(--border)',
-                        borderBottom: '1px solid var(--border)',
-                        fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: 10,
-                        whiteSpace: 'pre',
-                      }}
-                    >
-                      {`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`}
-                    </div>
-                    <div>
-                      {hunk.lines.map((line, lineIndex) => {
-                        const kind = line.startsWith('+') ? 'add'
-                          : line.startsWith('-') ? 'remove'
-                            : line.startsWith('\\') ? 'meta'
-                              : 'context'
-                        const oldDisplay = kind === 'add' || kind === 'meta' ? '' : String(oldLine)
-                        const newDisplay = kind === 'remove' || kind === 'meta' ? '' : String(newLine)
-                        if (kind !== 'add' && kind !== 'meta') oldLine += 1
-                        if (kind !== 'remove' && kind !== 'meta') newLine += 1
-                        const bg = kind === 'add'
-                          ? 'rgba(45,212,160,0.10)'
-                          : kind === 'remove'
-                            ? 'rgba(240,96,96,0.11)'
-                            : 'transparent'
-                        const fg = kind === 'add'
-                          ? 'var(--green)'
-                          : kind === 'remove'
-                            ? 'var(--red)'
-                            : kind === 'meta'
-                              ? 'var(--text-3)'
-                              : 'var(--text)'
-                        return (
-                          <div
-                            key={`${lineIndex}:${line}`}
-                            style={{
-                              display: 'grid',
-                              gridTemplateColumns: lineGridTemplate,
-                              minHeight: 18,
-                              background: bg,
-                              borderBottom: '1px solid color-mix(in srgb, var(--border) 52%, transparent)',
-                              fontFamily: "'IBM Plex Mono', monospace",
-                              fontSize: 11,
-                              lineHeight: '18px',
-                            }}
-                          >
-                            {patch.isCreate ? null : <div style={richLineNumberStyle}>{oldDisplay}</div>}
-                            {patch.isDelete ? null : <div style={richLineNumberStyle}>{newDisplay}</div>}
-                            <div
-                              style={{
-                                color: fg,
-                                whiteSpace: 'pre',
-                                overflowX: 'visible',
-                                padding: '0 8px',
-                              }}
-                            >
-                              {line || ' '}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )
-              })
-            )}
-          </section>
-        )
-      })}
-    </div>
-  )
-}
-
-const richLineNumberStyle: CSSProperties = {
-  color: 'var(--text-3)',
-  background: 'color-mix(in srgb, var(--surface-3) 72%, transparent)',
-  borderRight: '1px solid var(--border)',
-  textAlign: 'right',
-  padding: '0 6px',
-  userSelect: 'none',
 }
 
 function EmptyState({ title, description }: { title: string; description: string }) {

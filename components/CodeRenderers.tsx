@@ -1,7 +1,6 @@
 'use client'
 
 import { useMemo } from 'react'
-import { diffLines } from 'diff'
 import { renderMermaidSVG } from 'beautiful-mermaid'
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
 import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
@@ -35,6 +34,7 @@ import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import { getCodeThemeStyle } from '@/lib/codeThemeStyles'
 import { useCodeTheme } from './CodeThemeContext'
+import { PierreFileDiffView } from './PierreDiffView'
 
 SyntaxHighlighter.registerLanguage('bash', bash)
 SyntaxHighlighter.registerLanguage('sh', bash)
@@ -334,64 +334,5 @@ export function CodeViewer({
 }
 
 export function DiffView({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath?: string }) {
-  const codeStyle = useCodeHighlighterStyle()
-  const language = detectLanguageFromPath(filePath)
-  const changes = useMemo(() => diffLines(oldStr, newStr), [oldStr, newStr])
-
-  return (
-    <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto', borderTop: '1px solid var(--border)' }}>
-      {changes.map((change, ci) => {
-        const chunkLines = change.value.split('\n')
-        if (chunkLines[chunkLines.length - 1] === '') chunkLines.pop()
-        if (chunkLines.length === 0) return null
-
-        const isAdd = change.added
-        const isDel = change.removed
-        const sign      = isAdd ? '+' : isDel ? '-' : ' '
-        const signColor = isAdd ? 'var(--green)' : isDel ? 'var(--red)' : 'var(--text-3)'
-        const bgTint    = isAdd ? 'rgba(45,212,160,0.10)' : isDel ? 'rgba(240,96,96,0.10)' : 'transparent'
-        const gutterBg  = isAdd ? 'rgba(45,212,160,0.18)' : isDel ? 'rgba(240,96,96,0.18)' : 'var(--surface-2)'
-        const borderL   = isAdd ? '2px solid rgba(45,212,160,0.45)' : isDel ? '2px solid rgba(240,96,96,0.45)' : '2px solid transparent'
-
-        return (
-          <div key={ci} style={{ display: 'flex', borderLeft: borderL }}>
-            <div style={{
-              flexShrink: 0, width: 22,
-              background: gutterBg,
-              borderRight: '1px solid var(--border)',
-              display: 'flex', flexDirection: 'column', alignItems: 'center',
-              paddingTop: 1,
-            }}>
-              {chunkLines.map((_, li) => (
-                <span key={li} style={{
-                  display: 'block',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11, lineHeight: '1.6em',
-                  color: signColor, userSelect: 'none',
-                }}>
-                  {sign}
-                </span>
-              ))}
-            </div>
-            <div style={{ flex: 1, minWidth: 0, background: bgTint }}>
-              <SyntaxHighlighter
-                language={language || undefined}
-                style={codeStyle}
-                wrapLongLines={false}
-                customStyle={{
-                  margin: 0, padding: '0 10px',
-                  ...(isAdd || isDel ? { background: 'transparent' } : {}),
-                  fontSize: 13, lineHeight: 1.6,
-                  overflowX: 'visible',
-                }}
-                codeTagProps={{ style: { fontFamily: "'IBM Plex Mono', monospace" } }}
-              >
-                {chunkLines.join('\n')}
-              </SyntaxHighlighter>
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
+  return <PierreFileDiffView oldStr={oldStr} newStr={newStr} filePath={filePath} maxHeight={500} />
 }

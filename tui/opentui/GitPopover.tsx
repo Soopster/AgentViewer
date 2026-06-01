@@ -1,11 +1,10 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { extname } from 'node:path'
 import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
-import { normalizeTuiCodeFiletype } from '../codeFiletypes'
 import { fetchGitData, fetchGitPaneContent, type GitData, type GitStatusEntry } from '../../lib/gitProvider'
 import { runGitCommand } from '../../lib/gitNodeProvider'
+import { buildPierreDiffView, type TuiPierreDiffRow } from './pierreDiffView'
 
 // ---------------------------------------------------------------------------
 // Git data types
@@ -105,6 +104,65 @@ function PanelScrollbar({ total, viewportH, scrollTop, theme }: {
   )
 }
 
+function diffRowColor(row: TuiPierreDiffRow, theme: TuiThemePalette): string {
+  switch (row.tone) {
+    case 'addition':
+      return theme.green
+    case 'deletion':
+      return theme.red
+    case 'file':
+    case 'hunk':
+      return theme.cyan
+    case 'tree':
+    case 'meta':
+      return theme.dim
+    default:
+      return theme.text
+  }
+}
+
+function diffRowBackground(row: TuiPierreDiffRow, theme: TuiThemePalette): string | undefined {
+  switch (row.tone) {
+    case 'addition':
+      return theme.diffAddBg
+    case 'deletion':
+      return theme.diffRemoveBg
+    case 'file':
+    case 'hunk':
+      return theme.diffMetaBg
+    default:
+      return undefined
+  }
+}
+
+function diffRowIndicator(row: TuiPierreDiffRow): string {
+  switch (row.tone) {
+    case 'addition':
+      return '+'
+    case 'deletion':
+      return '-'
+    case 'file':
+      return '>'
+    case 'hunk':
+      return '@'
+    case 'tree':
+      return '|'
+    default:
+      return ' '
+  }
+}
+
+function formatDiffLineNumber(lineNumber: number | undefined, width: number): string {
+  return lineNumber == null ? ''.padStart(width, ' ') : lineNumber.toString().padStart(width, ' ')
+}
+
+function fitTerminalText(text: string, width: number): string {
+  if (width <= 0) return ''
+  if (text.length <= width) return text
+  if (width === 1) return '…'
+  return `${text.slice(0, width - 1)}…`
+}
+
 // ---------------------------------------------------------------------------
 // GitPopover component
 // ---------------------------------------------------------------------------
@@ -194,11 +252,6 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     const node = visibleNodes[treeCursor]
     return node?.kind === 'file' ? node.path : null
   }, [visibleNodes, treeCursor])
-  const selectedFileType = useMemo(() => {
-    if (!selectedFilePath) return undefined
-    const ext = extname(selectedFilePath).slice(1)
-    return normalizeTuiCodeFiletype(ext) ?? (ext || undefined)
-  }, [selectedFilePath])
 
   // File count for the N of M counter
   const fileCount = useMemo(
@@ -453,7 +506,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const commitsH = Math.max(leftInnerH - statusH - treeH - branchesH, 4)
   const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
-  const fileDiffLabel = fileDiffMode === 'viewer' ? 'v plain diff' : 'v opentui diff'
+  const fileDiffLabel = fileDiffMode === 'viewer' ? 'v plain diff' : 'v parsed diff'
 
   function statusColor(x: string, y: string): string {
     if (x === '?' && y === '?') return theme.red  // untracked
@@ -470,6 +523,20 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const MAX_DIFF_LINES = 1500
   const diffTruncated = allDiffLines.length > MAX_DIFF_LINES
   const diffLines = diffTruncated ? allDiffLines.slice(0, MAX_DIFF_LINES) : allDiffLines
+  const rightDiffView = useMemo(
+    () => (pane === 2 && fileDiffMode === 'viewer'
+      ? buildPierreDiffView(rightContent, selectedFilePath ?? 'git-diff')
+      : null),
+    [fileDiffMode, pane, rightContent, selectedFilePath],
+  )
+  const rightDiffRows = rightDiffView ? rightDiffView.rows.slice(0, MAX_DIFF_LINES) : []
+  const rightDiffTruncated = rightDiffView ? rightDiffView.rows.length > MAX_DIFF_LINES : false
+  const rightDiffLineNumbers = rightDiffRows.flatMap((row) => [row.oldLine, row.newLine].filter((value): value is number => value != null))
+  const rightDiffGutterWidth = Math.max(
+    rightDiffLineNumbers.length > 0 ? Math.max(...rightDiffLineNumbers).toString().length : 1,
+    1,
+  )
+  const rightDiffTextWidth = Math.max(rightW - (rightDiffGutterWidth * 2) - 5, 12)
 
   function clampLeftPaneWidth(nextWidth: number): number {
     return Math.max(minLeftW, Math.min(nextWidth, maxLeftW))
@@ -659,23 +726,38 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
             <box width={rightW}>
               <text fg={theme.dim} wrapMode="none">loading…</text>
             </box>
-          ) : pane === 2 && fileDiffMode === 'viewer' ? (
-            <box width={rightW}>
-              <diff
-                diff={rightContent}
-                view="unified"
-                wrapMode="char"
-                showLineNumbers={true}
-                filetype={selectedFileType}
-                addedBg={theme.diffAddBg}
-                removedBg={theme.diffRemoveBg}
-                contextBg={theme.surface}
-                lineNumberBg={theme.surface}
-                lineNumberFg={theme.dim}
-                fg={theme.text}
-                style={{ width: rightW }}
-              />
-            </box>
+          ) : pane === 2 && fileDiffMode === 'viewer' && rightDiffView ? (
+            <>
+              {rightDiffRows.map((row) => (
+                <box
+                  key={row.key}
+                  width={rightW}
+                  flexDirection="row"
+                  backgroundColor={diffRowBackground(row, theme)}
+                >
+                  <text fg={theme.dim} wrapMode="none">
+                    {fitTerminalText(formatDiffLineNumber(row.oldLine, rightDiffGutterWidth), rightDiffGutterWidth)}
+                  </text>
+                  <text fg={theme.dim} wrapMode="none"> </text>
+                  <text fg={theme.dim} wrapMode="none">
+                    {fitTerminalText(formatDiffLineNumber(row.newLine, rightDiffGutterWidth), rightDiffGutterWidth)}
+                  </text>
+                  <text fg={diffRowColor(row, theme)} wrapMode="none">
+                    {fitTerminalText(` ${row.indicator ?? diffRowIndicator(row)} `, 3)}
+                  </text>
+                  <text fg={diffRowColor(row, theme)} wrapMode="none">
+                    {fitTerminalText(row.text || ' ', rightDiffTextWidth)}
+                  </text>
+                </box>
+              ))}
+              {rightDiffTruncated ? (
+                <box width={rightW}>
+                  <text fg={theme.amber} wrapMode="none">
+                    {`... diff truncated - ${rightDiffView.rows.length - MAX_DIFF_LINES} more lines not shown`}
+                  </text>
+                </box>
+              ) : null}
+            </>
           ) : (
             <>
               {diffLines.map((line, i) => {

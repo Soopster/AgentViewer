@@ -7,6 +7,7 @@ import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
 import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
+import { buildPierreDiffView, type TuiPierreDiffRow, type TuiPierreDiffView } from './pierreDiffView'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
 import type { BaseRenderable, MarkdownRenderable, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
@@ -348,16 +349,14 @@ type CardLandmark = {
 // Stable per-card data: expensive to compute, independent of landmark indices and search.
 type StableCardData = {
   bodyLines: TuiTranscriptCardLine[]
-  diffText: string | null
-  diffLineCount: number
+  diffView: TuiPierreDiffView | null
   codeBlockLineCounts: number[]
 }
 
 type CardDisplayData = {
   landmarks: CardLandmark[]
   bodyLines: TuiTranscriptCardLine[]
-  diffText: string | null
-  diffLineCount: number
+  diffView: TuiPierreDiffView | null
   codeBlockLineCounts: number[]
   // Query-independent header metadata. The match-tag is folded in at render
   // time inside TranscriptCard so search-query changes don't invalidate
@@ -371,6 +370,11 @@ type CardDisplayData = {
 }
 
 type NoticeTone = 'info' | 'error'
+
+const PIERRE_DIFF_CACHE = new WeakMap<TuiTranscriptCard, {
+  isExpanded: boolean
+  value: TuiPierreDiffView | null
+}>()
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(value, max))
@@ -2165,6 +2169,58 @@ function transcriptBackground(line: TuiTranscriptCardLine, theme: TuiThemePalett
   }
 }
 
+function diffRowColor(row: TuiPierreDiffRow, theme: TuiThemePalette): string {
+  switch (row.tone) {
+    case 'addition':
+      return theme.green
+    case 'deletion':
+      return theme.red
+    case 'file':
+    case 'hunk':
+      return theme.cyan
+    case 'tree':
+    case 'meta':
+      return theme.dim
+    default:
+      return theme.text
+  }
+}
+
+function diffRowBackground(row: TuiPierreDiffRow, theme: TuiThemePalette): string | undefined {
+  switch (row.tone) {
+    case 'addition':
+      return theme.diffAddBg
+    case 'deletion':
+      return theme.diffRemoveBg
+    case 'file':
+    case 'hunk':
+      return theme.diffMetaBg
+    default:
+      return undefined
+  }
+}
+
+function diffRowIndicator(row: TuiPierreDiffRow): string {
+  switch (row.tone) {
+    case 'addition':
+      return '+'
+    case 'deletion':
+      return '-'
+    case 'file':
+      return '>'
+    case 'hunk':
+      return '@'
+    case 'tree':
+      return '|'
+    default:
+      return ' '
+  }
+}
+
+function formatDiffLineNumber(lineNumber: number | undefined, width: number): string {
+  return lineNumber == null ? ''.padStart(width, ' ') : lineNumber.toString().padStart(width, ' ')
+}
+
 const EMPTY_LANDMARKS: CardLandmark[] = []
 
 function landmarksEqual(a: CardLandmark[], b: CardLandmark[]): boolean {
@@ -2267,7 +2323,7 @@ function renderedBodyLines(
   if (pretendExpanded) {
     base = source.filter((line) => !['diff_add', 'diff_remove', 'diff_meta'].includes(line.tone))
   } else if (card.category === 'diff') {
-    // Keep diff_meta (file path header) but strip raw diff lines — <diff> renders those
+    // Keep diff_meta (file path header) but strip raw diff lines — Pierre renders those
     base = source.filter((line) => line.tone !== 'diff_add' && line.tone !== 'diff_remove')
   } else {
     base = source.slice(0, previewLimit)
@@ -2277,16 +2333,25 @@ function renderedBodyLines(
 
 function cardDiffText(card: TuiTranscriptCard, isExpanded: boolean): string | null {
   if (card.category !== 'diff' && !isExpanded) return null
-  const raw = card.editDiff ?? extractDiffText(card.expandedLines)
-  return raw ? rewriteHunkCounts(raw) : null
+  return card.editDiff ?? extractDiffText(card.expandedLines)
+}
+
+function cardDiffView(card: TuiTranscriptCard, isExpanded: boolean): TuiPierreDiffView | null {
+  const cached = PIERRE_DIFF_CACHE.get(card)
+  if (cached && cached.isExpanded === isExpanded) return cached.value
+
+  const diffText = cardDiffText(card, isExpanded)
+  const value = diffText ? buildPierreDiffView(diffText, card.key) : null
+  PIERRE_DIFF_CACHE.set(card, { isExpanded, value })
+  return value
 }
 
 function cardDiffRows(card: TuiTranscriptCard, isExpanded: boolean, previewLimit: number): number {
-  const diffText = cardDiffText(card, isExpanded)
-  if (!diffText) return 0
-  const lineCount = diffText.split('\n').length
-  const maxHeight = isExpanded ? Math.max(lineCount + 2, 4) : previewLimit
-  return Math.min(maxHeight, Math.max(lineCount + 2, 4)) + 1
+  const diffView = cardDiffView(card, isExpanded)
+  if (!diffView) return 0
+  const visibleRows = isExpanded ? diffView.rows.length : Math.min(previewLimit, diffView.rows.length)
+  const hiddenSummaryRows = visibleRows < diffView.rows.length ? 1 : 0
+  return visibleRows + hiddenSummaryRows + 1
 }
 
 function codeBlockRows(card: TuiTranscriptCard, isExpanded: boolean): number {
@@ -2631,41 +2696,6 @@ function extractDiffText(lines: TuiTranscriptCardLine[]): string | null {
   return diffLines.length > 0 ? diffLines.join('\n') : null
 }
 
-/**
- * Rewrite @@ hunk headers with counts that match the actual body content.
- * Necessary because previewDiff strips context lines, leaving the original
- * (context-aware) counts larger than the lines that remain.
- */
-function rewriteHunkCounts(diff: string): string {
-  const raw = diff.split('\n')
-  const out: string[] = []
-  let i = 0
-  while (i < raw.length) {
-    const l = raw[i]
-    if (!l.startsWith('@@')) {
-      out.push(l)
-      i++
-      continue
-    }
-    let j = i + 1
-    while (j < raw.length && !raw[j].startsWith('@@')) j++
-    const body = raw.slice(i + 1, j)
-    let oldCount = 0
-    let newCount = 0
-    for (const bl of body) {
-      if (!bl || bl === '\\ No newline at end of file') continue
-      if (bl.startsWith('-')) oldCount++
-      else if (bl.startsWith('+')) newCount++
-      else { oldCount++; newCount++ }
-    }
-    const m = l.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/)
-    out.push(m ? `@@ -${m[1]},${oldCount} +${m[2]},${newCount} @@${m[3] ?? ''}` : l)
-    out.push(...body)
-    i = j
-  }
-  return out.join('\n')
-}
-
 function currentProjectName(session: Session | null): string {
   return session ? formatSessionProject(session) : 'no-project'
 }
@@ -2775,8 +2805,7 @@ function TranscriptCardInner({
   const {
     landmarks,
     bodyLines,
-    diffText,
-    diffLineCount,
+    diffView,
     codeBlockLineCounts,
     headerMeta,
     accent,
@@ -2829,6 +2858,16 @@ function TranscriptCardInner({
   const bubbleTextColor = imessageUserBubble ? '#ffffff' : theme.text
   const bodyInnerWidth = Math.max((userBubbleWidth ?? rightPaneWidth) - densityState.bodyIndent - 8, 16)
   const markdownWidth = Math.max((userBubbleWidth ?? rightPaneWidth) - densityState.bodyIndent - 8, 20)
+  const diffRows = diffView
+    ? diffView.rows.slice(0, isExpanded ? diffView.rows.length : densityState.bodyLines)
+    : []
+  const hiddenDiffRows = diffView ? diffView.rows.length - diffRows.length : 0
+  const diffLineNumbers = diffRows.flatMap((row) => [row.oldLine, row.newLine].filter((value): value is number => value != null))
+  const diffGutterWidth = Math.max(
+    diffLineNumbers.length > 0 ? Math.max(...diffLineNumbers).toString().length : 1,
+    1,
+  )
+  const diffTextWidth = Math.max(bodyInnerWidth - (diffGutterWidth * 2) - 5, 12)
   const shouldRenderSyntaxMarkdown = Boolean(
     isExpanded
     && card.markdownContent
@@ -2973,22 +3012,34 @@ function TranscriptCardInner({
             </>
           )}
 
-          {diffText ? (
+          {diffView ? (
             <box paddingX={1} marginTop={1}>
-              <diff
-                diff={diffText}
-                view="unified"
-                wrapMode="char"
-                showLineNumbers={true}
-                addedBg={theme.diffAddBg}
-                removedBg={theme.diffRemoveBg}
-                contextBg={theme.surface}
-                lineNumberBg={theme.surface}
-                lineNumberFg={theme.dim}
-                {...selectionColors}
-                fg={theme.text}
-                style={{ height: isExpanded ? Math.max(diffLineCount + 2, 4) : Math.min(densityState.bodyLines, Math.max(diffLineCount + 2, 4)) }}
-              />
+              {diffRows.map((row) => (
+                <box
+                  key={row.key}
+                  flexDirection="row"
+                  backgroundColor={diffRowBackground(row, theme)}
+                >
+                  <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+                    {fitText(formatDiffLineNumber(row.oldLine, diffGutterWidth), diffGutterWidth)}
+                  </text>
+                  <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}> </text>
+                  <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+                    {fitText(formatDiffLineNumber(row.newLine, diffGutterWidth), diffGutterWidth)}
+                  </text>
+                  <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
+                    {fitText(` ${row.indicator ?? diffRowIndicator(row)} `, 3)}
+                  </text>
+                  <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
+                    {fitText(row.text, diffTextWidth)}
+                  </text>
+                </box>
+              ))}
+              {hiddenDiffRows > 0 ? (
+                <text fg={theme.dim} selectable {...selectionColors}>
+                  {fitText(`... ${hiddenDiffRows} more diff lines`, bodyInnerWidth)}
+                </text>
+              ) : null}
             </box>
           ) : null}
           {isThinkingCard ? (
@@ -4276,12 +4327,11 @@ export default function OpenTuiApp() {
         return prev.value
       }
       const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, thinkingFull)
-      const diffText = cardDiffText(card, isExpanded)
-      const diffLineCount = diffText ? diffText.split('\n').length : 0
+      const diffView = cardDiffView(card, isExpanded)
       const codeBlockLineCounts = (isExpanded && card.codeBlocks)
         ? card.codeBlocks.map((cb) => countCodeBlockLines(cb.content))
         : []
-      const value: StableCardData = { bodyLines, diffText, diffLineCount, codeBlockLineCounts }
+      const value: StableCardData = { bodyLines, diffView, codeBlockLineCounts }
       cache.set(card, { isExpanded, bodyLineLimit: densityState.bodyLines, thinkingFull, value })
       return value
     })
@@ -4322,8 +4372,7 @@ export default function OpenTuiApp() {
       const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
       const stable = stableCardData[index] ?? {
         bodyLines: [],
-        diffText: null,
-        diffLineCount: 0,
+        diffView: null,
         codeBlockLineCounts: [],
       }
       const providerKey = card.provider ?? provider
@@ -4361,8 +4410,7 @@ export default function OpenTuiApp() {
       const value: CardDisplayData = {
         landmarks,
         bodyLines: stable.bodyLines,
-        diffText: stable.diffText,
-        diffLineCount: stable.diffLineCount,
+        diffView: stable.diffView,
         codeBlockLineCounts: stable.codeBlockLineCounts,
         headerMeta,
         accent,

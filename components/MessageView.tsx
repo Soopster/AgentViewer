@@ -57,6 +57,14 @@ import {
 } from '@/lib/timelineVirtualizer'
 
 const AnalyticsPopover = dynamic(() => import('./AnalyticsPopover'), { ssr: false })
+const PierrePatchDiffView = dynamic(() => import('./PierreDiffView').then((mod) => mod.PierrePatchDiffView), {
+  ssr: false,
+  loading: () => (
+    <pre style={{ margin: 0, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, background: 'rgba(0,0,0,0.18)', padding: '5px 7px', borderRadius: 4, maxHeight: 180, overflow: 'auto' }}>
+      Loading diff…
+    </pre>
+  ),
+})
 
 const compactNativeSelectClassName = cn(
   nativeSelectBaseClassName,
@@ -6841,20 +6849,7 @@ export default function MessageView({
                       </div>
                     )}
                     {permission.diff && (
-                      <pre style={{ margin: 0, fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, background: 'rgba(0,0,0,0.18)', padding: '5px 7px', borderRadius: 4, maxHeight: 180, overflow: 'auto' }}>
-                        {permission.diff.split('\n').slice(0, 240).map((line, lineIndex) => (
-                          <div
-                            key={lineIndex}
-                            style={{
-                              color: line.startsWith('+') ? 'var(--green)' : line.startsWith('-') ? 'var(--red, #f87171)' : 'var(--text-3)',
-                              whiteSpace: 'pre-wrap',
-                              wordBreak: 'break-word',
-                            }}
-                          >
-                            {line || ' '}
-                          </div>
-                        ))}
-                      </pre>
+                      <PierrePatchDiffView patch={permission.diff} maxHeight={180} />
                     )}
                   </div>
                 ))}
