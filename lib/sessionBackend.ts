@@ -2536,7 +2536,9 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   // conversation root), or rewind (changes the resume point). These mutate
   // the conversation root or don't have a stable id to key the pool on, so we
   // run the legacy single-shot query() and let the pool catch up on turn 2.
-  const useColdPath = isPendingSession || forkSessionOnSend || Boolean(resumeSessionAt) || manualPermissions
+  // manualPermissions is no longer a cold-path trigger — the pool supports
+  // per-turn bridges via the bridgeBox delegation pattern.
+  const useColdPath = isPendingSession || forkSessionOnSend || Boolean(resumeSessionAt)
 
   if (useColdPath) {
     return createClaudeStreamCold({
@@ -2564,6 +2566,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     userMessage,
     attachments,
     permissionMode,
+    manualPermissions,
     model,
     effort,
     cwdOverride,
@@ -2816,6 +2819,7 @@ type ClaudeStreamPooledArgs = {
   userMessage: string
   attachments: SendAttachment[]
   permissionMode: ClaudePermissionMode | undefined
+  manualPermissions: boolean
   model: string | undefined
   effort: ReasoningEffortLevel | undefined
   cwdOverride: string | undefined
@@ -2830,6 +2834,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
     userMessage,
     attachments,
     permissionMode,
+    manualPermissions,
     model,
     effort,
     cwdOverride,
@@ -2896,9 +2901,22 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
         controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
       } catch {}
 
+      // Per-turn bridge for interactive permission approvals. Installed into the
+      // pool entry's bridgeBox so the warm subprocess routes permission requests
+      // through this turn's SSE stream without being recycled between turns.
+      // bypass/plan handle all tool decisions via permissionMode so no bridge needed.
+      const bridgedPermissionIds = new Set<string>()
+      const bridgeInstalled = manualPermissions
+        && permissionMode !== 'bypassPermissions'
+        && permissionMode !== 'plan'
+      const bridge = bridgeInstalled
+        ? createClaudePermissionBridge(entry.sessionId, controller, encoder, bridgedPermissionIds)
+        : undefined
+
       try {
         await entry.run(pushMessage, {
           signal: turnAbort.signal,
+          bridge,
           onMessage: (msg) => {
             try {
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
@@ -2936,6 +2954,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
         }
       } finally {
         clearRunningSession(entry.sessionId)
+        resolvePendingClaudePermissions(entry.sessionId, bridgedPermissionIds, 'Permission request ended before a response was received')
         try { controller.close() } catch { /* idempotent */ }
       }
     },

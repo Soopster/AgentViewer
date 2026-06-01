@@ -1,5 +1,6 @@
 import {
   query,
+  type CanUseTool,
   type PermissionMode,
   type Query,
   type SDKMessage,
@@ -88,6 +89,13 @@ export type ClaudePoolRunOptions = {
   onMessage(message: SDKMessage): void
   /** Called once if the underlying CLI dies mid-turn. */
   onError?(error: Error): void
+  /**
+   * Per-turn canUseTool implementation. Installed into the entry's bridgeBox
+   * before the turn starts and cleared when the turn ends. Used to route
+   * interactive permission requests through the current turn's SSE stream
+   * without recycling the warm Query between turns.
+   */
+  bridge?: CanUseTool
 }
 
 type Subscriber = {
@@ -118,6 +126,12 @@ type InternalEntry = {
   turnTail: Promise<void>
   lastActivityAt: number
   alive: boolean
+  /**
+   * Mutable per-turn bridge. The query's canUseTool delegates to this so the
+   * warm subprocess can be reused across turns while routing each turn's
+   * permission requests through the correct SSE stream controller.
+   */
+  bridgeBox: { fn: CanUseTool | null }
 }
 
 // Init/state messages emitted between session spawn and the first subscriber
@@ -162,6 +176,11 @@ class ClaudePool {
   private spawn(opts: ClaudePoolAcquireOptions): InternalEntry {
     const { pushUserMessage, endInput, iterable } = createInputStream()
 
+    // Mutable per-turn bridge. The canUseTool delegation below routes through
+    // this so permission requests reach the correct SSE stream controller for
+    // each turn while the underlying subprocess stays warm.
+    const bridgeBox: { fn: CanUseTool | null } = { fn: null }
+
     const effortOptions = effortToSdk(opts.effort)
     const q = query({
       prompt: iterable,
@@ -173,6 +192,10 @@ class ClaudePool {
         // bypassPermissions is a no-op (and the SDK rejects the option) unless we
         // also opt into the dangerous skip. Mirror `claude --dangerously-skip-permissions`.
         ...(opts.permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
+        canUseTool: (toolName, input, toolOpts) =>
+          bridgeBox.fn
+            ? bridgeBox.fn(toolName, input, toolOpts)
+            : Promise.resolve({ behavior: 'allow' as const }),
         ...effortOptions,
         enableFileCheckpointing: true,
         resumeSessionAt: opts.resumeSessionAt,
@@ -206,6 +229,7 @@ class ClaudePool {
       turnTail: Promise.resolve(),
       lastActivityAt: Date.now(),
       alive: true,
+      bridgeBox,
     }
 
     void this.pumpQueryToSubscriber(entry)
@@ -382,6 +406,12 @@ class ClaudePool {
     pushUserMessage: (msg: SDKUserMessage) => void
     endInput: () => void
     options: ClaudePoolAcquireOptions
+    /**
+     * The bridgeBox from the cold-path query. Passing this ensures the
+     * delegation closure already baked into the Query still routes to the
+     * correct per-turn bridge when future pool turns run.
+     */
+    bridgeBox?: { fn: CanUseTool | null }
   }): void {
     const { sessionId, query: q, pushUserMessage, endInput, options } = args
     const existing = this.entries.get(sessionId)
@@ -410,6 +440,9 @@ class ClaudePool {
       turnTail: Promise.resolve(),
       lastActivityAt: Date.now(),
       alive: true,
+      // Reuse the bridgeBox from the cold-path spawn so its delegation closure
+      // (already frozen into the Query) routes through the same object.
+      bridgeBox: args.bridgeBox ?? { fn: null },
     }
 
     this.entries.set(sessionId, entry)
@@ -505,10 +538,14 @@ class ClaudePool {
     else options.signal.addEventListener('abort', abortHandler, { once: true })
 
     entry.lastActivityAt = Date.now()
+    // Install the per-turn bridge (if any) before pushing the message so the
+    // delegation is live by the time any tool call arrives.
+    entry.bridgeBox.fn = options.bridge ?? null
     try {
       entry.pushUserMessage(message)
       try { broadcastClaudeTurnStart(entry.sessionId) } catch { /* swallow */ }
     } catch (err) {
+      entry.bridgeBox.fn = null
       entry.subscriber = null
       clearTimeout(hardTimer)
       options.signal.removeEventListener('abort', abortHandler)
@@ -523,6 +560,9 @@ class ClaudePool {
       options.onError?.(error)
       throw error
     } finally {
+      // Clear the bridge before releasing the mutex so the next turn starts
+      // with a clean slate even if the current turn's onError never fired.
+      entry.bridgeBox.fn = null
       if (tailTimer) clearTimeout(tailTimer)
       clearTimeout(hardTimer)
       options.signal.removeEventListener('abort', abortHandler)
@@ -630,6 +670,7 @@ export function adoptClaudeSession(args: {
   pushUserMessage: (msg: SDKUserMessage) => void
   endInput: () => void
   options: ClaudePoolAcquireOptions
+  bridgeBox?: { fn: CanUseTool | null }
 }): void {
   return getPool().adopt(args)
 }
