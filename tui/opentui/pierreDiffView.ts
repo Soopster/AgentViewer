@@ -28,8 +28,30 @@ export type TuiPierreDiffRow = {
   indicator?: string
 }
 
+// ─── Split-view types ─────────────────────────────────────────────────────────
+
+export type TuiSplitSideKind = 'deletion' | 'addition' | 'context' | 'empty'
+
+export type TuiSplitRowSide = {
+  kind: TuiSplitSideKind
+  lineNum?: number
+  text: string
+  spans?: TuiRenderSpan[]
+}
+
+/** One row in split view. Full-width header rows (file/hunk/meta/tree) use `.text`;
+ *  paired change/context rows use `.left` and `.right`. */
+export type TuiPierreSplitRow = {
+  key: string
+  tone: TuiPierreDiffRowTone | 'split-change' | 'split-context'
+  text?: string
+  left?: TuiSplitRowSide
+  right?: TuiSplitRowSide
+}
+
 export type TuiPierreDiffView = {
   rows: TuiPierreDiffRow[]
+  splitRows: TuiPierreSplitRow[]
 }
 
 export type TuiFileHighlights = {
@@ -200,6 +222,114 @@ export async function loadDiffHighlights(
   return promise
 }
 
+// ─── Split-view row builder (per file) ────────────────────────────────────────
+
+function buildFileSplitRows(
+  file: FileDiffMetadata,
+  fileHighlights: TuiFileHighlights | undefined,
+  appearance: 'dark' | 'light',
+  cacheKey: string,
+  fileIndex: number,
+): TuiPierreSplitRow[] {
+  const rows: TuiPierreSplitRow[] = []
+
+  for (const [hunkIndex, hunk] of file.hunks.entries()) {
+    if (hunk.collapsedBefore > 0) {
+      rows.push({
+        key: `${cacheKey}:s:${fileIndex}:${hunkIndex}:collapsed`,
+        tone: 'meta',
+        text: `... ${hunk.collapsedBefore} unchanged line${hunk.collapsedBefore === 1 ? '' : 's'}`,
+      })
+    }
+    rows.push({
+      key: `${cacheKey}:s:${fileIndex}:${hunkIndex}:header`,
+      tone: 'hunk',
+      text: cleanDiffLineText(
+        hunk.hunkSpecs ??
+          `@@ -${hunk.deletionStart},${hunk.deletionCount} +${hunk.additionStart},${hunk.additionCount} @@${hunk.hunkContext ? ` ${hunk.hunkContext}` : ''}`,
+      ),
+    })
+
+    let delIdx = hunk.deletionLineIndex
+    let addIdx = hunk.additionLineIndex
+    let delNum = hunk.deletionStart
+    let addNum = hunk.additionStart
+
+    for (const [ci, content] of hunk.hunkContent.entries()) {
+      if (content.type === 'context') {
+        for (let li = 0; li < content.lines; li++) {
+          const rawText =
+            file.additionLines[addIdx + li] ?? file.deletionLines[delIdx + li] ?? ''
+          const hastNode = fileHighlights?.additionLines[addIdx + li]
+          const spans = hastNode ? flattenHastLine(hastNode, appearance) : undefined
+          const side: Omit<TuiSplitRowSide, 'lineNum'> = {
+            kind: 'context',
+            text: cleanDiffLineText(rawText),
+            spans: spans?.length ? spans : undefined,
+          }
+          rows.push({
+            key: `${cacheKey}:s:${fileIndex}:${hunkIndex}:ctx:${ci}:${li}`,
+            tone: 'split-context',
+            left: { ...side, lineNum: delNum + li },
+            right: { ...side, lineNum: addNum + li },
+          })
+        }
+        delIdx += content.lines
+        addIdx += content.lines
+        delNum += content.lines
+        addNum += content.lines
+      } else {
+        const pairCount = Math.max(content.deletions, content.additions)
+        for (let i = 0; i < pairCount; i++) {
+          let left: TuiSplitRowSide
+          let right: TuiSplitRowSide
+
+          if (i < content.deletions) {
+            const rawText = file.deletionLines[delIdx + i] ?? ''
+            const hastNode = fileHighlights?.deletionLines[delIdx + i]
+            const spans = hastNode ? flattenHastLine(hastNode, appearance) : undefined
+            left = {
+              kind: 'deletion',
+              lineNum: delNum + i,
+              text: cleanDiffLineText(rawText),
+              spans: spans?.length ? spans : undefined,
+            }
+          } else {
+            left = { kind: 'empty', text: '' }
+          }
+
+          if (i < content.additions) {
+            const rawText = file.additionLines[addIdx + i] ?? ''
+            const hastNode = fileHighlights?.additionLines[addIdx + i]
+            const spans = hastNode ? flattenHastLine(hastNode, appearance) : undefined
+            right = {
+              kind: 'addition',
+              lineNum: addNum + i,
+              text: cleanDiffLineText(rawText),
+              spans: spans?.length ? spans : undefined,
+            }
+          } else {
+            right = { kind: 'empty', text: '' }
+          }
+
+          rows.push({
+            key: `${cacheKey}:s:${fileIndex}:${hunkIndex}:chg:${ci}:${i}`,
+            tone: 'split-change',
+            left,
+            right,
+          })
+        }
+        delIdx += content.deletions
+        addIdx += content.additions
+        delNum += content.deletions
+        addNum += content.additions
+      }
+    }
+  }
+
+  return rows
+}
+
 // ─── Main builder ─────────────────────────────────────────────────────────────
 
 export function buildPierreDiffView(
@@ -209,6 +339,7 @@ export function buildPierreDiffView(
   appearance: 'dark' | 'light' = 'dark',
 ): TuiPierreDiffView | null {
   const rows: TuiPierreDiffRow[] = []
+  const splitRows: TuiPierreSplitRow[] = []
   try {
     const parsed = parsePatchFiles(diffText, cacheKey, false)
     const files = parsed.flatMap((patch) => patch.files)
@@ -216,17 +347,21 @@ export function buildPierreDiffView(
 
     const orderedFiles = orderDiffFiles(files)
     if (orderedFiles.length > 1) {
-      rows.push({
+      const summaryRow: TuiPierreDiffRow = {
         key: `${cacheKey}:tree:summary`,
         tone: 'meta',
         text: `${orderedFiles.length} files changed`,
-      })
+      }
+      rows.push(summaryRow)
+      splitRows.push(summaryRow)
       for (const [index, path] of diffTreePaths(orderedFiles).entries()) {
-        rows.push({
+        const treeRow: TuiPierreDiffRow = {
           key: `${cacheKey}:tree:${index}`,
           tone: 'tree',
           text: treePathLabel(path, index, orderedFiles.length),
-        })
+        }
+        rows.push(treeRow)
+        splitRows.push(treeRow)
       }
     }
 
@@ -234,13 +369,20 @@ export function buildPierreDiffView(
       const fileHighlights = highlights?.get(diffDisplayPath(file))
 
       if (fileIndex > 0 || rows.length > 0) {
-        rows.push({ key: `${cacheKey}:spacer:${fileIndex}`, tone: 'meta', text: '' })
+        const spacer: TuiPierreDiffRow = { key: `${cacheKey}:spacer:${fileIndex}`, tone: 'meta', text: '' }
+        rows.push(spacer)
+        splitRows.push(spacer)
       }
-      rows.push({
+      const fileRow: TuiPierreDiffRow = {
         key: `${cacheKey}:file:${fileIndex}`,
         tone: 'file',
         text: diffFileLabel(file),
-      })
+      }
+      rows.push(fileRow)
+      splitRows.push(fileRow)
+
+      // Append split rows for this file
+      splitRows.push(...buildFileSplitRows(file, fileHighlights, appearance, cacheKey, fileIndex))
 
       for (const [hunkIndex, hunk] of file.hunks.entries()) {
         if (hunk.collapsedBefore > 0) {
@@ -316,7 +458,7 @@ export function buildPierreDiffView(
       }
     }
 
-    return rows.length > 0 ? { rows } : null
+    return rows.length > 0 ? { rows, splitRows } : null
   } catch {
     return buildFallbackDiffView(diffText, cacheKey)
   }
@@ -340,7 +482,7 @@ function buildFallbackDiffView(diffText: string, cacheKey: string): TuiPierreDif
       return { key: `${cacheKey}:fallback:${index}`, tone: 'meta', text }
     })
     .filter((row): row is TuiPierreDiffRow => row != null)
-  return rows.length > 0 ? { rows } : null
+  return rows.length > 0 ? { rows, splitRows: [] } : null
 }
 
 // ─── File ordering ────────────────────────────────────────────────────────────
