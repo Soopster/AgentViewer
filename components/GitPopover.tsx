@@ -1153,6 +1153,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
       return next
     })
     setDraftNote(null)
+    setSelectedLines(null)
   }
 
   function openReplyDraft(note: DiffNote) {
