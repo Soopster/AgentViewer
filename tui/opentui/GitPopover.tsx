@@ -189,6 +189,29 @@ function renderDiffSpans(spans: TuiRenderSpan[], defaultFg: string, maxWidth: nu
   return elements
 }
 
+// Stable semantic note anchor — survives diff re-parses as long as the line exists.
+// Format: "<filePath>:<side>:<lineNum>"  e.g. "src/foo.ts:new:42"
+function stackRowAnchor(row: TuiPierreDiffRow, filePath: string | null): string | null {
+  const fp = filePath ?? 'unknown'
+  if (row.newLine !== undefined) return `${fp}:new:${row.newLine}`
+  if (row.oldLine !== undefined) return `${fp}:old:${row.oldLine}`
+  return null
+}
+
+function splitRowAnchor(row: TuiPierreSplitRow, filePath: string | null): string | null {
+  const fp = filePath ?? 'unknown'
+  if (row.right?.lineNum !== undefined) return `${fp}:new:${row.right.lineNum}`
+  if (row.left?.lineNum !== undefined) return `${fp}:old:${row.left.lineNum}`
+  return null
+}
+
+function anchorLineLabel(anchor: string): string {
+  const parts = anchor.split(':')
+  const lineNum = parts[parts.length - 1]
+  const side = parts[parts.length - 2]
+  return `L${lineNum}${side === 'old' ? ' (old)' : ''}`
+}
+
 function splitSideFg(side: TuiSplitRowSide, theme: TuiThemePalette): string {
   if (side.kind === 'deletion') return theme.red
   if (side.kind === 'addition') return theme.green
@@ -357,6 +380,8 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const rightContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Ref so handleKey can read rightDiffView without a circular dep issue
   const rightDiffViewRef = useRef<ReturnType<typeof buildPierreDiffView>>(null)
+  // Ref so handleKey always sees the latest selectedFilePath without stale closure issues
+  const selectedFilePathRef = useRef<string | null>(null)
 
   // Refresh on mount
   useEffect(() => {
@@ -706,29 +731,31 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     // a = add/edit note on current diff cursor row
     if (key.sequence === 'a' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
       const rdv = rightDiffViewRef.current
-      const rows = diffLayout === 'split' ? rdv?.splitRows : rdv?.rows
+      const fp = selectedFilePathRef.current
+      const isSplit = diffLayout === 'split'
+      const rows = isSplit ? rdv?.splitRows : rdv?.rows
       const row = rows?.[diffCursorRow]
       if (!row) return
-      let lineLabel = ''
-      if (row.tone === 'split-change' || row.tone === 'split-context') {
-        const sr = row as TuiPierreSplitRow
-        const n = sr.right?.lineNum ?? sr.left?.lineNum
-        if (n) lineLabel = `L${n}`
-      } else {
-        const dr = row as TuiPierreDiffRow
-        const n = dr.newLine ?? dr.oldLine
-        if (n) lineLabel = `L${n}`
-      }
-      setDraftNote({ rowKey: row.key, lineLabel, text: diffNotes.get(row.key) ?? '' })
+      const anchor = isSplit
+        ? splitRowAnchor(row as TuiPierreSplitRow, fp)
+        : stackRowAnchor(row as TuiPierreDiffRow, fp)
+      if (!anchor) return
+      setDraftNote({ rowKey: anchor, lineLabel: anchorLineLabel(anchor), text: diffNotes.get(anchor) ?? '' })
       return
     }
     // x = delete note on current diff cursor row
     if (key.sequence === 'x' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
       const rdv = rightDiffViewRef.current
-      const rows = diffLayout === 'split' ? rdv?.splitRows : rdv?.rows
+      const fp = selectedFilePathRef.current
+      const isSplit = diffLayout === 'split'
+      const rows = isSplit ? rdv?.splitRows : rdv?.rows
       const row = rows?.[diffCursorRow]
-      if (row && diffNotes.has(row.key)) {
-        setDiffNotes((prev) => { const n = new Map(prev); n.delete(row.key); return n })
+      if (!row) return
+      const anchor = isSplit
+        ? splitRowAnchor(row as TuiPierreSplitRow, fp)
+        : stackRowAnchor(row as TuiPierreDiffRow, fp)
+      if (anchor && diffNotes.has(anchor)) {
+        setDiffNotes((prev) => { const n = new Map(prev); n.delete(anchor); return n })
       }
       return
     }
@@ -786,6 +813,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const diffLines = diffTruncated ? allDiffLines.slice(0, MAX_DIFF_LINES) : allDiffLines
   const rightDiffView = useMemo(
     () => {
+      selectedFilePathRef.current = selectedFilePath
       const v = pane === 2 && fileDiffMode === 'viewer'
         ? buildPierreDiffView(rightContent, selectedFilePath ?? 'git-diff', diffHighlights, pierreAppearance)
         : null
@@ -1012,8 +1040,9 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                 if (!showHunkHeaders && row.tone === 'hunk') return null
                 const isCursor = focusSide === 'right' && idx === diffCursorRow
                 const rowFg = diffRowColor(row, theme)
-                const hasDraft = draftNote?.rowKey === row.key
-                const hasNote = diffNotes.has(row.key)
+                const anchor = stackRowAnchor(row, selectedFilePath)
+                const hasDraft = anchor !== null && draftNote?.rowKey === anchor
+                const hasNote = anchor !== null && diffNotes.has(anchor)
                 return (
                   <React.Fragment key={row.key}>
                     <box
@@ -1052,7 +1081,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                       {hasNote && !hasDraft ? <text fg={theme.violet} wrapMode="none"> ●</text> : null}
                     </box>
                     {hasDraft ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
-                    {hasNote && !hasDraft ? renderNoteCard(row.key, diffNotes, rightW, selectedFilePath, theme) : null}
+                    {hasNote && !hasDraft ? renderNoteCard(anchor ?? '', diffNotes, rightW, selectedFilePath, theme) : null}
                   </React.Fragment>
                 )
               })}
@@ -1069,8 +1098,9 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
               {rightSplitRows.map((row, idx) => {
                 if (!showHunkHeaders && row.tone === 'hunk') return null
                 const isCursor = focusSide === 'right' && idx === diffCursorRow
-                const hasDraft = draftNote?.rowKey === row.key
-                const hasNote = diffNotes.has(row.key)
+                const anchor = splitRowAnchor(row, selectedFilePath)
+                const hasDraft = anchor !== null && draftNote?.rowKey === anchor
+                const hasNote = anchor !== null && diffNotes.has(anchor)
                 // Full-width header rows (file label, hunk header, tree summary)
                 if (row.tone !== 'split-change' && row.tone !== 'split-context') {
                   const fg = row.tone === 'file' || row.tone === 'hunk' ? theme.cyan : theme.dim
@@ -1083,7 +1113,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                         </text>
                       </box>
                       {hasDraft ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
-                      {hasNote && !hasDraft ? renderNoteCard(row.key, diffNotes, rightW, selectedFilePath, theme) : null}
+                      {hasNote && !hasDraft ? renderNoteCard(anchor ?? '', diffNotes, rightW, selectedFilePath, theme) : null}
                     </React.Fragment>
                   )
                 }
@@ -1096,7 +1126,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                       {renderSplitSide(row.right, splitRightHalfW, splitRightTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
                     </box>
                     {hasDraft ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
-                    {hasNote && !hasDraft ? renderNoteCard(row.key, diffNotes, rightW, selectedFilePath, theme) : null}
+                    {hasNote && !hasDraft ? renderNoteCard(anchor ?? '', diffNotes, rightW, selectedFilePath, theme) : null}
                   </React.Fragment>
                 )
               })}
