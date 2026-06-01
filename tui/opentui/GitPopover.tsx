@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
+import { prepareFileTreeInput } from '@pierre/trees'
 import { fetchGitData, fetchGitPaneContent, type GitData, type GitStatusEntry } from '../../lib/gitProvider'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import {
@@ -18,17 +19,30 @@ import {
 // Git data types
 // ---------------------------------------------------------------------------
 
+// chainPaths: all dir segments in a flattened chain, e.g. ['tui', 'tui/opentui'] for a
+// merged single-child dir. Used so expand/collapse toggles all segments together.
 type TreeNode =
-  | { kind: 'dir';  path: string; name: string; depth: number; expanded: boolean }
+  | { kind: 'dir'; path: string; name: string; depth: number; expanded: boolean; chainPaths: readonly string[] }
   | { kind: 'file'; path: string; name: string; depth: number; x: string; y: string }
 
 function buildVisibleNodes(entries: GitStatusEntry[], expandedDirs: Set<string>): TreeNode[] {
-  // Build a nested map: dirPath → { subdirs, files }
+  if (entries.length === 0) return []
+
+  // Use @pierre/trees for correct tree-aware sorting (dirs before files per level,
+  // consistent with the web GitPopover). Map from path → sort index.
+  const filePaths = entries.map((e) => e.path)
+  const prepared = prepareFileTreeInput(filePaths, { flattenEmptyDirectories: false, sort: 'default' })
+  const sortedFilePaths = [...prepared.paths]
+
+  // Build the nested dir/file structure in sorted order.
   interface DirData { subdirs: Map<string, DirData>; files: GitStatusEntry[] }
   const root: DirData = { subdirs: new Map(), files: [] }
+  const entryByPath = new Map(entries.map((e) => [e.path, e]))
 
-  for (const entry of entries) {
-    const parts = entry.path.split('/')
+  for (const fp of sortedFilePaths) {
+    const entry = entryByPath.get(fp)
+    if (!entry) continue
+    const parts = fp.split('/')
     let cur = root
     for (let i = 0; i < parts.length - 1; i++) {
       const seg = parts[i]!
@@ -40,14 +54,36 @@ function buildVisibleNodes(entries: GitStatusEntry[], expandedDirs: Set<string>)
 
   const nodes: TreeNode[] = []
 
-  function flatten(dir: DirData, prefix: string, depth: number) {
-    // Directories first (alphabetical), then root-level files
-    const sortedDirs = [...dir.subdirs.entries()].sort(([a], [b]) => a.localeCompare(b))
-    for (const [name, sub] of sortedDirs) {
+  // Walk a chain of single-subdir/no-file dirs, collecting paths for display flattening.
+  // e.g. tui/ → opentui/ (no files, one subdir) → returns chainPath='tui/opentui', chainDir=opentui's DirData
+  function walkChain(dir: DirData, dirPath: string): { chainPath: string; chainDir: DirData; chainPaths: string[] } {
+    const chainPaths = [dirPath]
+    let currentPath = dirPath
+    let currentDir = dir
+    while (currentDir.subdirs.size === 1 && currentDir.files.length === 0) {
+      const [childName, childDir] = [...currentDir.subdirs.entries()][0]!
+      currentPath = `${currentPath}/${childName}`
+      chainPaths.push(currentPath)
+      currentDir = childDir
+    }
+    return { chainPath: currentPath, chainDir: currentDir, chainPaths }
+  }
+
+  function visit(dir: DirData, prefix: string, depth: number) {
+    for (const [name, subdir] of dir.subdirs.entries()) {
       const dirPath = prefix ? `${prefix}/${name}` : name
-      const expanded = expandedDirs.has(dirPath)
-      nodes.push({ kind: 'dir', path: dirPath, name, depth, expanded })
-      if (expanded) flatten(sub, dirPath, depth + 1)
+      const { chainPath, chainDir, chainPaths } = walkChain(subdir, dirPath)
+      const expanded = expandedDirs.has(chainPath)
+      // Display name is the full flattened path segment, e.g. 'tui/opentui'
+      const displayName = chainPath.slice(prefix ? prefix.length + 1 : 0)
+      nodes.push({ kind: 'dir', path: chainPath, name: displayName, depth, expanded, chainPaths })
+      if (expanded) {
+        for (const fileEntry of chainDir.files) {
+          const fileName = fileEntry.path.split('/').at(-1) ?? fileEntry.path
+          nodes.push({ kind: 'file', path: fileEntry.path, name: fileName, depth: depth + 1, x: fileEntry.x, y: fileEntry.y })
+        }
+        visit(chainDir, chainPath, depth + 1)
+      }
     }
     for (const entry of dir.files) {
       const name = entry.path.split('/').at(-1) ?? entry.path
@@ -55,7 +91,7 @@ function buildVisibleNodes(entries: GitStatusEntry[], expandedDirs: Set<string>)
     }
   }
 
-  flatten(root, '', 0)
+  visit(root, '', 0)
   return nodes
 }
 
@@ -665,8 +701,11 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       if (node?.kind === 'dir') {
         setExpandedDirs((prev) => {
           const next = new Set(prev)
-          if (next.has(node.path)) next.delete(node.path)
-          else next.add(node.path)
+          if (next.has(node.path)) {
+            for (const p of node.chainPaths) next.delete(p)
+          } else {
+            for (const p of node.chainPaths) next.add(p)
+          }
           return next
         })
       }
@@ -678,7 +717,11 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       const node = visibleNodes[treeCursor]
       if (!node) return
       if (node.kind === 'dir' && expandedDirs.has(node.path)) {
-        setExpandedDirs((prev) => { const next = new Set(prev); next.delete(node.path); return next })
+        setExpandedDirs((prev) => {
+          const next = new Set(prev)
+          for (const p of node.chainPaths) next.delete(p)
+          return next
+        })
       } else if (node.depth > 0) {
         for (let i = treeCursor - 1; i >= 0; i--) {
           const candidate = visibleNodes[i]
@@ -696,7 +739,11 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       const node = visibleNodes[treeCursor]
       if (!node) return
       if (node.kind === 'dir' && !expandedDirs.has(node.path)) {
-        setExpandedDirs((prev) => { const next = new Set(prev); next.add(node.path); return next })
+        setExpandedDirs((prev) => {
+          const next = new Set(prev)
+          for (const p of node.chainPaths) next.add(p)
+          return next
+        })
       } else if (visibleNodes[treeCursor + 1]) {
         setTreeCursor(treeCursor + 1)
       }
