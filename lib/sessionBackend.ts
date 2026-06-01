@@ -2634,6 +2634,12 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     taskBudgetTokens: taskBudgetTotal,
   }
 
+  // Bridge is only needed for interactive approval modes; bypass and plan
+  // handle all tool decisions automatically via permissionMode.
+  const bridgeInstalled = manualPermissions
+    && permissionMode !== 'bypassPermissions'
+    && permissionMode !== 'plan'
+
   const stream = new ReadableStream({
     async start(controller) {
       const bridgedPermissionIds = new Set<string>()
@@ -2675,7 +2681,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           // on send and BYPASS appears broken. Mirror the CLI's
           // --dangerously-skip-permissions guard.
           ...(permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
-          ...(manualPermissions ? { canUseTool: createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds) } : {}),
+          ...(bridgeInstalled ? { canUseTool: createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds) } : {}),
           effort: effort === 'off' || effort === 'minimal' ? undefined : effort,
           thinking: effort === 'off'
             ? { type: 'disabled' }
@@ -2748,12 +2754,16 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         }
 
         // Adopt into the pool when we can: a clean result was seen, the
-        // session_id is known, and the client hasn't disconnected. Skipping
-        // adoption falls back to the legacy close-after-turn-1 behavior.
+        // session_id is known, and the client hasn't disconnected. Only adopt
+        // when no per-turn bridge was installed — the bridge is bound to this
+        // turn's stream controller and can't be handed to the pool.
+        // When a bridge IS installed, recycle any stale pool entry (e.g. one
+        // left over from a prior bypass/plan turn) so future bypass/plan sends
+        // don't reuse a Query that missed the messages from this turn.
         if (
           realizedSessionId
           && !abortController.signal.aborted
-          && !manualPermissions
+          && !bridgeInstalled
         ) {
           signal.removeEventListener('abort', propagateAbort)
           adoptClaudeSession({
@@ -2764,6 +2774,8 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
             options: { ...adoptOptions, sessionId: realizedSessionId },
           })
           adopted = true
+        } else if (bridgeInstalled) {
+          recycleClaudeSession(realizedSessionId ?? sessionId)
         }
       } catch (err) {
         if (!abortController.signal.aborted && !clientDetached) {

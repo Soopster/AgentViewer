@@ -789,6 +789,11 @@ function formatContextUsageChip(usage: Pick<ContextUsage, 'totalTokens' | 'maxTo
   return `${total}/${fmtTokens(usage.maxTokens)} ${percentage}%`
 }
 
+function formatLiveOutputTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
 function formatTuiComposerIdleHint(baseHint: string, historyCount: number): string {
   const cleaned = baseHint
     .replace(/\s*·\s*(?:↑↓|⌃P\/⌃N|\^P\/\^N|\^R|⌃R)\s+(?:search\s+)?history(?:\s*\(\d+\))?/g, '')
@@ -2376,6 +2381,18 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
   value: provider,
 }))
 
+// Permission mode status row — matches Claude Code's shift+tab indicator style.
+const PERMISSION_MODE_GLYPH: Partial<Record<string, string>> = {
+  plan: '“',           // " left double quotation mark (read-only/pause)
+  acceptEdits: '▶▶',    // ▶▶ (auto-accept edits)
+  bypassPermissions: '▶▶', // ▶▶ (bypass all)
+}
+const PERMISSION_MODE_LABEL: Partial<Record<string, string>> = {
+  plan: 'plan mode',
+  acceptEdits: 'accept edits',
+  bypassPermissions: 'bypass permissions',
+}
+
 const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   light: 'Crisp white background',
   paper: 'Warm off-white',
@@ -3037,6 +3054,7 @@ export default function OpenTuiApp() {
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const analyticsKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
+  const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
   const taskPopoverKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useState(false)
@@ -3126,6 +3144,7 @@ export default function OpenTuiApp() {
   const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
   const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | 'retrying' | null>(null)
   const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
+  const [liveOutputTokens, setLiveOutputTokens] = useState(0)
   const [liveToolActivities, setLiveToolActivities] = useState<TuiLiveToolActivity[]>([])
   const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
   // Provider-agnostic send knobs. Forwarded into the streamTuiSessionTurn
@@ -3671,7 +3690,14 @@ export default function OpenTuiApp() {
     }
     return parts.length > 0 ? `· ${parts.join(' · ')}` : ''
   }, [composerContextUsage, composerCurrentModel, composerTargetSession?.provider, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent, tuiPermissionMode])
-  const composerWaitingSuffix = composerKnobsChip ? composerKnobsChip.replace(/^·\s*/, '') : null
+  const composerWaitingSuffix = useMemo(() => {
+    const parts: string[] = []
+    if (composerKnobsChip) parts.push(composerKnobsChip.replace(/^·\s*/, ''))
+    if (composerSendState === 'sending' && liveOutputTokens > 0) {
+      parts.push(`↓ ${formatLiveOutputTokens(liveOutputTokens)} tokens`)
+    }
+    return parts.length > 0 ? parts.join(' · ') : null
+  }, [composerKnobsChip, composerSendState, liveOutputTokens])
   const composerWaitingStatusSeed = composerWaitingSeed
     || `${composerTargetSession?.provider ?? 'unknown'}:${composerTargetSession?.sessionId ?? 'pending'}:${composerDraft}`
   const composerFirstLine = composerDraft.split('\n')[0] ?? ''
@@ -4097,6 +4123,7 @@ export default function OpenTuiApp() {
     if (hasSubagentTail) rows += 2
     if (liveToolActivities.length > 0 && activeRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
+    if (composerTargetSession?.provider === 'claude' && tuiPermissionMode !== 'default') rows += 2
     if (hasComposerStatusMessage) {
       const streamingMarkdown = composerSendState === 'sending' && composerLiveText && syntaxStyle && !composerError
       rows += streamingMarkdown ? 6 : 2
@@ -5382,6 +5409,7 @@ export default function OpenTuiApp() {
     setLivePromptSuggestion(null)
     setLiveStatus(null)
     setLiveSubagentText({})
+    setLiveOutputTokens(0)
     setLiveToolActivities([])
     setPendingPermissions([])
     setPermissionOptionIndex(0)
@@ -5437,7 +5465,10 @@ export default function OpenTuiApp() {
             : undefined,
           // Claude/Copilot only emit interactive tool-approval prompts when the
           // client opts in. OpenCode/Codex surface them automatically.
-          manualPermissions: targetSession.provider === 'claude' || targetSession.provider === 'copilot' ? true : undefined,
+          // bypass/plan handle all tool decisions via permissionMode — no bridge.
+          manualPermissions: targetSession.provider === 'copilot'
+            || (targetSession.provider === 'claude' && tuiPermissionMode !== 'bypassPermissions' && tuiPermissionMode !== 'plan')
+            ? true : undefined,
         },
         controller.signal,
       )
@@ -5571,6 +5602,16 @@ export default function OpenTuiApp() {
             const { [parentId]: _, ...rest } = prev
             return rest
           })
+        }
+
+        // Accumulate output tokens from message_delta events (top-level only, not subagents).
+        if (parsedRecord.type === 'stream_event' && !parsedRecord.parent_tool_use_id) {
+          const sseEvent = parsedRecord.event as Record<string, unknown> | undefined
+          if (sseEvent?.type === 'message_delta') {
+            const usage = sseEvent.usage as Record<string, unknown> | undefined
+            const toks = typeof usage?.output_tokens === 'number' ? usage.output_tokens : 0
+            if (toks > 0) setLiveOutputTokens((prev) => prev + toks)
+          }
         }
 
         const claudeToolUse = extractClaudeStreamToolUse(parsed)
@@ -5850,6 +5891,7 @@ export default function OpenTuiApp() {
       setComposerLiveText('')
       setLiveStatus(null)
       setLiveSubagentText({})
+      setLiveOutputTokens(0)
       setLiveToolActivities([])
       setComposerSendStartedAt(null)
       clearSessionRunning(runningRef)
@@ -6986,6 +7028,7 @@ export default function OpenTuiApp() {
         break
       case 'tasks':
         setTaskPanelOpen(true)
+        setTaskPanelTab('tasks')
         break
       case 'tasks-full':
         setTaskPopoverOpen(true)
@@ -7327,6 +7370,22 @@ export default function OpenTuiApp() {
       }
     }
 
+    // Shift+Tab cycles Claude permission modes from any focus state.
+    if (key.name === 'tab' && key.shift) {
+      const target = composerTargetSession ?? selectedSession
+      if (target?.provider === 'claude') {
+        const order = ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const
+        handled(() => {
+          setTuiPermissionMode((current) => {
+            const next = order[(order.indexOf(current) + 1) % order.length]!
+            pushClaudeControl(target, { action: 'setPermissionMode', permissionMode: next })
+            return next
+          })
+        })
+        return
+      }
+    }
+
     if (composerActive) {
       if (isCtrl('v')) {
         handled(() => { void pasteSystemClipboardToComposer() })
@@ -7550,9 +7609,18 @@ export default function OpenTuiApp() {
       return
     }
 
-    // Global task panel toggle
+    // Global task panel toggle — cycles: closed → tasks → agents → closed
     if (isShifted('T')) {
-      handled(() => setTaskPanelOpen((v) => !v))
+      handled(() => {
+        if (!taskPanelOpen) {
+          setTaskPanelOpen(true)
+          setTaskPanelTab('tasks')
+        } else if (taskPanelTab === 'tasks') {
+          setTaskPanelTab('agents')
+        } else {
+          setTaskPanelOpen(false)
+        }
+      })
       return
     }
 
@@ -8106,7 +8174,13 @@ export default function OpenTuiApp() {
   const composerDockFooterHint = composerSendState === 'sending'
     ? composerConfig.footerHintSending
     : `${composerIdleFooterHint} · ⌃O expand`
-  const composerDockFooterHintWidth = Math.min(62, Math.max(18, Math.floor(composerDockTextareaWidth * 0.42)))
+  // Size the hint box to exactly fit its text, capped by available width minus
+  // 24 chars reserved for the stats side. Avoids the old proportional cap (62
+  // chars) that truncated the full idle hint (~72 chars on most terminals).
+  const composerDockFooterHintWidth = Math.max(
+    18,
+    Math.min(composerDockFooterHint.length + 1, composerDockTextareaWidth - 24),
+  )
   const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
   const composerWindowFooterHint = composerSendState === 'sending'
     ? `${composerConfig.footerHintSending} · ⌃O dock`
@@ -8562,6 +8636,8 @@ export default function OpenTuiApp() {
                 const idx = transcriptCards.findIndex((c) => c.key === uuid)
                 if (idx >= 0) jumpToTranscriptIndex(idx)
               }}
+              tab={taskPanelTab}
+              liveSubagentText={liveSubagentText}
             />
           </box>
         ) : null}
@@ -9053,6 +9129,20 @@ export default function OpenTuiApp() {
         <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
           <text fg={theme.cyan} wrapMode="none">
             {fitText(`Tab → ${livePromptSuggestion}`, Math.max(width - 4, 20))}
+          </text>
+        </box>
+      ) : null}
+
+      {composerTargetSession?.provider === 'claude' && tuiPermissionMode !== 'default' ? (
+        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+          <text
+            fg={tuiPermissionMode === 'bypassPermissions' ? theme.red : tuiPermissionMode === 'plan' ? theme.dim : theme.amber}
+            wrapMode="none"
+          >
+            {fitText(
+              `${PERMISSION_MODE_GLYPH[tuiPermissionMode] ?? ''} ${PERMISSION_MODE_LABEL[tuiPermissionMode] ?? tuiPermissionMode} on  (shift+tab to cycle)`,
+              Math.max(width - 4, 20),
+            )}
           </text>
         </box>
       ) : null}

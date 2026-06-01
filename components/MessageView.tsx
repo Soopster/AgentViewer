@@ -3171,7 +3171,9 @@ export default function MessageView({
           provider: session.provider,
           agent: session.provider === 'opencode' && selectedAgent ? selectedAgent : undefined,
           mode: session.provider === 'copilot' ? selectedCopilotMode : undefined,
-          manualPermissions: session.provider === 'copilot' || session.provider === 'claude' ? true : undefined,
+          manualPermissions: session.provider === 'copilot'
+            || (session.provider === 'claude' && selectedPermissionMode !== 'bypassPermissions' && selectedPermissionMode !== 'plan')
+            ? true : undefined,
           nativeCommands: session.provider === 'copilot' ? true : undefined,
           detachOnClientAbort: true,
           turnRequestId,
