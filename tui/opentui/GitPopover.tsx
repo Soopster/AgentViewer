@@ -376,7 +376,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   }, [branchIndex, data?.branches.length])
 
   useEffect(() => {
-    const popH = Math.min(height - 4, 60)
+    const popH = height - 4
     const treeH = Math.max(5, Math.min(14, visibleNodes.length + 3))
     const branchesH = Math.max(4, Math.min(8, (data?.branches.length ?? 0) + 3))
     const commitsH = Math.max(popH - 2 - 4 - treeH - branchesH, 4)
@@ -614,8 +614,8 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   }, [focusSide, leftPaneMode])
 
   // Dimensions
-  const popW = Math.min(width - 4, 160)
-  const popH = Math.min(height - 4, 60)
+  const popW = width - 4
+  const popH = height - 4
   const defaultLeftW = Math.min(LEFT_PANE_DEFAULT_MAX_WIDTH, Math.floor(popW * 0.28))
   const minLeftW = Math.min(LEFT_PANE_MIN_WIDTH, Math.max(defaultLeftW, popW - LEFT_PANE_RIGHT_MIN_WIDTH - 4))
   const maxLeftW = Math.max(defaultLeftW, Math.min(Math.floor(popW * LEFT_PANE_EXPANDED_RATIO), popW - LEFT_PANE_RIGHT_MIN_WIDTH - 4))
