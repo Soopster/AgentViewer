@@ -960,7 +960,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           </box>
 
           <box flexDirection="row">
-            <box flexGrow={1} flexDirection="column">
+            <box flexGrow={1} flexDirection="column" backgroundColor={pane === 2 ? theme.surface2 : theme.surface}>
               {visibleNodes.slice(fileScrollTop, fileScrollTop + (treeH - 2)).map((node, i) => {
                 const absoluteIdx = fileScrollTop + i
                 const isCursor = absoluteIdx === treeCursor && pane === 2
@@ -978,6 +978,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                 return (
                   <box
                     key={node.path}
+                    width={Math.max(0, leftW - 3)}
                     paddingX={1}
                     backgroundColor={isCursor ? theme.surface3 : 'transparent'}
                   >
@@ -986,7 +987,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                 )
               })}
               {(!data || data.status.length === 0) ? (
-                <box paddingX={1}><text fg={theme.dim}>clean</text></box>
+                <box width={Math.max(0, leftW - 3)} paddingX={1}><text fg={theme.dim}>clean</text></box>
               ) : null}
             </box>
             <PanelScrollbar total={visibleNodes.length} viewportH={treeH - 2} scrollTop={fileScrollTop} theme={theme} />

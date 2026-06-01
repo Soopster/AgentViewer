@@ -1,14 +1,15 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
-import { Clock3, Columns2, GitBranch, Hash, Info, ListTree, Maximize2, PanelLeftClose, PanelLeftOpen, RefreshCw, Rows3, WrapText, X } from 'lucide-react'
+import { ChevronDown, Clock3, Columns2, GitBranch, Hash, Info, ListTree, Maximize2, Minus, PanelLeftClose, PanelLeftOpen, PencilLine, RefreshCw, Rows3, SlidersHorizontal, X } from 'lucide-react'
 import type { SelectedLineRange } from '@pierre/diffs'
 import { FileTree, useFileTree } from '@pierre/trees/react'
-import { prepareFileTreeInput } from '@pierre/trees'
+import { prepareFileTreeInput, themeToTreeStyles } from '@pierre/trees'
 import type { GitData, GitStatusEntry } from '@/lib/gitProvider'
 import type { GitStatusEntry as TreeGitStatusEntry } from '@pierre/trees'
-import { PierrePatchDiffView, type PierreChangeStyle, type PierreDiffPresentation, type PierreDiffStyle, type PierreInlineDiffStyle } from './PierreDiffView'
+import { getCurrentTheme, subscribeTheme, THEME_META, type Theme } from '@/lib/themes'
+import { PierrePatchDiffView, type PierreAnnotationMetadata, type PierreChangeStyle, type PierreDiffAnnotation, type PierreDiffPresentation, type PierreDiffStyle, type PierreInlineDiffStyle } from './PierreDiffView'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -16,8 +17,33 @@ type TreeNode =
   | { kind: 'dir'; path: string; name: string; depth: number; expanded: boolean }
   | { kind: 'file'; path: string; name: string; depth: number; x: string; y: string }
 
+type DiffNote = {
+  filePath: string
+  range: SelectedLineRange
+  text: string
+  replies: DiffReply[]
+  resolved: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+type DiffReply = {
+  id: string
+  text: string
+  createdAt: number
+}
+
+type DraftDiffNote = {
+  key: string
+  filePath: string
+  range: SelectedLineRange
+  text: string
+  replyToKey?: string | null
+}
+
 type PaneId = 1 | 2 | 3 | 4
 type LeftPaneMode = 'normal' | 'expanded' | 'hidden'
+type PierreAnnotationKind = 'thread' | 'draft'
 
 const LEFT_PANE_MIN_WIDTH = 280
 const LEFT_PANE_DEFAULT_WIDTH = 440
@@ -141,6 +167,8 @@ function GitFileTreePane({
   selectedFilePath: string | null
   onSelectFile: (path: string) => void
 }) {
+  const themeName = useSyncExternalStore<Theme>(subscribeTheme, getCurrentTheme, () => 'dark')
+  const isDarkTheme = THEME_META[themeName].category === 'dark'
   const filePaths = useMemo(() => data.status.map((entry) => entry.path), [data.status])
   const preparedInput = useMemo(
     () => prepareFileTreeInput(filePaths, { flattenEmptyDirectories: true, sort: 'default' }),
@@ -148,6 +176,29 @@ function GitFileTreePane({
   )
   const expandedPaths = useMemo(() => allDirPaths(data.status), [data.status])
   const statusByPath = useMemo(() => data.status.map(toTreeGitStatus), [data.status])
+  const treeThemeStyles = useMemo(() => themeToTreeStyles({
+    type: isDarkTheme ? 'dark' : 'light',
+    bg: 'var(--surface)',
+    fg: 'var(--text-2)',
+    colors: {
+      'sideBar.background': 'var(--surface)',
+      'sideBar.foreground': 'var(--text-2)',
+      'sideBarSectionHeader.foreground': 'var(--text-3)',
+      'list.activeSelectionForeground': 'var(--text)',
+      'list.activeSelectionBackground': 'color-mix(in srgb, var(--cyan) 12%, var(--surface))',
+      'list.hoverBackground': 'color-mix(in srgb, var(--cyan) 8%, var(--surface))',
+      'focusBorder': 'var(--cyan)',
+      'scrollbarSlider.background': 'color-mix(in srgb, var(--text) 18%, var(--surface))',
+      'gitDecoration.addedResourceForeground': 'var(--green)',
+      'gitDecoration.modifiedResourceForeground': 'var(--amber)',
+      'gitDecoration.deletedResourceForeground': 'var(--red)',
+      'editor.foreground': 'var(--text-2)',
+      'editor.background': 'var(--surface)',
+      'editor.selectionBackground': 'color-mix(in srgb, var(--cyan) 12%, var(--surface))',
+      'input.background': 'var(--surface-2)',
+      'input.border': 'var(--border)',
+    },
+  }), [isDarkTheme])
 
   const { model } = useFileTree({
     preparedInput,
@@ -175,7 +226,12 @@ function GitFileTreePane({
     <div style={{ flex: 1, minHeight: 0, background: 'var(--surface)', overflow: 'hidden' }}>
       <FileTree
         model={model}
-        style={{ height: '100%', minHeight: 0 }}
+        style={{
+          width: '100%',
+          height: '100%',
+          minHeight: 0,
+          ...treeThemeStyles,
+        }}
       />
     </div>
   )
@@ -207,6 +263,237 @@ function toTreeGitStatus(entry: GitStatusEntry): TreeGitStatusEntry {
 function formatSelectedRange(selection: SelectedLineRange): string {
   if (selection.start === selection.end) return `Line ${selection.start}`
   return `Lines ${selection.start}-${selection.end}`
+}
+
+function formatSelectedRangeForNote(selection: SelectedLineRange): string {
+  const base = formatSelectedRange(selection)
+  const sides = [selection.side, selection.endSide].filter((side): side is NonNullable<SelectedLineRange['side']> => side != null)
+  if (sides.length === 0) return base
+  if (sides.length === 1) return `${base} (${sides[0]})`
+  return `${base} (${sides[0]} → ${sides[1]})`
+}
+
+function buildDiffNoteKey(filePath: string, range: SelectedLineRange): string {
+  return [filePath, range.start, range.side ?? '', range.end, range.endSide ?? ''].join('\u0000')
+}
+
+function buildReplyId(key: string): string {
+  return `${key}\u0000${Date.now().toString(36)}\u0000${Math.random().toString(36).slice(2, 8)}`
+}
+
+function compareSelectedRanges(left: SelectedLineRange, right: SelectedLineRange): number {
+  return left.start - right.start
+    || left.end - right.end
+    || (left.side ?? '').localeCompare(right.side ?? '')
+    || (left.endSide ?? '').localeCompare(right.endSide ?? '')
+}
+
+function buildAnnotationSide(selection: SelectedLineRange): PierreDiffAnnotation<PierreAnnotationMetadata>['side'] {
+  const side = selection.side ?? selection.endSide ?? 'additions'
+  return side === 'deletions' ? 'deletions' : 'additions'
+}
+
+function buildDiffAnnotations(notes: DiffNote[], draftNote: DraftDiffNote | null): PierreDiffAnnotation<PierreAnnotationMetadata>[] {
+  const annotations = notes.map((note) => {
+    const metadata: PierreAnnotationMetadata = {
+      filePath: note.filePath,
+      noteId: buildDiffNoteKey(note.filePath, note.range),
+      text: note.text,
+      rangeLabel: formatSelectedRangeForNote(note.range),
+      kind: 'thread',
+    }
+    return {
+      side: buildAnnotationSide(note.range),
+      lineNumber: note.range.start,
+      metadata,
+    }
+  })
+  if (draftNote && !draftNote.replyToKey) {
+    annotations.push({
+      side: buildAnnotationSide(draftNote.range),
+      lineNumber: draftNote.range.start,
+      metadata: {
+        filePath: draftNote.filePath,
+        noteId: draftNote.key,
+        text: draftNote.text,
+        rangeLabel: formatSelectedRangeForNote(draftNote.range),
+        kind: 'draft',
+      },
+    })
+  }
+  return annotations
+}
+
+function ToolbarSegmentButton({
+  active,
+  children,
+  title,
+  onClick,
+}: {
+  active: boolean
+  children: ReactNode
+  title: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-pressed={active}
+      onClick={onClick}
+      style={{
+        height: 30,
+        minWidth: 68,
+        padding: '0 10px',
+        border: 'none',
+        borderRight: '1px solid color-mix(in srgb, var(--border) 72%, transparent)',
+        background: active ? 'color-mix(in srgb, var(--surface) 86%, var(--text) 14%)' : 'transparent',
+        color: active ? 'var(--text)' : 'var(--text-2)',
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 5,
+        font: 'inherit',
+        fontSize: 11,
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+function ToolbarSelect({
+  value,
+  options,
+  onChange,
+}: {
+  value: string
+  options: readonly { value: string, label: string }[]
+  onChange: (value: string) => void
+}) {
+  return (
+    <div
+      style={{
+        position: 'relative',
+        height: 30,
+        border: '1px solid var(--border)',
+        borderRadius: 999,
+        background: 'var(--surface)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        flexShrink: 0,
+      }}
+    >
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        style={{
+          appearance: 'none',
+          height: '100%',
+          border: 'none',
+          background: 'transparent',
+          color: 'var(--text)',
+          padding: '0 28px 0 10px',
+          borderRadius: 999,
+          font: 'inherit',
+          fontSize: 11,
+          fontWeight: 700,
+          cursor: 'pointer',
+          outline: 'none',
+        }}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        size={14}
+        style={{
+          position: 'absolute',
+          right: 9,
+          pointerEvents: 'none',
+          color: 'var(--text-2)',
+        }}
+      />
+    </div>
+  )
+}
+
+function CompactToggle({
+  label,
+  active,
+  title,
+  onClick,
+}: {
+  label: string
+  active: boolean
+  title: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-pressed={active}
+      onClick={onClick}
+      style={{
+        minHeight: 28,
+        padding: '0 9px',
+        borderRadius: 999,
+        border: '1px solid var(--border)',
+        background: active ? 'color-mix(in srgb, var(--surface) 88%, var(--text) 12%)' : 'var(--surface)',
+        color: active ? 'var(--text)' : 'var(--text-2)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        cursor: 'pointer',
+        font: 'inherit',
+        fontSize: 11,
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span>{label}</span>
+      <span
+        style={{
+          width: 32,
+          height: 18,
+          borderRadius: 999,
+          background: active ? 'var(--surface)' : 'var(--surface-2)',
+          border: '1px solid var(--border)',
+          position: 'relative',
+          flexShrink: 0,
+        }}
+      >
+        <span
+          style={{
+            position: 'absolute',
+            top: 1,
+            left: active ? 15 : 1,
+            width: 14,
+            height: 14,
+            borderRadius: 999,
+            background: active ? 'var(--text)' : 'var(--text-3)',
+            transition: 'left 0.12s ease',
+          }}
+        />
+      </span>
+    </button>
+  )
+}
+
+function statusLabel(x: string, y: string): string {
+  if (x === '?' && y === '?') return 'Untracked'
+  if (x.trim() && y.trim()) return 'Staged + modified'
+  if (x.trim()) return 'Staged'
+  if (y === 'M') return 'Modified'
+  if (y === 'D') return 'Deleted'
+  return 'Changed'
 }
 
 const PANE_LABELS: Record<PaneId, string> = {
@@ -243,11 +530,16 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
   const [leftPaneWidth, setLeftPaneWidth] = useState(LEFT_PANE_DEFAULT_WIDTH)
   const [diffStyle, setDiffStyle] = useState<PierreDiffStyle>('stacked')
   const [changeStyle, setChangeStyle] = useState<PierreChangeStyle>('classic')
+  const [showBackgrounds, setShowBackgrounds] = useState(true)
   const [inlineDiffStyle, setInlineDiffStyle] = useState<PierreInlineDiffStyle>('word-alt')
   const [wrapDiff, setWrapDiff] = useState(true)
   const [showLineNumbers, setShowLineNumbers] = useState(true)
+  const [showHunkHeaders, setShowHunkHeaders] = useState(true)
+  const [viewOptionsOpen, setViewOptionsOpen] = useState(false)
   const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(null)
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
+  const [diffNotes, setDiffNotes] = useState<Map<string, DiffNote>>(new Map())
+  const [draftNote, setDraftNote] = useState<DraftDiffNote | null>(null)
   const [contentLoading, setContentLoading] = useState(false)
   const [hoveredRow, setHoveredRow] = useState<string | null>(null)
 
@@ -255,6 +547,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
   const rightContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const shellRef = useRef<HTMLDivElement>(null)
   const rightPanelRef = useRef<HTMLDivElement>(null)
+  const viewOptionsRef = useRef<HTMLDivElement>(null)
   const branchListRef = useRef<HTMLDivElement>(null)
   const commitListRef = useRef<HTMLDivElement>(null)
   const diffAvailable = pane === 2 && rightContent.trim().length > 0
@@ -266,8 +559,9 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
     inlineDiffStyle,
     wrap: wrapDiff,
     showLineNumbers,
-  }), [changeStyle, diffStyle, inlineDiffStyle, showLineNumbers, wrapDiff])
-
+    showHunkHeaders,
+    showBackgrounds,
+  }), [changeStyle, diffStyle, inlineDiffStyle, showBackgrounds, showHunkHeaders, showLineNumbers, wrapDiff])
   // Fetch git data when popover opens
   useEffect(() => {
     if (!open) return
@@ -290,12 +584,28 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
   }, [data])
 
   useEffect(() => {
+    setDraftNote(null)
+  }, [pane, selectedFilePath])
+
+  useEffect(() => {
     branchListRef.current?.querySelector('[data-cursor]')?.scrollIntoView({ block: 'nearest' })
   }, [branchIndex])
 
   useEffect(() => {
     commitListRef.current?.querySelector('[data-cursor]')?.scrollIntoView({ block: 'nearest' })
   }, [commitIndex])
+
+  useEffect(() => {
+    if (!viewOptionsOpen) return
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (viewOptionsRef.current?.contains(target)) return
+      setViewOptionsOpen(false)
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => window.removeEventListener('pointerdown', handlePointerDown)
+  }, [viewOptionsOpen])
 
   // Right panel content loader (debounced like TUI)
   useEffect(() => {
@@ -410,25 +720,354 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
     if (leftPaneHidden && focusSide === 'left') setFocusSide('right')
   }, [focusSide, leftPaneHidden])
 
-  if (!open) return null
-
   const diffLines = rightContent.split('\n')
   const changedFileCount = data?.status.length ?? 0
   const selectedEntry = data?.status.find((entry) => entry.path === selectedFilePath)
+  const currentSelectionNote = useMemo(() => {
+    if (!selectedFilePath || !selectedLines) return null
+    return diffNotes.get(buildDiffNoteKey(selectedFilePath, selectedLines)) ?? null
+  }, [diffNotes, selectedFilePath, selectedLines])
+  const currentFileThreads = useMemo(
+    () => [...diffNotes.values()]
+      .filter((note) => note.filePath === selectedFilePath)
+      .sort((left, right) => compareSelectedRanges(left.range, right.range)),
+    [diffNotes, selectedFilePath],
+  )
+  const diffAnnotations = useMemo(() => buildDiffAnnotations([...diffNotes.values()], draftNote), [diffNotes, draftNote])
+  const renderDiffAnnotation = useCallback((annotation: PierreDiffAnnotation<PierreAnnotationMetadata>) => {
+    const metadata = annotation.metadata
+    if (!metadata) return null
+
+    const threadKey = metadata.noteId.endsWith('\u0000reply')
+      ? metadata.noteId.slice(0, metadata.noteId.length - '\u0000reply'.length)
+      : metadata.noteId
+    const thread = diffNotes.get(threadKey)
+    const isDraft = metadata.kind === 'draft'
+    const formatAge = (time: number): string => {
+      const seconds = Math.max(0, Math.round((Date.now() - time) / 1000))
+      if (seconds < 60) return `${seconds}s`
+      const minutes = Math.round(seconds / 60)
+      if (minutes < 60) return `${minutes}m`
+      const hours = Math.round(minutes / 60)
+      if (hours < 48) return `${hours}h`
+      const days = Math.round(hours / 24)
+      return `${days}d`
+    }
+
+    if (isDraft) {
+      return (
+        <div style={{
+          display: 'grid',
+          gap: 8,
+          padding: '10px 12px',
+          borderRadius: 12,
+          border: '1px solid color-mix(in srgb, var(--cyan) 30%, var(--border))',
+          background: 'color-mix(in srgb, var(--cyan) 8%, var(--surface-2))',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, minWidth: 0 }}>
+            <div style={{
+              color: 'var(--cyan)',
+              fontSize: 12,
+              fontWeight: 700,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              Draft comment
+            </div>
+            <div style={{
+              color: 'var(--text-3)',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              whiteSpace: 'nowrap',
+            }}>
+              {metadata.rangeLabel}
+            </div>
+          </div>
+          <textarea
+            value={draftNote?.text ?? metadata.text}
+            onChange={(event) => {
+              if (!draftNote) return
+              setDraftNote((current) => current ? { ...current, text: event.target.value } : current)
+            }}
+            placeholder="Write a comment..."
+            rows={4}
+            style={{
+              width: '100%',
+              minHeight: 84,
+              resize: 'vertical',
+              borderRadius: 8,
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              color: 'var(--text)',
+              padding: '9px 10px',
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 12,
+              lineHeight: '18px',
+              outline: 'none',
+            }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setDraftNote(null)}
+              style={{
+                height: 28,
+                padding: '0 10px',
+                borderRadius: 999,
+                border: '1px solid var(--border)',
+                background: 'var(--surface-3)',
+                color: 'var(--text-2)',
+                cursor: 'pointer',
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={saveDraftNote}
+              style={{
+                height: 28,
+                padding: '0 10px',
+                borderRadius: 999,
+                border: '1px solid color-mix(in srgb, var(--green) 34%, var(--border))',
+                background: 'color-mix(in srgb, var(--green) 12%, var(--surface-3))',
+                color: 'var(--green)',
+                cursor: 'pointer',
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            >
+              Save comment
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    if (!thread) return null
+
+    return (
+      <div style={{
+        display: 'grid',
+        gap: 10,
+        padding: '10px 12px',
+        borderRadius: 12,
+        border: thread.resolved ? '1px solid color-mix(in srgb, var(--text-3) 24%, var(--border))' : '1px solid color-mix(in srgb, var(--violet) 24%, var(--border))',
+        background: thread.resolved ? 'color-mix(in srgb, var(--text-3) 6%, var(--surface-2))' : 'color-mix(in srgb, var(--violet) 8%, var(--surface-2))',
+        opacity: thread.resolved ? 0.72 : 1,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <div style={{
+              width: 28,
+              height: 28,
+              borderRadius: 999,
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              color: 'var(--violet)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              fontSize: 12,
+              fontWeight: 700,
+            }}>
+              You
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{
+                color: 'var(--text)',
+                fontSize: 13,
+                fontWeight: 700,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}>
+                You
+              </div>
+              <div style={{
+                color: 'var(--text-3)',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                whiteSpace: 'nowrap',
+              }}>
+                {metadata.rangeLabel}
+                {' · '}
+                {formatAge(thread.createdAt)}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => toggleResolved(threadKey)}
+            style={{
+              height: 28,
+              padding: '0 10px',
+              borderRadius: 999,
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              color: 'var(--text-2)',
+              cursor: 'pointer',
+              fontSize: 11,
+              fontWeight: 600,
+            }}
+          >
+            {thread.resolved ? 'Reopen' : 'Resolve'}
+          </button>
+        </div>
+        <div style={{
+          color: 'var(--text)',
+          fontSize: 12,
+          lineHeight: '18px',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}>
+          {thread.text}
+        </div>
+        {thread.replies.length > 0 ? (
+          <div style={{ display: 'grid', gap: 8, paddingLeft: 12, borderLeft: '1px solid color-mix(in srgb, var(--border) 70%, transparent)' }}>
+            {thread.replies.map((reply) => (
+              <div key={reply.id} style={{ display: 'grid', gap: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 999,
+                    background: 'var(--surface-3)',
+                    border: '1px solid var(--border)',
+                    color: 'var(--text-2)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    flexShrink: 0,
+                  }}>
+                    R
+                  </div>
+                  <div style={{ color: 'var(--text-3)', fontSize: 11 }}>Reply · {formatAge(reply.createdAt)}</div>
+                </div>
+                <div style={{ color: 'var(--text)', fontSize: 12, lineHeight: '18px', whiteSpace: 'pre-wrap' }}>
+                  {reply.text}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {draftNote?.replyToKey === threadKey ? (
+          <div style={{
+            display: 'grid',
+            gap: 8,
+            padding: '10px 12px',
+            borderRadius: 10,
+            border: '1px solid color-mix(in srgb, var(--cyan) 28%, var(--border))',
+            background: 'color-mix(in srgb, var(--cyan) 7%, var(--surface))',
+          }}>
+            <div style={{ color: 'var(--cyan)', fontSize: 12, fontWeight: 700 }}>
+              Add reply
+            </div>
+            <textarea
+              value={draftNote?.text ?? ''}
+              onChange={(event) => setDraftNote((current) => current ? { ...current, text: event.target.value } : current)}
+              placeholder="Write a reply..."
+              rows={3}
+              style={{
+                width: '100%',
+                minHeight: 72,
+                resize: 'vertical',
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'var(--surface)',
+                color: 'var(--text)',
+                padding: '9px 10px',
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 12,
+                lineHeight: '18px',
+                outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setDraftNote(null)}
+                style={{
+                  height: 28,
+                  padding: '0 10px',
+                  borderRadius: 999,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface-3)',
+                  color: 'var(--text-2)',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  fontWeight: 600,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveDraftNote}
+                style={{
+                  height: 28,
+                  padding: '0 10px',
+                  borderRadius: 999,
+                  border: '1px solid color-mix(in srgb, var(--green) 34%, var(--border))',
+                  background: 'color-mix(in srgb, var(--green) 12%, var(--surface-3))',
+                  color: 'var(--green)',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  fontWeight: 600,
+                }}
+              >
+                Save reply
+              </button>
+            </div>
+          </div>
+        ) : null}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => openReplyDraft(thread)}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--cyan)',
+              cursor: 'pointer',
+              padding: 0,
+              fontSize: 11,
+              fontWeight: 600,
+            }}
+          >
+            Add reply...
+          </button>
+          <button
+            type="button"
+            onClick={() => deleteNote(threadKey)}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--text-3)',
+              cursor: 'pointer',
+              padding: 0,
+              fontSize: 11,
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    )
+  }, [diffNotes, draftNote])
+  if (!open) return null
+
   const selectedTitle =
     pane === 1 ? 'Repository status'
       : pane === 2 ? (selectedFilePath ?? (changedFileCount === 0 ? 'Working tree clean' : 'Select a file'))
         : pane === 3 ? (data?.branches[branchIndex] ?? 'Branches')
           : (data?.commits[commitIndex] ?? 'Commits')
-
-  function statusLabel(x: string, y: string): string {
-    if (x === '?' && y === '?') return 'Untracked'
-    if (x.trim() && y.trim()) return 'Staged + modified'
-    if (x.trim()) return 'Staged'
-    if (y === 'M') return 'Modified'
-    if (y === 'D') return 'Deleted'
-    return 'Changed'
-  }
 
   function rowBackground(id: string, selected: boolean): string {
     if (selected) return 'color-mix(in srgb, var(--cyan) 14%, var(--surface-3))'
@@ -448,6 +1087,101 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
   function setPresetLeftPaneWidth(mode: Exclude<LeftPaneMode, 'hidden'>) {
     setLeftPaneMode(mode)
     setLeftPaneWidth(clampLeftPaneWidth(mode === 'expanded' ? LEFT_PANE_EXPANDED_WIDTH : LEFT_PANE_DEFAULT_WIDTH))
+  }
+
+  function openDraftNote() {
+    if (!selectedFilePath || !selectedLines) return
+    const key = buildDiffNoteKey(selectedFilePath, selectedLines)
+    const existing = diffNotes.get(key)
+    setDraftNote({
+      key,
+      filePath: selectedFilePath,
+      range: selectedLines,
+      text: existing?.text ?? '',
+      replyToKey: null,
+    })
+  }
+
+  function openDraftNoteForRange(range: SelectedLineRange) {
+    if (!selectedFilePath) return
+    const key = buildDiffNoteKey(selectedFilePath, range)
+    const existing = diffNotes.get(key)
+    setSelectedLines(range)
+    setDraftNote({
+      key,
+      filePath: selectedFilePath,
+      range,
+      text: existing?.text ?? '',
+      replyToKey: null,
+    })
+    setViewOptionsOpen(false)
+  }
+
+  function saveDraftNote() {
+    if (!draftNote) return
+    const text = draftNote.text.trim()
+    setDiffNotes((prev) => {
+      const next = new Map(prev)
+      if (draftNote.replyToKey) {
+        if (!text) return next
+        const thread = next.get(draftNote.replyToKey)
+        if (!thread) return next
+        const now = Date.now()
+        next.set(draftNote.replyToKey, {
+          ...thread,
+          replies: [...thread.replies, {
+            id: buildReplyId(draftNote.replyToKey),
+            text,
+            createdAt: now,
+          }],
+          updatedAt: now,
+        })
+      } else if (text) {
+        const existing = next.get(draftNote.key)
+        next.set(draftNote.key, {
+          filePath: draftNote.filePath,
+          range: draftNote.range,
+          text,
+          replies: existing?.replies ?? [],
+          resolved: existing?.resolved ?? false,
+          createdAt: existing?.createdAt ?? Date.now(),
+          updatedAt: Date.now(),
+        })
+      } else {
+        next.delete(draftNote.key)
+      }
+      return next
+    })
+    setDraftNote(null)
+  }
+
+  function openReplyDraft(note: DiffNote) {
+    setDraftNote({
+      key: `${buildDiffNoteKey(note.filePath, note.range)}\u0000reply`,
+      filePath: note.filePath,
+      range: note.range,
+      text: '',
+      replyToKey: buildDiffNoteKey(note.filePath, note.range),
+    })
+  }
+
+  function toggleResolved(noteKey: string) {
+    setDiffNotes((prev) => {
+      const next = new Map(prev)
+      const note = next.get(noteKey)
+      if (!note) return next
+      next.set(noteKey, { ...note, resolved: !note.resolved, updatedAt: Date.now() })
+      return next
+    })
+  }
+
+  function deleteNote(key: string) {
+    setDiffNotes((prev) => {
+      const next = new Map(prev)
+      next.delete(key)
+      return next
+    })
+    setDraftNote((current) => (current?.key === key ? null : current))
   }
 
   function startLeftPaneResize(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -953,174 +1687,164 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                   {statusLabel(selectedEntry.x, selectedEntry.y)}
                 </span>
               ) : null}
-              {diffAvailable && selectedLines ? (
-                <div
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    padding: '3px 8px',
-                    borderRadius: 999,
-                    background: 'var(--surface-3)',
-                    border: '1px solid var(--border)',
-                    color: 'var(--text-2)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    flexShrink: 0,
-                  }}
-                >
-                  <span>{formatSelectedRange(selectedLines)}</span>
+              {diffAvailable ? (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                  gap: 8,
+                  flex: 1,
+                  minWidth: 0,
+                  position: 'relative',
+                }} ref={viewOptionsRef}>
+                  {selectedLines ? (
+                    <button
+                      type="button"
+                      onClick={openDraftNote}
+                      title={currentSelectionNote ? 'Edit comment for selected lines' : 'Add comment for selected lines'}
+                      style={{
+                        height: 30,
+                        padding: '0 10px',
+                        borderRadius: 999,
+                        border: `1px solid ${currentSelectionNote ? 'color-mix(in srgb, var(--violet) 36%, var(--border))' : 'var(--border)'}`,
+                        background: currentSelectionNote ? 'color-mix(in srgb, var(--violet) 10%, var(--surface-3))' : 'var(--surface-3)',
+                        color: currentSelectionNote ? 'var(--violet)' : 'var(--text-2)',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+                        fontSize: 11,
+                        fontWeight: 600,
+                        flexShrink: 0,
+                      }}
+                    >
+                      <PencilLine size={12} />
+                      {currentSelectionNote ? 'Edit comment' : 'Add comment'}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    title="Clear selection"
-                    onClick={() => setSelectedLines(null)}
+                    aria-expanded={viewOptionsOpen}
+                    aria-haspopup="dialog"
+                    onClick={() => setViewOptionsOpen((current) => !current)}
                     style={{
-                      border: 'none',
-                      background: 'transparent',
-                      color: 'var(--text-3)',
+                      height: 30,
+                      padding: '0 10px',
+                      borderRadius: 999,
+                      border: '1px solid var(--border)',
+                      background: viewOptionsOpen ? 'color-mix(in srgb, var(--surface) 88%, var(--text) 12%)' : 'var(--surface)',
+                      color: 'var(--text)',
                       cursor: 'pointer',
                       display: 'inline-flex',
                       alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                    }}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              ) : null}
-              {diffAvailable ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', flexShrink: 0 }}>
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      border: '1px solid var(--border)',
-                      borderRadius: 8,
-                      overflow: 'hidden',
-                      background: 'var(--surface-3)',
+                      gap: 6,
+                      fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+                      fontSize: 11,
+                      fontWeight: 700,
                       flexShrink: 0,
+                      whiteSpace: 'nowrap',
                     }}
-                    aria-label="Diff layout"
-                  >
-                    <button
-                      type="button"
-                      title="Stacked view"
-                      aria-pressed={diffStyle === 'stacked'}
-                      onClick={() => setDiffStyle('stacked')}
-                      style={{
-                        width: 32,
-                        height: 28,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        border: 'none',
-                        borderRight: '1px solid var(--border)',
-                        background: diffStyle === 'stacked' ? 'var(--surface-2)' : 'transparent',
-                        color: diffStyle === 'stacked' ? 'var(--text)' : 'var(--text-3)',
-                        cursor: 'pointer',
-                      }}
                     >
-                      <Rows3 size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      title="Split view"
-                      aria-pressed={diffStyle === 'split'}
-                      onClick={() => setDiffStyle('split')}
+                    <SlidersHorizontal size={12} />
+                    <span>View options</span>
+                  </button>
+                  {viewOptionsOpen ? (
+                    <div
+                      role="dialog"
+                      aria-label="View options"
                       style={{
-                        width: 32,
-                        height: 28,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        border: 'none',
-                        background: diffStyle === 'split' ? 'var(--surface-2)' : 'transparent',
-                        color: diffStyle === 'split' ? 'var(--text)' : 'var(--text-3)',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <Columns2 size={14} />
-                    </button>
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
-                    {(['classic', 'backgrounds', 'bars'] as const).map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() => setChangeStyle(value)}
-                        style={{
-                          border: '1px solid var(--border)',
-                          borderRadius: 999,
-                          padding: '4px 9px',
-                          fontSize: 10,
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          color: changeStyle === value ? 'var(--text)' : 'var(--text-3)',
-                          background: changeStyle === value ? 'var(--surface-2)' : 'var(--surface-3)',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {value}
-                      </button>
-                    ))}
-                    {(['word-alt', 'word', 'char', 'none'] as const).map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() => setInlineDiffStyle(value)}
-                        style={{
-                          border: '1px solid var(--border)',
-                          borderRadius: 999,
-                          padding: '4px 9px',
-                          fontSize: 10,
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          color: inlineDiffStyle === value ? 'var(--text)' : 'var(--text-3)',
-                          background: inlineDiffStyle === value ? 'var(--surface-2)' : 'var(--surface-3)',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {value}
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      title={wrapDiff ? 'Wrap lines' : 'Scroll lines'}
-                      onClick={() => setWrapDiff((v) => !v)}
-                      style={{
-                        width: 32,
-                        height: 28,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
+                        position: 'absolute',
+                        top: 36,
+                        right: 0,
+                        zIndex: 20,
+                        width: 294,
+                        padding: 10,
+                        borderRadius: 14,
                         border: '1px solid var(--border)',
-                        borderRadius: 999,
-                        background: wrapDiff ? 'var(--surface-2)' : 'var(--surface-3)',
-                        color: wrapDiff ? 'var(--text)' : 'var(--text-3)',
-                        cursor: 'pointer',
+                        background: 'var(--surface)',
+                        boxShadow: '0 16px 40px color-mix(in srgb, var(--text) 16%, transparent)',
+                        display: 'grid',
+                        gap: 10,
                       }}
                     >
-                      <WrapText size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      title={showLineNumbers ? 'Hide line numbers' : 'Show line numbers'}
-                      onClick={() => setShowLineNumbers((v) => !v)}
-                      style={{
-                        width: 32,
-                        height: 28,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        border: '1px solid var(--border)',
-                        borderRadius: 999,
-                        background: showLineNumbers ? 'var(--surface-2)' : 'var(--surface-3)',
-                        color: showLineNumbers ? 'var(--text)' : 'var(--text-3)',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <Hash size={14} />
-                    </button>
-                  </div>
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        <div style={{ color: 'var(--text-3)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.04 }}>
+                          Layout
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                          <ToolbarSegmentButton active={diffStyle === 'stacked'} title="Stacked view" onClick={() => setDiffStyle('stacked')}>
+                            <Rows3 size={14} />
+                            <span>Stacked</span>
+                          </ToolbarSegmentButton>
+                          <ToolbarSegmentButton active={diffStyle === 'split'} title="Split view" onClick={() => setDiffStyle('split')}>
+                            <Columns2 size={14} />
+                            <span>Split</span>
+                          </ToolbarSegmentButton>
+                        </div>
+                      </div>
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        <div style={{ color: 'var(--text-3)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.04 }}>
+                          Indicators
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                          <ToolbarSegmentButton active={changeStyle === 'bars'} title="Bars" onClick={() => setChangeStyle('bars')}>
+                            <Rows3 size={14} />
+                            <span>Bars</span>
+                          </ToolbarSegmentButton>
+                          <ToolbarSegmentButton active={changeStyle === 'classic'} title="Classic" onClick={() => setChangeStyle('classic')}>
+                            <Hash size={14} />
+                            <span>Classic</span>
+                          </ToolbarSegmentButton>
+                          <ToolbarSegmentButton active={changeStyle === 'none'} title="None" onClick={() => setChangeStyle('none')}>
+                            <Minus size={14} />
+                            <span>None</span>
+                          </ToolbarSegmentButton>
+                        </div>
+                        <ToolbarSelect
+                          value={inlineDiffStyle}
+                          options={[
+                            { value: 'word-alt', label: 'Word-Alt' },
+                            { value: 'word', label: 'Word' },
+                            { value: 'char', label: 'Char' },
+                            { value: 'none', label: 'None' },
+                          ]}
+                          onChange={(value) => setInlineDiffStyle(value as PierreInlineDiffStyle)}
+                        />
+                      </div>
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        <div style={{ color: 'var(--text-3)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.04 }}>
+                          Display
+                        </div>
+                        <div style={{ display: 'grid', gap: 6 }}>
+                          <CompactToggle
+                            label="Backgrounds"
+                            active={showBackgrounds}
+                            title={showBackgrounds ? 'Disable backgrounds' : 'Enable backgrounds'}
+                            onClick={() => setShowBackgrounds((value) => !value)}
+                          />
+                          <CompactToggle
+                            label="Wrapping"
+                            active={wrapDiff}
+                            title={wrapDiff ? 'Scroll lines' : 'Wrap lines'}
+                            onClick={() => setWrapDiff((value) => !value)}
+                          />
+                          <CompactToggle
+                            label="Line numbers"
+                            active={showLineNumbers}
+                            title={showLineNumbers ? 'Hide line numbers' : 'Show line numbers'}
+                            onClick={() => setShowLineNumbers((value) => !value)}
+                          />
+                          <CompactToggle
+                            label="Hunk headers"
+                            active={showHunkHeaders}
+                            title={showHunkHeaders ? 'Hide hunk headers' : 'Show hunk headers'}
+                            onClick={() => setShowHunkHeaders((value) => !value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -1136,13 +1860,28 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                   Loading…
                 </div>
               ) : diffAvailable ? (
-                <PierrePatchDiffView
-                  patch={rightContent}
-                  maxHeight={null}
-                  presentation={diffPresentation}
-                  selectedLines={selectedLines}
-                  onSelectedLinesChange={setSelectedLines}
-                />
+                <>
+                  {currentFileThreads.length > 0 ? (
+                    <div style={{
+                      padding: '8px 16px 12px',
+                      color: 'var(--text-3)',
+                      fontSize: 11,
+                      lineHeight: '16px',
+                    }}>
+                      {currentFileThreads.length} annotation thread{currentFileThreads.length === 1 ? '' : 's'}
+                    </div>
+                  ) : null}
+                  <PierrePatchDiffView
+                    patch={rightContent}
+                    maxHeight={null}
+                    presentation={diffPresentation}
+                    lineAnnotations={diffAnnotations}
+                    renderAnnotation={renderDiffAnnotation}
+                    onGutterUtilityClick={openDraftNoteForRange}
+                    selectedLines={selectedLines}
+                    onSelectedLinesChange={setSelectedLines}
+                  />
+                </>
               ) : (
                 diffLines.map((line, i) => (
                   <div
