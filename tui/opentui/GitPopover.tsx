@@ -4,7 +4,13 @@ import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 import { fetchGitData, fetchGitPaneContent, type GitData, type GitStatusEntry } from '../../lib/gitProvider'
 import { runGitCommand } from '../../lib/gitNodeProvider'
-import { buildPierreDiffView, type TuiPierreDiffRow } from './pierreDiffView'
+import {
+  buildPierreDiffView,
+  loadDiffHighlights,
+  type TuiFileHighlights,
+  type TuiPierreDiffRow,
+  type TuiRenderSpan,
+} from './pierreDiffView'
 
 // ---------------------------------------------------------------------------
 // Git data types
@@ -163,6 +169,24 @@ function fitTerminalText(text: string, width: number): string {
   return `${text.slice(0, width - 1)}…`
 }
 
+// Render syntax-highlighted spans clipped to maxWidth terminal columns.
+// Each span becomes an OpenTUI <span fg=...> element inside a parent <text>.
+function renderDiffSpans(spans: TuiRenderSpan[], defaultFg: string, maxWidth: number) {
+  const elements = []
+  let remaining = maxWidth
+  for (let i = 0; i < spans.length; i++) {
+    if (remaining <= 0) break
+    const span = spans[i]!
+    const text = span.text.length <= remaining ? span.text : `${span.text.slice(0, remaining - 1)}…`
+    remaining -= text.length
+    elements.push(<span key={i} fg={span.fg ?? defaultFg}>{text}</span>)
+  }
+  if (remaining > 0) {
+    elements.push(<span key="pad" fg={defaultFg}>{' '.repeat(remaining)}</span>)
+  }
+  return elements
+}
+
 // ---------------------------------------------------------------------------
 // GitPopover component
 // ---------------------------------------------------------------------------
@@ -194,7 +218,8 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const [contentLoading, setContentLoading] = useState(false)
   const [pane, setPane] = useState<PaneId>(2)
   const [focusSide, setFocusSide] = useState<FocusSide>('left')
-  const [fileDiffMode, setFileDiffMode] = useState<FileDiffMode>('text')
+  const [fileDiffMode, setFileDiffMode] = useState<FileDiffMode>('viewer')
+  const [diffHighlights, setDiffHighlights] = useState<Map<string, TuiFileHighlights> | null>(null)
   const [leftPaneMode, setLeftPaneMode] = useState<LeftPaneMode>('normal')
   const [leftPaneWidth, setLeftPaneWidth] = useState(LEFT_PANE_DEFAULT_MAX_WIDTH)
   const [treeCursor, setTreeCursor] = useState(0)
@@ -356,6 +381,32 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     }
   }, [branchIndex, commitIndex, data, pane, repoCwd, selectedFilePath])
 
+  // Derive the Pierre appearance (dark/light) from the theme's bg luminance.
+  const pierreAppearance: 'dark' | 'light' = useMemo(() => {
+    const hex = theme.bg.replace('#', '')
+    const r = parseInt(hex.slice(0, 2), 16)
+    const g = parseInt(hex.slice(2, 4), 16)
+    const b = parseInt(hex.slice(4, 6), 16)
+    return (r * 299 + g * 587 + b * 114) / 1000 > 128 ? 'light' : 'dark'
+  }, [theme.bg])
+
+  // Load syntax highlights async whenever the diff content or appearance changes.
+  // Resets immediately so stale highlights don't flash over a new file.
+  useEffect(() => {
+    if (pane !== 2 || fileDiffMode !== 'viewer') return
+    const text = rightContent
+    if (!text || text === 'Loading…') {
+      setDiffHighlights(null)
+      return
+    }
+    let cancelled = false
+    setDiffHighlights(null)
+    void loadDiffHighlights(text, selectedFilePath ?? 'git-diff', pierreAppearance).then((result) => {
+      if (!cancelled) setDiffHighlights(result)
+    })
+    return () => { cancelled = true }
+  }, [rightContent, pane, fileDiffMode, selectedFilePath, pierreAppearance])
+
   const handleKey = useCallback((key: GitKeyEvent) => {
     if (key.name === 'escape') { onClose(); return }
 
@@ -506,7 +557,9 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const commitsH = Math.max(leftInnerH - statusH - treeH - branchesH, 4)
   const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
-  const fileDiffLabel = fileDiffMode === 'viewer' ? 'v plain diff' : 'v parsed diff'
+  const fileDiffLabel = fileDiffMode === 'viewer'
+    ? `v plain  ${diffHighlights ? '●' : '○'} syntax`
+    : 'v parsed'
 
   function statusColor(x: string, y: string): string {
     if (x === '?' && y === '?') return theme.red  // untracked
@@ -525,9 +578,9 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const diffLines = diffTruncated ? allDiffLines.slice(0, MAX_DIFF_LINES) : allDiffLines
   const rightDiffView = useMemo(
     () => (pane === 2 && fileDiffMode === 'viewer'
-      ? buildPierreDiffView(rightContent, selectedFilePath ?? 'git-diff')
+      ? buildPierreDiffView(rightContent, selectedFilePath ?? 'git-diff', diffHighlights, pierreAppearance)
       : null),
-    [fileDiffMode, pane, rightContent, selectedFilePath],
+    [diffHighlights, fileDiffMode, pane, pierreAppearance, rightContent, selectedFilePath],
   )
   const rightDiffRows = rightDiffView ? rightDiffView.rows.slice(0, MAX_DIFF_LINES) : []
   const rightDiffTruncated = rightDiffView ? rightDiffView.rows.length > MAX_DIFF_LINES : false
@@ -745,9 +798,15 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                   <text fg={diffRowColor(row, theme)} wrapMode="none">
                     {fitTerminalText(` ${row.indicator ?? diffRowIndicator(row)} `, 3)}
                   </text>
-                  <text fg={diffRowColor(row, theme)} wrapMode="none">
-                    {fitTerminalText(row.text || ' ', rightDiffTextWidth)}
-                  </text>
+                  {row.spans && row.spans.length > 0 ? (
+                    <text wrapMode="none">
+                      {renderDiffSpans(row.spans, diffRowColor(row, theme), rightDiffTextWidth)}
+                    </text>
+                  ) : (
+                    <text fg={diffRowColor(row, theme)} wrapMode="none">
+                      {fitTerminalText(row.text || ' ', rightDiffTextWidth)}
+                    </text>
+                  )}
                 </box>
               ))}
               {rightDiffTruncated ? (
