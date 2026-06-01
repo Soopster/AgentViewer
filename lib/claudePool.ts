@@ -4,6 +4,7 @@ import {
   type PermissionMode,
   type Query,
   type SDKMessage,
+  type SDKSessionStateChangedMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import type { ReasoningEffortLevel } from './types'
@@ -139,7 +140,7 @@ type InternalEntry = {
 // generous headroom while halving the worst-case detached-session footprint.
 const BUFFER_CAP = 64
 
-function effortToSdk(effort: ReasoningEffortLevel | undefined):
+export function effortToSdk(effort: ReasoningEffortLevel | undefined):
   | { effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; thinking?: { type: 'disabled' } | { type: 'adaptive' } }
   | Record<string, never> {
   if (!effort) return {}
@@ -507,8 +508,9 @@ class ClaudePool {
         }
         if (
           msg.type === 'system'
-          && (msg as { subtype?: string }).subtype === 'session_state_changed'
-          && (msg as { state?: string }).state === 'idle'
+          && 'subtype' in msg
+          && (msg as SDKSessionStateChangedMessage).subtype === 'session_state_changed'
+          && (msg as SDKSessionStateChangedMessage).state === 'idle'
         ) {
           // Authoritative turn-over signal — short-circuit the tail drain.
           if (tailTimer) clearTimeout(tailTimer)

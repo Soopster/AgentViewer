@@ -2,9 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react'
-import { ChevronDown, ChevronRight, Clock3, FileText, Folder, FolderOpen, GitBranch, Info, ListTree, Maximize2, PanelLeftClose, PanelLeftOpen, RefreshCw, X } from 'lucide-react'
+import { Clock3, Columns2, GitBranch, Hash, Info, ListTree, Maximize2, PanelLeftClose, PanelLeftOpen, RefreshCw, Rows3, WrapText, X } from 'lucide-react'
+import type { SelectedLineRange } from '@pierre/diffs'
+import { FileTree, useFileTree } from '@pierre/trees/react'
+import { prepareFileTreeInput } from '@pierre/trees'
 import type { GitData, GitStatusEntry } from '@/lib/gitProvider'
-import { PierrePatchDiffView } from './PierreDiffView'
+import type { GitStatusEntry as TreeGitStatusEntry } from '@pierre/trees'
+import { PierrePatchDiffView, type PierreChangeStyle, type PierreDiffPresentation, type PierreDiffStyle, type PierreInlineDiffStyle } from './PierreDiffView'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -128,6 +132,55 @@ async function fetchGitContent({
   }
 }
 
+function GitFileTreePane({
+  data,
+  selectedFilePath,
+  onSelectFile,
+}: {
+  data: GitData
+  selectedFilePath: string | null
+  onSelectFile: (path: string) => void
+}) {
+  const filePaths = useMemo(() => data.status.map((entry) => entry.path), [data.status])
+  const preparedInput = useMemo(
+    () => prepareFileTreeInput(filePaths, { flattenEmptyDirectories: true, sort: 'default' }),
+    [filePaths],
+  )
+  const expandedPaths = useMemo(() => allDirPaths(data.status), [data.status])
+  const statusByPath = useMemo(() => data.status.map(toTreeGitStatus), [data.status])
+
+  const { model } = useFileTree({
+    preparedInput,
+    icons: { set: 'complete', colored: true },
+    gitStatus: statusByPath,
+    initialExpandedPaths: [...expandedPaths],
+    initialSelectedPaths: selectedFilePath ? [selectedFilePath] : undefined,
+    search: false,
+    stickyFolders: true,
+    density: 'compact',
+    overscan: 6,
+    onSelectionChange: (selectedPaths) => {
+      const next = [...selectedPaths].reverse().find((path) => filePaths.includes(path))
+      if (next) onSelectFile(next)
+    },
+  })
+
+  useEffect(() => {
+    if (!selectedFilePath) return
+    model.focusPath(selectedFilePath)
+    model.scrollToPath(selectedFilePath, { offset: 'nearest' })
+  }, [model, selectedFilePath])
+
+  return (
+    <div style={{ flex: 1, minHeight: 0, background: 'var(--surface)', overflow: 'hidden' }}>
+      <FileTree
+        model={model}
+        style={{ height: '100%', minHeight: 0 }}
+      />
+    </div>
+  )
+}
+
 // ─── Style helpers ────────────────────────────────────────────────────────────
 
 function statusColor(x: string, y: string): string {
@@ -136,6 +189,24 @@ function statusColor(x: string, y: string): string {
   if (y === 'M') return 'var(--amber)'
   if (y === 'D') return 'var(--red)'
   return 'var(--text-2)'
+}
+
+function toTreeGitStatus(entry: GitStatusEntry): TreeGitStatusEntry {
+  return {
+    path: entry.path,
+    status:
+      entry.x === '?' && entry.y === '?' ? 'untracked'
+        : entry.x === 'A' || entry.y === 'A' ? 'added'
+          : entry.x === 'D' || entry.y === 'D' ? 'deleted'
+            : entry.x === 'R' || entry.y === 'R' ? 'renamed'
+              : entry.x === '!' || entry.y === '!' ? 'ignored'
+                : 'modified',
+  }
+}
+
+function formatSelectedRange(selection: SelectedLineRange): string {
+  if (selection.start === selection.end) return `Line ${selection.start}`
+  return `Lines ${selection.start}-${selection.end}`
 }
 
 const PANE_LABELS: Record<PaneId, string> = {
@@ -165,13 +236,18 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
   const [loading, setLoading] = useState(false)
   const [pane, setPane] = useState<PaneId>(2)
   const [focusSide, setFocusSide] = useState<'left' | 'right'>('left')
-  const [treeCursor, setTreeCursor] = useState(0)
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [branchIndex, setBranchIndex] = useState(0)
   const [commitIndex, setCommitIndex] = useState(0)
   const [rightContent, setRightContent] = useState('')
   const [leftPaneMode, setLeftPaneMode] = useState<LeftPaneMode>('normal')
   const [leftPaneWidth, setLeftPaneWidth] = useState(LEFT_PANE_DEFAULT_WIDTH)
+  const [diffStyle, setDiffStyle] = useState<PierreDiffStyle>('stacked')
+  const [changeStyle, setChangeStyle] = useState<PierreChangeStyle>('classic')
+  const [inlineDiffStyle, setInlineDiffStyle] = useState<PierreInlineDiffStyle>('word-alt')
+  const [wrapDiff, setWrapDiff] = useState(true)
+  const [showLineNumbers, setShowLineNumbers] = useState(true)
+  const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(null)
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
   const [contentLoading, setContentLoading] = useState(false)
   const [hoveredRow, setHoveredRow] = useState<string | null>(null)
 
@@ -179,34 +255,18 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
   const rightContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const shellRef = useRef<HTMLDivElement>(null)
   const rightPanelRef = useRef<HTMLDivElement>(null)
-  const treeListRef = useRef<HTMLDivElement>(null)
   const branchListRef = useRef<HTMLDivElement>(null)
   const commitListRef = useRef<HTMLDivElement>(null)
-
-  const visibleNodes = useMemo(
-    () => (data ? buildVisibleNodes(data.status, expandedDirs) : []),
-    [data, expandedDirs],
-  )
-
-  const selectedFilePath = useMemo(() => {
-    const node = visibleNodes[treeCursor]
-    return node?.kind === 'file' ? node.path : null
-  }, [visibleNodes, treeCursor])
-
-  const fileCount = useMemo(
-    () => visibleNodes.filter((n) => n.kind === 'file').length,
-    [visibleNodes],
-  )
-  const filePosition = useMemo(() => {
-    let pos = 0
-    for (let i = 0; i <= treeCursor && i < visibleNodes.length; i++) {
-      if (visibleNodes[i]?.kind === 'file') pos++
-    }
-    return pos
-  }, [visibleNodes, treeCursor])
   const diffAvailable = pane === 2 && rightContent.trim().length > 0
   const leftPaneHidden = leftPaneMode === 'hidden'
   const leftPaneExpanded = leftPaneMode === 'expanded'
+  const diffPresentation = useMemo<PierreDiffPresentation>(() => ({
+    diffStyle,
+    changeStyle,
+    inlineDiffStyle,
+    wrap: wrapDiff,
+    showLineNumbers,
+  }), [changeStyle, diffStyle, inlineDiffStyle, showLineNumbers, wrapDiff])
 
   // Fetch git data when popover opens
   useEffect(() => {
@@ -220,22 +280,14 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
     return () => { cancelled = true }
   }, [open, cwd])
 
-  // Expand all dirs and place cursor on first file when data loads
+  // Place the right pane on the first file when data loads
   useEffect(() => {
     if (!data) return
-    const dirs = allDirPaths(data.status)
-    setExpandedDirs(dirs)
-    const nodes = buildVisibleNodes(data.status, dirs)
-    const firstFile = nodes.findIndex((n) => n.kind === 'file')
-    setTreeCursor(firstFile >= 0 ? firstFile : 0)
+    const firstFile = data.status[0]?.path ?? null
+    setSelectedFilePath(firstFile)
     setBranchIndex(0)
     setCommitIndex(0)
   }, [data])
-
-  // Scroll list cursors into view
-  useEffect(() => {
-    treeListRef.current?.querySelector('[data-cursor]')?.scrollIntoView({ block: 'nearest' })
-  }, [treeCursor])
 
   useEffect(() => {
     branchListRef.current?.querySelector('[data-cursor]')?.scrollIntoView({ block: 'nearest' })
@@ -257,6 +309,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
     if (rightContentTimerRef.current) clearTimeout(rightContentTimerRef.current)
 
     setContentLoading(true)
+    setSelectedLines(null)
     rightContentTimerRef.current = setTimeout(() => {
       void (async () => {
         const content = await fetchGitContent({
@@ -315,8 +368,6 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
         const delta = isDown ? 1 : -1
         if (focusSide === 'right') {
           if (rightPanelRef.current) rightPanelRef.current.scrollTop += delta * 20
-        } else if (pane === 2) {
-          setTreeCursor((i) => Math.max(0, Math.min(i + delta, visibleNodes.length - 1)))
         } else if (pane === 3 && data) {
           setBranchIndex((i) => Math.max(0, Math.min(i + delta, data.branches.length - 1)))
         } else if (pane === 4 && data) {
@@ -325,45 +376,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
         return
       }
 
-      if ((e.key === 'Enter' || e.key === ' ') && pane === 2 && focusSide === 'left') {
-        e.preventDefault()
-        const node = visibleNodes[treeCursor]
-        if (node?.kind === 'dir') {
-          setExpandedDirs((prev) => {
-            const next = new Set(prev)
-            if (next.has(node.path)) next.delete(node.path)
-            else next.add(node.path)
-            return next
-          })
-        }
-        return
-      }
-
-      if ((e.key === 'h' || e.key === 'ArrowLeft') && pane === 2 && focusSide === 'left') {
-        const node = visibleNodes[treeCursor]
-        if (!node) return
-        if (node.kind === 'dir' && expandedDirs.has(node.path)) {
-          setExpandedDirs((prev) => { const next = new Set(prev); next.delete(node.path); return next })
-        } else if (node.depth > 0) {
-          for (let i = treeCursor - 1; i >= 0; i--) {
-            const candidate = visibleNodes[i]
-            if (candidate?.kind === 'dir' && candidate.depth === node.depth - 1) {
-              setTreeCursor(i)
-              break
-            }
-          }
-        }
-        return
-      }
-
-      if ((e.key === 'l' || e.key === 'ArrowRight') && pane === 2 && focusSide === 'left') {
-        const node = visibleNodes[treeCursor]
-        if (!node) return
-        if (node.kind === 'dir' && !expandedDirs.has(node.path)) {
-          setExpandedDirs((prev) => { const next = new Set(prev); next.add(node.path); return next })
-        } else if (visibleNodes[treeCursor + 1]) {
-          setTreeCursor(treeCursor + 1)
-        }
+      if (pane === 2 && focusSide === 'left' && (e.key === 'Enter' || e.key === ' ' || e.key === 'h' || e.key === 'l' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         return
       }
 
@@ -384,7 +397,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
         return
       }
     },
-    [cwd, data, expandedDirs, focusSide, leftPaneHidden, onClose, pane, treeCursor, visibleNodes],
+    [cwd, data, focusSide, leftPaneHidden, onClose, pane],
   )
 
   useEffect(() => {
@@ -400,8 +413,8 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
   if (!open) return null
 
   const diffLines = rightContent.split('\n')
-  const selectedNode = visibleNodes[treeCursor]
   const changedFileCount = data?.status.length ?? 0
+  const selectedEntry = data?.status.find((entry) => entry.path === selectedFilePath)
   const selectedTitle =
     pane === 1 ? 'Repository status'
       : pane === 2 ? (selectedFilePath ?? (changedFileCount === 0 ? 'Working tree clean' : 'Select a file'))
@@ -792,11 +805,6 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>
                 {PANE_LABELS[pane]}
               </div>
-              {pane === 2 && fileCount > 0 ? (
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
-                  {filePosition}/{fileCount}
-                </div>
-              ) : null}
             </div>
 
             {pane === 1 ? (
@@ -806,90 +814,22 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                 <InfoCard label="Upstream" value={data?.upstream ?? 'No upstream configured'} tone="muted" />
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                   <InfoCard label="Ahead" value={String(data?.ahead ?? 0)} tone="green" />
-                  <InfoCard label="Behind" value={String(data?.behind ?? 0)} tone="amber" />
+                <InfoCard label="Behind" value={String(data?.behind ?? 0)} tone="amber" />
                 </div>
               </div>
             ) : pane === 2 ? (
-              <div ref={treeListRef} style={{ overflow: 'auto', flex: 1, padding: 8 }}>
-                {visibleNodes.length === 0 && !loading ? (
-                  <EmptyState title="No file changes" description="The working tree is clean." />
-                ) : null}
-                {visibleNodes.map((node, i) => {
-                  const rowId = `file:${node.path}`
-                  const isCursor = i === treeCursor && pane === 2
-                  const isDir = node.kind === 'dir'
-                  return (
-                    <button
-                      key={node.path}
-                      type="button"
-                      data-cursor={isCursor ? '' : undefined}
-                      onMouseEnter={() => setHoveredRow(rowId)}
-                      onMouseLeave={() => setHoveredRow(null)}
-                      onClick={() => {
-                        setPane(2)
-                        setTreeCursor(i)
-                        if (isDir) {
-                          setExpandedDirs((prev) => {
-                            const next = new Set(prev)
-                            if (next.has(node.path)) next.delete(node.path)
-                            else next.add(node.path)
-                            return next
-                          })
-                        }
-                      }}
-                      style={{
-                        width: '100%',
-                        minHeight: 34,
-                        border: 'none',
-                        borderRadius: 8,
-                        padding: `5px 9px 5px ${10 + node.depth * 18}px`,
-                        background: rowBackground(rowId, isCursor),
-                        color: 'var(--text)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        font: 'inherit',
-                      }}
-                    >
-                      {isDir ? (
-                        <>
-                          <span style={{ color: 'var(--text-3)', width: 16, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-                            {node.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                          </span>
-                          <span style={{ color: 'var(--amber)', width: 16, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-                            {node.expanded ? <FolderOpen size={15} /> : <Folder size={15} />}
-                          </span>
-                          <span style={{ color: isCursor ? 'var(--text)' : 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
-                            {node.name}
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <span style={{ width: 16, flexShrink: 0 }} />
-                          <FileText size={15} style={{ color: statusColor(node.x, node.y), flexShrink: 0 }} />
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, fontSize: 13 }}>
-                            {node.name}
-                          </span>
-                          <span style={{
-                            padding: '2px 7px',
-                            borderRadius: 999,
-                            background: 'var(--surface-3)',
-                            color: statusColor(node.x, node.y),
-                            border: '1px solid var(--border)',
-                            fontFamily: "'IBM Plex Mono', monospace",
-                            fontSize: 10,
-                            flexShrink: 0,
-                          }}>
-                            {statusLabel(node.x, node.y)}
-                          </span>
-                        </>
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
+              data && data.status.length > 0 ? (
+                <GitFileTreePane
+                  key={data.status.map((entry) => entry.path).join('\u0000')}
+                  data={data}
+                  selectedFilePath={selectedFilePath}
+                  onSelectFile={(path) => setSelectedFilePath(path)}
+                />
+              ) : loading ? (
+                <div style={{ padding: 14, color: 'var(--text-3)', fontSize: 13 }}>Loading…</div>
+              ) : (
+                <EmptyState title="No file changes" description="The working tree is clean." />
+              )
             ) : pane === 3 ? (
               <div ref={branchListRef} style={{ overflow: 'auto', flex: 1, padding: 8 }}>
                 {(data?.branches ?? []).map((branch, i) => {
@@ -989,29 +929,199 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                 minWidth: 0,
               }}
             >
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ color: 'var(--text)', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {selectedTitle}
-                </div>
-                <div style={{ marginTop: 2, color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>
-                  {focusSide === 'right'
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ color: 'var(--text)', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {selectedTitle}
+                  </div>
+                  <div style={{ marginTop: 2, color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>
+                    {focusSide === 'right'
                     ? 'j/k scroll · d/u page · [/] resize files · tab focus list'
                     : 'click rows to inspect · [/] resize files · arrows and j/k also work'}
                 </div>
-              </div>
-              {pane === 2 && selectedNode?.kind === 'file' ? (
+                </div>
+              {pane === 2 && selectedEntry ? (
                 <span style={{
                   padding: '3px 8px',
                   borderRadius: 999,
                   background: 'var(--surface-3)',
-                  color: statusColor(selectedNode.x, selectedNode.y),
+                  color: statusColor(selectedEntry.x, selectedEntry.y),
                   border: '1px solid var(--border)',
                   fontFamily: "'IBM Plex Mono', monospace",
                   fontSize: 10,
                   flexShrink: 0,
                 }}>
-                  {statusLabel(selectedNode.x, selectedNode.y)}
+                  {statusLabel(selectedEntry.x, selectedEntry.y)}
                 </span>
+              ) : null}
+              {diffAvailable && selectedLines ? (
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '3px 8px',
+                    borderRadius: 999,
+                    background: 'var(--surface-3)',
+                    border: '1px solid var(--border)',
+                    color: 'var(--text-2)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    flexShrink: 0,
+                  }}
+                >
+                  <span>{formatSelectedRange(selectedLines)}</span>
+                  <button
+                    type="button"
+                    title="Clear selection"
+                    onClick={() => setSelectedLines(null)}
+                    style={{
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'var(--text-3)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ) : null}
+              {diffAvailable ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', flexShrink: 0 }}>
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      overflow: 'hidden',
+                      background: 'var(--surface-3)',
+                      flexShrink: 0,
+                    }}
+                    aria-label="Diff layout"
+                  >
+                    <button
+                      type="button"
+                      title="Stacked view"
+                      aria-pressed={diffStyle === 'stacked'}
+                      onClick={() => setDiffStyle('stacked')}
+                      style={{
+                        width: 32,
+                        height: 28,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: 'none',
+                        borderRight: '1px solid var(--border)',
+                        background: diffStyle === 'stacked' ? 'var(--surface-2)' : 'transparent',
+                        color: diffStyle === 'stacked' ? 'var(--text)' : 'var(--text-3)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Rows3 size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title="Split view"
+                      aria-pressed={diffStyle === 'split'}
+                      onClick={() => setDiffStyle('split')}
+                      style={{
+                        width: 32,
+                        height: 28,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: 'none',
+                        background: diffStyle === 'split' ? 'var(--surface-2)' : 'transparent',
+                        color: diffStyle === 'split' ? 'var(--text)' : 'var(--text-3)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Columns2 size={14} />
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
+                    {(['classic', 'backgrounds', 'bars'] as const).map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setChangeStyle(value)}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 999,
+                          padding: '4px 9px',
+                          fontSize: 10,
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          color: changeStyle === value ? 'var(--text)' : 'var(--text-3)',
+                          background: changeStyle === value ? 'var(--surface-2)' : 'var(--surface-3)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {value}
+                      </button>
+                    ))}
+                    {(['word-alt', 'word', 'char', 'none'] as const).map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setInlineDiffStyle(value)}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 999,
+                          padding: '4px 9px',
+                          fontSize: 10,
+                          fontFamily: "'IBM Plex Mono', monospace",
+                          color: inlineDiffStyle === value ? 'var(--text)' : 'var(--text-3)',
+                          background: inlineDiffStyle === value ? 'var(--surface-2)' : 'var(--surface-3)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {value}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      title={wrapDiff ? 'Wrap lines' : 'Scroll lines'}
+                      onClick={() => setWrapDiff((v) => !v)}
+                      style={{
+                        width: 32,
+                        height: 28,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '1px solid var(--border)',
+                        borderRadius: 999,
+                        background: wrapDiff ? 'var(--surface-2)' : 'var(--surface-3)',
+                        color: wrapDiff ? 'var(--text)' : 'var(--text-3)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <WrapText size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      title={showLineNumbers ? 'Hide line numbers' : 'Show line numbers'}
+                      onClick={() => setShowLineNumbers((v) => !v)}
+                      style={{
+                        width: 32,
+                        height: 28,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '1px solid var(--border)',
+                        borderRadius: 999,
+                        background: showLineNumbers ? 'var(--surface-2)' : 'var(--surface-3)',
+                        color: showLineNumbers ? 'var(--text)' : 'var(--text-3)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Hash size={14} />
+                    </button>
+                  </div>
+                </div>
               ) : null}
             </div>
             <div
@@ -1026,7 +1136,13 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
                   Loading…
                 </div>
               ) : diffAvailable ? (
-                <PierrePatchDiffView patch={rightContent} maxHeight={null} />
+                <PierrePatchDiffView
+                  patch={rightContent}
+                  maxHeight={null}
+                  presentation={diffPresentation}
+                  selectedLines={selectedLines}
+                  onSelectedLinesChange={setSelectedLines}
+                />
               ) : (
                 diffLines.map((line, i) => (
                   <div

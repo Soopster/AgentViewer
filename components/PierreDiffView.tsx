@@ -2,8 +2,24 @@
 
 import { useMemo } from 'react'
 import { FileDiff, MultiFileDiff } from '@pierre/diffs/react'
-import { parsePatchFiles, type FileDiffMetadata, type FileDiffOptions } from '@pierre/diffs'
-import { prepareFileTreeInput } from '@pierre/trees'
+import { parsePatchFiles, type FileDiffMetadata, type FileDiffOptions, type SelectedLineRange } from '@pierre/diffs'
+import { createFileTreeIconResolver, getBuiltInSpriteSheet, prepareFileTreeInput } from '@pierre/trees'
+
+export type PierreDiffStyle = 'stacked' | 'split'
+export type PierreChangeStyle = 'classic' | 'backgrounds' | 'bars'
+export type PierreInlineDiffStyle = 'word-alt' | 'word' | 'char' | 'none'
+
+export type PierreDiffPresentation = {
+  diffStyle?: PierreDiffStyle
+  changeStyle?: PierreChangeStyle
+  inlineDiffStyle?: PierreInlineDiffStyle
+  wrap?: boolean
+  showLineNumbers?: boolean
+}
+
+const COMPLETE_TREE_ICONS = { set: 'complete', colored: true } as const
+const COMPLETE_TREE_SPRITE = getBuiltInSpriteSheet('complete')
+const COMPLETE_TREE_ICON_RESOLVER = createFileTreeIconResolver(COMPLETE_TREE_ICONS)
 
 const DIFF_OPTIONS: FileDiffOptions<undefined> = {
   diffStyle: 'unified',
@@ -11,6 +27,7 @@ const DIFF_OPTIONS: FileDiffOptions<undefined> = {
   overflow: 'wrap',
   hunkSeparators: 'line-info-basic',
   lineDiffType: 'word',
+  enableLineSelection: true,
   disableVirtualizationBuffers: true,
   unsafeCSS: `
     :host {
@@ -49,6 +66,25 @@ const DIFF_OPTIONS: FileDiffOptions<undefined> = {
   `,
 }
 
+function getDiffOptions(presentation?: PierreDiffPresentation): FileDiffOptions<undefined> {
+  if (!presentation) return DIFF_OPTIONS
+
+  const diffIndicators =
+    presentation.changeStyle === 'bars' ? 'bars'
+      : presentation.changeStyle === 'backgrounds' ? 'none'
+        : 'classic'
+
+  return {
+    ...DIFF_OPTIONS,
+    diffStyle: presentation.diffStyle === 'split' ? 'split' : 'unified',
+    diffIndicators,
+    disableBackground: presentation.changeStyle !== 'backgrounds',
+    lineDiffType: presentation.inlineDiffStyle ?? DIFF_OPTIONS.lineDiffType,
+    overflow: presentation.wrap === false ? 'scroll' : 'wrap',
+    disableLineNumbers: presentation.showLineNumbers === false,
+  }
+}
+
 type PierreDiffFrameProps = {
   children: React.ReactNode
   maxHeight?: number | null
@@ -64,6 +100,7 @@ function PierreDiffFrame({ children, maxHeight }: PierreDiffFrameProps) {
         background: 'var(--surface)',
       }}
     >
+      <PierreBuiltInIconSprite />
       {children}
     </div>
   )
@@ -74,11 +111,17 @@ export function PierreFileDiffView({
   newStr,
   filePath,
   maxHeight = 500,
+  presentation,
+  selectedLines,
+  onSelectedLinesChange,
 }: {
   oldStr: string
   newStr: string
   filePath?: string
   maxHeight?: number | null
+  presentation?: PierreDiffPresentation
+  selectedLines?: SelectedLineRange | null
+  onSelectedLinesChange?: (selection: SelectedLineRange | null) => void
 }) {
   const oldFile = useMemo(() => ({
     name: filePath || 'previous',
@@ -91,7 +134,20 @@ export function PierreFileDiffView({
 
   return (
     <PierreDiffFrame maxHeight={maxHeight}>
-      <MultiFileDiff oldFile={oldFile} newFile={newFile} options={DIFF_OPTIONS} disableWorkerPool />
+      <MultiFileDiff
+        oldFile={oldFile}
+        newFile={newFile}
+        options={{
+          ...getDiffOptions(presentation),
+          onLineSelectionStart: onSelectedLinesChange,
+          onLineSelectionChange: onSelectedLinesChange,
+          onLineSelectionEnd: onSelectedLinesChange,
+          onLineSelected: onSelectedLinesChange,
+        }}
+        selectedLines={selectedLines}
+        renderHeaderPrefix={(fileDiff) => <PierreFileTypeIcon filePath={displayPath(fileDiff)} />}
+        disableWorkerPool
+      />
     </PierreDiffFrame>
   )
 }
@@ -100,10 +156,16 @@ export function PierrePatchDiffView({
   patch,
   maxHeight = 500,
   emptyLabel = 'No textual diff.',
+  presentation,
+  selectedLines,
+  onSelectedLinesChange,
 }: {
   patch: string
   maxHeight?: number | null
   emptyLabel?: string
+  presentation?: PierreDiffPresentation
+  selectedLines?: SelectedLineRange | null
+  onSelectedLinesChange?: (selection: SelectedLineRange | null) => void
 }) {
   const files = useMemo(() => parsePatchDiffFiles(patch), [patch])
 
@@ -122,7 +184,15 @@ export function PierrePatchDiffView({
           <FileDiff
             key={`${file.prevName ?? ''}:${file.name}:${index}`}
             fileDiff={file}
-            options={DIFF_OPTIONS}
+            options={{
+              ...getDiffOptions(presentation),
+              onLineSelectionStart: onSelectedLinesChange,
+              onLineSelectionChange: onSelectedLinesChange,
+              onLineSelectionEnd: onSelectedLinesChange,
+              onLineSelected: onSelectedLinesChange,
+            }}
+            selectedLines={selectedLines}
+            renderHeaderPrefix={(fileDiff) => <PierreFileTypeIcon filePath={displayPath(fileDiff)} />}
             disableWorkerPool
           />
         ))}
@@ -156,6 +226,32 @@ function parsePatchDiffFiles(patch: string): FileDiffMetadata[] {
 
 function displayPath(file: FileDiffMetadata): string {
   return (file.name || file.prevName || 'unknown').replace(/^[ab]\//, '')
+}
+
+export function PierreFileTypeIcon({ filePath }: { filePath: string }) {
+  const icon = useMemo(() => COMPLETE_TREE_ICON_RESOLVER.resolveIcon('file-tree-icon-file', filePath), [filePath])
+  return (
+    <svg
+      aria-hidden="true"
+      focusable="false"
+      width={14}
+      height={14}
+      viewBox="0 0 16 16"
+      style={{ flexShrink: 0, color: 'var(--text-3)' }}
+    >
+      <use href={`#${icon.name}`} />
+    </svg>
+  )
+}
+
+export function PierreBuiltInIconSprite() {
+  return (
+    <span
+      aria-hidden="true"
+      style={{ display: 'none' }}
+      dangerouslySetInnerHTML={{ __html: COMPLETE_TREE_SPRITE }}
+    />
+  )
 }
 
 function PierreFallbackDiffView({ text }: { text: string }) {

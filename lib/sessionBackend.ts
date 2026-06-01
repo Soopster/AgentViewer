@@ -35,6 +35,7 @@ import {
   acquireClaudeSession,
   adoptClaudeSession,
   createInputStream,
+  effortToSdk,
   peekClaudeSession,
   recycleClaudeSession,
 } from './claudePool'
@@ -1264,7 +1265,6 @@ type PendingClaudePermission = {
   resolve: (result: PermissionResult) => void
   timer: ReturnType<typeof setTimeout>
   suggestions?: PermissionUpdate[]
-  toolUseID: string
 }
 
 const pendingClaudePermissions = new Map<string, PendingClaudePermission>()
@@ -1275,20 +1275,20 @@ function pendingClaudePermissionKey(sessionId: string, permissionId: string): st
 
 function claudePermissionDecision(
   response: string,
-  pending: Pick<PendingClaudePermission, 'suggestions' | 'toolUseID'>,
+  pending: Pick<PendingClaudePermission, 'suggestions'>,
 ): PermissionResult {
+  // The SDK always injects toolUseID into the control response itself, so we
+  // omit it here. decisionClassification is in the TypeScript types but the
+  // CLI's Zod schema does not accept it — including it causes a validation
+  // error that blocks the approval.
   if (response === 'reject') {
     return {
       behavior: 'deny',
       message: 'User denied permission',
-      toolUseID: pending.toolUseID,
-      decisionClassification: 'user_reject',
     }
   }
   return {
     behavior: 'allow',
-    toolUseID: pending.toolUseID,
-    decisionClassification: response === 'always' ? 'user_permanent' : 'user_temporary',
     ...(response === 'always' && pending.suggestions?.length
       ? { updatedPermissions: pending.suggestions }
       : {}),
@@ -1341,8 +1341,6 @@ function createClaudePermissionBridge(
       const deny = (message: string): PermissionResult => ({
         behavior: 'deny',
         message,
-        toolUseID: options.toolUseID,
-        decisionClassification: 'user_reject',
       })
       const cleanup = () => {
         pendingClaudePermissions.delete(key)
@@ -1362,7 +1360,6 @@ function createClaudePermissionBridge(
       }
       options.signal.addEventListener('abort', onAbort, { once: true })
       pendingClaudePermissions.set(key, {
-        toolUseID: options.toolUseID,
         suggestions: options.suggestions,
         timer,
         resolve: (result) => {
@@ -1387,8 +1384,6 @@ function resolvePendingClaudePermissions(sessionId: string, ids: Set<string>, me
     pending.resolve({
       behavior: 'deny',
       message,
-      toolUseID: pending.toolUseID,
-      decisionClassification: 'user_reject',
     })
   }
 }
@@ -2672,6 +2667,12 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       } else {
         signal.addEventListener('abort', propagateAbort)
       }
+      // Mutable per-turn bridge installed in the query at construction time so
+      // the delegation closure survives pool adoption. The bridge is set below
+      // (after q is created) and cleared in the finally block so future pool
+      // turns can swap in a fresh bridge without recycling the subprocess.
+      const bridgeBox: { fn: import('@anthropic-ai/claude-agent-sdk').CanUseTool | null } = { fn: null }
+
       const q = query({
         prompt: iterable,
         options: {
@@ -2684,13 +2685,11 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           // on send and BYPASS appears broken. Mirror the CLI's
           // --dangerously-skip-permissions guard.
           ...(permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
-          ...(bridgeInstalled ? { canUseTool: createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds) } : {}),
-          effort: effort === 'off' || effort === 'minimal' ? undefined : effort,
-          thinking: effort === 'off'
-            ? { type: 'disabled' }
-            : effort
-            ? { type: 'adaptive' }
-            : undefined,
+          canUseTool: (toolName, input, toolOpts) =>
+            bridgeBox.fn
+              ? bridgeBox.fn(toolName, input, toolOpts)
+              : Promise.resolve({ behavior: 'allow' as const }),
+          ...effortToSdk(effort),
           abortController,
           enableFileCheckpointing: true,
           resumeSessionAt,
@@ -2704,6 +2703,13 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           taskBudget: taskBudgetTotal ? { total: taskBudgetTotal } : undefined,
         },
       })
+
+      // Must be set BEFORE the for-await below, not before query() above —
+      // the iterator drives SDK processing, so no tool call can arrive until
+      // the first pull of the iterator at the for-await.
+      if (bridgeInstalled) {
+        bridgeBox.fn = createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds)
+      }
 
       setRunningSession(sessionId, {
         provider: 'claude',
@@ -2757,17 +2763,12 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         }
 
         // Adopt into the pool when we can: a clean result was seen, the
-        // session_id is known, and the client hasn't disconnected. Only adopt
-        // when no per-turn bridge was installed — the bridge is bound to this
-        // turn's stream controller and can't be handed to the pool.
-        // When a bridge IS installed, recycle any stale pool entry (e.g. one
-        // left over from a prior bypass/plan turn) so future bypass/plan sends
-        // don't reuse a Query that missed the messages from this turn.
-        if (
-          realizedSessionId
-          && !abortController.signal.aborted
-          && !bridgeInstalled
-        ) {
+        // session_id is known, and the client hasn't disconnected. The bridge
+        // is now cleared before adoption — the query's canUseTool delegates
+        // through bridgeBox.fn which will be set fresh for each future turn.
+        if (realizedSessionId && !abortController.signal.aborted) {
+          // Clear the turn-1 bridge so the pool entry starts idle.
+          bridgeBox.fn = null
           signal.removeEventListener('abort', propagateAbort)
           adoptClaudeSession({
             sessionId: realizedSessionId,
@@ -2775,16 +2776,18 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
             pushUserMessage,
             endInput,
             options: { ...adoptOptions, sessionId: realizedSessionId },
+            bridgeBox,
           })
           adopted = true
-        } else if (bridgeInstalled) {
-          recycleClaudeSession(realizedSessionId ?? sessionId)
         }
       } catch (err) {
         if (!abortController.signal.aborted && !clientDetached) {
           safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
         }
       } finally {
+        // Clear the bridge in case adoption didn't happen (error, abort) so the
+        // box isn't left pointing at a dead stream controller.
+        bridgeBox.fn = null
         clearRunningSession(sessionId)
         resolvePendingClaudePermissions(sessionId, bridgedPermissionIds, 'Permission request ended before a response was received')
         if (!adopted) {
