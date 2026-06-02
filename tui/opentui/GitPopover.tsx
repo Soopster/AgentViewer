@@ -410,10 +410,10 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [branchIndex, setBranchIndex] = useState(0)
   const [commitIndex, setCommitIndex] = useState(0)
-  const [branchScrollTop, setBranchScrollTop] = useState(0)
-  const [commitScrollTop, setCommitScrollTop] = useState(0)
   const diffScrollRef = useRef<ScrollBoxRenderable>(null)
   const fileTreeScrollRef = useRef<ScrollBoxRenderable>(null)
+  const branchesScrollRef = useRef<ScrollBoxRenderable>(null)
+  const commitsScrollRef = useRef<ScrollBoxRenderable>(null)
   const rightContentRequestRef = useRef(0)
   const rightContentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Ref so handleKey can read rightDiffView without a circular dep issue
@@ -453,8 +453,8 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     const nodes = buildVisibleNodes(data.status, dirs)
     const firstFile = nodes.findIndex((n) => n.kind === 'file')
     setTreeCursor(firstFile >= 0 ? firstFile : 0)
-    setBranchScrollTop(0)
-    setCommitScrollTop(0)
+    branchesScrollRef.current?.scrollTo(0)
+    commitsScrollRef.current?.scrollTo(0)
   }, [data])
 
   // Visible tree nodes (recomputed when data or expanded state changes)
@@ -488,22 +488,12 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   }, [treeCursor])
 
   useEffect(() => {
-    const viewportH = Math.max(1, Math.max(3, Math.min(6, (data?.branches.length ?? 0) + 2)) - 1)
-    setBranchScrollTop((top) => {
-      if (branchIndex < top) return branchIndex
-      if (branchIndex >= top + viewportH) return branchIndex - viewportH + 1
-      return top
-    })
-  }, [branchIndex, data?.branches.length])
+    branchesScrollRef.current?.scrollTo(Math.max(0, branchIndex - 1))
+  }, [branchIndex])
 
   useEffect(() => {
-    const viewportH = Math.max(1, Math.max(3, Math.min(8, (data?.commits.length ?? 0) + 2)) - 1)
-    setCommitScrollTop((top) => {
-      if (commitIndex < top) return commitIndex
-      if (commitIndex >= top + viewportH) return commitIndex - viewportH + 1
-      return top
-    })
-  }, [commitIndex, data?.commits.length])
+    commitsScrollRef.current?.scrollTo(Math.max(0, commitIndex - 1))
+  }, [commitIndex])
 
   // Right-panel content is loaded in an effect so git commands do not block render.
   const [rightContent, setRightContent] = useState('Loading…')
@@ -857,7 +847,6 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const fileTreeMaxH = Math.max(4, Math.floor((leftInnerH - statusH - branchesH) * 0.6))
   const fileTreeH = Math.min(Math.max(3, visibleNodes.length + 2), fileTreeMaxH)
   // Estimate remaining rows for Commits (used for manual slicing while Commits lacks scrollbox).
-  const commitsH = Math.max(4, leftInnerH - statusH - fileTreeH - branchesH - 2)
   const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
   const fileDiffLabel = fileDiffMode === 'viewer'
@@ -1027,10 +1016,15 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           <box paddingX={1} width={leftW - 2} backgroundColor={pane === 3 ? theme.cyan : 'transparent'}>
             <text fg={pane === 3 ? theme.surface : theme.muted}>[3] Branches</text>
           </box>
-          <box flexDirection="column">
-            {(data?.branches ?? []).slice(branchScrollTop, branchScrollTop + (branchesH - 2)).map((b, i) => {
+          <scrollbox
+            ref={branchesScrollRef}
+            flexGrow={1}
+            scrollY
+            scrollbarOptions={{ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }}
+          >
+            {(data?.branches ?? []).map((b, i) => {
               const isCurrent = b === data?.branch
-              const isSel = (branchScrollTop + i) === branchIndex && pane === 3
+              const isSel = i === branchIndex && pane === 3
               return (
                 <box key={b} paddingX={1} backgroundColor={isSel ? theme.surface3 : 'transparent'}>
                   <text fg={isCurrent ? theme.green : isSel ? theme.text : theme.muted} wrapMode="none">
@@ -1039,7 +1033,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                 </box>
               )
             })}
-          </box>
+          </scrollbox>
         </box>
 
         {/* [4] Commits */}
@@ -1047,9 +1041,14 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           <box paddingX={1} width={leftW - 2} backgroundColor={pane === 4 ? theme.cyan : 'transparent'}>
             <text fg={pane === 4 ? theme.surface : theme.muted}>[4] Commits</text>
           </box>
-          <box flexDirection="column">
-            {(data?.commits ?? []).slice(commitScrollTop, commitScrollTop + (commitsH - 1)).map((c, i) => {
-              const isSel = (commitScrollTop + i) === commitIndex && pane === 4
+          <scrollbox
+            ref={commitsScrollRef}
+            flexGrow={1}
+            scrollY
+            scrollbarOptions={{ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }}
+          >
+            {(data?.commits ?? []).map((c, i) => {
+              const isSel = i === commitIndex && pane === 4
               const spaceIdx = c.indexOf(' ')
               const hash = spaceIdx > 0 ? c.slice(0, spaceIdx) : c
               const msg = spaceIdx > 0 ? c.slice(spaceIdx + 1) : ''
@@ -1062,7 +1061,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                 </box>
               )
             })}
-          </box>
+          </scrollbox>
         </box>
       </box>
       ) : null}
