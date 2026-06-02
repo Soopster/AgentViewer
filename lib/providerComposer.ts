@@ -42,7 +42,7 @@ const CLAUDE: ProviderComposerConfig = {
   placeholderStreaming: 'Draft your next message for Claude…',
   placeholderNoSession: 'Pick a Claude session to send a message',
   footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · @ files · ↑↓ history',
-  footerHintSending: 'Esc cancel · ⏎ queue next message',
+  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ queue next message',
   sendVerb: 'Send',
   examples: [
     'Try "find where API errors are logged"',
@@ -72,7 +72,7 @@ const CODEX: ProviderComposerConfig = {
   // Match the bindings implemented by this composer: `/` for commands, `@` for file paths,
   // and Shift+Enter for newline.
   footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · @ files',
-  footerHintSending: 'Esc to interrupt · ⇥ to queue · turn running…',
+  footerHintSending: 'Esc view transcript · ⌃C cancel · ⇥ to queue · turn running…',
   sendVerb: 'Send',
   // Verbatim from codex-rs chatwidget.rs PLACEHOLDERS so rotating examples match what Codex shows.
   examples: [
@@ -105,7 +105,7 @@ const OPENCODE: ProviderComposerConfig = {
   placeholderStreaming: 'Draft your next prompt for opencode…',
   placeholderNoSession: 'Pick an opencode session to send a message',
   footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · @ files/agents · ↑↓ history',
-  footerHintSending: 'Esc cancel · streaming…',
+  footerHintSending: 'Esc view transcript · ⌃C cancel · streaming…',
   sendVerb: 'Send',
   examples: [
     'Try "explore the routing layer"',
@@ -131,7 +131,7 @@ const COPILOT: ProviderComposerConfig = {
   placeholderStreaming: 'Draft your next question for Copilot…',
   placeholderNoSession: 'Pick a Copilot session to send a message',
   footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · mode picker · ↑↓ history',
-  footerHintSending: 'Esc cancel · thinking…',
+  footerHintSending: 'Esc view transcript · ⌃C cancel · thinking…',
   sendVerb: 'Ask',
   examples: [
     'Try "what changed in the last release?"',
@@ -157,7 +157,7 @@ const PI: ProviderComposerConfig = {
   placeholderStreaming: 'Draft your next message for Pi…',
   placeholderNoSession: 'Pick a Pi session to send a message',
   footerHintIdle: '⏎ send · ⇧⏎ newline · ! bash · !! bash (no context) · / commands · ↑↓ history',
-  footerHintSending: 'Esc cancel · responding…',
+  footerHintSending: 'Esc view transcript · ⌃C cancel · responding…',
   sendVerb: 'Send',
   examples: [
     'Try "build a quick prototype for X"',

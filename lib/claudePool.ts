@@ -196,7 +196,7 @@ class ClaudePool {
         canUseTool: (toolName, input, toolOpts) =>
           bridgeBox.fn
             ? bridgeBox.fn(toolName, input, toolOpts)
-            : Promise.resolve({ behavior: 'allow' as const }),
+            : Promise.resolve({ behavior: 'allow' as const, updatedInput: input }),
         ...effortOptions,
         enableFileCheckpointing: true,
         resumeSessionAt: opts.resumeSessionAt,

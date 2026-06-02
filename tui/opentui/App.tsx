@@ -7467,10 +7467,12 @@ export default function OpenTuiApp() {
           return
         }
         handled(() => {
-          // Native CLIs interrupt the running turn with Esc. Do that first; a
-          // second Esc (now idle) closes the window/composer.
+          // While a turn is running, Esc hides the composer so the user can
+          // read the transcript without cancelling. Use Ctrl+C to interrupt.
           if (composerSendState === 'sending') {
-            cancelComposerSend()
+            rememberComposerCursor()
+            setComposerWindowOpen(false)
+            setComposerActive(false)
             return
           }
           if (composerWindowOpen) {
@@ -9134,7 +9136,11 @@ export default function OpenTuiApp() {
       {composerSendState === 'sending' && composerLiveReasoning.trim() ? (
         <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
           <text fg={theme.dim} wrapMode="none">
-            {fitText(`✻ thinking · ${composerLiveReasoning.replace(/\s+/g, ' ').trim().slice(-100)}`, Math.max(width - 4, 20))}
+            {(() => {
+              const t = composerLiveReasoning.replace(/\s+/g, ' ').trim()
+              const preview = t.length > 100 ? `…${t.slice(-98)}` : t
+              return fitText(`✻ thinking · ${preview}`, Math.max(width - 4, 20))
+            })()}
           </text>
         </box>
       ) : null}

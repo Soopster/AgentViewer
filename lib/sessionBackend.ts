@@ -1265,6 +1265,7 @@ type PendingClaudePermission = {
   resolve: (result: PermissionResult) => void
   timer: ReturnType<typeof setTimeout>
   suggestions?: PermissionUpdate[]
+  input?: Record<string, unknown>
 }
 
 const pendingClaudePermissions = new Map<string, PendingClaudePermission>()
@@ -1275,7 +1276,7 @@ function pendingClaudePermissionKey(sessionId: string, permissionId: string): st
 
 function claudePermissionDecision(
   response: string,
-  pending: Pick<PendingClaudePermission, 'suggestions'>,
+  pending: Pick<PendingClaudePermission, 'suggestions' | 'input'>,
 ): PermissionResult {
   // The SDK always injects toolUseID into the control response itself, so we
   // omit it here. decisionClassification is in the TypeScript types but the
@@ -1289,6 +1290,7 @@ function claudePermissionDecision(
   }
   return {
     behavior: 'allow',
+    updatedInput: pending.input ?? {},
     ...(response === 'always' && pending.suggestions?.length
       ? { updatedPermissions: pending.suggestions }
       : {}),
@@ -1361,6 +1363,7 @@ function createClaudePermissionBridge(
       options.signal.addEventListener('abort', onAbort, { once: true })
       pendingClaudePermissions.set(key, {
         suggestions: options.suggestions,
+        input,
         timer,
         resolve: (result) => {
           clearTimeout(timer)
@@ -2688,7 +2691,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           canUseTool: (toolName, input, toolOpts) =>
             bridgeBox.fn
               ? bridgeBox.fn(toolName, input, toolOpts)
-              : Promise.resolve({ behavior: 'allow' as const }),
+              : Promise.resolve({ behavior: 'allow' as const, updatedInput: input }),
           ...effortToSdk(effort),
           abortController,
           enableFileCheckpointing: true,
