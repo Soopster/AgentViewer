@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRenderer } from '@opentui/react'
 import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 import { prepareFileTreeInput } from '@pierre/trees'
@@ -373,6 +374,7 @@ type FileDiffMode = 'text' | 'viewer'
 type LeftPaneMode = 'normal' | 'expanded' | 'hidden'
 
 const LEFT_PANE_MIN_WIDTH = 24
+const DIFF_BADGE_WIDTH = 3  // "[+]" badge column reserved on each stack-view diff row
 const LEFT_PANE_DEFAULT_MAX_WIDTH = 40
 const LEFT_PANE_RIGHT_MIN_WIDTH = 44
 const LEFT_PANE_EXPANDED_RATIO = 0.5
@@ -418,6 +420,10 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const rightDiffViewRef = useRef<ReturnType<typeof buildPierreDiffView>>(null)
   // Ref so handleKey always sees the latest selectedFilePath without stale closure issues
   const selectedFilePathRef = useRef<string | null>(null)
+  // Mouse hover state for the diff badge ([+] affordance)
+  const [hoveredDiffRowKey, setHoveredDiffRowKey] = useState<string | null>(null)
+  const hoverIdleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const renderer = useRenderer()
 
   // Refresh on mount
   useEffect(() => {
@@ -597,7 +603,28 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   useEffect(() => {
     setDiffCursorRow(0)
     setDraftNote(null)
+    setHoveredDiffRowKey(null)
   }, [selectedFilePath, pane])
+
+  // Clear hover badge when the terminal loses focus (matches hunk's behaviour).
+  useEffect(() => {
+    const clear = () => setHoveredDiffRowKey(null)
+    renderer.on('blur', clear)
+    return () => {
+      renderer.off('blur', clear)
+      if (hoverIdleTimeoutRef.current) clearTimeout(hoverIdleTimeoutRef.current)
+    }
+  }, [renderer])
+
+  // Show the [+] badge on a diff row for 2 seconds of idle hover (same as hunk).
+  const activateDiffHover = useCallback((rowKey: string) => {
+    if (hoverIdleTimeoutRef.current) clearTimeout(hoverIdleTimeoutRef.current)
+    setHoveredDiffRowKey(rowKey)
+    hoverIdleTimeoutRef.current = setTimeout(() => {
+      setHoveredDiffRowKey(null)
+      hoverIdleTimeoutRef.current = null
+    }, 2000)
+  }, [])
 
   const handleKey = useCallback((key: GitKeyEvent) => {
     // While a draft note is open, all keyboard input goes to the note editor.
@@ -883,7 +910,8 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
 
   // Stack view text column width
   const stackGutterCols = showLineNumbers ? rightDiffGutterWidth * 2 + 2 : 0
-  const rightDiffTextWidth = Math.max(rightW - stackGutterCols - 3, 12)
+  // Always reserve DIFF_BADGE_WIDTH cols for the hover/note badge column.
+  const rightDiffTextWidth = Math.max(rightW - stackGutterCols - 3 - DIFF_BADGE_WIDTH, 12)
 
   // Split view widths
   const splitHalfW = Math.floor((rightW - 1) / 2)
@@ -1091,12 +1119,16 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                 const anchor = stackRowAnchor(row, selectedFilePath)
                 const hasDraft = anchor !== null && draftNote?.rowKey === anchor
                 const hasNote = anchor !== null && diffNotes.has(anchor)
+                const isHovered = hoveredDiffRowKey === row.key && anchor !== null
                 return (
                   <React.Fragment key={row.key}>
                     <box
                       width={rightW}
                       flexDirection="row"
                       backgroundColor={diffRowBackground(row, theme)}
+                      onMouseOver={() => activateDiffHover(row.key)}
+                      onMouseMove={() => activateDiffHover(row.key)}
+                      onMouseUp={() => setDiffCursorRow(idx)}
                     >
                       {showLineNumbers ? (
                         <>
@@ -1119,14 +1151,31 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                       </text>
                       {row.spans && row.spans.length > 0 ? (
                         <text wrapMode="none">
-                          {renderDiffSpans(row.spans, rowFg, rightDiffTextWidth - (hasNote && !hasDraft ? 2 : 0))}
+                          {renderDiffSpans(row.spans, rowFg, rightDiffTextWidth)}
                         </text>
                       ) : (
                         <text fg={rowFg} wrapMode="none">
-                          {fitTerminalText(row.text || ' ', rightDiffTextWidth - (hasNote && !hasDraft ? 2 : 0))}
+                          {fitTerminalText(row.text || ' ', rightDiffTextWidth)}
                         </text>
                       )}
-                      {hasNote && !hasDraft ? <text fg={theme.violet} wrapMode="none"> ●</text> : null}
+                      {/* Badge column: [+] on hover, ● on noted, blank otherwise */}
+                      {isHovered ? (
+                        <box
+                          width={DIFF_BADGE_WIDTH}
+                          onMouseUp={() => {
+                            setDiffCursorRow(idx)
+                            if (anchor) {
+                              setDraftNote({ rowKey: anchor, lineLabel: anchorLineLabel(anchor), text: diffNotes.get(anchor) ?? '' })
+                            }
+                          }}
+                        >
+                          <text fg={theme.cyan} bg={theme.surface3} wrapMode="none">[+]</text>
+                        </box>
+                      ) : hasNote && !hasDraft ? (
+                        <text fg={theme.violet} wrapMode="none"> ● </text>
+                      ) : (
+                        <text fg={theme.dim} wrapMode="none">{'   '}</text>
+                      )}
                     </box>
                     {hasDraft ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
                     {hasNote && !hasDraft ? renderNoteCard(anchor ?? '', diffNotes, rightW, selectedFilePath, theme) : null}
@@ -1155,7 +1204,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                   const bg = row.tone === 'hunk' ? theme.diffMetaBg : row.tone === 'file' ? theme.surface2 : undefined
                   return (
                     <React.Fragment key={row.key}>
-                      <box width={rightW} backgroundColor={bg}>
+                      <box width={rightW} backgroundColor={bg} onMouseUp={() => setDiffCursorRow(idx)}>
                         <text fg={isCursor ? theme.cyan : fg} wrapMode="none">
                           {fitTerminalText((isCursor ? '▶ ' : '') + (row.text ?? ''), rightW - 1)}
                         </text>
@@ -1165,12 +1214,35 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                     </React.Fragment>
                   )
                 }
-                // Paired change/context rows
+                // Paired change/context rows — hover shows [+] badge on divider
+                const isHoveredSplit = hoveredDiffRowKey === row.key && anchor !== null
                 return (
                   <React.Fragment key={row.key}>
-                    <box width={rightW} flexDirection="row">
+                    <box
+                      width={rightW}
+                      flexDirection="row"
+                      onMouseOver={() => activateDiffHover(row.key)}
+                      onMouseMove={() => activateDiffHover(row.key)}
+                      onMouseUp={() => setDiffCursorRow(idx)}
+                    >
                       {renderSplitSide(row.left, splitHalfW, splitLeftTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
-                      <text fg={isCursor ? theme.cyan : theme.border}>│</text>
+                      {isHoveredSplit ? (
+                        <box
+                          width={1}
+                          onMouseUp={() => {
+                            setDiffCursorRow(idx)
+                            if (anchor) {
+                              setDraftNote({ rowKey: anchor, lineLabel: anchorLineLabel(anchor), text: diffNotes.get(anchor) ?? '' })
+                            }
+                          }}
+                        >
+                          <text fg={theme.cyan} bg={theme.surface3} wrapMode="none">+</text>
+                        </box>
+                      ) : (
+                        <text fg={hasNote && !hasDraft ? theme.violet : isCursor ? theme.cyan : theme.border}>
+                          {hasNote && !hasDraft ? '●' : '│'}
+                        </text>
+                      )}
                       {renderSplitSide(row.right, splitRightHalfW, splitRightTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
                     </box>
                     {hasDraft ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
