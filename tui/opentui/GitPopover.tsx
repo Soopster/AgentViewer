@@ -846,6 +846,8 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   // Commits gets whatever is left via flexGrow.
   const fileTreeMaxH = Math.max(4, Math.floor((leftInnerH - statusH - branchesH) * 0.6))
   const fileTreeH = Math.min(Math.max(3, visibleNodes.length + 2), fileTreeMaxH)
+  // Commits gets the remaining height after Status + Files + Branches (minus 3 section borders).
+  const commitsH = Math.max(4, leftInnerH - statusH - fileTreeH - branchesH - 3)
   // Estimate remaining rows for Commits (used for manual slicing while Commits lacks scrollbox).
   const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
@@ -1037,7 +1039,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
         </box>
 
         {/* [4] Commits */}
-        <box flexGrow={1} flexDirection="column" backgroundColor={pane === 4 ? theme.surface2 : theme.surface}>
+        <box height={commitsH} flexDirection="column" backgroundColor={pane === 4 ? theme.surface2 : theme.surface}>
           <box paddingX={1} width={leftW - 2} backgroundColor={pane === 4 ? theme.cyan : 'transparent'}>
             <text fg={pane === 4 ? theme.surface : theme.muted}>[4] Commits</text>
           </box>
