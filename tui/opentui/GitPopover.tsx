@@ -852,7 +852,12 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const leftInnerH = popH - 2
   const statusH = 4
   const branchesH = Math.max(3, Math.min(6, (data?.branches.length ?? 0) + 2))
-  const commitsH = Math.max(3, Math.min(8, (data?.commits.length ?? 0) + 2))
+  // Files: grow with content up to 60 % of the left panel, with a scrollbox inside.
+  // Commits gets whatever is left via flexGrow.
+  const fileTreeMaxH = Math.max(4, Math.floor((leftInnerH - statusH - branchesH) * 0.6))
+  const fileTreeH = Math.min(Math.max(3, visibleNodes.length + 2), fileTreeMaxH)
+  // Estimate remaining rows for Commits (used for manual slicing while Commits lacks scrollbox).
+  const commitsH = Math.max(4, leftInnerH - statusH - fileTreeH - branchesH - 2)
   const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
   const fileDiffLabel = fileDiffMode === 'viewer'
@@ -961,7 +966,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
 
         {/* [2] Files — tree view (scrollbox so large lists scroll naturally) */}
         <box
-          flexGrow={1}
+          height={fileTreeH}
           flexDirection="column"
           border={['bottom']} borderStyle="single"
           borderColor={pane === 2 ? theme.border2 : theme.border}
