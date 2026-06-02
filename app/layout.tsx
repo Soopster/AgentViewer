@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { THEMES } from '@/lib/themes'
+import { RouteTransition } from '@/components/RouteTransition'
 
 export const metadata: Metadata = {
   title: 'Agent Viewer',
@@ -19,7 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* eslint-disable-next-line react-doctor/no-danger, react-doctor/nextjs-no-native-script */}
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body>{children}</body>
+      <body><RouteTransition>{children}</RouteTransition></body>
     </html>
   )
 }

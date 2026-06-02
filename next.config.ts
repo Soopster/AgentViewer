@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
     viewTransition: true,
     optimizePackageImports: ['lucide-react', 'recharts'],
   },
+  logging: {
+    browserToTerminal: 'warn',
+  },
   devIndicators: false,
   // Keep the Agent SDK as a server-side external — it uses Node.js APIs
   // (filesystem, process spawning) that can't be bundled for the browser

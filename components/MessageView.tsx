@@ -4902,6 +4902,7 @@ export default function MessageView({
         {/* All-session analytics */}
         <Link
           href="/analytics"
+          transitionTypes={['route']}
           title="Cross-session analytics"
           className="av-hover-control"
           style={{

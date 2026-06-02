@@ -829,6 +829,7 @@ export default function AnalyticsPage() {
           </div>
           <Link
             href="/"
+            transitionTypes={['route']}
             style={{
               fontSize: 11,
               padding: '6px 10px',
