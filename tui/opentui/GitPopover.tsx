@@ -984,7 +984,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
             ref={fileTreeScrollRef}
             flexGrow={1}
             scrollY
-            scrollbarOptions={{ trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
+            scrollbarOptions={{ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }}
           >
             {visibleNodes.map((node, i) => {
               const isCursor = i === treeCursor && pane === 2
@@ -1092,7 +1092,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           height={rightH - 1}
           backgroundColor={theme.surface}
           scrollY
-          scrollbarOptions={{ trackOptions: { foregroundColor: theme.dim, backgroundColor: theme.surface } }}
+          scrollbarOptions={{ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }}
         >
           {contentLoading && diffLines.length === 1 && diffLines[0] === 'Loading…' ? (
             <box width={rightW}>
