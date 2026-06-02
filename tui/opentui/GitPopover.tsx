@@ -1027,21 +1027,18 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           <box paddingX={1} width={leftW - 2} backgroundColor={pane === 3 ? theme.cyan : 'transparent'}>
             <text fg={pane === 3 ? theme.surface : theme.muted}>[3] Branches</text>
           </box>
-          <box flexDirection="row">
-            <box flexGrow={1} flexDirection="column">
-              {(data?.branches ?? []).slice(branchScrollTop, branchScrollTop + (branchesH - 2)).map((b, i) => {
-                const isCurrent = b === data?.branch
-                const isSel = (branchScrollTop + i) === branchIndex && pane === 3
-                return (
-                  <box key={b} paddingX={1} backgroundColor={isSel ? theme.surface3 : 'transparent'}>
-                    <text fg={isCurrent ? theme.green : isSel ? theme.text : theme.muted} wrapMode="none">
-                      {isCurrent ? `* ${b}` : `  ${b}`}
-                    </text>
-                  </box>
-                )
-              })}
-            </box>
-            <PanelScrollbar total={data?.branches.length ?? 0} viewportH={branchesH - 2} scrollTop={branchScrollTop} theme={theme} />
+          <box flexDirection="column">
+            {(data?.branches ?? []).slice(branchScrollTop, branchScrollTop + (branchesH - 2)).map((b, i) => {
+              const isCurrent = b === data?.branch
+              const isSel = (branchScrollTop + i) === branchIndex && pane === 3
+              return (
+                <box key={b} paddingX={1} backgroundColor={isSel ? theme.surface3 : 'transparent'}>
+                  <text fg={isCurrent ? theme.green : isSel ? theme.text : theme.muted} wrapMode="none">
+                    {isCurrent ? `* ${b}` : `  ${b}`}
+                  </text>
+                </box>
+              )
+            })}
           </box>
         </box>
 
@@ -1050,24 +1047,21 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           <box paddingX={1} width={leftW - 2} backgroundColor={pane === 4 ? theme.cyan : 'transparent'}>
             <text fg={pane === 4 ? theme.surface : theme.muted}>[4] Commits</text>
           </box>
-          <box flexDirection="row">
-            <box flexGrow={1} flexDirection="column">
-              {(data?.commits ?? []).slice(commitScrollTop, commitScrollTop + (commitsH - 1)).map((c, i) => {
-                const isSel = (commitScrollTop + i) === commitIndex && pane === 4
-                const spaceIdx = c.indexOf(' ')
-                const hash = spaceIdx > 0 ? c.slice(0, spaceIdx) : c
-                const msg = spaceIdx > 0 ? c.slice(spaceIdx + 1) : ''
-                return (
-                  <box key={c} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'}>
-                    <text fg={theme.amber} wrapMode="none">{hash} </text>
-                    <text fg={isSel ? theme.text : theme.dim} wrapMode="none">
-                      {msg.slice(0, leftW - hash.length - 5)}
-                    </text>
-                  </box>
-                )
-              })}
-            </box>
-            <PanelScrollbar total={data?.commits.length ?? 0} viewportH={commitsH - 1} scrollTop={commitScrollTop} theme={theme} />
+          <box flexDirection="column">
+            {(data?.commits ?? []).slice(commitScrollTop, commitScrollTop + (commitsH - 1)).map((c, i) => {
+              const isSel = (commitScrollTop + i) === commitIndex && pane === 4
+              const spaceIdx = c.indexOf(' ')
+              const hash = spaceIdx > 0 ? c.slice(0, spaceIdx) : c
+              const msg = spaceIdx > 0 ? c.slice(spaceIdx + 1) : ''
+              return (
+                <box key={c} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'}>
+                  <text fg={theme.amber} wrapMode="none">{hash} </text>
+                  <text fg={isSel ? theme.text : theme.dim} wrapMode="none">
+                    {msg.slice(0, leftW - hash.length - 5)}
+                  </text>
+                </box>
+              )
+            })}
           </box>
         </box>
       </box>
