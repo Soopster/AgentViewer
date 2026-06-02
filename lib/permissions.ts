@@ -39,6 +39,72 @@ function stringField(record: Record<string, unknown>, key: string): string | und
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
+function codexPathLabel(value: unknown): string | undefined {
+  const record = asRecord(value)
+  if (!record) return undefined
+  if (record.type === 'path') return stringField(record, 'path')
+  if (record.type === 'glob_pattern') {
+    const pattern = stringField(record, 'pattern')
+    return pattern ? `glob ${pattern}` : undefined
+  }
+  if (record.type !== 'special') return undefined
+  const special = asRecord(record.value)
+  if (!special) return undefined
+  const subpath = stringField(special, 'subpath')
+  switch (special.kind) {
+    case 'root':
+      return ':root'
+    case 'minimal':
+      return ':minimal'
+    case 'project_roots':
+      return subpath ? `:workspace_roots/${subpath}` : ':workspace_roots'
+    case 'tmpdir':
+      return ':tmpdir'
+    case 'slash_tmp':
+      return '/tmp'
+    case 'unknown': {
+      const path = stringField(special, 'path')
+      if (!path) return undefined
+      return subpath ? `${path}/${subpath}` : path
+    }
+    default:
+      return undefined
+  }
+}
+
+function codexPermissionRule(value: unknown): string | undefined {
+  const permissions = asRecord(value)
+  if (!permissions) return undefined
+  const parts: string[] = []
+  const network = asRecord(permissions.network)
+  if (network?.enabled === true) parts.push('network')
+
+  const fileSystem = asRecord(permissions.fileSystem)
+  if (fileSystem) {
+    const entries = Array.isArray(fileSystem.entries) ? fileSystem.entries : []
+    for (const access of ['read', 'write', 'deny'] as const) {
+      const paths = entries.flatMap((entry) => {
+        const entryRecord = asRecord(entry)
+        if (!entryRecord || entryRecord.access !== access) return []
+        const label = codexPathLabel(entryRecord.path)
+        return label ? [label] : []
+      })
+      if (paths.length > 0) parts.push(`${access === 'deny' ? 'deny read' : access} ${paths.join(', ')}`)
+    }
+
+    const legacyRead = Array.isArray(fileSystem.read)
+      ? fileSystem.read.filter((entry): entry is string => typeof entry === 'string')
+      : []
+    if (legacyRead.length > 0) parts.push(`read ${legacyRead.join(', ')}`)
+    const legacyWrite = Array.isArray(fileSystem.write)
+      ? fileSystem.write.filter((entry): entry is string => typeof entry === 'string')
+      : []
+    if (legacyWrite.length > 0) parts.push(`write ${legacyWrite.join(', ')}`)
+  }
+
+  return parts.length > 0 ? parts.join('; ') : undefined
+}
+
 export function copilotPermissionSummary(permission: Record<string, unknown>): { title: string; detail?: string; canApproveAlways?: boolean } {
   const kind = stringField(permission, 'kind') ?? 'permission'
   const canApproveAlways = permission.canOfferSessionApproval === true
@@ -237,6 +303,10 @@ export function extractCodexApproval(payload: unknown): PendingPermission | null
   const command = stringField(params, 'command')
   const cwd = stringField(params, 'cwd')
   const reason = stringField(params, 'reason')
+  const requestedPermissionRule = codexPermissionRule(params.permissions)
+  const additionalPermissionRule = codexPermissionRule(params.additionalPermissions)
+  const paths = [cwd ? `cwd: ${cwd}` : undefined, requestedPermissionRule, additionalPermissionRule]
+    .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
   const title = method.includes('commandExecution')
     ? 'Codex wants to run a command'
     : method.includes('fileChange')
@@ -252,8 +322,8 @@ export function extractCodexApproval(payload: unknown): PendingPermission | null
     title,
     reason: reason ?? undefined,
     command: command ?? undefined,
-    paths: cwd ? [`cwd: ${cwd}`] : undefined,
-    detail: command ?? reason ?? undefined,
+    paths: paths.length > 0 ? paths : undefined,
+    detail: command ?? requestedPermissionRule ?? additionalPermissionRule ?? reason ?? undefined,
     canApproveAlways: true,
   }
 }

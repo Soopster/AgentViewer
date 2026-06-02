@@ -3105,7 +3105,7 @@ function isCodexIdleStatusNotification(notification: CodexNotification, sessionI
 // getCodexClient().respond(). Without this the turn hangs forever (the request
 // was previously dropped as an unmatched response).
 
-type PendingCodexApproval = { rawId: string | number; method: string }
+type PendingCodexApproval = { rawId: string | number; method: string; params: Record<string, unknown> }
 
 const pendingCodexApprovals = new Map<string, PendingCodexApproval>()
 
@@ -3142,12 +3142,24 @@ function codexApprovalRequestedEvent(threadId: string, request: CodexServerReque
   })
 }
 
+function grantedCodexPermissionsFromRequest(params: Record<string, unknown>, response: string): Record<string, unknown> {
+  if (response === 'reject' || response === 'decline' || response === 'cancel') return {}
+  const request = params.permissions && typeof params.permissions === 'object' && !Array.isArray(params.permissions)
+    ? params.permissions as Record<string, unknown>
+    : {}
+  const granted: Record<string, unknown> = {}
+  if (request.network && typeof request.network === 'object') granted.network = request.network
+  if (request.fileSystem && typeof request.fileSystem === 'object') granted.fileSystem = request.fileSystem
+  return granted
+}
+
 // Map a user decision to the per-method app-server response payload. Accepts the
 // generic once/always/reject vocabulary shared by every provider's permission
 // card, plus codex-native decision strings (accept/acceptForSession/decline/
-// cancel) for finer control. Returns undefined when the method doesn't use the
-// simple {decision} response (permissions/elicitation/user-input).
-function codexApprovalResult(method: string, response: string): { decision: string } | undefined {
+// cancel) for finer control. Permission-profile requests follow codex-rs'
+// composer flow: once grants for the turn, always grants for the session, and
+// reject continues with an empty granted-permissions object.
+function codexApprovalResult(method: string, response: string, params: Record<string, unknown>): Record<string, unknown> | undefined {
   const decision =
     response === 'accept' || response === 'acceptForSession' || response === 'decline' || response === 'cancel'
       ? response
@@ -3160,6 +3172,12 @@ function codexApprovalResult(method: string, response: string): { decision: stri
     case 'item/commandExecution/requestApproval':
     case 'item/fileChange/requestApproval':
       return { decision }
+    case 'item/permissions/requestApproval':
+      return {
+        permissions: grantedCodexPermissionsFromRequest(params, response),
+        scope: response === 'always' || response === 'acceptForSession' ? 'session' : 'turn',
+        strictAutoReview: response === 'strict',
+      }
     default:
       return undefined
   }
@@ -3171,7 +3189,7 @@ function respondCodexApproval(threadId: string, permissionId: string, response: 
   if (!pending) throw new Error('Approval request is no longer pending')
   pendingCodexApprovals.delete(key)
   const client = getCodexClient()
-  const result = codexApprovalResult(pending.method, response)
+  const result = codexApprovalResult(pending.method, response, pending.params)
   if (result === undefined) {
     client.respondError(pending.rawId, -32601, 'Approval type not supported by this client')
     return
@@ -3187,7 +3205,7 @@ function declinePendingCodexApprovals(threadId: string): void {
   for (const [key, pending] of Array.from(pendingCodexApprovals)) {
     if (!key.startsWith(`${threadId}:`)) continue
     pendingCodexApprovals.delete(key)
-    const result = codexApprovalResult(pending.method, 'reject')
+    const result = codexApprovalResult(pending.method, 'reject', pending.params)
     if (result === undefined) client.respondError(pending.rawId, -32601, 'Approval cancelled')
     else client.respond(pending.rawId, result)
   }
@@ -3302,6 +3320,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         pendingCodexApprovals.set(pendingCodexApprovalKey(sessionId, String(request.id)), {
           rawId: request.id,
           method: request.method,
+          params: request.params,
         })
         safeEnqueue(`data: ${codexApprovalRequestedEvent(sessionId, request)}\n\n`)
       })
