@@ -4353,7 +4353,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   }, [])
 
   if (viewMode === 'stream') {
-    const textBlocks = message.blocks.filter((b) => b.type === 'text' || b.type === 'thinking')
+    const textBlocks = message.blocks.filter((b) => b.type === 'text')
     if (textBlocks.length === 0) return null
     return (
       <SessionContext.Provider value={message.sessionId}>
