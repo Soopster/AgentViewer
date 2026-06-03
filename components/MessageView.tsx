@@ -5415,8 +5415,8 @@ export default function MessageView({
         )}
 
         <Button
-          onClick={() => setViewMode((v) => v === 'conversation' ? 'full' : v === 'full' ? 'continue' : v === 'continue' ? 'stream' : 'conversation')}
-          title={`View: ${viewMode} — click to cycle (conversation → full → continue → stream)`}
+          onClick={() => setViewMode((v) => (v === 'conversation' || v === 'full') ? 'continue' : v === 'continue' ? 'stream' : 'conversation')}
+          title={`View: ${viewMode} — click to cycle (full → continue → stream)`}
           variant="outline"
           size="sm"
           className="av-hover-control"
@@ -5434,7 +5434,7 @@ export default function MessageView({
             letterSpacing: '0.08em',
           }}
         >
-          {viewMode === 'conversation' ? 'CONVO' : viewMode === 'full' ? 'FULL' : viewMode === 'continue' ? 'CONT' : 'STREAM'}
+          {(viewMode === 'conversation' || viewMode === 'full') ? 'FULL' : viewMode === 'continue' ? 'CONT' : 'STREAM'}
         </Button>
 
         <Button
