@@ -4357,7 +4357,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
     if (textBlocks.length === 0) return null
     return (
       <SessionContext.Provider value={message.sessionId}>
-        <div style={{ marginBottom: 20, paddingLeft: 2 }}>
+        <div style={{ marginBottom: 8, paddingLeft: 2 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
             <span style={{ fontFamily: "'Oxanium', monospace", fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: style.labelColor }}>
               {roleLabel}
