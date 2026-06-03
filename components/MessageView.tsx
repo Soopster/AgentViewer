@@ -1487,6 +1487,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   forking,
   resumeTarget,
   bookmarked,
+  streamMode,
   onForkFromMessage,
   onToggleResume,
   onToggleBookmark,
@@ -1502,6 +1503,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   forking: boolean
   resumeTarget: boolean
   bookmarked: boolean
+  streamMode: boolean
   onForkFromMessage: (messageId: string) => void
   onToggleResume: (messageId: string) => void
   onToggleBookmark: (messageId: string) => void
@@ -1548,16 +1550,16 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
       style={{
         position: 'relative',
         opacity: row.dimmed ? 0.92 : 1,
-        borderRadius: 10,
+        borderRadius: streamMode ? 0 : 10,
         // The cyan ring is the transient nav/target highlight; the amber ring
         // is the persistent bookmark accent. Both use theme-aware colours so
         // bookmarks read correctly on every theme. Highlight wins when both.
-        boxShadow: highlighted
+        boxShadow: streamMode ? 'none' : highlighted
           ? '0 0 0 2px rgba(56,217,245,0.55), 0 0 36px rgba(56,217,245,0.18)'
           : bookmarked
             ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent), 0 0 22px color-mix(in srgb, var(--t-bookmark) 14%, transparent)'
             : 'none',
-        background: highlighted
+        background: streamMode ? 'transparent' : highlighted
           ? 'rgba(56,217,245,0.06)'
           : bookmarked
             ? 'color-mix(in srgb, var(--t-bookmark) 7%, transparent)'
@@ -1565,7 +1567,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
         transition: 'box-shadow 180ms ease, background 180ms ease',
       }}
     >
-      {bookmarked && (
+      {bookmarked && !streamMode && (
         <span
           className="timeline-row-bookmark-flag"
           aria-hidden
@@ -1574,7 +1576,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           ★
         </span>
       )}
-      {row.previewBadge && (
+      {row.previewBadge && !streamMode && (
         <div style={{
           display: 'flex',
           justifyContent: 'flex-end',
@@ -1620,7 +1622,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           </span>
         </div>
       )}
-      {row.liveToolActivities && row.liveToolActivities.length > 0 && (
+      {row.liveToolActivities && row.liveToolActivities.length > 0 && !streamMode && (
         <div style={{ margin: '0 0 10px 38px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {row.liveToolActivities.map((activity) => (
             <span
@@ -1649,7 +1651,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           ))}
         </div>
       )}
-      {showActions && (
+      {showActions && !streamMode && (
         <div className="timeline-row-actions">
           {canBookmark && (
             <button
@@ -1854,6 +1856,7 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   forking,
   resumeTarget,
   bookmarked,
+  streamMode,
   onMeasure,
   onLastRowRef,
   onForkFromMessage,
@@ -1870,6 +1873,7 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   forking: boolean
   resumeTarget: boolean
   bookmarked: boolean
+  streamMode: boolean
   onMeasure: (key: string, height: number) => void
   onLastRowRef: (node: HTMLDivElement | null) => void
   onForkFromMessage: (messageId: string) => void
@@ -1921,6 +1925,7 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
         forking={forking}
         resumeTarget={resumeTarget}
         bookmarked={bookmarked}
+        streamMode={streamMode}
         onForkFromMessage={onForkFromMessage}
         onToggleResume={onToggleResume}
         onToggleBookmark={onToggleBookmark}
@@ -5952,6 +5957,7 @@ export default function MessageView({
                           forking={forkingMessageId === row.message.uuid}
                           resumeTarget={resumeFromMessageId === row.message.uuid}
                           bookmarked={bookmarkIds.has(row.message.uuid)}
+                          streamMode={viewMode === 'stream'}
                           onMeasure={handleTimelineRowMeasure}
                           onLastRowRef={setLastTimelineRow}
                           onForkFromMessage={handleForkFromMessage}
