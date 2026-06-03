@@ -1545,26 +1545,34 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
     onEditFromMessage(row.message.uuid, copyText)
   }, [canEdit, copyText, onEditFromMessage, row.message.uuid])
 
+  const streamActive = streamMode && (highlighted || bookmarked)
   return (
     <div
       style={{
         position: 'relative',
         opacity: row.dimmed ? 0.92 : 1,
-        borderRadius: streamMode ? 0 : 10,
+        borderRadius: streamMode ? (streamActive ? 6 : 0) : 10,
+        padding: streamActive ? '8px 12px' : undefined,
         // The cyan ring is the transient nav/target highlight; the amber ring
         // is the persistent bookmark accent. Both use theme-aware colours so
         // bookmarks read correctly on every theme. Highlight wins when both.
-        boxShadow: streamMode ? 'none' : highlighted
-          ? '0 0 0 2px rgba(56,217,245,0.55), 0 0 36px rgba(56,217,245,0.18)'
-          : bookmarked
-            ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent), 0 0 22px color-mix(in srgb, var(--t-bookmark) 14%, transparent)'
-            : 'none',
+        boxShadow: streamMode
+          ? highlighted
+            ? '0 0 0 1.5px rgba(56,217,245,0.55)'
+            : bookmarked
+              ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent)'
+              : 'none'
+          : highlighted
+            ? '0 0 0 2px rgba(56,217,245,0.55), 0 0 36px rgba(56,217,245,0.18)'
+            : bookmarked
+              ? '0 0 0 1.5px color-mix(in srgb, var(--t-bookmark) 60%, transparent), 0 0 22px color-mix(in srgb, var(--t-bookmark) 14%, transparent)'
+              : 'none',
         background: streamMode ? 'transparent' : highlighted
           ? 'rgba(56,217,245,0.06)'
           : bookmarked
             ? 'color-mix(in srgb, var(--t-bookmark) 7%, transparent)'
             : 'transparent',
-        transition: 'box-shadow 180ms ease, background 180ms ease',
+        transition: 'box-shadow 180ms ease, background 180ms ease, padding 180ms ease',
       }}
     >
       {bookmarked && !streamMode && (
