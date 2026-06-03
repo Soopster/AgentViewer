@@ -5087,9 +5087,6 @@ export default function MessageView({
                 </button>
               )}
               <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
-              {/* Code theme */}
-              <div style={{ padding: '4px 14px' }}><CodeThemeToggle /></div>
-              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
               {/* View mode */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>MESSAGES</div>
               {(['conversation', 'continue', 'stream'] as const).map((mode) => (
@@ -5115,6 +5112,9 @@ export default function MessageView({
             </div>
           )}
         </div>
+
+        {/* Code theme — standalone so its sub-popover isn't clipped by the VIEW dropdown */}
+        <CodeThemeToggle />
 
         {/* ··· actions dropdown — session actions */}
         {!isProject && (
