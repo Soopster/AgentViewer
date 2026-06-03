@@ -2051,6 +2051,10 @@ export default function MessageView({
   const [deleting, setDeleting] = useState(false)
   const [cliPopoverOpen, setCliPopoverOpen] = useState(false)
   const cliPopoverRef = useRef<HTMLDivElement>(null)
+  const [viewDropdownOpen, setViewDropdownOpen] = useState(false)
+  const viewDropdownRef = useRef<HTMLDivElement>(null)
+  const [actionsDropdownOpen, setActionsDropdownOpen] = useState(false)
+  const actionsDropdownRef = useRef<HTMLDivElement>(null)
   const [sessionActionLoading, setSessionActionLoading] = useState<string | null>(null)
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
@@ -2296,6 +2300,26 @@ export default function MessageView({
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
   }, [cliPopoverOpen])
+
+  useEffect(() => {
+    if (!viewDropdownOpen) return
+    function onDown(e: MouseEvent) {
+      if (viewDropdownRef.current && !viewDropdownRef.current.contains(e.target as Node))
+        setViewDropdownOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [viewDropdownOpen])
+
+  useEffect(() => {
+    if (!actionsDropdownOpen) return
+    function onDown(e: MouseEvent) {
+      if (actionsDropdownRef.current && !actionsDropdownRef.current.contains(e.target as Node))
+        setActionsDropdownOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [actionsDropdownOpen])
 
   const resizeComposer = useCallback(() => {
     const textarea = textareaRef.current
@@ -5016,449 +5040,157 @@ export default function MessageView({
           </Button>
         )}
 
-        {/* Tasks panel */}
-        {!isProject && taskRegistry.size > 0 && (
-          <Button
-            onClick={() => setTaskRailOpen((value) => !value)}
-            title={taskRailOpen ? 'Hide task panel' : 'Show task panel'}
-            variant="outline"
-            size="sm"
-            className="av-hover-control"
-            style={{
-              flexShrink: 0,
-              height: 26,
-              padding: '0 10px',
-              background: taskRailOpen ? 'rgba(245,158,11,0.14)' : 'transparent',
-              border: '1px solid var(--border)',
-              borderRadius: 5,
-              color: taskRailOpen ? 'var(--amber)' : 'var(--text-2)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.08em',
-              cursor: 'pointer',
-            }}
-          >
-            ☐ TASKS · {taskRegistry.size}
-          </Button>
-        )}
-
-        <Button
-          onClick={() => setShowVisualizer((value) => !value)}
-          title={showVisualizer ? 'Show transcript view' : 'Show session visualiser'}
-          variant="outline"
-          size="sm"
-          className="av-hover-control"
-          style={{
-            flexShrink: 0,
-            height: 26,
-            padding: '0 10px',
-            background: showVisualizer ? 'rgba(56,217,245,0.14)' : 'rgba(56,217,245,0.06)',
-            border: '1px solid rgba(56,217,245,0.22)',
-            borderRadius: 5,
-            color: showVisualizer ? 'var(--cyan)' : 'var(--text-3)',
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            letterSpacing: '0.08em',
-            cursor: 'pointer',
-          }}
-        >
-          <ChartNetwork data-icon="inline-start" />
-          {showVisualizer ? 'TRANSCRIPT' : 'VISUALISER'}
-        </Button>
-
-        {/* Code theme picker */}
-        <CodeThemeToggle />
-
         {/* Stats */}
         {!loading && (
-          <span
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              color: 'var(--text-3)',
-              flexShrink: 0,
-            }}
-          >
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', flexShrink: 0 }}>
             {isProject
               ? `${projectView!.sessionCount} sessions · ${threaded.length} turns`
               : `${threaded.length} turns · ${messages.length} events`}
           </span>
         )}
 
-        {/* Fork button (single session only) */}
-        {!isProject && session?.provider !== 'copilot' && (
-          <Button
-            onClick={handleFork}
-            disabled={forking}
-            title="Fork this session into a new branch"
-            variant="outline"
-            size="sm"
+        {/* VIEW dropdown — display settings */}
+        <div ref={viewDropdownRef} style={{ position: 'relative', flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => { setViewDropdownOpen(v => !v); setActionsDropdownOpen(false) }}
             className="av-hover-control"
             style={{
-              flexShrink: 0,
-              height: 26,
-              padding: '0 10px',
-              background: 'rgba(139,128,240,0.07)',
-              border: '1px solid rgba(139,128,240,0.18)',
-              borderRadius: 5,
-              cursor: forking ? 'not-allowed' : 'pointer',
-              color: 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.08em',
-              transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-              opacity: forking ? 0.5 : 1,
-            }}
-            onMouseEnter={e => {
-              if (!forking) {
-                e.currentTarget.style.background    = 'rgba(139,128,240,0.14)'
-                e.currentTarget.style.color         = 'var(--violet)'
-                e.currentTarget.style.borderColor   = 'rgba(139,128,240,0.35)'
-              }
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background    = 'rgba(139,128,240,0.07)'
-              e.currentTarget.style.color         = 'var(--text-3)'
-              e.currentTarget.style.borderColor   = 'rgba(139,128,240,0.18)'
+              height: 26, padding: '0 10px', borderRadius: 5, cursor: 'pointer',
+              background: viewDropdownOpen ? 'rgba(139,92,246,0.18)' : 'rgba(139,92,246,0.08)',
+              border: '1px solid rgba(139,92,246,0.22)',
+              color: 'var(--violet)',
+              fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.08em',
             }}
           >
-            {forking ? 'FORKING…' : 'FORK'}
-          </Button>
-        )}
+            VIEW ▾
+          </button>
+          {viewDropdownOpen && (
+            <div style={{
+              position: 'absolute', top: 32, right: 0, zIndex: 60,
+              background: 'var(--surface-2)', border: '1px solid var(--border)',
+              borderRadius: 8, padding: '10px 0', minWidth: 200,
+              boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
+              display: 'flex', flexDirection: 'column', gap: 0,
+            }}>
+              {/* Visualiser toggle */}
+              <button type="button" onClick={() => { setShowVisualizer(v => !v); setViewDropdownOpen(false) }}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showVisualizer ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                <ChartNetwork style={{ width: 13, height: 13, flexShrink: 0 }} />
+                {showVisualizer ? 'TRANSCRIPT' : 'VISUALISER'}
+              </button>
+              {/* Tasks toggle */}
+              {!isProject && taskRegistry.size > 0 && (
+                <button type="button" onClick={() => { setTaskRailOpen(v => !v); setViewDropdownOpen(false) }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: taskRailOpen ? 'var(--amber)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                  ☐ TASKS · {taskRegistry.size}
+                </button>
+              )}
+              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              {/* Code theme */}
+              <div style={{ padding: '4px 14px' }}><CodeThemeToggle /></div>
+              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              {/* View mode */}
+              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>MESSAGES</div>
+              {(['conversation', 'continue', 'stream'] as const).map((mode) => (
+                <button key={mode} type="button"
+                  onClick={() => { setViewMode(mode); setViewDropdownOpen(false) }}
+                  style={{ padding: '7px 14px', background: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'rgba(139,92,246,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'var(--violet)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                  {mode === 'conversation' ? 'FULL' : mode === 'continue' ? 'CONT' : 'STREAM'}
+                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
+                    {mode === 'conversation' ? 'all cards' : mode === 'continue' ? 'no tools' : 'plain text'}
+                  </span>
+                </button>
+              ))}
+              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              {/* Density */}
+              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DENSITY</div>
+              {(['comfortable', 'balanced', 'dense'] as const).map((d) => (
+                <button key={d} type="button"
+                  onClick={() => { setDensity(d); setViewDropdownOpen(false) }}
+                  style={{ padding: '7px 14px', background: density === d ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: density === d ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                  {d === 'comfortable' ? 'COMFY' : d.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
-        {/* CLI continue button */}
-        {!isProject && cliCommand && (
-          <div ref={cliPopoverRef} style={{ position: 'relative', flexShrink: 0 }}>
+        {/* ··· actions dropdown — session actions */}
+        {!isProject && (
+          <div ref={actionsDropdownRef} style={{ position: 'relative', flexShrink: 0 }}>
             <button
               type="button"
-              onClick={() => setCliPopoverOpen(v => !v)}
-              title="Get CLI command to resume this session"
+              onClick={() => { setActionsDropdownOpen(v => !v); setViewDropdownOpen(false) }}
               className="av-hover-control"
               style={{
-                height: 26,
-                padding: '0 10px',
-                background: cliPopoverOpen ? 'rgba(56,217,245,0.13)' : 'rgba(56,217,245,0.07)',
-                border: '1px solid rgba(56,217,245,0.18)',
-                borderRadius: 5,
-                cursor: 'pointer',
-                color: cliPopoverOpen ? 'var(--cyan)' : 'var(--text-3)',
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: 11,
-                letterSpacing: '0.08em',
-                transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-              }}
-              onMouseEnter={e => {
-                if (!cliPopoverOpen) {
-                  e.currentTarget.style.background = 'rgba(56,217,245,0.13)'
-                  e.currentTarget.style.color = 'var(--cyan)'
-                  e.currentTarget.style.borderColor = 'rgba(56,217,245,0.35)'
-                }
-              }}
-              onMouseLeave={e => {
-                if (!cliPopoverOpen) {
-                  e.currentTarget.style.background = 'rgba(56,217,245,0.07)'
-                  e.currentTarget.style.color = 'var(--text-3)'
-                  e.currentTarget.style.borderColor = 'rgba(56,217,245,0.18)'
-                }
-              }}
-            >CLI</button>
-            {cliPopoverOpen && (
-              <div style={{
-                position: 'absolute',
-                top: 32,
-                right: 0,
-                zIndex: 50,
-                background: 'var(--surface-2, #1e1e2e)',
+                height: 26, padding: '0 10px', borderRadius: 5, cursor: 'pointer',
+                background: actionsDropdownOpen ? 'var(--surface-3)' : 'transparent',
                 border: '1px solid var(--border)',
-                borderRadius: 8,
-                padding: '10px 12px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-                minWidth: 320,
+                color: 'var(--text-2)',
+                fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, letterSpacing: '0.05em',
+              }}
+            >
+              ···
+            </button>
+            {actionsDropdownOpen && (
+              <div style={{
+                position: 'absolute', top: 32, right: 0, zIndex: 60,
+                background: 'var(--surface-2)', border: '1px solid var(--border)',
+                borderRadius: 8, padding: '10px 0', minWidth: 160,
                 boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
+                display: 'flex', flexDirection: 'column', gap: 0,
               }}>
-                <code style={{
-                  fontSize: 11,
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  color: 'var(--cyan)',
-                  wordBreak: 'break-all',
-                  userSelect: 'all',
-                }}>
-                  {cliCommand}
-                </code>
-                <button
-                  type="button"
-                  style={{
-                    alignSelf: 'flex-end',
-                    height: 24,
-                    fontSize: 11,
-                    padding: '0 10px',
-                    cursor: 'pointer',
-                    background: 'rgba(56,217,245,0.07)',
-                    border: '1px solid rgba(56,217,245,0.25)',
-                    borderRadius: 4,
-                    color: 'var(--cyan)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    letterSpacing: '0.08em',
-                  }}
-                  onClick={() => {
-                    void navigator.clipboard.writeText(cliCommand)
-                    setCliPopoverOpen(false)
-                  }}
-                >COPY</button>
+                {session?.provider !== 'copilot' && (
+                  <button type="button" onClick={() => { handleFork(); setActionsDropdownOpen(false) }} disabled={forking}
+                    style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: forking ? 'not-allowed' : 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: forking ? 0.5 : 1 }}>
+                    {forking ? 'FORKING…' : 'FORK'}
+                  </button>
+                )}
+                {cliCommand && (
+                  <div ref={cliPopoverRef} style={{ position: 'relative' }}>
+                    <button type="button" onClick={() => setCliPopoverOpen(v => !v)}
+                      style={{ width: '100%', padding: '7px 14px', background: cliPopoverOpen ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: cliPopoverOpen ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                      CLI
+                    </button>
+                    {cliPopoverOpen && (
+                      <div style={{ position: 'absolute', top: 0, right: 170, zIndex: 70, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 320, boxShadow: '0 4px 24px rgba(0,0,0,0.35)' }}>
+                        <code style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--cyan)', wordBreak: 'break-all', userSelect: 'all' }}>{cliCommand}</code>
+                        <button type="button" style={{ alignSelf: 'flex-end', height: 24, fontSize: 11, padding: '0 10px', cursor: 'pointer', background: 'rgba(56,217,245,0.07)', border: '1px solid rgba(56,217,245,0.25)', borderRadius: 4, color: 'var(--cyan)', fontFamily: "'IBM Plex Mono', monospace", letterSpacing: '0.08em' }}
+                          onClick={() => { void navigator.clipboard.writeText(cliCommand); setCliPopoverOpen(false); setActionsDropdownOpen(false) }}>COPY</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <button type="button" onClick={() => { handleExport(); setActionsDropdownOpen(false) }} disabled={exporting}
+                  style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: exporting ? 'not-allowed' : 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: exporting ? 0.6 : 1 }}>
+                  {exporting ? 'EXPORTING…' : 'EXPORT'}
+                </button>
+                <button type="button" onClick={() => { toggleDiagnostics(); setActionsDropdownOpen(false) }}
+                  style={{ padding: '7px 14px', background: showDiagnostics ? 'rgba(234,170,64,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: showDiagnostics ? 'var(--amber)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                  DIAG
+                </button>
+                {activeProvider === 'opencode' && (
+                  <>
+                    {sessionCapabilities?.shareSession && <button type="button" onClick={() => { runSessionAction('share'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>SHARE</button>}
+                    {sessionCapabilities?.unshareSession && <button type="button" onClick={() => { runSessionAction('unshare'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>UNSHARE</button>}
+                    {sessionCapabilities?.summarizeSession && <button type="button" onClick={() => { runSessionAction('summarize'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>SUMMARY</button>}
+                    {sessionCapabilities?.unrevertSession && <button type="button" onClick={() => { runSessionAction('unrevert'); setActionsDropdownOpen(false) }} disabled={!!sessionActionLoading} style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: sessionActionLoading ? 0.55 : 1 }}>UNREVERT</button>}
+                  </>
+                )}
+                {sessionCapabilities?.deleteSession && (
+                  <>
+                    <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+                    <button type="button" onClick={() => { handleDeleteSession(); setActionsDropdownOpen(false) }} disabled={deleting}
+                      style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: deleting ? 'not-allowed' : 'pointer', color: deleting ? 'var(--red, #f87171)' : 'rgba(248,113,113,0.8)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: deleting ? 0.55 : 1 }}>
+                      {deleting ? 'DELETING…' : 'DELETE'}
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
         )}
-
-        {!isProject && activeProvider === 'opencode' && (
-          <>
-            {sessionCapabilities?.shareSession && (
-              <Button
-                onClick={() => runSessionAction('share')}
-                disabled={!!sessionActionLoading}
-                title="Share OpenCode session"
-                variant="outline"
-                size="sm"
-                className="av-hover-control"
-                style={{
-                  flexShrink: 0,
-                  height: 26,
-                  padding: '0 8px',
-                  background: 'rgba(45,212,160,0.07)',
-                  border: '1px solid rgba(45,212,160,0.18)',
-                  borderRadius: 5,
-                  color: 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 10,
-                  letterSpacing: '0.08em',
-                  cursor: sessionActionLoading ? 'not-allowed' : 'pointer',
-                  opacity: sessionActionLoading ? 0.55 : 1,
-                }}
-              >
-                SHARE
-              </Button>
-            )}
-            {sessionCapabilities?.unshareSession && (
-              <Button
-                onClick={() => runSessionAction('unshare')}
-                disabled={!!sessionActionLoading}
-                title="Unshare OpenCode session"
-                variant="outline"
-                size="sm"
-                className="av-hover-control"
-                style={{
-                  flexShrink: 0,
-                  height: 26,
-                  padding: '0 8px',
-                  background: 'rgba(45,212,160,0.07)',
-                  border: '1px solid rgba(45,212,160,0.18)',
-                  borderRadius: 5,
-                  color: 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 10,
-                  letterSpacing: '0.08em',
-                  cursor: sessionActionLoading ? 'not-allowed' : 'pointer',
-                  opacity: sessionActionLoading ? 0.55 : 1,
-                }}
-              >
-                UNSHARE
-              </Button>
-            )}
-            {sessionCapabilities?.summarizeSession && (
-              <Button
-                onClick={() => runSessionAction('summarize')}
-                disabled={!!sessionActionLoading}
-                title="Summarize OpenCode session"
-                variant="outline"
-                size="sm"
-                className="av-hover-control"
-                style={{
-                  flexShrink: 0,
-                  height: 26,
-                  padding: '0 8px',
-                  background: 'rgba(234,170,64,0.07)',
-                  border: '1px solid rgba(234,170,64,0.18)',
-                  borderRadius: 5,
-                  color: 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 10,
-                  letterSpacing: '0.08em',
-                  cursor: sessionActionLoading ? 'not-allowed' : 'pointer',
-                  opacity: sessionActionLoading ? 0.55 : 1,
-                }}
-              >
-                SUMMARY
-              </Button>
-            )}
-            {sessionCapabilities?.unrevertSession && (
-              <Button
-                onClick={() => runSessionAction('unrevert')}
-                disabled={!!sessionActionLoading}
-                title="Restore reverted OpenCode changes"
-                variant="outline"
-                size="sm"
-                className="av-hover-control"
-                style={{
-                  flexShrink: 0,
-                  height: 26,
-                  padding: '0 8px',
-                  background: 'rgba(234,170,64,0.07)',
-                  border: '1px solid rgba(234,170,64,0.18)',
-                  borderRadius: 5,
-                  color: 'var(--text-3)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 10,
-                  letterSpacing: '0.08em',
-                  cursor: sessionActionLoading ? 'not-allowed' : 'pointer',
-                  opacity: sessionActionLoading ? 0.55 : 1,
-                }}
-              >
-                UNREVERT
-              </Button>
-            )}
-          </>
-        )}
-
-        {/* Export button (single session only) */}
-        {!isProject && (
-          <Button
-            onClick={handleExport}
-            disabled={exporting}
-            title="Export session to HTML"
-            variant="outline"
-            size="sm"
-            className="av-hover-control"
-            style={{
-              flexShrink: 0,
-              height: 26,
-              padding: '0 10px',
-              background: 'rgba(56,217,245,0.07)',
-              border: '1px solid rgba(56,217,245,0.18)',
-              borderRadius: 5,
-              cursor: exporting ? 'not-allowed' : 'pointer',
-              color: 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.08em',
-              transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-              opacity: exporting ? 0.6 : 1,
-            }}
-            onMouseEnter={e => {
-              if (!exporting) {
-                e.currentTarget.style.background    = 'rgba(56,217,245,0.13)'
-                e.currentTarget.style.color         = 'var(--cyan)'
-                e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.35)'
-              }
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background    = 'rgba(56,217,245,0.07)'
-              e.currentTarget.style.color         = 'var(--text-3)'
-              e.currentTarget.style.borderColor   = 'rgba(56,217,245,0.18)'
-            }}
-          >
-            {exporting ? 'EXPORTING…' : 'EXPORT'}
-          </Button>
-        )}
-
-        {!isProject && sessionCapabilities?.deleteSession && (
-          <Button
-            onClick={handleDeleteSession}
-            disabled={deleting}
-            title="Delete session"
-            variant="outline"
-            size="sm"
-            className="av-hover-control"
-            style={{
-              flexShrink: 0,
-              height: 26,
-              padding: '0 10px',
-              background: 'rgba(248,113,113,0.07)',
-              border: '1px solid rgba(248,113,113,0.18)',
-              borderRadius: 5,
-              cursor: deleting ? 'not-allowed' : 'pointer',
-              color: deleting ? 'var(--red, #f87171)' : 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.08em',
-              opacity: deleting ? 0.55 : 1,
-            }}
-          >
-            {deleting ? 'DELETING…' : 'DELETE'}
-          </Button>
-        )}
-
-        {!isProject && (
-          <Button
-            onClick={toggleDiagnostics}
-            title="Show session diagnostics"
-            variant="outline"
-            size="sm"
-            className="av-hover-control"
-            style={{
-              flexShrink: 0,
-              height: 26,
-              padding: '0 10px',
-              background: showDiagnostics ? 'rgba(234,170,64,0.14)' : 'rgba(234,170,64,0.07)',
-              border: '1px solid rgba(234,170,64,0.18)',
-              borderRadius: 5,
-              cursor: 'pointer',
-              color: showDiagnostics ? 'var(--yellow, #fbbf24)' : 'var(--text-3)',
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 11,
-              letterSpacing: '0.08em',
-            }}
-          >
-            DIAG
-          </Button>
-        )}
-
-        <Button
-          onClick={() => setViewMode((v) => (v === 'conversation' || v === 'full') ? 'continue' : v === 'continue' ? 'stream' : 'conversation')}
-          title={`View: ${viewMode} — click to cycle (full → continue → stream)`}
-          variant="outline"
-          size="sm"
-          className="av-hover-control"
-          style={{
-            flexShrink: 0,
-            height: 26,
-            padding: '0 10px',
-            background: viewMode === 'stream' ? 'rgba(45,212,160,0.10)' : viewMode === 'continue' ? 'rgba(139,92,246,0.05)' : 'rgba(139,92,246,0.14)',
-            border: viewMode === 'stream' ? '1px solid rgba(45,212,160,0.28)' : '1px solid rgba(139,92,246,0.22)',
-            borderRadius: 5,
-            cursor: 'pointer',
-            color: viewMode === 'stream' ? 'var(--green)' : viewMode === 'continue' ? 'var(--text-3)' : 'var(--violet)',
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            letterSpacing: '0.08em',
-          }}
-        >
-          {(viewMode === 'conversation' || viewMode === 'full') ? 'FULL' : viewMode === 'continue' ? 'CONT' : 'STREAM'}
-        </Button>
-
-        <Button
-          onClick={() => setDensity((d) => d === 'comfortable' ? 'balanced' : d === 'balanced' ? 'dense' : 'comfortable')}
-          title={`Density: ${density} — click to cycle`}
-          variant="outline"
-          size="sm"
-          className="av-hover-control"
-          style={{
-            flexShrink: 0,
-            height: 26,
-            padding: '0 10px',
-            background: density === 'comfortable' ? 'rgba(56,217,245,0.08)' : density === 'dense' ? 'rgba(251,191,36,0.08)' : 'rgba(56,217,245,0.04)',
-            border: density === 'comfortable' ? '1px solid rgba(56,217,245,0.28)' : density === 'dense' ? '1px solid rgba(251,191,36,0.28)' : '1px solid rgba(56,217,245,0.16)',
-            borderRadius: 5,
-            cursor: 'pointer',
-            color: density === 'comfortable' ? 'var(--cyan)' : density === 'dense' ? 'var(--amber)' : 'var(--text-3)',
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
-            letterSpacing: '0.08em',
-          }}
-        >
-          {density === 'comfortable' ? 'COMFY' : density === 'dense' ? 'DENSE' : 'BALANCED'}
-        </Button>
 
         {/* Live pill */}
         <div
