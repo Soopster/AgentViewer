@@ -212,7 +212,7 @@ export async function setConfiguredTuiDensity(density: TuiDensity): Promise<void
 
 export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptView> {
   const parsed = await readTuiState()
-  return parsed.transcriptView === 'full' ? 'full' : 'conversation'
+  return parsed.transcriptView === 'full' ? 'full' : parsed.transcriptView === 'continue' ? 'continue' : parsed.transcriptView === 'stream' ? 'stream' : 'conversation'
 }
 
 export async function setConfiguredTuiTranscriptView(transcriptView: TuiTranscriptView): Promise<void> {

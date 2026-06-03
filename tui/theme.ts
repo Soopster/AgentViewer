@@ -83,7 +83,7 @@ export type TuiThemeMode =
   | 'resend'
   | 'cyber'
 export type TuiDensity = 'comfortable' | 'balanced' | 'dense'
-export type TuiTranscriptView = 'conversation' | 'full'
+export type TuiTranscriptView = 'conversation' | 'full' | 'continue' | 'stream'
 
 export type TuiThemePalette = {
   bg: string

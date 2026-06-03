@@ -2437,7 +2437,7 @@ function cycleDensityValue(current: TuiDensity): TuiDensity {
 }
 
 function cycleTranscriptViewValue(current: TuiTranscriptView): TuiTranscriptView {
-  return current === 'conversation' ? 'full' : 'conversation'
+  return current === 'conversation' ? 'full' : current === 'full' ? 'continue' : current === 'continue' ? 'stream' : 'conversation'
 }
 
 const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
@@ -2748,6 +2748,7 @@ type TranscriptCardProps = {
   bookmarked: boolean
   thinkingMode: boolean
   imessageStyle: boolean
+  streamMode: boolean
 }
 
 type SelectableMarkdownProps = {
@@ -2801,6 +2802,7 @@ function TranscriptCardInner({
   bookmarked,
   thinkingMode,
   imessageStyle,
+  streamMode,
 }: TranscriptCardProps) {
   const {
     landmarks,
@@ -2877,6 +2879,48 @@ function TranscriptCardInner({
   )
   const landmarkWidth = rightPaneWidth - 4
   const selectionColors = terminalSelectionColors(theme)
+
+  if (streamMode) {
+    const streamWidth = Math.max(rightPaneWidth - 2, 16)
+    const streamTextWidth = Math.max(rightPaneWidth - 4, 12)
+    const roleLine = fitText(
+      `${marker} ${card.label}${card.timestamp ? `  ${card.timestamp}` : ''}`,
+      streamWidth,
+    )
+    const streamBg = hasCursor ? theme.surface3 : isSelected ? theme.surface2 : undefined
+    return (
+      <box id={`card:${card.key}`} flexDirection="column" marginBottom={1} backgroundColor={streamBg}>
+        {landmarks.map((landmark, landmarkIndex) => {
+          const lmColor = landmark.kind === 'resume'
+            ? theme.cyan
+            : landmark.kind === 'unread'
+              ? theme.amber
+              : landmark.kind === 'day'
+                ? theme.violet
+                : theme.dim
+          return (
+            <text key={`${card.key}:lm:${landmarkIndex}`} fg={lmColor} selectable {...selectionColors}>
+              {fitText(landmark.text, streamWidth)}
+            </text>
+          )
+        })}
+        <text fg={hasCursor ? accent : isSearchHit ? theme.cyan : theme.dim} selectable {...selectionColors}>
+          {roleLine}
+        </text>
+        {bodyLines.map((line, lineIndex) => (
+          <text
+            key={`${card.key}:s:${lineIndex}`}
+            fg={transcriptColor(line, theme)}
+            wrapMode="none"
+            selectable
+            {...selectionColors}
+          >
+            {fitText(line.text, streamTextWidth)}
+          </text>
+        ))}
+      </box>
+    )
+  }
 
   return (
     <box
@@ -3521,6 +3565,15 @@ export default function OpenTuiApp() {
     return [...baseCards, ...liveCards]
   }, [density, liveTranscriptMessagesForSession, sessionDetail, selectedSessionTarget, showToolCalls])
 
+  // In 'continue' and 'stream' modes, hide technical/diff/system cards entirely
+  // so only the conversation layer (user + assistant text) is visible.
+  const visibleTranscriptCards = useMemo(
+    () => (transcriptView === 'continue' || transcriptView === 'stream')
+      ? transcriptCards.filter((card) => !card.autoFold)
+      : transcriptCards,
+    [transcriptCards, transcriptView],
+  )
+
   useLayoutEffect(() => {
     if (!selectedSessionTarget || !sessionDetail) return
     const key = sessionKey(selectedSessionTarget)
@@ -3578,25 +3631,25 @@ export default function OpenTuiApp() {
   }, [density, sessionDetail, selectedSessionTarget, showToolCalls])
   const transcriptIndexByKey = useMemo(() => {
     const indexByKey = new Map<string, number>()
-    transcriptCards.forEach((card, index) => {
+    visibleTranscriptCards.forEach((card, index) => {
       indexByKey.set(card.key, index)
     })
     return indexByKey
-  }, [transcriptCards])
+  }, [visibleTranscriptCards])
   const thinkingFullKeys = useMemo(() => {
     if (!thinkingMode) return new Set<string>()
     const next = new Set<string>()
-    for (const card of transcriptCards) {
+    for (const card of visibleTranscriptCards) {
       if (card.lines.some((line) => line.tone === 'thinking')) {
         next.add(card.key)
       }
     }
     return next
-  }, [thinkingMode, transcriptCards])
+  }, [thinkingMode, visibleTranscriptCards])
 
   const resolvedExpandedKeys = useMemo(() => {
     const next = new Set<string>()
-    for (const card of transcriptCards) {
+    for (const card of visibleTranscriptCards) {
       const shouldAutoFold = transcriptView === 'conversation' && card.autoFold
       const isExpanded = shouldAutoFold
         ? expandedCardKeys.has(card.key)
@@ -3604,24 +3657,24 @@ export default function OpenTuiApp() {
       if (isExpanded) next.add(card.key)
     }
     return next
-  }, [collapsedCardKeys, expandedCardKeys, transcriptCards, transcriptView])
+  }, [collapsedCardKeys, expandedCardKeys, visibleTranscriptCards, transcriptView])
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
   // Deferred: search computation runs after user interactions, so typing stays instant.
   const deferredSearchQuery = useDeferredValue(normalizedSearchQuery)
   const searchMatches = useMemo(() => {
     if (!deferredSearchQuery) return []
-    return transcriptCards.flatMap((card, index) => (
+    return visibleTranscriptCards.flatMap((card, index) => (
       card.searchHaystackLower.includes(deferredSearchQuery) ? [index] : []
     ))
-  }, [deferredSearchQuery, transcriptCards])
+  }, [deferredSearchQuery, visibleTranscriptCards])
 
   const cursorIndex = useMemo(() => {
-    if (transcriptCards.length === 0) return -1
+    if (visibleTranscriptCards.length === 0) return -1
     const index = transcriptCursorKey ? transcriptIndexByKey.get(transcriptCursorKey) ?? -1 : -1
     if (index >= 0) return index
-    return followTail ? transcriptCards.length - 1 : 0
-  }, [followTail, transcriptCards.length, transcriptCursorKey, transcriptIndexByKey])
+    return followTail ? visibleTranscriptCards.length - 1 : 0
+  }, [followTail, visibleTranscriptCards.length, transcriptCursorKey, transcriptIndexByKey])
 
   const unreadBoundaryIndex = useMemo(
     () => unreadBoundaryKey ? (transcriptIndexByKey.get(unreadBoundaryKey) ?? -1) : -1,
@@ -3647,19 +3700,19 @@ export default function OpenTuiApp() {
     [sessions],
   )
   const foldedTechnicalCount = useMemo(
-    () => transcriptCards.filter((card) => card.autoFold && !resolvedExpandedKeys.has(card.key)).length,
-    [resolvedExpandedKeys, transcriptCards],
+    () => visibleTranscriptCards.filter((card) => card.autoFold && !resolvedExpandedKeys.has(card.key)).length,
+    [resolvedExpandedKeys, visibleTranscriptCards],
   )
   // Split the live-stream fast path out of the O(transcript) scan so the
   // expensive `.some()` only recomputes when expanded keys or cards change —
   // not on every RAF flush that mutates composerLiveText while a turn streams.
   const liveSyntaxActive = composerSendState === 'sending' && Boolean(composerLiveText)
   const expandedSyntaxActive = useMemo(
-    () => transcriptCards.some((card) => {
+    () => visibleTranscriptCards.some((card) => {
       if (!resolvedExpandedKeys.has(card.key)) return false
       return Boolean(card.markdownContent || (card.codeBlocks && card.codeBlocks.length > 0))
     }),
-    [resolvedExpandedKeys, transcriptCards],
+    [resolvedExpandedKeys, visibleTranscriptCards],
   )
   const shouldEnableSyntaxHighlighting = liveSyntaxActive || expandedSyntaxActive
   const syntaxStyle = useMemo(
@@ -4314,7 +4367,7 @@ export default function OpenTuiApp() {
   }>())
   const stableCardData = useMemo((): StableCardData[] => {
     const cache = stableCardCacheRef.current
-    return transcriptCards.map((card) => {
+    return visibleTranscriptCards.map((card) => {
       const isExpanded = resolvedExpandedKeys.has(card.key)
       const thinkingFull = thinkingFullKeys.has(card.key)
       const prev = cache.get(card)
@@ -4335,12 +4388,12 @@ export default function OpenTuiApp() {
       cache.set(card, { isExpanded, bodyLineLimit: densityState.bodyLines, thinkingFull, value })
       return value
     })
-  }, [transcriptCards, resolvedExpandedKeys, densityState.bodyLines, thinkingFullKeys])
+  }, [visibleTranscriptCards, resolvedExpandedKeys, densityState.bodyLines, thinkingFullKeys])
 
   const allLandmarksRef = useRef<CardLandmark[][] | null>(null)
   const allLandmarks = useMemo(() => {
     const next = computeAllLandmarks(
-      transcriptCards,
+      visibleTranscriptCards,
       resumeMarkerIndex,
       unreadBoundaryIndex,
       pendingNewCount,
@@ -4348,7 +4401,7 @@ export default function OpenTuiApp() {
     )
     allLandmarksRef.current = next
     return next
-  }, [transcriptCards, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount])
+  }, [visibleTranscriptCards, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount])
 
   const cardDisplayCacheRef = useRef(new WeakMap<TuiTranscriptCard, {
     inputs: {
@@ -4365,9 +4418,9 @@ export default function OpenTuiApp() {
 
   const cardDisplayData = useMemo((): CardDisplayData[] => {
     const cache = cardDisplayCacheRef.current
-    return transcriptCards.map((card, index) => {
+    return visibleTranscriptCards.map((card, index) => {
       const isExpanded = resolvedExpandedKeys.has(card.key)
-      const isLatest = index === transcriptCards.length - 1
+      const isLatest = index === visibleTranscriptCards.length - 1
       const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
       const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
       const stable = stableCardData[index] ?? {
@@ -4436,7 +4489,7 @@ export default function OpenTuiApp() {
   }, [
     allLandmarks,
     stableCardData,
-    transcriptCards,
+    visibleTranscriptCards,
     resolvedExpandedKeys,
     transcriptView,
     provider,
@@ -4455,7 +4508,7 @@ export default function OpenTuiApp() {
   const searchMatchSet = useMemo(() => new Set(searchMatches), [searchMatches])
   const activeMatchTargetIndex = searchMatches[searchMatchIndex] ?? -1
   const transcriptChildren = useMemo(() => (
-    transcriptCards.map((card, index) => {
+    visibleTranscriptCards.map((card, index) => {
       const display = cardDisplayData[index]
       if (!display) return null
       const isSelected = card.key === transcriptCursorKey
@@ -4480,11 +4533,12 @@ export default function OpenTuiApp() {
           bookmarked={bookmarkKeys.has(card.key)}
           thinkingMode={thinkingMode}
           imessageStyle={imessageStyle}
+          streamMode={transcriptView === 'stream'}
         />
       )
     })
   ), [
-    transcriptCards,
+    visibleTranscriptCards,
     cardDisplayData,
     transcriptCursorKey,
     effectiveFocus,
@@ -4498,6 +4552,7 @@ export default function OpenTuiApp() {
     rightPaneWidth,
     thinkingMode,
     imessageStyle,
+    transcriptView,
   ])
 
   const refreshSessions = useCallback(async (
@@ -4813,27 +4868,27 @@ export default function OpenTuiApp() {
   }, [])
 
   const jumpToTranscriptIndex = useCallback((index: number) => {
-    if (transcriptCards.length === 0) return
-    const nextIndex = clamp(index, 0, transcriptCards.length - 1)
-    const nextCard = transcriptCards[nextIndex]
+    if (visibleTranscriptCards.length === 0) return
+    const nextIndex = clamp(index, 0, visibleTranscriptCards.length - 1)
+    const nextCard = visibleTranscriptCards[nextIndex]
     if (!nextCard) return
     setTranscriptCursorKey(nextCard.key)
-    const atTail = nextIndex === transcriptCards.length - 1
+    const atTail = nextIndex === visibleTranscriptCards.length - 1
     setFollowTail(atTail)
     if (atTail) {
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
     }
-  }, [transcriptCards])
+  }, [visibleTranscriptCards])
 
   const jumpToTranscriptTail = useCallback(() => {
-    if (transcriptCards.length === 0) return
-    const lastIndex = transcriptCards.length - 1
+    if (visibleTranscriptCards.length === 0) return
+    const lastIndex = visibleTranscriptCards.length - 1
     jumpToTranscriptIndex(lastIndex)
     setFollowTail(true)
     setPendingNewCount(0)
     setUnreadBoundaryKey(null)
-  }, [jumpToTranscriptIndex, transcriptCards])
+  }, [jumpToTranscriptIndex, visibleTranscriptCards])
 
   const jumpToUnreadBoundary = useEffectEvent(() => {
     if (unreadBoundaryIndex >= 0) {
@@ -4863,10 +4918,10 @@ export default function OpenTuiApp() {
   })
 
   const moveCursor = useEffectEvent((delta: number) => {
-    if (transcriptCards.length === 0) return
-    const nextIndex = clamp((cursorIndex >= 0 ? cursorIndex : 0) + delta, 0, transcriptCards.length - 1)
-    setTranscriptCursorKey(transcriptCards[nextIndex].key)
-    const atTail = nextIndex === transcriptCards.length - 1
+    if (visibleTranscriptCards.length === 0) return
+    const nextIndex = clamp((cursorIndex >= 0 ? cursorIndex : 0) + delta, 0, visibleTranscriptCards.length - 1)
+    setTranscriptCursorKey(visibleTranscriptCards[nextIndex].key)
+    const atTail = nextIndex === visibleTranscriptCards.length - 1
     setFollowTail(atTail)
     if (atTail) {
       setPendingNewCount(0)
@@ -4880,10 +4935,10 @@ export default function OpenTuiApp() {
   })
 
   const jumpToMatchingCard = useEffectEvent((direction: -1 | 1, predicate: (card: TuiTranscriptCard) => boolean) => {
-    if (transcriptCards.length === 0) return
-    let index = cursorIndex >= 0 ? cursorIndex + direction : direction > 0 ? 0 : transcriptCards.length - 1
-    while (index >= 0 && index < transcriptCards.length) {
-      if (predicate(transcriptCards[index])) {
+    if (visibleTranscriptCards.length === 0) return
+    let index = cursorIndex >= 0 ? cursorIndex + direction : direction > 0 ? 0 : visibleTranscriptCards.length - 1
+    while (index >= 0 && index < visibleTranscriptCards.length) {
+      if (predicate(visibleTranscriptCards[index])) {
         jumpToTranscriptIndex(index)
         return
       }
@@ -4899,7 +4954,7 @@ export default function OpenTuiApp() {
   })
 
   const toggleExpansion = useEffectEvent(() => {
-    const card = cursorIndex >= 0 ? transcriptCards[cursorIndex] : null
+    const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     if (!card) return
     const shouldAutoFold = transcriptView === 'conversation' && card.autoFold
     const isExpanded = resolvedExpandedKeys.has(card.key)
@@ -6238,13 +6293,13 @@ export default function OpenTuiApp() {
       if (restoredState?.followTail === false) {
         const restoredIndex = restoredState.cursorKey ? (transcriptIndexByKey.get(restoredState.cursorKey) ?? -1) : -1
         const targetIndex = restoredIndex >= 0 ? restoredIndex : 0
-        setTranscriptCursorKey(transcriptCards[targetIndex]?.key ?? transcriptCards[0].key)
+        setTranscriptCursorKey(visibleTranscriptCards[targetIndex]?.key ?? visibleTranscriptCards[0].key)
         setFollowTail(false)
         setPendingNewCount(0)
         setUnreadBoundaryKey(null)
         setResumeMarkerKey(restoredState.cursorKey)
       } else {
-        setTranscriptCursorKey(transcriptCards[transcriptCards.length - 1].key)
+        setTranscriptCursorKey(visibleTranscriptCards[visibleTranscriptCards.length - 1].key)
     setComposerLiveTodos([])
     setFollowTail(true)
     setPendingNewCount(0)
@@ -6256,7 +6311,7 @@ export default function OpenTuiApp() {
     }
 
     if (followTail) {
-      setTranscriptCursorKey(transcriptCards[transcriptCards.length - 1].key)
+      setTranscriptCursorKey(visibleTranscriptCards[visibleTranscriptCards.length - 1].key)
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
       previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
@@ -6279,7 +6334,7 @@ export default function OpenTuiApp() {
 
     setTranscriptCursorKey((current) => {
       if (current && currentKeys.includes(current)) return current
-      return transcriptCards[Math.max(cursorIndex, 0)]?.key ?? transcriptCards[0].key
+      return visibleTranscriptCards[Math.max(cursorIndex, 0)]?.key ?? visibleTranscriptCards[0].key
     })
     previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
     // cursorIndex is intentionally omitted from deps: the effect reconciles
@@ -6293,6 +6348,7 @@ export default function OpenTuiApp() {
     restoredReaderState,
     selectedSessionKey,
     transcriptCards,
+    visibleTranscriptCards,
     transcriptIndexByKey,
   ])
 
@@ -6315,11 +6371,11 @@ export default function OpenTuiApp() {
     const idx = transcriptIndexByKey.get(pending.uuid)
     if (idx === undefined || idx < 0) return
     pendingBookmarkCursorRef.current = null
-    setTranscriptCursorKey(transcriptCards[idx].key)
+    setTranscriptCursorKey(visibleTranscriptCards[idx].key)
     setFollowTail(false)
     setPendingNewCount(0)
     setUnreadBoundaryKey(null)
-  }, [selectedSessionKey, transcriptCards, transcriptIndexByKey])
+  }, [selectedSessionKey, visibleTranscriptCards, transcriptIndexByKey])
 
 
   useEffect(() => {
@@ -6435,11 +6491,11 @@ export default function OpenTuiApp() {
 
   useLayoutEffect(() => {
     if (!followTail) return
-    if (transcriptCards.length === 0) return
-    const lastKey = transcriptCards[transcriptCards.length - 1]?.key
+    if (visibleTranscriptCards.length === 0) return
+    const lastKey = visibleTranscriptCards[visibleTranscriptCards.length - 1]?.key
     if (!lastKey) return
     transcriptScrollRef.current?.scrollChildIntoView(`card:${lastKey}`)
-  }, [followTail, transcriptCards.length])
+  }, [followTail, visibleTranscriptCards.length])
 
   useEffect(() => {
     const entry = sidebarEntries[selectedSidebarEntryIndex]
@@ -6461,11 +6517,11 @@ export default function OpenTuiApp() {
     if (typeof scrollTop === 'number') {
       pausedTranscriptScrollTopRef.current = scrollTop
     }
-  }, [followTail, pendingNewCount, transcriptCards.length, unreadBoundaryKey])
+  }, [followTail, pendingNewCount, visibleTranscriptCards.length, unreadBoundaryKey])
 
   useLayoutEffect(() => {
     if (followTail) {
-      if (transcriptCards.length > 0 && (prevTranscriptLengthRef.current !== transcriptCards.length || !prevFollowTailRef.current)) {
+      if (visibleTranscriptCards.length > 0 && (prevTranscriptLengthRef.current !== visibleTranscriptCards.length || !prevFollowTailRef.current)) {
         transcriptScrollRef.current?.scrollTo(transcriptScrollRef.current?.scrollHeight ?? Number.MAX_SAFE_INTEGER)
       }
     } else {
@@ -6475,8 +6531,8 @@ export default function OpenTuiApp() {
       }
     }
     prevFollowTailRef.current = followTail
-    prevTranscriptLengthRef.current = transcriptCards.length
-  }, [followTail, pendingNewCount, transcriptCards.length, unreadBoundaryKey])
+    prevTranscriptLengthRef.current = visibleTranscriptCards.length
+  }, [followTail, pendingNewCount, visibleTranscriptCards.length, unreadBoundaryKey])
 
   useLayoutEffect(() => {
     if (!followTail) return
@@ -6484,6 +6540,20 @@ export default function OpenTuiApp() {
       transcriptScrollRef.current?.scrollTo(transcriptScrollRef.current?.scrollHeight ?? Number.MAX_SAFE_INTEGER)
     }
   }, [composerLiveText, composerSendState, followTail])
+
+  // When switching to 'continue' or 'stream' mode the cursor may be on a hidden
+  // technical card. Snap it to the last visible card so navigation stays coherent.
+  useEffect(() => {
+    if (transcriptView !== 'continue' && transcriptView !== 'stream') return
+    if (visibleTranscriptCards.length === 0) return
+    const isVisible = transcriptCursorKey
+      ? visibleTranscriptCards.some((c) => c.key === transcriptCursorKey)
+      : false
+    if (!isVisible) {
+      setTranscriptCursorKey(visibleTranscriptCards[visibleTranscriptCards.length - 1].key)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transcriptView])
 
   const footerText = useMemo(
     () => fitText(
@@ -6829,7 +6899,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    const card = cursorIndex >= 0 ? transcriptCards[cursorIndex] : null
+    const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     if (!card) {
       showNotice('error', 'No message selected')
       return
@@ -6851,7 +6921,7 @@ export default function OpenTuiApp() {
   const toggleBookmarkForCursor = useEffectEvent(async () => {
     const target = selectedSessionTarget
     if (!target) { showNotice('error', 'No session selected'); return }
-    const card = cursorIndex >= 0 ? transcriptCards[cursorIndex] : null
+    const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     if (!card) { showNotice('error', 'No message selected'); return }
     if (card.key.startsWith('live-')) { showNotice('error', 'Cannot bookmark a streaming message'); return }
     const uuid = card.key
@@ -6893,14 +6963,14 @@ export default function OpenTuiApp() {
 
   // Jump to the next/previous bookmarked card in the active session.
   const jumpToBookmark = useEffectEvent((direction: 1 | -1) => {
-    if (transcriptCards.length === 0) return
+    if (visibleTranscriptCards.length === 0) return
     const marks = bookmarkKeysRef.current
     if (marks.size === 0) { showNotice('info', 'No bookmarks in this session'); return }
     const start = cursorIndex >= 0 ? cursorIndex : 0
-    const count = transcriptCards.length
+    const count = visibleTranscriptCards.length
     for (let step = 1; step <= count; step += 1) {
       const idx = (((start + direction * step) % count) + count) % count
-      const card = transcriptCards[idx]
+      const card = visibleTranscriptCards[idx]
       if (card && marks.has(card.key)) {
         jumpToTranscriptIndex(idx)
         return
@@ -8162,7 +8232,7 @@ export default function OpenTuiApp() {
     () => fitText(
       joinMeta([
         statusLabel,
-        `position ${transcriptCards.length === 0 ? '0' : `${Math.max(cursorIndex, 0) + 1}`}/${transcriptCards.length}`,
+        `position ${visibleTranscriptCards.length === 0 ? '0' : `${Math.max(cursorIndex, 0) + 1}`}/${visibleTranscriptCards.length}`,
         readerMode,
         sessionIdLabel,
         themeMode.toUpperCase(),
@@ -8173,7 +8243,7 @@ export default function OpenTuiApp() {
       ]),
       Math.max(Math.floor(width * 0.55), 20),
     ),
-    [statusLabel, transcriptCards.length, cursorIndex, readerMode, sessionIdLabel, themeMode, provider, density, pendingNewCount, railVisible, width],
+    [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, sessionIdLabel, themeMode, provider, density, pendingNewCount, railVisible, width],
   )
   const headerContextLeft = useMemo(
     () => fitText(
@@ -8581,9 +8651,9 @@ export default function OpenTuiApp() {
           ) : null}
 
           <box flexGrow={1} paddingX={1} paddingBottom={1} marginTop={1} overflow="hidden">
-            {loadingDetail && transcriptCards.length === 0 ? (
+            {loadingDetail && visibleTranscriptCards.length === 0 ? (
               <Spinner label={fitText('Loading transcript…', rightPaneWidth - 6)} fg={theme.dim} />
-            ) : transcriptCards.length === 0 ? (
+            ) : visibleTranscriptCards.length === 0 ? (
               !selectedSession ? (
                 <box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1} paddingY={2}>
                   <ascii-font text="AGENT VIEWER" font="tiny" color={theme.dim} />
@@ -8669,7 +8739,7 @@ export default function OpenTuiApp() {
             )}
           </box>
 
-          {followTail && transcriptCards.length > 0 ? (
+          {followTail && visibleTranscriptCards.length > 0 ? (
             <box paddingX={2} paddingBottom={1}>
               <Spinner label="waiting for new messages" fg={theme.dim} />
             </box>
@@ -8687,7 +8757,7 @@ export default function OpenTuiApp() {
               width={taskPanelWidth}
               height={mainContentHeight - 2}
               onSelectTask={(uuid) => {
-                const idx = transcriptCards.findIndex((c) => c.key === uuid)
+                const idx = visibleTranscriptCards.findIndex((c) => c.key === uuid)
                 if (idx >= 0) jumpToTranscriptIndex(idx)
               }}
               tab={taskPanelTab}
@@ -9349,7 +9419,7 @@ export default function OpenTuiApp() {
           height={height}
           onClose={() => setTaskPopoverOpen(false)}
           onSelectTask={(uuid) => {
-            const idx = transcriptCards.findIndex((c) => c.key === uuid)
+            const idx = visibleTranscriptCards.findIndex((c) => c.key === uuid)
             if (idx >= 0) jumpToTranscriptIndex(idx)
           }}
           onKeyHandlerReady={(handler) => { taskPopoverKeyHandlerRef.current = handler }}
