@@ -36,7 +36,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 import { ChartNetwork, Filter, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
-import MessageItem, { MessageDensityProvider, type MessageDensity } from './MessageItem'
+import MessageItem, { MessageDensityProvider, ViewModeProvider, type MessageDensity, type WebViewMode } from './MessageItem'
 import { LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb } from './messageItemShared'
 import { TaskRail } from './TaskRail'
 import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos, type CodexPlanStep } from '@/lib/taskRegistry'
@@ -2006,14 +2006,19 @@ export default function MessageView({
   const bookmarkIdsRef = useRef<Set<string>>(bookmarkIds)
   bookmarkIdsRef.current = bookmarkIds
   const [bookmarksOnly, setBookmarksOnly] = useState(false)
-  const [showTools, setShowTools] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true
-    return window.localStorage.getItem('agentViewer:showTools') !== 'false'
+  const [viewMode, setViewMode] = useState<WebViewMode>(() => {
+    if (typeof window === 'undefined') return 'conversation'
+    const stored = window.localStorage.getItem('agentViewer:viewMode')
+    if (stored === 'full' || stored === 'continue' || stored === 'stream') return stored
+    // Migrate legacy showTools=false → continue
+    if (window.localStorage.getItem('agentViewer:showTools') === 'false') return 'continue'
+    return 'conversation'
   })
   useEffect(() => {
     if (typeof window === 'undefined') return
-    window.localStorage.setItem('agentViewer:showTools', showTools ? 'true' : 'false')
-  }, [showTools])
+    window.localStorage.setItem('agentViewer:viewMode', viewMode)
+  }, [viewMode])
+  const showTools = viewMode === 'conversation' || viewMode === 'full'
   const [density, setDensity] = useState<MessageDensity>(() => {
     if (typeof window === 'undefined') return 'balanced'
     const stored = window.localStorage.getItem('agentViewer:density')
@@ -5405,8 +5410,8 @@ export default function MessageView({
         )}
 
         <Button
-          onClick={() => setShowTools((v) => !v)}
-          title={showTools ? 'Hide tool calls' : 'Show tool calls'}
+          onClick={() => setViewMode((v) => v === 'conversation' ? 'full' : v === 'full' ? 'continue' : v === 'continue' ? 'stream' : 'conversation')}
+          title={`View: ${viewMode} — click to cycle (conversation → full → continue → stream)`}
           variant="outline"
           size="sm"
           className="av-hover-control"
@@ -5414,17 +5419,17 @@ export default function MessageView({
             flexShrink: 0,
             height: 26,
             padding: '0 10px',
-            background: showTools ? 'rgba(139,92,246,0.14)' : 'rgba(139,92,246,0.05)',
-            border: '1px solid rgba(139,92,246,0.22)',
+            background: viewMode === 'stream' ? 'rgba(45,212,160,0.10)' : viewMode === 'continue' ? 'rgba(139,92,246,0.05)' : 'rgba(139,92,246,0.14)',
+            border: viewMode === 'stream' ? '1px solid rgba(45,212,160,0.28)' : '1px solid rgba(139,92,246,0.22)',
             borderRadius: 5,
             cursor: 'pointer',
-            color: showTools ? 'var(--violet)' : 'var(--text-3)',
+            color: viewMode === 'stream' ? 'var(--green)' : viewMode === 'continue' ? 'var(--text-3)' : 'var(--violet)',
             fontFamily: "'IBM Plex Mono', monospace",
             fontSize: 11,
             letterSpacing: '0.08em',
           }}
         >
-          {showTools ? 'TOOLS ON' : 'TOOLS OFF'}
+          {viewMode === 'conversation' ? 'CONVO' : viewMode === 'full' ? 'FULL' : viewMode === 'continue' ? 'CONT' : 'STREAM'}
         </Button>
 
         <Button
@@ -5932,6 +5937,7 @@ export default function MessageView({
               style={{ position: 'relative', minHeight: timelineRenderedHeight, height: timelineRenderedHeight }}
             >
               <MessageDensityProvider density={density}>
+              <ViewModeProvider mode={viewMode}>
                 <LiveSubagentTextContext.Provider value={liveSubagentText}>
                   <TaskActiveFormsContext.Provider value={taskActiveForms}>
                     {(() => {
@@ -5959,6 +5965,7 @@ export default function MessageView({
                     })()}
                   </TaskActiveFormsContext.Provider>
                 </LiveSubagentTextContext.Provider>
+              </ViewModeProvider>
               </MessageDensityProvider>
             </div>
           </div>

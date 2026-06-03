@@ -4306,6 +4306,7 @@ const ROLE_STYLE = {
 } as const
 
 export type MessageDensity = 'comfortable' | 'balanced' | 'dense'
+export type WebViewMode = 'conversation' | 'full' | 'continue' | 'stream'
 
 type DensityConfig = { msgGap: number; blockGap: number; labelGap: number; dotGap: number }
 
@@ -4319,6 +4320,7 @@ function densityConfig(d: MessageDensity): DensityConfig {
 
 const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanced'))
 const SessionContext = createContext<string | undefined>(undefined)
+const ViewModeContext = createContext<WebViewMode>('conversation')
 
 export function MessageDensityProvider({ density, children }: { density: MessageDensity; children: React.ReactNode }) {
   const value = useMemo(() => densityConfig(density), [density])
@@ -4329,9 +4331,18 @@ export function MessageDensityProvider({ density, children }: { density: Message
   )
 }
 
+export function ViewModeProvider({ mode, children }: { mode: WebViewMode; children: React.ReactNode }) {
+  return (
+    <ViewModeContext.Provider value={mode}>
+      {children}
+    </ViewModeContext.Provider>
+  )
+}
+
 function MessageItemInner({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {
   const [hydrated, setHydrated] = useState(false)
   const dc = use(MessageDensityContext)
+  const viewMode = use(ViewModeContext)
   const style = ROLE_STYLE[message.role]
   const roleLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
@@ -4340,6 +4351,30 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   useEffect(() => {
     setHydrated(true)
   }, [])
+
+  if (viewMode === 'stream') {
+    const textBlocks = message.blocks.filter((b) => b.type === 'text' || b.type === 'thinking')
+    if (textBlocks.length === 0) return null
+    return (
+      <SessionContext.Provider value={message.sessionId}>
+        <div style={{ marginBottom: 20, paddingLeft: 2 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
+            <span style={{ fontFamily: "'Oxanium', monospace", fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: style.labelColor }}>
+              {roleLabel}
+            </span>
+            {message.timestamp && (
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+                {hydrated ? formatLocalMessageTime(message.timestamp) : formatStableMessageTime(message.timestamp)}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {textBlocks.map((block, i) => renderBlock(block, i))}
+          </div>
+        </div>
+      </SessionContext.Provider>
+    )
+  }
 
   return (
     <SessionContext.Provider value={message.sessionId}>
