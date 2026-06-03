@@ -5923,6 +5923,7 @@ export default function MessageView({
         )}
         {!loading && hasTranscriptTimeline && (
           <div style={{ position: 'relative' }}>
+            {viewMode !== 'stream' && (
             <div
               className="timeline-line"
               style={{
@@ -5937,6 +5938,7 @@ export default function MessageView({
                 pointerEvents: 'none',
               }}
             />
+            )}
             <div
               ref={timelineContentRef}
               style={{ position: 'relative', minHeight: timelineRenderedHeight, height: timelineRenderedHeight }}
