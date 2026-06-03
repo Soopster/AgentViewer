@@ -1545,14 +1545,13 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
     onEditFromMessage(row.message.uuid, copyText)
   }, [canEdit, copyText, onEditFromMessage, row.message.uuid])
 
-  const streamActive = streamMode && (highlighted || bookmarked)
   return (
     <div
       style={{
         position: 'relative',
         opacity: row.dimmed ? 0.92 : 1,
-        borderRadius: streamMode ? (streamActive ? 6 : 0) : 10,
-        padding: streamActive ? '8px 12px' : undefined,
+        borderRadius: streamMode ? 6 : 10,
+        padding: streamMode ? '8px 12px' : undefined,
         // The cyan ring is the transient nav/target highlight; the amber ring
         // is the persistent bookmark accent. Both use theme-aware colours so
         // bookmarks read correctly on every theme. Highlight wins when both.
