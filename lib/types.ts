@@ -131,6 +131,7 @@ export type SessionModelInfo = {
   description: string
   supportsEffort?: boolean
   supportedEffortLevels?: ReasoningEffortLevel[]
+  supportsLongContext?: boolean
 }
 
 export type SessionComposerAgentOption = {
@@ -157,13 +158,18 @@ export type SessionComposerOptions = {
 
 export type SendAttachment = {
   id?: string
-  type: 'file' | 'directory' | 'selection' | 'image' | 'mention' | 'skill' | 'blob' | 'agent'
+  type: 'file' | 'directory' | 'selection' | 'image' | 'mention' | 'skill' | 'blob' | 'agent' | 'extension_context'
   path?: string
   filePath?: string
   displayName?: string
   text?: string
   data?: string
   mimeType?: string
+  extensionId?: string
+  canvasId?: string
+  instanceId?: string
+  capturedAt?: string
+  payload?: Record<string, unknown>
   selection?: {
     start: { line: number; character: number }
     end: { line: number; character: number }

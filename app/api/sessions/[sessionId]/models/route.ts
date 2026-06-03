@@ -10,10 +10,11 @@ export async function GET(
   const providerParam = new URL(request.url).searchParams.get('provider')
   const provider = isAgentProvider(providerParam) ? providerParam : undefined
   try {
-    const { models, currentModel, contextUsage } = await readViewSessionModels(sessionId, provider)
+    const { models, currentModel, currentContextTier, contextUsage } = await readViewSessionModels(sessionId, provider)
     return NextResponse.json({
       models,
       currentModel,
+      currentContextTier,
       contextUsage,
     })
   } catch (err) {

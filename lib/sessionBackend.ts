@@ -54,6 +54,7 @@ import {
 import type { ContentBlockParam as ClaudeContentBlockParam } from '@anthropic-ai/sdk/resources'
 import {
   approveAll,
+  type ContextTier as CopilotContextTier,
   type GetAuthStatusResponse as CopilotGetAuthStatusResponse,
   type GetStatusResponse as CopilotGetStatusResponse,
   type MessageOptions as CopilotMessageOptions,
@@ -79,6 +80,9 @@ import type {
   SendAttachment,
   ReasoningEffortLevel,
 } from './types'
+
+type CopilotReasoningEffort = Extract<ReasoningEffortLevel, 'low' | 'medium' | 'high' | 'xhigh'>
+
 import { consumeReadModelsWarmQuery, createSessionControlQuery, openPrompt } from './sdkControlQuery'
 import { acquireCopilotSession, evictCopilotSession, getCopilotClient, setCopilotPermissionHandler } from './copilotClient'
 import {
@@ -447,9 +451,28 @@ function parseEffort(body: Record<string, unknown>): ReasoningEffortLevel | unde
     : undefined
 }
 
+function parseCopilotContextTier(value: unknown): CopilotContextTier | undefined {
+  return value === 'default' || value === 'long_context' ? value : undefined
+}
+
+function claudeFallbackModelChain(): string | undefined {
+  const value = process.env.AGENT_VIEWER_CLAUDE_FALLBACK_MODELS
+    ?? process.env.CLAUDE_FALLBACK_MODELS
+    ?? process.env.CLAUDE_FALLBACK_MODEL
+  if (!value) return undefined
+  const models = value.split(',').map((model) => model.trim()).filter(Boolean)
+  return models.length > 0 ? models.join(',') : undefined
+}
+
 function parseTurnRequestId(body: Record<string, unknown>): string | undefined {
   return typeof body.turnRequestId === 'string' && body.turnRequestId.trim()
     ? body.turnRequestId.trim()
+    : undefined
+}
+
+function parseAttachmentPayload(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
     : undefined
 }
 
@@ -460,7 +483,7 @@ function parseAttachments(body: Record<string, unknown>): SendAttachment[] {
     if (!entry || typeof entry !== 'object') return []
     const record = entry as Record<string, unknown>
     const type = typeof record.type === 'string' ? record.type : ''
-    if (!['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob', 'agent'].includes(type)) return []
+    if (!['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob', 'agent', 'extension_context'].includes(type)) return []
     return [{
       id: typeof record.id === 'string' ? record.id : undefined,
       type: type as SendAttachment['type'],
@@ -470,6 +493,11 @@ function parseAttachments(body: Record<string, unknown>): SendAttachment[] {
       text: typeof record.text === 'string' ? record.text : undefined,
       data: typeof record.data === 'string' ? record.data : undefined,
       mimeType: typeof record.mimeType === 'string' ? record.mimeType.trim() : undefined,
+      extensionId: typeof record.extensionId === 'string' ? record.extensionId.trim() : undefined,
+      canvasId: typeof record.canvasId === 'string' ? record.canvasId.trim() : undefined,
+      instanceId: typeof record.instanceId === 'string' ? record.instanceId.trim() : undefined,
+      capturedAt: typeof record.capturedAt === 'string' ? record.capturedAt.trim() : undefined,
+      payload: parseAttachmentPayload(record.payload),
       selection: normalizeSelection(record.selection),
     }]
   }).slice(0, 12)
@@ -624,8 +652,22 @@ function buildCodexInput(userMessage: string, attachments: SendAttachment[]): Co
   return input
 }
 
-function buildCopilotAttachments(attachments: SendAttachment[]): NonNullable<CopilotMessageOptions['attachments']> {
-  const result: NonNullable<CopilotMessageOptions['attachments']> = []
+type CopilotSendAttachment = NonNullable<CopilotMessageOptions['attachments']>[number] | {
+  type: 'extension_context'
+  title: string
+  extensionId: string
+  capturedAt: string
+  canvasId?: string
+  instanceId?: string
+  payload?: Record<string, unknown>
+}
+
+type CopilotSendMessageOptions = Omit<CopilotMessageOptions, 'attachments'> & {
+  attachments?: CopilotSendAttachment[]
+}
+
+function buildCopilotAttachments(attachments: SendAttachment[]): CopilotSendAttachment[] {
+  const result: CopilotSendAttachment[] = []
   for (const attachment of attachments) {
     const path = attachmentPath(attachment)
     if (attachment.type === 'file' || attachment.type === 'image' || attachment.type === 'mention') {
@@ -655,6 +697,18 @@ function buildCopilotAttachments(attachments: SendAttachment[]): NonNullable<Cop
         data: attachment.data,
         mimeType: attachment.mimeType,
         displayName: attachment.displayName,
+      })
+      continue
+    }
+    if (attachment.type === 'extension_context' && attachment.extensionId && attachment.capturedAt && attachment.displayName) {
+      result.push({
+        type: 'extension_context',
+        title: attachment.displayName,
+        extensionId: attachment.extensionId,
+        capturedAt: attachment.capturedAt,
+        canvasId: attachment.canvasId,
+        instanceId: attachment.instanceId,
+        payload: attachment.payload,
       })
     }
   }
@@ -813,12 +867,12 @@ function isCopilotPersistentMode(mode: CopilotAgentMode): mode is CopilotPersist
   return mode !== 'shell'
 }
 
-function copilotPermissionDecision(response: string): Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }> {
+function copilotPermissionDecision(response: string, feedback?: string): Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }> {
   return response === 'once'
     ? { kind: 'approve-once' }
     : response === 'always'
     ? { kind: 'approve-for-session' }
-    : { kind: 'reject' }
+    : { kind: 'reject', ...(feedback ? { feedback } : {}) }
 }
 
 type PendingCopilotPermission = {
@@ -2007,11 +2061,14 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     if (action === 'respondPermission') {
       const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
       const response = typeof body.response === 'string' ? body.response : ''
+      const feedback = typeof body.permissionDecisionReason === 'string' && body.permissionDecisionReason.trim()
+        ? body.permissionDecisionReason.trim()
+        : undefined
       if (!permissionId) throw new Error('permissionId is required')
       if (response !== 'once' && response !== 'always' && response !== 'reject') {
         throw new Error('response must be once, always, or reject')
       }
-      const result = copilotPermissionDecision(response)
+      const result = copilotPermissionDecision(response, feedback)
       const pending = pendingCopilotPermissions.get(pendingCopilotPermissionKey(sessionId, permissionId))
       if (pending) {
         pendingCopilotPermissions.delete(pendingCopilotPermissionKey(sessionId, permissionId))
@@ -2521,6 +2578,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   // unset so the SDK reuses whatever the session was last running with — same
   // as `claude --resume` from the CLI.
   const model = explicitModel ?? (isPendingSession ? 'claude-sonnet-4-6' : undefined)
+  const fallbackModel = claudeFallbackModelChain()
   const effort = parseEffort(body)
   const attachments = parseAttachments(body)
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
@@ -2555,6 +2613,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
       cwdOverride,
       taskBudgetTotal,
       turnRequestId,
+      fallbackModel,
     })
   }
 
@@ -2570,6 +2629,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     cwdOverride,
     taskBudgetTotal,
     turnRequestId,
+    fallbackModel,
   })
 }
 
@@ -2589,6 +2649,7 @@ type ClaudeStreamColdArgs = {
   cwdOverride: string | undefined
   taskBudgetTotal: number | undefined
   turnRequestId: string | undefined
+  fallbackModel: string | undefined
 }
 
 async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Response> {
@@ -2608,6 +2669,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     cwdOverride,
     taskBudgetTotal,
     turnRequestId,
+    fallbackModel,
   } = args
 
   // Build the user message in the same SDKUserMessage shape the pool uses,
@@ -2628,6 +2690,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     sessionId,
     cwd: cwdOverride,
     model,
+    fallbackModel,
     permissionMode,
     effort,
     resumeSessionAt,
@@ -2682,6 +2745,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           ...(isPendingSession ? {} : { resume: sessionId }),
           ...(cwdOverride ? { cwd: cwdOverride } : {}),
           ...(model ? { model } : {}),
+          ...(fallbackModel ? { fallbackModel } : {}),
           ...(permissionMode ? { permissionMode } : {}),
           // The SDK requires allowDangerouslySkipPermissions whenever
           // permissionMode is 'bypassPermissions'; without it the query rejects
@@ -2831,6 +2895,7 @@ type ClaudeStreamPooledArgs = {
   cwdOverride: string | undefined
   taskBudgetTotal: number | undefined
   turnRequestId: string | undefined
+  fallbackModel: string | undefined
 }
 
 async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<Response> {
@@ -2846,6 +2911,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
     cwdOverride,
     taskBudgetTotal,
     turnRequestId,
+    fallbackModel,
   } = args
 
   let pushMessage: SDKUserMessage
@@ -2868,6 +2934,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
           sessionId,
           cwd: cwdOverride,
           model,
+          fallbackModel,
           permissionMode,
           effort,
           taskBudgetTokens: taskBudgetTotal,
@@ -2989,12 +3056,14 @@ async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
   // via `q.close()`. The legacy `prompt: 'ping'` + `maxTurns: 1` pattern
   // would burn a full API round-trip on every cache miss.
   const warm = await consumeReadModelsWarmQuery()
+  const fallbackModel = claudeFallbackModelChain()
   const q = warm
     ? warm.query(openPrompt())
     : query({
         prompt: openPrompt(),
         options: {
           model: 'claude-sonnet-4-6',
+          ...(fallbackModel ? { fallbackModel } : {}),
           persistSession: false,
           maxTurns: 0,
           enableFileCheckpointing: true,
@@ -3738,11 +3807,23 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
   })
 }
 
+function copilotModelOptions(params: {
+  effort?: CopilotReasoningEffort
+  contextTier?: CopilotContextTier
+}): Parameters<Awaited<ReturnType<typeof acquireCopilotSession>>['setModel']>[1] | undefined {
+  const options = {
+    ...(params.effort ? { reasoningEffort: params.effort } : {}),
+    ...(params.contextTier ? { contextTier: params.contextTier } : {}),
+  }
+  return Object.keys(options).length > 0 ? options : undefined
+}
+
 async function createCopilotStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
   const selectedModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null
   const effort = parseEffort(body)
+  const contextTier = parseCopilotContextTier(body.contextTier)
   let turnAgentMode = parseCopilotMode(body.mode)
   const manualPermissions = body.manualPermissions === true
   const nativeCommands = body.nativeCommands === true
@@ -3913,16 +3994,19 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
         if (selectedModel) {
           await withTimeout(
-            session.setModel(selectedModel, copilotEffort ? { reasoningEffort: copilotEffort } : undefined),
+            session.setModel(selectedModel, copilotModelOptions({ effort: copilotEffort, contextTier })),
             15000,
             'Copilot model switch',
           )
-        } else if (copilotEffort) {
-          const current = await withTimeout(session.rpc.model.getCurrent(), 5000, 'Copilot current model').catch(() => ({ modelId: undefined }))
+        } else if (copilotEffort || contextTier) {
+          const current = await withTimeout(session.rpc.model.getCurrent(), 5000, 'Copilot current model').catch(() => ({ modelId: undefined, contextTier: undefined }))
           const nextModel = current.modelId
-          if (nextModel && (current.modelId !== nextModel || copilotEffort)) {
+          if (nextModel && (copilotEffort || contextTier)) {
             await withTimeout(
-              session.setModel(nextModel, copilotEffort ? { reasoningEffort: copilotEffort } : undefined),
+              session.setModel(nextModel, copilotModelOptions({
+                effort: copilotEffort,
+                contextTier: contextTier ?? parseCopilotContextTier(current.contextTier),
+              })),
               15000,
               'Copilot model switch',
             )
@@ -3971,7 +4055,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
               return
             }
             await withTimeout(
-              session.setModel(requestedModel, copilotEffort ? { reasoningEffort: copilotEffort } : undefined),
+              session.setModel(requestedModel, copilotModelOptions({ effort: copilotEffort, contextTier })),
               15000,
               'Copilot model switch',
             )
@@ -4029,12 +4113,12 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         if (typeof turnTimeoutTimer === 'object' && turnTimeoutTimer && 'unref' in turnTimeoutTimer) {
           (turnTimeoutTimer as { unref: () => void }).unref()
         }
-        const messageOptions: CopilotMessageOptions = {
+        const messageOptions: CopilotSendMessageOptions = {
           prompt: promptToSend,
           attachments: attachments.length > 0 ? attachments : undefined,
         }
         if (turnAgentMode) messageOptions.agentMode = turnAgentMode
-        await session.send(messageOptions)
+        await session.send(messageOptions as CopilotMessageOptions)
         const historyCompletion = historyBaselineCount == null
           ? new Promise<never>(() => {})
           : (async () => {
@@ -4503,7 +4587,7 @@ export async function interruptViewSession(sessionId: string, turnRequestId?: st
   await interruptRunningSession(sessionId, turnRequestId)
 }
 
-export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; contextUsage: ContextUsage | null }> {
+export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; currentContextTier?: CopilotContextTier | null; contextUsage: ContextUsage | null }> {
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const client = getCodexClient()
@@ -4536,11 +4620,12 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     const session = await acquireCopilotSession(sessionId)
     const [models, currentModel] = await Promise.all([
       client.listModels(),
-      session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
+      session.rpc.model.getCurrent().catch(() => ({ modelId: undefined, contextTier: undefined })),
     ])
     return {
       models: mapCopilotModelsToSessionModels(models),
       currentModel: currentModel.modelId ?? null,
+      currentContextTier: parseCopilotContextTier(currentModel.contextTier) ?? null,
       contextUsage: null,
     }
   }
@@ -4787,11 +4872,12 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
       }) as CopilotGetAuthStatusResponse),
     ])
 
-    const [events, currentModel, mode, tools, quota] = await Promise.all([
+    const [events, currentModel, mode, tools, currentTools, quota] = await Promise.all([
       session.getEvents(),
       session.rpc.model.getCurrent().catch(() => ({ modelId: undefined })),
       session.rpc.mode.get().catch(() => ({ mode: undefined })),
       client.rpc.tools.list({ model: undefined }).catch(() => ({ tools: [] as Array<{ name: string; description?: string }> })),
+      session.rpc.tools.getCurrentMetadata().catch(() => ({ tools: null })),
       client.rpc.account.getQuota({}).catch(() => ({ quotaSnapshots: {} as Record<string, {
         entitlementRequests: number
         usedRequests: number
@@ -4818,6 +4904,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
         currentModel: currentModel.modelId ?? null,
         mode: typeof mode === 'string' ? mode : mode.mode ?? null,
         tools: tools.tools,
+        currentTools: currentTools.tools ?? [],
         quotaItems,
         metadata,
         events,

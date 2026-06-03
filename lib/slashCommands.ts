@@ -126,3 +126,26 @@ export function filterSlashCommands(entries: SlashCommandSuggestion[], rawQuery:
   if (!query) return entries
   return entries.filter((entry) => entry.command.toLowerCase().includes(query) || entry.description.toLowerCase().includes(query))
 }
+
+export function normalizeSlashCommandSuggestions(value: unknown): SlashCommandSuggestion[] | null {
+  if (!Array.isArray(value)) return null
+  return value.flatMap((entry): SlashCommandSuggestion[] => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+    const record = entry as Record<string, unknown>
+    const rawName = typeof record.command === 'string'
+      ? record.command
+      : typeof record.name === 'string'
+      ? record.name
+      : ''
+    const command = rawName.trim()
+    if (!command) return []
+    const argumentHint = typeof record.argumentHint === 'string' && record.argumentHint.trim()
+      ? record.argumentHint.trim()
+      : undefined
+    return [{
+      command: command.startsWith('/') ? command : `/${command}`,
+      description: typeof record.description === 'string' ? record.description : '',
+      argumentHint,
+    }]
+  })
+}

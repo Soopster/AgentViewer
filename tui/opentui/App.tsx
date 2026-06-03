@@ -85,7 +85,7 @@ import type { ContextUsage, ProviderSelection, RunningSessionRef, SendAttachment
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
-import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '../../lib/slashCommands'
+import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
 import { extractPendingPermission, extractPermissionReply, type PendingPermission, type PermissionResponse } from '../../lib/permissions'
 import { readViewSessionSlashCommands, readViewSessionComposerOptions, createNewViewSession } from '../../lib/sessionBackend'
@@ -5620,6 +5620,10 @@ export default function OpenTuiApp() {
 
         if (parsedRecord.type === 'prompt_suggestion' && typeof parsedRecord.suggestion === 'string') {
           setLivePromptSuggestion(parsedRecord.suggestion)
+        }
+        if (parsedRecord.type === 'system' && parsedRecord.subtype === 'commands_changed') {
+          const commands = normalizeSlashCommandSuggestions(parsedRecord.commands)
+          if (commands) setComposerLiveSlashCommands(commands)
         }
         if (parsedRecord.type === 'system' && parsedRecord.subtype === 'status') {
           const status = parsedRecord.status === 'requesting' || parsedRecord.status === 'compacting' ? parsedRecord.status : null

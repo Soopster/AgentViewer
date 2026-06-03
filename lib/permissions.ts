@@ -6,7 +6,7 @@
 // Pure functions only — no React, no Node/DOM APIs — so it loads in both the
 // Next.js and Bun/OpenTUI bundles.
 
-import type { AgentProvider } from './types'
+import type { AgentProvider, SendAttachment } from './types'
 
 export type PendingPermission = {
   id: string
@@ -37,6 +37,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function stringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key]
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function objectField(record: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const value = record[key]
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
 }
 
 function codexPathLabel(value: unknown): string | undefined {
@@ -243,6 +250,39 @@ export function extractCopilotPermissionCompletion(payload: unknown): string | n
   if (!eventRecord || eventRecord.type !== 'permission.completed') return null
   const data = asRecord(eventRecord.data)
   return data ? stringField(data, 'requestId') ?? null : null
+}
+
+export function extractCopilotPushedAttachments(payload: unknown): SendAttachment[] {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'copilot_event') return []
+  const eventRecord = asRecord(record.event)
+  if (!eventRecord || eventRecord.type !== 'session.extensions.attachments_pushed') return []
+  const data = asRecord(eventRecord.data)
+  const rawAttachments = Array.isArray(data?.attachments) ? data.attachments : []
+  return rawAttachments.flatMap((attachment, index): SendAttachment[] => {
+    const attachmentRecord = asRecord(attachment)
+    if (!attachmentRecord || attachmentRecord.type !== 'extension_context') return []
+    const name = stringField(attachmentRecord, 'title') ?? stringField(attachmentRecord, 'name')
+    const extensionId = stringField(attachmentRecord, 'extensionId')
+    const capturedAt = stringField(attachmentRecord, 'capturedAt')
+    if (!name || !extensionId || !capturedAt) return []
+    return [{
+      id: [
+        'copilot-extension',
+        extensionId,
+        stringField(attachmentRecord, 'instanceId') ?? stringField(attachmentRecord, 'canvasId') ?? capturedAt,
+        index,
+      ].join(':'),
+      type: 'extension_context',
+      displayName: name,
+      text: `@${name}`,
+      extensionId,
+      canvasId: stringField(attachmentRecord, 'canvasId'),
+      instanceId: stringField(attachmentRecord, 'instanceId'),
+      capturedAt,
+      payload: objectField(attachmentRecord, 'payload'),
+    }]
+  })
 }
 
 export function extractClaudePermission(payload: unknown): PendingPermission | null {

@@ -52,6 +52,8 @@ export type ClaudePoolAcquireOptions = {
   cwd?: string
   /** Live-settable via setModel; recycle only if the SDK call fails. */
   model?: string
+  /** Comma-separated ordered fallback model chain. */
+  fallbackModel?: string
   /** Live-settable via setPermissionMode. */
   permissionMode?: PermissionMode
   /** Reasoning effort. Mapped to `effort` + `thinking` on the Query. Recycles on change. */
@@ -106,6 +108,7 @@ type Subscriber = {
 type EntryState = {
   cwd: string | undefined
   model: string | undefined
+  fallbackModel: string | undefined
   permissionMode: PermissionMode | undefined
   effort: ReasoningEffortLevel | undefined
   resumeSessionAt: string | undefined
@@ -189,6 +192,7 @@ class ClaudePool {
         ...(opts.forkSession ? {} : { resume: opts.sessionId }),
         ...(opts.cwd ? { cwd: opts.cwd } : {}),
         ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
         ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
         // bypassPermissions is a no-op (and the SDK rejects the option) unless we
         // also opt into the dangerous skip. Mirror `claude --dangerously-skip-permissions`.
@@ -217,6 +221,7 @@ class ClaudePool {
       state: {
         cwd: opts.cwd,
         model: opts.model,
+        fallbackModel: opts.fallbackModel,
         permissionMode: opts.permissionMode,
         effort: opts.effort,
         resumeSessionAt: opts.resumeSessionAt,
@@ -269,6 +274,7 @@ class ClaudePool {
 
   private compatible(state: EntryState, opts: ClaudePoolAcquireOptions): boolean {
     if (state.cwd !== opts.cwd) return false
+    if (state.fallbackModel !== opts.fallbackModel) return false
     if (state.effort !== opts.effort) return false
     if (state.taskBudgetTokens !== opts.taskBudgetTokens) return false
     // resumeSessionAt / forkSession affect the conversation root; never reuse.
@@ -425,6 +431,7 @@ class ClaudePool {
       state: {
         cwd: options.cwd,
         model: options.model,
+        fallbackModel: options.fallbackModel,
         permissionMode: options.permissionMode,
         effort: options.effort,
         // The one-shot options below don't apply to future turns of the

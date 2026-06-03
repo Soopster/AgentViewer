@@ -440,13 +440,30 @@ export function mapCopilotEventsToSessionMessages(sessionId: string, events: Ses
 }
 
 export function mapCopilotModelsToSessionModels(models: ModelInfo[]): SessionModelInfo[] {
-  return models.map((model) => ({
-    value: model.id,
-    displayName: model.name,
-    description: `Context ${model.capabilities.limits.max_context_window_tokens.toLocaleString()} tokens`,
-    supportsEffort: model.capabilities.supports.reasoningEffort,
-    supportedEffortLevels: model.supportedReasoningEfforts,
-  }))
+  return models.map((model) => {
+    const runtimeModel = model as ModelInfo & {
+      billing?: {
+        tokenPrices?: {
+          longContext?: {
+            contextMax?: number
+          }
+        }
+      }
+    }
+    const longContextMax = runtimeModel.billing?.tokenPrices?.longContext?.contextMax
+    const supportsLongContext = typeof longContextMax === 'number' && longContextMax > 0
+    const contextDescription = supportsLongContext
+      ? `Context ${model.capabilities.limits.max_context_window_tokens.toLocaleString()} tokens · Long ${longContextMax.toLocaleString()} tokens`
+      : `Context ${model.capabilities.limits.max_context_window_tokens.toLocaleString()} tokens`
+    return {
+      value: model.id,
+      displayName: model.name,
+      description: contextDescription,
+      supportsEffort: model.capabilities.supports.reasoningEffort,
+      supportedEffortLevels: model.supportedReasoningEfforts,
+      supportsLongContext,
+    }
+  })
 }
 
 export function mapCopilotUsageToContextUsage(
@@ -481,6 +498,14 @@ export function mapCopilotDiagnosticsToSections(params: {
   currentModel: string | null
   mode: string | null
   tools: Array<{ name: string; description?: string }>
+  currentTools?: Array<{
+    name?: string
+    displayName?: string
+    description?: string
+    mcpServerName?: string
+    mcpToolName?: string
+    deferLoading?: boolean
+  }>
   quotaItems: string[]
   metadata?: SessionMetadata | null
   events: SessionEvent[]
@@ -523,10 +548,25 @@ export function mapCopilotDiagnosticsToSections(params: {
     },
     {
       id: 'tools',
-      title: 'TOOLS',
+      title: 'AVAILABLE TOOLS',
       items: params.tools.length > 0
         ? params.tools.slice(0, 20).map((tool) => tool.description ? `${tool.name} · ${tool.description}` : tool.name)
         : ['None'],
+    },
+    {
+      id: 'current-tools',
+      title: 'INITIALIZED TOOLS',
+      items: params.currentTools && params.currentTools.length > 0
+        ? params.currentTools.slice(0, 30).map((tool) => {
+            const name = tool.displayName ?? tool.name ?? 'unnamed'
+            const source = tool.mcpServerName
+              ? ` · MCP ${tool.mcpServerName}${tool.mcpToolName ? `/${tool.mcpToolName}` : ''}`
+              : ''
+            const deferred = tool.deferLoading ? ' · deferred' : ''
+            const description = tool.description ? ` · ${tool.description}` : ''
+            return `${name}${source}${deferred}${description}`
+          })
+        : ['Unavailable'],
     },
     {
       id: 'quota',

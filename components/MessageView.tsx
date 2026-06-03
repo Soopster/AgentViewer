@@ -23,9 +23,9 @@ import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
 import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '@/lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
-import { getSlashCommandSuggestions, filterSlashCommands, type SlashCommandSuggestion } from '@/lib/slashCommands'
+import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '@/lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer'
-import { extractPendingPermission, extractPermissionReply, type PendingPermission } from '@/lib/permissions'
+import { extractCopilotPushedAttachments, extractPendingPermission, extractPermissionReply, type PendingPermission } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -89,6 +89,8 @@ type Props = {
   openCodeTodos?: OpenCodeTodo[]
   codexPlan?: { plan: CodexPlanStep[]; explanation: string | null }
 }
+
+type CopilotContextTier = 'default' | 'long_context'
 
 type OpenCodeTodo = {
   id: string
@@ -194,7 +196,7 @@ const TIMELINE_BOTTOM_GUTTER_PX = 72
 const TIMELINE_TARGET_TOP_GUTTER_PX = 72
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 const COMPOSER_DRAFT_STORAGE_PREFIX = 'agentViewer:composerDraft:v1:'
-const SEND_ATTACHMENT_TYPES = new Set<SendAttachment['type']>(['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob', 'agent'])
+const SEND_ATTACHMENT_TYPES = new Set<SendAttachment['type']>(['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob', 'agent', 'extension_context'])
 function detectMentionAtCursor(text: string, cursor: number): { start: number; query: string } | null {
   if (cursor === 0) return null
   let i = cursor - 1
@@ -309,6 +311,25 @@ function attachmentDisplayName(attachment: SendAttachment): string {
   if (attachment.displayName) return attachment.displayName
   const path = attachment.path ?? attachment.filePath ?? attachment.type
   return path.split('/').filter(Boolean).at(-1) ?? path
+}
+
+function permissionDenialReason(permission: PendingPermission): string {
+  const target = permission.command
+    ? `command "${permission.command}"`
+    : permission.url
+    ? `URL ${permission.url}`
+    : permission.paths && permission.paths.length > 0
+    ? `path ${permission.paths.join(', ')}`
+    : permission.detail
+    ? permission.detail
+    : permission.title
+  return `User rejected ${target} in Agent Viewer.`
+}
+
+function mergeAttachmentsById(existing: SendAttachment[], incoming: SendAttachment[]): SendAttachment[] {
+  const ids = new Set(existing.map((attachment) => attachment.id).filter(Boolean))
+  const next = incoming.filter((attachment) => !attachment.id || !ids.has(attachment.id))
+  return next.length > 0 ? [...existing, ...next].slice(-12) : existing
 }
 
 function composerDraftStorageKey(session: Session | null): string | null {
@@ -1940,6 +1961,7 @@ export default function MessageView({
   const [availableModels, setAvailableModels] = useState<SessionModelInfo[]>([])
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedEffort, setSelectedEffort] = useState<'auto' | ReasoningEffortLevel>('auto')
+  const [selectedCopilotContextTier, setSelectedCopilotContextTier] = useState<CopilotContextTier>('default')
   const [composerOptions, setComposerOptions] = useState<SessionComposerOptions>({})
   const [selectedAgent, setSelectedAgent] = useState('')
   const [selectedCopilotMode, setSelectedCopilotMode] = useState('interactive')
@@ -2064,6 +2086,7 @@ export default function MessageView({
   const suppressDraftSaveRef = useRef(false)
   const sendInFlightRef = useRef(false)
   const awaitingPersistedTurnRef = useRef(false)
+  const pushedCopilotAttachmentsRef = useRef<SendAttachment[]>([])
   const pendingMessageBaselineRef = useRef<PendingMessageBaseline | null>(null)
   const liveTurnSessionHandoffRef = useRef<string | null>(null)
   const liveAssistantTextRef = useRef('')
@@ -2401,6 +2424,8 @@ export default function MessageView({
         const nextModels = Array.isArray(data.models) ? data.models.filter((model: SessionModelInfo) => normalizeSelectValue(model.value)) : []
         setAvailableModels(nextModels)
         const live = normalizeSelectValue(data.currentModel)
+        const liveContextTier = data.currentContextTier === 'long_context' ? 'long_context' : 'default'
+        setSelectedCopilotContextTier(liveContextTier)
         setSelectedModel((prev) => {
           if (preserveSelection && prev && nextModels.some((m: SessionModelInfo) => normalizeSelectValue(m.value) === normalizeSelectValue(prev))) {
             // Keep user's pick if it is still valid; otherwise fall back.
@@ -2418,6 +2443,7 @@ export default function MessageView({
       setAvailableModels([])
       setSelectedModel('')
       setSelectedEffort('auto')
+      setSelectedCopilotContextTier('default')
       return
     }
     refreshSessionModels({ preserveSelection: false })
@@ -2470,6 +2496,16 @@ export default function MessageView({
       setSelectedEffort('auto')
     }
   }, [effortOptions, selectedEffort])
+
+  useEffect(() => {
+    if (activeProvider !== 'copilot') {
+      if (selectedCopilotContextTier !== 'default') setSelectedCopilotContextTier('default')
+      return
+    }
+    if (selectedCopilotContextTier === 'long_context' && !selectedModelInfo?.supportsLongContext) {
+      setSelectedCopilotContextTier('default')
+    }
+  }, [activeProvider, selectedCopilotContextTier, selectedModelInfo])
 
   useEffect(() => {
     if (activeProvider !== 'opencode' && attachmentType === 'agent') {
@@ -2813,6 +2849,7 @@ export default function MessageView({
     if (!text) return
 
     sendInFlightRef.current = true
+    pushedCopilotAttachmentsRef.current = []
     const sendAttachments = attachments
     const effort = selectedEffort === 'auto' ? undefined : selectedEffort
     setSentHistory((prev) => {
@@ -2862,6 +2899,9 @@ export default function MessageView({
           provider: session.provider,
           agent: session.provider === 'opencode' && selectedAgent ? selectedAgent : undefined,
           mode: session.provider === 'copilot' ? selectedCopilotMode : undefined,
+          contextTier: session.provider === 'copilot'
+            ? selectedCopilotContextTier
+            : undefined,
           manualPermissions: session.provider === 'copilot'
             || (session.provider === 'claude' && selectedPermissionMode !== 'bypassPermissions' && selectedPermissionMode !== 'plan')
             ? true : undefined,
@@ -2977,6 +3017,10 @@ export default function MessageView({
             if (parsed?.type === 'prompt_suggestion' && typeof parsed.suggestion === 'string') {
               setLivePromptSuggestion(parsed.suggestion)
             }
+            if (parsed?.type === 'system' && parsed.subtype === 'commands_changed') {
+              const commands = normalizeSlashCommandSuggestions(parsed.commands)
+              if (commands) setLiveSlashCommands(commands)
+            }
             if (parsed?.type === 'system' && parsed.subtype === 'status') {
               const next = parsed.status === 'requesting' || parsed.status === 'compacting' ? parsed.status : null
               setLiveStatus(next)
@@ -3011,6 +3055,15 @@ export default function MessageView({
             const repliedPermissionId = extractPermissionReply(parsed)
             if (repliedPermissionId) {
               setPendingPermissions((prev) => prev.filter((permission) => permission.id !== repliedPermissionId))
+            }
+            const pushedAttachments = extractCopilotPushedAttachments(parsed)
+            if (pushedAttachments.length > 0) {
+              pushedCopilotAttachmentsRef.current = mergeAttachmentsById(pushedCopilotAttachmentsRef.current, pushedAttachments)
+              setAttachments((prev) => mergeAttachmentsById(prev, pushedAttachments))
+              setQueuedSend((prev) => prev
+                ? { ...prev, attachments: mergeAttachmentsById(prev.attachments, pushedAttachments) }
+                : prev
+              )
             }
             const toolStart = extractLiveToolStart(parsed)
             if (toolStart) {
@@ -3113,7 +3166,9 @@ export default function MessageView({
       flushLiveAssistantTextNow()
       setSendState('idle')
       setLiveStatus(null)
-      setAttachments([])
+      const pushedAttachments = pushedCopilotAttachmentsRef.current
+      pushedCopilotAttachmentsRef.current = []
+      setAttachments(pushedAttachments)
       // Pick up any model/effort the user invoked via a slash command (e.g.
       // `/model claude-sonnet-4-6`) so the composer chip mirrors the SDK.
       refreshSessionModels({ preserveSelection: true })
@@ -3154,7 +3209,7 @@ export default function MessageView({
       activeTurnRequestIdRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, clearLiveAssistantText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, clearLiveAssistantText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
@@ -3704,6 +3759,7 @@ export default function MessageView({
           action: 'respondPermission',
           permissionId: permission.id,
           response,
+          permissionDecisionReason: response === 'reject' ? permissionDenialReason(permission) : undefined,
           provider: session.provider,
         }),
       })
@@ -6209,6 +6265,32 @@ export default function MessageView({
                         {effortLabel(level)}
                       </NativeSelectOption>
                     ))}
+                  </NativeSelect>
+                </label>
+              )}
+              {activeProvider === 'copilot' && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 148px', minWidth: 128 }}>
+                  <Label style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    color: 'var(--text-3)',
+                    letterSpacing: '0.05em',
+                  }}>
+                    CONTEXT
+                  </Label>
+                  <NativeSelect
+                    value={selectedCopilotContextTier}
+                    onChange={(event) => setSelectedCopilotContextTier(event.target.value as CopilotContextTier)}
+                    className={cn(compactNativeSelectClassName, 'flex-1')}
+                    title="GitHub Copilot context tier"
+                  >
+                    <NativeSelectOption value="default">DEFAULT</NativeSelectOption>
+                    <NativeSelectOption
+                      value="long_context"
+                      disabled={!selectedModelInfo?.supportsLongContext}
+                    >
+                      LONG
+                    </NativeSelectOption>
                   </NativeSelect>
                 </label>
               )}
