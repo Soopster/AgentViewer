@@ -9175,7 +9175,7 @@ export default function OpenTuiApp() {
                   {fitText(line || ' ', innerWidth)}
                 </text>
               ))}
-              <box flexDirection="row" gap={2} paddingTop={1}>
+              <box flexDirection="row" gap={2} marginTop={1} height={1}>
                 {options.map((option, index) => {
                   const selected = index === selectedIndex
                   const color = option.response === 'reject' ? theme.red : theme.green
