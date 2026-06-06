@@ -5778,6 +5778,13 @@ export default function OpenTuiApp() {
           setContextUsage(usage)
           return
         }
+        if (frame.event === 'turn-usage' && parsed && typeof parsed === 'object') {
+          const outputTokens = (parsed as { outputTokens?: unknown }).outputTokens
+          if (typeof outputTokens === 'number' && Number.isFinite(outputTokens)) {
+            setLiveOutputTokens(Math.max(0, outputTokens))
+          }
+          return
+        }
         // Non-fatal turn notice (e.g. an MCP elicitation prompt). Surface it as a
         // transient banner without disturbing the live turn state.
         if (frame.event === 'turn-notice' && parsed) {

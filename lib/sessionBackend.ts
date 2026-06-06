@@ -132,6 +132,7 @@ import type {
   TurnStartedNotification,
 } from './codex-schema/v2'
 import {
+  advanceCodexTurnOutputUsage,
   mapCodexDiagnosticsToSections,
   mapCodexModelsToSessionModels,
   mapCodexThreadToMessages,
@@ -791,6 +792,10 @@ function parsePiDirectShell(message: string): { command: string; excludeFromCont
 
 function codexContextUsageToEventData(contextUsage: ContextUsage): string {
   return `event: context-usage\ndata: ${JSON.stringify(contextUsage)}\n\n`
+}
+
+function turnUsageToEventData(outputTokens: number): string {
+  return `event: turn-usage\ndata: ${JSON.stringify({ outputTokens })}\n\n`
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -3536,6 +3541,10 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       // opencode stream consumes its harness.
       const subscription = subscribeToCodexEvents({ threadId: sessionId })
       const cachedSnapshot = subscription.snapshot
+      let turnOutputUsage = {
+        lastTotalOutputTokens: cachedSnapshot?.tokenUsage?.total?.outputTokens ?? null,
+        outputTokens: 0,
+      }
       let consumeAborted = false
       // Surface this thread's server→client approval requests as codex_approval
       // SSE frames. The app-server blocks the turn until respondPermission replies.
@@ -3557,6 +3566,12 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         declinePendingCodexApprovals(sessionId)
         subscription.close()
       }
+      const emitTokenUsage = (tokenUsage: CodexThreadTokenUsage) => {
+        const usage = mapCodexTokenUsageToContextUsage(tokenUsage, currentModel)
+        safeEnqueue(codexContextUsageToEventData(usage))
+        turnOutputUsage = advanceCodexTurnOutputUsage(turnOutputUsage, tokenUsage)
+        safeEnqueue(turnUsageToEventData(turnOutputUsage.outputTokens))
+      }
       const activateTargetTurn = (turnId: string) => {
         if (!turnId || targetTurnId) return
         targetTurnId = turnId
@@ -3576,11 +3591,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
             continue
           }
           if (notification.method === 'thread/tokenUsage/updated') {
-            const usage = mapCodexTokenUsageToContextUsage(
-              (notification.params as ThreadTokenUsageUpdatedNotification).tokenUsage,
-              currentModel,
-            )
-            safeEnqueue(codexContextUsageToEventData(usage))
+            emitTokenUsage((notification.params as ThreadTokenUsageUpdatedNotification).tokenUsage)
             continue
           }
           if (notification.method === 'error') {
@@ -3650,11 +3661,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
               continue
             }
             if (!targetTurnId || notificationTurnId !== targetTurnId) continue
-            const usage = mapCodexTokenUsageToContextUsage(
-              (notification.params as ThreadTokenUsageUpdatedNotification).tokenUsage,
-              currentModel,
-            )
-            safeEnqueue(codexContextUsageToEventData(usage))
+            emitTokenUsage((notification.params as ThreadTokenUsageUpdatedNotification).tokenUsage)
             continue
           }
 
@@ -4125,6 +4132,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
       try {
         const modelsById = new Map<string, CopilotModelInfo>()
+        let activeContextTier = contextTier
 
         const turnComplete = new Promise<void>((resolve, reject) => {
           finishTurn = () => {
@@ -4162,8 +4170,8 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           }
 
           if (event.type === 'assistant.usage') {
-            const usage = mapCopilotUsageToContextUsage(event, modelsById)
-            safeEnqueue(codexContextUsageToEventData(usage))
+            const usage = mapCopilotUsageToContextUsage(event, modelsById, activeContextTier)
+            if (usage) safeEnqueue(codexContextUsageToEventData(usage))
           }
 
           if (event.type === 'session.error') {
@@ -4181,7 +4189,22 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         // Warm session pool: re-use a single Copilot session per id across
         // sends and bind a fresh listener for this turn only. The native CLI
         // keeps the JSON-RPC connection alive between turns; this matches.
-        session = await withTimeout(acquireCopilotSession(sessionId), 20000, 'Copilot session resume')
+        const [acquiredSession, availableModels] = await Promise.all([
+          withTimeout(acquireCopilotSession(sessionId), 20000, 'Copilot session resume'),
+          getCopilotClient()
+            .then((client) => withTimeout(client.listModels(), 15000, 'Copilot model list'))
+            .catch(() => [] as CopilotModelInfo[]),
+        ])
+        session = acquiredSession
+        for (const model of availableModels) modelsById.set(model.id, model)
+        if (!activeContextTier) {
+          const currentModel = await withTimeout(
+            session.rpc.model.getCurrent(),
+            5000,
+            'Copilot current model',
+          ).catch(() => ({ modelId: undefined, contextTier: undefined }))
+          activeContextTier = parseCopilotContextTier(currentModel.contextTier) ?? 'default'
+        }
         if (manualPermissions) {
           setCopilotPermissionHandler(sessionId, createCopilotPermissionBridge(
             sessionId,

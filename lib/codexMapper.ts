@@ -397,6 +397,43 @@ export function mapCodexTokenUsageToContextUsage(tokenUsage: CodexThreadTokenUsa
   }
 }
 
+export type CodexTurnOutputUsageState = {
+  lastTotalOutputTokens: number | null
+  outputTokens: number
+}
+
+export function advanceCodexTurnOutputUsage(
+  state: CodexTurnOutputUsageState,
+  tokenUsage: CodexThreadTokenUsage,
+): CodexTurnOutputUsageState {
+  const totalOutputTokens = tokenUsage.total?.outputTokens
+  const lastOutputTokens = tokenUsage.last?.outputTokens ?? 0
+
+  if (typeof totalOutputTokens !== 'number' || !Number.isFinite(totalOutputTokens)) {
+    return {
+      lastTotalOutputTokens: state.lastTotalOutputTokens,
+      outputTokens: state.outputTokens + Math.max(0, lastOutputTokens),
+    }
+  }
+
+  if (state.lastTotalOutputTokens == null) {
+    return {
+      lastTotalOutputTokens: totalOutputTokens,
+      outputTokens: state.outputTokens + Math.max(0, lastOutputTokens),
+    }
+  }
+
+  const delta = totalOutputTokens - state.lastTotalOutputTokens
+  return {
+    lastTotalOutputTokens: totalOutputTokens,
+    outputTokens: state.outputTokens + (
+      delta >= 0
+        ? delta
+        : Math.max(0, lastOutputTokens)
+    ),
+  }
+}
+
 export function mapCodexModelsToSessionModels(models: Array<{
   model: string
   displayName: string

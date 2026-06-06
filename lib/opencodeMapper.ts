@@ -290,7 +290,12 @@ export function firstOpenCodePrompt(messages: OpenCodeMessageBundle[]): string |
 
 export function mapOpenCodeContextUsage(message?: Message): ContextUsage | null {
   if (!message || message.role !== 'assistant') return null
-  const totalTokens = message.tokens.input + message.tokens.output + message.tokens.reasoning + message.tokens.cache.read + message.tokens.cache.write
+  // Newer OpenCode payloads normalize provider-specific cache semantics into
+  // `total`. Prefer it because cached tokens are additive for some providers
+  // and already included in input for others.
+  const normalizedTotal = (message.tokens as typeof message.tokens & { total?: number }).total
+  const totalTokens = normalizedTotal
+    ?? message.tokens.input + message.tokens.output + message.tokens.reasoning + message.tokens.cache.read + message.tokens.cache.write
   return {
     totalTokens,
     maxTokens: 0,

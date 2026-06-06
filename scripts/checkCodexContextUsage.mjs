@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 
-import { mapCodexTokenUsageToContextUsage } from '../lib/codexMapper.ts'
+import {
+  advanceCodexTurnOutputUsage,
+  mapCodexTokenUsageToContextUsage,
+} from '../lib/codexMapper.ts'
 
 const currentContext = {
   totalTokens: 113_250,
@@ -34,5 +37,40 @@ const legacyUsage = mapCodexTokenUsageToContextUsage({
 }, 'gpt-5.5')
 
 assert.equal(legacyUsage.totalTokens, currentContext.totalTokens, 'older payloads without last usage should fall back to total')
+
+let turnUsage = {
+  lastTotalOutputTokens: 10_000,
+  outputTokens: 0,
+}
+turnUsage = advanceCodexTurnOutputUsage(turnUsage, {
+  total: { ...currentContext, outputTokens: 10_125 },
+  last: { ...currentContext, outputTokens: 125 },
+  modelContextWindow: 258_400,
+})
+assert.equal(turnUsage.outputTokens, 125, 'first model pass should use the lifetime output-token delta')
+
+turnUsage = advanceCodexTurnOutputUsage(turnUsage, {
+  total: { ...currentContext, outputTokens: 10_200 },
+  last: { ...currentContext, outputTokens: 75 },
+  modelContextWindow: 258_400,
+})
+assert.equal(turnUsage.outputTokens, 200, 'later model passes should accumulate without double-counting')
+
+turnUsage = advanceCodexTurnOutputUsage(turnUsage, {
+  total: { ...currentContext, outputTokens: 10_200 },
+  last: { ...currentContext, outputTokens: 75 },
+  modelContextWindow: 258_400,
+})
+assert.equal(turnUsage.outputTokens, 200, 'repeated usage notifications should not increment the turn total')
+
+const coldTurnUsage = advanceCodexTurnOutputUsage({
+  lastTotalOutputTokens: null,
+  outputTokens: 0,
+}, {
+  total: { ...currentContext, outputTokens: 20_125 },
+  last: { ...currentContext, outputTokens: 125 },
+  modelContextWindow: 258_400,
+})
+assert.equal(coldTurnUsage.outputTokens, 125, 'a cold stream should fall back to the latest model-pass usage')
 
 console.log('Codex context usage checks passed')

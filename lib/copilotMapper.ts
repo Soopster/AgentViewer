@@ -469,13 +469,36 @@ export function mapCopilotModelsToSessionModels(models: ModelInfo[]): SessionMod
 export function mapCopilotUsageToContextUsage(
   event: Extract<SessionEvent, { type: 'assistant.usage' }>,
   models: Map<string, ModelInfo>,
-): ContextUsage {
+  contextTier: 'default' | 'long_context' = 'default',
+): ContextUsage | null {
+  // assistant.usage is emitted for every API call. Sub-agent, compaction, and
+  // MCP sampling calls do not represent the root conversation's context.
+  if (event.agentId || event.data.initiator) return null
+
   const inputTokens = event.data.inputTokens ?? 0
   const outputTokens = event.data.outputTokens ?? 0
   const cacheReadTokens = event.data.cacheReadTokens ?? 0
   const cacheWriteTokens = event.data.cacheWriteTokens ?? 0
-  const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
-  const maxTokens = models.get(event.data.model)?.capabilities.limits.max_context_window_tokens ?? Math.max(totalTokens, 1)
+  // Anthropic reports cached input separately; OpenAI/Gemini include cached
+  // tokens in input and expose cache counts as subsets. Copilot normalizes the
+  // field names but retains the originating API's accounting semantics.
+  const cacheIsAdditionalInput = event.data.apiEndpoint === '/v1/messages'
+    || event.data.model.toLowerCase().includes('claude')
+  const totalTokens = inputTokens + outputTokens + (cacheIsAdditionalInput ? cacheReadTokens + cacheWriteTokens : 0)
+  const model = models.get(event.data.model)
+  const runtimeModel = model as ModelInfo & {
+    billing?: {
+      tokenPrices?: {
+        longContext?: {
+          contextMax?: number
+        }
+      }
+    }
+  }
+  const longContextMax = runtimeModel?.billing?.tokenPrices?.longContext?.contextMax
+  const maxTokens = contextTier === 'long_context' && typeof longContextMax === 'number' && longContextMax > 0
+    ? longContextMax
+    : model?.capabilities.limits.max_context_window_tokens ?? 0
 
   return {
     totalTokens,
