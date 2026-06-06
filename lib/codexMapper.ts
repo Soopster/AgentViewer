@@ -376,9 +376,12 @@ export function mapCodexThreadToMessages(thread: CodexThread): SessionMessage[] 
 }
 
 export function mapCodexTokenUsageToContextUsage(tokenUsage: CodexThreadTokenUsage, model: string): ContextUsage {
-  const total = tokenUsage.total ?? null
+  // `total` is lifetime thread usage and can exceed the model window many
+  // times over. `last` is the current request/context snapshot that Codex
+  // itself uses for context-window accounting.
+  const context = tokenUsage.last ?? tokenUsage.total ?? null
   const maxTokens = tokenUsage.modelContextWindow ?? 0
-  const totalTokens = total?.totalTokens ?? 0
+  const totalTokens = context?.totalTokens ?? 0
 
   return {
     totalTokens,
@@ -386,10 +389,10 @@ export function mapCodexTokenUsageToContextUsage(tokenUsage: CodexThreadTokenUsa
     percentage: maxTokens > 0 ? Math.min(100, (totalTokens / maxTokens) * 100) : 0,
     model,
     categories: [
-      { name: 'Input', tokens: total?.inputTokens ?? 0, color: 'var(--cyan)' },
-      { name: 'Cached', tokens: total?.cachedInputTokens ?? 0, color: 'var(--green)' },
-      { name: 'Output', tokens: total?.outputTokens ?? 0, color: 'var(--violet)' },
-      { name: 'Reasoning', tokens: total?.reasoningOutputTokens ?? 0, color: 'var(--amber)' },
+      { name: 'Input', tokens: context?.inputTokens ?? 0, color: 'var(--cyan)' },
+      { name: 'Cached', tokens: context?.cachedInputTokens ?? 0, color: 'var(--green)' },
+      { name: 'Output', tokens: context?.outputTokens ?? 0, color: 'var(--violet)' },
+      { name: 'Reasoning', tokens: context?.reasoningOutputTokens ?? 0, color: 'var(--amber)' },
     ],
   }
 }
