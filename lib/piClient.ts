@@ -108,15 +108,33 @@ const PI_SESSION_TTL_MS = 5 * 60 * 1000
 type PiPoolEntry = { session: AgentSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
 const piSessionPool = new Map<string, PiPoolEntry>()
 
+// Tear down a pooled AgentSession's background work (retry/compaction loops,
+// branch summary, bash) and its agent event subscription. Without this an
+// evicted session leaks those listeners + timers. dispose() aborts in-flight
+// work, so callers must only invoke this on a session that is not mid-turn.
+function disposePiEntry(entry: PiPoolEntry): void {
+  try {
+    entry.session.dispose()
+  } catch {
+    // Dispose must not throw out of an eviction/teardown path.
+  }
+}
+
 function schedulePiEviction(sessionId: string): void {
   const entry = piSessionPool.get(sessionId)
   if (!entry) return
   if (entry.timer) clearTimeout(entry.timer)
   entry.timer = setTimeout(() => {
     const current = piSessionPool.get(sessionId)
-    if (current && Date.now() - current.lastUsed >= PI_SESSION_TTL_MS) {
-      piSessionPool.delete(sessionId)
+    if (!current || Date.now() - current.lastUsed < PI_SESSION_TTL_MS) return
+    // A detached turn can outlive the idle TTL. Never dispose mid-turn (it would
+    // abort the live turn) — defer eviction until the session goes idle.
+    if (current.session.isStreaming) {
+      schedulePiEviction(sessionId)
+      return
     }
+    piSessionPool.delete(sessionId)
+    disposePiEntry(current)
   }, PI_SESSION_TTL_MS)
   // Don't keep the event loop alive solely for eviction.
   if (typeof entry.timer === 'object' && entry.timer && 'unref' in entry.timer) {
@@ -152,6 +170,10 @@ export function evictPiAgentSession(sessionId: string): void {
   if (!entry) return
   clearTimeout(entry.timer)
   piSessionPool.delete(sessionId)
+  // Explicit eviction (e.g. after a fork rewrote the on-disk state) means this
+  // session is stale and must be torn down so its background loops/listeners
+  // don't leak — dispose even though it aborts any in-flight work.
+  disposePiEntry(entry)
 }
 
 export async function refreshPiSessionCache(cwd?: string): Promise<void> {

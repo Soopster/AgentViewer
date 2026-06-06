@@ -3978,6 +3978,10 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
       let historyPollCancelled = false
       let finishTurn: (() => void) | null = null
       let failTurn: ((error: Error) => void) | null = null
+      // Captured from the root assistant.turn_start so we can complete the turn
+      // on the matching authoritative assistant.turn_end (faster + more reliable
+      // than the 1.5s assistant.message heuristic / session.idle / history poll).
+      let currentTurnId: string | null = null
       const streamedAssistantMessageIds = new Set<string>()
       const bridgedPermissionIds = new Set<string>()
 
@@ -4046,11 +4050,22 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           if (cleanedUp) return
           recordCopilotLiveTranscriptEvent(sessionId, event)
           broadcastLiveSessionActivity('copilot', sessionId)
+          // Only the root agent's turn lifecycle ends our turn; sub-agent
+          // turn_start/turn_end (which carry an agentId) must not finish it.
+          const eventAgentId = (event as { agentId?: string }).agentId
           if (event.type === 'assistant.message') {
             streamedAssistantMessageIds.add(event.data.messageId)
             scheduleFinalMessageFallback(event)
           } else if (event.type === 'assistant.turn_start') {
+            if (!eventAgentId) currentTurnId = event.data.turnId ?? currentTurnId
             clearFinalMessageFallback()
+          } else if (event.type === 'assistant.turn_end') {
+            // Authoritative completion. Match the captured root turnId so a stale
+            // or sub-agent turn_end can't end the turn early; if we never saw a
+            // turn_start, accept it rather than risk hanging on the heuristics.
+            if (!eventAgentId && (currentTurnId == null || event.data.turnId === currentTurnId)) {
+              finishTurn?.()
+            }
           } else if ((event.type as string) === 'session.idle' || (event.type as string) === 'session.task_complete') {
             finishTurn?.()
           }
@@ -4364,6 +4379,14 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           ? await createPiAgentSession(cwdOverride ?? process.cwd(), { id: sessionId })
           : await openPiAgentSession(sessionId)
         targetSessionId = agentSession.sessionId
+        // The warm Pi session is single-turn: a concurrent send (another tab, a
+        // rapid double-fire) would otherwise hit the raw SDK "Agent is already
+        // processing" throw after we'd already mutated model/thinking state.
+        // Detect it up front and surface a clear message instead — the catch
+        // below turns this into a tidy error frame and closes cleanly.
+        if (agentSession.isStreaming) {
+          throw new Error('Pi is still finishing the previous message. Wait for it to complete before sending another.')
+        }
         if (selectedModel) {
           const model = agentSession.modelRegistry.find(selectedModel.providerID, selectedModel.modelID)
           if (!model) {
