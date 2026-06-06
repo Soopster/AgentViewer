@@ -44,6 +44,11 @@ const SWEEP_INTERVAL_MS = 60_000
 const TURN_TAIL_DRAIN_MS = 500
 // Hard ceiling so a stuck SDK can't strand the mutex forever.
 const TURN_HARD_TIMEOUT_MS = 10 * 60 * 1000
+// Grace after an interrupt request before we assume the SDK interrupt was a
+// no-op and recycle the entry. A genuine interrupt emits a result well within
+// this; if it doesn't, recycling frees the FIFO mutex instead of holding it
+// until the 10-min hard timeout while the user stares at a dead spinner.
+const INTERRUPT_FALLBACK_MS = 4000
 
 export type ClaudePoolAcquireOptions = {
   /** Real session id. Callers must NOT pool pending sessions in phase 1. */
@@ -540,8 +545,18 @@ class ClaudePool {
       throw new Error('Claude pool entry was recycled before turn could start')
     }
 
+    let interruptFallbackTimer: ReturnType<typeof setTimeout> | null = null
     const abortHandler = () => {
       void entry.query.interrupt().catch(() => {})
+      // If the SDK interrupt is silently a no-op, the turn keeps streaming and
+      // holds this entry's FIFO mutex until the 10-min hard timeout, blocking
+      // every subsequent send to the session. Recycle after a short grace so
+      // the turn rejects, the mutex frees, and the next send reconnects fresh.
+      if (interruptFallbackTimer) clearTimeout(interruptFallbackTimer)
+      interruptFallbackTimer = setTimeout(() => {
+        interruptFallbackTimer = null
+        if (entry.alive) this.recycleInternal(entry, 'interrupt-fallback')
+      }, INTERRUPT_FALLBACK_MS)
     }
     if (options.signal.aborted) abortHandler()
     else options.signal.addEventListener('abort', abortHandler, { once: true })
@@ -556,6 +571,7 @@ class ClaudePool {
     } catch (err) {
       entry.bridgeBox.fn = null
       entry.subscriber = null
+      if (interruptFallbackTimer) clearTimeout(interruptFallbackTimer)
       clearTimeout(hardTimer)
       options.signal.removeEventListener('abort', abortHandler)
       releaseMutex()
@@ -573,6 +589,7 @@ class ClaudePool {
       // with a clean slate even if the current turn's onError never fired.
       entry.bridgeBox.fn = null
       if (tailTimer) clearTimeout(tailTimer)
+      if (interruptFallbackTimer) clearTimeout(interruptFallbackTimer)
       clearTimeout(hardTimer)
       options.signal.removeEventListener('abort', abortHandler)
       entry.subscriber = null

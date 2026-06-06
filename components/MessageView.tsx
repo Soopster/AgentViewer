@@ -27,6 +27,7 @@ import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandS
 import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer'
 import { extractCopilotPushedAttachments, extractPendingPermission, extractPermissionReply, type PendingPermission } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
+import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '@/lib/transientError'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -190,6 +191,11 @@ const TIMELINE_OVERSCAN_PX = 2400
 // during active scroll it fights the user's input and is the main source of
 // the perceived jumpiness on long transcripts with tool cards.
 const SCROLL_IDLE_MS = 140
+// Safety net: how long the composer will wait for a turn's persisted rows to
+// land before force-revealing the polled timeline. The 2s message poll means
+// the durable rows are normally present within a poll or two; this only fires
+// when a write is lost/delayed so "Syncing transcript…" can never stick forever.
+const AWAITING_PERSISTED_TURN_TIMEOUT_MS = 15000
 const PROGRAMMATIC_SCROLL_SUPPRESSION_MS = 120
 const ESTIMATED_CHARS_PER_LINE = 92
 const TIMELINE_BOTTOM_GUTTER_PX = 72
@@ -1985,7 +1991,10 @@ export default function MessageView({
   // Mirrors the CLI "queue next prompt while streaming" behavior. When a send
   // fires while one is in flight, the draft is captured here and flushed by an
   // effect once the active turn finishes.
-  const [queuedSend, setQueuedSend] = useState<{ text: string; attachments: SendAttachment[] } | null>(null)
+  // FIFO backlog of follow-up prompts typed while a turn is in flight. Native
+  // CLIs queue an arbitrary number of follow-ups; a single overwritten slot
+  // silently dropped all but the most recent draft.
+  const [queuedSends, setQueuedSends] = useState<Array<{ text: string; attachments: SendAttachment[] }>>([])
   const [attachments, setAttachments] = useState<SendAttachment[]>([])
   const [attachmentType, setAttachmentType] = useState<SendAttachment['type']>('file')
   const [attachmentPath, setAttachmentPath] = useState('')
@@ -2066,6 +2075,11 @@ export default function MessageView({
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
   const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
+  // True from when the user hits stop until the interrupted turn's partial
+  // output reconciles (or the awaitingPersistedTurn escape hatch fires). Lets
+  // the composer show a definite "Interrupting…" instead of snapping to idle
+  // while the agent is still wrapping up server-side.
+  const [interrupting, setInterrupting] = useState(false)
   const [liveAssistantText, setLiveAssistantText] = useState('')
   // Reasoning/thinking streams on its own channel so it renders as a distinct
   // dim block above the answer (like the native CLIs) instead of being folded
@@ -2087,7 +2101,7 @@ export default function MessageView({
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const [sentHistory, setSentHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
-  const draftBeforeHistoryRef = useRef('')
+  const draftBeforeHistoryRef = useRef<{ text: string; cursorPos: number }>({ text: '', cursorPos: 0 })
   const [mentionQuery, setMentionQuery] = useState<{ start: number; query: string } | null>(null)
   const [mentionResults, setMentionResults] = useState<MentionResult[]>([])
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0)
@@ -2098,6 +2112,7 @@ export default function MessageView({
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
   const [liveSlashCommands, setLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const isComposingRef = useRef(false)
   const timelineRef = useRef<HTMLDivElement>(null)
   const timelineContentRef = useRef<HTMLDivElement | null>(null)
   const lastTimelineRowRef = useRef<HTMLDivElement | null>(null)
@@ -2108,6 +2123,13 @@ export default function MessageView({
   const sendInFlightRef = useRef(false)
   const awaitingPersistedTurnRef = useRef(false)
   const pushedCopilotAttachmentsRef = useRef<SendAttachment[]>([])
+  // Transient auto-retry bookkeeping. turnProducedOutputRef gates retries to
+  // turns that streamed nothing yet (so a retry can't duplicate work);
+  // transientRetryCountRef counts attempts within one logical send;
+  // transientRetryTimerRef holds the pending backoff so cancel can clear it.
+  const turnProducedOutputRef = useRef(false)
+  const transientRetryCountRef = useRef(0)
+  const transientRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingMessageBaselineRef = useRef<PendingMessageBaseline | null>(null)
   const liveTurnSessionHandoffRef = useRef<string | null>(null)
   const liveAssistantTextRef = useRef('')
@@ -2836,6 +2858,35 @@ export default function MessageView({
     }
   }, [autoFollow, awaitingPersistedTurn, clearLiveAssistantText, liveAssistantText, liveThreadedMessages.length, messages, scrollTimelineToBottom, session])
 
+  // Escape hatch for a persisted row that never lands. Without this, a lost or
+  // badly delayed write leaves the composer stuck on "Syncing transcript…"
+  // indefinitely (the reconcile effect above only resolves on arrival). After a
+  // bounded wait we tear down the live overlay and reveal whatever the poll has.
+  useEffect(() => {
+    if (!awaitingPersistedTurn) return
+    const timer = window.setTimeout(() => {
+      setOptimisticUserText(null)
+      clearLiveAssistantText()
+      setLiveToolActivities([])
+      setLiveThreadedMessages([])
+      clearLiveSubagentText()
+      awaitingPersistedTurnRef.current = false
+      setAwaitingPersistedTurn(false)
+      pendingMessageBaselineRef.current = null
+      liveToolIndexesRef.current.clear()
+    }, AWAITING_PERSISTED_TURN_TIMEOUT_MS)
+    return () => window.clearTimeout(timer)
+  }, [awaitingPersistedTurn, clearLiveAssistantText, clearLiveSubagentText])
+
+  // 'Interrupting…' is only meaningful while we're waiting for the interrupted
+  // turn to reconcile. Once awaitingPersistedTurn clears (the partial turn
+  // landed, or the escape-hatch timeout fired), drop the interrupting flag.
+  useEffect(() => {
+    if (!awaitingPersistedTurn && interrupting) {
+      setInterrupting(false)
+    }
+  }, [awaitingPersistedTurn, interrupting])
+
   const cancelSend = useCallback(() => {
     if (session) {
       fetch(`/api/sessions/${session.sessionId}/interrupt`, {
@@ -2847,37 +2898,56 @@ export default function MessageView({
         }),
       }).catch(() => {})
     }
-    if (optimisticUserText) {
-      setInputText((prev) => prev || optimisticUserText)
+    // Cancel any pending transient auto-retry so it can't fire after the user
+    // explicitly stopped the turn.
+    if (transientRetryTimerRef.current) {
+      clearTimeout(transientRetryTimerRef.current)
+      transientRetryTimerRef.current = null
     }
+    transientRetryCountRef.current = 0
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
     activeTurnRequestIdRef.current = null
     sendInFlightRef.current = false
-    awaitingPersistedTurnRef.current = false
-    setSendState('idle')
     setSendError(null)
-    setOptimisticUserText(null)
-    clearLiveAssistantText()
-    setLiveToolActivities([])
-    setLiveThreadedMessages([])
-    clearLiveSubagentText()
-    setAwaitingPersistedTurn(false)
-    pendingMessageBaselineRef.current = null
-    liveToolIndexesRef.current.clear()
+    setSendState('idle')
+    if (pendingMessageBaselineRef.current) {
+      // The turn had started: keep whatever the agent produced visible and
+      // transition into the 'Interrupting…' / syncing state so the interrupted
+      // turn's partial output reconciles smoothly instead of vanishing and then
+      // reappearing on the next poll. The awaitingPersistedTurn timeout is the
+      // escape hatch if the interrupt is a no-op and nothing ever persists.
+      setInterrupting(true)
+      awaitingPersistedTurnRef.current = true
+      setAwaitingPersistedTurn(true)
+    } else {
+      // Nothing started yet — restore the draft and clear cleanly, as if unsent.
+      if (optimisticUserText) setInputText((prev) => prev || optimisticUserText)
+      setInterrupting(false)
+      awaitingPersistedTurnRef.current = false
+      setAwaitingPersistedTurn(false)
+      setOptimisticUserText(null)
+      clearLiveAssistantText()
+      setLiveToolActivities([])
+      setLiveThreadedMessages([])
+      clearLiveSubagentText()
+      pendingMessageBaselineRef.current = null
+      liveToolIndexesRef.current.clear()
+    }
     textareaRef.current?.focus()
-  }, [clearLiveAssistantText, optimisticUserText, session])
+  }, [clearLiveAssistantText, clearLiveSubagentText, optimisticUserText, session])
 
-  const sendMessage = useCallback(async () => {
+  const sendMessage = useCallback(async (retryOverride?: { text: string; attachments: SendAttachment[] }) => {
     if (!session) return
     // Native CLIs (Claude, Codex) accept a follow-up prompt while the current
     // turn is still streaming — they queue it. Mirror that: if a send fires
     // while one is in flight, stash the draft and have the post-stream effect
-    // flush it once the current turn lands.
-    if (sendInFlightRef.current || awaitingPersistedTurnRef.current) {
+    // flush it once the current turn lands. A transient auto-retry (retryOverride)
+    // is never a queue candidate — it only fires after the failed turn settled.
+    if (!retryOverride && (sendInFlightRef.current || awaitingPersistedTurnRef.current)) {
       const queueText = (textareaRef.current?.value ?? inputTextRef.current).trim()
       if (!queueText) return
-      setQueuedSend({ text: queueText, attachments })
+      setQueuedSends((prev) => [...prev, { text: queueText, attachments }])
       setInputText('')
       inputTextRef.current = ''
       textareaRef.current?.value !== undefined && (textareaRef.current!.value = '')
@@ -2886,12 +2956,16 @@ export default function MessageView({
       return
     }
 
-    const text = (textareaRef.current?.value ?? inputTextRef.current).trim()
+    const text = retryOverride ? retryOverride.text : (textareaRef.current?.value ?? inputTextRef.current).trim()
     if (!text) return
+
+    // Reset the retry counter at the start of a fresh (non-retry) send.
+    if (!retryOverride) transientRetryCountRef.current = 0
+    turnProducedOutputRef.current = false
 
     sendInFlightRef.current = true
     pushedCopilotAttachmentsRef.current = []
-    const sendAttachments = attachments
+    const sendAttachments = retryOverride ? retryOverride.attachments : attachments
     const effort = selectedEffort === 'auto' ? undefined : selectedEffort
     setSentHistory((prev) => {
       if (prev.length > 0 && prev[prev.length - 1] === text) return prev
@@ -2899,12 +2973,13 @@ export default function MessageView({
       return next.length > 50 ? next.slice(next.length - 50) : next
     })
     setHistoryIndex(-1)
-    draftBeforeHistoryRef.current = ''
+    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
     setInputText('')
     inputTextRef.current = ''
     setSendState('sending')
     setSendError(null)
     setFailedSend(null)
+    setInterrupting(false)
     setOptimisticUserText(text)
     clearLiveAssistantText()
     setLiveToolActivities([])
@@ -3101,13 +3176,17 @@ export default function MessageView({
             if (pushedAttachments.length > 0) {
               pushedCopilotAttachmentsRef.current = mergeAttachmentsById(pushedCopilotAttachmentsRef.current, pushedAttachments)
               setAttachments((prev) => mergeAttachmentsById(prev, pushedAttachments))
-              setQueuedSend((prev) => prev
-                ? { ...prev, attachments: mergeAttachmentsById(prev.attachments, pushedAttachments) }
-                : prev
-              )
+              setQueuedSends((prev) => prev.length === 0
+                ? prev
+                : prev.map((queued, index) => index === prev.length - 1
+                  ? { ...queued, attachments: mergeAttachmentsById(queued.attachments, pushedAttachments) }
+                  : queued))
             }
             const toolStart = extractLiveToolStart(parsed)
             if (toolStart) {
+              // A tool call is a real side effect — once one starts, this turn
+              // must never be silently auto-retried (it could re-run the tool).
+              turnProducedOutputRef.current = true
               if (parsed.type === 'stream_event') {
                 liveToolIndexesRef.current.set(toolStart.index, toolStart.key)
               }
@@ -3160,6 +3239,8 @@ export default function MessageView({
 
             const deltaText = extractStreamingAssistantText(parsed)
             if (deltaText) {
+              // Committed assistant output — don't blind-retry past this point.
+              turnProducedOutputRef.current = true
               setLiveStatus(null)
               queueLiveAssistantText(deltaText, shouldReplaceLiveAssistantText(parsed))
             }
@@ -3227,8 +3308,36 @@ export default function MessageView({
         // User cancelled — already reset by cancelSend()
         return
       }
+      const errorMessage = err instanceof Error ? err.message : 'Failed to send message'
+      // Visible auto-retry: native CLIs quietly ride out transient API/network
+      // blips. Mirror that — but only when the error is transient AND the turn
+      // streamed no output (so a retry can't duplicate a tool call or partial
+      // reply) AND we're under the retry budget. Show a "Retrying…" badge so a
+      // multi-second wait reads as recovery, not a hang.
+      const canRetry = isTransientSendError(errorMessage)
+        && !turnProducedOutputRef.current
+        && transientRetryCountRef.current < MAX_TRANSIENT_SEND_RETRIES
+      if (canRetry) {
+        transientRetryCountRef.current += 1
+        const attempt = transientRetryCountRef.current
+        // Keep the turn visually "sending" with a retry status; clear only the
+        // (empty) live overlay. sendState stays 'sending' across the backoff.
+        setLiveStatus('retrying')
+        clearLiveAssistantText()
+        setLiveToolActivities([])
+        setLiveThreadedMessages([])
+        clearLiveSubagentText()
+        liveToolIndexesRef.current.clear()
+        if (transientRetryTimerRef.current) clearTimeout(transientRetryTimerRef.current)
+        transientRetryTimerRef.current = setTimeout(() => {
+          transientRetryTimerRef.current = null
+          void sendMessage({ text, attachments: sendAttachments })
+        }, transientRetryBackoffMs(attempt))
+        return
+      }
       setSendState('error')
-      setSendError(err instanceof Error ? err.message : 'Failed to send message')
+      setSendError(errorMessage)
+      setLiveStatus(null)
       setFailedSend({ text, attachments: sendAttachments })
       setInputText((current) => {
         if (current.trim()) return current
@@ -3250,16 +3359,16 @@ export default function MessageView({
       activeTurnRequestIdRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, clearLiveAssistantText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, clearLiveAssistantText, clearLiveSubagentText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
   useEffect(() => {
-    if (!queuedSend) return
+    if (queuedSends.length === 0) return
     if (sendInFlightRef.current || awaitingPersistedTurnRef.current) return
     if (sendState === 'sending' || awaitingPersistedTurn) return
-    const next = queuedSend
-    setQueuedSend(null)
+    const next = queuedSends[0]
+    setQueuedSends((prev) => prev.slice(1))
     setInputText(next.text)
     inputTextRef.current = next.text
     setAttachments(next.attachments)
@@ -3272,7 +3381,7 @@ export default function MessageView({
       resizeComposer()
       void sendMessage()
     })
-  }, [awaitingPersistedTurn, queuedSend, resizeComposer, sendMessage, sendState])
+  }, [awaitingPersistedTurn, queuedSends, resizeComposer, sendMessage, sendState])
 
   const updateComposerHints = useCallback((text: string, cursor: number) => {
     const mention = detectMentionAtCursor(text, cursor)
@@ -3458,7 +3567,7 @@ export default function MessageView({
   }, [inputText, resizeComposer])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.nativeEvent.isComposing) return
+    if (e.nativeEvent.isComposing || isComposingRef.current) return
     if (mentionQuery && mentionResults.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -3520,7 +3629,10 @@ export default function MessageView({
       const cursorAtStart = textarea ? textarea.selectionStart === 0 && textarea.selectionEnd === 0 : true
       if (historyIndex === -1) {
         if (draftValue.length > 0 && !cursorAtStart) return
-        draftBeforeHistoryRef.current = draftValue
+        draftBeforeHistoryRef.current = {
+          text: draftValue,
+          cursorPos: textarea?.selectionStart ?? draftValue.length,
+        }
         const nextIndex = sentHistory.length - 1
         setHistoryIndex(nextIndex)
         const replacement = sentHistory[nextIndex] ?? ''
@@ -3557,14 +3669,14 @@ export default function MessageView({
       const nextIndex = historyIndex + 1
       if (nextIndex >= sentHistory.length) {
         setHistoryIndex(-1)
-        const restored = draftBeforeHistoryRef.current
+        const { text: restored, cursorPos } = draftBeforeHistoryRef.current
         setInputText(restored)
         inputTextRef.current = restored
         e.preventDefault()
         window.requestAnimationFrame(() => {
           const ta = textareaRef.current
           if (!ta) return
-          ta.setSelectionRange(restored.length, restored.length)
+          ta.setSelectionRange(cursorPos, cursorPos)
           resizeComposer()
         })
         return
@@ -3881,7 +3993,7 @@ export default function MessageView({
     setInputText(trimmed)
     inputTextRef.current = trimmed
     setHistoryIndex(-1)
-    draftBeforeHistoryRef.current = ''
+    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
     focusComposer()
   }, [focusComposer])
 
@@ -3898,7 +4010,7 @@ export default function MessageView({
     setInputText(next)
     inputTextRef.current = next
     setHistoryIndex(-1)
-    draftBeforeHistoryRef.current = ''
+    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
     focusComposer()
   }, [focusComposer])
 
@@ -3908,7 +4020,7 @@ export default function MessageView({
     setInputText(trimmed)
     inputTextRef.current = trimmed
     setHistoryIndex(-1)
-    draftBeforeHistoryRef.current = ''
+    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
     if (sessionCapabilities?.resumeAtMessage) {
       setResumeFromMessageId(messageId)
       setSessionActionNotice('Editing — next send will replace from this point in a forked session.')
@@ -4077,8 +4189,12 @@ export default function MessageView({
     : composerExample
   const composerStatus = sendState === 'error'
     ? 'Failed'
-    : queuedSend && (sendState === 'sending' || awaitingPersistedTurn)
-    ? 'Queued · sends after current turn'
+    : interrupting
+    ? 'Interrupting…'
+    : queuedSends.length > 0 && (sendState === 'sending' || awaitingPersistedTurn)
+    ? (queuedSends.length === 1
+      ? 'Queued · sends after current turn'
+      : `${queuedSends.length} queued · send in order after current turn`)
     : sendState === 'sending'
     ? 'Sending...'
     : awaitingPersistedTurn
@@ -4086,15 +4202,17 @@ export default function MessageView({
     : 'Ready'
   const composerStatusColor = sendState === 'error'
     ? 'var(--red, #f87171)'
-    : queuedSend
+    : queuedSends.length > 0
     ? 'var(--amber, #eaaa40)'
     : sendState === 'sending' || awaitingPersistedTurn
     ? 'var(--cyan)'
     : 'var(--text-3)'
   const liveTurnTone: 'running' | 'syncing' = awaitingPersistedTurn ? 'syncing' : 'running'
-  const liveTurnBadge = awaitingPersistedTurn ? 'SYNCING' : 'RUNNING'
-  const liveTurnActivityDetail = awaitingPersistedTurn
-    ? queuedSend
+  const liveTurnBadge = interrupting ? 'STOPPING' : awaitingPersistedTurn ? 'SYNCING' : 'RUNNING'
+  const liveTurnActivityDetail = interrupting
+    ? 'Interrupting turn; saving what the agent produced…'
+    : awaitingPersistedTurn
+    ? queuedSends.length > 0
       ? 'Turn complete; syncing transcript. Next message queued.'
       : 'Turn complete; syncing transcript.'
     : liveStatus === 'retrying'
@@ -6572,7 +6690,7 @@ export default function MessageView({
                   inputTextRef.current = next
                   if (historyIndex !== -1 && next !== sentHistory[historyIndex]) {
                     setHistoryIndex(-1)
-                    draftBeforeHistoryRef.current = ''
+                    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
                   }
                   if (sendError && !failedSend) {
                     setSendError(null)
@@ -6583,6 +6701,8 @@ export default function MessageView({
                 onKeyUp={(event) => updateComposerHints(event.currentTarget.value, event.currentTarget.selectionStart ?? event.currentTarget.value.length)}
                 onClick={(event) => updateComposerHints(event.currentTarget.value, event.currentTarget.selectionStart ?? event.currentTarget.value.length)}
                 onBlur={() => { setMentionQuery(null); setSlashOpen(false) }}
+                onCompositionStart={() => { isComposingRef.current = true }}
+                onCompositionEnd={() => { isComposingRef.current = false }}
                 onKeyDown={handleKeyDown}
                 onPaste={handleComposerPaste}
                 placeholder={composerPlaceholder}
@@ -6608,7 +6728,7 @@ export default function MessageView({
                 <div style={{ flexShrink: 0, display: 'flex', gap: 6, alignItems: 'center' }}>
                   <Button
                     type="button"
-                    onClick={sendMessage}
+                    onClick={() => { void sendMessage() }}
                     disabled={!canSubmitMessage}
                     variant="outline"
                     aria-label="Queue message after current turn"
@@ -6662,7 +6782,7 @@ export default function MessageView({
               ) : (
                 <Button
                   type="button"
-                  onClick={sendMessage}
+                  onClick={() => { void sendMessage() }}
                   disabled={!canSubmitMessage}
                   aria-label={awaitingPersistedTurn ? 'Queue message after current turn' : `${composerConfig.sendVerb} to ${composerConfig.label}`}
                   title={awaitingPersistedTurn ? 'Queue message after current turn' : `${composerConfig.sendVerb} to ${composerConfig.label}`}

@@ -305,6 +305,12 @@ const OPENCODE_OPTIONS = {
   throwOnError: true as const,
 }
 
+// OpenCode streams complete on a `session.idle` event. If that event is dropped
+// (e.g. the shared harness subscription reconnects across a heartbeat gap), the
+// consume loop would otherwise wait forever. After this much total silence the
+// watchdog probes session.status to confirm the turn really finished.
+const OPENCODE_WATCHDOG_IDLE_MS = 30000
+
 function openCodeData<T>(response: T | { data: T }): T {
   if (response && typeof response === 'object' && 'data' in response) {
     return (response as { data: T }).data
@@ -796,6 +802,91 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
   return Promise.race([promise, timeout]).finally(() => {
     if (timer != null) clearTimeout(timer)
   })
+}
+
+// How many inconclusive probes (provider unreachable / status unknown) to
+// tolerate after a silence window before giving up and resolving the turn so
+// the request can never hang indefinitely.
+const WATCHDOG_MAX_UNKNOWN_PROBES = 3
+
+type TurnWatchdogVerdict = 'idle' | 'running' | 'unknown'
+
+/**
+ * Backstop for a send stream whose provider can miss its own terminal signal
+ * (a dropped/reconnected event subscription that swallows session.idle, a
+ * heuristic completion timer that never fires, etc.). The timer resets on every
+ * outbound SSE frame; after `idleTimeoutMs` of total silence it asks the
+ * provider — authoritatively — whether the turn is actually still running.
+ *
+ * Crucially it only resolves the turn when the probe CONFIRMS idle, so a long
+ * but silent tool call (e.g. a multi-minute build that emits no frames between
+ * tool start and result) is never killed while the agent is still working — the
+ * probe reports 'running' and the watchdog simply waits again. Only after the
+ * provider says idle, or after several inconclusive probes, does it fire
+ * `onResolved`, which the caller uses to synthesize a terminal frame and close.
+ */
+function startTurnWatchdog(opts: {
+  label: string
+  idleTimeoutMs: number
+  isClosed: () => boolean
+  lastActivityAt: () => number
+  probe: () => Promise<TurnWatchdogVerdict>
+  onResolved: (reason: string) => void
+}): () => void {
+  const { label, idleTimeoutMs, isClosed, lastActivityAt, probe, onResolved } = opts
+  let cancelled = false
+  let probing = false
+  let unknownStreak = 0
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  const arm = () => {
+    if (cancelled) return
+    const elapsed = Date.now() - lastActivityAt()
+    const wait = Math.max(idleTimeoutMs - elapsed, 1000)
+    timer = setTimeout(() => { void tick() }, wait)
+    if (typeof timer === 'object' && timer && 'unref' in timer) {
+      (timer as { unref: () => void }).unref()
+    }
+  }
+
+  const tick = async () => {
+    timer = null
+    if (cancelled || isClosed()) return
+    // Activity arrived while the timer was pending — not silent after all.
+    if (Date.now() - lastActivityAt() < idleTimeoutMs) { arm(); return }
+    if (probing) { arm(); return }
+    probing = true
+    let verdict: TurnWatchdogVerdict = 'unknown'
+    try {
+      verdict = await probe()
+    } catch {
+      verdict = 'unknown'
+    } finally {
+      probing = false
+    }
+    if (cancelled || isClosed()) return
+    if (verdict === 'idle') {
+      onResolved(`${label}: turn idle confirmed after ${idleTimeoutMs}ms of silence`)
+      return
+    }
+    if (verdict === 'running') {
+      unknownStreak = 0
+      arm()
+      return
+    }
+    unknownStreak += 1
+    if (unknownStreak >= WATCHDOG_MAX_UNKNOWN_PROBES) {
+      onResolved(`${label}: no terminal signal and ${unknownStreak} inconclusive probes after silence`)
+      return
+    }
+    arm()
+  }
+
+  arm()
+  return () => {
+    cancelled = true
+    if (timer != null) { clearTimeout(timer); timer = null }
+  }
 }
 
 function formatOpenCodeEvent(event: OpenCodeEvent): string {
@@ -3448,6 +3539,16 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       const consume = (async () => {
         for await (const harnessEvent of subscription.events) {
           if (consumeAborted) break
+          if (harnessEvent.type === 'disconnected') {
+            // The app-server died mid-turn. Surface it as a terminal error (so
+            // the composer leaves its sending state) and close, rather than
+            // blocking forever on a pipe that will never produce again.
+            if (!completionSeen) {
+              safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: 'Codex app-server disconnected' })}\n\n`)
+            }
+            scheduleCompletionClose(unsubscribe)
+            break
+          }
           if (harnessEvent.type !== 'notification') continue
           const notification = harnessEvent.notification
           const notificationTurnId = getCodexNotificationTurnId(notification)
@@ -3616,6 +3717,8 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
       let downstreamClosed = false
       let requestAborted = false
       let consumeEvents: Promise<void> | null = null
+      let lastActivityAt = Date.now()
+      let cancelWatchdog: (() => void) | null = null
       // Subscribe to the shared event harness — one upstream connection
       // per process, multiplexed by session. Filter on the original session
       // id first; if we end up forking we'll resubscribe to the new id.
@@ -3623,6 +3726,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
 
       const safeEnqueue = (chunk: string) => {
         if (cleanedUp || downstreamClosed) return
+        lastActivityAt = Date.now()
         try {
           controller.enqueue(encoder.encode(chunk))
         } catch {
@@ -3780,12 +3884,39 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
           })
         }
 
+        // Backstop a dropped session.idle: if the event subscription goes
+        // silent we probe session.status and, once OpenCode confirms the turn
+        // is no longer busy, synthesize the idle frame so the consume loop ends
+        // instead of hanging until the request is forcibly torn down.
+        cancelWatchdog = startTurnWatchdog({
+          label: 'opencode',
+          idleTimeoutMs: OPENCODE_WATCHDOG_IDLE_MS,
+          isClosed: () => cleanedUp || downstreamClosed,
+          lastActivityAt: () => lastActivityAt,
+          probe: async () => {
+            try {
+              const statusMap = await client.session.status({ ...OPENCODE_OPTIONS })
+              const status = (statusMap as Record<string, { type?: string }>)?.[targetSessionId]
+              if (!status) return 'idle'
+              return status.type === 'busy' || status.type === 'retry' ? 'running' : 'idle'
+            } catch {
+              return 'unknown'
+            }
+          },
+          onResolved: () => {
+            safeEnqueue(`data: ${formatOpenCodeEvent({ type: 'session.idle', properties: { sessionID: targetSessionId } } as OpenCodeEvent)}\n\n`)
+            // Ends the for-await over subscription.events, resolving consumeEvents.
+            subscription.close()
+          },
+        })
+
         await consumeEvents
       } catch (err) {
         if (!requestAborted) {
           safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
         }
       } finally {
+        cancelWatchdog?.()
         subscription.close()
         await consumeEvents?.catch(() => {})
         clearRunningSession(sessionId)
@@ -3841,7 +3972,6 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
       let requestAborted = false
       let emittedError = false
       let manualPermissionHandlerInstalled = false
-      let completedTurn = false
       let broadcastedTurnStart = false
       let turnTimeoutTimer: ReturnType<typeof setTimeout> | null = null
       let finalMessageFallbackTimer: ReturnType<typeof setTimeout> | null = null
@@ -4145,7 +4275,6 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
             }
           })()
         await Promise.race([turnComplete, historyCompletion])
-        completedTurn = true
       } catch (err) {
         if (!emittedError && !requestAborted) {
           safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
@@ -4165,10 +4294,11 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         }
         clearRunningSession(sessionId)
         try { unsubscribe?.() } catch { /* ignore */ }
-        if (completedTurn) {
-          await evictCopilotSession(sessionId).catch(() => {})
-          broadcastLiveSessionRecycled('copilot', sessionId)
-        }
+        // Do NOT evict the warm session on a clean turn completion. Evicting
+        // here disconnects the JSON-RPC session and forces a full resumeSession
+        // (up to a 20s timeout) on the very next send, defeating the warm pool
+        // for back-to-back turns. Rely on the 5-min TTL; the catch{} branch
+        // above still evicts when the session is genuinely hosed.
         if (broadcastedTurnStart) {
           broadcastLiveSessionTurnEnd('copilot', sessionId)
           scheduleCopilotLiveTranscriptCleanup(sessionId)
@@ -4416,6 +4546,19 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
 
         const text = `${userMessage}${attachmentsAsPromptText(attachments)}`.trim()
         await agentSession.prompt(text, images.length > 0 ? { images } : undefined)
+        // prompt() resolving means the turn is genuinely over. Normally the
+        // terminal agent_end handler above already ran cleanup + close (and set
+        // cleanedUp). But if that event was never delivered to our subscriber,
+        // without this backstop the AgentSession subscription would leak and the
+        // stream would hang open forever. Guard on cleanedUp so it's a no-op on
+        // the happy path.
+        if (!cleanedUp) {
+          unsubscribePi?.()
+          clearRunningSession(sessionId)
+          broadcastLiveSessionTurnEnd('pi', targetSessionId)
+          schedulePiLiveTranscriptCleanup(targetSessionId)
+          close()
+        }
       } catch (err) {
         unsubscribePi?.()
         if (!requestAborted) {

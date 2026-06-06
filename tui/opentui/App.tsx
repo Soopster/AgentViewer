@@ -81,8 +81,9 @@ import {
   getTranscriptCardsSync,
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import type { ContextUsage, ProviderSelection, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, ToolResultBlock } from '../../lib/types'
+import type { ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, ToolResultBlock } from '../../lib/types'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
+import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../lib/slashCommands'
@@ -322,6 +323,10 @@ const THEME_GROUPS: Array<{ label: string; themes: TuiThemeMode[] }> = [
 const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
 const DETAIL_REFRESH_MS = 2000
+// Safety net: max time to wait for a completed turn's persisted rows before
+// force-revealing the polled transcript, so the "Syncing…" state can't hang
+// forever on a lost/delayed write. Generous vs the 2s detail poll.
+const AWAITING_PERSISTED_TURN_TIMEOUT_MS = 12000
 const DEFAULT_SIDEBAR_WIDTH = 32
 const SIDEBAR_RESIZE_STEP = 2
 const MIN_SIDEBAR_WIDTH = 28
@@ -388,6 +393,7 @@ type ComposerDraftSnapshot = {
   text: string
   attachments: SendAttachment[]
   promptParts: ComposerPromptPart[]
+  cursorOffset?: number
 }
 type ComposerPromptPartRange = ComposerPromptPart & { start: number; end: number }
 type ComposerSubmission = {
@@ -802,10 +808,11 @@ function formatTuiComposerIdleHint(baseHint: string, historyCount: number): stri
   const cleaned = baseHint
     .replace(/\s*·\s*(?:↑↓|⌃P\/⌃N|\^P\/\^N|\^R|⌃R)\s+(?:search\s+)?history(?:\s*\(\d+\))?/g, '')
     .trim()
+  const withSettings = cleaned.replace('⏎ send', '⏎ send · ⌥M model/effort')
   const historyHint = historyCount > 0
     ? `⌃P/⌃N history (${historyCount})`
     : '⌃P/⌃N history'
-  return `${cleaned} · ${historyHint}`
+  return `${withSettings} · ${historyHint}`
 }
 
 function contextBarColor(percentage: number, theme: TuiThemePalette): string {
@@ -2446,6 +2453,51 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
   value: provider,
 }))
 
+type TuiEffort = 'auto' | ReasoningEffortLevel
+type ModelPickerOption = SelectOption & Pick<SessionModelInfo, 'supportsEffort' | 'supportedEffortLevels'>
+
+const EFFORT_DESCRIPTIONS: Record<TuiEffort, string> = {
+  auto: 'Use the model or session default',
+  off: 'Disable extended reasoning',
+  minimal: 'Fastest reasoning pass',
+  low: 'Light reasoning',
+  medium: 'Balanced reasoning',
+  high: 'Deep reasoning',
+  xhigh: 'Extra-high reasoning',
+  max: 'Maximum reasoning budget',
+}
+
+function effortLevelsForModel(
+  provider: ProviderSelection | undefined,
+  model: ModelPickerOption | undefined,
+): ReasoningEffortLevel[] {
+  if (!provider || provider === 'all' || provider === 'opencode' || model?.supportsEffort === false) return []
+  const allowed: ReasoningEffortLevel[] = provider === 'codex'
+    ? ['low', 'medium', 'high']
+    : provider === 'copilot'
+      ? ['low', 'medium', 'high', 'xhigh']
+      : provider === 'pi'
+        ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
+        : ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+  const reported = model?.supportedEffortLevels
+  if (!reported || reported.length === 0) return allowed
+  return allowed.filter((level) => reported.includes(level))
+}
+
+function effortPickerOptions(
+  provider: ProviderSelection | undefined,
+  model: ModelPickerOption | undefined,
+): Array<SelectOption & { value: TuiEffort }> {
+  return [
+    { name: 'AUTO', value: 'auto', description: EFFORT_DESCRIPTIONS.auto },
+    ...effortLevelsForModel(provider, model).map((level) => ({
+      name: level === 'xhigh' ? 'XHIGH' : level.toUpperCase(),
+      value: level,
+      description: EFFORT_DESCRIPTIONS[level],
+    })),
+  ]
+}
+
 // Permission mode status row — matches Claude Code's shift+tab indicator style.
 const PERMISSION_MODE_GLYPH: Partial<Record<string, string>> = {
   plan: '“',           // " left double quotation mark (read-only/pause)
@@ -2673,9 +2725,8 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
   { id: 'tools',      label: 'Toggle tool calls',      key: 'X',  category: 'View'       },
-  { id: 'effort',     label: 'Cycle reasoning effort', key: 'E',  category: 'Session'    },
   { id: 'mode',       label: 'Cycle provider mode',    key: 'M',  category: 'Session'    },
-  { id: 'model',      label: 'Pick model',             key: '⌥M', category: 'Session'    },
+  { id: 'model',      label: 'Pick model and effort',  key: '⌥M', category: 'Session'    },
   // App
   { id: 'refresh',    label: 'Refresh sessions',       key: 'r',  category: 'App'        },
   { id: 'quit',       label: 'Quit',                   key: 'q',  category: 'App'        },
@@ -3222,6 +3273,8 @@ export default function OpenTuiApp() {
   const [composerLiveSlashCommands, setComposerLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
   const [composerSendStartedAt, setComposerSendStartedAt] = useState<number | null>(null)
+  const [interruptPressActive, setInterruptPressActive] = useState(false)
+  const interruptPressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Pending tool-approval requests surfaced from the live SSE stream (Claude
   // canUseTool, Copilot/OpenCode permission events, Codex approvals). The
   // overlay below the composer lets the user allow/reject them, matching native.
@@ -3246,14 +3299,17 @@ export default function OpenTuiApp() {
   // body so the TUI composer matches the web composer's send-time controls
   // (model / reasoning effort / Claude permission mode). Defaults of `auto`
   // / `default` mean "let the SDK keep whatever the session was using".
-  const [tuiEffort, setTuiEffort] = useState<'auto' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>('auto')
+  const [tuiEffort, setTuiEffort] = useState<TuiEffort>('auto')
   const [tuiPermissionMode, setTuiPermissionMode] = useState<'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'>('default')
   const [tuiCopilotMode, setTuiCopilotMode] = useState<'interactive' | 'plan' | 'autopilot' | 'shell'>('interactive')
   const [tuiOpenCodeAgent, setTuiOpenCodeAgent] = useState('')
   const [tuiModelOverride, setTuiModelOverride] = useState<Record<string, string>>({})
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
-  const [modelPickerOptions, setModelPickerOptions] = useState<Array<{ name: string; value: string; description: string }>>([])
+  const [modelPickerTarget, setModelPickerTarget] = useState<Session | null>(null)
+  const [modelPickerFocus, setModelPickerFocus] = useState<'model' | 'effort'>('model')
+  const [modelPickerOptions, setModelPickerOptions] = useState<ModelPickerOption[]>([])
   const [modelPickerIndex, setModelPickerIndex] = useState(0)
+  const [modelPickerEffortIndex, setModelPickerEffortIndex] = useState(0)
   const [modelPickerLoading, setModelPickerLoading] = useState(false)
   const [modelPickerError, setModelPickerError] = useState<string | null>(null)
   const [sentHistory, setSentHistory] = useState<ComposerDraftSnapshot[]>([])
@@ -3294,6 +3350,15 @@ export default function OpenTuiApp() {
   const sessionMetadataInFlightRef = useRef(new Set<string>())
   const composerAbortRef = useRef<AbortController | null>(null)
   const activeComposerSendCleanupRef = useRef<Promise<void> | null>(null)
+  // Transient auto-retry bookkeeping (mirrors the web composer): only retry a
+  // turn that streamed no output yet, bounded attempts, timer cleared on cancel.
+  const composerTurnProducedOutputRef = useRef(false)
+  const composerRetryCountRef = useRef(0)
+  const composerRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Set by cancelComposerSend so the send's AbortError handler transitions into
+  // the awaitingPersistedTurn 'Syncing…' reconcile (confirmed interrupt) rather
+  // than discarding the interrupted turn's partial output outright.
+  const composerInterruptPendingRef = useRef(false)
   const composerTextareaRef = useRef<TextareaRenderable | null>(null)
   const composerPastePartTypeIdRef = useRef<number | null>(null)
   const composerCursorOffsetRef = useRef<number | null>(null)
@@ -3604,6 +3669,24 @@ export default function OpenTuiApp() {
     setAwaitingPersistedTurn(false)
   }, [composerLiveText, liveTranscriptMessagesForSession, selectedSessionIdentity, selectedSessionTarget, sessionDetail])
 
+  // Escape hatch mirroring the web composer: if the persisted rows for a
+  // completed turn never arrive, force-reveal the polled transcript after a
+  // bounded wait so the live overlay / "Syncing…" state can't stick forever.
+  useEffect(() => {
+    if (!awaitingPersistedTurn) return
+    const timer = setTimeout(() => {
+      const key = selectedSessionTarget ? sessionKey(selectedSessionTarget) : null
+      if (key) {
+        liveTranscriptBaselineRef.current.delete(key)
+        setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== key))
+      }
+      liveToolIndexesRef.current.clear()
+      setComposerLiveText('')
+      setAwaitingPersistedTurn(false)
+    }, AWAITING_PERSISTED_TURN_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [awaitingPersistedTurn, selectedSessionTarget])
+
   // (Auto-open of the composer on a pending session was removed: with
   // composerActive=true, the global key handler's `N` / `c` / `q` shortcuts
   // were intercepted by the composer-active branch. The welcome banner +
@@ -3768,6 +3851,11 @@ export default function OpenTuiApp() {
     const model = formatModelChipValue(rawModel)
     return model && model.toLowerCase() !== 'unknown' ? model : null
   }, [composerTargetSession, contextUsage, selectedSessionKey, sessionDetail, tuiModelOverride])
+  const highlightedModelPickerOption = modelPickerOptions[modelPickerIndex]
+  const modelPickerEffortOptions = useMemo(
+    () => effortPickerOptions(modelPickerTarget?.provider, highlightedModelPickerOption),
+    [highlightedModelPickerOption, modelPickerTarget?.provider],
+  )
   const composerContextUsage = useMemo(() => {
     if (!composerTargetSession) return null
     const targetKey = sessionKey(composerTargetSession)
@@ -3776,13 +3864,13 @@ export default function OpenTuiApp() {
       : sessionContextUsageCacheRef.current.get(targetKey) ?? null
     return usage ? formatContextUsageChip(usage) : null
   }, [composerTargetSession, contextUsage, selectedSessionKey])
-  // One-line chip summarising the active model plus send-body knobs that are
-  // not default. Skipped when no metadata is known and knobs are default.
+  // One-line chip summarising the active model, explicit effort, and any
+  // provider-specific send knobs.
   const composerKnobsChip = useMemo(() => {
     const parts: string[] = []
     if (composerCurrentModel) parts.push(`model:${composerCurrentModel}`)
     if (composerContextUsage) parts.push(`ctx:${composerContextUsage}`)
-    if (tuiEffort !== 'auto') parts.push(`effort:${tuiEffort}`)
+    parts.push(`effort:${tuiEffort}`)
     if (composerTargetSession?.provider === 'opencode' && tuiOpenCodeAgent) {
       parts.push(`agent:${tuiOpenCodeAgent}`)
     }
@@ -3802,6 +3890,12 @@ export default function OpenTuiApp() {
     }
     return parts.length > 0 ? parts.join(' · ') : null
   }, [composerKnobsChip, composerSendState, liveOutputTokens])
+
+  useEffect(() => {
+    if (!modelPickerOpen) return
+    const index = modelPickerEffortOptions.findIndex((option) => option.value === tuiEffort)
+    setModelPickerEffortIndex(index >= 0 ? index : 0)
+  }, [modelPickerEffortOptions, modelPickerOpen, tuiEffort])
   const composerWaitingStatusSeed = composerWaitingSeed
     || `${composerTargetSession?.provider ?? 'unknown'}:${composerTargetSession?.sessionId ?? 'pending'}:${composerDraft}`
   const composerFirstLine = composerDraft.split('\n')[0] ?? ''
@@ -3982,12 +4076,13 @@ export default function OpenTuiApp() {
     text: composerTextareaRef.current?.plainText ?? composerDraft,
     attachments: [...composerMentionAttachments],
     promptParts: [...composerPromptParts],
+    cursorOffset: composerTextareaRef.current?.cursorOffset,
   }))
 
   const applyComposerSnapshot = useEffectEvent((snapshot: ComposerDraftSnapshot) => {
     const text = snapshot.text
     composerTextareaRef.current?.setText(text)
-    if (composerTextareaRef.current) composerTextareaRef.current.cursorOffset = text.length
+    if (composerTextareaRef.current) composerTextareaRef.current.cursorOffset = snapshot.cursorOffset ?? text.length
     setComposerDraft(text)
     setComposerMentionAttachments(snapshot.attachments)
     setComposerPromptParts(snapshot.promptParts)
@@ -5067,16 +5162,20 @@ export default function OpenTuiApp() {
     setExitConfirmOpen(false)
   }, [])
 
-  // Pop a small select overlay listing the active session's available models.
-  // Reuses readTuiSessionMetadata which already returns the SDK-reported list
-  // for any provider — keeps this one switch out of the TUI layer.
+  // Open the composer settings overlay. Model metadata stays provider-owned;
+  // the TUI only filters the reported effort levels to values each backend
+  // accepts, then applies both settings to the next send.
   const openModelPicker = useEffectEvent(async () => {
-    const target = selectedSession ?? composerTargetSession
+    const target = composerTargetSession ?? selectedSession
     if (!target) {
       setNotice({ tone: 'info', text: 'Pick a session first' })
       return
     }
+    setModelPickerTarget(target)
+    setModelPickerFocus('model')
     setModelPickerError(null)
+    setModelPickerOptions([])
+    setModelPickerIndex(0)
     setModelPickerLoading(true)
     setModelPickerOpen(true)
     try {
@@ -5084,7 +5183,13 @@ export default function OpenTuiApp() {
       const options = meta.models
         .filter((m): m is { value: string; displayName?: string; description?: string } & typeof m =>
           typeof m.value === 'string' && m.value.length > 0)
-        .map((m) => ({ name: m.displayName || m.value, value: m.value, description: m.description ?? '' }))
+        .map((m): ModelPickerOption => ({
+          name: m.displayName || m.value,
+          value: m.value,
+          description: m.description ?? '',
+          supportsEffort: m.supportsEffort,
+          supportedEffortLevels: m.supportedEffortLevels,
+        }))
       if (options.length === 0) {
         setModelPickerError('No models reported by provider')
         setModelPickerOptions([])
@@ -5275,12 +5380,45 @@ export default function OpenTuiApp() {
     if (target && !target.isPending) {
       void interruptTuiSessionTurn({ sessionId: target.sessionId }).catch(() => { /* best effort */ })
     }
+    // Cancel any pending transient auto-retry so it can't fire after an explicit stop.
+    if (composerRetryTimerRef.current) {
+      clearTimeout(composerRetryTimerRef.current)
+      composerRetryTimerRef.current = null
+    }
+    composerRetryCountRef.current = 0
+    const targetKey = target ? sessionKey(target) : null
+    // Confirmed interrupt: if the turn had started (a live baseline exists),
+    // keep what the agent produced visible and hand off to the awaitingPersistedTurn
+    // 'Syncing…' reconcile so the partial output settles smoothly instead of
+    // vanishing and reappearing on the next poll. The send's AbortError handler
+    // checks composerInterruptPendingRef to avoid undoing this. The awaiting
+    // timeout (AWAITING_PERSISTED_TURN_TIMEOUT_MS) is the escape hatch.
+    const reconcileInterrupt = Boolean(targetKey && liveTranscriptBaselineRef.current.has(targetKey))
+    composerInterruptPendingRef.current = reconcileInterrupt
     if (composerAbortRef.current) {
       composerAbortRef.current.abort()
     }
     composerAbortRef.current = null
-    if (target) {
-      const targetKey = sessionKey(target)
+    setInterruptPressActive(false)
+    if (interruptPressTimeoutRef.current) {
+      clearTimeout(interruptPressTimeoutRef.current)
+      interruptPressTimeoutRef.current = null
+    }
+    setPendingPermissions([])
+    setPermissionOptionIndex(0)
+    if (reconcileInterrupt) {
+      // Keep committed partial cards (liveTranscriptMessages) + baseline for the
+      // reconcile, but drop the transient streaming previews right away.
+      setComposerSendState('idle')
+      setAwaitingPersistedTurn(true)
+      setLiveStatus(null)
+      setComposerLiveText('')
+      setComposerLiveReasoning('')
+      pendingLiveReasoningRef.current = ''
+      return
+    }
+    // Nothing started yet — clear cleanly.
+    if (targetKey) {
       liveTranscriptBaselineRef.current.delete(targetKey)
       setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
     }
@@ -5298,8 +5436,6 @@ export default function OpenTuiApp() {
     setLiveStatus(null)
     setLiveSubagentText({})
     setLiveToolActivities([])
-    setPendingPermissions([])
-    setPermissionOptionIndex(0)
   })
 
   const respondToTuiPermission = useEffectEvent(async (permission: PendingPermission, response: PermissionResponse) => {
@@ -5459,7 +5595,7 @@ export default function OpenTuiApp() {
     setComposerLiveReasoning(pendingLiveReasoningRef.current)
   }, [])
 
-  const sendComposerMessage = useCallback(async (draftOverride?: string, attachmentsOverride?: SendAttachment[]) => {
+  const sendComposerMessage = useCallback(async (draftOverride?: string, attachmentsOverride?: SendAttachment[], isRetry?: boolean) => {
     const visibleText = draftOverride ?? composerDraft
     const submission = attachmentsOverride
       ? {
@@ -5473,8 +5609,10 @@ export default function OpenTuiApp() {
     if ((!trimmed && submission.attachments.length === 0) || !composerTargetSession) return
     const sendAttachments = submission.attachments
     // Native CLIs queue a follow-up prompt while the active turn streams.
-    // Mirror that here: when sending, stash this draft and flush it after.
-    if (composerSendState === 'sending') {
+    // Mirror that here: when sending, stash this draft and flush it after. A
+    // transient auto-retry bypasses the queue — the prior (failed) turn already
+    // settled, composerSendState just hasn't been cleared yet across the backoff.
+    if (!isRetry && composerSendState === 'sending') {
       setQueuedComposerSend({ text: trimmed, attachments: sendAttachments })
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
@@ -5485,6 +5623,9 @@ export default function OpenTuiApp() {
       setComposerHistoryIndex(0)
       return
     }
+
+    if (!isRetry) composerRetryCountRef.current = 0
+    composerTurnProducedOutputRef.current = false
 
     const targetSession = composerTargetSession
     const controller = new AbortController()
@@ -5723,6 +5864,8 @@ export default function OpenTuiApp() {
 
         const claudeToolUse = extractClaudeStreamToolUse(parsed)
         if (claudeToolUse) {
+          // A tool call is a side effect — never blind-retry past this point.
+          composerTurnProducedOutputRef.current = true
           const startIndex = streamEventIndex(parsed, 'content_block_start')
           if (startIndex != null) liveToolIndexesRef.current.set(startIndex, claudeToolUse.id)
           setLiveToolActivities((prev) => [...prev, { key: claudeToolUse.id, label: claudeToolUse.name, status: 'running' }])
@@ -5752,6 +5895,7 @@ export default function OpenTuiApp() {
 
         const openCodeToolThread = extractOpenCodeLiveToolThread(parsed, targetSession)
         if (openCodeToolThread) {
+          composerTurnProducedOutputRef.current = true
           setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, openCodeToolThread))
         }
 
@@ -5778,6 +5922,7 @@ export default function OpenTuiApp() {
         if (targetSession.provider === 'codex') {
           const codexToolActivity = extractCodexLiveToolActivity(parsedRecord)
           if (codexToolActivity) {
+            composerTurnProducedOutputRef.current = true
             setLiveToolActivities((prev) => applyLiveToolActivity(prev, codexToolActivity))
           }
           setLiveTranscriptMessages((prev) => appendCodexLiveToolOutput(prev, parsedRecord, targetSession))
@@ -5842,6 +5987,8 @@ export default function OpenTuiApp() {
 
         const delta = extractStreamingAssistantText(parsed)
         if (!delta) return
+        // Committed assistant output — this turn must not be blind-retried.
+        composerTurnProducedOutputRef.current = true
         setLiveStatus(null)
 
         // Route agent/subtask text to liveSubagentText so it appears as ↪ subagent: <text>
@@ -5935,6 +6082,11 @@ export default function OpenTuiApp() {
       setComposerSlashIndex(0)
       setComposerSlashDismissed(false)
       setComposerSendState('idle')
+      setInterruptPressActive(false)
+      if (interruptPressTimeoutRef.current) {
+        clearTimeout(interruptPressTimeoutRef.current)
+        interruptPressTimeoutRef.current = null
+      }
       setComposerError(null)
       setAwaitingPersistedTurn(true)
       setFollowTail(true)
@@ -5965,6 +6117,20 @@ export default function OpenTuiApp() {
       }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
+        // Confirmed interrupt: cancelComposerSend already moved us into the
+        // awaitingPersistedTurn reconcile and wants the partial output kept.
+        // Don't tear it down here — just clean up the live-text frame plumbing.
+        if (composerInterruptPendingRef.current) {
+          composerInterruptPendingRef.current = false
+          liveToolIndexesRef.current.clear()
+          if (liveTextFlushFrameRef.current != null) {
+            cancelAnimationFrame(liveTextFlushFrameRef.current)
+            liveTextFlushFrameRef.current = null
+          }
+          pendingLiveTextRef.current = ''
+          liveTextTargetSessionRef.current = null
+          return
+        }
         liveTranscriptBaselineRef.current.delete(targetKey)
         setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
         setAwaitingPersistedTurn(false)
@@ -5977,6 +6143,32 @@ export default function OpenTuiApp() {
         liveTextTargetSessionRef.current = null
         return
       }
+      const errorMessage = err instanceof Error ? err.message : 'Failed to send message'
+      // Visible auto-retry: ride out a transient API/network blip when the turn
+      // produced no output yet (mirrors the web composer + Pi's native retry).
+      // Keep the turn 'sending' with a 'retrying' status across the backoff,
+      // then re-fire the same draft. The finally below preserves liveStatus
+      // while a retry timer is armed (see the guarded setLiveStatus there).
+      if (isTransientSendError(errorMessage)
+        && !composerTurnProducedOutputRef.current
+        && composerRetryCountRef.current < MAX_TRANSIENT_SEND_RETRIES) {
+        composerRetryCountRef.current += 1
+        const attempt = composerRetryCountRef.current
+        const retryDraft = draftOverride ?? composerDraft
+        const retryAttachments = attachmentsOverride
+        setLiveStatus('retrying')
+        setComposerLiveText('')
+        setLiveToolActivities([])
+        liveTranscriptBaselineRef.current.delete(targetKey)
+        setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
+        liveToolIndexesRef.current.clear()
+        if (composerRetryTimerRef.current) clearTimeout(composerRetryTimerRef.current)
+        composerRetryTimerRef.current = setTimeout(() => {
+          composerRetryTimerRef.current = null
+          void sendComposerMessage(retryDraft, retryAttachments, true)
+        }, transientRetryBackoffMs(attempt))
+        return
+      }
       const failedDraft = draftOverride ?? composerDraft
       setComposerSendState('error')
       setComposerError(err instanceof Error ? err.message : 'Failed to send message')
@@ -5984,6 +6176,11 @@ export default function OpenTuiApp() {
       setLiveStatus(null)
       setLiveToolActivities([])
       setAwaitingPersistedTurn(false)
+      // Drop any queued follow-up: auto-sending it blind after a failed turn is
+      // a surprise-send, and keeping it would clobber the restored failedDraft
+      // the moment a keystroke flips error->idle (handleComposerContentChange).
+      setQueuedComposerSend(null)
+      liveToolIndexesRef.current.clear()
       composerTextareaRef.current?.setText(failedDraft)
       setComposerDraft(failedDraft)
     } finally {
@@ -5996,7 +6193,9 @@ export default function OpenTuiApp() {
       pendingLiveTextRef.current = ''
       liveTextTargetSessionRef.current = null
       setComposerLiveText('')
-      setLiveStatus(null)
+      // Preserve the 'retrying' status while a transient-retry backoff is armed;
+      // the catch above left composerSendState 'sending' so the badge shows.
+      if (composerRetryTimerRef.current == null) setLiveStatus(null)
       setLiveSubagentText({})
       setLiveOutputTokens(0)
       setLiveToolActivities([])
@@ -6030,9 +6229,13 @@ export default function OpenTuiApp() {
   ])
 
   // Flush queued prompt once the active turn lands (CLI-style queueing).
+  // Gate on === 'idle' (not !== 'sending'): the prior turn can settle into
+  // 'error', and auto-firing a queued follow-up after a failed turn is a
+  // surprise-send. On error we clear the queue (see the error branch above),
+  // so the only state that reaches here with a queued send is a clean idle.
   useEffect(() => {
     if (!queuedComposerSend) return
-    if (composerSendState === 'sending') return
+    if (composerSendState !== 'idle') return
     const next = queuedComposerSend
     setQueuedComposerSend(null)
     composerTextareaRef.current?.setText(next.text)
@@ -7060,14 +7263,6 @@ export default function OpenTuiApp() {
         })
         break
       }
-      case 'effort': {
-        const order = ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
-        setTuiEffort((current) => {
-          const idx = order.indexOf(current)
-          return order[(idx + 1) % order.length]!
-        })
-        break
-      }
       case 'mode': {
         const target = composerTargetSession ?? selectedSession
         if (target?.provider === 'opencode') {
@@ -7254,6 +7449,7 @@ export default function OpenTuiApp() {
         : ''
       return (key.ctrl && key.name === normalized) || sequence === ctrlSequence
     }
+    const isModelEffortShortcut = (key.name === 'm' && (key.option || key.meta)) || sequence === 'µ'
     const handled = (action: () => void): void => {
       key.preventDefault()
       key.stopPropagation()
@@ -7393,8 +7589,12 @@ export default function OpenTuiApp() {
     }
 
     if (modelPickerOpen) {
-      if (key.name === 'escape') {
+      if (key.name === 'escape' || isModelEffortShortcut) {
         handled(() => setModelPickerOpen(false))
+        return
+      }
+      if (key.name === 'tab' || key.name === 'left' || key.name === 'right') {
+        handled(() => setModelPickerFocus((current) => current === 'model' ? 'effort' : 'model'))
         return
       }
       if (key.name === 'q' || isCtrl('c')) {
@@ -7462,6 +7662,11 @@ export default function OpenTuiApp() {
         })
         return
       }
+      return
+    }
+
+    if (isModelEffortShortcut) {
+      handled(() => { void openModelPicker() })
       return
     }
 
@@ -7558,12 +7763,22 @@ export default function OpenTuiApp() {
         })
         return
       }
-      // Cancel in-flight send (Ctrl+C when composer is open)
+      // Cancel in-flight send (Ctrl+C when composer is open) — requires two
+      // presses within 5 s to prevent accidental interrupts.
       if (isCtrl('c') && composerSendState === 'sending') {
         handled(() => {
-          cancelComposerSend()
-          setComposerWindowOpen(false)
-          setComposerActive(false)
+          if (interruptPressActive) {
+            cancelComposerSend()
+            setComposerWindowOpen(false)
+            setComposerActive(false)
+          } else {
+            setInterruptPressActive(true)
+            if (interruptPressTimeoutRef.current) clearTimeout(interruptPressTimeoutRef.current)
+            interruptPressTimeoutRef.current = setTimeout(() => {
+              setInterruptPressActive(false)
+              interruptPressTimeoutRef.current = null
+            }, 5000)
+          }
         })
         return
       }
@@ -8295,8 +8510,11 @@ export default function OpenTuiApp() {
   const composerWindowStats = composerDraft.length === 0
     ? `${composerConfig.glyph} ${composerConfig.label}${composerAttachmentLabel ? ` · ${composerAttachmentLabel}` : ''}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
     : `${composerWindowVisualLineCount} line${composerWindowVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerAttachmentLabel ? ` · ${composerAttachmentLabel}` : ''}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+  const sendingHintBase = interruptPressActive
+    ? composerConfig.footerHintSending.replace('⌃C cancel', '⌃C again to interrupt')
+    : composerConfig.footerHintSending
   const composerDockFooterHint = composerSendState === 'sending'
-    ? composerConfig.footerHintSending
+    ? sendingHintBase
     : `${composerIdleFooterHint} · ⌃O expand`
   // Size the hint box to exactly fit its text, capped by available width minus
   // 24 chars reserved for the stats side. Avoids the old proportional cap (62
@@ -8307,8 +8525,13 @@ export default function OpenTuiApp() {
   )
   const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
   const composerWindowFooterHint = composerSendState === 'sending'
-    ? `${composerConfig.footerHintSending} · ⌃O dock`
-    : '⏎ send · ⇧⏎ newline · ⌃O dock · Esc close'
+    ? `${sendingHintBase} · ⌃O dock`
+    : '⏎ send · ⌥M model/effort · ⇧⏎ newline · ⌃O dock · Esc close'
+  const composerWindowFooterHintWidth = Math.max(
+    18,
+    Math.min(composerWindowFooterHint.length + 1, composerWindowContentWidth - 16),
+  )
+  const composerWindowFooterStatsWidth = Math.max(composerWindowContentWidth - composerWindowFooterHintWidth - 1, 8)
   const submitComposerFromDock = () => {
     void sendComposerMessage(composerTextareaRef.current?.plainText ?? composerDraft)
   }
@@ -8813,60 +9036,109 @@ export default function OpenTuiApp() {
               </box>
             ) : null}
 
-            {modelPickerOpen ? (
-              <box
-                position="absolute"
-                top={focusMode ? 1 : 3}
-                right={2}
-                width={48}
-                height={16}
-                border
-                borderStyle="single"
-                borderColor={ot.border2}
-                backgroundColor={ot.surface}
-                zIndex={20}
-                flexDirection="column"
-              >
-                <box paddingX={1} paddingTop={1}>
-                  <text fg={ot.text}>MODELS</text>
+            {modelPickerOpen ? (() => {
+              const overlayWidth = Math.min(78, Math.max(width - 4, 44))
+              const overlayHeight = Math.min(18, Math.max(height - 2, 12))
+              const contentWidth = Math.max(overlayWidth - 5, 38)
+              const modelWidth = Math.max(Math.floor(contentWidth * 0.6), 22)
+              const effortWidth = Math.max(contentWidth - modelWidth - 1, 15)
+              return (
+                <box
+                  position="absolute"
+                  top={Math.max(1, Math.floor((height - overlayHeight) / 2))}
+                  left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
+                  width={overlayWidth}
+                  height={overlayHeight}
+                  border
+                  borderStyle="single"
+                  borderColor={ot.border2}
+                  backgroundColor={ot.surface}
+                  zIndex={70}
+                  flexDirection="column"
+                  title=" Composer settings "
+                  titleAlignment="left"
+                >
+                  <box height={2} paddingX={1} flexDirection="row" alignItems="center">
+                    <text fg={ot.text} wrapMode="none">
+                      {`${String(modelPickerTarget?.provider ?? 'session').toUpperCase()} · MODEL & EFFORT`}
+                    </text>
+                    <box flexGrow={1} />
+                    <text fg={ot.dim} wrapMode="none">tab/←/→ switch · enter apply · esc close</text>
+                  </box>
+                  <box flexGrow={1} paddingX={1} paddingBottom={1} flexDirection="row" gap={1}>
+                    <box width={modelWidth} flexDirection="column">
+                      <text fg={modelPickerFocus === 'model' ? ot.cyan : ot.dim} wrapMode="none">
+                        {modelPickerFocus === 'model' ? '▸ MODEL' : '  MODEL'}
+                      </text>
+                      {modelPickerLoading ? (
+                        <text fg={ot.dim} wrapMode="none">Loading provider models…</text>
+                      ) : modelPickerError ? (
+                        <text fg={ot.red} wrapMode="word">{modelPickerError}</text>
+                      ) : modelPickerOptions.length === 0 ? (
+                        <text fg={ot.dim} wrapMode="none">No models available</text>
+                      ) : (
+                        <select
+                          style={{ height: Math.max(overlayHeight - 6, 6) }}
+                          focused={modelPickerFocus === 'model'}
+                          options={modelPickerOptions}
+                          selectedIndex={modelPickerIndex}
+                          selectedBackgroundColor={ot.surface3}
+                          selectedTextColor={ot.text}
+                          textColor={ot.muted}
+                          descriptionColor={ot.dim}
+                          selectedDescriptionColor={ot.cyan}
+                          backgroundColor={ot.surface}
+                          focusedBackgroundColor={ot.surface}
+                          showScrollIndicator={false}
+                          itemSpacing={0}
+                          onChange={(index) => setModelPickerIndex(index)}
+                          onSelect={(_, option) => {
+                            const target = modelPickerTarget ?? composerTargetSession ?? selectedSession
+                            const value = typeof option?.value === 'string' ? option.value : ''
+                            if (target && value) {
+                              setTuiModelOverride((prev) => ({ ...prev, [sessionKey(target)]: value }))
+                              pushClaudeControl(target, { action: 'setModel', model: value })
+                            }
+                            if (modelPickerEffortOptions.length > 1) {
+                              setModelPickerFocus('effort')
+                            } else {
+                              setTuiEffort('auto')
+                              setModelPickerOpen(false)
+                            }
+                          }}
+                        />
+                      )}
+                    </box>
+                    <box width={effortWidth} flexDirection="column">
+                      <text fg={modelPickerFocus === 'effort' ? ot.cyan : ot.dim} wrapMode="none">
+                        {modelPickerFocus === 'effort' ? '▸ EFFORT' : '  EFFORT'}
+                      </text>
+                      <select
+                        style={{ height: Math.max(overlayHeight - 6, 6) }}
+                        focused={modelPickerFocus === 'effort'}
+                        options={modelPickerEffortOptions}
+                        selectedIndex={modelPickerEffortIndex}
+                        selectedBackgroundColor={ot.surface3}
+                        selectedTextColor={ot.text}
+                        textColor={ot.muted}
+                        descriptionColor={ot.dim}
+                        selectedDescriptionColor={ot.cyan}
+                        backgroundColor={ot.surface}
+                        focusedBackgroundColor={ot.surface}
+                        showScrollIndicator={false}
+                        itemSpacing={0}
+                        onChange={(index) => setModelPickerEffortIndex(index)}
+                        onSelect={(_, option) => {
+                          const value = option?.value
+                          if (typeof value === 'string') setTuiEffort(value as TuiEffort)
+                          setModelPickerOpen(false)
+                        }}
+                      />
+                    </box>
+                  </box>
                 </box>
-                <box flexGrow={1} paddingX={1} paddingBottom={1}>
-                  {modelPickerLoading ? (
-                    <text fg={ot.dim} wrapMode="none">Loading…</text>
-                  ) : modelPickerError ? (
-                    <text fg={ot.red} wrapMode="none">{modelPickerError}</text>
-                  ) : modelPickerOptions.length === 0 ? (
-                    <text fg={ot.dim} wrapMode="none">No models available</text>
-                  ) : (
-                    <select
-                      style={{ height: 12 }}
-                      focused
-                      options={modelPickerOptions}
-                      selectedIndex={modelPickerIndex}
-                      selectedBackgroundColor={ot.surface3}
-                      selectedTextColor={ot.text}
-                      textColor={ot.muted}
-                      descriptionColor={ot.dim}
-                      selectedDescriptionColor={ot.cyan}
-                      backgroundColor={ot.surface}
-                      focusedBackgroundColor={ot.surface}
-                      showScrollIndicator={false}
-                      itemSpacing={0}
-                      onChange={(index) => setModelPickerIndex(index)}
-                      onSelect={(_, option) => {
-                        const target = selectedSession ?? composerTargetSession
-                        const value = typeof option?.value === 'string' ? option.value : ''
-                        if (target && value) {
-                          setTuiModelOverride((prev) => ({ ...prev, [sessionKey(target)]: value }))
-                          pushClaudeControl(target, { action: 'setModel', model: value })
-                        }
-                        setModelPickerOpen(false)
-                      }}
-                    />
-                  )}
-                </box>
-              </box>
-            ) : null}
+              )
+            })() : null}
           </>)
         })()}
 
@@ -9499,13 +9771,17 @@ export default function OpenTuiApp() {
             flexDirection="row"
             alignItems="center"
           >
-            <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
-              {fitText(composerSlashHint || composerWindowStats, Math.max(composerWindowContentWidth - 42, 10))}
-            </text>
+            <box width={composerWindowFooterStatsWidth} overflow="hidden">
+              <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
+                {fitText(composerSlashHint || composerWindowStats, composerWindowFooterStatsWidth)}
+              </text>
+            </box>
             <box flexGrow={1} />
-            <text fg={composerSendState === 'sending' ? theme.dim : composerAccentColor} wrapMode="none">
-              {fitText(composerWindowFooterHint, Math.min(40, composerWindowContentWidth))}
-            </text>
+            <box width={composerWindowFooterHintWidth} overflow="hidden">
+              <text fg={composerSendState === 'sending' ? theme.dim : composerAccentColor} wrapMode="none">
+                {fitText(composerWindowFooterHint, composerWindowFooterHintWidth)}
+              </text>
+            </box>
           </box>
         </box>
       ) : null}

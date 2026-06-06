@@ -211,6 +211,15 @@ class CodexHarness {
     this.subscribed = true
     const client = getCodexClient()
     client.subscribe((notification) => this.handleNotification(notification))
+    // The client singleton (and this listener) survive an app-server respawn,
+    // so registering once is enough. On child exit, fan a disconnect out to
+    // every subscriber so in-flight turn streams stop waiting on a dead pipe.
+    client.subscribeDisconnect(() => this.broadcastDisconnect())
+  }
+
+  private broadcastDisconnect(): void {
+    const event: CodexHarnessEvent = { type: 'disconnected' }
+    for (const subscriber of this.subscribers) subscriber.push(event)
   }
 
   private handleNotification(notification: CodexNotification): void {

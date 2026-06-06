@@ -9,6 +9,7 @@ type PendingRequest = {
 
 type NotificationListener = (notification: CodexNotification) => void
 type ServerRequestListener = (request: CodexServerRequest) => void
+type DisconnectListener = () => void
 
 class CodexAppServerClient {
   private child: ChildProcessWithoutNullStreams | null = null
@@ -16,6 +17,7 @@ class CodexAppServerClient {
   private pending = new Map<string, PendingRequest>()
   private listeners = new Set<NotificationListener>()
   private requestListeners = new Set<ServerRequestListener>()
+  private disconnectListeners = new Set<DisconnectListener>()
   private stdoutBuffer = ''
   private initializePromise: Promise<void> | null = null
   private exitPromise: Promise<void> | null = null
@@ -43,6 +45,15 @@ class CodexAppServerClient {
       this.child = null
       this.initializePromise = null
       this.exitPromise = null
+      // Discard any partial line buffered from the dead process so it can't
+      // corrupt the first frame parsed from the next respawned app-server.
+      this.stdoutBuffer = ''
+      // Notify subscribers (the harness, hence every active turn stream) that
+      // the app-server died. Without this an in-flight turn's consume loop
+      // would block forever waiting for events that can never arrive.
+      for (const listener of this.disconnectListeners) {
+        try { listener() } catch { /* a listener throwing must not strand the others */ }
+      }
     })
 
     this.child = child
@@ -144,6 +155,16 @@ class CodexAppServerClient {
     this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
+    }
+  }
+
+  // Fires when the app-server child process exits (crash or restart). Lets the
+  // harness broadcast a synthetic disconnect so active turn streams unblock
+  // instead of hanging on an event source that will never produce again.
+  subscribeDisconnect(listener: DisconnectListener): () => void {
+    this.disconnectListeners.add(listener)
+    return () => {
+      this.disconnectListeners.delete(listener)
     }
   }
 
