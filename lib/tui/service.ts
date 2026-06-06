@@ -7,6 +7,7 @@ import {
 import { getConfiguredProvider, setConfiguredProvider } from '../providerState'
 import {
   getConfiguredTuiDensity,
+  getConfiguredTuiDiffLayout,
   getConfiguredTuiFocusMode,
   getConfiguredTuiRailVisible,
   getConfiguredTuiSessionReaderState,
@@ -17,6 +18,7 @@ import {
   getConfiguredTuiTheme,
   getConfiguredTuiTranscriptView,
   setConfiguredTuiDensity,
+  setConfiguredTuiDiffLayout,
   setConfiguredTuiFocusMode,
   setConfiguredTuiRailVisible,
   setConfiguredTuiSessionReaderState,
@@ -28,6 +30,7 @@ import {
   setConfiguredTuiThemeSync,
   setConfiguredTuiTranscriptView,
   type TuiSessionReaderState,
+  type TuiDiffLayout,
   type TuiSidebarSort,
 } from '../tuiState'
 import {
@@ -120,6 +123,14 @@ export async function writeTuiDensity(density: TuiDensity): Promise<void> {
   await setConfiguredTuiDensity(density)
 }
 
+export async function readTuiDiffLayout(): Promise<TuiDiffLayout> {
+  return getConfiguredTuiDiffLayout()
+}
+
+export async function writeTuiDiffLayout(diffLayout: TuiDiffLayout): Promise<void> {
+  await setConfiguredTuiDiffLayout(diffLayout)
+}
+
 export async function readTuiTranscriptView(): Promise<TuiTranscriptView> {
   return getConfiguredTuiTranscriptView()
 }
@@ -152,7 +163,7 @@ export async function writeTuiSidebarSort(sidebarSort: TuiSidebarSort): Promise<
   await setConfiguredTuiSidebarSort(sidebarSort)
 }
 
-export type { TuiSidebarSort }
+export type { TuiDiffLayout, TuiSidebarSort }
 
 export async function readTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {
   return getConfiguredTuiSessionReaderState(sessionKey)

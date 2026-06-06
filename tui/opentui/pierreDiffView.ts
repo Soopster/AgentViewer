@@ -467,22 +467,129 @@ export function buildPierreDiffView(
 // ─── Fallback (raw text diff coloring) ───────────────────────────────────────
 
 function buildFallbackDiffView(diffText: string, cacheKey: string): TuiPierreDiffView | null {
-  const rows = diffText
-    .split('\n')
-    .map((lineText, index): TuiPierreDiffRow | null => {
-      const text = lineText.trimEnd()
-      if (!text) return null
-      if (text.startsWith('+') && !text.startsWith('+++')) {
-        return { key: `${cacheKey}:fallback:${index}`, tone: 'addition', text: text.slice(1), indicator: '+' }
+  const lines = diffText.split('\n').map((line) => line.trimEnd())
+  const rows: TuiPierreDiffRow[] = []
+  const splitRows: TuiPierreSplitRow[] = []
+  let oldLine: number | undefined
+  let newLine: number | undefined
+  let index = 0
+
+  while (index < lines.length) {
+    const text = lines[index] ?? ''
+    if (!text) {
+      index += 1
+      continue
+    }
+
+    if (text.startsWith('@@')) {
+      const match = text.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
+      oldLine = match ? Number.parseInt(match[1], 10) : undefined
+      newLine = match ? Number.parseInt(match[2], 10) : undefined
+      rows.push({ key: `${cacheKey}:fallback:${index}`, tone: 'hunk', text })
+      splitRows.push({ key: `${cacheKey}:fallback:split:${index}`, tone: 'hunk', text })
+      index += 1
+      continue
+    }
+
+    if (text.startsWith('-') && !text.startsWith('---')) {
+      const deletions: Array<{ index: number; text: string }> = []
+      while (index < lines.length) {
+        const deletion = lines[index] ?? ''
+        if (!deletion.startsWith('-') || deletion.startsWith('---')) break
+        deletions.push({ index, text: deletion.slice(1) })
+        rows.push({
+          key: `${cacheKey}:fallback:${index}`,
+          tone: 'deletion',
+          text: deletion.slice(1),
+          oldLine,
+          indicator: '-',
+        })
+        if (oldLine != null) oldLine += 1
+        index += 1
       }
-      if (text.startsWith('-') && !text.startsWith('---')) {
-        return { key: `${cacheKey}:fallback:${index}`, tone: 'deletion', text: text.slice(1), indicator: '-' }
+
+      const additions: Array<{ index: number; text: string }> = []
+      while (index < lines.length) {
+        const addition = lines[index] ?? ''
+        if (!addition.startsWith('+') || addition.startsWith('+++')) break
+        additions.push({ index, text: addition.slice(1) })
+        rows.push({
+          key: `${cacheKey}:fallback:${index}`,
+          tone: 'addition',
+          text: addition.slice(1),
+          newLine,
+          indicator: '+',
+        })
+        if (newLine != null) newLine += 1
+        index += 1
       }
-      if (text.startsWith('@@')) return { key: `${cacheKey}:fallback:${index}`, tone: 'hunk', text }
-      return { key: `${cacheKey}:fallback:${index}`, tone: 'meta', text }
-    })
-    .filter((row): row is TuiPierreDiffRow => row != null)
-  return rows.length > 0 ? { rows, splitRows: [] } : null
+
+      const deletionStart = oldLine == null ? undefined : oldLine - deletions.length
+      const additionStart = newLine == null ? undefined : newLine - additions.length
+      const pairCount = Math.max(deletions.length, additions.length)
+      for (let pairIndex = 0; pairIndex < pairCount; pairIndex += 1) {
+        const deletion = deletions[pairIndex]
+        const addition = additions[pairIndex]
+        splitRows.push({
+          key: `${cacheKey}:fallback:split:${deletion?.index ?? addition?.index ?? index}:${pairIndex}`,
+          tone: 'split-change',
+          left: deletion
+            ? { kind: 'deletion', lineNum: deletionStart == null ? undefined : deletionStart + pairIndex, text: deletion.text }
+            : { kind: 'empty', text: '' },
+          right: addition
+            ? { kind: 'addition', lineNum: additionStart == null ? undefined : additionStart + pairIndex, text: addition.text }
+            : { kind: 'empty', text: '' },
+        })
+      }
+      continue
+    }
+
+    if (text.startsWith('+') && !text.startsWith('+++')) {
+      rows.push({
+        key: `${cacheKey}:fallback:${index}`,
+        tone: 'addition',
+        text: text.slice(1),
+        newLine,
+        indicator: '+',
+      })
+      splitRows.push({
+        key: `${cacheKey}:fallback:split:${index}`,
+        tone: 'split-change',
+        left: { kind: 'empty', text: '' },
+        right: { kind: 'addition', lineNum: newLine, text: text.slice(1) },
+      })
+      if (newLine != null) newLine += 1
+      index += 1
+      continue
+    }
+
+    if (text.startsWith(' ')) {
+      const content = text.slice(1)
+      rows.push({
+        key: `${cacheKey}:fallback:${index}`,
+        tone: 'context',
+        text: content,
+        oldLine,
+        newLine,
+      })
+      splitRows.push({
+        key: `${cacheKey}:fallback:split:${index}`,
+        tone: 'split-context',
+        left: { kind: 'context', lineNum: oldLine, text: content },
+        right: { kind: 'context', lineNum: newLine, text: content },
+      })
+      if (oldLine != null) oldLine += 1
+      if (newLine != null) newLine += 1
+      index += 1
+      continue
+    }
+
+    rows.push({ key: `${cacheKey}:fallback:${index}`, tone: 'meta', text })
+    splitRows.push({ key: `${cacheKey}:fallback:split:${index}`, tone: 'meta', text })
+    index += 1
+  }
+
+  return rows.length > 0 ? { rows, splitRows } : null
 }
 
 // ─── File ordering ────────────────────────────────────────────────────────────

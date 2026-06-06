@@ -94,6 +94,7 @@ type TuiState = {
   sidebarWidth?: unknown
   focusMode?: unknown
   density?: unknown
+  diffLayout?: unknown
   transcriptView?: unknown
   tabsEnabled?: unknown
   showToolCalls?: unknown
@@ -102,6 +103,7 @@ type TuiState = {
 }
 
 export type TuiSidebarSort = 'project' | 'time'
+export type TuiDiffLayout = 'stack' | 'split'
 
 export type TuiSessionReaderState = {
   followTail: boolean
@@ -208,6 +210,15 @@ export async function getConfiguredTuiDensity(): Promise<TuiDensity> {
 
 export async function setConfiguredTuiDensity(density: TuiDensity): Promise<void> {
   await writeTuiState({ density })
+}
+
+export async function getConfiguredTuiDiffLayout(): Promise<TuiDiffLayout> {
+  const parsed = await readTuiState()
+  return parsed.diffLayout === 'split' ? 'split' : 'stack'
+}
+
+export async function setConfiguredTuiDiffLayout(diffLayout: TuiDiffLayout): Promise<void> {
+  await writeTuiState({ diffLayout })
 }
 
 export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptView> {

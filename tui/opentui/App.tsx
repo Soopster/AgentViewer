@@ -7,7 +7,13 @@ import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
 import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
-import { buildPierreDiffView, type TuiPierreDiffRow, type TuiPierreDiffView } from './pierreDiffView'
+import {
+  buildPierreDiffView,
+  type TuiPierreDiffRow,
+  type TuiPierreDiffView,
+  type TuiPierreSplitRow,
+  type TuiSplitRowSide,
+} from './pierreDiffView'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
 import type { BaseRenderable, MarkdownRenderable, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
@@ -36,6 +42,7 @@ import {
 import {
   patchTuiSession,
   readTuiDensity,
+  readTuiDiffLayout,
   readTuiFocusMode,
   readTuiProvider,
   readTuiRailVisible,
@@ -57,6 +64,7 @@ import {
   streamTuiSessionTurn,
   interruptTuiSessionTurn,
   writeTuiDensity,
+  writeTuiDiffLayout,
   writeTuiFocusMode,
   writeTuiProvider,
   writeTuiRailVisible,
@@ -69,6 +77,7 @@ import {
   writeTuiThemeSync,
   writeTuiTranscriptView,
   type TuiSessionDetail,
+  type TuiDiffLayout,
   type TuiSidebarSort,
 } from '../../lib/tui/service'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
@@ -2246,6 +2255,55 @@ function diffRowIndicator(row: TuiPierreDiffRow): string {
   }
 }
 
+function splitDiffSideColor(side: TuiSplitRowSide, theme: TuiThemePalette): string {
+  if (side.kind === 'deletion') return theme.red
+  if (side.kind === 'addition') return theme.green
+  return theme.text
+}
+
+function splitDiffSideBackground(side: TuiSplitRowSide, theme: TuiThemePalette): string | undefined {
+  if (side.kind === 'deletion') return theme.diffRemoveBg
+  if (side.kind === 'addition') return theme.diffAddBg
+  if (side.kind === 'empty') return theme.surface2
+  return undefined
+}
+
+function splitDiffSideIndicator(side: TuiSplitRowSide): string {
+  if (side.kind === 'deletion') return '-'
+  if (side.kind === 'addition') return '+'
+  return ' '
+}
+
+type SplitDiffSideProps = {
+  side?: TuiSplitRowSide
+  width: number
+  gutterWidth: number
+  theme: TuiThemePalette
+  selectionColors: SelectionColors
+}
+
+function SplitDiffSide({
+  side,
+  width,
+  gutterWidth,
+  theme,
+  selectionColors,
+}: SplitDiffSideProps) {
+  const resolved = side ?? { kind: 'empty' as const, text: '' }
+  const sideColor = splitDiffSideColor(resolved, theme)
+  const textWidth = Math.max(width - gutterWidth - 1, 4)
+  return (
+    <box width={width} flexDirection="row" backgroundColor={splitDiffSideBackground(resolved, theme)}>
+      <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+        {formatDiffLineNumber(resolved.lineNum, gutterWidth)}{' '}
+      </text>
+      <text fg={sideColor} wrapMode="none" selectable {...selectionColors}>
+        {fitText(` ${splitDiffSideIndicator(resolved)} ${resolved.text}`, textWidth)}
+      </text>
+    </box>
+  )
+}
+
 function formatDiffLineNumber(lineNumber: number | undefined, width: number): string {
   return lineNumber == null ? ''.padStart(width, ' ') : lineNumber.toString().padStart(width, ' ')
 }
@@ -2743,6 +2801,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'theme',      label: 'Switch theme',           key: 't',  category: 'View'       },
   { id: 'thinking',   label: 'Toggle thinking mode',   key: 'i',  category: 'View'       },
   { id: 'density',    label: 'Toggle density',         key: 'd',  category: 'View'       },
+  { id: 'diff-layout', label: 'Toggle diff layout',    key: 's',  category: 'View'       },
   { id: 'view',       label: 'Toggle transcript view', key: 'v',  category: 'View'       },
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
@@ -2820,6 +2879,7 @@ type TranscriptCardProps = {
   isActiveMatch: boolean
   bookmarked: boolean
   thinkingMode: boolean
+  diffLayout: TuiDiffLayout
   imessageStyle: boolean
   streamMode: boolean
 }
@@ -2874,6 +2934,7 @@ function TranscriptCardInner({
   isActiveMatch,
   bookmarked,
   thinkingMode,
+  diffLayout,
   imessageStyle,
   streamMode,
 }: TranscriptCardProps) {
@@ -2918,6 +2979,7 @@ function TranscriptCardInner({
   const maxTitleWidth = Math.max(rightPaneWidth - 6, 20)
   const titleMeta = joinMeta([
     headerMeta,
+    card.category === 'diff' ? `s ${diffLayout}` : null,
     isSearchHit ? 'match' : null,
     isSelected ? card.usageSummary ?? null : null,
   ])
@@ -2933,16 +2995,33 @@ function TranscriptCardInner({
   const bubbleTextColor = imessageUserBubble ? '#ffffff' : theme.text
   const bodyInnerWidth = Math.max((userBubbleWidth ?? rightPaneWidth) - densityState.bodyIndent - 8, 16)
   const markdownWidth = Math.max((userBubbleWidth ?? rightPaneWidth) - densityState.bodyIndent - 8, 20)
-  const diffRows = diffView
-    ? diffView.rows.slice(0, isExpanded ? diffView.rows.length : densityState.bodyLines)
+  const effectiveDiffLayout = diffLayout === 'split' && (diffView?.splitRows.length ?? 0) > 0
+    ? 'split'
+    : 'stack'
+  const activeDiffRows = diffView
+    ? effectiveDiffLayout === 'split' ? diffView.splitRows : diffView.rows
     : []
-  const hiddenDiffRows = diffView ? diffView.rows.length - diffRows.length : 0
-  const diffLineNumbers = diffRows.flatMap((row) => [row.oldLine, row.newLine].filter((value): value is number => value != null))
+  const diffRows = activeDiffRows.slice(0, isExpanded ? activeDiffRows.length : densityState.bodyLines)
+  const hiddenDiffRows = activeDiffRows.length - diffRows.length
+  const stackedDiffRows = effectiveDiffLayout === 'stack' ? diffRows as TuiPierreDiffRow[] : []
+  const splitDiffRows = effectiveDiffLayout === 'split' ? diffRows as TuiPierreSplitRow[] : []
+  const diffLineNumbers = stackedDiffRows.flatMap((row) => [row.oldLine, row.newLine].filter((value): value is number => value != null))
   const diffGutterWidth = Math.max(
     diffLineNumbers.length > 0 ? Math.max(...diffLineNumbers).toString().length : 1,
     1,
   )
   const diffTextWidth = Math.max(bodyInnerWidth - (diffGutterWidth * 2) - 5, 12)
+  const splitLineNumbers = splitDiffRows.flatMap((row) => [
+    row.left?.lineNum,
+    row.right?.lineNum,
+  ].filter((value): value is number => value != null))
+  const splitGutterWidth = Math.max(
+    splitLineNumbers.length > 0 ? Math.max(...splitLineNumbers).toString().length : 1,
+    1,
+  )
+  const splitDividerWidth = 1
+  const splitLeftWidth = Math.floor((bodyInnerWidth - splitDividerWidth) / 2)
+  const splitRightWidth = bodyInnerWidth - splitDividerWidth - splitLeftWidth
   const shouldRenderSyntaxMarkdown = Boolean(
     isExpanded
     && card.markdownContent
@@ -3129,9 +3208,9 @@ function TranscriptCardInner({
             </>
           )}
 
-          {diffView ? (
+          {diffView && effectiveDiffLayout === 'stack' ? (
             <box paddingX={1} marginTop={1}>
-              {diffRows.map((row) => (
+              {stackedDiffRows.map((row) => (
                 <box
                   key={row.key}
                   flexDirection="row"
@@ -3152,6 +3231,51 @@ function TranscriptCardInner({
                   </text>
                 </box>
               ))}
+              {hiddenDiffRows > 0 ? (
+                <text fg={theme.dim} selectable {...selectionColors}>
+                  {fitText(`... ${hiddenDiffRows} more diff lines`, bodyInnerWidth)}
+                </text>
+              ) : null}
+            </box>
+          ) : diffView ? (
+            <box paddingX={1} marginTop={1}>
+              {splitDiffRows.map((row) => {
+                if (row.tone !== 'split-change' && row.tone !== 'split-context') {
+                  const rowColor = row.tone === 'file' || row.tone === 'hunk' ? theme.cyan : theme.dim
+                  const rowBackground = row.tone === 'hunk'
+                    ? theme.diffMetaBg
+                    : row.tone === 'file'
+                      ? theme.surface2
+                      : undefined
+                  return (
+                    <box key={row.key} backgroundColor={rowBackground}>
+                      <text fg={rowColor} wrapMode="none" selectable {...selectionColors}>
+                        {fitText(row.text ?? '', bodyInnerWidth)}
+                      </text>
+                    </box>
+                  )
+                }
+
+                return (
+                  <box key={row.key} flexDirection="row">
+                    <SplitDiffSide
+                      side={row.left}
+                      width={splitLeftWidth}
+                      gutterWidth={splitGutterWidth}
+                      theme={theme}
+                      selectionColors={selectionColors}
+                    />
+                    <text fg={theme.border} wrapMode="none" selectable {...selectionColors}>│</text>
+                    <SplitDiffSide
+                      side={row.right}
+                      width={splitRightWidth}
+                      gutterWidth={splitGutterWidth}
+                      theme={theme}
+                      selectionColors={selectionColors}
+                    />
+                  </box>
+                )
+              })}
               {hiddenDiffRows > 0 ? (
                 <text fg={theme.dim} selectable {...selectionColors}>
                   {fitText(`... ${hiddenDiffRows} more diff lines`, bodyInnerWidth)}
@@ -3189,6 +3313,7 @@ export default function OpenTuiApp() {
   const [provider, setProvider] = useState<ProviderSelection>('claude')
   const [themeMode, setThemeMode] = useState<TuiThemeMode>('light')
   const [density, setDensity] = useState<TuiDensity>('balanced')
+  const [diffLayout, setDiffLayout] = useState<TuiDiffLayout>('stack')
   const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
   const [focusMode, setFocusMode] = useState(false)
   const [railVisible, setRailVisible] = useState(true)
@@ -4652,6 +4777,7 @@ export default function OpenTuiApp() {
           isActiveMatch={isActiveMatch}
           bookmarked={bookmarkKeys.has(card.key)}
           thinkingMode={thinkingMode}
+          diffLayout={diffLayout}
           imessageStyle={imessageStyle}
           streamMode={transcriptView === 'stream'}
         />
@@ -4671,6 +4797,7 @@ export default function OpenTuiApp() {
     syntaxStyle,
     rightPaneWidth,
     thinkingMode,
+    diffLayout,
     imessageStyle,
     transcriptView,
   ])
@@ -6330,6 +6457,7 @@ export default function OpenTuiApp() {
           configuredRailVisible,
           configuredFocusMode,
           configuredDensity,
+          configuredDiffLayout,
           configuredTranscriptView,
           configuredTabsEnabled,
           configuredSidebarSort,
@@ -6341,6 +6469,7 @@ export default function OpenTuiApp() {
           readTuiRailVisible(),
           readTuiFocusMode(),
           readTuiDensity(),
+          readTuiDiffLayout(),
           readTuiTranscriptView(),
           readTuiTabsEnabled(),
           readTuiSidebarSort(),
@@ -6354,6 +6483,7 @@ export default function OpenTuiApp() {
         setRailVisible(configuredRailVisible)
         setFocusMode(configuredFocusMode)
         setDensity(configuredDensity)
+        setDiffLayout(configuredDiffLayout)
         setTranscriptView(configuredTranscriptView)
         setTabsEnabled(configuredTabsEnabled)
         setSidebarSort(configuredSidebarSort)
@@ -6835,10 +6965,10 @@ export default function OpenTuiApp() {
 
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b bookmark  [ ] jump marks  S-B all marks  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  r refresh  ? commands  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b bookmark  [ ] jump marks  S-B all marks  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  s diff:${diffLayout}  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
-    [width, transcriptView, density, showToolCalls],
+    [width, diffLayout, transcriptView, density, showToolCalls],
   )
 
   const composerStatusMessage = composerError
@@ -7314,6 +7444,12 @@ export default function OpenTuiApp() {
         const next = cycleDensityValue(density)
         setDensity(next)
         void writeTuiDensity(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store density'))
+        break
+      }
+      case 'diff-layout': {
+        const next: TuiDiffLayout = diffLayout === 'stack' ? 'split' : 'stack'
+        setDiffLayout(next)
+        void writeTuiDiffLayout(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store diff layout'))
         break
       }
       case 'rail': {
@@ -8290,6 +8426,20 @@ export default function OpenTuiApp() {
         void copySelectedMessage()
       })
       return
+    }
+
+    if (effectiveFocus === 'messages' && sequence === 's') {
+      const selectedCard = visibleTranscriptCards[cursorIndex]
+      if (selectedCard?.category === 'diff') {
+        handled(() => {
+          const next: TuiDiffLayout = diffLayout === 'stack' ? 'split' : 'stack'
+          setDiffLayout(next)
+          void writeTuiDiffLayout(next).catch((err) => {
+            setError(err instanceof Error ? err.message : 'Failed to store diff layout')
+          })
+        })
+        return
+      }
     }
 
     if (effectiveFocus === 'messages' && key.name === 'n' && !key.shift && searchMatches.length > 0) {
