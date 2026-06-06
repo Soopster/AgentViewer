@@ -108,6 +108,11 @@ const PI_SESSION_TTL_MS = 5 * 60 * 1000
 type PiPoolEntry = { session: AgentSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
 const piSessionPool = new Map<string, PiPoolEntry>()
 
+/** Number of warm Pi AgentSessions currently pooled. Diagnostics only. */
+export function piPoolSize(): number {
+  return piSessionPool.size
+}
+
 // Tear down a pooled AgentSession's background work (retry/compaction loops,
 // branch summary, bash) and its agent event subscription. Without this an
 // evicted session leaks those listeners + timers. dispose() aborts in-flight

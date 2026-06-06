@@ -9,6 +9,7 @@ import { Sidebar, SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { isProviderSelection } from '@/lib/provider'
 import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
+import { startClientPerf, measureAsync } from '@/lib/clientPerf'
 import type { AgentProvider, ProviderSelection, Session, SessionMessage } from '@/lib/types'
 import type { Todo as OpenCodeTodo } from '@opencode-ai/sdk'
 import type { CodexPlanStep } from '@/lib/taskRegistry'
@@ -429,8 +430,10 @@ export default function Home() {
     params.set('provider', selection)
     params.set('limit', '500')
     const suffix = params.toString() ? `?${params.toString()}` : ''
-    const r = await fetch(`/api/sessions${suffix}`)
-    const data = await r.json()
+    const data = await measureAsync('fetch.sessions', async () => {
+      const r = await fetch(`/api/sessions${suffix}`)
+      return r.json()
+    })
     if (data.error) throw new Error(data.error)
     const loaded = (data.sessions ?? []) as Session[]
     const fp = sessionsFingerprint(loaded)
@@ -525,6 +528,10 @@ export default function Home() {
       pollInFlightRef.current = false
     }
   }, [applySessionMessagePayload])
+
+  // Opt-in client perf monitor (?perf=1 or localStorage 'agentviewer:perf'=1).
+  // No-op unless enabled. See lib/clientPerf.ts.
+  useEffect(() => startClientPerf(), [])
 
   // Initial session load
   useEffect(() => {

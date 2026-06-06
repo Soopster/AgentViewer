@@ -123,6 +123,11 @@ const COPILOT_SESSION_TTL_MS = 5 * 60 * 1000
 type CopilotPoolEntry = { session: CopilotSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
 const copilotSessionPool = new Map<string, CopilotPoolEntry>()
 
+/** Number of warm Copilot sessions currently pooled. Diagnostics only. */
+export function copilotPoolSize(): number {
+  return copilotSessionPool.size
+}
+
 function scheduleCopilotEviction(sessionId: string): void {
   const entry = copilotSessionPool.get(sessionId)
   if (!entry) return

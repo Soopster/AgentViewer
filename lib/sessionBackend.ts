@@ -36,6 +36,7 @@ import {
   adoptClaudeSession,
   type ClaudeBridgeBox,
   type ClaudeElicitationHandler,
+  claudePoolSize,
   CLAUDE_QUERY_ENV,
   createInputStream,
   effortToSdk,
@@ -88,7 +89,9 @@ import type {
 type CopilotReasoningEffort = Extract<ReasoningEffortLevel, 'low' | 'medium' | 'high' | 'xhigh'>
 
 import { consumeReadModelsWarmQuery, createSessionControlQuery, openPrompt } from './sdkControlQuery'
-import { acquireCopilotSession, evictCopilotSession, getCopilotClient, setCopilotPermissionHandler } from './copilotClient'
+import { acquireCopilotSession, copilotPoolSize, evictCopilotSession, getCopilotClient, setCopilotPermissionHandler } from './copilotClient'
+import { timeAsync } from './perfLog'
+import { registerDiagnosticsReporter } from './runtimeDiagnostics'
 import {
   deriveCopilotState,
   mapCopilotDiagnosticsToSections,
@@ -185,6 +188,7 @@ import {
   listPiSessions,
   openPiAgentSession,
   openPiSessionManager,
+  piPoolSize,
   refreshPiSessionCache,
 } from './piClient'
 import {
@@ -217,8 +221,15 @@ export const maxDuration = 300
 // Session info rarely changes between polls — cache for 20 s to avoid repeating
 // filesystem I/O on every 5-second session list refresh. Bounded by LRU so the
 // long-lived dev server cannot accumulate entries for every session ever listed.
+//
+// The cap MUST stay >= the session-list limit (500): listClaudeSessions calls
+// getCachedSessionInfo for every listed session, so a cap below the list size
+// thrashes the LRU and every poll re-reads the overflow from disk. With 128 and
+// a 300+ session corpus, ~60% of sessions missed the cache on every 5 s poll,
+// making listViewSessions ~300ms (measured). 640 covers the 500 limit with
+// headroom; entries are small metadata records, so the memory cost is ~1 MB.
 const SESSION_INFO_TTL = 20_000
-const SESSION_INFO_CACHE_MAX = 128
+const SESSION_INFO_CACHE_MAX = 640
 type SessionInfoCacheEntry = { result: Awaited<ReturnType<typeof getSessionInfo>>; ts: number }
 const sessionInfoCache = new Map<string, SessionInfoCacheEntry>()
 
@@ -1709,13 +1720,13 @@ async function listCodexSessions({ limit, offset, dir }: ListParams): Promise<Se
 
 async function listClaudeSessions({ limit, offset, dir, includeWorktrees }: ListParams): Promise<Session[]> {
   pruneSessionInfoCache()
-  const sessions = await listSessions({
+  const sessions = await timeAsync('claude.listSessions', () => listSessions({
     limit,
     offset,
     dir,
     includeWorktrees: dir ? includeWorktrees : undefined,
-  })
-  const normalized = await mapConcurrent(sessions, 20, async (session) => {
+  }))
+  const normalized = await timeAsync('claude.sessionInfo', () => mapConcurrent(sessions, 20, async (session) => {
     try {
       const sessionDir = typeof session.cwd === 'string' && session.cwd ? session.cwd : dir
       const info = await getCachedSessionInfo(session.sessionId, sessionDir)
@@ -1730,7 +1741,7 @@ async function listClaudeSessions({ limit, offset, dir, includeWorktrees }: List
     } catch {
       return session
     }
-  })
+  }))
 
   return normalized.map((session) => ({
     ...session,
@@ -1795,7 +1806,23 @@ function sessionsPersistSignature(sessions: Session[]): string {
 // Tracks the last signature we successfully persisted for each session, so that
 // repeated polls (SSE pump @ 1.5 s, GET fallback @ 2 s) don't open a SQLite write
 // transaction every tick when nothing has actually changed.
+// LRU-capped: a long-running dev server mints a fresh session id on every
+// `claude`/`codex` invocation, so an uncapped map grows one entry per distinct
+// session forever (a slow but unbounded leak on idle long-open tabs). The cap is
+// far above the working set; evicting a cold session just costs one redundant
+// no-op re-sync the next time it's polled.
+const PERSISTED_MESSAGES_SIGNATURE_MAX = 512
 const persistedMessagesSignature = new Map<string, string>()
+
+function rememberPersistedMessagesSignature(key: string, signature: string): void {
+  if (persistedMessagesSignature.has(key)) persistedMessagesSignature.delete(key)
+  persistedMessagesSignature.set(key, signature)
+  while (persistedMessagesSignature.size > PERSISTED_MESSAGES_SIGNATURE_MAX) {
+    const oldest = persistedMessagesSignature.keys().next().value
+    if (oldest === undefined) break
+    persistedMessagesSignature.delete(oldest)
+  }
+}
 
 function messagesPersistSignature(messages: SessionMessage[]): string {
   if (messages.length === 0) return '0::'
@@ -1811,10 +1838,15 @@ async function syncMessagesBestEffort(
   const key = `${provider}:${sessionId}`
   const durableMessages = messages.filter((message) => message.ephemeral !== true)
   const signature = messagesPersistSignature(durableMessages)
-  if (persistedMessagesSignature.get(key) === signature) return
+  if (persistedMessagesSignature.get(key) === signature) {
+    // Refresh LRU recency so an actively-polled (but unchanged) session isn't
+    // evicted by a burst of newly-created session ids.
+    rememberPersistedMessagesSignature(key, signature)
+    return
+  }
   try {
     await syncPersistedSessionMessages(provider, sessionId, durableMessages)
-    persistedMessagesSignature.set(key, signature)
+    rememberPersistedMessagesSignature(key, signature)
   } catch {
     // Persistence is opportunistic and must not break live provider reads.
   }
@@ -1940,7 +1972,11 @@ async function listPiSessionsForView({ limit, offset, dir }: ListParams): Promis
   return page.map((s) => mapPiSessionToSession(s, stored[s.id] ?? { title: null, tag: null }))
 }
 
-export async function listViewSessions(params: ListParams): Promise<Session[]> {
+export function listViewSessions(params: ListParams): Promise<Session[]> {
+  return timeAsync('listViewSessions', () => listViewSessionsImpl(params))
+}
+
+async function listViewSessionsImpl(params: ListParams): Promise<Session[]> {
   const provider = params.provider ?? await getConfiguredProvider()
   let sessions: Session[]
   if (provider === 'all') {
@@ -2453,7 +2489,11 @@ function readPiMessagesAll(sessionId: string): SessionMessage[] {
   return writeMappedMessagesCache(`pi:${sessionId}`, signature, markedMessages)
 }
 
-export async function listViewSessionMessageWindow(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessageWindow> {
+export function listViewSessionMessageWindow(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessageWindow> {
+  return timeAsync('listViewSessionMessageWindow', () => listViewSessionMessageWindowImpl(sessionId, params, providerOverride))
+}
+
+async function listViewSessionMessageWindowImpl(sessionId: string, params: MessageListParams, providerOverride?: AgentProvider): Promise<SessionMessageWindow> {
   const provider = await resolveProvider(providerOverride)
   let messages: SessionMessage[]
   if (provider === 'codex') {
@@ -5407,5 +5447,33 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
     return await q.rewindFiles(userMessageId, { dryRun: Boolean(body.dryRun) })
   } finally {
     q.close()
+  }
+}
+
+// ── Memory diagnostics ──────────────────────────────────────────────────────
+// Reports live sizes of the module-level caches/maps and warm provider pools so
+// the instrumentation logger can attribute RSS growth to a specific structure.
+// Read-only; safe to call on a timer. Registered into the globalThis reporter
+// registry so the logger reads THIS module instance's caches even when it runs
+// in a separate instance (see lib/runtimeDiagnostics.ts).
+registerDiagnosticsReporter(() => getServerMemoryDiagnostics())
+
+export function getServerMemoryDiagnostics(): Record<string, number> {
+  let codexApprovals = 0
+  try { codexApprovals = pendingCodexApprovals.size } catch { /* defined later in module; ignore during init */ }
+  return {
+    sessionInfoCache: sessionInfoCache.size,
+    mappedMessageCache: mappedMessageCache.size,
+    persistedMessagesSignature: persistedMessagesSignature.size,
+    persistedSessionListSignatures: persistedSessionListSignatures.size,
+    projectSessionsCache: projectSessionsCache.size,
+    copilotLiveTranscripts: copilotLiveTranscripts.size,
+    piLiveTranscripts: piLiveTranscripts.size,
+    pendingClaudePermissions: pendingClaudePermissions.size,
+    pendingCopilotPermissions: pendingCopilotPermissions.size,
+    pendingCodexApprovals: codexApprovals,
+    claudePool: claudePoolSize(),
+    piPool: piPoolSize(),
+    copilotPool: copilotPoolSize(),
   }
 }

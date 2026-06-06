@@ -18,6 +18,7 @@ import type {
   ReasoningEffortLevel,
 } from '@/lib/types'
 import { buildThreadedMessages, buildThreadedMessagesIncremental, stripToolCallBlocks, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
+import { measureSync } from '@/lib/clientPerf'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
@@ -4171,7 +4172,7 @@ export default function MessageView({
     }
   }, [diagnosticSections.length, diagnosticsLoading, selectedModelValue, session, showDiagnostics])
 
-  const threadedFull = useMemo(() => {
+  const threadedFull = useMemo(() => measureSync('threading.build', () => {
     const prev = prevThreadingRef.current
     const nextMessages = (prev ? buildThreadedMessagesIncremental(messages, prev) : null)
       ?? buildThreadedMessages(messages)
@@ -4185,7 +4186,7 @@ export default function MessageView({
     threadedCacheRef.current = nextCache
     prevThreadingRef.current = { messages, threaded: stabilized }
     return stabilized
-  }, [messages])
+  }), [messages])
   const threaded = useMemo(
     () => (showTools ? threadedFull : stripToolCallBlocks(threadedFull)),
     [threadedFull, showTools],
@@ -4657,7 +4658,8 @@ export default function MessageView({
   // accumulation over the entire transcript. Rebuilds only on a real poll
   // delta (persistedTimelineRows identity) or a persisted-row resize.
   const baseLayout = useMemo(() => {
-    return buildTimelineRowLayout(persistedTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight)
+    return measureSync('timeline.baseLayout', () =>
+      buildTimelineRowLayout(persistedTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight))
   }, [persistedMeasurementVersion, persistedTimelineRows])
 
   // Separate the expensive O(n) height accumulation from the scroll-reactive
@@ -4674,11 +4676,13 @@ export default function MessageView({
     // with a full-list layout. When they differ, a filter is genuinely active
     // and the base prefix can't be reused — rebuild the full layout.
     if (transcriptTimelineRows !== timelineRows) {
-      return buildTimelineRowLayout(transcriptTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight)
+      return measureSync('timeline.fullLayout', () =>
+        buildTimelineRowLayout(transcriptTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight))
     }
     // Otherwise reuse baseLayout for the persisted prefix and append only the
     // live suffix.
-    return appendTimelineRowLayout(baseLayout, liveTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight)
+    return measureSync('timeline.appendLayout', () =>
+      appendTimelineRowLayout(baseLayout, liveTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight))
   }, [baseLayout, liveTimelineRows, rowMeasurementVersion, timelineRows, transcriptTimelineRows])
   rowLayoutRef.current = rowLayout
 

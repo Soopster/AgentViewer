@@ -82,6 +82,11 @@ export const CLAUDE_QUERY_ENV: Record<string, string | undefined> = {
 // Surface the Claude CLI subprocess's stderr (otherwise dropped) so a genuinely
 // stuck or erroring subprocess is debuggable. Rate-limited per session so a
 // chatty process can't flood server logs.
+// LRU-capped: a session that logs stderr once and never again would otherwise
+// leave a stale window entry resident forever, so the map grows one entry per
+// distinct session over a long-running server. The cap is well above any
+// realistic count of concurrently-chatty subprocesses.
+const CLAUDE_STDERR_WINDOWS_MAX = 64
 const claudeStderrWindows = new Map<string, { count: number; windowStart: number }>()
 export function logClaudeSubprocessStderr(sessionId: string, data: string): void {
   const text = data.trim()
@@ -89,7 +94,13 @@ export function logClaudeSubprocessStderr(sessionId: string, data: string): void
   const now = Date.now()
   const win = claudeStderrWindows.get(sessionId)
   if (!win || now - win.windowStart > 10_000) {
+    if (win) claudeStderrWindows.delete(sessionId)
     claudeStderrWindows.set(sessionId, { count: 1, windowStart: now })
+    while (claudeStderrWindows.size > CLAUDE_STDERR_WINDOWS_MAX) {
+      const oldest = claudeStderrWindows.keys().next().value
+      if (oldest === undefined) break
+      claudeStderrWindows.delete(oldest)
+    }
   } else {
     win.count += 1
     if (win.count === 21) console.warn(`[claude ${sessionId}] stderr rate-limited (>20 lines/10s)`)
@@ -210,6 +221,11 @@ export function effortToSdk(effort: ReasoningEffortLevel | undefined):
 class ClaudePool {
   private entries = new Map<string, InternalEntry>()
   private sweepHandle: ReturnType<typeof setInterval> | null = null
+
+  /** Live entry count, for memory diagnostics. */
+  get size(): number {
+    return this.entries.size
+  }
 
   acquire(opts: ClaudePoolAcquireOptions): ClaudePoolEntry {
     const existing = this.entries.get(opts.sessionId)
@@ -740,6 +756,11 @@ export function acquireClaudeSession(opts: ClaudePoolAcquireOptions): ClaudePool
 
 export function recycleClaudeSession(sessionId: string): void {
   getPool().recycle(sessionId)
+}
+
+/** Number of warm Claude subprocesses currently pooled. Diagnostics only. */
+export function claudePoolSize(): number {
+  return getPool().size
 }
 
 /**

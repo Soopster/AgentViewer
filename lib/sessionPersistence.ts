@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { priceForModel } from './analytics'
+import { timeAsync } from './perfLog'
 import { isAgentProvider } from './provider'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from './projectPaths'
 import type { AgentProvider, ApiMessage, ContentBlock, Session, SessionMessage, SystemMessagePayload } from './types'
@@ -1204,7 +1205,15 @@ function tryAppendMessagesForSession(
   return true
 }
 
-export async function syncPersistedSessionMessages(
+export function syncPersistedSessionMessages(
+  provider: AgentProvider,
+  sessionId: string,
+  messages: SessionMessage[],
+): Promise<void> {
+  return timeAsync('sqlite.syncPersistedSessionMessages', () => syncPersistedSessionMessagesImpl(provider, sessionId, messages))
+}
+
+async function syncPersistedSessionMessagesImpl(
   provider: AgentProvider,
   sessionId: string,
   messages: SessionMessage[],
@@ -1550,7 +1559,11 @@ function emptyStats(): PersistedIndexStats {
   }
 }
 
-export async function searchPersistedSessions(params: PersistedSearchParams): Promise<PersistedSearchResponse> {
+export function searchPersistedSessions(params: PersistedSearchParams): Promise<PersistedSearchResponse> {
+  return timeAsync('sqlite.searchPersistedSessions', () => searchPersistedSessionsImpl(params))
+}
+
+async function searchPersistedSessionsImpl(params: PersistedSearchParams): Promise<PersistedSearchResponse> {
   if (persistenceDisabled()) return { query: params.query, total: 0, results: [] }
   const query = params.query.trim()
   if (!query) return { query, total: 0, results: [] }
@@ -1627,7 +1640,11 @@ export async function searchPersistedSessions(params: PersistedSearchParams): Pr
   }
 }
 
-export async function readPersistedIndexStats(filters: PersistedIndexFilters = {}): Promise<PersistedIndexStats> {
+export function readPersistedIndexStats(filters: PersistedIndexFilters = {}): Promise<PersistedIndexStats> {
+  return timeAsync('sqlite.readPersistedIndexStats', () => readPersistedIndexStatsImpl(filters))
+}
+
+async function readPersistedIndexStatsImpl(filters: PersistedIndexFilters = {}): Promise<PersistedIndexStats> {
   if (persistenceDisabled()) return emptyStats()
   const db = await getDatabase()
   const sessions = selectFilteredSessions(db, filters)
@@ -1796,7 +1813,13 @@ function costFor(model: string | null, i: number, o: number, cr: number, cw: num
   return (i * p.in + o * p.out + cr * (p.cacheRead ?? p.in) + cw * (p.cacheWrite ?? p.in)) / 1_000_000
 }
 
-export async function readCrossSessionAnalytics(
+export function readCrossSessionAnalytics(
+  filters: PersistedAnalyticsFilters = {},
+): Promise<CrossSessionAnalytics> {
+  return timeAsync('sqlite.readCrossSessionAnalytics', () => readCrossSessionAnalyticsImpl(filters))
+}
+
+async function readCrossSessionAnalyticsImpl(
   filters: PersistedAnalyticsFilters = {},
 ): Promise<CrossSessionAnalytics> {
   if (persistenceDisabled()) return emptyCrossSessionAnalytics()
