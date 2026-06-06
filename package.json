@@ -32,7 +32,7 @@
     "tui": "bun run ./tui/opentui/main.tsx",
     "tui:dev": "bun --watch ./tui/opentui/main.tsx",
     "tui:check": "tsc -p tsconfig.opentui.json --noEmit",
-    "tui:smoke": "bun run ./tui/opentui/renderSmoke.tsx",
+    "tui:smoke": "bun run ./tui/opentui/renderSmoke.tsx && bun run ./tui/opentui/gitPopoverSmoke.tsx",
     "tui:ink": "node --import tsx ./tui/main.tsx",
     "tui:ink:dev": "node --watch --import tsx ./tui/main.tsx",
     "regen-codex-schema": "rm -rf lib/codex-schema && codex app-server generate-ts --experimental --out lib/codex-schema",

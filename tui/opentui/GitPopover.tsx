@@ -79,10 +79,6 @@ function buildVisibleNodes(entries: GitStatusEntry[], expandedDirs: Set<string>)
       const displayName = chainPath.slice(prefix ? prefix.length + 1 : 0)
       nodes.push({ kind: 'dir', path: chainPath, name: displayName, depth, expanded, chainPaths })
       if (expanded) {
-        for (const fileEntry of chainDir.files) {
-          const fileName = fileEntry.path.split('/').at(-1) ?? fileEntry.path
-          nodes.push({ kind: 'file', path: fileEntry.path, name: fileName, depth: depth + 1, x: fileEntry.x, y: fileEntry.y })
-        }
         visit(chainDir, chainPath, depth + 1)
       }
     }
