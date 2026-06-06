@@ -72,7 +72,12 @@ import {
   type TuiSidebarSort,
 } from '../../lib/tui/service'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
-import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '../../lib/claudeMapper'
+import {
+  extractClaudeStreamToolInputDelta,
+  extractClaudeStreamToolUse,
+  normalizeClaudeStreamThreadedMessage,
+  parseClaudeStreamToolInput,
+} from '../../lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
 import {
@@ -1492,6 +1497,23 @@ function completeLiveToolThread(messages: ThreadedMessage[], key: string): Threa
           },
         }
       }),
+    }
+  })
+}
+
+function updateLiveToolThreadInput(
+  messages: ThreadedMessage[],
+  key: string,
+  input: Record<string, unknown>,
+): ThreadedMessage[] {
+  const targetUuid = `live-tool:${key}`
+  return messages.map((message) => {
+    if (message.uuid !== targetUuid) return message
+    return {
+      ...message,
+      blocks: message.blocks.map((block) => block.type === 'tool_thread'
+        ? { ...block, toolUse: { ...block.toolUse, input } }
+        : block),
     }
   })
 }
@@ -3364,6 +3386,7 @@ export default function OpenTuiApp() {
   const composerCursorOffsetRef = useRef<number | null>(null)
   const terminalSelectionRef = useRef<{ text: string; capturedAt: number } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
+  const liveToolInputJsonRef = useRef<Map<number, string>>(new Map())
   const liveTranscriptBaselineRef = useRef(new Map<string, { count: number; lastFingerprint: string | null; sequenceFingerprint: string }>())
   const liveTranscriptMessagesRef = useRef<ThreadedMessage[]>([])
   const awaitingPersistedTurnRef = useRef(false)
@@ -3665,6 +3688,7 @@ export default function OpenTuiApp() {
     liveTranscriptBaselineRef.current.delete(key)
     setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== key))
     liveToolIndexesRef.current.clear()
+    liveToolInputJsonRef.current.clear()
     setComposerLiveText('')
     setAwaitingPersistedTurn(false)
   }, [composerLiveText, liveTranscriptMessagesForSession, selectedSessionIdentity, selectedSessionTarget, sessionDetail])
@@ -3681,6 +3705,7 @@ export default function OpenTuiApp() {
         setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== key))
       }
       liveToolIndexesRef.current.clear()
+      liveToolInputJsonRef.current.clear()
       setComposerLiveText('')
       setAwaitingPersistedTurn(false)
     }, AWAITING_PERSISTED_TURN_TIMEOUT_MS)
@@ -4896,6 +4921,7 @@ export default function OpenTuiApp() {
             liveTranscriptBaselineRef.current.delete(cacheKeyForGuards)
             setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== cacheKeyForGuards))
             liveToolIndexesRef.current.clear()
+            liveToolInputJsonRef.current.clear()
             setComposerLiveText('')
             setAwaitingPersistedTurn(false)
           }
@@ -5423,6 +5449,7 @@ export default function OpenTuiApp() {
       setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
     }
     liveToolIndexesRef.current.clear()
+    liveToolInputJsonRef.current.clear()
     if (liveTextFlushFrameRef.current != null) {
       cancelAnimationFrame(liveTextFlushFrameRef.current)
       liveTextFlushFrameRef.current = null
@@ -5672,6 +5699,7 @@ export default function OpenTuiApp() {
       sequenceFingerprint: sessionMessageSequenceFingerprint(baselineMessages),
     })
     liveToolIndexesRef.current.clear()
+    liveToolInputJsonRef.current.clear()
     setLiveTranscriptMessages((prev) => [
       ...prev.filter((message) => liveMessageSessionKey(message) !== targetKey),
       makeLiveUserMessage(targetSession, trimmed),
@@ -5880,7 +5908,10 @@ export default function OpenTuiApp() {
           // A tool call is a side effect — never blind-retry past this point.
           composerTurnProducedOutputRef.current = true
           const startIndex = streamEventIndex(parsed, 'content_block_start')
-          if (startIndex != null) liveToolIndexesRef.current.set(startIndex, claudeToolUse.id)
+          if (startIndex != null) {
+            liveToolIndexesRef.current.set(startIndex, claudeToolUse.id)
+            liveToolInputJsonRef.current.set(startIndex, '')
+          }
           setLiveToolActivities((prev) => [...prev, { key: claudeToolUse.id, label: claudeToolUse.name, status: 'running' }])
           setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, {
             role: 'assistant',
@@ -5895,15 +5926,35 @@ export default function OpenTuiApp() {
           }))
         }
 
+        const toolInputDelta = extractClaudeStreamToolInputDelta(parsed)
+        if (toolInputDelta) {
+          const toolKey = liveToolIndexesRef.current.get(toolInputDelta.index)
+          if (toolKey) {
+            const accumulated = `${liveToolInputJsonRef.current.get(toolInputDelta.index) ?? ''}${toolInputDelta.partialJson}`
+            liveToolInputJsonRef.current.set(toolInputDelta.index, accumulated)
+            const input = parseClaudeStreamToolInput(accumulated)
+            if (input) {
+              setLiveTranscriptMessages((prev) => updateLiveToolThreadInput(prev, toolKey, input))
+            }
+          }
+        }
+
         const stopIndex = streamEventIndex(parsed, 'content_block_stop')
         if (stopIndex != null) {
           const toolKey = liveToolIndexesRef.current.get(stopIndex)
           if (toolKey) {
+            const accumulated = liveToolInputJsonRef.current.get(stopIndex)
+            const finalInput = accumulated ? parseClaudeStreamToolInput(accumulated) : null
+            if (finalInput) {
+              setLiveTranscriptMessages((prev) => updateLiveToolThreadInput(prev, toolKey, finalInput))
+            }
             setLiveToolActivities((prev) => prev.map((a) =>
               a.key === toolKey ? { ...a, status: 'done' } : a
             ))
             setLiveTranscriptMessages((prev) => completeLiveToolThread(prev, toolKey))
           }
+          liveToolInputJsonRef.current.delete(stopIndex)
+          liveToolIndexesRef.current.delete(stopIndex)
         }
 
         const openCodeToolThread = extractOpenCodeLiveToolThread(parsed, targetSession)
@@ -6136,6 +6187,7 @@ export default function OpenTuiApp() {
         if (composerInterruptPendingRef.current) {
           composerInterruptPendingRef.current = false
           liveToolIndexesRef.current.clear()
+          liveToolInputJsonRef.current.clear()
           if (liveTextFlushFrameRef.current != null) {
             cancelAnimationFrame(liveTextFlushFrameRef.current)
             liveTextFlushFrameRef.current = null
@@ -6148,6 +6200,7 @@ export default function OpenTuiApp() {
         setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
         setAwaitingPersistedTurn(false)
         liveToolIndexesRef.current.clear()
+        liveToolInputJsonRef.current.clear()
         if (liveTextFlushFrameRef.current != null) {
           cancelAnimationFrame(liveTextFlushFrameRef.current)
           liveTextFlushFrameRef.current = null
@@ -6175,6 +6228,7 @@ export default function OpenTuiApp() {
         liveTranscriptBaselineRef.current.delete(targetKey)
         setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
         liveToolIndexesRef.current.clear()
+        liveToolInputJsonRef.current.clear()
         if (composerRetryTimerRef.current) clearTimeout(composerRetryTimerRef.current)
         composerRetryTimerRef.current = setTimeout(() => {
           composerRetryTimerRef.current = null
@@ -6194,6 +6248,7 @@ export default function OpenTuiApp() {
       // the moment a keystroke flips error->idle (handleComposerContentChange).
       setQueuedComposerSend(null)
       liveToolIndexesRef.current.clear()
+      liveToolInputJsonRef.current.clear()
       composerTextareaRef.current?.setText(failedDraft)
       setComposerDraft(failedDraft)
     } finally {

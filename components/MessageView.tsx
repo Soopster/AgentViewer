@@ -21,7 +21,12 @@ import { buildThreadedMessages, buildThreadedMessagesIncremental, stripToolCallB
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
-import { extractClaudeStreamToolUse, normalizeClaudeStreamThreadedMessage } from '@/lib/claudeMapper'
+import {
+  extractClaudeStreamToolInputDelta,
+  extractClaudeStreamToolUse,
+  normalizeClaudeStreamThreadedMessage,
+  parseClaudeStreamToolInput,
+} from '@/lib/claudeMapper'
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '@/lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer'
@@ -688,6 +693,23 @@ function completeLiveToolThread(messages: ThreadedMessage[], key: string): Threa
           },
         }
       }),
+    }
+  })
+}
+
+function updateLiveToolThreadInput(
+  messages: ThreadedMessage[],
+  key: string,
+  input: Record<string, unknown>,
+): ThreadedMessage[] {
+  const targetUuid = `live-tool:${key}`
+  return messages.map((message) => {
+    if (message.uuid !== targetUuid) return message
+    return {
+      ...message,
+      blocks: message.blocks.map((block) => block.type === 'tool_thread'
+        ? { ...block, toolUse: { ...block.toolUse, input } }
+        : block),
     }
   })
 }
@@ -2145,6 +2167,7 @@ export default function MessageView({
   const liveSubagentTextRef = useRef<Record<string, string>>({})
   const liveSubagentFlushFrameRef = useRef<number | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
+  const liveToolInputJsonRef = useRef<Map<number, string>>(new Map())
   const rowHeightsRef = useRef<Map<string, number>>(new Map())
   const rowLayoutRef = useRef<TimelineRowLayout>(buildTimelineRowLayout([], new Map(), estimateTimelineRowHeight))
   const threadedCacheRef = useRef<Map<string, ThreadedMessage>>(new Map())
@@ -2636,6 +2659,7 @@ export default function MessageView({
     setPersistedMeasurementVersion(0)
     pendingMessageBaselineRef.current = null
     liveToolIndexesRef.current.clear()
+    liveToolInputJsonRef.current.clear()
     initialScrollDoneRef.current = false
   }, [clearLiveAssistantText, session?.sessionId])
 
@@ -2852,6 +2876,7 @@ export default function MessageView({
       setAwaitingPersistedTurn(false)
       pendingMessageBaselineRef.current = null
       liveToolIndexesRef.current.clear()
+      liveToolInputJsonRef.current.clear()
       if (autoFollow) {
         window.requestAnimationFrame(() => scrollTimelineToBottom())
       }
@@ -2874,6 +2899,7 @@ export default function MessageView({
       setAwaitingPersistedTurn(false)
       pendingMessageBaselineRef.current = null
       liveToolIndexesRef.current.clear()
+      liveToolInputJsonRef.current.clear()
     }, AWAITING_PERSISTED_TURN_TIMEOUT_MS)
     return () => window.clearTimeout(timer)
   }, [awaitingPersistedTurn, clearLiveAssistantText, clearLiveSubagentText])
@@ -2933,6 +2959,7 @@ export default function MessageView({
       clearLiveSubagentText()
       pendingMessageBaselineRef.current = null
       liveToolIndexesRef.current.clear()
+      liveToolInputJsonRef.current.clear()
     }
     textareaRef.current?.focus()
   }, [clearLiveAssistantText, clearLiveSubagentText, optimisticUserText, session])
@@ -2992,6 +3019,7 @@ export default function MessageView({
     setAutoFollow(true)
     pendingMessageBaselineRef.current = buildPendingMessageBaseline(messages, session.sessionId)
     liveToolIndexesRef.current.clear()
+    liveToolInputJsonRef.current.clear()
 
     window.requestAnimationFrame(resizeComposer)
 
@@ -3210,6 +3238,7 @@ export default function MessageView({
               turnProducedOutputRef.current = true
               if (parsed.type === 'stream_event') {
                 liveToolIndexesRef.current.set(toolStart.index, toolStart.key)
+                liveToolInputJsonRef.current.set(toolStart.index, '')
               }
               setLiveToolActivities((prev) => {
                 const existing = prev.filter((activity) => activity.key !== toolStart.key)
@@ -3231,6 +3260,19 @@ export default function MessageView({
               }
             }
 
+            const toolInputDelta = extractClaudeStreamToolInputDelta(parsed)
+            if (toolInputDelta) {
+              const toolKey = liveToolIndexesRef.current.get(toolInputDelta.index)
+              if (toolKey) {
+                const accumulated = `${liveToolInputJsonRef.current.get(toolInputDelta.index) ?? ''}${toolInputDelta.partialJson}`
+                liveToolInputJsonRef.current.set(toolInputDelta.index, accumulated)
+                const input = parseClaudeStreamToolInput(accumulated)
+                if (input) {
+                  setLiveThreadedMessages((prev) => updateLiveToolThreadInput(prev, toolKey, input))
+                }
+              }
+            }
+
             const completedToolKey = extractCompletedToolKey(parsed)
             if (completedToolKey) {
               setLiveToolActivities((prev) => prev.map((activity) =>
@@ -3247,6 +3289,11 @@ export default function MessageView({
             if (toolStopIndex != null && parsed.type !== 'codex_item_completed') {
               const activityKey = liveToolIndexesRef.current.get(toolStopIndex)
               if (activityKey) {
+                const accumulated = liveToolInputJsonRef.current.get(toolStopIndex)
+                const finalInput = accumulated ? parseClaudeStreamToolInput(accumulated) : null
+                if (finalInput) {
+                  setLiveThreadedMessages((prev) => updateLiveToolThreadInput(prev, activityKey, finalInput))
+                }
                 setLiveToolActivities((prev) => prev.map((activity) =>
                   activity.key === activityKey
                     ? { ...activity, status: 'done' }
@@ -3256,6 +3303,8 @@ export default function MessageView({
                   setLiveThreadedMessages((prev) => completeLiveToolThread(prev, activityKey))
                 }
               }
+              liveToolInputJsonRef.current.delete(toolStopIndex)
+              liveToolIndexesRef.current.delete(toolStopIndex)
             }
 
             const deltaText = extractStreamingAssistantText(parsed)
@@ -3349,6 +3398,7 @@ export default function MessageView({
         setLiveThreadedMessages([])
         clearLiveSubagentText()
         liveToolIndexesRef.current.clear()
+        liveToolInputJsonRef.current.clear()
         if (transientRetryTimerRef.current) clearTimeout(transientRetryTimerRef.current)
         transientRetryTimerRef.current = setTimeout(() => {
           transientRetryTimerRef.current = null
@@ -3374,6 +3424,7 @@ export default function MessageView({
       setAwaitingPersistedTurn(false)
       pendingMessageBaselineRef.current = null
       liveToolIndexesRef.current.clear()
+      liveToolInputJsonRef.current.clear()
       textareaRef.current?.focus()
     } finally {
       abortControllerRef.current = null

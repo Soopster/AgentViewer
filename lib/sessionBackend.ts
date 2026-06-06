@@ -3462,6 +3462,8 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
   const bangShell = userMessage.startsWith('!') && attachments.length === 0
     ? userMessage.slice(1).trim()
     : null
+  const codexSlash = attachments.length === 0 ? parseOpenCodeSlashCommand(userMessage) : null
+  const isCompactCommand = codexSlash?.command.toLowerCase() === 'compact'
   const detachOnClientAbort = body.detachOnClientAbort === true
   const client = getCodexClient()
   const encoder = new TextEncoder()
@@ -3475,7 +3477,8 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       let downstreamClosed = false
       let completionSeen = false
       let bufferedTurnCompleted = false
-      let turnStartRequested = false
+      let targetTurnObserved = false
+      let directOperationStarted = false
       let completionCloseTimer: ReturnType<typeof setTimeout> | null = null
 
       const safeEnqueue = (chunk: string) => {
@@ -3567,6 +3570,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         for (const notification of bufferedNotifications.splice(0)) {
           const bufferedTurnId = getCodexNotificationTurnId(notification)
           if (bufferedTurnId && bufferedTurnId !== turnId) continue
+          if (bufferedTurnId === turnId) targetTurnObserved = true
           if (notification.method === 'turn/completed') {
             bufferedTurnCompleted = true
             continue
@@ -3617,8 +3621,34 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           const notification = harnessEvent.notification
           const notificationTurnId = getCodexNotificationTurnId(notification)
 
+          if (!targetTurnId && directOperationStarted) {
+            if (notification.method === 'error') {
+              const params = notification.params as ErrorNotification
+              const message = params.error?.message || 'Codex operation failed'
+              safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`)
+              if (!params.willRetry) {
+                scheduleCompletionClose(unsubscribe)
+              }
+              continue
+            }
+            if (isCodexIdleStatusNotification(notification, sessionId)) {
+              scheduleCompletionClose(unsubscribe)
+              continue
+            }
+            if (isCodexRealtimeNotification(notification)) {
+              flushNotification(notification)
+              if (notification.method === 'item/completed') {
+                scheduleCompletionClose(unsubscribe)
+              }
+            }
+            continue
+          }
+
           if (notification.method === 'thread/tokenUsage/updated') {
-            if (!targetTurnId && notificationTurnId) activateTargetTurn(notificationTurnId)
+            if (!targetTurnId) {
+              bufferedNotifications.push(notification)
+              continue
+            }
             if (!targetTurnId || notificationTurnId !== targetTurnId) continue
             const usage = mapCodexTokenUsageToContextUsage(
               (notification.params as ThreadTokenUsageUpdatedNotification).tokenUsage,
@@ -3629,26 +3659,23 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           }
 
           if (!targetTurnId) {
+            // `turn/start` is the authoritative source of the new turn id.
+            // The shared app-server can still deliver trailing notifications
+            // from the previous turn while this request is in flight; binding
+            // to one of those would filter out every delta from the real turn.
             if (notificationTurnId) {
-              activateTargetTurn(notificationTurnId)
-            } else if (isCodexRealtimeNotification(notification)) {
-              flushNotification(notification)
-              if (bangShell !== null && notification.method === 'item/completed') {
-                scheduleCompletionClose(unsubscribe)
-              }
-              continue
-            } else if (notification.method === 'thread/status/changed' && !turnStartRequested) {
-              continue
-            } else {
               bufferedNotifications.push(notification)
-              continue
             }
+            continue
           }
 
-          if (notificationTurnId && notificationTurnId !== targetTurnId) continue
+          if (notificationTurnId) {
+            if (notificationTurnId !== targetTurnId) continue
+            targetTurnObserved = true
+          }
 
           if (isCodexIdleStatusNotification(notification, sessionId)) {
-            scheduleCompletionClose(unsubscribe)
+            if (targetTurnObserved) scheduleCompletionClose(unsubscribe)
             continue
           }
 
@@ -3704,6 +3731,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
 
         if (bangShell !== null) {
           if (!bangShell) throw new Error('Enter a shell command after !')
+          directOperationStarted = true
           await client.request('thread/shellCommand', {
             threadId: sessionId,
             command: bangShell,
@@ -3714,14 +3742,13 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         // Execute native Codex slash commands instead of leaking the literal
         // "/command" into the model prompt. The thread goes idle after the
         // command, which closes the stream via the existing idle handler.
-        const codexSlash = attachments.length === 0 ? parseOpenCodeSlashCommand(userMessage) : null
-        if (codexSlash && codexSlash.command.toLowerCase() === 'compact') {
+        if (isCompactCommand) {
+          directOperationStarted = true
           await client.request('thread/compact/start', { threadId: sessionId })
           safeEnqueue(commandResultEvent('codex', { message: 'Compacting the conversation…' }))
           return
         }
 
-        turnStartRequested = true
         const started = await client.request<CodexTurnStartResponse>('turn/start', {
           threadId: sessionId,
           model: model ?? undefined,

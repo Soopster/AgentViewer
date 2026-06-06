@@ -327,3 +327,110 @@ export function extractClaudeStreamToolUse(value: unknown): ToolUseBlock | null 
     input: asObject(contentBlock.input),
   }
 }
+
+export function extractClaudeStreamToolInputDelta(value: unknown): { index: number; partialJson: string } | null {
+  const record = asObject(value)
+  if (record.type !== 'stream_event') return null
+
+  const event = asObject(record.event)
+  if (event.type !== 'content_block_delta' || typeof event.index !== 'number') return null
+  const delta = asObject(event.delta)
+  if (delta.type !== 'input_json_delta' || typeof delta.partial_json !== 'string') return null
+
+  return {
+    index: event.index,
+    partialJson: delta.partial_json,
+  }
+}
+
+function closePartialJson(raw: string): string | null {
+  const stack: Array<'}' | ']'> = []
+  let inString = false
+  let escaped = false
+  let unicodeDigitsRemaining = 0
+
+  for (const char of raw) {
+    if (inString) {
+      if (unicodeDigitsRemaining > 0) {
+        if (/^[0-9a-f]$/i.test(char)) {
+          unicodeDigitsRemaining -= 1
+          continue
+        }
+        unicodeDigitsRemaining = 0
+      }
+      if (escaped) {
+        escaped = false
+        if (char === 'u') unicodeDigitsRemaining = 4
+        continue
+      }
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      if (char === '"') inString = false
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+    } else if (char === '{') {
+      stack.push('}')
+    } else if (char === '[') {
+      stack.push(']')
+    } else if (char === '}' || char === ']') {
+      if (stack.at(-1) !== char) return null
+      stack.pop()
+    }
+  }
+
+  let repaired = raw.trimEnd()
+  if (inString) {
+    if (escaped) repaired = repaired.slice(0, -1)
+    if (unicodeDigitsRemaining > 0) {
+      const unicodeStart = repaired.lastIndexOf('\\u')
+      if (unicodeStart >= 0) repaired = repaired.slice(0, unicodeStart)
+    }
+    repaired += '"'
+  }
+  return repaired + [...stack].reverse().join('')
+}
+
+function parseObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Parse the accumulated `input_json_delta` buffer into the best available tool
+ * input snapshot. The raw stream is always retained by the caller; this helper
+ * only repairs a copy, so a later delta or the final assistant message remains
+ * authoritative.
+ */
+export function parseClaudeStreamToolInput(raw: string): Record<string, unknown> | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return {}
+
+  const exact = parseObject(trimmed)
+  if (exact) return exact
+
+  const closed = closePartialJson(trimmed)
+  if (!closed) return null
+
+  const direct = parseObject(closed)
+  if (direct) return direct
+
+  // Deltas can end immediately after a key separator or comma. Complete or
+  // remove only that dangling token, then close the surrounding containers.
+  const withoutClosers = closed.replace(/[}\]]+$/g, '')
+  const withNullValue = parseObject(`${withoutClosers.replace(/:\s*$/, ': null')}${closed.slice(withoutClosers.length)}`)
+  if (withNullValue) return withNullValue
+
+  const withoutComma = withoutClosers.replace(/,\s*$/, '')
+  return parseObject(`${withoutComma}${closed.slice(withoutClosers.length)}`)
+}
