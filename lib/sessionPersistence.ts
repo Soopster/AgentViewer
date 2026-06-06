@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { priceForModel } from './analytics'
 import { timeAsync } from './perfLog'
+import { runReadRows } from './sqliteWorkerClient'
 import { isAgentProvider } from './provider'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from './projectPaths'
 import type { AgentProvider, ApiMessage, ContentBlock, Session, SessionMessage, SystemMessagePayload } from './types'
@@ -596,7 +597,7 @@ function selectAllSessions(db: SqliteDatabase): PersistedSessionRecord[] {
 // Pre-narrows the sessions table in SQL using indexed columns when possible,
 // then re-applies matchesFilters() in JS for cases SQL can't express
 // (sameProjectPath's basename-suffix branch when includeWorktrees=true).
-function selectFilteredSessions(db: SqliteDatabase, filters: PersistedIndexFilters): PersistedSessionRecord[] {
+async function selectFilteredSessions(db: SqliteDatabase, filters: PersistedIndexFilters): Promise<PersistedSessionRecord[]> {
   const where: string[] = []
   const params: unknown[] = []
   if (filters.provider && filters.provider !== 'all') {
@@ -611,7 +612,7 @@ function selectFilteredSessions(db: SqliteDatabase, filters: PersistedIndexFilte
   const sql = where.length === 0
     ? 'SELECT * FROM sessions'
     : `SELECT * FROM sessions WHERE ${where.join(' AND ')}`
-  const rows = db.prepare(sql).all(...params) as Row[]
+  const rows = await runReadRows(DB_FILE, sql, params, () => db.prepare(sql).all(...params) as Row[]) as Row[]
   const records: PersistedSessionRecord[] = []
   for (const row of rows) {
     const session = rowToSessionRecord(row)
@@ -1444,12 +1445,13 @@ const MESSAGE_CANDIDATE_GLOBAL_LIMIT = 4000
 
 // Fetches specific session rows by primary key — used by the messagesOnly
 // fast path so we only hydrate sessions referenced by matched messages.
-function selectSessionsByKeys(db: SqliteDatabase, keys: string[]): PersistedSessionRecord[] {
+async function selectSessionsByKeys(db: SqliteDatabase, keys: string[]): Promise<PersistedSessionRecord[]> {
   if (keys.length === 0) return []
   const records: PersistedSessionRecord[] = []
   for (const chunk of chunkArray(keys, 500)) {
     const placeholders = chunk.map(() => '?').join(', ')
-    const rows = db.prepare(`SELECT * FROM sessions WHERE key IN (${placeholders})`).all(...chunk) as Row[]
+    const sql = `SELECT * FROM sessions WHERE key IN (${placeholders})`
+    const rows = await runReadRows(DB_FILE, sql, chunk, () => db.prepare(sql).all(...chunk) as Row[]) as Row[]
     for (const row of rows) {
       const session = rowToSessionRecord(row)
       if (session) records.push(session)
@@ -1461,12 +1463,12 @@ function selectSessionsByKeys(db: SqliteDatabase, keys: string[]): PersistedSess
 // Variant of selectMessageCandidates that doesn't constrain to a session list.
 // Used when messagesOnly is set and no session filter narrows the search,
 // avoiding a hydrate-every-session-then-IN round trip.
-function selectMessageCandidatesGlobal(
+async function selectMessageCandidatesGlobal(
   db: SqliteDatabase,
   normalizedQuery: string,
   role?: SessionMessage['type'],
   toolName?: string,
-): PersistedMessageRecord[] {
+): Promise<PersistedMessageRecord[]> {
   if (!normalizedQuery) return []
   const clauses: string[] = []
   const queryParams: unknown[] = []
@@ -1482,13 +1484,14 @@ function selectMessageCandidatesGlobal(
   queryParams.push(`%${escapeLike(normalizedQuery)}%`)
   queryParams.push(MESSAGE_CANDIDATE_GLOBAL_LIMIT)
   const where = clauses.length === 0 ? '' : `WHERE ${clauses.join(' AND ')}`
-  const rows = db.prepare(`
+  const sql = `
     SELECT m.*
     FROM messages m
     ${where}
     ORDER BY m.timestamp_ms DESC
     LIMIT ?
-  `).all(...queryParams) as Row[]
+  `
+  const rows = await runReadRows(DB_FILE, sql, queryParams, () => db.prepare(sql).all(...queryParams) as Row[]) as Row[]
   const records: PersistedMessageRecord[] = []
   for (const row of rows) {
     const message = rowToMessageRecord(row)
@@ -1497,14 +1500,14 @@ function selectMessageCandidatesGlobal(
   return records
 }
 
-function selectMessageCandidates(
+async function selectMessageCandidates(
   db: SqliteDatabase,
   sessionKeys: string[],
   normalizedQuery: string,
   _terms: string[],
   role?: SessionMessage['type'],
   toolName?: string,
-): PersistedMessageRecord[] {
+): Promise<PersistedMessageRecord[]> {
   if (sessionKeys.length === 0 || !normalizedQuery) return []
   const candidates: PersistedMessageRecord[] = []
   const chunks = chunkArray(sessionKeys, 500)
@@ -1526,13 +1529,14 @@ function selectMessageCandidates(
     clauses.push("m.text LIKE ? ESCAPE '\\' COLLATE NOCASE")
     queryParams.push(`%${escapeLike(normalizedQuery)}%`)
     queryParams.push(remaining)
-    const rows = db.prepare(`
+    const sql = `
       SELECT m.*
       FROM messages m
       WHERE ${clauses.join(' AND ')}
       ORDER BY m.timestamp_ms DESC
       LIMIT ?
-    `).all(...queryParams) as Row[]
+    `
+    const rows = await runReadRows(DB_FILE, sql, queryParams, () => db.prepare(sql).all(...queryParams) as Row[]) as Row[]
 
     for (const row of rows) {
       const message = rowToMessageRecord(row)
@@ -1582,12 +1586,12 @@ async function searchPersistedSessionsImpl(params: PersistedSearchParams): Promi
   let sessions: PersistedSessionRecord[]
   let candidates: PersistedMessageRecord[]
   if (messagesOnly && !hasSessionFilter) {
-    candidates = selectMessageCandidatesGlobal(db, normalizedQuery, params.role, params.toolName)
+    candidates = await selectMessageCandidatesGlobal(db, normalizedQuery, params.role, params.toolName)
     const candidateSessionKeys = [...new Set(candidates.map((message) => message.sessionKey))]
-    sessions = selectSessionsByKeys(db, candidateSessionKeys)
+    sessions = await selectSessionsByKeys(db, candidateSessionKeys)
   } else {
-    sessions = selectFilteredSessions(db, params)
-    candidates = selectMessageCandidates(db, sessions.map((session) => session.key), normalizedQuery, terms, params.role, params.toolName)
+    sessions = await selectFilteredSessions(db, params)
+    candidates = await selectMessageCandidates(db, sessions.map((session) => session.key), normalizedQuery, terms, params.role, params.toolName)
   }
   const sessionByKey = new Map(sessions.map((session) => [session.key, session]))
   const resultsBySession = new Map<string, PersistedSearchResult>()
@@ -1647,7 +1651,7 @@ export function readPersistedIndexStats(filters: PersistedIndexFilters = {}): Pr
 async function readPersistedIndexStatsImpl(filters: PersistedIndexFilters = {}): Promise<PersistedIndexStats> {
   if (persistenceDisabled()) return emptyStats()
   const db = await getDatabase()
-  const sessions = selectFilteredSessions(db, filters)
+  const sessions = await selectFilteredSessions(db, filters)
   if (sessions.length === 0) return emptyStats()
 
   const stats = emptyStats()
@@ -1824,7 +1828,7 @@ async function readCrossSessionAnalyticsImpl(
 ): Promise<CrossSessionAnalytics> {
   if (persistenceDisabled()) return emptyCrossSessionAnalytics()
   const db = await getDatabase()
-  const sessions = selectFilteredSessions(db, filters)
+  const sessions = await selectFilteredSessions(db, filters)
   if (sessions.length === 0) {
     const empty = emptyCrossSessionAnalytics()
     empty.range = { from: filters.from ?? null, to: filters.to ?? null }
