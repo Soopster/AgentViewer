@@ -3058,12 +3058,16 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
       controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: entry.sessionId })}\n\n`))
 
       // Cheap freebie: the persistent Query lets us read context usage without
-      // spinning up a subprocess. The cold path had to call this on a fresh
-      // Query too.
-      try {
-        const usage = await entry.query.getContextUsage()
-        controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
-      } catch {}
+      // spinning up a subprocess. Fire it WITHOUT awaiting so the turn starts
+      // immediately — blocking here adds a control-RPC round-trip to first-token
+      // latency. The usage frame is enqueued out-of-band when it resolves.
+      void entry.query.getContextUsage()
+        .then((usage) => {
+          try {
+            controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+          } catch { /* downstream already closed */ }
+        })
+        .catch(() => {})
 
       // Per-turn bridge for interactive permission approvals. Installed into the
       // pool entry's bridgeBox so the warm subprocess routes permission requests
