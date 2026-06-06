@@ -155,6 +155,7 @@ import {
   mapOpenCodeSessionToInfo,
   mapOpenCodeSessionToSession,
   summarizeOpenCodeDiffs,
+  updateOpenCodeTurnOutputUsage,
 } from './opencodeMapper'
 import { getOpenCodeStoredTag, getOpenCodeStoredTagsForSessions, setOpenCodeStoredTag } from './opencodeTags'
 import type {
@@ -3817,6 +3818,8 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
       let consumeEvents: Promise<void> | null = null
       let lastActivityAt = Date.now()
       let cancelWatchdog: (() => void) | null = null
+      const outputTokensByMessageId = new Map<string, number>()
+      let turnOutputTokens = 0
       // Subscribe to the shared event harness — one upstream connection
       // per process, multiplexed by session. Filter on the original session
       // id first; if we end up forking we'll resubscribe to the new id.
@@ -3923,6 +3926,12 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
               if (usage) {
                 safeEnqueue(codexContextUsageToEventData(usage))
               }
+              turnOutputTokens = updateOpenCodeTurnOutputUsage(
+                outputTokensByMessageId,
+                event.properties.info,
+                turnOutputTokens,
+              )
+              safeEnqueue(turnUsageToEventData(turnOutputTokens))
             }
 
             if (event.type === 'session.status') {
@@ -4081,7 +4090,9 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
       // than the 1.5s assistant.message heuristic / session.idle / history poll).
       let currentTurnId: string | null = null
       const streamedAssistantMessageIds = new Set<string>()
+      const seenUsageEventIds = new Set<string>()
       const bridgedPermissionIds = new Set<string>()
+      let turnOutputTokens = 0
 
       const safeEnqueue = (chunk: string) => {
         if (downstreamClosed) return
@@ -4171,7 +4182,14 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
           if (event.type === 'assistant.usage') {
             const usage = mapCopilotUsageToContextUsage(event, modelsById, activeContextTier)
-            if (usage) safeEnqueue(codexContextUsageToEventData(usage))
+            if (usage) {
+              safeEnqueue(codexContextUsageToEventData(usage))
+              if (!seenUsageEventIds.has(event.id)) {
+                seenUsageEventIds.add(event.id)
+                turnOutputTokens += Math.max(0, event.data.outputTokens ?? 0)
+                safeEnqueue(turnUsageToEventData(turnOutputTokens))
+              }
+            }
           }
 
           if (event.type === 'session.error') {
@@ -4466,6 +4484,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
       let broadcastedTurnStart = false
       let targetSessionId = sessionId
       let unsubscribePi: (() => void) | undefined
+      let turnOutputTokens = 0
 
       const safeEnqueue = (chunk: string) => {
         if (downstreamClosed) return
@@ -4662,6 +4681,11 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           recordPiLiveTranscriptEvent(targetSessionId, agentEvent)
           broadcastLiveSessionActivity('pi', targetSessionId)
           safeEnqueue(`data: ${JSON.stringify({ type: 'pi_event', event: agentEvent })}\n\n`)
+
+          if (event.type === 'message_end' && event.message.role === 'assistant') {
+            turnOutputTokens += Math.max(0, event.message.usage.output)
+            safeEnqueue(turnUsageToEventData(turnOutputTokens))
+          }
 
           if (event.type === 'agent_end') {
             // Terminal turn end. Only a genuine 'error' stopReason (rate limit /

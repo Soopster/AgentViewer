@@ -311,6 +311,18 @@ export function mapOpenCodeContextUsage(message?: Message): ContextUsage | null 
   }
 }
 
+export function updateOpenCodeTurnOutputUsage(
+  outputByMessageId: Map<string, number>,
+  message: Message,
+  currentTotal: number,
+): number {
+  if (message.role !== 'assistant') return currentTotal
+  const nextOutput = Math.max(0, message.tokens.output)
+  const previousOutput = outputByMessageId.get(message.id) ?? 0
+  outputByMessageId.set(message.id, nextOutput)
+  return Math.max(0, currentTotal - previousOutput + nextOutput)
+}
+
 export function mapOpenCodeDiagnosticsToSections(params: {
   providers: ConfigProvidersResponse
   commands: CommandListResponse

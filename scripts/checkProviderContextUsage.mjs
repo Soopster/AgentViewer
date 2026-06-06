@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
 
 import { mapCopilotUsageToContextUsage } from '../lib/copilotMapper.ts'
-import { mapOpenCodeContextUsage } from '../lib/opencodeMapper.ts'
+import {
+  mapOpenCodeContextUsage,
+  updateOpenCodeTurnOutputUsage,
+} from '../lib/opencodeMapper.ts'
 
-const openCodeUsage = mapOpenCodeContextUsage({
+const openCodeUsageMessage = {
   id: 'message',
   sessionID: 'session',
   role: 'assistant',
@@ -22,9 +25,28 @@ const openCodeUsage = mapOpenCodeContextUsage({
     reasoning: 0,
     cache: { read: 18_000, write: 0 },
   },
-})
+}
+const openCodeUsage = mapOpenCodeContextUsage(openCodeUsageMessage)
 
 assert.equal(openCodeUsage?.totalTokens, 20_100, 'OpenCode should use its normalized total without double-counting cached input')
+
+const openCodeOutputByMessage = new Map()
+let openCodeTurnOutput = updateOpenCodeTurnOutputUsage(
+  openCodeOutputByMessage,
+  { ...openCodeUsageMessage, id: 'assistant-1', tokens: { ...openCodeUsageMessage.tokens, output: 75 } },
+  0,
+)
+openCodeTurnOutput = updateOpenCodeTurnOutputUsage(
+  openCodeOutputByMessage,
+  { ...openCodeUsageMessage, id: 'assistant-1', tokens: { ...openCodeUsageMessage.tokens, output: 100 } },
+  openCodeTurnOutput,
+)
+openCodeTurnOutput = updateOpenCodeTurnOutputUsage(
+  openCodeOutputByMessage,
+  { ...openCodeUsageMessage, id: 'assistant-2', tokens: { ...openCodeUsageMessage.tokens, output: 40 } },
+  openCodeTurnOutput,
+)
+assert.equal(openCodeTurnOutput, 140, 'OpenCode message snapshots should replace prior counts and sum model passes')
 
 const models = new Map([
   ['claude-sonnet', {
