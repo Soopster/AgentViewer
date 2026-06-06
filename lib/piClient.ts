@@ -1,11 +1,21 @@
-import {
+import type {
   SessionManager,
-  type SessionInfo as PiSessionInfo,
-  type SessionEntry,
-  createAgentSession,
-  type AgentSession,
+  SessionInfo as PiSessionInfo,
+  SessionEntry,
+  AgentSession,
 } from '@earendil-works/pi-coding-agent'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
+
+// The Pi SDK is ~86MB resident once loaded (measured) — by far the heaviest
+// provider SDK. Import it lazily and cache the module so a Claude/Codex/etc.
+// session never pays for Pi just because sessionBackend imports this module.
+// All runtime SDK access goes through loadPiSdk(); the imports above are
+// type-only (erased at compile time, zero runtime cost).
+type PiSdk = typeof import('@earendil-works/pi-coding-agent')
+let piSdkPromise: Promise<PiSdk> | null = null
+function loadPiSdk(): Promise<PiSdk> {
+  return (piSdkPromise ??= import('@earendil-works/pi-coding-agent'))
+}
 
 // Cache session ID → file path mappings (populated on list, refreshed on miss)
 const sessionPathCache = new Map<string, string>()
@@ -32,6 +42,7 @@ export type PiSessionListEntry = PiSessionInfo
 
 export async function listPiSessions(cwd?: string): Promise<PiSessionListEntry[]> {
   try {
+    const { SessionManager } = await loadPiSdk()
     const sessions = cwd
       ? await SessionManager.list(cwd, process.env.PI_SESSION_DIR)
       : await SessionManager.listAll()
@@ -44,20 +55,21 @@ export async function listPiSessions(cwd?: string): Promise<PiSessionListEntry[]
   }
 }
 
-export function openPiSessionManager(sessionId: string): SessionManager {
+export async function openPiSessionManager(sessionId: string): Promise<SessionManager> {
   const sessionPath = sessionPathCache.get(sessionId)
   if (!sessionPath) {
     throw new Error(`Pi session not found: ${sessionId}. Try refreshing the session list.`)
   }
   try {
+    const { SessionManager } = await loadPiSdk()
     return SessionManager.open(sessionPath, process.env.PI_SESSION_DIR)
   } catch (error) {
     throw wrapPiError(error)
   }
 }
 
-export function getPiSessionMessages(sessionId: string): AgentMessage[] {
-  const sm = openPiSessionManager(sessionId)
+export async function getPiSessionMessages(sessionId: string): Promise<AgentMessage[]> {
+  const sm = await openPiSessionManager(sessionId)
   const entries = sm.getBranch()
   const messages: AgentMessage[] = []
   for (const entry of entries) {
@@ -68,13 +80,14 @@ export function getPiSessionMessages(sessionId: string): AgentMessage[] {
   return messages
 }
 
-export function getPiSessionEntries(sessionId: string): SessionEntry[] {
-  const sm = openPiSessionManager(sessionId)
+export async function getPiSessionEntries(sessionId: string): Promise<SessionEntry[]> {
+  const sm = await openPiSessionManager(sessionId)
   return sm.getBranch()
 }
 
 export async function createPiAgentSession(cwd: string, options: { id?: string } = {}): Promise<AgentSession> {
   try {
+    const { SessionManager, createAgentSession } = await loadPiSdk()
     const sessionManager = options.id
       ? SessionManager.create(cwd, process.env.PI_SESSION_DIR, { id: options.id })
       : undefined
@@ -154,8 +167,9 @@ export async function openPiAgentSession(sessionId: string): Promise<AgentSessio
     schedulePiEviction(sessionId)
     return cached.session
   }
-  const sm = openPiSessionManager(sessionId)
+  const sm = await openPiSessionManager(sessionId)
   try {
+    const { createAgentSession } = await loadPiSdk()
     const result = await createAgentSession({ sessionManager: sm })
     const entry: PiPoolEntry = {
       session: result.session,
@@ -182,6 +196,7 @@ export function evictPiAgentSession(sessionId: string): void {
 }
 
 export async function refreshPiSessionCache(cwd?: string): Promise<void> {
+  const { SessionManager } = await loadPiSdk()
   const sessions = cwd
     ? await SessionManager.list(cwd, process.env.PI_SESSION_DIR)
     : await SessionManager.listAll()
@@ -190,8 +205,8 @@ export async function refreshPiSessionCache(cwd?: string): Promise<void> {
   }
 }
 
-export function forkPiSession(sessionId: string, entryId: string): string | undefined {
-  const sm = openPiSessionManager(sessionId)
+export async function forkPiSession(sessionId: string, entryId: string): Promise<string | undefined> {
+  const sm = await openPiSessionManager(sessionId)
   sm.branch(entryId)
   const leafId = sm.getLeafId()
   if (!leafId) return undefined

@@ -2076,7 +2076,7 @@ export async function readViewSessionInfo(sessionId: string, providerOverride?: 
     ])
     const info = sessions.find((s) => s.id === sessionId)
     if (!info) return null
-    const messages = getPiSessionMessages(sessionId)
+    const messages = await getPiSessionMessages(sessionId)
     return mapPiSessionToInfo(info, stored, messages)
   }
 
@@ -2466,8 +2466,8 @@ async function readCopilotMessagesAll(sessionId: string): Promise<SessionMessage
   return writeMappedMessagesCache(`copilot:${sessionId}`, signature, messages)
 }
 
-function readPiMessagesAll(sessionId: string): SessionMessage[] {
-  const raw = getPiSessionMessages(sessionId)
+async function readPiMessagesAll(sessionId: string): Promise<SessionMessage[]> {
+  const raw = await getPiSessionMessages(sessionId)
   const live = getPiLiveTranscriptMessages(sessionId, raw)
   const mergedRaw = live.length > 0 ? [...raw, ...live] : raw
   const last = raw.at(-1) as { id?: string; role?: string } | undefined
@@ -2512,7 +2512,7 @@ async function listViewSessionMessageWindowImpl(sessionId: string, params: Messa
     return windowForParams(messages, params)
   }
   if (provider === 'pi') {
-    messages = readPiMessagesAll(sessionId)
+    messages = await readPiMessagesAll(sessionId)
     await syncMessagesBestEffort(provider, sessionId, messages)
     return windowForParams(messages, params)
   }
@@ -4852,7 +4852,7 @@ export async function forkViewSession({ sessionId, body, provider }: ForkParams)
     if (!entryId) {
       throw new Error('upToMessageId is required for Pi fork')
     }
-    const newId = forkPiSession(sessionId, entryId)
+    const newId = await forkPiSession(sessionId, entryId)
     if (!newId) {
       throw new Error('Failed to fork Pi session')
     }
@@ -4974,7 +4974,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
     }
   }
   if (provider === 'pi') {
-    const messages = getPiSessionMessages(sessionId)
+    const messages = await getPiSessionMessages(sessionId)
     let currentModel: string | undefined
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i] as { role: string; model?: string }
@@ -5257,7 +5257,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
     }
   }
   if (provider === 'pi') {
-    const entries = getPiSessionEntries(sessionId)
+    const entries = await getPiSessionEntries(sessionId)
     let currentModel: string | undefined
     let thinkingLevel: string | undefined
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -5277,7 +5277,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
       if (currentModel && thinkingLevel !== undefined) break
     }
 
-    const sm = openPiSessionManager(sessionId)
+    const sm = await openPiSessionManager(sessionId)
     const sessionFile = sm.getSessionFile()
     const cwd = sm.getCwd()
     const agentSession = await openPiAgentSession(sessionId)
