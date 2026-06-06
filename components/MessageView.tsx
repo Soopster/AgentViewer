@@ -3109,6 +3109,19 @@ export default function MessageView({
             continue
           }
 
+          // Non-fatal turn notice (e.g. an MCP elicitation prompt). Unlike
+          // command-result, this must NOT clear the live turn state — the turn
+          // is still running; we just surface a transient banner.
+          if (frame.event === 'turn-notice') {
+            try {
+              const parsed = JSON.parse(frame.data) as { message?: unknown }
+              if (typeof parsed.message === 'string' && parsed.message.trim()) {
+                setSessionActionNotice(parsed.message.trim())
+              }
+            } catch { /* ignore malformed notice */ }
+            continue
+          }
+
           if (frame.event === 'command-result') {
             try {
               const parsed = JSON.parse(frame.data) as { message?: unknown; mode?: unknown }

@@ -1,12 +1,27 @@
 import {
   query,
   type CanUseTool,
+  type ElicitationRequest,
+  type ElicitationResult,
   type PermissionMode,
   type Query,
   type SDKMessage,
   type SDKSessionStateChangedMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
+
+// Per-turn MCP elicitation handler. Mirrors the canUseTool bridge: the warm
+// Query's onElicitation delegates to this so the long-lived subprocess can route
+// each turn's elicitation requests through the current turn's SSE controller.
+export type ClaudeElicitationHandler = (
+  request: ElicitationRequest,
+  options: { signal: AbortSignal },
+) => Promise<ElicitationResult>
+
+// Mutable per-turn bridge box shared between the cold-path query and the pooled
+// entry (so an adopted cold Query keeps routing through it). `fn` handles tool
+// permissions; `elicit` handles MCP elicitation. Both are swapped per turn.
+export type ClaudeBridgeBox = { fn: CanUseTool | null; elicit: ClaudeElicitationHandler | null }
 import type { ReasoningEffortLevel } from './types'
 import {
   broadcastClaudeMessage,
@@ -64,6 +79,25 @@ export const CLAUDE_QUERY_ENV: Record<string, string | undefined> = {
   CLAUDE_STREAM_IDLE_TIMEOUT_MS: '300000',
 }
 
+// Surface the Claude CLI subprocess's stderr (otherwise dropped) so a genuinely
+// stuck or erroring subprocess is debuggable. Rate-limited per session so a
+// chatty process can't flood server logs.
+const claudeStderrWindows = new Map<string, { count: number; windowStart: number }>()
+export function logClaudeSubprocessStderr(sessionId: string, data: string): void {
+  const text = data.trim()
+  if (!text) return
+  const now = Date.now()
+  const win = claudeStderrWindows.get(sessionId)
+  if (!win || now - win.windowStart > 10_000) {
+    claudeStderrWindows.set(sessionId, { count: 1, windowStart: now })
+  } else {
+    win.count += 1
+    if (win.count === 21) console.warn(`[claude ${sessionId}] stderr rate-limited (>20 lines/10s)`)
+    if (win.count >= 21) return
+  }
+  console.warn(`[claude ${sessionId}] stderr: ${text.length > 500 ? `${text.slice(0, 500)}…` : text}`)
+}
+
 export type ClaudePoolAcquireOptions = {
   /** Real session id. Callers must NOT pool pending sessions in phase 1. */
   sessionId: string
@@ -118,6 +152,8 @@ export type ClaudePoolRunOptions = {
    * without recycling the warm Query between turns.
    */
   bridge?: CanUseTool
+  /** Per-turn MCP elicitation handler, installed/cleared alongside `bridge`. */
+  elicit?: ClaudeElicitationHandler
 }
 
 type Subscriber = {
@@ -150,11 +186,11 @@ type InternalEntry = {
   lastActivityAt: number
   alive: boolean
   /**
-   * Mutable per-turn bridge. The query's canUseTool delegates to this so the
-   * warm subprocess can be reused across turns while routing each turn's
-   * permission requests through the correct SSE stream controller.
+   * Mutable per-turn bridge. The query's canUseTool / onElicitation delegate to
+   * this so the warm subprocess can be reused across turns while routing each
+   * turn's permission + elicitation requests through the correct SSE controller.
    */
-  bridgeBox: { fn: CanUseTool | null }
+  bridgeBox: ClaudeBridgeBox
 }
 
 // Init/state messages emitted between session spawn and the first subscriber
@@ -202,13 +238,14 @@ class ClaudePool {
     // Mutable per-turn bridge. The canUseTool delegation below routes through
     // this so permission requests reach the correct SSE stream controller for
     // each turn while the underlying subprocess stays warm.
-    const bridgeBox: { fn: CanUseTool | null } = { fn: null }
+    const bridgeBox: ClaudeBridgeBox = { fn: null, elicit: null }
 
     const effortOptions = effortToSdk(opts.effort)
     const q = query({
       prompt: iterable,
       options: {
         env: CLAUDE_QUERY_ENV,
+        stderr: (data) => logClaudeSubprocessStderr(opts.sessionId, data),
         ...(opts.forkSession ? {} : { resume: opts.sessionId }),
         ...(opts.cwd ? { cwd: opts.cwd } : {}),
         ...(opts.model ? { model: opts.model } : {}),
@@ -221,6 +258,10 @@ class ClaudePool {
           bridgeBox.fn
             ? bridgeBox.fn(toolName, input, toolOpts)
             : Promise.resolve({ behavior: 'allow' as const, updatedInput: input }),
+        onElicitation: (request, elicitOpts) =>
+          bridgeBox.elicit
+            ? bridgeBox.elicit(request, elicitOpts)
+            : Promise.resolve({ action: 'decline' as const }),
         ...effortOptions,
         enableFileCheckpointing: true,
         resumeSessionAt: opts.resumeSessionAt,
@@ -312,23 +353,30 @@ class ClaudePool {
     // either succeeds (giving the caller what they asked for) or surfaces a
     // real error to the caller. Swallowing leaves the snapshot stale and
     // the UX confused.
-    if (opts.model && opts.model !== entry.state.model) {
-      try {
-        await entry.query.setModel(opts.model)
-        entry.state.model = opts.model
-      } catch {
-        this.recycleInternal(entry, 'set-model-failed')
-        return
-      }
-    }
-    if (opts.permissionMode && opts.permissionMode !== entry.state.permissionMode) {
-      try {
-        await entry.query.setPermissionMode(opts.permissionMode)
-        entry.state.permissionMode = opts.permissionMode
-      } catch {
-        this.recycleInternal(entry, 'set-permission-mode-failed')
-      }
-    }
+    // Apply model + permission changes concurrently rather than as two serial
+    // round-trips on the settings path. We keep the dedicated setModel /
+    // setPermissionMode methods (rather than batching via applyFlagSettings):
+    // permissionMode is security-sensitive and the SDK's typed
+    // applyFlagSettings surface routes it through `permissions.defaultMode`,
+    // whose equivalence to setPermissionMode isn't guaranteed — a silent
+    // mismatch there wouldn't trip the recycle-on-failure guard. effortLevel
+    // isn't in the typed Settings surface at all, so it still recycles via
+    // compatible(). Concurrency gets the latency win safely.
+    const modelChange = opts.model && opts.model !== entry.state.model
+      ? entry.query.setModel(opts.model).then(
+        () => { entry.state.model = opts.model; return null },
+        () => 'set-model-failed' as const,
+      )
+      : Promise.resolve(null)
+    const permissionChange = opts.permissionMode && opts.permissionMode !== entry.state.permissionMode
+      ? entry.query.setPermissionMode(opts.permissionMode).then(
+        () => { entry.state.permissionMode = opts.permissionMode; return null },
+        () => 'set-permission-mode-failed' as const,
+      )
+      : Promise.resolve(null)
+    const [modelResult, permissionResult] = await Promise.all([modelChange, permissionChange])
+    const failure = modelResult ?? permissionResult
+    if (failure) this.recycleInternal(entry, failure)
   }
 
   private recycleInternal(entry: InternalEntry, _reason: string): void {
@@ -438,7 +486,7 @@ class ClaudePool {
      * delegation closure already baked into the Query still routes to the
      * correct per-turn bridge when future pool turns run.
      */
-    bridgeBox?: { fn: CanUseTool | null }
+    bridgeBox?: ClaudeBridgeBox
   }): void {
     const { sessionId, query: q, pushUserMessage, endInput, options } = args
     const existing = this.entries.get(sessionId)
@@ -470,7 +518,7 @@ class ClaudePool {
       alive: true,
       // Reuse the bridgeBox from the cold-path spawn so its delegation closure
       // (already frozen into the Query) routes through the same object.
-      bridgeBox: args.bridgeBox ?? { fn: null },
+      bridgeBox: args.bridgeBox ?? { fn: null, elicit: null },
     }
 
     this.entries.set(sessionId, entry)
@@ -580,11 +628,13 @@ class ClaudePool {
     // Install the per-turn bridge (if any) before pushing the message so the
     // delegation is live by the time any tool call arrives.
     entry.bridgeBox.fn = options.bridge ?? null
+    entry.bridgeBox.elicit = options.elicit ?? null
     try {
       entry.pushUserMessage(message)
       try { broadcastClaudeTurnStart(entry.sessionId) } catch { /* swallow */ }
     } catch (err) {
       entry.bridgeBox.fn = null
+      entry.bridgeBox.elicit = null
       entry.subscriber = null
       if (interruptFallbackTimer) clearTimeout(interruptFallbackTimer)
       clearTimeout(hardTimer)
@@ -603,6 +653,7 @@ class ClaudePool {
       // Clear the bridge before releasing the mutex so the next turn starts
       // with a clean slate even if the current turn's onError never fired.
       entry.bridgeBox.fn = null
+      entry.bridgeBox.elicit = null
       if (tailTimer) clearTimeout(tailTimer)
       if (interruptFallbackTimer) clearTimeout(interruptFallbackTimer)
       clearTimeout(hardTimer)
@@ -711,7 +762,7 @@ export function adoptClaudeSession(args: {
   pushUserMessage: (msg: SDKUserMessage) => void
   endInput: () => void
   options: ClaudePoolAcquireOptions
-  bridgeBox?: { fn: CanUseTool | null }
+  bridgeBox?: ClaudeBridgeBox
 }): void {
   return getPool().adopt(args)
 }

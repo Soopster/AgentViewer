@@ -5750,6 +5750,13 @@ export default function OpenTuiApp() {
           setContextUsage(usage)
           return
         }
+        // Non-fatal turn notice (e.g. an MCP elicitation prompt). Surface it as a
+        // transient banner without disturbing the live turn state.
+        if (frame.event === 'turn-notice' && parsed) {
+          const message = (parsed as { message?: unknown }).message
+          if (typeof message === 'string' && message.trim()) setNotice({ tone: 'info', text: message.trim() })
+          return
+        }
         if (frame.event === 'session' && parsed) {
           const evt = parsed as { sessionId?: unknown }
           if (typeof evt.sessionId === 'string' && evt.sessionId && targetSession.isPending) {

@@ -34,9 +34,12 @@ import {
 import {
   acquireClaudeSession,
   adoptClaudeSession,
+  type ClaudeBridgeBox,
+  type ClaudeElicitationHandler,
   CLAUDE_QUERY_ENV,
   createInputStream,
   effortToSdk,
+  logClaudeSubprocessStderr,
   peekClaudeSession,
   recycleClaudeSession,
 } from './claudePool'
@@ -916,6 +919,13 @@ function commandResultEvent(provider: AgentProvider, data: Record<string, unknow
   return `event: command-result\ndata: ${JSON.stringify({ provider, ...data })}\n\n`
 }
 
+// A non-fatal banner shown mid-turn (e.g. an MCP elicitation prompt). Distinct
+// from command-result, which the client treats as a turn-ending result and uses
+// to clear the live overlay.
+function turnNoticeEvent(message: string): string {
+  return `event: turn-notice\ndata: ${JSON.stringify({ message })}\n\n`
+}
+
 const COPILOT_COMPOSER_MODES = [
   {
     value: 'interactive',
@@ -1519,6 +1529,43 @@ function createClaudePermissionBridge(
         },
       })
     })
+  }
+}
+
+// Handle MCP elicitation requests from Claude's MCP servers. Without an
+// onElicitation callback an eliciting server has no way to prompt and the turn
+// can stall. We resolve immediately rather than waiting on a round-trip:
+//   - 'url' mode (the common MCP OAuth flow): surface the URL as a turn notice
+//     and accept, so the user completes auth out-of-band in the browser.
+//   - 'form' / structured mode: surface what was asked and decline — agent-viewer
+//     has no in-app schema form yet, and declining is far better than hanging.
+//   - aborted turn: cancel.
+// (A full interactive form UI is a worthwhile follow-up if MCP form-elicitation
+// becomes common; the URL path already covers the dominant real-world case.)
+function createClaudeElicitationBridge(
+  sessionId: string,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  encoder: TextEncoder,
+): ClaudeElicitationHandler {
+  const notice = (message: string) => {
+    try {
+      controller.enqueue(encoder.encode(turnNoticeEvent(message)))
+    } catch {
+      // Client may have disconnected while the turn keeps running server-side.
+    }
+  }
+  return async (request, options) => {
+    if (options.signal.aborted) return { action: 'cancel' }
+    const label = request.displayName?.trim() || request.serverName || 'An MCP server'
+    if (request.mode === 'url' && typeof request.url === 'string' && request.url) {
+      notice(`${label} needs authorization — open ${request.url} to continue.`)
+      return { action: 'accept' }
+    }
+    const ask = typeof request.message === 'string' && request.message.trim()
+      ? `: “${request.message.trim()}”`
+      : ''
+    notice(`${label} requested input${ask} that agent-viewer can’t collect in-app yet — declining.`)
+    return { action: 'decline' }
   }
 }
 
@@ -2829,12 +2876,13 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       // the delegation closure survives pool adoption. The bridge is set below
       // (after q is created) and cleared in the finally block so future pool
       // turns can swap in a fresh bridge without recycling the subprocess.
-      const bridgeBox: { fn: import('@anthropic-ai/claude-agent-sdk').CanUseTool | null } = { fn: null }
+      const bridgeBox: ClaudeBridgeBox = { fn: null, elicit: null }
 
       const q = query({
         prompt: iterable,
         options: {
           env: CLAUDE_QUERY_ENV,
+          stderr: (data) => logClaudeSubprocessStderr(sessionId, data),
           ...(isPendingSession ? {} : { resume: sessionId }),
           ...(cwdOverride ? { cwd: cwdOverride } : {}),
           ...(model ? { model } : {}),
@@ -2849,6 +2897,10 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
             bridgeBox.fn
               ? bridgeBox.fn(toolName, input, toolOpts)
               : Promise.resolve({ behavior: 'allow' as const, updatedInput: input }),
+          onElicitation: (request, elicitOpts) =>
+            bridgeBox.elicit
+              ? bridgeBox.elicit(request, elicitOpts)
+              : Promise.resolve({ action: 'decline' as const }),
           ...effortToSdk(effort),
           abortController,
           enableFileCheckpointing: true,
@@ -2870,6 +2922,9 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       if (bridgeInstalled) {
         bridgeBox.fn = createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds)
       }
+      // Elicitation isn't gated on manual permissions — an MCP server can elicit
+      // in any mode, so always install the handler.
+      bridgeBox.elicit = createClaudeElicitationBridge(sessionId, controller, encoder)
 
       setRunningSession(sessionId, {
         provider: 'claude',
@@ -3082,11 +3137,14 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
       const bridge = bridgeInstalled
         ? createClaudePermissionBridge(entry.sessionId, controller, encoder, bridgedPermissionIds)
         : undefined
+      // Elicitation isn't gated on manual permissions — install it every turn.
+      const elicit = createClaudeElicitationBridge(entry.sessionId, controller, encoder)
 
       try {
         await entry.run(pushMessage, {
           signal: turnAbort.signal,
           bridge,
+          elicit,
           onMessage: (msg) => {
             try {
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
