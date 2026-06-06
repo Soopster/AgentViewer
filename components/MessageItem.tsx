@@ -28,6 +28,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk/sdk-tools'
 import { getAssistantLabel } from '@/lib/provider'
 import { Separator } from '@/components/ui/separator'
+import type { PierreDiffPresentation, PierreDiffStyle } from './PierreDiffView'
 
 // ── Tool color palette ────────────────────────────────────────────────────────
 
@@ -409,10 +410,18 @@ function DiffView(props: { oldStr: string; newStr: string; filePath?: string }) 
   )
 }
 
-function PatchDiffView({ patch, maxHeight = 420 }: { patch: string; maxHeight?: number }) {
+function PatchDiffView({
+  patch,
+  maxHeight = 420,
+  presentation,
+}: {
+  patch: string
+  maxHeight?: number
+  presentation?: PierreDiffPresentation
+}) {
   return (
     <Suspense fallback={<PlainCodeBlock code={patch} language="diff" maxHeight={maxHeight} />}>
-      <LazyPierrePatchDiffView patch={patch} maxHeight={maxHeight} />
+      <LazyPierrePatchDiffView patch={patch} maxHeight={maxHeight} presentation={presentation} />
     </Suspense>
   )
 }
@@ -534,6 +543,7 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
   const changes = input.changes ?? []
   const largeDiff = isLargeTextList(changes.map((change) => change.diff ?? ''))
   const [open, setOpen] = useState(() => !largeDiff)
+  const [diffStyle, setDiffStyle] = useState<PierreDiffStyle>('stacked')
   const [hovered, setHovered] = useState(false)
   const c = toolColor('FileChange')
   const preview = changes.length === 1
@@ -574,6 +584,28 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
               LARGE
             </span>
           )}
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              setDiffStyle((current) => (current === 'stacked' ? 'split' : 'stacked'))
+            }}
+            aria-label={`Switch diff view to ${diffStyle === 'stacked' ? 'split' : 'stacked'}`}
+            title={`Diff view: ${diffStyle}`}
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              color: 'var(--text-3)',
+              border: '1px solid var(--border)',
+              borderRadius: 3,
+              padding: '1px 5px',
+              background: 'var(--surface-2)',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            {diffStyle === 'stacked' ? 'STACKED' : 'SPLIT'}
+          </button>
           <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
         </div>
       }
@@ -629,7 +661,11 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
                       {filePath}
                     </span>
                   </div>
-                  <PatchDiffView patch={diffText} maxHeight={420} />
+                  <PatchDiffView
+                    patch={diffText}
+                    maxHeight={420}
+                    presentation={{ diffStyle }}
+                  />
                 </div>
               )
             })

@@ -200,7 +200,7 @@ export function PierrePatchDiffView({
   if (files.length === 0) {
     return (
       <PierreDiffFrame maxHeight={maxHeight}>
-        <PierreFallbackDiffView text={patch || emptyLabel} />
+        <PierreFallbackDiffView text={patch || emptyLabel} presentation={presentation} />
       </PierreDiffFrame>
     )
   }
@@ -291,8 +291,82 @@ export function PierreBuiltInIconSprite() {
   )
 }
 
-function PierreFallbackDiffView({ text }: { text: string }) {
+function PierreFallbackDiffView({
+  text,
+  presentation,
+}: {
+  text: string
+  presentation?: PierreDiffPresentation
+}) {
   const lines = text.split('\n').slice(0, 240)
+  if (presentation?.diffStyle === 'split') {
+    const rows = buildSplitFallbackRows(lines)
+    return (
+      <div style={{ padding: '8px 10px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, lineHeight: '17px' }}>
+        {rows.map((row, index) => {
+          if (row.kind === 'header') {
+            return (
+              <div
+                key={`${index}:${row.kind}:${row.text}`}
+                style={{ color: 'var(--cyan)', background: 'var(--surface-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+              >
+                {row.text}
+              </div>
+            )
+          }
+          if (row.kind === 'meta') {
+            return (
+              <div
+                key={`${index}:${row.kind}:${row.text}`}
+                style={{ color: 'var(--text-3)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+              >
+                {row.text}
+              </div>
+            )
+          }
+          return (
+            <div key={`${index}:${row.kind}:${row.leftText}:${row.rightText}`} style={{ display: 'flex', width: '100%' }}>
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: row.leftKind === 'deletion'
+                    ? 'color-mix(in srgb, var(--red) 14%, var(--surface))'
+                    : row.leftKind === 'empty'
+                      ? 'var(--surface-2)'
+                      : undefined,
+                  color: row.leftKind === 'deletion' ? 'var(--red)' : 'var(--text)',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  paddingRight: 8,
+                }}
+              >
+                {row.leftText || ' '}
+              </div>
+              <div style={{ width: 1, background: 'var(--border)' }} />
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: row.rightKind === 'addition'
+                    ? 'color-mix(in srgb, var(--green) 13%, var(--surface))'
+                    : row.rightKind === 'empty'
+                      ? 'var(--surface-2)'
+                      : undefined,
+                  color: row.rightKind === 'addition' ? 'var(--green)' : 'var(--text)',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  paddingLeft: 8,
+                }}
+              >
+                {row.rightText || ' '}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
   return (
     <pre style={{ margin: 0, padding: '8px 10px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, lineHeight: '17px' }}>
       {lines.map((line, index) => {
@@ -313,4 +387,87 @@ function PierreFallbackDiffView({ text }: { text: string }) {
       })}
     </pre>
   )
+}
+
+type SplitFallbackRow =
+  | { kind: 'header'; text: string }
+  | { kind: 'meta'; text: string }
+  | { kind: 'pair'; leftKind: 'deletion' | 'context' | 'empty'; rightKind: 'addition' | 'context' | 'empty'; leftText: string; rightText: string }
+
+function buildSplitFallbackRows(lines: string[]): SplitFallbackRow[] {
+  const rows: SplitFallbackRow[] = []
+  let index = 0
+
+  while (index < lines.length) {
+    const line = lines[index] ?? ''
+    if (!line) {
+      index += 1
+      continue
+    }
+
+    if (line.startsWith('@@') || line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
+      rows.push({ kind: 'header', text: line })
+      index += 1
+      continue
+    }
+
+    if (line.startsWith('-') && !line.startsWith('---')) {
+      const deletions: string[] = []
+      while (index < lines.length) {
+        const next = lines[index] ?? ''
+        if (!next.startsWith('-') || next.startsWith('---')) break
+        deletions.push(next.slice(1))
+        index += 1
+      }
+
+      const additions: string[] = []
+      while (index < lines.length) {
+        const next = lines[index] ?? ''
+        if (!next.startsWith('+') || next.startsWith('+++')) break
+        additions.push(next.slice(1))
+        index += 1
+      }
+
+      const pairCount = Math.max(deletions.length, additions.length)
+      for (let pairIndex = 0; pairIndex < pairCount; pairIndex += 1) {
+        rows.push({
+          kind: 'pair',
+          leftKind: pairIndex < deletions.length ? 'deletion' : 'empty',
+          rightKind: pairIndex < additions.length ? 'addition' : 'empty',
+          leftText: deletions[pairIndex] ?? '',
+          rightText: additions[pairIndex] ?? '',
+        })
+      }
+      continue
+    }
+
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      rows.push({
+        kind: 'pair',
+        leftKind: 'empty',
+        rightKind: 'addition',
+        leftText: '',
+        rightText: line.slice(1),
+      })
+      index += 1
+      continue
+    }
+
+    if (line.startsWith(' ')) {
+      rows.push({
+        kind: 'pair',
+        leftKind: 'context',
+        rightKind: 'context',
+        leftText: line.slice(1),
+        rightText: line.slice(1),
+      })
+      index += 1
+      continue
+    }
+
+    rows.push({ kind: 'meta', text: line })
+    index += 1
+  }
+
+  return rows
 }
