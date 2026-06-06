@@ -191,11 +191,12 @@ const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
 const TIMELINE_OVERSCAN_PX = 2400
 // Milliseconds of inactivity after the last scroll event before we consider
 // the user "done scrolling" and start applying scrollTop anchor adjustments
-// again. Anchor compensation is helpful while reading (a row above the
-// viewport gets measured and we keep the user's content visually stable);
-// during active scroll it fights the user's input and is the main source of
-// the perceived jumpiness on long transcripts with tool cards.
+// again for direct scrollbar/touch scrubbing.
 const SCROLL_IDLE_MS = 140
+// Wheel and trackpad scrolling benefits from keeping the visible row anchored
+// while overscanned rows settle. The window outlives the wheel event long
+// enough to cover ResizeObserver delivery and the following animation frame.
+const WHEEL_SCROLL_COMPENSATION_MS = 180
 // Safety net: how long the composer will wait for a turn's persisted rows to
 // land before force-revealing the polled timeline. The 2s message poll means
 // the durable rows are normally present within a poll or two; this only fires
@@ -2179,13 +2180,13 @@ export default function MessageView({
   const measurementFrameRef = useRef<number | null>(null)
   const scrollRafRef = useRef<number | null>(null)
   const programmaticScrollUntilRef = useRef<number>(0)
+  const wheelScrollCompensationUntilRef = useRef<number>(0)
   const timelineHeightOverrideRef = useRef<number | null>(null)
   const activeTimelineScrollAnchorRef = useRef<TimelineScrollAnchor | null>(null)
   const pendingTimelineAnchorRestoreRef = useRef(false)
   // Set true on each scroll event, cleared SCROLL_IDLE_MS after the last
-  // event. While true, we skip the scrollTop anchor adjustment in
-  // handleTimelineRowMeasure — measurements still flow into the layout, but
-  // they don't yank the scrollbar against the user's drag.
+  // event. Direct scrollbar/touch scrubbing suppresses scrollTop adjustment;
+  // wheel/trackpad input opts back in via wheelScrollCompensationUntilRef.
   const userScrollingRef = useRef(false)
   const userScrollingTimerRef = useRef<number | null>(null)
   const suppressFollowEvalUntilRef = useRef<number>(0)
@@ -2652,6 +2653,7 @@ export default function MessageView({
       measurementFrameRef.current = null
     }
     timelineHeightOverrideRef.current = null
+    wheelScrollCompensationUntilRef.current = 0
     activeTimelineScrollAnchorRef.current = null
     pendingTimelineAnchorRestoreRef.current = false
     setTimelineHeightOverride(null)
@@ -2703,6 +2705,7 @@ export default function MessageView({
       window.clearTimeout(userScrollingTimerRef.current)
     }
     timelineHeightOverrideRef.current = null
+    wheelScrollCompensationUntilRef.current = 0
     activeTimelineScrollAnchorRef.current = null
     pendingTimelineAnchorRestoreRef.current = false
   }, [])
@@ -2719,7 +2722,14 @@ export default function MessageView({
     updateMetrics()
     const observer = new ResizeObserver(() => updateMetrics())
     observer.observe(node)
-    return () => observer.disconnect()
+    const handleWheel = () => {
+      wheelScrollCompensationUntilRef.current = performance.now() + WHEEL_SCROLL_COMPENSATION_MS
+    }
+    node.addEventListener('wheel', handleWheel, { passive: true })
+    return () => {
+      observer.disconnect()
+      node.removeEventListener('wheel', handleWheel)
+    }
   }, [showDiagnostics, showVisualizer, session?.sessionId])
 
   useEffect(() => {
@@ -4588,13 +4598,13 @@ export default function MessageView({
       const layout = rowLayoutRef.current
       const rows = timelineRowsRef.current
       const isFollowing = autoFollowRef.current
-      // While the user is actively dragging the scrollbar, refuse to apply
-      // anchor compensation — it adds to scrollTop on the same frame the
-      // user is updating it, which the browser perceives as a fight and
-      // produces the visible jumpiness on fast scrubs over tool-heavy
-      // transcripts. Layout still updates so positions remain correct;
-      // only the scrollTop nudge is suppressed.
+      // Wheel/trackpad input is delta-based, so compensating measurements
+      // strictly above the anchor preserves the content under the viewport
+      // without cancelling the user's scroll. Keep compensation suppressed
+      // for direct scrollbar/touch scrubbing, where writing scrollTop fights
+      // the absolute position controlled by the gesture.
       const allowScrollAdjust = !userScrollingRef.current
+        || performance.now() < wheelScrollCompensationUntilRef.current
       const anchor = node ? findTimelineScrollAnchor(rows, layout, node.scrollTop) : null
       const measurementChanges: TimelineMeasurementChange[] = []
       let changed = false
