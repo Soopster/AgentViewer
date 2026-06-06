@@ -7,6 +7,7 @@ import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
 import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
+import { startTuiMetricsLogger, tuiMetricsEnabled, noteRenderFrame, registerTuiMetricsGauge, cardProfileEnabled, logCardRecompute } from './metricsLogger'
 import {
   buildPierreDiffView,
   type TuiPierreDiffRow,
@@ -143,6 +144,7 @@ const COMPOSER_WAITING_MESSAGES = [
 ] as const
 
 registerExtraTreeSitterParsers()
+startTuiMetricsLogger()
 
 // ── Optional render-frame timing (set AGENT_VIEWER_PERF=1) ───────────────────
 // A fullscreen TUI can't log to stdout/stderr without corrupting the render, so
@@ -154,6 +156,13 @@ const PERF_LOG = process.env.AGENT_VIEWER_PERF === '1'
 const PERF_LOG_PATH = process.env.AGENT_VIEWER_PERF_LOG
   ?? join(process.cwd(), '.agent-viewer-data', 'tui-perf.log')
 const FRAME_BUDGET_MS = 1000 / 60
+// Either sink wants a render-start stamp; check both so enabling just
+// AGENT_VIEWER_TUI_METRICS (without AGENT_VIEWER_PERF) still times frames.
+const FRAME_TIMING_NEEDED = PERF_LOG || tuiMetricsEnabled()
+// Targeted live-streaming render profiling — see metricsLogger.ts. Read once
+// at module scope (matches PERF_LOG) so the hot-path memos below pay nothing
+// but a boolean check when disabled.
+const CARD_PROFILE = cardProfileEnabled()
 
 if (PERF_LOG) {
   try { mkdirSync(dirname(PERF_LOG_PATH), { recursive: true }) } catch { /* logging is best-effort */ }
@@ -3305,9 +3314,12 @@ export default function OpenTuiApp() {
   // Frame-timing canary (no-op unless AGENT_VIEWER_PERF=1). Stamp at the top of
   // every render; the effect below reads it after commit.
   const renderStartRef = useRef(0)
-  if (PERF_LOG) renderStartRef.current = performance.now()
+  if (FRAME_TIMING_NEEDED) renderStartRef.current = performance.now()
   useEffect(() => {
-    if (PERF_LOG) recordFramePerf(performance.now() - renderStartRef.current)
+    if (!FRAME_TIMING_NEEDED) return
+    const durationMs = performance.now() - renderStartRef.current
+    if (PERF_LOG) recordFramePerf(durationMs)
+    noteRenderFrame(durationMs)
   })
 
   const [provider, setProvider] = useState<ProviderSelection>('claude')
@@ -3548,6 +3560,24 @@ export default function OpenTuiApp() {
   useEffect(() => { searchModeRef.current = searchMode }, [searchMode])
   useEffect(() => { sessionSearchModeRef.current = sessionSearchMode }, [sessionSearchMode])
   useEffect(() => { exitConfirmOpenRef.current = exitConfirmOpen }, [exitConfirmOpen])
+  // No-op unless AGENT_VIEWER_TUI_METRICS=1: reports the sizes of the
+  // session-keyed maps/sets most likely to grow unbounded, alongside the
+  // process-level memory/GC/loop-delay samples in metricsLogger.ts.
+  useEffect(() => registerTuiMetricsGauge(() => ({
+    sessions: sessions.length,
+    runningSessions: runningSessionsRef.current.length,
+    transcriptMessages: sessionDetail?.rawMessages.length ?? 0,
+    threadedMessages: sessionDetail?.threadedMessages.length ?? 0,
+    sessionDetailCache: sessionDetailCacheRef.current.size,
+    sessionContextUsageCache: sessionContextUsageCacheRef.current.size,
+    sessionMetadataFetchedAt: sessionMetadataFetchedAtRef.current.size,
+    sessionMetadataInFlight: sessionMetadataInFlightRef.current.size,
+    liveToolIndexes: liveToolIndexesRef.current.size,
+    liveToolInputJson: liveToolInputJsonRef.current.size,
+    liveTranscriptBaseline: liveTranscriptBaselineRef.current.size,
+    backgroundRefreshInFlight: backgroundRefreshInFlightRef.current.size,
+    sessionDetailMtime: sessionDetailMtimeRef.current.size,
+  })), [sessions.length, sessionDetail])
   useEffect(() => {
     if (!composerActive && composerWindowOpen) setComposerWindowOpen(false)
   }, [composerActive, composerWindowOpen])
@@ -3740,43 +3770,88 @@ export default function OpenTuiApp() {
   // Card formatting runs in the threading worker. The worker client keeps only
   // the most recent card variant; if it has been evicted, this render path can
   // still format synchronously from the already-threaded messages.
-  const transcriptCards = useMemo<TuiTranscriptCard[]>(() => {
-    if (!selectedSessionTarget) return []
-    let baseCards: TuiTranscriptCard[] = []
-    if (sessionDetail) {
-      const cachedSync = getTranscriptCardsSync(
-        selectedSessionTarget,
-        sessionDetail.threadedMessages,
-        density,
-        showToolCalls,
-      )
-      if (cachedSync) {
-        baseCards = cachedSync
-      } else {
-        const filtered = showToolCalls
-          ? sessionDetail.threadedMessages
-          : stripToolCallBlocks(sessionDetail.threadedMessages)
-        const activeForms = buildTaskActiveForms(filtered)
-        const taskRegistry = buildTaskRegistry(filtered)
-        baseCards = filtered.map((msg) => formatTranscriptCard(msg, density, activeForms, taskRegistry))
-      }
+  // ── Base card computation — NOT dependent on live messages ────────────────
+  // Separating base from the live overlay is the key perf fix: streaming deltas
+  // change only liveTranscriptMessagesForSession, so this memo is stable for
+  // the entire duration of a streaming turn. Before the split, every delta
+  // triggered a full O(N_base) rebuild: buildTaskActiveForms/buildTaskRegistry
+  // over all base messages + formatTranscriptCard × N_base on the main thread
+  // (60–800ms per delta for a 63–136 card session). Now that work runs only
+  // when sessionDetail/density/showToolCalls actually change.
+  const baseTranscriptCards = useMemo<TuiTranscriptCard[]>(() => {
+    const profileStart = CARD_PROFILE ? performance.now() : 0
+    if (!selectedSessionTarget || !sessionDetail) return []
+    let cards: TuiTranscriptCard[]
+    let recomputed = 0
+    const cachedSync = getTranscriptCardsSync(
+      selectedSessionTarget,
+      sessionDetail.threadedMessages,
+      density,
+      showToolCalls,
+    )
+    if (cachedSync) {
+      cards = cachedSync
+    } else {
+      const filtered = showToolCalls
+        ? sessionDetail.threadedMessages
+        : stripToolCallBlocks(sessionDetail.threadedMessages)
+      const activeForms = buildTaskActiveForms(filtered)
+      const taskRegistry = buildTaskRegistry(filtered)
+      cards = filtered.map((msg) => formatTranscriptCard(msg, density, activeForms, taskRegistry))
+      recomputed = cards.length
     }
+    if (CARD_PROFILE) {
+      logCardRecompute({
+        scope: 'transcriptCards',
+        totalCards: cards.length,
+        recomputed,
+        liveCards: 0,
+        durationMs: performance.now() - profileStart,
+      })
+    }
+    return cards
+  }, [density, sessionDetail, selectedSessionTarget, showToolCalls])
 
-    if (liveTranscriptMessagesForSession.length === 0) return baseCards
+  // ── Task context for live cards — stable across streaming deltas ───────────
+  // buildTaskActiveForms and buildTaskRegistry scan the full base transcript.
+  // Memoizing them separately ensures the O(N_base) scan runs at most once per
+  // sessionDetail update (2s poll cadence), never per streamed token.
+  // Live messages occasionally contain TaskCreate/TaskUpdate calls; their task
+  // events appear in the persisted transcript (and therefore here) on the next
+  // poll, which is the correct behaviour — the live overlay is ephemeral.
+  const baseTaskContext = useMemo(() => {
+    if (!sessionDetail) return { activeForms: new Map() as ReturnType<typeof buildTaskActiveForms>, taskRegistry: new Map() as ReturnType<typeof buildTaskRegistry> }
+    const filtered = showToolCalls
+      ? sessionDetail.threadedMessages
+      : stripToolCallBlocks(sessionDetail.threadedMessages)
+    return {
+      activeForms: buildTaskActiveForms(filtered),
+      taskRegistry: buildTaskRegistry(filtered),
+    }
+  }, [sessionDetail, showToolCalls])
+
+  // ── Live overlay — O(N_live) per delta, base cards always cache-hit ────────
+  const transcriptCards = useMemo<TuiTranscriptCard[]>(() => {
+    if (liveTranscriptMessagesForSession.length === 0) return baseTranscriptCards
+    const profileStart = CARD_PROFILE ? performance.now() : 0
     const liveMessages = showToolCalls
       ? liveTranscriptMessagesForSession
       : stripToolCallBlocks(liveTranscriptMessagesForSession)
-    const contextMessages = sessionDetail
-      ? [...sessionDetail.threadedMessages, ...liveMessages]
-      : liveMessages
-    const activeForms = buildTaskActiveForms(contextMessages)
-    const taskRegistry = buildTaskRegistry(contextMessages)
     const liveCards = liveMessages.map((message) => ({
-      ...formatTranscriptCard(message, density, activeForms, taskRegistry),
+      ...formatTranscriptCard(message, density, baseTaskContext.activeForms, baseTaskContext.taskRegistry),
       key: `live:${message.uuid}`,
     }))
-    return [...baseCards, ...liveCards]
-  }, [density, liveTranscriptMessagesForSession, sessionDetail, selectedSessionTarget, showToolCalls])
+    if (CARD_PROFILE) {
+      logCardRecompute({
+        scope: 'transcriptCards',
+        totalCards: baseTranscriptCards.length + liveCards.length,
+        recomputed: liveCards.length,
+        liveCards: liveCards.length,
+        durationMs: performance.now() - profileStart,
+      })
+    }
+    return [...baseTranscriptCards, ...liveCards]
+  }, [baseTranscriptCards, baseTaskContext, density, liveTranscriptMessagesForSession, showToolCalls])
 
   // In 'continue' and 'stream' modes, hide technical/diff/system cards entirely
   // so only the conversation layer (user + assistant text) is visible.
@@ -4612,7 +4687,9 @@ export default function OpenTuiApp() {
   }>())
   const stableCardData = useMemo((): StableCardData[] => {
     const cache = stableCardCacheRef.current
-    return visibleTranscriptCards.map((card) => {
+    const profileStart = CARD_PROFILE ? performance.now() : 0
+    let recomputed = 0
+    const result = visibleTranscriptCards.map((card) => {
       const isExpanded = resolvedExpandedKeys.has(card.key)
       const thinkingFull = thinkingFullKeys.has(card.key)
       const prev = cache.get(card)
@@ -4624,6 +4701,7 @@ export default function OpenTuiApp() {
       ) {
         return prev.value
       }
+      recomputed += 1
       const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, thinkingFull)
       const diffView = cardDiffView(card, isExpanded)
       const codeBlockLineCounts = (isExpanded && card.codeBlocks)
@@ -4633,6 +4711,16 @@ export default function OpenTuiApp() {
       cache.set(card, { isExpanded, bodyLineLimit: densityState.bodyLines, thinkingFull, value })
       return value
     })
+    if (CARD_PROFILE) {
+      logCardRecompute({
+        scope: 'stableCardData',
+        totalCards: visibleTranscriptCards.length,
+        recomputed,
+        liveCards: liveTranscriptMessagesForSession.length,
+        durationMs: performance.now() - profileStart,
+      })
+    }
+    return result
   }, [visibleTranscriptCards, resolvedExpandedKeys, densityState.bodyLines, thinkingFullKeys])
 
   const allLandmarksRef = useRef<CardLandmark[][] | null>(null)
@@ -4663,7 +4751,9 @@ export default function OpenTuiApp() {
 
   const cardDisplayData = useMemo((): CardDisplayData[] => {
     const cache = cardDisplayCacheRef.current
-    return visibleTranscriptCards.map((card, index) => {
+    const profileStart = CARD_PROFILE ? performance.now() : 0
+    let recomputed = 0
+    const result = visibleTranscriptCards.map((card, index) => {
       const isExpanded = resolvedExpandedKeys.has(card.key)
       const isLatest = index === visibleTranscriptCards.length - 1
       const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
@@ -4688,6 +4778,7 @@ export default function OpenTuiApp() {
       ) {
         return prev.value
       }
+      recomputed += 1
 
       const headerMeta = joinMeta([
         card.timestamp ?? null,
@@ -4731,6 +4822,16 @@ export default function OpenTuiApp() {
       })
       return value
     })
+    if (CARD_PROFILE) {
+      logCardRecompute({
+        scope: 'cardDisplayData',
+        totalCards: visibleTranscriptCards.length,
+        recomputed,
+        liveCards: liveTranscriptMessagesForSession.length,
+        durationMs: performance.now() - profileStart,
+      })
+    }
+    return result
   }, [
     allLandmarks,
     stableCardData,

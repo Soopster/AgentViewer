@@ -4064,7 +4064,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       if (typeof compact.trigger === 'string') nextBadges.push(compact.trigger)
       if (typeof compact.pre_tokens === 'number') nextBadges.push(`${fmtTokens(compact.pre_tokens)} pre`)
     }
-    return nextBadges
+    return [...new Set(nextBadges)]
   }, [apiErrorStatus, errorCode, payload, subtype])
 
   const body = useMemo(() => {

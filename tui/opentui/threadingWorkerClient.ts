@@ -44,11 +44,11 @@ type WorkerResponse =
 let worker: Worker | null = null
 let requestCounter = 0
 const pending = new Map<number, Pending>()
-// Matches the worker-side cap. Holds the active session plus one neighbour;
-// switching back further re-runs threading from disk-sourced messages which
-// is already fast and avoids a 3rd resident transcript.
-const THREADING_CACHE_LIMIT = 2
-const CARD_VARIANT_CACHE_LIMIT = 1
+// Holds the recent session neighbourhood. With tabs enabled users commonly
+// switch between 4-8 sessions; a cap of 2 evicted almost everything on the
+// third switch, forcing full main-thread card rebuilds on revisit.
+const THREADING_CACHE_LIMIT = 10
+const CARD_VARIANT_CACHE_LIMIT = 4
 const threadingCacheByKey = new Map<string, ThreadingClientCache>()
 
 function cacheKey(session: Session): string {
