@@ -50,6 +50,20 @@ const TURN_HARD_TIMEOUT_MS = 10 * 60 * 1000
 // until the 10-min hard timeout while the user stares at a dead spinner.
 const INTERRUPT_FALLBACK_MS = 4000
 
+// Environment for the Claude CLI subprocess. Passing `env` to query() REPLACES
+// the subprocess environment, so the process.env spread is mandatory. We enable
+// the SDK's built-in response-body stall watchdog (off by default) so a stalled
+// model stream is caught at the idle timeout instead of hanging to the per-turn
+// hard timeout — complements our own stream-level watchdog. CLAUDE_CODE_MAX_RETRIES
+// (default 10) and API_TIMEOUT_MS (default 600000) are left at their defaults;
+// the SDK already retries transient API errors, which our client-side retry sits
+// on top of. CLAUDE_STREAM_IDLE_TIMEOUT_MS has a 300000ms (5 min) floor.
+export const CLAUDE_QUERY_ENV: Record<string, string | undefined> = {
+  ...process.env,
+  CLAUDE_ENABLE_STREAM_WATCHDOG: '1',
+  CLAUDE_STREAM_IDLE_TIMEOUT_MS: '300000',
+}
+
 export type ClaudePoolAcquireOptions = {
   /** Real session id. Callers must NOT pool pending sessions in phase 1. */
   sessionId: string
@@ -194,6 +208,7 @@ class ClaudePool {
     const q = query({
       prompt: iterable,
       options: {
+        env: CLAUDE_QUERY_ENV,
         ...(opts.forkSession ? {} : { resume: opts.sessionId }),
         ...(opts.cwd ? { cwd: opts.cwd } : {}),
         ...(opts.model ? { model: opts.model } : {}),

@@ -5825,6 +5825,12 @@ export default function OpenTuiApp() {
           const status = parsedRecord.status === 'requesting' || parsedRecord.status === 'compacting' ? parsedRecord.status : null
           setLiveStatus(status)
         }
+        // The Claude SDK auto-retries transient API errors and emits an api_retry
+        // system message per attempt. Surface it as the live "Retrying…" status
+        // (same as Pi's native retry); it clears on the next delta/result.
+        if (parsedRecord.type === 'system' && parsedRecord.subtype === 'api_retry') {
+          setLiveStatus('retrying')
+        }
         // Pi surfaces auto-retry / auto-compaction as non-fatal progress so the
         // turn doesn't look hung while it recovers (mirrors native Pi).
         if (parsedRecord.type === 'pi_status') {

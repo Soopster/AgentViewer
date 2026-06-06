@@ -34,6 +34,7 @@ import {
 import {
   acquireClaudeSession,
   adoptClaudeSession,
+  CLAUDE_QUERY_ENV,
   createInputStream,
   effortToSdk,
   peekClaudeSession,
@@ -2833,6 +2834,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       const q = query({
         prompt: iterable,
         options: {
+          env: CLAUDE_QUERY_ENV,
           ...(isPendingSession ? {} : { resume: sessionId }),
           ...(cwdOverride ? { cwd: cwdOverride } : {}),
           ...(model ? { model } : {}),

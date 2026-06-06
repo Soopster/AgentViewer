@@ -3141,6 +3141,14 @@ export default function MessageView({
               const next = parsed.status === 'requesting' || parsed.status === 'compacting' ? parsed.status : null
               setLiveStatus(next)
             }
+            // The Claude SDK auto-retries transient API errors (overload/network)
+            // and emits an api_retry system message per attempt. Surface it as the
+            // live "Retrying…" status — same UX Pi gets natively — so a multi-second
+            // SDK retry reads as recovery instead of a hang. It clears when the next
+            // assistant delta / result arrives (those setLiveStatus(null) below).
+            if (parsed?.type === 'system' && parsed.subtype === 'api_retry') {
+              setLiveStatus('retrying')
+            }
             // Pi surfaces auto-retry / auto-compaction as non-fatal progress so the
             // turn doesn't look hung while it recovers (mirrors native Pi).
             if (parsed?.type === 'pi_status') {
