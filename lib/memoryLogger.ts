@@ -41,10 +41,26 @@ export function startMemoryLogger(): void {
     } catch {
       /* diagnostics unavailable (e.g. module init race) — RSS line is still useful */
     }
+    // Event-loop delay + GC pressure (only populated when AGENT_VIEWER_DIAG=1
+    // started the monitors). High loop delay = main-thread blocking; heavy major
+    // GC totals = memory pressure.
+    let loopGc = ''
+    try {
+      const { eventLoopDelaySummary, gcSummary } = await import('./telemetry')
+      const loop = eventLoopDelaySummary()
+      if (loop) loopGc += ` | loopDelay p99=${loop.p99Ms}ms max=${loop.maxMs}ms`
+      const gc = gcSummary()
+      if (gc.length > 0) {
+        loopGc += ' | gc ' + gc.map((g) => `${g.kind}=${g.count}/${g.totalMs}ms`).join(' ')
+      }
+    } catch {
+      /* telemetry unavailable */
+    }
+
     console.log(
       `[mem] +${uptimeMin}m rss=${mb(m.rss)} heapUsed=${mb(m.heapUsed)} `
       + `heapTotal=${mb(m.heapTotal)} external=${mb(m.external)} `
-      + `arrayBuffers=${mb(m.arrayBuffers)}${diag}`,
+      + `arrayBuffers=${mb(m.arrayBuffers)}${diag}${loopGc}`,
     )
 
     // Perf rollup (only populated when AGENT_VIEWER_PERF_LOG=1). Top entries by

@@ -4,8 +4,12 @@ export async function register() {
     // Opt-in RSS/heap + cache-size logger (AGENT_VIEWER_MEM_LOG=1). No-op otherwise.
     const { startMemoryLogger } = await import('./lib/memoryLogger')
     startMemoryLogger()
+    // Start continuous event-loop-delay + GC monitors when diagnostics are on so
+    // the /api/diagnostics/runtime endpoint and the logger have data to report.
+    const { diagnosticsEnabled, initTelemetry } = await import('./lib/telemetry')
+    if (diagnosticsEnabled()) initTelemetry()
   } catch (err) {
-    console.warn('[instrumentation] memory logger failed to start:', err)
+    console.warn('[instrumentation] telemetry failed to start:', err)
   }
   try {
     // Prime the WarmQuery slot used by readClaudeSupportedModels. This

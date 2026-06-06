@@ -86,9 +86,16 @@ export function startClientPerf(intervalMs = 30_000): (() => void) | void {
 
   const handle = window.setInterval(() => {
     const rows = getClientPerfStats()
-    if (rows.length === 0) return
+    // Chrome-only JS heap sampling — surfaces tab memory growth over time.
+    const mem = (performance as Performance & {
+      memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number }
+    }).memory
+    const memLine = mem
+      ? `jsHeap used=${(mem.usedJSHeapSize / 1048576).toFixed(1)}MB total=${(mem.totalJSHeapSize / 1048576).toFixed(1)}MB`
+      : ''
+    if (rows.length === 0 && !memLine) return
     // eslint-disable-next-line no-console
-    console.groupCollapsed(`[perf] client rollup (${rows.length} labels)`)
+    console.groupCollapsed(`[perf] client rollup${memLine ? ` — ${memLine}` : ''} (${rows.length} labels)`)
     for (const row of rows) {
       // eslint-disable-next-line no-console
       console.log(formatPerfRow(row))
