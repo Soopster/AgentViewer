@@ -1948,6 +1948,7 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
       className="timeline-row"
       ref={rowRef}
       data-message-id={row.message.uuid}
+      data-timeline-key={row.key}
       style={{
         position: 'absolute',
         top: 0,
@@ -2181,6 +2182,7 @@ export default function MessageView({
   const measurementFrameRef = useRef<number | null>(null)
   const scheduleTimelineMeasurementFlushRef = useRef<() => void>(() => {})
   const pendingTimelineScrollCompensationRef = useRef(0)
+  const pendingMountedAnchorCaptureRef = useRef(false)
   const scrollRafRef = useRef<number | null>(null)
   const programmaticScrollUntilRef = useRef<number>(0)
   const wheelScrollCompensationUntilRef = useRef<number>(0)
@@ -2652,6 +2654,7 @@ export default function MessageView({
     prevThreadingRef.current = null
     pendingRowMeasurementsRef.current.clear()
     pendingTimelineScrollCompensationRef.current = 0
+    pendingMountedAnchorCaptureRef.current = false
     if (measurementFrameRef.current != null) {
       window.cancelAnimationFrame(measurementFrameRef.current)
       measurementFrameRef.current = null
@@ -2709,21 +2712,51 @@ export default function MessageView({
       window.clearTimeout(userScrollingTimerRef.current)
     }
     pendingTimelineScrollCompensationRef.current = 0
+    pendingMountedAnchorCaptureRef.current = false
     timelineHeightOverrideRef.current = null
     wheelScrollCompensationUntilRef.current = 0
     activeTimelineScrollAnchorRef.current = null
     pendingTimelineAnchorRestoreRef.current = false
   }, [])
 
+  const captureTimelineScrollAnchor = useCallback((): TimelineScrollAnchor | null => {
+    const node = timelineRef.current
+    const rows = timelineRowsRef.current
+    const layout = rowLayoutRef.current
+    if (!node) return findTimelineScrollAnchor(rows, layout, 0)
+
+    const viewportTop = node.getBoundingClientRect().top
+    let nearest: TimelineScrollAnchor | null = null
+    let nearestDistance = Number.POSITIVE_INFINITY
+
+    for (const candidate of Array.from(node.querySelectorAll<HTMLElement>('.timeline-row[data-timeline-key]'))) {
+      const key = candidate.dataset.timelineKey
+      if (!key) continue
+      const index = layout.indexByKey.get(key)
+      if (index == null) continue
+
+      const rect = candidate.getBoundingClientRect()
+      if (rect.bottom <= viewportTop) continue
+      const distance = Math.max(rect.top - viewportTop, 0)
+      if (distance >= nearestDistance) continue
+
+      nearestDistance = distance
+      nearest = {
+        index,
+        key,
+        offset: node.scrollTop - layout.tops[index],
+      }
+      if (distance === 0) break
+    }
+
+    return nearest ?? findTimelineScrollAnchor(rows, layout, node.scrollTop)
+  }, [])
+
   const markTimelineUserScrolling = useCallback(() => {
     if (timelineHeightOverrideRef.current == null) {
       const stableHeight = rowLayoutRef.current.totalHeight
       timelineHeightOverrideRef.current = stableHeight
-      activeTimelineScrollAnchorRef.current = findTimelineScrollAnchor(
-        timelineRowsRef.current,
-        rowLayoutRef.current,
-        timelineRef.current?.scrollTop ?? 0,
-      )
+      activeTimelineScrollAnchorRef.current = captureTimelineScrollAnchor()
       setTimelineHeightOverride(stableHeight)
     }
 
@@ -2734,20 +2767,13 @@ export default function MessageView({
     userScrollingTimerRef.current = window.setTimeout(() => {
       userScrollingRef.current = false
       userScrollingTimerRef.current = null
-      const node = timelineRef.current
-      if (node) {
-        activeTimelineScrollAnchorRef.current = findTimelineScrollAnchor(
-          timelineRowsRef.current,
-          rowLayoutRef.current,
-          node.scrollTop,
-        )
-      }
+      activeTimelineScrollAnchorRef.current ??= captureTimelineScrollAnchor()
       timelineHeightOverrideRef.current = null
       pendingTimelineAnchorRestoreRef.current = true
       setTimelineHeightOverride(null)
       scheduleTimelineMeasurementFlushRef.current()
     }, SCROLL_IDLE_MS)
-  }, [])
+  }, [captureTimelineScrollAnchor])
 
   useEffect(() => {
     const node = timelineRef.current
@@ -2842,15 +2868,13 @@ export default function MessageView({
     const isProgrammaticScroll = performance.now() < programmaticScrollUntilRef.current
     if (!isProgrammaticScroll) {
       markTimelineUserScrolling()
+      pendingMountedAnchorCaptureRef.current = true
     }
     if (scrollRafRef.current != null) return
     scrollRafRef.current = window.requestAnimationFrame(() => {
       scrollRafRef.current = null
       const node = timelineRef.current
       if (!node) return
-      if (!isProgrammaticScroll) {
-        activeTimelineScrollAnchorRef.current = findTimelineScrollAnchor(timelineRowsRef.current, rowLayoutRef.current, node.scrollTop)
-      }
       scheduleTimelineMeasurementFlushRef.current()
       setTimelineScrollTop(node.scrollTop)
       if (performance.now() < suppressFollowEvalUntilRef.current) return
@@ -4859,6 +4883,13 @@ export default function MessageView({
 
     return { totalHeight: window.totalHeight, visibleRows }
   }, [rowLayout, transcriptTimelineRows, timelineScrollTop, timelineViewportHeight])
+
+  useLayoutEffect(() => {
+    if (!pendingMountedAnchorCaptureRef.current) return
+    pendingMountedAnchorCaptureRef.current = false
+    activeTimelineScrollAnchorRef.current = captureTimelineScrollAnchor()
+  }, [captureTimelineScrollAnchor, timelineScrollTop, virtualTimeline.visibleRows])
+
   const timelineRenderedHeight = useMemo(() => {
     const lastVisibleRow = virtualTimeline.visibleRows.at(-1)
     const visibleBottom = lastVisibleRow
