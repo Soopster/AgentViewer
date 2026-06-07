@@ -34,7 +34,9 @@ import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import { getCodeThemeStyle } from '@/lib/codeThemeStyles'
 import { useCodeTheme } from './CodeThemeContext'
-import { PierreFileDiffView, type PierreDiffPresentation } from './PierreDiffView'
+import type { ReactNode } from 'react'
+import type { SelectedLineRange } from '@pierre/diffs'
+import { PierreFileDiffView, type PierreAnnotationMetadata, type PierreDiffAnnotation, type PierreDiffPresentation } from './PierreDiffView'
 
 SyntaxHighlighter.registerLanguage('bash', bash)
 SyntaxHighlighter.registerLanguage('sh', bash)
@@ -333,6 +335,39 @@ export function CodeViewer({
   )
 }
 
-export function DiffView({ oldStr, newStr, filePath, presentation }: { oldStr: string; newStr: string; filePath?: string; presentation?: PierreDiffPresentation }) {
-  return <PierreFileDiffView oldStr={oldStr} newStr={newStr} filePath={filePath} maxHeight={500} presentation={presentation} />
+export function DiffView({
+  oldStr,
+  newStr,
+  filePath,
+  presentation,
+  selectedLines,
+  onSelectedLinesChange,
+  lineAnnotations,
+  renderAnnotation,
+  onGutterUtilityClick,
+}: {
+  oldStr: string
+  newStr: string
+  filePath?: string
+  presentation?: PierreDiffPresentation
+  selectedLines?: SelectedLineRange | null
+  onSelectedLinesChange?: (selection: SelectedLineRange | null) => void
+  lineAnnotations?: PierreDiffAnnotation<PierreAnnotationMetadata>[]
+  renderAnnotation?: (annotation: PierreDiffAnnotation<PierreAnnotationMetadata>) => ReactNode
+  onGutterUtilityClick?: (range: SelectedLineRange) => void
+}) {
+  return (
+    <PierreFileDiffView
+      oldStr={oldStr}
+      newStr={newStr}
+      filePath={filePath}
+      maxHeight={500}
+      presentation={presentation}
+      selectedLines={selectedLines}
+      onSelectedLinesChange={onSelectedLinesChange}
+      lineAnnotations={lineAnnotations}
+      renderAnnotation={renderAnnotation}
+      onGutterUtilityClick={onGutterUtilityClick}
+    />
+  )
 }

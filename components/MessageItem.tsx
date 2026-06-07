@@ -28,7 +28,9 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk/sdk-tools'
 import { getAssistantLabel } from '@/lib/provider'
 import { Separator } from '@/components/ui/separator'
-import type { PierreChangeStyle, PierreDiffPresentation, PierreDiffStyle, PierreInlineDiffStyle } from './PierreDiffView'
+import type { SelectedLineRange } from '@pierre/diffs'
+import type { PierreAnnotationMetadata, PierreChangeStyle, PierreDiffAnnotation, PierreDiffPresentation, PierreDiffStyle, PierreInlineDiffStyle } from './PierreDiffView'
+import { useDiffComments } from './diffComments'
 
 // ── Tool color palette ────────────────────────────────────────────────────────
 
@@ -402,7 +404,15 @@ function CardShell({
 
 // ── Diff view ─────────────────────────────────────────────────────────────────
 
-function DiffView(props: { oldStr: string; newStr: string; filePath?: string; presentation?: PierreDiffPresentation }) {
+type DiffAnnotationProps = {
+  selectedLines?: SelectedLineRange | null
+  onSelectedLinesChange?: (selection: SelectedLineRange | null) => void
+  lineAnnotations?: PierreDiffAnnotation<PierreAnnotationMetadata>[]
+  renderAnnotation?: (annotation: PierreDiffAnnotation<PierreAnnotationMetadata>) => React.ReactNode
+  onGutterUtilityClick?: (range: SelectedLineRange) => void
+}
+
+function DiffView(props: { oldStr: string; newStr: string; filePath?: string; presentation?: PierreDiffPresentation } & DiffAnnotationProps) {
   return (
     <Suspense fallback={<PlainCodeBlock code={props.newStr || props.oldStr} language={detectLanguageFromPath(props.filePath)} maxHeight={500} />}>
       <LazyDiffView {...props} />
@@ -445,14 +455,28 @@ function PatchDiffView({
   patch,
   maxHeight = 420,
   presentation,
+  selectedLines,
+  onSelectedLinesChange,
+  lineAnnotations,
+  renderAnnotation,
+  onGutterUtilityClick,
 }: {
   patch: string
   maxHeight?: number
   presentation?: PierreDiffPresentation
-}) {
+} & DiffAnnotationProps) {
   return (
     <Suspense fallback={<PlainCodeBlock code={patch} language="diff" maxHeight={maxHeight} />}>
-      <LazyPierrePatchDiffView patch={patch} maxHeight={maxHeight} presentation={presentation} />
+      <LazyPierrePatchDiffView
+        patch={patch}
+        maxHeight={maxHeight}
+        presentation={presentation}
+        selectedLines={selectedLines}
+        onSelectedLinesChange={onSelectedLinesChange}
+        lineAnnotations={lineAnnotations}
+        renderAnnotation={renderAnnotation}
+        onGutterUtilityClick={onGutterUtilityClick}
+      />
     </Suspense>
   )
 }
@@ -468,6 +492,7 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
   const largeDiff = isLargeTextPayload(oldStr, newStr)
   const [open, setOpen] = useState(() => !largeDiff)
   const [presentation, diffStyle, toggleDiffStyleOverride] = useDiffPresentation()
+  const comments = useDiffComments(filePath)
   const [hovered, setHovered] = useState(false)
   const delta    = countLines(newStr) - countLines(oldStr)
   const sign     = delta > 0 ? `+${delta}` : String(delta)
@@ -509,7 +534,17 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
           <div style={{ padding: '2px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {filePath}
           </div>
-          <DiffView oldStr={oldStr} newStr={newStr} filePath={filePath} presentation={presentation} />
+          <DiffView
+            oldStr={oldStr}
+            newStr={newStr}
+            filePath={filePath}
+            presentation={presentation}
+            selectedLines={comments.selectedLines}
+            onSelectedLinesChange={comments.onSelectedLinesChange}
+            lineAnnotations={comments.lineAnnotations}
+            renderAnnotation={comments.renderAnnotation}
+            onGutterUtilityClick={comments.onGutterUtilityClick}
+          />
         </>
       ) : undefined}
     />
@@ -640,51 +675,84 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
                 : change.kind != null
                 ? safeJson(change.kind)
                 : ''
-              const diffText = change.diff ?? ''
               return (
-                <div key={`${filePath}:${index}`} style={{ borderTop: index > 0 ? '1px solid var(--border)' : undefined }}>
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '6px 12px',
-                    background: 'var(--surface-2)',
-                    borderBottom: '1px solid var(--border)',
-                  }}>
-                    <span style={{
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 11,
-                      color: c,
-                      fontWeight: 500,
-                      letterSpacing: '0.06em',
-                      flexShrink: 0,
-                    }}>
-                      {kind || 'change'}
-                    </span>
-                    <span style={{
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 12,
-                      color: 'var(--text)',
-                      flex: 1,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}>
-                      {filePath}
-                    </span>
-                  </div>
-                  <PatchDiffView
-                    patch={diffText}
-                    maxHeight={420}
-                    presentation={presentation}
-                  />
-                </div>
+                <FileChangeDiffRegion
+                  key={`${filePath}:${index}`}
+                  index={index}
+                  filePath={filePath}
+                  kind={kind}
+                  diffText={change.diff ?? ''}
+                  accentColor={c}
+                  presentation={presentation}
+                />
               )
             })
           )}
         </div>
       ) : undefined}
     />
+  )
+}
+
+function FileChangeDiffRegion({
+  index,
+  filePath,
+  kind,
+  diffText,
+  accentColor,
+  presentation,
+}: {
+  index: number
+  filePath: string
+  kind: string
+  diffText: string
+  accentColor: string
+  presentation: PierreDiffPresentation
+}) {
+  const comments = useDiffComments(filePath)
+  return (
+    <div style={{ borderTop: index > 0 ? '1px solid var(--border)' : undefined }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '6px 12px',
+        background: 'var(--surface-2)',
+        borderBottom: '1px solid var(--border)',
+      }}>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          color: accentColor,
+          fontWeight: 500,
+          letterSpacing: '0.06em',
+          flexShrink: 0,
+        }}>
+          {kind || 'change'}
+        </span>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 12,
+          color: 'var(--text)',
+          flex: 1,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {filePath}
+        </span>
+      </div>
+      <PatchDiffView
+        patch={diffText}
+        maxHeight={420}
+        presentation={presentation}
+        selectedLines={comments.selectedLines}
+        onSelectedLinesChange={comments.onSelectedLinesChange}
+        lineAnnotations={comments.lineAnnotations}
+        renderAnnotation={comments.renderAnnotation}
+        onGutterUtilityClick={comments.onGutterUtilityClick}
+      />
+    </div>
   )
 }
 
@@ -2196,29 +2264,71 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
             {filePath}
           </div>
           {edits.map((edit, i) => (
-            <div key={i}>
-              {edits.length > 1 && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '2px 12px',
-                  borderTop: '1px solid var(--border)',
-                  background: 'var(--surface)',
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: 11, color: 'var(--text-3)',
-                  userSelect: 'none',
-                }}>
-                  <span>{i + 1} / {edits.length}</span>
-                  {edit.replace_all && (
-                    <span style={{ color: 'var(--amber)', border: '1px solid var(--border)', borderRadius: 3, padding: '0 4px' }}>replace_all</span>
-                  )}
-                </div>
-              )}
-              <DiffView oldStr={edit.old_string ?? ''} newStr={edit.new_string ?? ''} filePath={filePath} presentation={presentation} />
-            </div>
+            <MultiEditDiffRegion
+              key={i}
+              index={i}
+              total={edits.length}
+              replaceAll={!!edit.replace_all}
+              oldStr={edit.old_string ?? ''}
+              newStr={edit.new_string ?? ''}
+              filePath={filePath}
+              presentation={presentation}
+            />
           ))}
         </>
       ) : undefined}
     />
+  )
+}
+
+function MultiEditDiffRegion({
+  index,
+  total,
+  replaceAll,
+  oldStr,
+  newStr,
+  filePath,
+  presentation,
+}: {
+  index: number
+  total: number
+  replaceAll: boolean
+  oldStr: string
+  newStr: string
+  filePath: string
+  presentation: PierreDiffPresentation
+}) {
+  const comments = useDiffComments(filePath)
+  return (
+    <div>
+      {total > 1 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '2px 12px',
+          borderTop: '1px solid var(--border)',
+          background: 'var(--surface)',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11, color: 'var(--text-3)',
+          userSelect: 'none',
+        }}>
+          <span>{index + 1} / {total}</span>
+          {replaceAll && (
+            <span style={{ color: 'var(--amber)', border: '1px solid var(--border)', borderRadius: 3, padding: '0 4px' }}>replace_all</span>
+          )}
+        </div>
+      )}
+      <DiffView
+        oldStr={oldStr}
+        newStr={newStr}
+        filePath={filePath}
+        presentation={presentation}
+        selectedLines={comments.selectedLines}
+        onSelectedLinesChange={comments.onSelectedLinesChange}
+        lineAnnotations={comments.lineAnnotations}
+        renderAnnotation={comments.renderAnnotation}
+        onGutterUtilityClick={comments.onGutterUtilityClick}
+      />
+    </div>
   )
 }
 

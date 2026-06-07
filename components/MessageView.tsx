@@ -5576,96 +5576,96 @@ export default function MessageView({
             <div style={{
               position: 'absolute', top: 32, right: 0, zIndex: 60,
               background: 'var(--surface-2)', border: '1px solid var(--border)',
-              borderRadius: 8, padding: '10px 0', minWidth: 200,
+              borderRadius: 8, padding: '6px 0', minWidth: 200,
               boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
               display: 'flex', flexDirection: 'column', gap: 0,
             }}>
               {/* Visualiser toggle */}
               <button type="button" onClick={() => { setShowVisualizer(v => !v); setViewDropdownOpen(false) }}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showVisualizer ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showVisualizer ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                 <ChartNetwork style={{ width: 13, height: 13, flexShrink: 0 }} />
                 {showVisualizer ? 'TRANSCRIPT' : 'VISUALISER'}
               </button>
               {/* Tasks toggle */}
               {!isProject && taskRegistry.size > 0 && (
                 <button type="button" onClick={() => { setTaskRailOpen(v => !v); setViewDropdownOpen(false) }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: taskRailOpen ? 'var(--amber)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: taskRailOpen ? 'var(--amber)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                   ☐ TASKS · {taskRegistry.size}
                 </button>
               )}
-              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* View mode */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>MESSAGES</div>
               {(['conversation', 'continue', 'stream'] as const).map((mode) => (
                 <button key={mode} type="button"
                   onClick={() => { setViewMode(mode); setViewDropdownOpen(false) }}
-                  style={{ padding: '7px 14px', background: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'rgba(139,92,246,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'var(--violet)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                  style={{ padding: '6px 14px', background: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'rgba(139,92,246,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'var(--violet)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                   {mode === 'conversation' ? 'FULL' : mode === 'continue' ? 'CONT' : 'STREAM'}
                   <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
                     {mode === 'conversation' ? 'all cards' : mode === 'continue' ? 'no tools' : 'plain text'}
                   </span>
                 </button>
               ))}
-              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Density */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DENSITY</div>
               {(['comfortable', 'balanced', 'dense'] as const).map((d) => (
                 <button key={d} type="button"
                   onClick={() => { setDensity(d); setViewDropdownOpen(false) }}
-                  style={{ padding: '7px 14px', background: density === d ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: density === d ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                  style={{ padding: '6px 14px', background: density === d ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: density === d ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                   {d === 'comfortable' ? 'COMFY' : d.toUpperCase()}
                 </button>
               ))}
-              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Diff style */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DIFF STYLE</div>
               {(['stacked', 'split'] as const).map((style) => (
                 <button key={style} type="button"
                   onClick={() => { setDiffStyle(style); setViewDropdownOpen(false) }}
-                  style={{ padding: '7px 14px', background: diffStyle === style ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: diffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                  style={{ padding: '6px 14px', background: diffStyle === style ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: diffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', whiteSpace: 'nowrap' }}>
                   {style.toUpperCase()}
                   <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
-                    {style === 'stacked' ? 'lines in one column' : 'before / after side by side'}
+                    {style === 'stacked' ? 'one column' : 'side by side'}
                   </span>
                 </button>
               ))}
-              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Change indicators */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>CHANGE INDICATORS</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 4px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 3px' }}>
                 {(['classic', 'bars', 'none'] as const).map((style) => (
                   <button key={style} type="button"
                     onClick={() => { setDiffOptions((prev) => ({ ...prev, changeStyle: style })); setViewDropdownOpen(false) }}
-                    style={{ padding: '5px 10px', borderRadius: 4, background: diffOptions.changeStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.changeStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em' }}>
+                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.changeStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.changeStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em' }}>
                     {style.toUpperCase()}
                   </button>
                 ))}
               </div>
-              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Inline diff highlighting */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>INLINE DIFF</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 4px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 3px' }}>
                 {(['word-alt', 'word', 'char', 'none'] as const).map((style) => (
                   <button key={style} type="button"
                     onClick={() => { setDiffOptions((prev) => ({ ...prev, inlineDiffStyle: style })); setViewDropdownOpen(false) }}
-                    style={{ padding: '5px 10px', borderRadius: 4, background: diffOptions.inlineDiffStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.inlineDiffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em' }}>
+                    style={{ padding: '4px 8px', borderRadius: 4, background: diffOptions.inlineDiffStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.inlineDiffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em' }}>
                     {style === 'word-alt' ? 'WORD-ALT' : style.toUpperCase()}
                   </button>
                 ))}
               </div>
-              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Display toggles */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DISPLAY</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, padding: '0 6px' }}>
                 {([
-                  { key: 'backgrounds', label: 'BACKGROUNDS', active: diffOptions.showBackgrounds, toggle: () => setDiffOptions((prev) => ({ ...prev, showBackgrounds: !prev.showBackgrounds })) },
-                  { key: 'wrap', label: 'WRAPPING', active: diffOptions.wrap, toggle: () => setDiffOptions((prev) => ({ ...prev, wrap: !prev.wrap })) },
-                  { key: 'lineNumbers', label: 'LINE NUMBERS', active: diffOptions.showLineNumbers, toggle: () => setDiffOptions((prev) => ({ ...prev, showLineNumbers: !prev.showLineNumbers })) },
-                  { key: 'hunkHeaders', label: 'HUNK HEADERS', active: diffOptions.showHunkHeaders, toggle: () => setDiffOptions((prev) => ({ ...prev, showHunkHeaders: !prev.showHunkHeaders })) },
+                  { key: 'backgrounds', label: 'BG', active: diffOptions.showBackgrounds, toggle: () => setDiffOptions((prev) => ({ ...prev, showBackgrounds: !prev.showBackgrounds })) },
+                  { key: 'wrap', label: 'WRAP', active: diffOptions.wrap, toggle: () => setDiffOptions((prev) => ({ ...prev, wrap: !prev.wrap })) },
+                  { key: 'lineNumbers', label: 'LINE #S', active: diffOptions.showLineNumbers, toggle: () => setDiffOptions((prev) => ({ ...prev, showLineNumbers: !prev.showLineNumbers })) },
+                  { key: 'hunkHeaders', label: 'HUNKS', active: diffOptions.showHunkHeaders, toggle: () => setDiffOptions((prev) => ({ ...prev, showHunkHeaders: !prev.showHunkHeaders })) },
                 ] as const).map((opt) => (
                   <button key={opt.key} type="button"
                     onClick={opt.toggle}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 8px', background: 'transparent', border: 0, cursor: 'pointer', color: opt.active ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em', textAlign: 'left' }}>
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', background: 'transparent', border: 0, cursor: 'pointer', color: opt.active ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em', textAlign: 'left', whiteSpace: 'nowrap' }}>
                     {opt.active ? '☑' : '☐'} {opt.label}
                   </button>
                 ))}
@@ -5741,7 +5741,7 @@ export default function MessageView({
                 )}
                 {sessionCapabilities?.deleteSession && (
                   <>
-                    <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+                    <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
                     <button type="button" onClick={() => { handleDeleteSession(); setActionsDropdownOpen(false) }} disabled={deleting}
                       style={{ padding: '7px 14px', background: 'transparent', border: 0, cursor: deleting ? 'not-allowed' : 'pointer', color: deleting ? 'var(--red, #f87171)' : 'rgba(248,113,113,0.8)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', opacity: deleting ? 0.55 : 1 }}>
                       {deleting ? 'DELETING…' : 'DELETE'}
