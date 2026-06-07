@@ -98,6 +98,7 @@ type TuiState = {
   transcriptView?: unknown
   tabsEnabled?: unknown
   showToolCalls?: unknown
+  velocityScroll?: unknown
   sidebarSort?: unknown
   sessionReaderState?: unknown
 }
@@ -246,6 +247,15 @@ export async function getConfiguredTuiShowToolCalls(): Promise<boolean> {
 
 export async function setConfiguredTuiShowToolCalls(showToolCalls: boolean): Promise<void> {
   await writeTuiState({ showToolCalls })
+}
+
+export async function getConfiguredTuiVelocityScroll(): Promise<boolean> {
+  const parsed = await readTuiState()
+  return parsed.velocityScroll === true
+}
+
+export async function setConfiguredTuiVelocityScroll(velocityScroll: boolean): Promise<void> {
+  await writeTuiState({ velocityScroll })
 }
 
 export async function getConfiguredTuiSidebarSort(): Promise<TuiSidebarSort> {

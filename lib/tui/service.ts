@@ -17,6 +17,7 @@ import {
   getConfiguredTuiTabsEnabled,
   getConfiguredTuiTheme,
   getConfiguredTuiTranscriptView,
+  getConfiguredTuiVelocityScroll,
   setConfiguredTuiDensity,
   setConfiguredTuiDiffLayout,
   setConfiguredTuiFocusMode,
@@ -29,6 +30,7 @@ import {
   setConfiguredTuiTheme,
   setConfiguredTuiThemeSync,
   setConfiguredTuiTranscriptView,
+  setConfiguredTuiVelocityScroll,
   type TuiSessionReaderState,
   type TuiDiffLayout,
   type TuiSidebarSort,
@@ -153,6 +155,14 @@ export async function readTuiShowToolCalls(): Promise<boolean> {
 
 export async function writeTuiShowToolCalls(showToolCalls: boolean): Promise<void> {
   await setConfiguredTuiShowToolCalls(showToolCalls)
+}
+
+export async function readTuiVelocityScroll(): Promise<boolean> {
+  return getConfiguredTuiVelocityScroll()
+}
+
+export async function writeTuiVelocityScroll(velocityScroll: boolean): Promise<void> {
+  await setConfiguredTuiVelocityScroll(velocityScroll)
 }
 
 export async function readTuiSidebarSort(): Promise<TuiSidebarSort> {

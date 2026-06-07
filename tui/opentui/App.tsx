@@ -58,6 +58,7 @@ import {
   readTuiTabsEnabled,
   readTuiTheme,
   readTuiTranscriptView,
+  readTuiVelocityScroll,
   readTuiSessionBookmarkIds,
   readTuiAllBookmarks,
   toggleTuiSessionBookmark,
@@ -77,6 +78,7 @@ import {
   writeTuiTheme,
   writeTuiThemeSync,
   writeTuiTranscriptView,
+  writeTuiVelocityScroll,
   type TuiSessionDetail,
   type TuiDiffLayout,
   type TuiSidebarSort,
@@ -365,6 +367,12 @@ const TASK_PANEL_RESIZE_STEP = 4
 const SESSION_CACHE_LIMIT = 2
 const EXIT_CLEANUP_TIMEOUT_MS = 1500
 const MESSAGE_SCROLL_ACCEL = new MacOSScrollAccel()
+// Velocity scroll tuning — see velocityScrollStep(). A gap longer than the
+// reset window between same-direction j/k/↑/↓ events means the key was
+// released, so the streak (and thus the speed) starts over from base.
+const VELOCITY_SCROLL_RESET_MS = 160
+const VELOCITY_SCROLL_RAMP_MS = 700
+const VELOCITY_SCROLL_MAX_STEP = 8
 const TERMINAL_SELECTION_COPY_WINDOW_MS = 15_000
 
 type PaneFocus = 'sessions' | 'messages'
@@ -2815,6 +2823,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
   { id: 'tools',      label: 'Toggle tool calls',      key: 'X',  category: 'View'       },
+  { id: 'velocity-scroll', label: 'Toggle velocity scroll', key: '⇧V', category: 'View'  },
   { id: 'mode',       label: 'Cycle provider mode',    key: 'M',  category: 'Session'    },
   { id: 'model',      label: 'Pick model and effort',  key: '⌥M', category: 'Session'    },
   // App
@@ -3331,6 +3340,7 @@ export default function OpenTuiApp() {
   const [railVisible, setRailVisible] = useState(true)
   const [tabsEnabled, setTabsEnabled] = useState(true)
   const [showToolCalls, setShowToolCalls] = useState(true)
+  const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
   const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
   const [sidebarWidthPreference, setSidebarWidthPreference] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [taskPanelWidth, setTaskPanelWidth] = useState(TASK_PANEL_DEFAULT_WIDTH)
@@ -3488,6 +3498,11 @@ export default function OpenTuiApp() {
   const sidebarScrollRef = useRef<ScrollBoxRenderable>(null)
   const pausedTranscriptScrollTopRef = useRef<number | null>(null)
   const prevFollowTailRef = useRef(true)
+  // Velocity scroll: ramps the per-tick cursor step up smoothly the longer j/k/↑/↓
+  // is held, by tracking how recently the same-direction key keeps repeating.
+  // A gap longer than VELOCITY_SCROLL_RESET_MS means the key was released (or
+  // re-pressed deliberately), so the streak — and the speed — resets to base.
+  const velocityScrollStateRef = useRef<{ direction: -1 | 1; streakStart: number; lastEventTime: number } | null>(null)
   const prevTranscriptLengthRef = useRef(0)
   const tabSelectRef = useRef<TabSelectRenderable>(null)
   const sessionRequestRef = useRef(0)
@@ -5278,6 +5293,25 @@ export default function OpenTuiApp() {
     }
   })
 
+  // Returns the number of cards to move for one j/k/↑/↓ tick. With velocity
+  // scroll off (or on a fresh tap) this is just 1; while the same direction
+  // keeps repeating, the step eases from 1 up to VELOCITY_SCROLL_MAX_STEP over
+  // VELOCITY_SCROLL_RAMP_MS — a quadratic ease-in so the ramp feels gradual
+  // rather than snapping straight to top speed.
+  const velocityScrollStep = useEffectEvent((direction: -1 | 1): number => {
+    if (!velocityScrollEnabled) return 1
+    const now = performance.now()
+    const state = velocityScrollStateRef.current
+    if (!state || state.direction !== direction || now - state.lastEventTime > VELOCITY_SCROLL_RESET_MS) {
+      velocityScrollStateRef.current = { direction, streakStart: now, lastEventTime: now }
+      return 1
+    }
+    state.lastEventTime = now
+    const t = clamp((now - state.streakStart) / VELOCITY_SCROLL_RAMP_MS, 0, 1)
+    const eased = t * t
+    return Math.max(1, Math.round(1 + (VELOCITY_SCROLL_MAX_STEP - 1) * eased))
+  })
+
   const moveViewport = useEffectEvent((direction: -1 | 1) => {
     const step = Math.max(Math.floor((height - (focusMode ? 5 : 7)) / 3), 1)
     moveCursor(direction * step)
@@ -6564,6 +6598,7 @@ export default function OpenTuiApp() {
           configuredSidebarSort,
           configuredSidebarWidth,
           configuredShowToolCalls,
+          configuredVelocityScroll,
         ] = await Promise.all([
           readTuiTheme(),
           readTuiProvider(),
@@ -6576,6 +6611,7 @@ export default function OpenTuiApp() {
           readTuiSidebarSort(),
           readTuiSidebarWidth(),
           readTuiShowToolCalls(),
+          readTuiVelocityScroll(),
         ])
         if (cancelled) return
         setThemeMode(configuredTheme)
@@ -6590,6 +6626,7 @@ export default function OpenTuiApp() {
         setSidebarSort(configuredSidebarSort)
         setSidebarWidthPreference(configuredSidebarWidth)
         setShowToolCalls(configuredShowToolCalls)
+        setVelocityScrollEnabled(configuredVelocityScroll)
         if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
         await refreshSessions(configuredProvider, false, true)
       } catch (err) {
@@ -7066,10 +7103,10 @@ export default function OpenTuiApp() {
 
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b bookmark  [ ] jump marks  S-B all marks  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  s diff:${diffLayout}  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  r refresh  ? commands  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b bookmark  [ ] jump marks  S-B all marks  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  s diff:${diffLayout}  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  V ${velocityScrollEnabled ? 'velocity off' : 'velocity on'}  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
-    [width, diffLayout, transcriptView, density, showToolCalls],
+    [width, diffLayout, transcriptView, density, showToolCalls, velocityScrollEnabled],
   )
 
   const composerStatusMessage = composerError
@@ -7571,6 +7608,14 @@ export default function OpenTuiApp() {
         setShowToolCalls((v) => {
           const next = !v
           void writeTuiShowToolCalls(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
+          return next
+        })
+        break
+      }
+      case 'velocity-scroll': {
+        setVelocityScrollEnabled((v) => {
+          const next = !v
+          void writeTuiVelocityScroll(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store velocity scroll'))
           return next
         })
         break
@@ -8419,14 +8464,14 @@ export default function OpenTuiApp() {
 
     if (effectiveFocus === 'messages' && (key.name === 'j' || key.name === 'down')) {
       handled(() => {
-        moveCursor(1)
+        moveCursor(velocityScrollStep(1))
       })
       return
     }
 
     if (effectiveFocus === 'messages' && (key.name === 'k' || key.name === 'up')) {
       handled(() => {
-        moveCursor(-1)
+        moveCursor(-velocityScrollStep(-1))
       })
       return
     }
@@ -8669,6 +8714,18 @@ export default function OpenTuiApp() {
         setShowToolCalls((v) => {
           const next = !v
           void writeTuiShowToolCalls(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
+          return next
+        })
+      })
+      return
+    }
+
+    if (sequence === 'V') {
+      handled(() => {
+        setVelocityScrollEnabled((v) => {
+          const next = !v
+          void writeTuiVelocityScroll(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store velocity scroll'))
+          setNotice({ tone: 'info', text: next ? 'Velocity scroll enabled' : 'Velocity scroll disabled' })
           return next
         })
       })
