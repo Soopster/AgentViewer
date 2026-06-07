@@ -170,6 +170,25 @@ type TimelineRow = {
 
 type TranscriptFilter = 'all' | 'user' | 'assistant' | 'system' | 'tools' | 'errors' | 'thinking' | 'media'
 type ActiveTranscriptFilter = Exclude<TranscriptFilter, 'all'>
+type TimelineEstimateBucket = 'text' | 'tool' | 'media' | 'system' | 'stream'
+
+type TimelineEstimateCalibration = {
+  estimatedTotal: number
+  measuredTotal: number
+  sampleCount: number
+}
+
+type TimelineEstimateSample = {
+  bucket: TimelineEstimateBucket
+  estimatedHeight: number
+  measuredHeight: number
+}
+
+function useLazyRef<T>(create: () => T): { current: T } {
+  const ref = useRef<T | null>(null)
+  if (ref.current === null) ref.current = create()
+  return ref as { current: T }
+}
 
 const TRANSCRIPT_FILTERS: Array<{ key: TranscriptFilter; label: string }> = [
   { key: 'all', label: 'All' },
@@ -198,6 +217,10 @@ const SCROLL_IDLE_MS = 140
 // while overscanned rows settle. The window outlives the wheel event long
 // enough to cover ResizeObserver delivery and the following animation frame.
 const WHEEL_SCROLL_COMPENSATION_MS = 180
+const TIMELINE_CALIBRATION_MIN_SAMPLES = 3
+const TIMELINE_CALIBRATION_BUCKET_CONFIDENCE = 6
+const TIMELINE_CALIBRATION_MIN_RATIO = 0.22
+const TIMELINE_CALIBRATION_MAX_RATIO = 2
 // Safety net: how long the composer will wait for a turn's persisted rows to
 // land before force-revealing the polled timeline. The 2s message poll means
 // the durable rows are normally present within a poll or two; this only fires
@@ -1195,6 +1218,36 @@ function estimateTextSectionHeight(
   return Math.max(min, bounded)
 }
 
+const STANDALONE_DATA_IMAGE_ESTIMATE_RE =
+  /^(?:\[image\]\s*)?data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+\s*$/
+
+function hasStandaloneDataImage(text: string): boolean {
+  return text.split('\n').some((line) => STANDALONE_DATA_IMAGE_ESTIMATE_RE.test(line.trim()))
+}
+
+function estimateRenderedTextHeight(text: string): number {
+  if (!hasStandaloneDataImage(text)) return estimateTextSectionHeight(text)
+
+  let estimated = 0
+  const textLines: string[] = []
+  const flushText = () => {
+    const chunk = textLines.join('\n').trimEnd()
+    if (chunk) estimated += estimateTextSectionHeight(chunk)
+    textLines.length = 0
+  }
+
+  for (const line of text.split('\n')) {
+    if (!STANDALONE_DATA_IMAGE_ESTIMATE_RE.test(line.trim())) {
+      textLines.push(line)
+      continue
+    }
+    flushText()
+    estimated += 520
+  }
+  flushText()
+  return Math.max(estimated, 56)
+}
+
 function estimateContentBlockHeight(block: ContentBlock): number {
   if (block.type === 'text') return estimateTextSectionHeight(typeof block.text === 'string' ? block.text : '')
   if (block.type === 'thinking') return 70
@@ -1351,7 +1404,7 @@ function estimateToolThreadHeight(block: Extract<ThreadedBlock, { type: 'tool_th
 }
 
 function estimateThreadedBlockHeight(block: ThreadedBlock): number {
-  if (block.type === 'text') return estimateTextSectionHeight(block.text)
+  if (block.type === 'text') return estimateRenderedTextHeight(block.text)
   if (block.type === 'thinking') return 72
   if (block.type === 'image') return 220
   if (block.type === 'tool_thread') return estimateToolThreadHeight(block)
@@ -1365,8 +1418,30 @@ function estimateThreadedBlockHeight(block: ThreadedBlock): number {
   return 68
 }
 
-function estimateTimelineRowHeight(row: TimelineRow): number {
+function timelineEstimateBucket(row: TimelineRow, viewMode: WebViewMode): TimelineEstimateBucket {
+  if (viewMode === 'stream') return 'stream'
+  if (row.message.role === 'system') return 'system'
+  if (row.message.blocks.some((block) => (
+    block.type === 'image' ||
+    (block.type === 'text' && hasStandaloneDataImage(block.text))
+  ))) return 'media'
+  if (row.message.blocks.some((block) => block.type === 'tool_thread')) return 'tool'
+  return 'text'
+}
+
+function estimateTimelineRowHeight(
+  row: TimelineRow,
+  density: MessageDensity = 'balanced',
+  viewMode: WebViewMode = 'conversation',
+): number {
   const { message } = row
+  if (viewMode === 'stream') {
+    const textHeight = message.blocks.reduce((total: number, block: ThreadedBlock) => (
+      block.type === 'text' ? total + estimateRenderedTextHeight(block.text) : total
+    ), 0)
+    return Math.max(56, 45 + textHeight)
+  }
+
   const headerHeight = 82
   const previewHeight = row.previewBadge ? (row.activityDetail ? 42 : 28) : 0
   const liveToolsHeight = row.liveToolActivities && row.liveToolActivities.length > 0
@@ -1374,8 +1449,38 @@ function estimateTimelineRowHeight(row: TimelineRow): number {
     : 0
   const blockGap = Math.max(message.blocks.length - 1, 0) * 8
   const blockHeight = message.blocks.reduce((total: number, block: ThreadedBlock) => total + estimateThreadedBlockHeight(block), 0)
-  const estimated = headerHeight + previewHeight + liveToolsHeight + blockGap + blockHeight
+  const densityAdjustment = density === 'comfortable' ? 16 : density === 'dense' ? -24 : 0
+  const estimated = headerHeight + previewHeight + liveToolsHeight + blockGap + blockHeight + densityAdjustment
   return Math.max(estimated, message.role === 'system' ? 120 : ESTIMATED_TIMELINE_ROW_HEIGHT)
+}
+
+function calibratedTimelineRowHeight(
+  row: TimelineRow,
+  rawEstimate: number,
+  viewMode: WebViewMode,
+  calibration: ReadonlyMap<TimelineEstimateBucket | 'all', TimelineEstimateCalibration>,
+): number {
+  const global = calibration.get('all')
+  if (!global || global.sampleCount < TIMELINE_CALIBRATION_MIN_SAMPLES || global.estimatedTotal <= 0) {
+    return rawEstimate
+  }
+
+  const globalRatio = global.measuredTotal / global.estimatedTotal
+  const bucket = calibration.get(timelineEstimateBucket(row, viewMode))
+  const bucketRatio = bucket && bucket.estimatedTotal > 0
+    ? bucket.measuredTotal / bucket.estimatedTotal
+    : globalRatio
+  const bucketConfidence = bucket
+    ? Math.min(bucket.sampleCount / TIMELINE_CALIBRATION_BUCKET_CONFIDENCE, 1)
+    : 0
+  const ratio = Math.max(
+    TIMELINE_CALIBRATION_MIN_RATIO,
+    Math.min(
+      TIMELINE_CALIBRATION_MAX_RATIO,
+      globalRatio + (bucketRatio - globalRatio) * bucketConfidence,
+    ),
+  )
+  return Math.max(48, Math.round(rawEstimate * ratio))
 }
 
 function readResizeObserverHeight(entry: ResizeObserverEntry, fallbackNode: HTMLElement): number {
@@ -2063,6 +2168,12 @@ export default function MessageView({
   useEffect(() => {
     if (typeof window === 'undefined') return
     window.localStorage.setItem('agentViewer:viewMode', viewMode)
+    rowHeightsRef.current.clear()
+    timelineEstimateCalibrationRef.current.clear()
+    timelineEstimateSamplesRef.current.clear()
+    timelineEstimateCalibrationFrozenRef.current = false
+    setRowMeasurementVersion((version) => version + 1)
+    setPersistedMeasurementVersion((version) => version + 1)
   }, [viewMode])
   const showTools = viewMode === 'conversation' || viewMode === 'full'
   const [density, setDensity] = useState<MessageDensity>(() => {
@@ -2074,6 +2185,9 @@ export default function MessageView({
     if (typeof window === 'undefined') return
     window.localStorage.setItem('agentViewer:density', density)
     rowHeightsRef.current.clear()
+    timelineEstimateCalibrationRef.current.clear()
+    timelineEstimateSamplesRef.current.clear()
+    timelineEstimateCalibrationFrozenRef.current = false
     setRowMeasurementVersion((version) => version + 1)
     setPersistedMeasurementVersion((version) => version + 1)
   }, [density])
@@ -2172,6 +2286,13 @@ export default function MessageView({
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const liveToolInputJsonRef = useRef<Map<number, string>>(new Map())
   const rowHeightsRef = useRef<Map<string, number>>(new Map())
+  const timelineEstimateCalibrationRef = useLazyRef(
+    () => new Map<TimelineEstimateBucket | 'all', TimelineEstimateCalibration>(),
+  )
+  const timelineEstimateSamplesRef = useLazyRef(() => new Map<string, TimelineEstimateSample>())
+  // Recalibrate during initial settling, then keep estimates stable once the
+  // user starts manipulating the scrollbar.
+  const timelineEstimateCalibrationFrozenRef = useRef(false)
   const rowLayoutRef = useRef<TimelineRowLayout>(buildTimelineRowLayout([], new Map(), estimateTimelineRowHeight))
   const threadedCacheRef = useRef<Map<string, ThreadedMessage>>(new Map())
   const prevThreadingRef = useRef<IncrementalThreadingCache | null>(null)
@@ -2650,6 +2771,9 @@ export default function MessageView({
     setTimelineScrollTop(0)
     setTimelineViewportHeight(0)
     rowHeightsRef.current.clear()
+    timelineEstimateCalibrationRef.current.clear()
+    timelineEstimateSamplesRef.current.clear()
+    timelineEstimateCalibrationFrozenRef.current = false
     threadedCacheRef.current.clear()
     prevThreadingRef.current = null
     pendingRowMeasurementsRef.current.clear()
@@ -2753,6 +2877,7 @@ export default function MessageView({
   }, [])
 
   const markTimelineUserScrolling = useCallback(() => {
+    timelineEstimateCalibrationFrozenRef.current = true
     if (timelineHeightOverrideRef.current == null) {
       const stableHeight = rowLayoutRef.current.totalHeight
       timelineHeightOverrideRef.current = stableHeight
@@ -4658,6 +4783,7 @@ export default function MessageView({
       const measurementChanges: TimelineMeasurementChange[] = []
       let changed = false
       let persistedChanged = false
+      let calibrationChanged = false
 
       for (const [key, nextMeasuredHeight] of pending) {
         const index = layout.indexByKey.get(key)
@@ -4672,7 +4798,43 @@ export default function MessageView({
         }
         if (!allowScrollAdjust && anchor && index < anchor.index) continue
 
-        const previousHeight = rowHeightsRef.current.get(key) ?? estimateTimelineRowHeight(row)
+        if (!key.startsWith('live:') && !timelineEstimateCalibrationFrozenRef.current) {
+          const rawEstimate = estimateTimelineRowHeight(row, density, viewMode)
+          const bucket = timelineEstimateBucket(row, viewMode)
+          const previousSample = timelineEstimateSamplesRef.current.get(key)
+          const sampleChanged = !previousSample
+            || previousSample.bucket !== bucket
+            || previousSample.estimatedHeight !== rawEstimate
+            || previousSample.measuredHeight !== nextMeasuredHeight
+          if (sampleChanged) {
+            if (previousSample) {
+              for (const calibrationKey of ['all', previousSample.bucket] as const) {
+                const current = timelineEstimateCalibrationRef.current.get(calibrationKey)
+                if (!current) continue
+                current.estimatedTotal -= previousSample.estimatedHeight
+                current.measuredTotal -= previousSample.measuredHeight
+                current.sampleCount -= 1
+                if (current.sampleCount <= 0) timelineEstimateCalibrationRef.current.delete(calibrationKey)
+              }
+            }
+            for (const calibrationKey of ['all', bucket] as const) {
+              const current = timelineEstimateCalibrationRef.current.get(calibrationKey)
+                ?? { estimatedTotal: 0, measuredTotal: 0, sampleCount: 0 }
+              current.estimatedTotal += rawEstimate
+              current.measuredTotal += nextMeasuredHeight
+              current.sampleCount += 1
+              timelineEstimateCalibrationRef.current.set(calibrationKey, current)
+            }
+            timelineEstimateSamplesRef.current.set(key, {
+              bucket,
+              estimatedHeight: rawEstimate,
+              measuredHeight: nextMeasuredHeight,
+            })
+            calibrationChanged = true
+          }
+        }
+
+        const previousHeight = rowHeightsRef.current.get(key) ?? layout.heights[index]
         pending.delete(key)
         if (nextMeasuredHeight === previousHeight) continue
 
@@ -4689,14 +4851,14 @@ export default function MessageView({
         pendingTimelineScrollCompensationRef.current += scrollDelta
       }
 
-      if (changed) {
+      if (changed || calibrationChanged) {
         setRowMeasurementVersion((version) => version + 1)
       }
-      if (persistedChanged) {
+      if (persistedChanged || calibrationChanged) {
         setPersistedMeasurementVersion((version) => version + 1)
       }
     })
-  }, [])
+  }, [density, viewMode])
 
   const scheduleTimelineMeasurementFlush = useCallback(() => {
     if (pendingRowMeasurementsRef.current.size === 0 || measurementFrameRef.current != null) return
@@ -4715,6 +4877,16 @@ export default function MessageView({
     alignLastTimelineRowToViewportBottom()
   }, [alignLastTimelineRowToViewportBottom, autoFollow, hasTranscriptTimeline, loading, rowMeasurementVersion, scrollTimelineToBottom, transcriptTimelineRows.length])
 
+  const estimateTimelineRowHeightForLayout = useCallback((row: TimelineRow) => {
+    const rawEstimate = estimateTimelineRowHeight(row, density, viewMode)
+    return calibratedTimelineRowHeight(
+      row,
+      rawEstimate,
+      viewMode,
+      timelineEstimateCalibrationRef.current,
+    )
+  }, [density, viewMode])
+
   // Layout for the persisted prefix only. Keyed on persistedMeasurementVersion
   // (not rowMeasurementVersion) so a streaming turn — which bumps the live
   // row's measured height every few frames — does NOT re-run the O(n) height
@@ -4722,8 +4894,8 @@ export default function MessageView({
   // delta (persistedTimelineRows identity) or a persisted-row resize.
   const baseLayout = useMemo(() => {
     return measureSync('timeline.baseLayout', () =>
-      buildTimelineRowLayout(persistedTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight))
-  }, [persistedMeasurementVersion, persistedTimelineRows])
+      buildTimelineRowLayout(persistedTimelineRows, rowHeightsRef.current, estimateTimelineRowHeightForLayout))
+  }, [estimateTimelineRowHeightForLayout, persistedMeasurementVersion, persistedTimelineRows])
 
   // Separate the expensive O(n) height accumulation from the scroll-reactive
   // visibility window. rowLayout only recomputes when rows or measurements
@@ -4740,13 +4912,13 @@ export default function MessageView({
     // and the base prefix can't be reused — rebuild the full layout.
     if (transcriptTimelineRows !== timelineRows) {
       return measureSync('timeline.fullLayout', () =>
-        buildTimelineRowLayout(transcriptTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight))
+        buildTimelineRowLayout(transcriptTimelineRows, rowHeightsRef.current, estimateTimelineRowHeightForLayout))
     }
     // Otherwise reuse baseLayout for the persisted prefix and append only the
     // live suffix.
     return measureSync('timeline.appendLayout', () =>
-      appendTimelineRowLayout(baseLayout, liveTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight))
-  }, [baseLayout, liveTimelineRows, rowMeasurementVersion, timelineRows, transcriptTimelineRows])
+      appendTimelineRowLayout(baseLayout, liveTimelineRows, rowHeightsRef.current, estimateTimelineRowHeightForLayout))
+  }, [baseLayout, estimateTimelineRowHeightForLayout, liveTimelineRows, rowMeasurementVersion, timelineRows, transcriptTimelineRows])
   rowLayoutRef.current = rowLayout
 
   useLayoutEffect(() => {
