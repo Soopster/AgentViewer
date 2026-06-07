@@ -2715,6 +2715,40 @@ export default function MessageView({
     pendingTimelineAnchorRestoreRef.current = false
   }, [])
 
+  const markTimelineUserScrolling = useCallback(() => {
+    if (timelineHeightOverrideRef.current == null) {
+      const stableHeight = rowLayoutRef.current.totalHeight
+      timelineHeightOverrideRef.current = stableHeight
+      activeTimelineScrollAnchorRef.current = findTimelineScrollAnchor(
+        timelineRowsRef.current,
+        rowLayoutRef.current,
+        timelineRef.current?.scrollTop ?? 0,
+      )
+      setTimelineHeightOverride(stableHeight)
+    }
+
+    userScrollingRef.current = true
+    if (userScrollingTimerRef.current != null) {
+      window.clearTimeout(userScrollingTimerRef.current)
+    }
+    userScrollingTimerRef.current = window.setTimeout(() => {
+      userScrollingRef.current = false
+      userScrollingTimerRef.current = null
+      const node = timelineRef.current
+      if (node) {
+        activeTimelineScrollAnchorRef.current = findTimelineScrollAnchor(
+          timelineRowsRef.current,
+          rowLayoutRef.current,
+          node.scrollTop,
+        )
+      }
+      timelineHeightOverrideRef.current = null
+      pendingTimelineAnchorRestoreRef.current = true
+      setTimelineHeightOverride(null)
+      scheduleTimelineMeasurementFlushRef.current()
+    }, SCROLL_IDLE_MS)
+  }, [])
+
   useEffect(() => {
     const node = timelineRef.current
     if (!node) return
@@ -2729,13 +2763,18 @@ export default function MessageView({
     observer.observe(node)
     const handleWheel = () => {
       wheelScrollCompensationUntilRef.current = performance.now() + WHEEL_SCROLL_COMPENSATION_MS
+      // Track the input event itself. Anchor compensation also writes
+      // scrollTop and temporarily marks resulting scroll events programmatic;
+      // relying only on those scroll events allowed the idle timer to expire
+      // in the middle of a continuous wheel/trackpad gesture.
+      markTimelineUserScrolling()
     }
     node.addEventListener('wheel', handleWheel, { passive: true })
     return () => {
       observer.disconnect()
       node.removeEventListener('wheel', handleWheel)
     }
-  }, [showDiagnostics, showVisualizer, session?.sessionId])
+  }, [markTimelineUserScrolling, showDiagnostics, showVisualizer, session?.sessionId])
 
   useEffect(() => {
     if (!rewindPreview || rewindPreview.userMessageId === rewindTargetId) return
@@ -2802,24 +2841,7 @@ export default function MessageView({
   const handleTimelineScroll = useCallback(() => {
     const isProgrammaticScroll = performance.now() < programmaticScrollUntilRef.current
     if (!isProgrammaticScroll) {
-      if (timelineHeightOverrideRef.current == null) {
-        const stableHeight = rowLayoutRef.current.totalHeight
-        timelineHeightOverrideRef.current = stableHeight
-        activeTimelineScrollAnchorRef.current = findTimelineScrollAnchor(timelineRowsRef.current, rowLayoutRef.current, timelineRef.current?.scrollTop ?? 0)
-        setTimelineHeightOverride(stableHeight)
-      }
-      userScrollingRef.current = true
-      if (userScrollingTimerRef.current != null) {
-        window.clearTimeout(userScrollingTimerRef.current)
-      }
-      userScrollingTimerRef.current = window.setTimeout(() => {
-        userScrollingRef.current = false
-        userScrollingTimerRef.current = null
-        timelineHeightOverrideRef.current = null
-        pendingTimelineAnchorRestoreRef.current = true
-        setTimelineHeightOverride(null)
-        scheduleTimelineMeasurementFlushRef.current()
-      }, SCROLL_IDLE_MS)
+      markTimelineUserScrolling()
     }
     if (scrollRafRef.current != null) return
     scrollRafRef.current = window.requestAnimationFrame(() => {
@@ -2835,7 +2857,7 @@ export default function MessageView({
       const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
       setAutoFollow(distanceFromBottom <= TIMELINE_BOTTOM_GUTTER_PX + 16)
     })
-  }, [restoreTimelineScrollAnchor])
+  }, [markTimelineUserScrolling])
 
   const scrollMountedTimelineRowIntoView = useCallback((messageId: string): boolean => {
     const node = timelineRef.current
