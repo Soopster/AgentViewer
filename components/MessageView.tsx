@@ -2179,6 +2179,8 @@ export default function MessageView({
   const taskActiveFormsRef = useRef<Map<string, string>>(new Map())
   const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
   const measurementFrameRef = useRef<number | null>(null)
+  const scheduleTimelineMeasurementFlushRef = useRef<() => void>(() => {})
+  const pendingTimelineScrollCompensationRef = useRef(0)
   const scrollRafRef = useRef<number | null>(null)
   const programmaticScrollUntilRef = useRef<number>(0)
   const wheelScrollCompensationUntilRef = useRef<number>(0)
@@ -2649,6 +2651,7 @@ export default function MessageView({
     threadedCacheRef.current.clear()
     prevThreadingRef.current = null
     pendingRowMeasurementsRef.current.clear()
+    pendingTimelineScrollCompensationRef.current = 0
     if (measurementFrameRef.current != null) {
       window.cancelAnimationFrame(measurementFrameRef.current)
       measurementFrameRef.current = null
@@ -2705,6 +2708,7 @@ export default function MessageView({
     if (userScrollingTimerRef.current != null) {
       window.clearTimeout(userScrollingTimerRef.current)
     }
+    pendingTimelineScrollCompensationRef.current = 0
     timelineHeightOverrideRef.current = null
     wheelScrollCompensationUntilRef.current = 0
     activeTimelineScrollAnchorRef.current = null
@@ -2814,6 +2818,7 @@ export default function MessageView({
         timelineHeightOverrideRef.current = null
         pendingTimelineAnchorRestoreRef.current = true
         setTimelineHeightOverride(null)
+        scheduleTimelineMeasurementFlushRef.current()
       }, SCROLL_IDLE_MS)
     }
     if (scrollRafRef.current != null) return
@@ -2824,6 +2829,7 @@ export default function MessageView({
       if (!isProgrammaticScroll) {
         activeTimelineScrollAnchorRef.current = findTimelineScrollAnchor(timelineRowsRef.current, rowLayoutRef.current, node.scrollTop)
       }
+      scheduleTimelineMeasurementFlushRef.current()
       setTimelineScrollTop(node.scrollTop)
       if (performance.now() < suppressFollowEvalUntilRef.current) return
       const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
@@ -4585,11 +4591,7 @@ export default function MessageView({
     lastTimelineRowRef.current = node
   }, [])
 
-  const handleTimelineRowMeasure = useCallback((key: string, height: number) => {
-    const nextHeight = Math.max(1, Math.ceil(height))
-    pendingRowMeasurementsRef.current.set(key, nextHeight)
-    if (measurementFrameRef.current != null) return
-
+  const flushTimelineRowMeasurements = useCallback(() => {
     measurementFrameRef.current = window.requestAnimationFrame(() => {
       measurementFrameRef.current = null
       const pending = pendingRowMeasurementsRef.current
@@ -4599,11 +4601,11 @@ export default function MessageView({
       const layout = rowLayoutRef.current
       const rows = timelineRowsRef.current
       const isFollowing = autoFollowRef.current
-      // Wheel/trackpad input is delta-based, so compensating measurements
-      // strictly above the anchor preserves the content under the viewport
-      // without cancelling the user's scroll. Keep compensation suppressed
-      // for direct scrollbar/touch scrubbing, where writing scrollTop fights
-      // the absolute position controlled by the gesture.
+      // Wheel/trackpad input is delta-based, so measurements can settle while
+      // scrolling as long as their anchor compensation lands with the layout
+      // commit. Direct scrollbar/touch scrubbing controls an absolute
+      // scrollTop, so hold measurements above the viewport until the gesture
+      // ends instead of moving every visible row underneath the pointer.
       const allowScrollAdjust = !userScrollingRef.current
         || performance.now() < wheelScrollCompensationUntilRef.current
       const anchor = node ? findTimelineScrollAnchor(rows, layout, node.scrollTop) : null
@@ -4613,10 +4615,19 @@ export default function MessageView({
 
       for (const [key, nextMeasuredHeight] of pending) {
         const index = layout.indexByKey.get(key)
-        if (index == null) continue
+        if (index == null) {
+          pending.delete(key)
+          continue
+        }
         const row = rows[index]
-        if (!row) continue
+        if (!row) {
+          pending.delete(key)
+          continue
+        }
+        if (!allowScrollAdjust && anchor && index < anchor.index) continue
+
         const previousHeight = rowHeightsRef.current.get(key) ?? estimateTimelineRowHeight(row)
+        pending.delete(key)
         if (nextMeasuredHeight === previousHeight) continue
 
         rowHeightsRef.current.set(key, nextMeasuredHeight)
@@ -4625,16 +4636,11 @@ export default function MessageView({
         measurementChanges.push({ index, previousHeight, nextHeight: nextMeasuredHeight })
       }
 
-      pending.clear()
-
       const scrollDelta = allowScrollAdjust && !isFollowing
         ? computeTimelineScrollCompensation(measurementChanges, anchor)
         : 0
-      if (node && allowScrollAdjust && !isFollowing && scrollDelta !== 0) {
-        suppressFollowEvalUntilRef.current = performance.now() + 200
-        markProgrammaticTimelineScroll()
-        node.scrollTop += scrollDelta
-        setTimelineScrollTop(node.scrollTop)
+      if (scrollDelta !== 0) {
+        pendingTimelineScrollCompensationRef.current += scrollDelta
       }
 
       if (changed) {
@@ -4644,7 +4650,18 @@ export default function MessageView({
         setPersistedMeasurementVersion((version) => version + 1)
       }
     })
-  }, [markProgrammaticTimelineScroll])
+  }, [])
+
+  const scheduleTimelineMeasurementFlush = useCallback(() => {
+    if (pendingRowMeasurementsRef.current.size === 0 || measurementFrameRef.current != null) return
+    flushTimelineRowMeasurements()
+  }, [flushTimelineRowMeasurements])
+  scheduleTimelineMeasurementFlushRef.current = scheduleTimelineMeasurementFlush
+
+  const handleTimelineRowMeasure = useCallback((key: string, height: number) => {
+    pendingRowMeasurementsRef.current.set(key, Math.max(1, Math.ceil(height)))
+    scheduleTimelineMeasurementFlush()
+  }, [scheduleTimelineMeasurementFlush])
 
   useLayoutEffect(() => {
     if (!autoFollow || !hasTranscriptTimeline || loading) return
@@ -4685,6 +4702,24 @@ export default function MessageView({
       appendTimelineRowLayout(baseLayout, liveTimelineRows, rowHeightsRef.current, estimateTimelineRowHeight))
   }, [baseLayout, liveTimelineRows, rowMeasurementVersion, timelineRows, transcriptTimelineRows])
   rowLayoutRef.current = rowLayout
+
+  useLayoutEffect(() => {
+    const scrollDelta = pendingTimelineScrollCompensationRef.current
+    pendingTimelineScrollCompensationRef.current = 0
+    if (scrollDelta === 0 || autoFollowRef.current) return
+
+    const node = timelineRef.current
+    if (!node) return
+
+    const maxScrollTop = Math.max(node.scrollHeight - node.clientHeight, 0)
+    const targetTop = Math.max(0, Math.min(node.scrollTop + scrollDelta, maxScrollTop))
+    if (Math.abs(node.scrollTop - targetTop) < 1) return
+
+    suppressFollowEvalUntilRef.current = performance.now() + 200
+    markProgrammaticTimelineScroll()
+    node.scrollTop = targetTop
+    setTimelineScrollTop(node.scrollTop)
+  }, [markProgrammaticTimelineScroll, rowLayout])
 
   useLayoutEffect(() => {
     if (timelineHeightOverride !== null || !pendingTimelineAnchorRestoreRef.current) return
