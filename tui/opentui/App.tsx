@@ -132,6 +132,25 @@ const COMPOSER_WAITING_SPINNER_FRAMES = [
   ['▖', '▘', '▝', '▗'],
   ['◜', '◝', '◞', '◟'],
 ] as const
+const IDLE_TICKER_PHRASES = [
+  'waiting for new messages',
+  'listening for activity',
+  'standing by',
+  'watching the wire',
+  'all quiet on the western front',
+  'ready when you are',
+  'nothing new — yet',
+  'on standby',
+  'holding position',
+  'idle — pinging occasionally',
+  'no new messages',
+  'the agent is thinking',
+  'biding its time',
+  'waiting patiently',
+  'keeping watch',
+] as const
+const IDLE_TICKER_ROTATE_MS = 8000
+
 const COMPOSER_WAITING_MESSAGES = [
   'Adding context',
   'Composing the reply',
@@ -217,6 +236,18 @@ function Spinner({ label, fg }: { label: string; fg: string }) {
     return () => clearInterval(id)
   }, [])
   return <text fg={fg}>{`${SPINNER_FRAMES[frame]} ${label}`}</text>
+}
+
+function IdleTicker({ seed, fg }: { seed: string; fg: string }) {
+  const [phraseIndex, setPhraseIndex] = useState(() => stableHash(seed) % IDLE_TICKER_PHRASES.length)
+  useEffect(() => {
+    const id = setInterval(
+      () => setPhraseIndex((i) => (i + 1) % IDLE_TICKER_PHRASES.length),
+      IDLE_TICKER_ROTATE_MS,
+    )
+    return () => clearInterval(id)
+  }, [])
+  return <Spinner label={IDLE_TICKER_PHRASES[phraseIndex]!} fg={fg} />
 }
 
 function ComposerWaitingStatus({
@@ -9347,7 +9378,7 @@ export default function OpenTuiApp() {
 
           {followTail && visibleTranscriptCards.length > 0 ? (
             <box paddingX={2} paddingBottom={1}>
-              <Spinner label="waiting for new messages" fg={theme.dim} />
+              <IdleTicker seed={selectedSessionKey ?? ''} fg={theme.dim} />
             </box>
           ) : null}
           </box>
