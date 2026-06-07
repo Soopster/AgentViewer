@@ -43,7 +43,8 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 import { ChartNetwork, Filter, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
-import MessageItem, { MessageDensityProvider, ViewModeProvider, type MessageDensity, type WebViewMode } from './MessageItem'
+import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, DEFAULT_DIFF_OPTIONS, type MessageDensity, type WebViewMode, type DiffOptions } from './MessageItem'
+import type { PierreDiffStyle } from './PierreDiffView'
 import { LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb } from './messageItemShared'
 import { TaskRail } from './TaskRail'
 import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos, type CodexPlanStep } from '@/lib/taskRegistry'
@@ -2191,6 +2192,41 @@ export default function MessageView({
     setRowMeasurementVersion((version) => version + 1)
     setPersistedMeasurementVersion((version) => version + 1)
   }, [density])
+  const [diffStyle, setDiffStyle] = useState<PierreDiffStyle>(() => {
+    if (typeof window === 'undefined') return 'stacked'
+    const stored = window.localStorage.getItem('agentViewer:diffStyle')
+    return stored === 'split' ? 'split' : 'stacked'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('agentViewer:diffStyle', diffStyle)
+  }, [diffStyle])
+  const [diffOptions, setDiffOptions] = useState<DiffOptions>(() => {
+    if (typeof window === 'undefined') return DEFAULT_DIFF_OPTIONS
+    const changeStyle = window.localStorage.getItem('agentViewer:diffChangeStyle')
+    const inlineDiffStyle = window.localStorage.getItem('agentViewer:diffInlineStyle')
+    const showBackgrounds = window.localStorage.getItem('agentViewer:diffShowBackgrounds')
+    const wrap = window.localStorage.getItem('agentViewer:diffWrap')
+    const showLineNumbers = window.localStorage.getItem('agentViewer:diffShowLineNumbers')
+    const showHunkHeaders = window.localStorage.getItem('agentViewer:diffShowHunkHeaders')
+    return {
+      changeStyle: changeStyle === 'bars' || changeStyle === 'classic' || changeStyle === 'none' ? changeStyle : DEFAULT_DIFF_OPTIONS.changeStyle,
+      inlineDiffStyle: inlineDiffStyle === 'word-alt' || inlineDiffStyle === 'word' || inlineDiffStyle === 'char' || inlineDiffStyle === 'none' ? inlineDiffStyle : DEFAULT_DIFF_OPTIONS.inlineDiffStyle,
+      showBackgrounds: showBackgrounds === null ? DEFAULT_DIFF_OPTIONS.showBackgrounds : showBackgrounds === 'true',
+      wrap: wrap === null ? DEFAULT_DIFF_OPTIONS.wrap : wrap === 'true',
+      showLineNumbers: showLineNumbers === null ? DEFAULT_DIFF_OPTIONS.showLineNumbers : showLineNumbers === 'true',
+      showHunkHeaders: showHunkHeaders === null ? DEFAULT_DIFF_OPTIONS.showHunkHeaders : showHunkHeaders === 'true',
+    }
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('agentViewer:diffChangeStyle', diffOptions.changeStyle)
+    window.localStorage.setItem('agentViewer:diffInlineStyle', diffOptions.inlineDiffStyle)
+    window.localStorage.setItem('agentViewer:diffShowBackgrounds', String(diffOptions.showBackgrounds))
+    window.localStorage.setItem('agentViewer:diffWrap', String(diffOptions.wrap))
+    window.localStorage.setItem('agentViewer:diffShowLineNumbers', String(diffOptions.showLineNumbers))
+    window.localStorage.setItem('agentViewer:diffShowHunkHeaders', String(diffOptions.showHunkHeaders))
+  }, [diffOptions])
   const [composerCollapsed, setComposerCollapsed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem('agentViewer:composerCollapsed') === 'true'
@@ -5580,6 +5616,60 @@ export default function MessageView({
                   {d === 'comfortable' ? 'COMFY' : d.toUpperCase()}
                 </button>
               ))}
+              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              {/* Diff style */}
+              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DIFF STYLE</div>
+              {(['stacked', 'split'] as const).map((style) => (
+                <button key={style} type="button"
+                  onClick={() => { setDiffStyle(style); setViewDropdownOpen(false) }}
+                  style={{ padding: '7px 14px', background: diffStyle === style ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: diffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                  {style.toUpperCase()}
+                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
+                    {style === 'stacked' ? 'lines in one column' : 'before / after side by side'}
+                  </span>
+                </button>
+              ))}
+              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              {/* Change indicators */}
+              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>CHANGE INDICATORS</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 4px' }}>
+                {(['classic', 'bars', 'none'] as const).map((style) => (
+                  <button key={style} type="button"
+                    onClick={() => { setDiffOptions((prev) => ({ ...prev, changeStyle: style })); setViewDropdownOpen(false) }}
+                    style={{ padding: '5px 10px', borderRadius: 4, background: diffOptions.changeStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.changeStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em' }}>
+                    {style.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              {/* Inline diff highlighting */}
+              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>INLINE DIFF</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '2px 14px 4px' }}>
+                {(['word-alt', 'word', 'char', 'none'] as const).map((style) => (
+                  <button key={style} type="button"
+                    onClick={() => { setDiffOptions((prev) => ({ ...prev, inlineDiffStyle: style })); setViewDropdownOpen(false) }}
+                    style={{ padding: '5px 10px', borderRadius: 4, background: diffOptions.inlineDiffStyle === style ? 'rgba(56,217,245,0.12)' : 'var(--surface)', border: '1px solid var(--border)', cursor: 'pointer', color: diffOptions.inlineDiffStyle === style ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em' }}>
+                    {style === 'word-alt' ? 'WORD-ALT' : style.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+              {/* Display toggles */}
+              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DISPLAY</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, padding: '0 6px' }}>
+                {([
+                  { key: 'backgrounds', label: 'BACKGROUNDS', active: diffOptions.showBackgrounds, toggle: () => setDiffOptions((prev) => ({ ...prev, showBackgrounds: !prev.showBackgrounds })) },
+                  { key: 'wrap', label: 'WRAPPING', active: diffOptions.wrap, toggle: () => setDiffOptions((prev) => ({ ...prev, wrap: !prev.wrap })) },
+                  { key: 'lineNumbers', label: 'LINE NUMBERS', active: diffOptions.showLineNumbers, toggle: () => setDiffOptions((prev) => ({ ...prev, showLineNumbers: !prev.showLineNumbers })) },
+                  { key: 'hunkHeaders', label: 'HUNK HEADERS', active: diffOptions.showHunkHeaders, toggle: () => setDiffOptions((prev) => ({ ...prev, showHunkHeaders: !prev.showHunkHeaders })) },
+                ] as const).map((opt) => (
+                  <button key={opt.key} type="button"
+                    onClick={opt.toggle}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 8px', background: 'transparent', border: 0, cursor: 'pointer', color: opt.active ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, letterSpacing: '0.06em', textAlign: 'left' }}>
+                    {opt.active ? '☑' : '☐'} {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -6148,6 +6238,8 @@ export default function MessageView({
             >
               <MessageDensityProvider density={density}>
               <ViewModeProvider mode={viewMode}>
+              <DiffStyleProvider diffStyle={diffStyle}>
+              <DiffOptionsProvider options={diffOptions}>
                 <LiveSubagentTextContext.Provider value={liveSubagentText}>
                   <TaskActiveFormsContext.Provider value={taskActiveForms}>
                     {(() => {
@@ -6176,6 +6268,8 @@ export default function MessageView({
                     })()}
                   </TaskActiveFormsContext.Provider>
                 </LiveSubagentTextContext.Provider>
+              </DiffOptionsProvider>
+              </DiffStyleProvider>
               </ViewModeProvider>
               </MessageDensityProvider>
             </div>

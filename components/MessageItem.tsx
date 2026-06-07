@@ -28,7 +28,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk/sdk-tools'
 import { getAssistantLabel } from '@/lib/provider'
 import { Separator } from '@/components/ui/separator'
-import type { PierreDiffPresentation, PierreDiffStyle } from './PierreDiffView'
+import type { PierreChangeStyle, PierreDiffPresentation, PierreDiffStyle, PierreInlineDiffStyle } from './PierreDiffView'
 
 // ── Tool color palette ────────────────────────────────────────────────────────
 
@@ -402,12 +402,43 @@ function CardShell({
 
 // ── Diff view ─────────────────────────────────────────────────────────────────
 
-function DiffView(props: { oldStr: string; newStr: string; filePath?: string }) {
+function DiffView(props: { oldStr: string; newStr: string; filePath?: string; presentation?: PierreDiffPresentation }) {
   return (
     <Suspense fallback={<PlainCodeBlock code={props.newStr || props.oldStr} language={detectLanguageFromPath(props.filePath)} maxHeight={500} />}>
       <LazyDiffView {...props} />
     </Suspense>
   )
+}
+
+function DiffStyleToggle({ diffStyle, onToggle }: { diffStyle: PierreDiffStyle; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation()
+        onToggle()
+      }}
+      aria-label={`Switch diff view to ${diffStyle === 'stacked' ? 'split' : 'stacked'}`}
+      title={`Diff view: ${diffStyle}`}
+      style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 10,
+        color: 'var(--text-3)',
+        border: '1px solid var(--border)',
+        borderRadius: 3,
+        padding: '1px 5px',
+        background: 'var(--surface-2)',
+        cursor: 'pointer',
+        flexShrink: 0,
+      }}
+    >
+      {diffStyle === 'stacked' ? 'STACKED' : 'SPLIT'}
+    </button>
+  )
+}
+
+function toggleDiffStyle(current: PierreDiffStyle): PierreDiffStyle {
+  return current === 'stacked' ? 'split' : 'stacked'
 }
 
 function PatchDiffView({
@@ -436,6 +467,7 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
   const newStr   = input.new_string ?? ''
   const largeDiff = isLargeTextPayload(oldStr, newStr)
   const [open, setOpen] = useState(() => !largeDiff)
+  const [presentation, diffStyle, toggleDiffStyleOverride] = useDiffPresentation()
   const [hovered, setHovered] = useState(false)
   const delta    = countLines(newStr) - countLines(oldStr)
   const sign     = delta > 0 ? `+${delta}` : String(delta)
@@ -468,6 +500,7 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
               LARGE
             </span>
           )}
+          <DiffStyleToggle diffStyle={diffStyle} onToggle={toggleDiffStyleOverride} />
           <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
         </div>
       }
@@ -476,7 +509,7 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
           <div style={{ padding: '2px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {filePath}
           </div>
-          <DiffView oldStr={oldStr} newStr={newStr} filePath={filePath} />
+          <DiffView oldStr={oldStr} newStr={newStr} filePath={filePath} presentation={presentation} />
         </>
       ) : undefined}
     />
@@ -543,7 +576,7 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
   const changes = input.changes ?? []
   const largeDiff = isLargeTextList(changes.map((change) => change.diff ?? ''))
   const [open, setOpen] = useState(() => !largeDiff)
-  const [diffStyle, setDiffStyle] = useState<PierreDiffStyle>('stacked')
+  const [presentation, diffStyle, toggleDiffStyleOverride] = useDiffPresentation()
   const [hovered, setHovered] = useState(false)
   const c = toolColor('FileChange')
   const preview = changes.length === 1
@@ -584,28 +617,7 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
               LARGE
             </span>
           )}
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation()
-              setDiffStyle((current) => (current === 'stacked' ? 'split' : 'stacked'))
-            }}
-            aria-label={`Switch diff view to ${diffStyle === 'stacked' ? 'split' : 'stacked'}`}
-            title={`Diff view: ${diffStyle}`}
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 10,
-              color: 'var(--text-3)',
-              border: '1px solid var(--border)',
-              borderRadius: 3,
-              padding: '1px 5px',
-              background: 'var(--surface-2)',
-              cursor: 'pointer',
-              flexShrink: 0,
-            }}
-          >
-            {diffStyle === 'stacked' ? 'STACKED' : 'SPLIT'}
-          </button>
+          <DiffStyleToggle diffStyle={diffStyle} onToggle={toggleDiffStyleOverride} />
           <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
         </div>
       }
@@ -664,7 +676,7 @@ function FileChangeCard({ thread }: { thread: ToolThread }) {
                   <PatchDiffView
                     patch={diffText}
                     maxHeight={420}
-                    presentation={{ diffStyle }}
+                    presentation={presentation}
                   />
                 </div>
               )
@@ -2123,6 +2135,7 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
   const edits = input.edits ?? []
   const largeDiff = isLargeTextList(edits.flatMap((edit) => [edit.old_string ?? '', edit.new_string ?? '']))
   const [open, setOpen] = useState(() => !largeDiff)
+  const [presentation, diffStyle, toggleDiffStyleOverride] = useDiffPresentation()
   const [hovered, setHovered] = useState(false)
   const c = toolColor('MultiEdit')
 
@@ -2166,6 +2179,7 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
               LARGE
             </span>
           )}
+          <DiffStyleToggle diffStyle={diffStyle} onToggle={toggleDiffStyleOverride} />
           <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
         </div>
       }
@@ -2199,7 +2213,7 @@ function MultiEditCard({ thread }: { thread: ToolThread }) {
                   )}
                 </div>
               )}
-              <DiffView oldStr={edit.old_string ?? ''} newStr={edit.new_string ?? ''} filePath={filePath} />
+              <DiffView oldStr={edit.old_string ?? ''} newStr={edit.new_string ?? ''} filePath={filePath} presentation={presentation} />
             </div>
           ))}
         </>
@@ -4357,6 +4371,27 @@ function densityConfig(d: MessageDensity): DensityConfig {
 const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanced'))
 const SessionContext = createContext<string | undefined>(undefined)
 const ViewModeContext = createContext<WebViewMode>('conversation')
+const DiffStyleContext = createContext<PierreDiffStyle>('stacked')
+
+export type DiffOptions = {
+  changeStyle: PierreChangeStyle
+  inlineDiffStyle: PierreInlineDiffStyle
+  showBackgrounds: boolean
+  wrap: boolean
+  showLineNumbers: boolean
+  showHunkHeaders: boolean
+}
+
+export const DEFAULT_DIFF_OPTIONS: DiffOptions = {
+  changeStyle: 'classic',
+  inlineDiffStyle: 'word-alt',
+  showBackgrounds: true,
+  wrap: true,
+  showLineNumbers: true,
+  showHunkHeaders: true,
+}
+
+const DiffOptionsContext = createContext<DiffOptions>(DEFAULT_DIFF_OPTIONS)
 
 export function MessageDensityProvider({ density, children }: { density: MessageDensity; children: React.ReactNode }) {
   const value = useMemo(() => densityConfig(density), [density])
@@ -4373,6 +4408,36 @@ export function ViewModeProvider({ mode, children }: { mode: WebViewMode; childr
       {children}
     </ViewModeContext.Provider>
   )
+}
+
+export function DiffStyleProvider({ diffStyle, children }: { diffStyle: PierreDiffStyle; children: React.ReactNode }) {
+  return (
+    <DiffStyleContext.Provider value={diffStyle}>
+      {children}
+    </DiffStyleContext.Provider>
+  )
+}
+
+export function DiffOptionsProvider({ options, children }: { options: DiffOptions; children: React.ReactNode }) {
+  return (
+    <DiffOptionsContext.Provider value={options}>
+      {children}
+    </DiffOptionsContext.Provider>
+  )
+}
+
+function useEffectiveDiffStyle(): [PierreDiffStyle, () => void] {
+  const defaultStyle = use(DiffStyleContext)
+  const [override, setOverride] = useState<PierreDiffStyle | null>(null)
+  const diffStyle = override ?? defaultStyle
+  return [diffStyle, () => setOverride(toggleDiffStyle(diffStyle))]
+}
+
+function useDiffPresentation(): [PierreDiffPresentation, PierreDiffStyle, () => void] {
+  const [diffStyle, toggleDiffStyleOverride] = useEffectiveDiffStyle()
+  const options = use(DiffOptionsContext)
+  const presentation = useMemo<PierreDiffPresentation>(() => ({ ...options, diffStyle }), [options, diffStyle])
+  return [presentation, diffStyle, toggleDiffStyleOverride]
 }
 
 function MessageItemInner({ message, showSession }: { message: ThreadedMessage; showSession?: boolean }) {

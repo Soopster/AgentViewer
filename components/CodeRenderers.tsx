@@ -34,7 +34,7 @@ import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
 import { pathBasename as basename } from '@/lib/projectPaths'
 import { getCodeThemeStyle } from '@/lib/codeThemeStyles'
 import { useCodeTheme } from './CodeThemeContext'
-import { PierreFileDiffView } from './PierreDiffView'
+import { PierreFileDiffView, type PierreDiffPresentation } from './PierreDiffView'
 
 SyntaxHighlighter.registerLanguage('bash', bash)
 SyntaxHighlighter.registerLanguage('sh', bash)
@@ -333,6 +333,6 @@ export function CodeViewer({
   )
 }
 
-export function DiffView({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath?: string }) {
-  return <PierreFileDiffView oldStr={oldStr} newStr={newStr} filePath={filePath} maxHeight={500} />
+export function DiffView({ oldStr, newStr, filePath, presentation }: { oldStr: string; newStr: string; filePath?: string; presentation?: PierreDiffPresentation }) {
+  return <PierreFileDiffView oldStr={oldStr} newStr={newStr} filePath={filePath} maxHeight={500} presentation={presentation} />
 }
