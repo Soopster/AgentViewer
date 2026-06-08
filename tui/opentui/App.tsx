@@ -4146,22 +4146,31 @@ export default function OpenTuiApp() {
   const composerHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, (composerDraft.length === 0 ? 1 : composerDraft.split('\n').length) + COMPOSER_DOCK_CHROME_HEIGHT))
   const composerDockHeight = composerWindowOpen ? 0 : composerHeight
   const composerDockTextareaHeight = Math.max(2, composerDockHeight - COMPOSER_DOCK_CHROME_HEIGHT)
+  const composerTargetSessionInfo = useMemo(() => {
+    if (!composerTargetSession) return null
+    const targetKey = sessionKey(composerTargetSession)
+    const activeDetail = sessionDetail?.info
+    if (
+      selectedSessionKey === targetKey
+      && activeDetail
+      && activeDetail.sessionId === composerTargetSession.sessionId
+      && activeDetail.provider === composerTargetSession.provider
+    ) {
+      return activeDetail
+    }
+    return sessionDetailCacheRef.current.get(targetKey)?.info ?? null
+  }, [composerTargetSession, selectedSessionKey, sessionDetail])
   const composerCurrentModel = useMemo(() => {
     if (!composerTargetSession) return null
     const targetKey = sessionKey(composerTargetSession)
     const modelOverride = tuiModelOverride[targetKey]
-    const selectedDetailModel = sessionDetail?.info
-      && sessionDetail.info.sessionId === composerTargetSession.sessionId
-      && sessionDetail.info.provider === composerTargetSession.provider
-      ? sessionDetail.info.currentModel
-      : undefined
-    const cachedDetailModel = sessionDetailCacheRef.current.get(targetKey)?.info?.currentModel
+    const selectedDetailModel = composerTargetSessionInfo?.currentModel
     const contextModel = selectedSessionKey === targetKey ? contextUsage?.model : undefined
-    const rawModel = modelOverride ?? selectedDetailModel ?? cachedDetailModel ?? contextModel
+    const rawModel = modelOverride ?? selectedDetailModel ?? contextModel
     if (!rawModel) return null
     const model = formatModelChipValue(rawModel)
     return model && model.toLowerCase() !== 'unknown' ? model : null
-  }, [composerTargetSession, contextUsage, selectedSessionKey, sessionDetail, tuiModelOverride])
+  }, [composerTargetSession, composerTargetSessionInfo, contextUsage, selectedSessionKey, tuiModelOverride])
   const highlightedModelPickerOption = modelPickerOptions[modelPickerIndex]
   const modelPickerEffortOptions = useMemo(
     () => effortPickerOptions(modelPickerTarget?.provider, highlightedModelPickerOption),
@@ -4193,6 +4202,15 @@ export default function OpenTuiApp() {
     }
     return parts.length > 0 ? `· ${parts.join(' · ')}` : ''
   }, [composerContextUsage, composerCurrentModel, composerPermissionMode, composerTargetSession?.provider, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+  const composerWorkingDirectory = composerTargetSessionInfo?.cwd ?? composerTargetSession?.cwd ?? null
+  const composerGitBranch = composerTargetSessionInfo?.gitBranch ?? null
+  const composerLocationChip = useMemo(
+    () => joinMeta([
+      composerWorkingDirectory ? `cwd ${composerWorkingDirectory}` : null,
+      composerGitBranch ? `⎇ ${composerGitBranch}` : null,
+    ]),
+    [composerGitBranch, composerWorkingDirectory],
+  )
   const composerWaitingSuffix = useMemo(() => {
     const parts: string[] = []
     if (composerKnobsChip) parts.push(composerKnobsChip.replace(/^·\s*/, ''))
@@ -4277,12 +4295,27 @@ export default function OpenTuiApp() {
     return `slash · ${suggestions.join(' · ')}`
   }, [composerSlashOpen, selectedSession?.provider])
 
+  const composerMentionSourceSession = composerTargetSession ?? selectedSession
+  const composerMentionSearchSession = useMemo(() => {
+    if (!composerMentionSourceSession) return null
+    const parentSessionId = composerMentionSourceSession.parentSessionId
+    if (!parentSessionId) return composerMentionSourceSession
+    const parentSession = sessions.find((session) =>
+      session.sessionId === parentSessionId
+      && session.provider === composerMentionSourceSession.provider,
+    ) ?? openTabSessions.find((session) => session.sessionId === parentSessionId)
+      ?? sessions.find((session) => session.sessionId === parentSessionId)
+    return parentSession ?? composerMentionSourceSession
+  }, [composerMentionSourceSession, openTabSessions, sessions])
+  const composerMentionProvider = composerMentionSourceSession?.provider ?? 'claude'
+  const composerMentionCwd = composerMentionSearchSession?.cwd ?? composerMentionSourceSession?.cwd ?? null
+
   useEffect(() => {
     if (!composerMention) {
       setComposerMentionResults([])
       return
     }
-    const agentMatches: TuiMentionResult[] = selectedSession?.provider === 'opencode'
+    const agentMatches: TuiMentionResult[] = composerMentionProvider === 'opencode'
       ? composerMentionAgents
           .filter((agent) => {
             const query = composerMention.query.toLowerCase()
@@ -4299,7 +4332,7 @@ export default function OpenTuiApp() {
             mode: agent.mode,
           }))
       : []
-    const cwd = selectedSession?.cwd
+    const cwd = composerMentionCwd
     if (!cwd) {
       setComposerMentionResults(agentMatches)
       setComposerMentionIndex(0)
@@ -4348,7 +4381,7 @@ export default function OpenTuiApp() {
       cancelled = true
       clearTimeout(handle)
     }
-  }, [composerMention, composerMentionAgents, selectedSession?.cwd, selectedSession?.provider])
+  }, [composerMention, composerMentionAgents, composerMentionCwd, composerMentionProvider])
 
   const ensureComposerPastePartTypeId = useEffectEvent((renderable: TextareaRenderable): number => {
     let typeId = composerPastePartTypeIdRef.current
@@ -9071,11 +9104,31 @@ export default function OpenTuiApp() {
     flexGrow: 1,
   }
   const composerDockStats = composerDraft.length === 0
-    ? `${composerConfig.glyph} ${composerConfig.label}${composerAttachmentLabel ? ` · ${composerAttachmentLabel}` : ''}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
-    : `${composerVisualLineCount} line${composerVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerAttachmentLabel ? ` · ${composerAttachmentLabel}` : ''}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+    ? joinMeta([
+        `${composerConfig.glyph} ${composerConfig.label}`,
+        composerAttachmentLabel,
+        composerKnobsChip.replace(/^·\s*/, ''),
+        composerLocationChip || null,
+      ])
+    : joinMeta([
+        `${composerVisualLineCount} line${composerVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars`,
+        composerAttachmentLabel,
+        composerKnobsChip.replace(/^·\s*/, ''),
+        composerLocationChip || null,
+      ])
   const composerWindowStats = composerDraft.length === 0
-    ? `${composerConfig.glyph} ${composerConfig.label}${composerAttachmentLabel ? ` · ${composerAttachmentLabel}` : ''}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
-    : `${composerWindowVisualLineCount} line${composerWindowVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerAttachmentLabel ? ` · ${composerAttachmentLabel}` : ''}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
+    ? joinMeta([
+        `${composerConfig.glyph} ${composerConfig.label}`,
+        composerAttachmentLabel,
+        composerKnobsChip.replace(/^·\s*/, ''),
+        composerLocationChip || null,
+      ])
+    : joinMeta([
+        `${composerWindowVisualLineCount} line${composerWindowVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars`,
+        composerAttachmentLabel,
+        composerKnobsChip.replace(/^·\s*/, ''),
+        composerLocationChip || null,
+      ])
   const sendingHintBase = interruptPressActive
     ? composerConfig.footerHintSending.replace('⌃C cancel', '⌃C again to interrupt')
     : composerTargetSession?.provider === 'claude' && activeRunningToolCount > 0
