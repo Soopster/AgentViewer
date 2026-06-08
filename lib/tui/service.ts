@@ -53,6 +53,15 @@ import {
   type MessageBookmark,
   type SetMessageBookmarkInput,
 } from '../messageBookmarks'
+import {
+  deletePrompt,
+  getPrompt,
+  listPrompts,
+  savePrompt,
+  type PromptRecord,
+  type PromptSummary,
+  type SavePromptInput,
+} from '../promptLibrary'
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 
@@ -319,4 +328,20 @@ export async function toggleTuiSessionBookmark(
 
 export async function readTuiAllBookmarks(): Promise<MessageBookmark[]> {
   return listAllBookmarks()
+}
+
+export async function readTuiPrompts(): Promise<PromptSummary[]> {
+  return listPrompts()
+}
+
+export async function readTuiPrompt(slug: string): Promise<PromptRecord | null> {
+  return getPrompt(slug)
+}
+
+export async function saveTuiPrompt(input: SavePromptInput): Promise<PromptRecord> {
+  return savePrompt(input)
+}
+
+export async function deleteTuiPrompt(slug: string): Promise<boolean> {
+  return deletePrompt(slug)
 }

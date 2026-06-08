@@ -315,6 +315,7 @@ export default function Home() {
   const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
   const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
+  const [promptLibraryOpenRequest, setPromptLibraryOpenRequest] = useState(0)
   const documentVisible = useDocumentVisible()
   // Tracks the absolute transcript offset immediately after the latest loaded
   // message window. This is not always messages.length because session loads
@@ -379,6 +380,7 @@ export default function Home() {
 
   const openCommandPalette = useCallback(() => setCommandPaletteOpen(true), [])
   const openTaskPanel = useCallback(() => setTaskPanelOpenRequest((value) => value + 1), [])
+  const openPromptLibrary = useCallback(() => setPromptLibraryOpenRequest((value) => value + 1), [])
 
   const fetchProjectSessions = useCallback(async (dir: string, selection: ProviderSelection) => {
     const params = new URLSearchParams()
@@ -1182,6 +1184,7 @@ export default function Home() {
                   onSelectTab={selectOpenTab}
                   onCloseTab={closeTab}
                   taskPanelOpenRequest={taskPanelOpenRequest}
+                  promptLibraryOpenRequest={promptLibraryOpenRequest}
                   openCodeTodos={openCodeTodosForView}
                   codexPlan={codexPlanForView}
                 />
@@ -1200,6 +1203,7 @@ export default function Home() {
                   messagePaneCollapsed={messagePaneCollapsed}
                   canOpenGit={!!activeProjectDir}
                   canOpenTasks={!selectedProject && (selectedSession?.provider ?? provider) === 'claude'}
+                  canOpenPromptLibrary={!selectedProject && !!selectedSession}
                   onSelectSession={selectCommandPaletteSession}
                   onSelectProject={selectProject}
                   onChangeProvider={handleChangeProvider}
@@ -1208,6 +1212,7 @@ export default function Home() {
                   onToggleMessagePane={toggleMessagePane}
                   onOpenGit={openGitPopover}
                   onOpenTasks={openTaskPanel}
+                  onOpenPromptLibrary={openPromptLibrary}
                   onOpenBookmarks={() => setBookmarksPanelOpen(true)}
                 />
               ) : null}

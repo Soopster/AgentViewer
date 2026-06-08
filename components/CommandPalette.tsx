@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -29,6 +29,7 @@ type CommandPaletteProps = {
   messagePaneCollapsed: boolean
   canOpenGit: boolean
   canOpenTasks: boolean
+  canOpenPromptLibrary: boolean
   onSelectSession: (session: Session, targetMessageId?: string) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onChangeProvider: (provider: ProviderSelection) => void
@@ -37,6 +38,7 @@ type CommandPaletteProps = {
   onToggleMessagePane: () => void
   onOpenGit: () => void
   onOpenTasks: () => void
+  onOpenPromptLibrary: () => void
   onOpenBookmarks: () => void
 }
 
@@ -301,6 +303,7 @@ export default function CommandPalette({
   messagePaneCollapsed,
   canOpenGit,
   canOpenTasks,
+  canOpenPromptLibrary,
   onSelectSession,
   onSelectProject,
   onChangeProvider,
@@ -309,6 +312,7 @@ export default function CommandPalette({
   onToggleMessagePane,
   onOpenGit,
   onOpenTasks,
+  onOpenPromptLibrary,
   onOpenBookmarks,
 }: CommandPaletteProps) {
   const { state: sidebarState, toggleSidebar } = useSidebar()
@@ -488,6 +492,19 @@ export default function CommandPalette({
         },
       },
       {
+        id: 'open-prompt-library',
+        label: 'Open prompt library',
+        description: canOpenPromptLibrary ? 'Browse, edit, and insert saved prompt templates into the composer' : 'Select a session first',
+        icon: <BookOpen size={16} />,
+        shortcut: 'Prompts',
+        group: 'actions',
+        keywords: ['prompt', 'prompts', 'library', 'template', 'templates', 'snippet', 'snippets', 'saved', 'reuse', 'composer'],
+        score: 0,
+        run: () => {
+          if (canOpenPromptLibrary) onOpenPromptLibrary()
+        },
+      },
+      {
         id: 'open-bookmarks',
         label: 'View all bookmarks',
         description: 'Browse every bookmarked message across all sessions and providers',
@@ -551,7 +568,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenGit, canOpenTasks, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onOpenPromptLibrary, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

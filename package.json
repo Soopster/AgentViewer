@@ -36,6 +36,7 @@
     "tui:ink": "node --import tsx ./tui/main.tsx",
     "tui:ink:dev": "node --watch --import tsx ./tui/main.tsx",
     "regen-codex-schema": "rm -rf lib/codex-schema && codex app-server generate-ts --experimental --out lib/codex-schema",
+    "seed-prompts": "node ./scripts/seed-prompts.mjs",
     "doctor": "npx react-doctor@latest"
   },
   "dependencies": {
@@ -57,6 +58,7 @@
     "beautiful-mermaid": "^1.1.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "gray-matter": "^4.0.3",
     "ink": "^7.0.5",
     "lucide-react": "^1.17.0",
     "marked": "^18.0.5",

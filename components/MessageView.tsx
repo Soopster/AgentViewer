@@ -42,7 +42,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { ChartNetwork, Filter, Minimize2, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
+import { BookOpen, ChartNetwork, Filter, Minimize2, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, DEFAULT_DIFF_OPTIONS, type MessageDensity, type WebViewMode, type DiffOptions } from './MessageItem'
 import type { PierreDiffStyle } from './PierreDiffView'
 import { LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb } from './messageItemShared'
@@ -66,6 +66,7 @@ import {
 } from '@/lib/timelineVirtualizer'
 
 const AnalyticsPopover = dynamic(() => import('./AnalyticsPopover'), { ssr: false })
+const PromptLibrary = dynamic(() => import('./PromptLibrary'), { ssr: false })
 const PierrePatchDiffView = dynamic(() => import('./PierreDiffView').then((mod) => mod.PierrePatchDiffView), {
   ssr: false,
   loading: () => (
@@ -94,6 +95,7 @@ type Props = {
   onSelectTab?: (session: Session) => void
   onCloseTab?: (sessionKey: string) => void
   taskPanelOpenRequest?: number
+  promptLibraryOpenRequest?: number
   openCodeTodos?: OpenCodeTodo[]
   codexPlan?: { plan: CodexPlanStep[]; explanation: string | null }
 }
@@ -2095,6 +2097,7 @@ export default function MessageView({
   onSelectTab,
   onCloseTab,
   taskPanelOpenRequest = 0,
+  promptLibraryOpenRequest = 0,
   openCodeTodos,
   codexPlan,
 }: Props) {
@@ -2283,6 +2286,7 @@ export default function MessageView({
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0)
   const mentionAbortRef = useRef<AbortController | null>(null)
   const mentionItemRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashActiveIndex, setSlashActiveIndex] = useState(0)
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -3870,6 +3874,29 @@ export default function MessageView({
     })
   }, [mentionQuery, resizeComposer])
 
+  const insertPromptText = useCallback((text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    const textarea = textareaRef.current
+    const value = textarea?.value ?? inputTextRef.current
+    const start = textarea?.selectionStart ?? value.length
+    const end = textarea?.selectionEnd ?? value.length
+    const before = value.slice(0, start)
+    const after = value.slice(end)
+    const insertion = before.length > 0 && !before.endsWith('\n') ? `\n${trimmed}` : trimmed
+    const next = `${before}${insertion}${after}`
+    setInputText(next)
+    inputTextRef.current = next
+    window.requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      const caret = before.length + insertion.length
+      ta.setSelectionRange(caret, caret)
+      ta.focus()
+      resizeComposer()
+    })
+  }, [resizeComposer])
+
   const insertSlashCommand = useCallback((command: string) => {
     const remainder = inputText.split('\n').slice(1).join('\n')
     const next = remainder ? `${command} ${remainder}` : `${command} `
@@ -4471,6 +4498,12 @@ export default function MessageView({
     if (taskPanelOpenRequest <= 0) return
     setTaskRailOpen(true)
   }, [taskPanelOpenRequest])
+
+  useEffect(() => {
+    if (promptLibraryOpenRequest <= 0) return
+    setPromptLibraryOpen(true)
+    window.requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [promptLibraryOpenRequest])
 
   // Auto-focus the composer for a brand-new pending session — same as opening
   // a CLI and landing at the prompt. Gated on `isPending` to avoid stealing
@@ -7188,6 +7221,36 @@ export default function MessageView({
                   transition: 'border-color 0.15s, opacity 0.15s',
                 }}
               />
+              <Button
+                type="button"
+                data-prompt-library-trigger="true"
+                onClick={() => setPromptLibraryOpen((open) => !open)}
+                variant="outline"
+                aria-label="Prompt library"
+                title="Prompt library — saved prompts you can insert into the composer"
+                style={{
+                  flexShrink: 0,
+                  width: 34,
+                  height: 34,
+                  padding: 0,
+                  background: promptLibraryOpen ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'var(--surface-2)',
+                  border: `1px solid ${promptLibraryOpen ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'var(--border-2)'}`,
+                  borderRadius: 6,
+                  color: promptLibraryOpen ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
+                  cursor: 'pointer',
+                  transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                }}
+              >
+                <BookOpen size={15} />
+              </Button>
+              {promptLibraryOpen && (
+                <PromptLibrary
+                  accent={{ cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label }}
+                  activeProvider={session?.provider}
+                  onInsert={insertPromptText}
+                  onClose={() => setPromptLibraryOpen(false)}
+                />
+              )}
               {sendState === 'sending' ? (
                 <div style={{ flexShrink: 0, display: 'flex', gap: 6, alignItems: 'center' }}>
                   <Button

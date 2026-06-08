@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
 import { AnalyticsPopover } from './AnalyticsPopover'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
+import { PromptLibraryPopover } from './PromptLibraryPopover'
 import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
 import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
@@ -62,6 +63,10 @@ import {
   readTuiVelocityScroll,
   readTuiSessionBookmarkIds,
   readTuiAllBookmarks,
+  readTuiPrompts,
+  readTuiPrompt,
+  saveTuiPrompt,
+  deleteTuiPrompt,
   toggleTuiSessionBookmark,
   runTuiSessionAction,
   streamTuiSessionTurn,
@@ -2855,6 +2860,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
   { id: 'handoff-brief', label: 'Handoff brief',       key: 'H',  category: 'Session'    },
+  { id: 'prompt-library', label: 'Prompt library',     key: '⇧P', category: 'Session'    },
   { id: 'diagnostics', label: 'Session diagnostics',   key: 'D',  category: 'Session'    },
   { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
   { id: 'sort',       label: 'Toggle sidebar sort',    key: 'S',  category: 'Session'    },
@@ -3420,6 +3426,8 @@ export default function OpenTuiApp() {
   const analyticsKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [handoffBriefOpen, setHandoffBriefOpen] = useState(false)
   const handoffBriefKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
+  const promptLibraryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
@@ -7658,6 +7666,28 @@ export default function OpenTuiApp() {
     setHandoffBriefOpen(true)
   })
 
+  const openPromptLibrary = useEffectEvent(() => {
+    if (!selectedSessionTarget) {
+      showNotice('error', 'No session selected')
+      return
+    }
+    rememberComposerCursor()
+    setComposerActive(true)
+    setPromptLibraryOpen(true)
+  })
+
+  const insertComposerPromptText = useEffectEvent((text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    const renderable = composerTextareaRef.current
+    const current = renderable?.plainText ?? composerDraft
+    const cursor = renderable?.cursorOffset ?? current.length
+    const before = current.slice(0, cursor)
+    const insertion = before.length > 0 && !before.endsWith('\n') ? `\n${trimmed}` : trimmed
+    insertComposerTextAtCursor(insertion)
+    setComposerActive(true)
+  })
+
   // Navigate to a bookmark from the global overlay — switching session (and
   // provider) when needed, then landing on the message once it has loaded.
   const openBookmarkRecord = useEffectEvent((record: MessageBookmark) => {
@@ -7884,6 +7914,9 @@ export default function OpenTuiApp() {
       case 'handoff-brief':
         openHandoffBrief()
         break
+      case 'prompt-library':
+        openPromptLibrary()
+        break
       case 'diagnostics':
         openDiagnostics()
         break
@@ -7976,6 +8009,11 @@ export default function OpenTuiApp() {
 
     if (handoffBriefOpen) {
       handled(() => { handoffBriefKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (promptLibraryOpen) {
+      handled(() => { promptLibraryKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -8441,6 +8479,12 @@ export default function OpenTuiApp() {
     // Global handoff brief popover
     if (isShifted('H')) {
       handled(openHandoffBrief)
+      return
+    }
+
+    // Global prompt library — saved prompts usable across providers
+    if (isShifted('P')) {
+      handled(openPromptLibrary)
       return
     }
 
@@ -10229,6 +10273,36 @@ export default function OpenTuiApp() {
             }
           }}
           onKeyHandlerReady={(handler) => { handoffBriefKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
+      {promptLibraryOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {promptLibraryOpen ? (
+        <PromptLibraryPopover
+          theme={theme}
+          accentColor={composerAccentColor}
+          width={width}
+          height={height}
+          activeProvider={selectedSessionTarget?.provider}
+          loadPrompts={readTuiPrompts}
+          loadPrompt={readTuiPrompt}
+          savePrompt={saveTuiPrompt}
+          deletePrompt={deleteTuiPrompt}
+          onInsert={insertComposerPromptText}
+          onClose={() => setPromptLibraryOpen(false)}
+          onNotice={showNotice}
+          onKeyHandlerReady={(handler) => { promptLibraryKeyHandlerRef.current = handler }}
         />
       ) : null}
 
