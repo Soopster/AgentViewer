@@ -97,6 +97,7 @@ type Props = {
   onCloseTab?: (sessionKey: string) => void
   taskPanelOpenRequest?: number
   promptLibraryOpenRequest?: number
+  channelBridgeOpenRequest?: number
   openCodeTodos?: OpenCodeTodo[]
   codexPlan?: { plan: CodexPlanStep[]; explanation: string | null }
 }
@@ -2103,6 +2104,7 @@ export default function MessageView({
   onCloseTab,
   taskPanelOpenRequest = 0,
   promptLibraryOpenRequest = 0,
+  channelBridgeOpenRequest = 0,
   openCodeTodos,
   codexPlan,
 }: Props) {
@@ -4523,6 +4525,11 @@ export default function MessageView({
     setPromptLibraryOpen(true)
     window.requestAnimationFrame(() => textareaRef.current?.focus())
   }, [promptLibraryOpenRequest])
+
+  useEffect(() => {
+    if (channelBridgeOpenRequest <= 0) return
+    setChannelBridgeOpen(true)
+  }, [channelBridgeOpenRequest])
 
   // Auto-focus the composer for a brand-new pending session — same as opening
   // a CLI and landing at the prompt. Gated on `isPending` to avoid stealing

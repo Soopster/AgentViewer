@@ -3124,6 +3124,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'reuse',      label: 'Reuse last prompt',      key: 'R',  category: 'Session'    },
   { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
   { id: 'cli',        label: 'Copy CLI resume command', key: 'C',  category: 'Session'    },
+  { id: 'channel-bridge', label: 'Channel bridge',      key: '⇧C', category: 'Session'    },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
   { id: 'handoff-brief', label: 'Handoff brief',       key: 'H',  category: 'Session'    },
@@ -8741,6 +8742,9 @@ export default function OpenTuiApp() {
         break
       case 'cli':
         void copyCliCommand()
+        break
+      case 'channel-bridge':
+        openChannelBridge()
         break
       case 'sort': {
         const next: TuiSidebarSort = sidebarSort === 'project' ? 'time' : 'project'

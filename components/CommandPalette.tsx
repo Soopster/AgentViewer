@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, Radio, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -30,6 +30,7 @@ type CommandPaletteProps = {
   canOpenGit: boolean
   canOpenTasks: boolean
   canOpenPromptLibrary: boolean
+  canOpenChannelBridge: boolean
   onSelectSession: (session: Session, targetMessageId?: string) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onChangeProvider: (provider: ProviderSelection) => void
@@ -39,6 +40,7 @@ type CommandPaletteProps = {
   onOpenGit: () => void
   onOpenTasks: () => void
   onOpenPromptLibrary: () => void
+  onOpenChannelBridge: () => void
   onOpenBookmarks: () => void
 }
 
@@ -304,6 +306,7 @@ export default function CommandPalette({
   canOpenGit,
   canOpenTasks,
   canOpenPromptLibrary,
+  canOpenChannelBridge,
   onSelectSession,
   onSelectProject,
   onChangeProvider,
@@ -313,6 +316,7 @@ export default function CommandPalette({
   onOpenGit,
   onOpenTasks,
   onOpenPromptLibrary,
+  onOpenChannelBridge,
   onOpenBookmarks,
 }: CommandPaletteProps) {
   const { state: sidebarState, toggleSidebar } = useSidebar()
@@ -505,6 +509,19 @@ export default function CommandPalette({
         },
       },
       {
+        id: 'open-channel-bridge',
+        label: 'Open channel bridge',
+        description: canOpenChannelBridge ? 'Push composer messages into a side-by-side `claude` CLI session' : 'Select a session first',
+        icon: <Radio size={16} />,
+        shortcut: 'Bridge',
+        group: 'actions',
+        keywords: ['channel', 'bridge', 'cli', 'claude', 'live', 'relay', 'session', 'composer'],
+        score: 0,
+        run: () => {
+          if (canOpenChannelBridge) onOpenChannelBridge()
+        },
+      },
+      {
         id: 'open-bookmarks',
         label: 'View all bookmarks',
         description: 'Browse every bookmarked message across all sessions and providers',
@@ -568,7 +585,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onOpenPromptLibrary, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

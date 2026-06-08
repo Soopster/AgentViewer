@@ -316,6 +316,7 @@ export default function Home() {
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
   const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
   const [promptLibraryOpenRequest, setPromptLibraryOpenRequest] = useState(0)
+  const [channelBridgeOpenRequest, setChannelBridgeOpenRequest] = useState(0)
   const documentVisible = useDocumentVisible()
   // Tracks the absolute transcript offset immediately after the latest loaded
   // message window. This is not always messages.length because session loads
@@ -381,6 +382,7 @@ export default function Home() {
   const openCommandPalette = useCallback(() => setCommandPaletteOpen(true), [])
   const openTaskPanel = useCallback(() => setTaskPanelOpenRequest((value) => value + 1), [])
   const openPromptLibrary = useCallback(() => setPromptLibraryOpenRequest((value) => value + 1), [])
+  const openChannelBridge = useCallback(() => setChannelBridgeOpenRequest((value) => value + 1), [])
 
   const fetchProjectSessions = useCallback(async (dir: string, selection: ProviderSelection) => {
     const params = new URLSearchParams()
@@ -1185,6 +1187,7 @@ export default function Home() {
                   onCloseTab={closeTab}
                   taskPanelOpenRequest={taskPanelOpenRequest}
                   promptLibraryOpenRequest={promptLibraryOpenRequest}
+                  channelBridgeOpenRequest={channelBridgeOpenRequest}
                   openCodeTodos={openCodeTodosForView}
                   codexPlan={codexPlanForView}
                 />
@@ -1204,6 +1207,7 @@ export default function Home() {
                   canOpenGit={!!activeProjectDir}
                   canOpenTasks={!selectedProject && (selectedSession?.provider ?? provider) === 'claude'}
                   canOpenPromptLibrary={!selectedProject && !!selectedSession}
+                  canOpenChannelBridge={!selectedProject && !!selectedSession}
                   onSelectSession={selectCommandPaletteSession}
                   onSelectProject={selectProject}
                   onChangeProvider={handleChangeProvider}
@@ -1213,6 +1217,7 @@ export default function Home() {
                   onOpenGit={openGitPopover}
                   onOpenTasks={openTaskPanel}
                   onOpenPromptLibrary={openPromptLibrary}
+                  onOpenChannelBridge={openChannelBridge}
                   onOpenBookmarks={() => setBookmarksPanelOpen(true)}
                 />
               ) : null}
