@@ -3,6 +3,7 @@ import type { AgentProvider } from './types'
 type RunningSession = {
   provider: AgentProvider
   interrupt: () => Promise<unknown>
+  background?: () => Promise<unknown>
   requestId?: string
 }
 
@@ -50,4 +51,11 @@ export async function interruptRunningSession(sessionId: string, requestId?: str
     (timer as { unref: () => void }).unref()
   }
   pendingInterrupts.set(sessionId, { requestId, timer })
+}
+
+export async function backgroundRunningSession(sessionId: string): Promise<boolean> {
+  const running = runningSessions.get(sessionId)
+  if (!running) throw new Error('No running session for this session')
+  if (!running.background) throw new Error(`${running.provider} sessions do not support backgrounding running tasks`)
+  return Boolean(await running.background())
 }

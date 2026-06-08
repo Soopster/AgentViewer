@@ -69,7 +69,7 @@ import {
   type SessionEvent as CopilotSessionEvent,
   type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
-import { clearRunningSession, getRunningSession, interruptRunningSession, setRunningSession } from './sessionRuntime'
+import { backgroundRunningSession, clearRunningSession, getRunningSession, interruptRunningSession, setRunningSession } from './sessionRuntime'
 import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
 import type {
@@ -2331,6 +2331,10 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       const usage = await warm.query.getContextUsage()
       return { ok: true, applied: 'live', usage }
     }
+    if (action === 'backgroundTasks') {
+      const backgrounded = await backgroundRunningSession(sessionId)
+      return { ok: true, backgrounded }
+    }
     if (action === 'reconnectMcpServer') {
       const serverName = typeof body.serverName === 'string' ? body.serverName : ''
       if (!serverName) throw new Error('serverName is required')
@@ -2976,6 +2980,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         provider: 'claude',
         requestId: turnRequestId,
         interrupt: () => q.interrupt(),
+        background: () => q.backgroundTasks(),
       })
 
       let emittedSessionEvent = false
@@ -3145,6 +3150,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
         provider: 'claude',
         requestId: turnRequestId,
         interrupt: () => entry.query.interrupt(),
+        background: () => entry.query.backgroundTasks(),
       })
 
       // Decouple the turn lifecycle from this HTTP request. A client disconnect

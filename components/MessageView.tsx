@@ -42,7 +42,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { ChartNetwork, Filter, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
+import { ChartNetwork, Filter, Minimize2, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, DEFAULT_DIFF_OPTIONS, type MessageDensity, type WebViewMode, type DiffOptions } from './MessageItem'
 import type { PierreDiffStyle } from './PierreDiffView'
 import { LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb } from './messageItemShared'
@@ -2250,6 +2250,7 @@ export default function MessageView({
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
   const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
+  const [backgroundingTasks, setBackgroundingTasks] = useState(false)
   // True from when the user hits stop until the interrupted turn's partial
   // output reconciles (or the awaitingPersistedTurn escape hatch fires). Lets
   // the composer show a definite "Interrupting…" instead of snapping to idle
@@ -3187,6 +3188,29 @@ export default function MessageView({
     }
     textareaRef.current?.focus()
   }, [clearLiveAssistantText, clearLiveSubagentText, optimisticUserText, session])
+
+  const backgroundClaudeTasks = useCallback(async () => {
+    if (!session || session.provider !== 'claude' || session.isPending || backgroundingTasks) return
+    setBackgroundingTasks(true)
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${session.sessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'claude', action: 'backgroundTasks' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const backgrounded = data.result?.backgrounded === true
+      setSessionActionNotice(backgrounded ? 'Claude task moved to background.' : 'No foreground Claude task to background.')
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to background Claude task')
+    } finally {
+      setBackgroundingTasks(false)
+      textareaRef.current?.focus()
+    }
+  }, [backgroundingTasks, session])
 
   const sendMessage = useCallback(async (retryOverride?: { text: string; attachments: SendAttachment[] }) => {
     if (!session) return
@@ -7193,6 +7217,35 @@ export default function MessageView({
                   >
                     <SendHorizontal data-icon="inline-start" />
                   </Button>
+                  {session?.provider === 'claude' && activeToolCount > 0 ? (
+                    <Button
+                      type="button"
+                      onClick={() => { void backgroundClaudeTasks() }}
+                      disabled={backgroundingTasks}
+                      variant="outline"
+                      aria-label="Move Claude task to background"
+                      title="Move Claude task to background"
+                      style={{
+                        width: 34,
+                        height: 34,
+                        padding: 0,
+                        background: 'rgba(56,189,248,0.1)',
+                        border: '1px solid rgba(56,189,248,0.3)',
+                        borderRadius: 6,
+                        color: 'var(--cyan)',
+                        fontFamily: "'Oxanium', monospace",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        letterSpacing: '0.1em',
+                        cursor: backgroundingTasks ? 'not-allowed' : 'pointer',
+                        transition: 'background 0.15s',
+                        whiteSpace: 'nowrap',
+                        opacity: backgroundingTasks ? 0.55 : 1,
+                      }}
+                    >
+                      <Minimize2 data-icon="inline-start" />
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     onClick={cancelSend}

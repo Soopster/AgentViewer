@@ -3487,6 +3487,7 @@ export default function OpenTuiApp() {
   const [composerSendState, setComposerSendState] = useState<SendState>('idle')
   const [composerSendStartedAt, setComposerSendStartedAt] = useState<number | null>(null)
   const [interruptPressActive, setInterruptPressActive] = useState(false)
+  const [backgroundingTasks, setBackgroundingTasks] = useState(false)
   const interruptPressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Pending tool-approval requests surfaced from the live SSE stream (Claude
   // canUseTool, Copilot/OpenCode permission events, Codex approvals). The
@@ -5771,6 +5772,30 @@ export default function OpenTuiApp() {
     setLiveToolActivities([])
   })
 
+  const backgroundComposerTasks = useEffectEvent(async () => {
+    const target = composerTargetSession
+    if (!target || target.provider !== 'claude' || target.isPending || backgroundingTasks) return
+    setBackgroundingTasks(true)
+    try {
+      const result = await runTuiSessionAction(target, { action: 'backgroundTasks', provider: 'claude' })
+      const backgrounded = result.backgrounded === true
+      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
+      setNotice({
+        tone: 'info',
+        text: backgrounded ? 'Claude task moved to background' : 'No foreground Claude task to background',
+      })
+      noticeTimeoutRef.current = setTimeout(() => {
+        setNotice((current) => current?.text.includes('background') ? null : current)
+        noticeTimeoutRef.current = null
+      }, 3500)
+    } catch (err) {
+      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
+      setNotice({ tone: 'error', text: err instanceof Error ? err.message : 'Failed to background Claude task' })
+    } finally {
+      setBackgroundingTasks(false)
+    }
+  })
+
   const respondToTuiPermission = useEffectEvent(async (permission: PendingPermission, response: PermissionResponse) => {
     const target = composerTargetSession
     if (!target || permissionActionLoading) return
@@ -7850,6 +7875,7 @@ export default function OpenTuiApp() {
         : ''
       return (key.ctrl && key.name === normalized) || sequence === ctrlSequence
     }
+    const isKeyRepeat = key.eventType === 'repeat' || key.repeated === true
     const isModelEffortShortcut = (key.name === 'm' && (key.option || key.meta)) || sequence === 'µ'
     const handled = (action: () => void): void => {
       key.preventDefault()
@@ -8167,6 +8193,11 @@ export default function OpenTuiApp() {
       // Cancel in-flight send (Ctrl+C when composer is open) — requires two
       // presses within 5 s to prevent accidental interrupts.
       if (isCtrl('c') && composerSendState === 'sending') {
+        if (isKeyRepeat) {
+          key.preventDefault()
+          key.stopPropagation()
+          return
+        }
         handled(() => {
           if (interruptPressActive) {
             cancelComposerSend()
@@ -8181,6 +8212,15 @@ export default function OpenTuiApp() {
             }, 5000)
           }
         })
+        return
+      }
+      if (isCtrl('b') && composerSendState === 'sending' && composerTargetSession?.provider === 'claude' && activeRunningToolCount > 0) {
+        if (isKeyRepeat) {
+          key.preventDefault()
+          key.stopPropagation()
+          return
+        }
+        handled(() => { void backgroundComposerTasks() })
         return
       }
       if (isCtrl('o')) {
@@ -8939,6 +8979,8 @@ export default function OpenTuiApp() {
     : `${composerWindowVisualLineCount} line${composerWindowVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars${composerAttachmentLabel ? ` · ${composerAttachmentLabel}` : ''}${composerKnobsChip ? `  ${composerKnobsChip}` : ''}`
   const sendingHintBase = interruptPressActive
     ? composerConfig.footerHintSending.replace('⌃C cancel', '⌃C again to interrupt')
+    : composerTargetSession?.provider === 'claude' && activeRunningToolCount > 0
+    ? `${composerConfig.footerHintSending} · ⌃B background`
     : composerConfig.footerHintSending
   const composerDockFooterHint = composerSendState === 'sending'
     ? sendingHintBase
