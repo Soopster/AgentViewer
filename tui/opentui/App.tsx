@@ -3,6 +3,7 @@ import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMe
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
 import { AnalyticsPopover } from './AnalyticsPopover'
+import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
 import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
@@ -2853,6 +2854,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'cli',        label: 'Copy CLI resume command', key: 'C',  category: 'Session'    },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
+  { id: 'handoff-brief', label: 'Handoff brief',       key: 'H',  category: 'Session'    },
   { id: 'diagnostics', label: 'Session diagnostics',   key: 'D',  category: 'Session'    },
   { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
   { id: 'sort',       label: 'Toggle sidebar sort',    key: 'S',  category: 'Session'    },
@@ -3416,6 +3418,8 @@ export default function OpenTuiApp() {
   const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const analyticsKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [handoffBriefOpen, setHandoffBriefOpen] = useState(false)
+  const handoffBriefKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
@@ -4096,6 +4100,10 @@ export default function OpenTuiApp() {
   const syntaxStyle = useMemo(
     () => shouldEnableSyntaxHighlighting ? buildSyntaxStyle(theme) : null,
     [shouldEnableSyntaxHighlighting, theme],
+  )
+  const handoffBriefSyntaxStyle = useMemo(
+    () => syntaxStyle ?? buildSyntaxStyle(theme),
+    [syntaxStyle, theme],
   )
   const normalizedSessionQuery = sessionSearchQuery.trim().toLowerCase()
   const filteredSessionsForSidebar = useMemo(() => {
@@ -7642,6 +7650,14 @@ export default function OpenTuiApp() {
     }
   })
 
+  const openHandoffBrief = useEffectEvent(() => {
+    if (!selectedSessionTarget) {
+      showNotice('error', 'No session selected')
+      return
+    }
+    setHandoffBriefOpen(true)
+  })
+
   // Navigate to a bookmark from the global overlay — switching session (and
   // provider) when needed, then landing on the message once it has loaded.
   const openBookmarkRecord = useEffectEvent((record: MessageBookmark) => {
@@ -7865,6 +7881,9 @@ export default function OpenTuiApp() {
       case 'analytics':
         setAnalyticsOpen(true)
         break
+      case 'handoff-brief':
+        openHandoffBrief()
+        break
       case 'diagnostics':
         openDiagnostics()
         break
@@ -7952,6 +7971,11 @@ export default function OpenTuiApp() {
 
     if (analyticsOpen) {
       handled(() => { analyticsKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (handoffBriefOpen) {
+      handled(() => { handoffBriefKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -8411,6 +8435,12 @@ export default function OpenTuiApp() {
     // Global analytics popover
     if (isCtrl('a')) {
       handled(() => setAnalyticsOpen(true))
+      return
+    }
+
+    // Global handoff brief popover
+    if (isShifted('H')) {
+      handled(openHandoffBrief)
       return
     }
 
@@ -10165,6 +10195,40 @@ export default function OpenTuiApp() {
           height={height}
           onClose={() => setAnalyticsOpen(false)}
           onKeyHandlerReady={(handler) => { analyticsKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
+      {handoffBriefOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {handoffBriefOpen ? (
+        <HandoffBriefPopover
+          session={selectedSessionTarget}
+          detail={sessionDetail}
+          bookmarkIds={bookmarkKeys}
+          theme={theme}
+          syntaxStyle={handoffBriefSyntaxStyle}
+          width={width}
+          height={height}
+          onClose={() => setHandoffBriefOpen(false)}
+          onCopy={async (text) => {
+            try {
+              await writeClipboard(text)
+              showNotice('info', 'Copied handoff brief to clipboard')
+            } catch (err) {
+              showNotice('error', err instanceof Error ? err.message : 'Failed to copy handoff brief')
+            }
+          }}
+          onKeyHandlerReady={(handler) => { handoffBriefKeyHandlerRef.current = handler }}
         />
       ) : null}
 
