@@ -2639,6 +2639,9 @@ function effortPickerOptions(
   ]
 }
 
+const CLAUDE_PERMISSION_MODE_ORDER = ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const
+type TuiPermissionMode = typeof CLAUDE_PERMISSION_MODE_ORDER[number]
+
 // Permission mode status row — matches Claude Code's shift+tab indicator style.
 const PERMISSION_MODE_GLYPH: Partial<Record<string, string>> = {
   plan: '“',           // " left double quotation mark (read-only/pause)
@@ -3515,7 +3518,8 @@ export default function OpenTuiApp() {
   // (model / reasoning effort / Claude permission mode). Defaults of `auto`
   // / `default` mean "let the SDK keep whatever the session was using".
   const [tuiEffort, setTuiEffort] = useState<TuiEffort>('auto')
-  const [tuiPermissionMode, setTuiPermissionMode] = useState<'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'>('default')
+  const [tuiPermissionModeByKey, setTuiPermissionModeByKey] = useState<Record<string, TuiPermissionMode>>({})
+  const tuiPermissionModeByKeyRef = useRef<Record<string, TuiPermissionMode>>({})
   const [tuiCopilotMode, setTuiCopilotMode] = useState<'interactive' | 'plan' | 'autopilot' | 'shell'>('interactive')
   const [tuiOpenCodeAgent, setTuiOpenCodeAgent] = useState('')
   const [tuiModelOverride, setTuiModelOverride] = useState<Record<string, string>>({})
@@ -3617,6 +3621,7 @@ export default function OpenTuiApp() {
   useEffect(() => { showToolCallsRef.current = showToolCalls }, [showToolCalls])
   useEffect(() => { composerActiveRef.current = composerActive }, [composerActive])
   useEffect(() => { composerDraftRef.current = composerDraft }, [composerDraft])
+  useEffect(() => { tuiPermissionModeByKeyRef.current = tuiPermissionModeByKey }, [tuiPermissionModeByKey])
   useEffect(() => { liveTranscriptMessagesRef.current = liveTranscriptMessages }, [liveTranscriptMessages])
   useEffect(() => { searchModeRef.current = searchMode }, [searchMode])
   useEffect(() => { sessionSearchModeRef.current = sessionSearchMode }, [sessionSearchMode])
@@ -3787,6 +3792,10 @@ export default function OpenTuiApp() {
     ),
   )
   const composerProvider = composerTargetSession?.provider ?? selectedSession?.provider ?? null
+  const composerPermissionMode = useMemo<TuiPermissionMode>(() => {
+    if (composerTargetSession?.provider !== 'claude') return 'default'
+    return tuiPermissionModeByKey[sessionKey(composerTargetSession)] ?? 'default'
+  }, [composerTargetSession, tuiPermissionModeByKey])
   const composerConfig = useMemo(() => getProviderComposer(composerProvider), [composerProvider])
   const composerExampleSeed = useMemo(() => {
     const source = composerTargetSession?.sessionId ?? composerProvider ?? ''
@@ -4160,14 +4169,14 @@ export default function OpenTuiApp() {
     if (composerTargetSession?.provider === 'opencode' && tuiOpenCodeAgent) {
       parts.push(`agent:${tuiOpenCodeAgent}`)
     }
-    if (composerTargetSession?.provider === 'claude' && tuiPermissionMode !== 'default') {
-      parts.push(`mode:${tuiPermissionMode}`)
+    if (composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default') {
+      parts.push(`mode:${composerPermissionMode}`)
     }
     if (composerTargetSession?.provider === 'copilot' && tuiCopilotMode !== 'interactive') {
       parts.push(`mode:${tuiCopilotMode}`)
     }
     return parts.length > 0 ? `· ${parts.join(' · ')}` : ''
-  }, [composerContextUsage, composerCurrentModel, composerTargetSession?.provider, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent, tuiPermissionMode])
+  }, [composerContextUsage, composerCurrentModel, composerPermissionMode, composerTargetSession?.provider, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
   const composerWaitingSuffix = useMemo(() => {
     const parts: string[] = []
     if (composerKnobsChip) parts.push(composerKnobsChip.replace(/^·\s*/, ''))
@@ -4608,7 +4617,7 @@ export default function OpenTuiApp() {
     if (hasSubagentTail) rows += 2
     if (liveToolActivities.length > 0 && activeRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
-    if (composerTargetSession?.provider === 'claude' && tuiPermissionMode !== 'default') rows += 2
+    if (composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default') rows += 2
     if (hasComposerStatusMessage) {
       const streamingMarkdown = composerSendState === 'sending' && composerLiveText && syntaxStyle && !composerError
       rows += streamingMarkdown ? 6 : 2
@@ -5705,6 +5714,25 @@ export default function OpenTuiApp() {
     void runTuiSessionAction(target, body).catch(() => { /* swallow */ })
   }, [])
 
+  const setClaudeComposerPermissionMode = useEffectEvent((target: Session | null | undefined, nextMode: TuiPermissionMode) => {
+    if (!target || target.provider !== 'claude') return
+    const targetKey = sessionKey(target)
+    setTuiPermissionModeByKey((prev) => {
+      const next = prev[targetKey] === nextMode ? prev : { ...prev, [targetKey]: nextMode }
+      tuiPermissionModeByKeyRef.current = next
+      return next
+    })
+    pushClaudeControl(target, { action: 'setPermissionMode', permissionMode: nextMode })
+  })
+
+  const cycleClaudeComposerPermissionMode = useEffectEvent((target: Session | null | undefined) => {
+    if (!target || target.provider !== 'claude') return
+    const current = tuiPermissionModeByKeyRef.current[sessionKey(target)] ?? 'default'
+    const currentIndex = CLAUDE_PERMISSION_MODE_ORDER.indexOf(current)
+    const next = CLAUDE_PERMISSION_MODE_ORDER[(currentIndex + 1) % CLAUDE_PERMISSION_MODE_ORDER.length]!
+    setClaudeComposerPermissionMode(target, next)
+  })
+
   const cancelComposerSend = useEffectEvent(() => {
     const target = composerTargetSession
     // Turns are decoupled from the client connection (they survive disconnect),
@@ -6064,14 +6092,14 @@ export default function OpenTuiApp() {
           mode: targetSession.provider === 'copilot'
             ? tuiCopilotMode
             : undefined,
-          permissionMode: targetSession.provider === 'claude' && tuiPermissionMode !== 'default'
-            ? tuiPermissionMode
+          permissionMode: targetSession.provider === 'claude' && composerPermissionMode !== 'default'
+            ? composerPermissionMode
             : undefined,
           // Claude/Copilot only emit interactive tool-approval prompts when the
           // client opts in. OpenCode/Codex surface them automatically.
           // bypass/plan handle all tool decisions via permissionMode — no bridge.
           manualPermissions: targetSession.provider === 'copilot'
-            || (targetSession.provider === 'claude' && tuiPermissionMode !== 'bypassPermissions' && tuiPermissionMode !== 'plan')
+            || (targetSession.provider === 'claude' && composerPermissionMode !== 'bypassPermissions' && composerPermissionMode !== 'plan')
             ? true : undefined,
         },
         controller.signal,
@@ -6141,6 +6169,15 @@ export default function OpenTuiApp() {
                 ? { ...message, sessionId: realId }
                 : message
             ))
+            setTuiPermissionModeByKey((prev) => {
+              const pendingMode = prev[oldKey]
+              if (!pendingMode) return prev
+              const next = { ...prev }
+              delete next[oldKey]
+              next[newKey] = pendingMode
+              tuiPermissionModeByKeyRef.current = next
+              return next
+            })
             setOpenTabSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? updated : s))
             setSessions((prev) => prev.map((s) => sessionKey(s) === oldKey ? { ...s, sessionId: realId, isPending: false } : s))
             if (selectedSessionKeyRef.current === oldKey) setSelectedSessionKey(newKey)
@@ -6627,7 +6664,7 @@ export default function OpenTuiApp() {
     tuiEffort,
     tuiCopilotMode,
     tuiOpenCodeAgent,
-    tuiPermissionMode,
+    composerPermissionMode,
     tuiModelOverride,
     composerMentionAttachments,
     composerPromptParts,
@@ -7712,17 +7749,9 @@ export default function OpenTuiApp() {
           })
           break
         }
-        const order = ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const
-        setTuiPermissionMode((current) => {
-          const next = order[(order.indexOf(current) + 1) % order.length]!
-          // Push to the warm pool if the active Claude session has one;
-          // otherwise this is a no-op and the next send carries it via body.
-          pushClaudeControl(composerTargetSession ?? selectedSession, {
-            action: 'setPermissionMode',
-            permissionMode: next,
-          })
-          return next
-        })
+        if (target?.provider === 'claude') {
+          cycleClaudeComposerPermissionMode(target)
+        }
         break
       }
       case 'model': {
@@ -8129,13 +8158,8 @@ export default function OpenTuiApp() {
     if (key.name === 'tab' && key.shift) {
       const target = composerTargetSession ?? selectedSession
       if (target?.provider === 'claude') {
-        const order = ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const
         handled(() => {
-          setTuiPermissionMode((current) => {
-            const next = order[(order.indexOf(current) + 1) % order.length]!
-            pushClaudeControl(target, { action: 'setPermissionMode', permissionMode: next })
-            return next
-          })
+          cycleClaudeComposerPermissionMode(target)
         })
         return
       }
@@ -10006,14 +10030,14 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {composerTargetSession?.provider === 'claude' && tuiPermissionMode !== 'default' ? (
+      {composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default' ? (
         <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
           <text
-            fg={tuiPermissionMode === 'bypassPermissions' ? theme.red : tuiPermissionMode === 'plan' ? theme.dim : theme.amber}
+            fg={composerPermissionMode === 'bypassPermissions' ? theme.red : composerPermissionMode === 'plan' ? theme.dim : theme.amber}
             wrapMode="none"
           >
             {fitText(
-              `${PERMISSION_MODE_GLYPH[tuiPermissionMode] ?? ''} ${PERMISSION_MODE_LABEL[tuiPermissionMode] ?? tuiPermissionMode} on  (shift+tab to cycle)`,
+              `${PERMISSION_MODE_GLYPH[composerPermissionMode] ?? ''} ${PERMISSION_MODE_LABEL[composerPermissionMode] ?? composerPermissionMode} on  (shift+tab to cycle)`,
               Math.max(width - 4, 20),
             )}
           </text>
