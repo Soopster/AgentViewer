@@ -5,6 +5,7 @@ import { GitPopover } from './GitPopover'
 import { AnalyticsPopover } from './AnalyticsPopover'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { PromptLibraryPopover } from './PromptLibraryPopover'
+import { ChannelBridgePopover } from './ChannelBridgePopover'
 import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
 import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
@@ -19,7 +20,7 @@ import {
 } from './pierreDiffView'
 import type { SelectedLineRange } from '@pierre/diffs'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
-import type { BaseRenderable, MarkdownRenderable, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
+import type { BaseRenderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
   formatProviderLabel,
@@ -33,6 +34,7 @@ import {
 } from '../format'
 import { stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
 import { buildTaskRegistry } from '../../lib/taskRegistry'
+import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
 import {
   THEME,
   getProviderAccent,
@@ -2526,6 +2528,21 @@ function cardDiffText(card: TuiTranscriptCard, isExpanded: boolean): string | nu
   return card.editDiff ?? extractDiffText(card.expandedLines)
 }
 
+function filePathFromDiffText(diffText: string | null, fallback: string): string {
+  if (!diffText) return fallback
+  const lines = diffText.split('\n')
+  for (const line of lines) {
+    if (line.startsWith('+++ b/')) return line.slice(6).trim()
+    if (line.startsWith('--- a/')) return line.slice(6).trim()
+  }
+  const fileHeader = lines.find((line) => line.startsWith('diff --git '))
+  if (fileHeader) {
+    const match = fileHeader.match(/\sb\/(.+)$/)
+    if (match?.[1]) return match[1].trim()
+  }
+  return fallback
+}
+
 function cardDiffView(card: TuiTranscriptCard, isExpanded: boolean): TuiPierreDiffView | null {
   const cached = PIERRE_DIFF_CACHE.get(card)
   if (cached && cached.isExpanded === isExpanded) return cached.value
@@ -2726,6 +2743,7 @@ function renderTranscriptDiffNoteCard(
   width: number,
   theme: TuiThemePalette,
   label: string,
+  onSendToComposer?: () => void,
 ) {
   return (
     <box width={width} flexDirection="column" border borderStyle="single" borderColor={theme.violet} paddingX={1}>
@@ -2734,11 +2752,23 @@ function renderTranscriptDiffNoteCard(
           {fitText(`Note — ${label}`, Math.max(width - 6, 8))}
         </text>
         <box flexGrow={1} />
+        {onSendToComposer ? (
+          <text fg={theme.green} wrapMode="none"> C:composer</text>
+        ) : null}
         <text fg={theme.dim} wrapMode="none"> x:del</text>
       </box>
       <box>
         <text fg={theme.text} wrapMode="none">{note.text}</text>
       </box>
+      {onSendToComposer ? (
+        <box flexDirection="row">
+          <box flexGrow={1} />
+          <text fg={theme.green} wrapMode="none" onMouseUp={(event) => {
+            event.stopPropagation()
+            onSendToComposer()
+          }}>Send to composer</text>
+        </box>
+      ) : null}
     </box>
   )
 }
@@ -3188,6 +3218,7 @@ type TranscriptCardProps = {
   isSearchHit: boolean
   isActiveMatch: boolean
   bookmarked: boolean
+  onSelectCard: (cardKey: string) => void
   thinkingMode: boolean
   diffLayout: TuiDiffLayout
   imessageStyle: boolean
@@ -3198,12 +3229,14 @@ type TranscriptCardProps = {
   hoveredDiffAnchor: string | null
   activateDiffHover: (anchor: string) => void
   openDiffNote: (selection: SelectedLineRange) => void
+  sendDiffNoteToComposer: (card: TuiTranscriptCard, note: TranscriptDiffNote, label: string, diffText: string | null) => void
   diffPlain: boolean
   diffShowLineNumbers: boolean
   diffShowHunkHeaders: boolean
   diffRowCursor: number
   diffSelectionAnchor: number | null
   setDiffRowCursor: (cardKey: string, rowIndex: number, preserveSelection?: boolean) => void
+  setDiffSelectionAnchor: (cardKey: string, rowIndex: number) => void
 }
 
 type SelectableMarkdownProps = {
@@ -3255,6 +3288,7 @@ function TranscriptCardInner({
   isSearchHit,
   isActiveMatch,
   bookmarked,
+  onSelectCard,
   thinkingMode,
   diffLayout,
   imessageStyle,
@@ -3265,12 +3299,14 @@ function TranscriptCardInner({
   hoveredDiffAnchor,
   activateDiffHover,
   openDiffNote,
+  sendDiffNoteToComposer,
   diffPlain,
   diffShowLineNumbers,
   diffShowHunkHeaders,
   diffRowCursor,
   diffSelectionAnchor,
   setDiffRowCursor,
+  setDiffSelectionAnchor,
 }: TranscriptCardProps) {
   const {
     landmarks,
@@ -3285,6 +3321,7 @@ function TranscriptCardInner({
     markdownFallbackLines,
   } = display
 
+  const diffTextForComposer = card.category === 'diff' ? cardDiffText(card, isExpanded) : null
   const marker = hasCursor ? '>' : isSelected ? ':' : card.role === 'user' ? '▸' : '●'
   const cardBg = hasCursor
     ? theme.surface3
@@ -3435,9 +3472,25 @@ function TranscriptCardInner({
         { text: '{} hunk  ', fg: theme.cyan },
         { text: 'shift+j/k range  ', fg: theme.cyan },
         { text: 'a:note  ', fg: theme.cyan },
+        { text: 'C:composer  ', fg: theme.cyan },
         { text: 'x:del', fg: theme.cyan },
       ]
     : null
+  const beginDiffMouseSelection = (event: MouseEvent, rowIndex: number) => {
+    if (event.button !== 0) return
+    event.stopPropagation()
+    if (event.modifiers.shift) {
+      setDiffSelectionAnchor(card.key, diffSelectionAnchor ?? diffSelectionCurrentIndex)
+    } else {
+      setDiffSelectionAnchor(card.key, rowIndex)
+    }
+    setDiffRowCursor(card.key, rowIndex, true)
+  }
+  const updateDiffMouseSelection = (event: MouseEvent, rowIndex: number) => {
+    if (event.button !== 0 || (!event.isDragging && event.type !== 'drag')) return
+    event.stopPropagation()
+    setDiffRowCursor(card.key, rowIndex, true)
+  }
   const landmarkWidth = rightPaneWidth - 4
   const selectionColors = terminalSelectionColors(theme)
 
@@ -3514,6 +3567,10 @@ function TranscriptCardInner({
         flexDirection="column"
         title={cardTitle}
         titleColor={accent}
+        onMouseDown={(event) => {
+          if (event.button !== 0) return
+          onSelectCard(card.key)
+        }}
       >
         <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={1}>
           {shouldRenderSyntaxMarkdown && card.markdownContent && syntaxStyle ? (
@@ -3673,9 +3730,21 @@ function TranscriptCardInner({
                         width={bodyInnerWidth}
                         flexDirection="row"
                         backgroundColor={rowBackground}
-                        onMouseOver={() => anchor && activateDiffHover(anchor)}
-                        onMouseMove={() => anchor && activateDiffHover(anchor)}
-                        onMouseUp={() => setDiffRowCursor(card.key, rowIndex)}
+                        onMouseDown={(event) => beginDiffMouseSelection(event, rowIndex)}
+                        onMouseDrag={(event) => updateDiffMouseSelection(event, rowIndex)}
+                        onMouseOver={(event) => {
+                          anchor && activateDiffHover(anchor)
+                          updateDiffMouseSelection(event, rowIndex)
+                        }}
+                        onMouseMove={(event) => {
+                          anchor && activateDiffHover(anchor)
+                          updateDiffMouseSelection(event, rowIndex)
+                        }}
+                        onMouseUp={(event) => {
+                          if (event.button !== 0) return
+                          event.stopPropagation()
+                          setDiffRowCursor(card.key, rowIndex, true)
+                        }}
                       >
                         {diffShowLineNumbers ? (
                           <>
@@ -3695,7 +3764,13 @@ function TranscriptCardInner({
                           {fitText(row.text, Math.max(diffTextWidth, 12))}
                         </text>
                         {isHovered ? (
-                          <box width={3} onMouseUp={() => rowLabelSelection && openDiffNote(rowLabelSelection)}>
+                          <box
+                            width={3}
+                            onMouseUp={(event) => {
+                              event.stopPropagation()
+                              rowLabelSelection && openDiffNote(rowLabelSelection)
+                            }}
+                          >
                             <text fg={theme.cyan} bg={theme.surface3} wrapMode="none">[+]</text>
                           </box>
                         ) : noteCards.length > 0 ? (
@@ -3707,7 +3782,13 @@ function TranscriptCardInner({
                       {hasDraft && diffDraft ? renderTranscriptDiffNoteDraft(diffDraft, bodyInnerWidth, theme) : null}
                       {noteCards.map(({ key, note, label }) => (
                         <React.Fragment key={key}>
-                          {renderTranscriptDiffNoteCard(note, bodyInnerWidth, theme, label)}
+                          {renderTranscriptDiffNoteCard(
+                            note,
+                            bodyInnerWidth,
+                            theme,
+                            label,
+                            () => sendDiffNoteToComposer(card, note, label, diffTextForComposer),
+                          )}
                         </React.Fragment>
                       ))}
                     </React.Fragment>
@@ -3767,9 +3848,21 @@ function TranscriptCardInner({
                       width={bodyInnerWidth}
                       flexDirection="row"
                       backgroundColor={isSelectedDiffRow ? theme.surface3 : undefined}
-                      onMouseOver={() => anchor && activateDiffHover(anchor)}
-                      onMouseMove={() => anchor && activateDiffHover(anchor)}
-                      onMouseUp={() => setDiffRowCursor(card.key, rowIndex)}
+                      onMouseDown={(event) => beginDiffMouseSelection(event, rowIndex)}
+                      onMouseDrag={(event) => updateDiffMouseSelection(event, rowIndex)}
+                      onMouseOver={(event) => {
+                        anchor && activateDiffHover(anchor)
+                        updateDiffMouseSelection(event, rowIndex)
+                      }}
+                      onMouseMove={(event) => {
+                        anchor && activateDiffHover(anchor)
+                        updateDiffMouseSelection(event, rowIndex)
+                      }}
+                      onMouseUp={(event) => {
+                        if (event.button !== 0) return
+                        event.stopPropagation()
+                        setDiffRowCursor(card.key, rowIndex, true)
+                      }}
                     >
                       <SplitDiffSide
                         side={row.left}
@@ -3780,7 +3873,13 @@ function TranscriptCardInner({
                         selectionColors={selectionColors}
                       />
                       {isHovered ? (
-                        <box width={1} onMouseUp={() => currentSelectionRange && openDiffNote(currentSelectionRange)}>
+                        <box
+                          width={1}
+                          onMouseUp={(event) => {
+                            event.stopPropagation()
+                            currentSelectionRange && openDiffNote(currentSelectionRange)
+                          }}
+                        >
                           <text fg={theme.cyan} bg={theme.surface3} wrapMode="none">+</text>
                         </box>
                       ) : noteCards.length > 0 ? (
@@ -3800,7 +3899,13 @@ function TranscriptCardInner({
                     {hasDraft && diffDraft ? renderTranscriptDiffNoteDraft(diffDraft, bodyInnerWidth, theme) : null}
                     {noteCards.map(({ key, note, label }) => (
                       <React.Fragment key={key}>
-                        {renderTranscriptDiffNoteCard(note, bodyInnerWidth, theme, label)}
+                        {renderTranscriptDiffNoteCard(
+                          note,
+                          bodyInnerWidth,
+                          theme,
+                          label,
+                          () => sendDiffNoteToComposer(card, note, label, diffTextForComposer),
+                        )}
                       </React.Fragment>
                     ))}
                   </React.Fragment>
@@ -3906,6 +4011,8 @@ export default function OpenTuiApp() {
   const handoffBriefKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
   const promptLibraryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => void) | null>(null)
+  const [channelBridgeOpen, setChannelBridgeOpen] = useState(false)
+  const channelBridgeKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
@@ -4291,6 +4398,9 @@ export default function OpenTuiApp() {
       return next
     })
   }, [])
+  const setTranscriptDiffSelectionAnchorForCard = useCallback((cardKey: string, rowIndex: number) => {
+    setTranscriptDiffSelectionAnchorByCardKey((prev) => ({ ...prev, [cardKey]: Math.max(0, rowIndex) }))
+  }, [])
   const setTranscriptDiffRowCursorForCard = useCallback((cardKey: string, rowIndex: number, preserveSelection = false) => {
     setTranscriptDiffRowCursorByCardKey((prev) => ({ ...prev, [cardKey]: Math.max(0, rowIndex) }))
     if (!preserveSelection) clearTranscriptDiffSelectionForCard(cardKey)
@@ -4558,6 +4668,27 @@ export default function OpenTuiApp() {
     })
     return indexByKey
   }, [visibleTranscriptCards])
+
+  const jumpToTranscriptIndex = useCallback((index: number) => {
+    if (visibleTranscriptCards.length === 0) return
+    const nextIndex = clamp(index, 0, visibleTranscriptCards.length - 1)
+    const nextCard = visibleTranscriptCards[nextIndex]
+    if (!nextCard) return
+    setTranscriptCursorKey(nextCard.key)
+    const atTail = nextIndex === visibleTranscriptCards.length - 1
+    setFollowTail(atTail)
+    if (atTail) {
+      setPendingNewCount(0)
+      setUnreadBoundaryKey(null)
+    }
+  }, [visibleTranscriptCards])
+
+  const selectTranscriptCard = useCallback((cardKey: string) => {
+    const index = transcriptIndexByKey.get(cardKey)
+    if (index == null) return
+    jumpToTranscriptIndex(index)
+    setFocusedPane('messages')
+  }, [transcriptIndexByKey, jumpToTranscriptIndex])
   const thinkingFullKeys = useMemo(() => {
     if (!thinkingMode) return new Set<string>()
     const next = new Set<string>()
@@ -4997,6 +5128,37 @@ export default function OpenTuiApp() {
     setComposerMentionAttachments(snapshot.attachments)
     setComposerPromptParts(snapshot.promptParts)
     restoreComposerPromptPartExtmarks(snapshot.promptParts, text)
+  })
+
+  const appendDiffCommentPromptToComposer = useEffectEvent((prompt: string) => {
+    const trimmed = prompt.trim()
+    if (!trimmed) return
+    const existing = composerTextareaRef.current?.plainText ?? composerDraft
+    const separator = existing.length > 0 ? (existing.endsWith('\n') ? '\n' : '\n\n') : ''
+    const next = `${existing}${separator}${trimmed}\n\n`
+    applyComposerSnapshot({
+      text: next,
+      attachments: [...composerMentionAttachments],
+      promptParts: [...composerPromptParts],
+      cursorOffset: next.length,
+    })
+    setComposerActive(true)
+  })
+
+  const sendTranscriptDiffNoteToComposer = useEffectEvent((
+    card: TuiTranscriptCard,
+    note: TranscriptDiffNote,
+    label: string,
+    diffText: string | null,
+  ) => {
+    const context = diffText ?? cardClipboardText(card)
+    appendDiffCommentPromptToComposer(buildDiffCommentComposerPrompt({
+      filePath: filePathFromDiffText(diffText, card.label),
+      range: note.range,
+      comment: note.text,
+      context,
+      source: `Transcript diff card ${label}`,
+    }))
   })
 
   const activeComposerPromptPartRanges = useEffectEvent((text: string, parts: ComposerPromptPart[]): ComposerPromptPartRange[] => {
@@ -5562,6 +5724,7 @@ export default function OpenTuiApp() {
           isSearchHit={isSearchHit}
           isActiveMatch={isActiveMatch}
           bookmarked={bookmarkKeys.has(card.key)}
+          onSelectCard={selectTranscriptCard}
           thinkingMode={thinkingMode}
           diffLayout={diffLayout}
           imessageStyle={imessageStyle}
@@ -5572,12 +5735,14 @@ export default function OpenTuiApp() {
           hoveredDiffAnchor={hoveredTranscriptDiffAnchor}
           activateDiffHover={activateTranscriptDiffHover}
           openDiffNote={openTranscriptDiffNote}
+          sendDiffNoteToComposer={sendTranscriptDiffNoteToComposer}
           diffPlain={transcriptDiffPlainCardKeys.has(card.key)}
           diffShowLineNumbers={!transcriptDiffHiddenLineNumberCardKeys.has(card.key)}
           diffShowHunkHeaders={!transcriptDiffHiddenHunkHeaderCardKeys.has(card.key)}
           diffRowCursor={transcriptDiffRowCursorByCardKey[card.key] ?? 0}
           diffSelectionAnchor={transcriptDiffSelectionAnchorByCardKey[card.key] ?? null}
           setDiffRowCursor={setTranscriptDiffRowCursorForCard}
+          setDiffSelectionAnchor={setTranscriptDiffSelectionAnchorForCard}
         />
       )
     })
@@ -5590,6 +5755,7 @@ export default function OpenTuiApp() {
     searchMatchSet,
     activeMatchTargetIndex,
     bookmarkKeys,
+    selectTranscriptCard,
     theme,
     densityState,
     syntaxStyle,
@@ -5604,10 +5770,12 @@ export default function OpenTuiApp() {
     hoveredTranscriptDiffAnchor,
     activateTranscriptDiffHover,
     openTranscriptDiffNote,
+    sendTranscriptDiffNoteToComposer,
     transcriptDiffPlainCardKeys,
     transcriptDiffHiddenLineNumberCardKeys,
     transcriptDiffHiddenHunkHeaderCardKeys,
     transcriptDiffRowCursorByCardKey,
+    setTranscriptDiffSelectionAnchorForCard,
     setTranscriptDiffRowCursorForCard,
   ])
 
@@ -5923,20 +6091,6 @@ export default function OpenTuiApp() {
       if (!foreground) backgroundRefreshInFlightRef.current.delete(cacheKeyForGuards)
     }
   }, [])
-
-  const jumpToTranscriptIndex = useCallback((index: number) => {
-    if (visibleTranscriptCards.length === 0) return
-    const nextIndex = clamp(index, 0, visibleTranscriptCards.length - 1)
-    const nextCard = visibleTranscriptCards[nextIndex]
-    if (!nextCard) return
-    setTranscriptCursorKey(nextCard.key)
-    const atTail = nextIndex === visibleTranscriptCards.length - 1
-    setFollowTail(atTail)
-    if (atTail) {
-      setPendingNewCount(0)
-      setUnreadBoundaryKey(null)
-    }
-  }, [visibleTranscriptCards])
 
   const jumpToTranscriptTail = useCallback(() => {
     if (visibleTranscriptCards.length === 0) return
@@ -8327,6 +8481,10 @@ export default function OpenTuiApp() {
     setPromptLibraryOpen(true)
   })
 
+  const openChannelBridge = useEffectEvent(() => {
+    setChannelBridgeOpen(true)
+  })
+
   const insertComposerPromptText = useEffectEvent((text: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -8671,6 +8829,11 @@ export default function OpenTuiApp() {
 
     if (promptLibraryOpen) {
       handled(() => { promptLibraryKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (channelBridgeOpen) {
+      handled(() => { channelBridgeKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -9178,6 +9341,12 @@ export default function OpenTuiApp() {
       return
     }
 
+    // Global live CLI channel bridge — push composer messages into a side-by-side `claude` session
+    if (isShifted('C')) {
+      handled(openChannelBridge)
+      return
+    }
+
     // Global task panel toggle — cycles: closed → tasks → agents → closed
     if (isShifted('T')) {
       handled(() => {
@@ -9539,6 +9708,27 @@ export default function OpenTuiApp() {
             return
           }
           deleteTranscriptDiffNote(noteSelectionKey)
+        })
+        return
+      }
+      if (key.sequence === 'C') {
+        handled(() => {
+          if (!noteSelectionKey) {
+            showNotice('info', 'No diff row selected')
+            return
+          }
+          const note = transcriptDiffNotes.get(noteSelectionKey)
+          if (!note) {
+            showNotice('info', 'No note on the selected diff row')
+            return
+          }
+          sendTranscriptDiffNoteToComposer(
+            selectedTranscriptCard,
+            note,
+            currentSelectionSpan?.label ?? transcriptDiffSelectionLineLabel(note.range),
+            cardDiffText(selectedTranscriptCard, resolvedExpandedKeys.has(selectedTranscriptCard.key)),
+          )
+          showNotice('info', 'Diff comment added to composer')
         })
         return
       }
@@ -11028,6 +11218,10 @@ export default function OpenTuiApp() {
           height={height}
           onClose={() => setGitOpen(false)}
           onKeyHandlerReady={(handler) => { gitKeyHandlerRef.current = handler }}
+          onSendDiffNoteToComposer={(prompt) => {
+            appendDiffCommentPromptToComposer(prompt)
+            showNotice('info', 'Diff comment added to composer')
+          }}
         />
       ) : null}
 
@@ -11115,6 +11309,30 @@ export default function OpenTuiApp() {
           onClose={() => setPromptLibraryOpen(false)}
           onNotice={showNotice}
           onKeyHandlerReady={(handler) => { promptLibraryKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
+      {channelBridgeOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {channelBridgeOpen ? (
+        <ChannelBridgePopover
+          theme={theme}
+          accentColor={composerAccentColor}
+          width={width}
+          height={height}
+          onClose={() => setChannelBridgeOpen(false)}
+          onNotice={showNotice}
+          onKeyHandlerReady={(handler) => { channelBridgeKeyHandlerRef.current = handler }}
         />
       ) : null}
 
