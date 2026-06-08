@@ -6,6 +6,7 @@ import { LiveSubagentTextContext, TaskActiveFormsContext } from './messageItemSh
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
+import { PencilLine } from 'lucide-react'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, ClaudeSystemBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
 import {
@@ -30,7 +31,7 @@ import { getAssistantLabel } from '@/lib/provider'
 import { Separator } from '@/components/ui/separator'
 import type { SelectedLineRange } from '@pierre/diffs'
 import type { PierreAnnotationMetadata, PierreChangeStyle, PierreDiffAnnotation, PierreDiffPresentation, PierreDiffStyle, PierreInlineDiffStyle } from './PierreDiffView'
-import { useDiffComments } from './diffComments'
+import { useDiffComments, type DiffComment } from './diffComments'
 
 // ── Tool color palette ────────────────────────────────────────────────────────
 
@@ -447,6 +448,63 @@ function DiffStyleToggle({ diffStyle, onToggle }: { diffStyle: PierreDiffStyle; 
   )
 }
 
+function DiffCommentButton({
+  selectedLines,
+  currentSelectionNote,
+  onOpenComment,
+}: {
+  selectedLines: SelectedLineRange | null
+  currentSelectionNote: DiffComment | null
+  onOpenComment: () => void
+}) {
+  if (!selectedLines) return null
+  const active = Boolean(currentSelectionNote)
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation()
+        onOpenComment()
+      }}
+      title={active ? 'Edit comment for selected lines' : 'Add comment for selected lines'}
+      style={{
+        height: 30,
+        padding: '0 10px',
+        borderRadius: 999,
+        border: `1px solid ${active ? 'color-mix(in srgb, var(--violet) 36%, var(--border))' : 'var(--border)'}`,
+        background: active ? 'color-mix(in srgb, var(--violet) 10%, var(--surface-3))' : 'var(--surface-3)',
+        color: active ? 'var(--violet)' : 'var(--text-2)',
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+        fontSize: 11,
+        fontWeight: 600,
+        flexShrink: 0,
+      }}
+    >
+      <PencilLine size={12} />
+      {active ? 'Edit comment' : 'Add comment'}
+    </button>
+  )
+}
+
+function DiffThreadSummary({ count }: { count: number }) {
+  if (count <= 0) return null
+  return (
+    <div style={{
+      padding: '2px 12px 0',
+      color: 'var(--text-3)',
+      fontFamily: "'IBM Plex Mono', monospace",
+      fontSize: 10,
+      whiteSpace: 'nowrap',
+    }}>
+      {count} annotation thread{count === 1 ? '' : 's'}
+    </div>
+  )
+}
+
 function toggleDiffStyle(current: PierreDiffStyle): PierreDiffStyle {
   return current === 'stacked' ? 'split' : 'stacked'
 }
@@ -525,6 +583,14 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
               LARGE
             </span>
           )}
+          <DiffCommentButton
+            selectedLines={comments.selectedLines}
+            currentSelectionNote={comments.currentSelectionNote}
+            onOpenComment={() => {
+              if (!comments.selectedLines) return
+              comments.onGutterUtilityClick(comments.selectedLines)
+            }}
+          />
           <DiffStyleToggle diffStyle={diffStyle} onToggle={toggleDiffStyleOverride} />
           <span style={{ color: 'var(--text-3)', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
         </div>
@@ -534,6 +600,7 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
           <div style={{ padding: '2px 12px', background: 'var(--surface)', borderTop: '1px solid var(--border)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {filePath}
           </div>
+          <DiffThreadSummary count={comments.commentCount} />
           <DiffView
             oldStr={oldStr}
             newStr={newStr}
@@ -741,7 +808,16 @@ function FileChangeDiffRegion({
         }}>
           {filePath}
         </span>
+        <DiffCommentButton
+          selectedLines={comments.selectedLines}
+          currentSelectionNote={comments.currentSelectionNote}
+          onOpenComment={() => {
+            if (!comments.selectedLines) return
+            comments.onGutterUtilityClick(comments.selectedLines)
+          }}
+        />
       </div>
+      <DiffThreadSummary count={comments.commentCount} />
       <PatchDiffView
         patch={diffText}
         maxHeight={420}
@@ -2317,6 +2393,21 @@ function MultiEditDiffRegion({
           )}
         </div>
       )}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'flex-end',
+        padding: '2px 12px 0',
+      }}>
+        <DiffCommentButton
+          selectedLines={comments.selectedLines}
+          currentSelectionNote={comments.currentSelectionNote}
+          onOpenComment={() => {
+            if (!comments.selectedLines) return
+            comments.onGutterUtilityClick(comments.selectedLines)
+          }}
+        />
+      </div>
+      <DiffThreadSummary count={comments.commentCount} />
       <DiffView
         oldStr={oldStr}
         newStr={newStr}

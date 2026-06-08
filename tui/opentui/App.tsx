@@ -17,6 +17,7 @@ import {
   type TuiPierreSplitRow,
   type TuiSplitRowSide,
 } from './pierreDiffView'
+import type { SelectedLineRange } from '@pierre/diffs'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
 import type { BaseRenderable, MarkdownRenderable, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
@@ -2376,6 +2377,7 @@ type SplitDiffSideProps = {
   side?: TuiSplitRowSide
   width: number
   gutterWidth: number
+  showLineNumbers: boolean
   theme: TuiThemePalette
   selectionColors: SelectionColors
 }
@@ -2384,6 +2386,7 @@ function SplitDiffSide({
   side,
   width,
   gutterWidth,
+  showLineNumbers,
   theme,
   selectionColors,
 }: SplitDiffSideProps) {
@@ -2392,9 +2395,11 @@ function SplitDiffSide({
   const textWidth = Math.max(width - gutterWidth - 1, 4)
   return (
     <box width={width} flexDirection="row" backgroundColor={splitDiffSideBackground(resolved, theme)}>
-      <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
-        {formatDiffLineNumber(resolved.lineNum, gutterWidth)}{' '}
-      </text>
+      {showLineNumbers ? (
+        <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+          {formatDiffLineNumber(resolved.lineNum, gutterWidth)}{' '}
+        </text>
+      ) : null}
       <text fg={sideColor} wrapMode="none" selectable {...selectionColors}>
         {fitText(` ${splitDiffSideIndicator(resolved)} ${resolved.text}`, textWidth)}
       </text>
@@ -2539,6 +2544,205 @@ function cardDiffRows(card: TuiTranscriptCard, isExpanded: boolean, previewLimit
   return visibleRows + hiddenSummaryRows + 1
 }
 
+type TranscriptDiffNoteDraft = {
+  anchor: string
+  range: SelectedLineRange
+  lineLabel: string
+  text: string
+}
+
+type TranscriptDiffNote = {
+  range: SelectedLineRange
+  text: string
+}
+
+type TranscriptDiffSelectionPoint = {
+  lineNumber: number
+  side: SelectedLineRange['side']
+}
+
+type TranscriptDiffSelectionSpan = {
+  startIndex: number
+  endIndex: number
+  selection: SelectedLineRange
+  key: string
+  label: string
+}
+
+function transcriptDiffStackRowAnchor(namespace: string, row: TuiPierreDiffRow): string | null {
+  if (row.newLine !== undefined) return `${namespace}:new:${row.newLine}`
+  if (row.oldLine !== undefined) return `${namespace}:old:${row.oldLine}`
+  return null
+}
+
+function transcriptDiffSplitRowAnchor(namespace: string, row: TuiPierreSplitRow): string | null {
+  if (row.right?.lineNum !== undefined) return `${namespace}:new:${row.right.lineNum}`
+  if (row.left?.lineNum !== undefined) return `${namespace}:old:${row.left.lineNum}`
+  return null
+}
+
+function transcriptDiffSelectionPointForStackRow(row: TuiPierreDiffRow): TranscriptDiffSelectionPoint | null {
+  if (row.newLine !== undefined) return { lineNumber: row.newLine, side: 'additions' }
+  if (row.oldLine !== undefined) return { lineNumber: row.oldLine, side: 'deletions' }
+  return null
+}
+
+function transcriptDiffSelectionPointForSplitRow(row: TuiPierreSplitRow): TranscriptDiffSelectionPoint | null {
+  if (row.right?.lineNum !== undefined) return { lineNumber: row.right.lineNum, side: 'additions' }
+  if (row.left?.lineNum !== undefined) return { lineNumber: row.left.lineNum, side: 'deletions' }
+  return null
+}
+
+function transcriptDiffSelectionKey(namespace: string, selection: SelectedLineRange): string {
+  return [namespace, selection.start, selection.side ?? '', selection.end, selection.endSide ?? ''].join('\u0000')
+}
+
+function transcriptDiffSelectionLineLabel(selection: SelectedLineRange): string {
+  const start = `L${selection.start}${selection.side === 'deletions' ? ' (old)' : ''}`
+  const end = `L${selection.end}${selection.endSide === 'deletions' ? ' (old)' : ''}`
+  return selection.start === selection.end && selection.side === selection.endSide ? start : `${start} → ${end}`
+}
+
+function transcriptDiffSelectionPointForRow(row: TuiPierreDiffRow | TuiPierreSplitRow): TranscriptDiffSelectionPoint | null {
+  const splitRow = row as TuiPierreSplitRow
+  if (splitRow.left !== undefined || splitRow.right !== undefined) {
+    return transcriptDiffSelectionPointForSplitRow(splitRow)
+  }
+  return transcriptDiffSelectionPointForStackRow(row as TuiPierreDiffRow)
+}
+
+function transcriptDiffSelectionSpanFromRowRange(
+  namespace: string,
+  rows: Array<TuiPierreDiffRow | TuiPierreSplitRow>,
+  startIndex: number,
+  endIndex: number,
+): TranscriptDiffSelectionSpan | null {
+  if (rows.length === 0) return null
+  const lo = Math.max(0, Math.min(startIndex, endIndex))
+  const hi = Math.min(rows.length - 1, Math.max(startIndex, endIndex))
+  let startPoint: TranscriptDiffSelectionPoint | null = null
+  for (let index = lo; index <= hi; index += 1) {
+    startPoint = transcriptDiffSelectionPointForRow(rows[index] as TuiPierreDiffRow | TuiPierreSplitRow)
+    if (startPoint) break
+  }
+  let endPoint: TranscriptDiffSelectionPoint | null = null
+  for (let index = hi; index >= lo; index -= 1) {
+    endPoint = transcriptDiffSelectionPointForRow(rows[index] as TuiPierreDiffRow | TuiPierreSplitRow)
+    if (endPoint) break
+  }
+  if (!startPoint || !endPoint) return null
+  const selection: SelectedLineRange = {
+    start: startPoint.lineNumber,
+    side: startPoint.side,
+    end: endPoint.lineNumber,
+    endSide: endPoint.side,
+  }
+  return {
+    startIndex: lo,
+    endIndex: hi,
+    selection,
+    key: transcriptDiffSelectionKey(namespace, selection),
+    label: transcriptDiffSelectionLineLabel(selection),
+  }
+}
+
+function transcriptDiffSelectionSpanFromSelection(
+  namespace: string,
+  rows: Array<TuiPierreDiffRow | TuiPierreSplitRow>,
+  selection: SelectedLineRange,
+): TranscriptDiffSelectionSpan | null {
+  if (rows.length === 0) return null
+  let startIndex = -1
+  let endIndex = -1
+  for (let index = 0; index < rows.length; index += 1) {
+    const point = transcriptDiffSelectionPointForRow(rows[index] as TuiPierreDiffRow | TuiPierreSplitRow)
+    if (!point) continue
+    if (startIndex === -1 && point.lineNumber === selection.start && point.side === selection.side) {
+      startIndex = index
+    }
+    if (point.lineNumber === selection.end && point.side === selection.endSide) {
+      endIndex = index
+    }
+  }
+  if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) return null
+  return {
+    startIndex,
+    endIndex,
+    selection,
+    key: transcriptDiffSelectionKey(namespace, selection),
+    label: transcriptDiffSelectionLineLabel(selection),
+  }
+}
+
+function nextTranscriptDiffRowIndex(
+  rows: Array<TuiPierreDiffRow | TuiPierreSplitRow>,
+  currentIndex: number,
+  direction: 1 | -1,
+  showHunkHeaders: boolean,
+): number | null {
+  if (rows.length === 0) return null
+  const hunkIndexes = rows
+    .map((row, index) => row.tone === 'hunk' ? index : -1)
+    .filter((index) => index >= 0)
+  if (hunkIndexes.length === 0) return null
+
+  const next = direction > 0
+    ? hunkIndexes.find((index) => index > currentIndex) ?? hunkIndexes[0]
+    : [...hunkIndexes].reverse().find((index) => index < currentIndex) ?? hunkIndexes[hunkIndexes.length - 1]
+  if (showHunkHeaders) return next
+
+  for (let index = next + 1; index < rows.length; index += 1) {
+    if (rows[index]?.tone !== 'hunk') return index
+  }
+  return next
+}
+
+function renderTranscriptDiffNoteDraft(draft: TranscriptDiffNoteDraft, width: number, theme: TuiThemePalette) {
+  const displayText = draft.text || 'Write a note…'
+  return (
+    <box width={width} flexDirection="column" border borderStyle="single" borderColor={theme.cyan} paddingX={1}>
+      <box>
+        <text fg={theme.cyan} wrapMode="none">
+          {fitText(`Draft note — ${draft.lineLabel}`, Math.max(width - 4, 8))}
+        </text>
+      </box>
+      <box height={2}>
+        <text fg={draft.text ? theme.text : theme.dim} wrapMode="none">
+          {`${displayText}${draft.text ? '▋' : ''}`}
+        </text>
+      </box>
+      <box flexDirection="row" paddingY={0}>
+        <box flexGrow={1} />
+        <text fg={theme.green} wrapMode="none">Save (^S)</text>
+        <text fg={theme.dim} wrapMode="none">{'  '}</text>
+        <text fg={theme.muted} wrapMode="none">Cancel (Esc)</text>
+      </box>
+    </box>
+  )
+}
+
+function renderTranscriptDiffNoteCard(
+  note: TranscriptDiffNote,
+  width: number,
+  theme: TuiThemePalette,
+  label: string,
+) {
+  return (
+    <box width={width} flexDirection="column" border borderStyle="single" borderColor={theme.violet} paddingX={1}>
+      <box flexDirection="row">
+        <text fg={theme.violet} wrapMode="none">
+          {fitText(`Note — ${label}`, Math.max(width - 6, 8))}
+        </text>
+        <box flexGrow={1} />
+        <text fg={theme.dim} wrapMode="none"> x:del</text>
+      </box>
+      <box>
+        <text fg={theme.text} wrapMode="none">{note.text}</text>
+      </box>
+    </box>
+  )
+}
+
 function codeBlockRows(card: TuiTranscriptCard, isExpanded: boolean): number {
   if (!isExpanded || !card.codeBlocks?.length) return 0
   return card.codeBlocks.reduce((sum, cb) => {
@@ -2608,9 +2812,10 @@ function cardHeight(
   const diffRows = cardDiffRows(card, isExpanded, previewLimit)
   const codeRows = useMarkdown ? 0 : codeBlockRows(card, isExpanded)
   const mdRows = useMarkdown ? card.markdownContent!.split('\n').length : 0
+  const diffFooterRows = card.category === 'diff' && cardDiffView(card, isExpanded) ? 1 : 0
   const borderRows = 2
   const bodyPaddingBottom = 1
-  return landmarkRows + borderRows + bodyPaddingBottom + bodyRows + diffRows + codeRows + mdRows + cardGap
+  return landmarkRows + borderRows + bodyPaddingBottom + bodyRows + diffRows + diffFooterRows + codeRows + mdRows + cardGap
 }
 
 function cycleDensityValue(current: TuiDensity): TuiDensity {
@@ -2987,6 +3192,18 @@ type TranscriptCardProps = {
   diffLayout: TuiDiffLayout
   imessageStyle: boolean
   streamMode: boolean
+  noteNamespace: string
+  diffNotes: Map<string, TranscriptDiffNote>
+  diffDraft: TranscriptDiffNoteDraft | null
+  hoveredDiffAnchor: string | null
+  activateDiffHover: (anchor: string) => void
+  openDiffNote: (selection: SelectedLineRange) => void
+  diffPlain: boolean
+  diffShowLineNumbers: boolean
+  diffShowHunkHeaders: boolean
+  diffRowCursor: number
+  diffSelectionAnchor: number | null
+  setDiffRowCursor: (cardKey: string, rowIndex: number, preserveSelection?: boolean) => void
 }
 
 type SelectableMarkdownProps = {
@@ -3042,6 +3259,18 @@ function TranscriptCardInner({
   diffLayout,
   imessageStyle,
   streamMode,
+  noteNamespace,
+  diffNotes,
+  diffDraft,
+  hoveredDiffAnchor,
+  activateDiffHover,
+  openDiffNote,
+  diffPlain,
+  diffShowLineNumbers,
+  diffShowHunkHeaders,
+  diffRowCursor,
+  diffSelectionAnchor,
+  setDiffRowCursor,
 }: TranscriptCardProps) {
   const {
     landmarks,
@@ -3104,30 +3333,91 @@ function TranscriptCardInner({
   const effectiveDiffLayout = diffLayout === 'split' && (diffView?.splitRows.length ?? 0) > 0
     ? 'split'
     : 'stack'
-  const activeDiffRows = diffView
+  const rawDiffLines = diffPlain
+    ? ((card.editDiff ?? extractDiffText(card.expandedLines) ?? '').split('\n').filter((line) => line.length > 0))
+    : []
+  const activeDiffRows = !diffPlain && diffView
     ? effectiveDiffLayout === 'split' ? diffView.splitRows : diffView.rows
     : []
-  const diffRows = activeDiffRows.slice(0, isExpanded ? activeDiffRows.length : densityState.bodyLines)
-  const hiddenDiffRows = activeDiffRows.length - diffRows.length
-  const stackedDiffRows = effectiveDiffLayout === 'stack' ? diffRows as TuiPierreDiffRow[] : []
-  const splitDiffRows = effectiveDiffLayout === 'split' ? diffRows as TuiPierreSplitRow[] : []
-  const diffLineNumbers = stackedDiffRows.flatMap((row) => [row.oldLine, row.newLine].filter((value): value is number => value != null))
+  const renderedDiffRows = activeDiffRows.filter((row) => diffShowHunkHeaders || row.tone !== 'hunk')
+  const diffRows = renderedDiffRows.slice(0, isExpanded ? renderedDiffRows.length : densityState.bodyLines)
+  const hiddenDiffRows = renderedDiffRows.length - diffRows.length
+  const stackedDiffRows = !diffPlain && effectiveDiffLayout === 'stack' ? diffRows as TuiPierreDiffRow[] : []
+  const splitDiffRows = !diffPlain && effectiveDiffLayout === 'split' ? diffRows as TuiPierreSplitRow[] : []
+  const diffLineNumbers = diffShowLineNumbers
+    ? stackedDiffRows.flatMap((row) => [row.oldLine, row.newLine].filter((value): value is number => value != null))
+    : []
   const diffGutterWidth = Math.max(
     diffLineNumbers.length > 0 ? Math.max(...diffLineNumbers).toString().length : 1,
     1,
   )
-  const diffTextWidth = Math.max(bodyInnerWidth - (diffGutterWidth * 2) - 5, 12)
-  const splitLineNumbers = splitDiffRows.flatMap((row) => [
-    row.left?.lineNum,
-    row.right?.lineNum,
-  ].filter((value): value is number => value != null))
-  const splitGutterWidth = Math.max(
-    splitLineNumbers.length > 0 ? Math.max(...splitLineNumbers).toString().length : 1,
-    1,
-  )
+  const diffBadgeWidth = 3
+  const diffTextWidth = Math.max(bodyInnerWidth - (diffShowLineNumbers ? (diffGutterWidth * 2 + 2) : 0) - 5 - diffBadgeWidth, 12)
+  const splitLineNumbers = diffShowLineNumbers
+    ? splitDiffRows.flatMap((row) => [
+        row.left?.lineNum,
+        row.right?.lineNum,
+      ].filter((value): value is number => value != null))
+    : []
+  const splitGutterWidth = diffShowLineNumbers
+    ? Math.max(
+        splitLineNumbers.length > 0 ? Math.max(...splitLineNumbers).toString().length : 1,
+        1,
+      )
+    : 0
   const splitDividerWidth = 1
-  const splitLeftWidth = Math.floor((bodyInnerWidth - splitDividerWidth) / 2)
-  const splitRightWidth = bodyInnerWidth - splitDividerWidth - splitLeftWidth
+  const splitBadgeWidth = 1
+  const splitContentWidth = Math.max(bodyInnerWidth - splitBadgeWidth, 2)
+  const splitLeftWidth = Math.floor((splitContentWidth - splitDividerWidth) / 2)
+  const splitRightWidth = splitContentWidth - splitDividerWidth - splitLeftWidth
+  const diffSelectionRows = !diffPlain && diffView
+    ? effectiveDiffLayout === 'split' ? diffView.splitRows : diffView.rows
+    : []
+  const diffSelectionCurrentIndex = diffSelectionRows.length > 0
+    ? clamp(diffRowCursor, 0, diffSelectionRows.length - 1)
+    : 0
+  const selectionAnchorIndex = diffSelectionAnchor != null
+    ? clamp(diffSelectionAnchor, 0, Math.max(diffSelectionRows.length - 1, 0))
+    : null
+  const diffSelectionSpan = diffSelectionRows.length > 0
+    ? (
+        selectionAnchorIndex != null
+          ? transcriptDiffSelectionSpanFromRowRange(
+              noteNamespace,
+              diffSelectionRows,
+              selectionAnchorIndex,
+              diffSelectionCurrentIndex,
+            )
+          : transcriptDiffSelectionSpanFromRowRange(
+              noteNamespace,
+              diffSelectionRows,
+              diffSelectionCurrentIndex,
+              diffSelectionCurrentIndex,
+            )
+      )
+    : null
+  const diffSelectionKey = diffSelectionSpan?.key ?? null
+  const diffSelectionCurrentSelection = diffSelectionSpan?.selection ?? null
+  const diffSelectionStartIndex = diffSelectionSpan?.startIndex ?? diffSelectionCurrentIndex
+  const diffSelectionEndIndex = diffSelectionSpan?.endIndex ?? diffSelectionCurrentIndex
+  const diffSelectionNotesByEndIndex = useMemo(() => {
+    const notesByEndIndex = new Map<number, Array<{ key: string; note: TranscriptDiffNote; label: string; span: TranscriptDiffSelectionSpan }>>()
+    if (diffPlain || !diffView) return notesByEndIndex
+    const rows = effectiveDiffLayout === 'split' ? diffView.splitRows : diffView.rows
+    for (const [key, note] of diffNotes) {
+      const span = transcriptDiffSelectionSpanFromSelection(noteNamespace, rows, note.range)
+      if (!span) continue
+      const list = notesByEndIndex.get(span.endIndex) ?? []
+      list.push({ key, note, label: span.label, span })
+      notesByEndIndex.set(span.endIndex, list)
+    }
+    return notesByEndIndex
+  }, [diffNotes, diffPlain, diffView, effectiveDiffLayout, noteNamespace])
+  const diffDraftSpan = useMemo(() => {
+    if (diffPlain || !diffView || !diffDraft) return null
+    const rows = effectiveDiffLayout === 'split' ? diffView.splitRows : diffView.rows
+    return transcriptDiffSelectionSpanFromSelection(noteNamespace, rows, diffDraft.range)
+  }, [diffDraft, diffPlain, diffView, effectiveDiffLayout, noteNamespace])
   const shouldRenderSyntaxMarkdown = Boolean(
     isExpanded
     && card.markdownContent
@@ -3135,6 +3425,19 @@ function TranscriptCardInner({
     && syntaxStyle
     && canRenderMarkdownWithSyntax(card.markdownContent),
   )
+  const diffFooterSegments = card.category === 'diff'
+    ? [
+        { text: `v ${diffPlain ? 'parsed' : 'plain'}  `, fg: theme.cyan },
+        { text: '● syntax  ', fg: theme.cyan },
+        { text: `s ${diffLayout}  `, fg: theme.cyan },
+        { text: `n ${diffShowLineNumbers ? '#' : 'no#'}  `, fg: theme.cyan },
+        { text: `m ${diffShowHunkHeaders ? '@@' : 'no@@'}  `, fg: theme.cyan },
+        { text: '{} hunk  ', fg: theme.cyan },
+        { text: 'shift+j/k range  ', fg: theme.cyan },
+        { text: 'a:note  ', fg: theme.cyan },
+        { text: 'x:del', fg: theme.cyan },
+      ]
+    : null
   const landmarkWidth = rightPaneWidth - 4
   const selectionColors = terminalSelectionColors(theme)
 
@@ -3315,38 +3618,118 @@ function TranscriptCardInner({
             </>
           )}
 
-          {diffView && effectiveDiffLayout === 'stack' ? (
+          {card.category === 'diff' && diffPlain ? (
             <box paddingX={1} marginTop={1}>
-              {stackedDiffRows.map((row) => (
-                <box
-                  key={row.key}
-                  flexDirection="row"
-                  backgroundColor={diffRowBackground(row, theme)}
-                >
-                  <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
-                    {fitText(formatDiffLineNumber(row.oldLine, diffGutterWidth), diffGutterWidth)}
-                  </text>
-                  <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}> </text>
-                  <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
-                    {fitText(formatDiffLineNumber(row.newLine, diffGutterWidth), diffGutterWidth)}
-                  </text>
-                  <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
-                    {fitText(` ${row.indicator ?? diffRowIndicator(row)} `, 3)}
-                  </text>
-                  <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
-                    {fitText(row.text, diffTextWidth)}
+              {rawDiffLines.map((line, index) => {
+                const fg = line.startsWith('+') && !line.startsWith('+++')
+                  ? theme.green
+                  : line.startsWith('-') && !line.startsWith('---')
+                    ? theme.red
+                    : line.startsWith('@@')
+                      ? theme.cyan
+                      : line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')
+                        ? theme.muted
+                        : theme.text
+                return (
+                  <box key={`${card.key}:raw:${index}`}>
+                    <text fg={fg} wrapMode="none" selectable {...selectionColors}>
+                      {fitText(line, bodyInnerWidth)}
+                    </text>
+                  </box>
+                )
+              })}
+              {diffFooterSegments ? (
+                <box marginTop={1}>
+                  <text fg={theme.cyan} selectable {...selectionColors}>
+                    {renderInlineTextSegments(diffFooterSegments, bodyInnerWidth, theme.dim)}
                   </text>
                 </box>
+              ) : null}
+            </box>
+          ) : diffView && effectiveDiffLayout === 'stack' ? (
+            <box paddingX={1} marginTop={1}>
+              {stackedDiffRows.map((row, rowIndex) => (
+                (() => {
+                  const anchor = transcriptDiffStackRowAnchor(noteNamespace, row)
+                  const point = transcriptDiffSelectionPointForStackRow(row)
+                  const singleRowSelection = point
+                    ? {
+                        start: point.lineNumber,
+                        side: point.side,
+                        end: point.lineNumber,
+                        endSide: point.side,
+                      }
+                    : null
+                  const currentSelectionRange = diffSelectionCurrentSelection ?? singleRowSelection
+                  const hasDraft = diffDraftSpan?.endIndex === rowIndex
+                  const noteCards = (diffSelectionNotesByEndIndex.get(rowIndex) ?? []).filter(({ key }) => diffDraft?.anchor !== key)
+                  const isHovered = anchor !== null && hoveredDiffAnchor === anchor
+                  const isSelectedDiffRow = hasCursor && card.category === 'diff' && rowIndex >= diffSelectionStartIndex && rowIndex <= diffSelectionEndIndex
+                  const rowBackground = isSelectedDiffRow ? theme.surface3 : diffRowBackground(row, theme)
+                  const rowLabelSelection = currentSelectionRange ?? singleRowSelection
+                  return (
+                    <React.Fragment key={row.key}>
+                      <box
+                        width={bodyInnerWidth}
+                        flexDirection="row"
+                        backgroundColor={rowBackground}
+                        onMouseOver={() => anchor && activateDiffHover(anchor)}
+                        onMouseMove={() => anchor && activateDiffHover(anchor)}
+                        onMouseUp={() => setDiffRowCursor(card.key, rowIndex)}
+                      >
+                        {diffShowLineNumbers ? (
+                          <>
+                            <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+                              {fitText(formatDiffLineNumber(row.oldLine, diffGutterWidth), diffGutterWidth)}
+                            </text>
+                            <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}> </text>
+                            <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+                              {fitText(formatDiffLineNumber(row.newLine, diffGutterWidth), diffGutterWidth)}
+                            </text>
+                          </>
+                        ) : null}
+                        <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
+                          {fitText(`${isSelectedDiffRow ? '▶' : ' '} ${row.indicator ?? diffRowIndicator(row)} `, 3)}
+                        </text>
+                        <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
+                          {fitText(row.text, Math.max(diffTextWidth, 12))}
+                        </text>
+                        {isHovered ? (
+                          <box width={3} onMouseUp={() => rowLabelSelection && openDiffNote(rowLabelSelection)}>
+                            <text fg={theme.cyan} bg={theme.surface3} wrapMode="none">[+]</text>
+                          </box>
+                        ) : noteCards.length > 0 ? (
+                          <text fg={theme.violet} wrapMode="none"> ● </text>
+                        ) : (
+                          <text fg={theme.dim} wrapMode="none">{'   '}</text>
+                        )}
+                      </box>
+                      {hasDraft && diffDraft ? renderTranscriptDiffNoteDraft(diffDraft, bodyInnerWidth, theme) : null}
+                      {noteCards.map(({ key, note, label }) => (
+                        <React.Fragment key={key}>
+                          {renderTranscriptDiffNoteCard(note, bodyInnerWidth, theme, label)}
+                        </React.Fragment>
+                      ))}
+                    </React.Fragment>
+                  )
+                })()
               ))}
               {hiddenDiffRows > 0 ? (
                 <text fg={theme.dim} selectable {...selectionColors}>
                   {fitText(`... ${hiddenDiffRows} more diff lines`, bodyInnerWidth)}
                 </text>
               ) : null}
+              {diffFooterSegments ? (
+                <box marginTop={1}>
+                  <text fg={theme.cyan} selectable {...selectionColors}>
+                    {renderInlineTextSegments(diffFooterSegments, bodyInnerWidth, theme.dim)}
+                  </text>
+                </box>
+              ) : null}
             </box>
           ) : diffView ? (
             <box paddingX={1} marginTop={1}>
-              {splitDiffRows.map((row) => {
+              {splitDiffRows.map((row, rowIndex) => {
                 if (row.tone !== 'split-change' && row.tone !== 'split-context') {
                   const rowColor = row.tone === 'file' || row.tone === 'hunk' ? theme.cyan : theme.dim
                   const rowBackground = row.tone === 'hunk'
@@ -3363,30 +3746,77 @@ function TranscriptCardInner({
                   )
                 }
 
+                const anchor = transcriptDiffSplitRowAnchor(noteNamespace, row)
+                const point = transcriptDiffSelectionPointForSplitRow(row)
+                const singleRowSelection = point
+                  ? {
+                      start: point.lineNumber,
+                      side: point.side,
+                      end: point.lineNumber,
+                      endSide: point.side,
+                    }
+                  : null
+                const currentSelectionRange = diffSelectionCurrentSelection ?? singleRowSelection
+                const hasDraft = diffDraftSpan?.endIndex === rowIndex
+                const noteCards = (diffSelectionNotesByEndIndex.get(rowIndex) ?? []).filter(({ key }) => diffDraft?.anchor !== key)
+                const isHovered = anchor !== null && hoveredDiffAnchor === anchor
+                const isSelectedDiffRow = hasCursor && card.category === 'diff' && rowIndex >= diffSelectionStartIndex && rowIndex <= diffSelectionEndIndex
                 return (
-                  <box key={row.key} flexDirection="row">
-                    <SplitDiffSide
-                      side={row.left}
-                      width={splitLeftWidth}
-                      gutterWidth={splitGutterWidth}
-                      theme={theme}
-                      selectionColors={selectionColors}
-                    />
-                    <text fg={theme.border} wrapMode="none" selectable {...selectionColors}>│</text>
-                    <SplitDiffSide
-                      side={row.right}
-                      width={splitRightWidth}
-                      gutterWidth={splitGutterWidth}
-                      theme={theme}
-                      selectionColors={selectionColors}
-                    />
-                  </box>
+                  <React.Fragment key={row.key}>
+                    <box
+                      width={bodyInnerWidth}
+                      flexDirection="row"
+                      backgroundColor={isSelectedDiffRow ? theme.surface3 : undefined}
+                      onMouseOver={() => anchor && activateDiffHover(anchor)}
+                      onMouseMove={() => anchor && activateDiffHover(anchor)}
+                      onMouseUp={() => setDiffRowCursor(card.key, rowIndex)}
+                    >
+                      <SplitDiffSide
+                        side={row.left}
+                        width={splitLeftWidth}
+                        gutterWidth={splitGutterWidth}
+                        showLineNumbers={diffShowLineNumbers}
+                        theme={theme}
+                        selectionColors={selectionColors}
+                      />
+                      {isHovered ? (
+                        <box width={1} onMouseUp={() => currentSelectionRange && openDiffNote(currentSelectionRange)}>
+                          <text fg={theme.cyan} bg={theme.surface3} wrapMode="none">+</text>
+                        </box>
+                      ) : noteCards.length > 0 ? (
+                        <text fg={theme.violet} wrapMode="none">{'●'}</text>
+                      ) : (
+                        <text fg={isSelectedDiffRow ? theme.cyan : theme.border} wrapMode="none">{isSelectedDiffRow ? '▶' : '│'}</text>
+                      )}
+                      <SplitDiffSide
+                        side={row.right}
+                        width={splitRightWidth}
+                        gutterWidth={splitGutterWidth}
+                        showLineNumbers={diffShowLineNumbers}
+                        theme={theme}
+                        selectionColors={selectionColors}
+                      />
+                    </box>
+                    {hasDraft && diffDraft ? renderTranscriptDiffNoteDraft(diffDraft, bodyInnerWidth, theme) : null}
+                    {noteCards.map(({ key, note, label }) => (
+                      <React.Fragment key={key}>
+                        {renderTranscriptDiffNoteCard(note, bodyInnerWidth, theme, label)}
+                      </React.Fragment>
+                    ))}
+                  </React.Fragment>
                 )
               })}
               {hiddenDiffRows > 0 ? (
                 <text fg={theme.dim} selectable {...selectionColors}>
                   {fitText(`... ${hiddenDiffRows} more diff lines`, bodyInnerWidth)}
                 </text>
+              ) : null}
+              {diffFooterSegments ? (
+                <box marginTop={1}>
+                  <text fg={theme.cyan} selectable {...selectionColors}>
+                    {renderInlineTextSegments(diffFooterSegments, bodyInnerWidth, theme.dim)}
+                  </text>
+                </box>
               ) : null}
             </box>
           ) : null}
@@ -3419,11 +3849,26 @@ export default function OpenTuiApp() {
     if (PERF_LOG) recordFramePerf(durationMs)
     noteRenderFrame(durationMs)
   })
+  useEffect(() => {
+    const clearTranscriptDiffHover = () => setHoveredTranscriptDiffAnchor(null)
+    renderer.on('blur', clearTranscriptDiffHover)
+    return () => {
+      renderer.off('blur', clearTranscriptDiffHover)
+    }
+  }, [renderer])
 
   const [provider, setProvider] = useState<ProviderSelection>('claude')
   const [themeMode, setThemeMode] = useState<TuiThemeMode>('light')
   const [density, setDensity] = useState<TuiDensity>('balanced')
   const [diffLayout, setDiffLayout] = useState<TuiDiffLayout>('stack')
+  const [transcriptDiffNotes, setTranscriptDiffNotes] = useState<Map<string, TranscriptDiffNote>>(() => new Map())
+  const [transcriptDiffDraft, setTranscriptDiffDraft] = useState<TranscriptDiffNoteDraft | null>(null)
+  const [hoveredTranscriptDiffAnchor, setHoveredTranscriptDiffAnchor] = useState<string | null>(null)
+  const [transcriptDiffPlainCardKeys, setTranscriptDiffPlainCardKeys] = useState<Set<string>>(() => new Set())
+  const [transcriptDiffHiddenLineNumberCardKeys, setTranscriptDiffHiddenLineNumberCardKeys] = useState<Set<string>>(() => new Set())
+  const [transcriptDiffHiddenHunkHeaderCardKeys, setTranscriptDiffHiddenHunkHeaderCardKeys] = useState<Set<string>>(() => new Set())
+  const [transcriptDiffRowCursorByCardKey, setTranscriptDiffRowCursorByCardKey] = useState<Record<string, number>>({})
+  const [transcriptDiffSelectionAnchorByCardKey, setTranscriptDiffSelectionAnchorByCardKey] = useState<Record<string, number>>({})
   const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
   const [focusMode, setFocusMode] = useState(false)
   const [railVisible, setRailVisible] = useState(true)
@@ -3655,6 +4100,7 @@ export default function OpenTuiApp() {
   const exitInProgressRef = useRef(false)
   const densityRef = useRef<TuiDensity>('balanced')
   const showToolCallsRef = useRef(true)
+  const transcriptDiffHoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Tracked for the detail-poll skip path (proposal 6): the 2s background
   // refresh fires startTransition work that can interleave with keystroke
   // handling during active typing or searching, causing visible stutter.
@@ -3796,6 +4242,59 @@ export default function OpenTuiApp() {
     return sessions[0] ?? null
   }, [openTabSessions, selectedIndex, selectedSessionKey, sessions])
   const selectedSessionIdentity = selectedSession ? sessionKey(selectedSession) : null
+  useEffect(() => {
+    setTranscriptDiffDraft(null)
+    setHoveredTranscriptDiffAnchor(null)
+    setTranscriptDiffSelectionAnchorByCardKey({})
+  }, [selectedSessionIdentity])
+  useEffect(() => () => {
+    if (transcriptDiffHoverTimeoutRef.current) clearTimeout(transcriptDiffHoverTimeoutRef.current)
+  }, [])
+  const activateTranscriptDiffHover = useCallback((anchor: string) => {
+    if (transcriptDiffHoverTimeoutRef.current) clearTimeout(transcriptDiffHoverTimeoutRef.current)
+    setHoveredTranscriptDiffAnchor(anchor)
+    transcriptDiffHoverTimeoutRef.current = setTimeout(() => {
+      setHoveredTranscriptDiffAnchor(null)
+      transcriptDiffHoverTimeoutRef.current = null
+    }, 2000)
+  }, [])
+  const openTranscriptDiffNote = useCallback((selection: SelectedLineRange) => {
+    const key = transcriptDiffSelectionKey(selectedSessionIdentity ?? 'no-session', selection)
+    setTranscriptDiffDraft({
+      anchor: key,
+      range: selection,
+      lineLabel: transcriptDiffSelectionLineLabel(selection),
+      text: transcriptDiffNotes.get(key)?.text ?? '',
+    })
+  }, [selectedSessionIdentity, transcriptDiffNotes])
+  const deleteTranscriptDiffNote = useCallback((selectionKey: string) => {
+    setTranscriptDiffNotes((prev) => {
+      const next = new Map(prev)
+      next.delete(selectionKey)
+      return next
+    })
+    setTranscriptDiffDraft((draft) => (draft?.anchor === selectionKey ? null : draft))
+  }, [])
+  const toggleTranscriptDiffCardSet = useCallback((setter: React.Dispatch<React.SetStateAction<Set<string>>>, cardKey: string) => {
+    setter((prev) => {
+      const next = new Set(prev)
+      if (next.has(cardKey)) next.delete(cardKey)
+      else next.add(cardKey)
+      return next
+    })
+  }, [])
+  const clearTranscriptDiffSelectionForCard = useCallback((cardKey: string) => {
+    setTranscriptDiffSelectionAnchorByCardKey((prev) => {
+      if (!(cardKey in prev)) return prev
+      const next = { ...prev }
+      delete next[cardKey]
+      return next
+    })
+  }, [])
+  const setTranscriptDiffRowCursorForCard = useCallback((cardKey: string, rowIndex: number, preserveSelection = false) => {
+    setTranscriptDiffRowCursorByCardKey((prev) => ({ ...prev, [cardKey]: Math.max(0, rowIndex) }))
+    if (!preserveSelection) clearTranscriptDiffSelectionForCard(cardKey)
+  }, [clearTranscriptDiffSelectionForCard])
   const selectedSessionTarget = useMemo<Session | null>(() => (
     selectedSession
       ? {
@@ -5067,6 +5566,18 @@ export default function OpenTuiApp() {
           diffLayout={diffLayout}
           imessageStyle={imessageStyle}
           streamMode={transcriptView === 'stream'}
+          noteNamespace={selectedSessionIdentity ?? 'no-session'}
+          diffNotes={transcriptDiffNotes}
+          diffDraft={transcriptDiffDraft}
+          hoveredDiffAnchor={hoveredTranscriptDiffAnchor}
+          activateDiffHover={activateTranscriptDiffHover}
+          openDiffNote={openTranscriptDiffNote}
+          diffPlain={transcriptDiffPlainCardKeys.has(card.key)}
+          diffShowLineNumbers={!transcriptDiffHiddenLineNumberCardKeys.has(card.key)}
+          diffShowHunkHeaders={!transcriptDiffHiddenHunkHeaderCardKeys.has(card.key)}
+          diffRowCursor={transcriptDiffRowCursorByCardKey[card.key] ?? 0}
+          diffSelectionAnchor={transcriptDiffSelectionAnchorByCardKey[card.key] ?? null}
+          setDiffRowCursor={setTranscriptDiffRowCursorForCard}
         />
       )
     })
@@ -5087,6 +5598,17 @@ export default function OpenTuiApp() {
     diffLayout,
     imessageStyle,
     transcriptView,
+    selectedSessionIdentity,
+    transcriptDiffNotes,
+    transcriptDiffDraft,
+    hoveredTranscriptDiffAnchor,
+    activateTranscriptDiffHover,
+    openTranscriptDiffNote,
+    transcriptDiffPlainCardKeys,
+    transcriptDiffHiddenLineNumberCardKeys,
+    transcriptDiffHiddenHunkHeaderCardKeys,
+    transcriptDiffRowCursorByCardKey,
+    setTranscriptDiffRowCursorForCard,
   ])
 
   const refreshSessions = useCallback(async (
@@ -8097,6 +8619,8 @@ export default function OpenTuiApp() {
       key.stopPropagation()
       action()
     }
+    const selectedTranscriptCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
+    const selectedTranscriptCardDisplay = cursorIndex >= 0 ? cardDisplayData[cursorIndex] : null
 
     if (exitConfirmOpen) {
       if (key.name === 'return' || key.name === 'y') {
@@ -8311,6 +8835,39 @@ export default function OpenTuiApp() {
         handled(() => {
           setCommandPaletteQuery((q) => q + sequence)
           setCommandPaletteIndex(0)
+        })
+        return
+      }
+      return
+    }
+
+    if (transcriptDiffDraft !== null) {
+      if (key.name === 'escape') {
+        handled(() => setTranscriptDiffDraft(null))
+        return
+      }
+      if ((key.ctrl && key.name === 's') || key.name === 'return') {
+        handled(() => {
+          const trimmed = transcriptDiffDraft.text.trim()
+          setTranscriptDiffNotes((prev) => {
+            const next = new Map(prev)
+            if (trimmed) next.set(transcriptDiffDraft.anchor, { range: transcriptDiffDraft.range, text: trimmed })
+            else next.delete(transcriptDiffDraft.anchor)
+            return next
+          })
+          setTranscriptDiffDraft(null)
+        })
+        return
+      }
+      if (key.name === 'backspace' || key.name === 'delete') {
+        handled(() => {
+          setTranscriptDiffDraft((draft) => (draft ? { ...draft, text: draft.text.slice(0, -1) } : null))
+        })
+        return
+      }
+      if (key.sequence && key.sequence.length === 1 && !key.ctrl) {
+        handled(() => {
+          setTranscriptDiffDraft((draft) => (draft ? { ...draft, text: draft.text + key.sequence } : null))
         })
         return
       }
@@ -8874,6 +9431,117 @@ export default function OpenTuiApp() {
         replySelectedMessage()
       })
       return
+    }
+
+    if (
+      effectiveFocus === 'messages'
+      && selectedTranscriptCard?.category === 'diff'
+      && selectedTranscriptCardDisplay?.diffView
+      && key.shift
+      && (key.name === 'j' || key.name === 'down' || key.name === 'k' || key.name === 'up')
+    ) {
+      const selectedDiffView = selectedTranscriptCardDisplay.diffView
+      if (!selectedDiffView) return
+      handled(() => {
+        const cardKey = selectedTranscriptCard.key
+        const currentRows = diffLayout === 'split'
+          ? selectedDiffView.splitRows
+          : selectedDiffView.rows
+        const visibleRows = currentRows.filter((row) => !transcriptDiffHiddenHunkHeaderCardKeys.has(cardKey) || row.tone !== 'hunk')
+        if (visibleRows.length === 0) return
+        const currentCursor = transcriptDiffRowCursorByCardKey[cardKey] ?? 0
+        const currentIndex = clamp(currentCursor, 0, visibleRows.length - 1)
+        const delta = key.name === 'j' || key.name === 'down' ? 1 : -1
+        const nextIndex = clamp(currentIndex + delta, 0, visibleRows.length - 1)
+        setTranscriptDiffSelectionAnchorByCardKey((prev) => (
+          prev[cardKey] != null ? prev : { ...prev, [cardKey]: currentIndex }
+        ))
+        setTranscriptDiffRowCursorForCard(cardKey, nextIndex, true)
+      })
+      return
+    }
+
+    if (effectiveFocus === 'messages' && selectedTranscriptCard?.category === 'diff' && selectedTranscriptCardDisplay?.diffView) {
+      const selectedDiffView = selectedTranscriptCardDisplay.diffView
+      if (!selectedDiffView) return
+      const cardKey = selectedTranscriptCard.key
+      const currentRows = diffLayout === 'split'
+        ? selectedDiffView.splitRows
+        : selectedDiffView.rows
+      const visibleRows = currentRows.filter((row) => !transcriptDiffHiddenHunkHeaderCardKeys.has(cardKey) || row.tone !== 'hunk')
+      const currentCursor = transcriptDiffRowCursorByCardKey[cardKey] ?? 0
+      const currentIndex = visibleRows.length > 0 ? clamp(currentCursor, 0, visibleRows.length - 1) : 0
+      const currentRow = visibleRows[currentIndex] ?? null
+      const noteAnchorNamespace = selectedSessionIdentity ?? 'no-session'
+      const selectionAnchorIndex = transcriptDiffSelectionAnchorByCardKey[cardKey] ?? null
+      const currentSelectionSpan = selectionAnchorIndex != null
+        ? transcriptDiffSelectionSpanFromRowRange(noteAnchorNamespace, visibleRows, selectionAnchorIndex, currentIndex)
+        : (currentRow
+          ? transcriptDiffSelectionSpanFromRowRange(noteAnchorNamespace, visibleRows, currentIndex, currentIndex)
+          : null)
+      const noteSelection = currentSelectionSpan?.selection ?? null
+      const noteSelectionKey = currentSelectionSpan?.key ?? null
+      const hunkHeadersVisible = !transcriptDiffHiddenHunkHeaderCardKeys.has(cardKey)
+
+      if (key.sequence === 'v') {
+        handled(() => {
+          toggleTranscriptDiffCardSet(setTranscriptDiffPlainCardKeys, cardKey)
+          clearTranscriptDiffSelectionForCard(cardKey)
+        })
+        return
+      }
+      if (key.sequence === 'n') {
+        handled(() => {
+          toggleTranscriptDiffCardSet(setTranscriptDiffHiddenLineNumberCardKeys, cardKey)
+          clearTranscriptDiffSelectionForCard(cardKey)
+        })
+        return
+      }
+      if (key.sequence === 'm') {
+        handled(() => {
+          toggleTranscriptDiffCardSet(setTranscriptDiffHiddenHunkHeaderCardKeys, cardKey)
+          clearTranscriptDiffSelectionForCard(cardKey)
+        })
+        return
+      }
+      if (key.sequence === '{') {
+        handled(() => {
+          const next = nextTranscriptDiffRowIndex(visibleRows, currentIndex, -1, hunkHeadersVisible)
+          if (next != null) setTranscriptDiffRowCursorForCard(cardKey, next)
+        })
+        return
+      }
+      if (key.sequence === '}') {
+        handled(() => {
+          const next = nextTranscriptDiffRowIndex(visibleRows, currentIndex, 1, hunkHeadersVisible)
+          if (next != null) setTranscriptDiffRowCursorForCard(cardKey, next)
+        })
+        return
+      }
+      if (key.sequence === 'a') {
+        handled(() => {
+          if (!noteSelection) {
+            showNotice('info', 'No diff row selected')
+            return
+          }
+          openTranscriptDiffNote(noteSelection)
+        })
+        return
+      }
+      if (key.sequence === 'x') {
+        handled(() => {
+          if (!noteSelectionKey) {
+            showNotice('info', 'No diff row selected')
+            return
+          }
+          if (!transcriptDiffNotes.has(noteSelectionKey)) {
+            showNotice('info', 'No note on the selected diff row')
+            return
+          }
+          deleteTranscriptDiffNote(noteSelectionKey)
+        })
+        return
+      }
     }
 
     if (effectiveFocus === 'messages' && sequence === '/') {

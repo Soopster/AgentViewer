@@ -2,6 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRenderer } from '@opentui/react'
 import type { MouseEvent, ScrollBoxRenderable } from '@opentui/core'
+import type { SelectedLineRange } from '@pierre/diffs'
 import type { TuiThemePalette } from '../theme'
 import { prepareFileTreeInput } from '@pierre/trees'
 import { fetchGitData, fetchGitPaneContent, type GitData, type GitStatusEntry } from '../../lib/gitProvider'
@@ -238,11 +239,8 @@ function splitRowAnchor(row: TuiPierreSplitRow, filePath: string | null): string
   return null
 }
 
-function anchorLineLabel(anchor: string): string {
-  const parts = anchor.split(':')
-  const lineNum = parts[parts.length - 1]
-  const side = parts[parts.length - 2]
-  return `L${lineNum}${side === 'old' ? ' (old)' : ''}`
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(value, max))
 }
 
 function splitSideFg(side: TuiSplitRowSide, theme: TuiThemePalette): string {
@@ -330,7 +328,114 @@ function renderSplitSide(
 
 // ─── Inline note rendering helpers ───────────────────────────────────────────
 
-type DraftNote = { rowKey: string; lineLabel: string; text: string }
+type DraftNote = { rowKey: string; range: SelectedLineRange; lineLabel: string; text: string }
+type DiffNote = { range: SelectedLineRange; text: string }
+
+type DiffSelectionPoint = {
+  lineNumber: number
+  side: SelectedLineRange['side']
+}
+
+type DiffSelectionSpan = {
+  startIndex: number
+  endIndex: number
+  selection: SelectedLineRange
+  key: string
+  label: string
+}
+
+function diffSelectionPointForStackRow(row: TuiPierreDiffRow): DiffSelectionPoint | null {
+  if (row.newLine !== undefined) return { lineNumber: row.newLine, side: 'additions' }
+  if (row.oldLine !== undefined) return { lineNumber: row.oldLine, side: 'deletions' }
+  return null
+}
+
+function diffSelectionPointForSplitRow(row: TuiPierreSplitRow): DiffSelectionPoint | null {
+  if (row.right?.lineNum !== undefined) return { lineNumber: row.right.lineNum, side: 'additions' }
+  if (row.left?.lineNum !== undefined) return { lineNumber: row.left.lineNum, side: 'deletions' }
+  return null
+}
+
+function diffSelectionPointForRow(row: TuiPierreDiffRow | TuiPierreSplitRow): DiffSelectionPoint | null {
+  const splitRow = row as TuiPierreSplitRow
+  if (splitRow.left !== undefined || splitRow.right !== undefined) {
+    return diffSelectionPointForSplitRow(splitRow)
+  }
+  return diffSelectionPointForStackRow(row as TuiPierreDiffRow)
+}
+
+function diffSelectionKey(filePath: string | null, selection: SelectedLineRange): string {
+  return [filePath ?? 'unknown', selection.start, selection.side ?? '', selection.end, selection.endSide ?? ''].join('\u0000')
+}
+
+function diffSelectionLineLabel(selection: SelectedLineRange): string {
+  const start = `L${selection.start}${selection.side === 'deletions' ? ' (old)' : ''}`
+  const end = `L${selection.end}${selection.endSide === 'deletions' ? ' (old)' : ''}`
+  return selection.start === selection.end && selection.side === selection.endSide ? start : `${start} → ${end}`
+}
+
+function diffSelectionSpanFromRowRange(
+  filePath: string | null,
+  rows: Array<TuiPierreDiffRow | TuiPierreSplitRow>,
+  startIndex: number,
+  endIndex: number,
+): DiffSelectionSpan | null {
+  if (rows.length === 0) return null
+  const lo = clampNumber(Math.min(startIndex, endIndex), 0, rows.length - 1)
+  const hi = clampNumber(Math.max(startIndex, endIndex), 0, rows.length - 1)
+  let startPoint: DiffSelectionPoint | null = null
+  for (let index = lo; index <= hi; index += 1) {
+    startPoint = diffSelectionPointForRow(rows[index]!)
+    if (startPoint) break
+  }
+  let endPoint: DiffSelectionPoint | null = null
+  for (let index = hi; index >= lo; index -= 1) {
+    endPoint = diffSelectionPointForRow(rows[index]!)
+    if (endPoint) break
+  }
+  if (!startPoint || !endPoint) return null
+  const selection: SelectedLineRange = {
+    start: startPoint.lineNumber,
+    side: startPoint.side,
+    end: endPoint.lineNumber,
+    endSide: endPoint.side,
+  }
+  return {
+    startIndex: lo,
+    endIndex: hi,
+    selection,
+    key: diffSelectionKey(filePath, selection),
+    label: diffSelectionLineLabel(selection),
+  }
+}
+
+function diffSelectionSpanFromSelection(
+  filePath: string | null,
+  rows: Array<TuiPierreDiffRow | TuiPierreSplitRow>,
+  selection: SelectedLineRange,
+): DiffSelectionSpan | null {
+  if (rows.length === 0) return null
+  let startIndex = -1
+  let endIndex = -1
+  for (let index = 0; index < rows.length; index += 1) {
+    const point = diffSelectionPointForRow(rows[index]!)
+    if (!point) continue
+    if (startIndex === -1 && point.lineNumber === selection.start && point.side === selection.side) {
+      startIndex = index
+    }
+    if (point.lineNumber === selection.end && point.side === selection.endSide) {
+      endIndex = index
+    }
+  }
+  if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) return null
+  return {
+    startIndex,
+    endIndex,
+    selection,
+    key: diffSelectionKey(filePath, selection),
+    label: diffSelectionLineLabel(selection),
+  }
+}
 
 function renderNoteDraft(draft: DraftNote, width: number, filePath: string | null, theme: TuiThemePalette) {
   const header = [filePath ?? '', draft.lineLabel].filter(Boolean).join(' ')
@@ -358,15 +463,14 @@ function renderNoteDraft(draft: DraftNote, width: number, filePath: string | nul
 }
 
 function renderNoteCard(
-  rowKey: string,
-  notes: Map<string, string>,
+  note: DiffNote,
   width: number,
   filePath: string | null,
   theme: TuiThemePalette,
+  lineLabel: string,
 ) {
-  const text = notes.get(rowKey)
-  if (!text) return null
-  const header = filePath ?? ''
+  if (!note.text) return null
+  const header = [filePath ?? '', lineLabel].filter(Boolean).join(' ')
   return (
     <box width={width} flexDirection="column" border borderStyle="single" borderColor={theme.violet} paddingX={1}>
       <box flexDirection="row">
@@ -377,7 +481,7 @@ function renderNoteCard(
         <text fg={theme.dim} wrapMode="none"> x:del</text>
       </box>
       <box>
-        <text fg={theme.text} wrapMode="none">{text}</text>
+        <text fg={theme.text} wrapMode="none">{note.text}</text>
       </box>
     </box>
   )
@@ -421,7 +525,8 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const [showLineNumbers, setShowLineNumbers] = useState(true)
   const [showHunkHeaders, setShowHunkHeaders] = useState(true)
   const [diffCursorRow, setDiffCursorRow] = useState(0)
-  const [diffNotes, setDiffNotes] = useState<Map<string, string>>(new Map())
+  const [diffSelectionAnchorRow, setDiffSelectionAnchorRow] = useState<number | null>(null)
+  const [diffNotes, setDiffNotes] = useState<Map<string, DiffNote>>(new Map())
   const [draftNote, setDraftNote] = useState<DraftNote | null>(null)
   const [leftPaneMode, setLeftPaneMode] = useState<LeftPaneMode>('normal')
   const [leftPaneWidth, setLeftPaneWidth] = useState(LEFT_PANE_DEFAULT_MAX_WIDTH)
@@ -601,6 +706,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   // Reset diff cursor and any open draft when the viewed file changes.
   useEffect(() => {
     setDiffCursorRow(0)
+    setDiffSelectionAnchorRow(null)
     setDraftNote(null)
     setHoveredDiffRowKey(null)
   }, [selectedFilePath, pane])
@@ -633,7 +739,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
         const trimmed = draftNote.text.trim()
         setDiffNotes((prev) => {
           const next = new Map(prev)
-          if (trimmed) next.set(draftNote.rowKey, trimmed)
+          if (trimmed) next.set(draftNote.rowKey, { range: draftNote.range, text: trimmed })
           else next.delete(draftNote.rowKey)
           return next
         })
@@ -673,6 +779,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       const rows = diffLayout === 'split' ? rightDiffViewRef.current?.splitRows : rightDiffViewRef.current?.rows
       const nextIndex = rows ? nextHunkRowIndex(rows, diffCursorRow, key.sequence === '}' ? 1 : -1, showHunkHeaders) : null
       if (nextIndex != null) {
+        setDiffSelectionAnchorRow(null)
         setDiffCursorRow(nextIndex)
         diffScrollRef.current?.scrollTo(nextIndex)
       }
@@ -715,7 +822,16 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
         const totalRows = pane === 2 && fileDiffMode === 'viewer'
           ? (diffLayout === 'split' ? (rdv?.splitRows.length ?? 0) : (rdv?.rows.length ?? 0))
           : 0
-        if (totalRows > 0) setDiffCursorRow((i) => Math.min(i + 1, totalRows - 1))
+        if (totalRows > 0) {
+          const currentIndex = clampNumber(diffCursorRow, 0, totalRows - 1)
+          const nextIndex = clampNumber(currentIndex + 1, 0, totalRows - 1)
+          if (key.shift && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
+            setDiffSelectionAnchorRow((anchor) => anchor ?? currentIndex)
+          } else {
+            setDiffSelectionAnchorRow(null)
+          }
+          setDiffCursorRow(nextIndex)
+        }
         diffScrollRef.current?.scrollBy(1)
       }
       return
@@ -725,7 +841,23 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.max(i - 1, 0))
       else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.max(i - 1, 0))
       else {
-        setDiffCursorRow((i) => Math.max(i - 1, 0))
+        const rdv = rightDiffViewRef.current
+        const totalRows = pane === 2 && fileDiffMode === 'viewer'
+          ? (diffLayout === 'split' ? (rdv?.splitRows.length ?? 0) : (rdv?.rows.length ?? 0))
+          : 0
+        if (totalRows > 0) {
+          const currentIndex = clampNumber(diffCursorRow, 0, totalRows - 1)
+          const nextIndex = clampNumber(currentIndex - 1, 0, totalRows - 1)
+          if (key.shift && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
+            setDiffSelectionAnchorRow((anchor) => anchor ?? currentIndex)
+          } else {
+            setDiffSelectionAnchorRow(null)
+          }
+          setDiffCursorRow(nextIndex)
+        } else {
+          setDiffCursorRow(0)
+          setDiffSelectionAnchorRow(null)
+        }
         diffScrollRef.current?.scrollBy(-1)
       }
       return
@@ -797,52 +929,57 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     }
     if (key.name === 'v' && pane === 2) {
       setFileDiffMode((mode) => (mode === 'text' ? 'viewer' : 'text'))
+      setDiffSelectionAnchorRow(null)
       return
     }
     if (key.sequence === 's' && pane === 2 && fileDiffMode === 'viewer') {
       setDiffLayout((l) => (l === 'stack' ? 'split' : 'stack'))
+      setDiffSelectionAnchorRow(null)
       return
     }
     if (key.sequence === 'n' && pane === 2 && fileDiffMode === 'viewer') {
       setShowLineNumbers((v) => !v)
+      setDiffSelectionAnchorRow(null)
       return
     }
     if (key.sequence === 'm' && pane === 2 && fileDiffMode === 'viewer') {
       setShowHunkHeaders((v) => !v)
+      setDiffSelectionAnchorRow(null)
       return
     }
-    // a = add/edit note on current diff cursor row
+    // a = add/edit note on current diff cursor range
     if (key.sequence === 'a' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
       const rdv = rightDiffViewRef.current
       const fp = selectedFilePathRef.current
       const isSplit = diffLayout === 'split'
       const rows = isSplit ? rdv?.splitRows : rdv?.rows
-      const row = rows?.[diffCursorRow]
-      if (!row) return
-      const anchor = isSplit
-        ? splitRowAnchor(row as TuiPierreSplitRow, fp)
-        : stackRowAnchor(row as TuiPierreDiffRow, fp)
-      if (!anchor) return
-      setDraftNote({ rowKey: anchor, lineLabel: anchorLineLabel(anchor), text: diffNotes.get(anchor) ?? '' })
+      if (!rows || rows.length === 0) return
+      const currentIndex = clampNumber(diffCursorRow, 0, rows.length - 1)
+      const span = diffSelectionSpanFromRowRange(fp, rows, diffSelectionAnchorRow ?? currentIndex, currentIndex)
+      if (!span) return
+      setDraftNote({
+        rowKey: span.key,
+        range: span.selection,
+        lineLabel: span.label,
+        text: diffNotes.get(span.key)?.text ?? '',
+      })
       return
     }
-    // x = delete note on current diff cursor row
+    // x = delete note on current diff cursor range
     if (key.sequence === 'x' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
       const rdv = rightDiffViewRef.current
       const fp = selectedFilePathRef.current
       const isSplit = diffLayout === 'split'
       const rows = isSplit ? rdv?.splitRows : rdv?.rows
-      const row = rows?.[diffCursorRow]
-      if (!row) return
-      const anchor = isSplit
-        ? splitRowAnchor(row as TuiPierreSplitRow, fp)
-        : stackRowAnchor(row as TuiPierreDiffRow, fp)
-      if (anchor && diffNotes.has(anchor)) {
-        setDiffNotes((prev) => { const n = new Map(prev); n.delete(anchor); return n })
+      if (!rows || rows.length === 0) return
+      const currentIndex = clampNumber(diffCursorRow, 0, rows.length - 1)
+      const span = diffSelectionSpanFromRowRange(fp, rows, diffSelectionAnchorRow ?? currentIndex, currentIndex)
+      if (span && diffNotes.has(span.key)) {
+        setDiffNotes((prev) => { const n = new Map(prev); n.delete(span.key); return n })
       }
       return
     }
-  }, [data, diffCursorRow, diffLayout, diffNotes, draftNote, expandedDirs, fileDiffMode, focusSide,
+  }, [data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
       leftPaneMode, onClose, pane, repoCwd, showHunkHeaders, treeCursor, visibleNodes])
 
   // Register key handler with parent
@@ -881,7 +1018,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
   const fileDiffLabel = fileDiffMode === 'viewer'
-    ? `v plain  ${diffHighlights ? '●' : '○'} syntax  s ${diffLayout}  n ${showLineNumbers ? '#' : 'no#'}  m ${showHunkHeaders ? '@@' : 'no@@'}  {} hunk  a:note  x:del`
+    ? `v plain  ${diffHighlights ? '●' : '○'} syntax  s ${diffLayout}  n ${showLineNumbers ? '#' : 'no#'}  m ${showHunkHeaders ? '@@' : 'no@@'}  {} hunk  shift+j/k range  a:note  x:del`
     : 'v parsed'
 
   function statusColor(x: string, y: string): string {
@@ -914,6 +1051,37 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const rightDiffTruncated = rightDiffView ? rightDiffView.rows.length > MAX_DIFF_LINES : false
   const rightSplitRows = rightDiffView ? rightDiffView.splitRows.slice(0, MAX_DIFF_LINES) : []
   const rightSplitTruncated = rightDiffView ? rightDiffView.splitRows.length > MAX_DIFF_LINES : false
+  const activeDiffRows = diffLayout === 'split' ? rightSplitRows : rightDiffRows
+  const diffSelectionCurrentIndex = activeDiffRows.length > 0
+    ? clampNumber(diffCursorRow, 0, activeDiffRows.length - 1)
+    : 0
+  const diffSelectionSpan = pane === 2 && fileDiffMode === 'viewer' && activeDiffRows.length > 0
+    ? diffSelectionSpanFromRowRange(
+        selectedFilePath,
+        activeDiffRows,
+        diffSelectionAnchorRow ?? diffSelectionCurrentIndex,
+        diffSelectionCurrentIndex,
+      )
+    : null
+  const diffSelectionCurrentSelection = diffSelectionSpan?.selection ?? null
+  const diffSelectionStartIndex = diffSelectionSpan?.startIndex ?? diffSelectionCurrentIndex
+  const diffSelectionEndIndex = diffSelectionSpan?.endIndex ?? diffSelectionCurrentIndex
+  const diffNotesByEndIndex = useMemo(() => {
+    const notesByEndIndex = new Map<number, Array<{ key: string; note: DiffNote; label: string; span: DiffSelectionSpan }>>()
+    if (pane !== 2 || fileDiffMode !== 'viewer' || activeDiffRows.length === 0) return notesByEndIndex
+    for (const [key, note] of diffNotes) {
+      const span = diffSelectionSpanFromSelection(selectedFilePath, activeDiffRows, note.range)
+      if (!span) continue
+      const list = notesByEndIndex.get(span.endIndex) ?? []
+      list.push({ key, note, label: span.label, span })
+      notesByEndIndex.set(span.endIndex, list)
+    }
+    return notesByEndIndex
+  }, [activeDiffRows, diffNotes, fileDiffMode, pane, selectedFilePath])
+  const diffDraftSpan = useMemo(() => {
+    if (pane !== 2 || fileDiffMode !== 'viewer' || !draftNote || activeDiffRows.length === 0) return null
+    return diffSelectionSpanFromSelection(selectedFilePath, activeDiffRows, draftNote.range)
+  }, [activeDiffRows, draftNote, fileDiffMode, pane, selectedFilePath])
 
   // Gutter width: max line number digit count across all stack rows
   const rightDiffLineNumbers = rightDiffRows.flatMap((row) => [row.oldLine, row.newLine].filter((value): value is number => value != null))
@@ -1136,18 +1304,33 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                 const isCursor = focusSide === 'right' && idx === diffCursorRow
                 const rowFg = diffRowColor(row, theme)
                 const anchor = stackRowAnchor(row, selectedFilePath)
-                const hasDraft = anchor !== null && draftNote?.rowKey === anchor
-                const hasNote = anchor !== null && diffNotes.has(anchor)
+                const point = diffSelectionPointForStackRow(row)
+                const singleRowSelection = point
+                  ? {
+                      start: point.lineNumber,
+                      side: point.side,
+                      end: point.lineNumber,
+                      endSide: point.side,
+                    }
+                  : null
+                const isSelectedDiffRow = focusSide === 'right' && idx >= diffSelectionStartIndex && idx <= diffSelectionEndIndex
+                const currentSelectionRange = isSelectedDiffRow ? (diffSelectionCurrentSelection ?? singleRowSelection) : singleRowSelection
+                const hasDraft = diffDraftSpan?.endIndex === idx
+                const noteCards = (diffNotesByEndIndex.get(idx) ?? []).filter(({ key }) => draftNote?.rowKey !== key)
                 const isHovered = hoveredDiffRowKey === row.key && anchor !== null
+                const rowBackground = isSelectedDiffRow ? theme.surface3 : diffRowBackground(row, theme)
                 return (
                   <React.Fragment key={row.key}>
                     <box
                       width={rightW}
                       flexDirection="row"
-                      backgroundColor={diffRowBackground(row, theme)}
+                      backgroundColor={rowBackground}
                       onMouseOver={() => activateDiffHover(row.key)}
                       onMouseMove={() => activateDiffHover(row.key)}
-                      onMouseUp={() => setDiffCursorRow(idx)}
+                      onMouseUp={() => {
+                        setDiffCursorRow(idx)
+                        setDiffSelectionAnchorRow(null)
+                      }}
                     >
                       {showLineNumbers ? (
                         <>
@@ -1183,21 +1366,31 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                           width={DIFF_BADGE_WIDTH}
                           onMouseUp={() => {
                             setDiffCursorRow(idx)
-                            if (anchor) {
-                              setDraftNote({ rowKey: anchor, lineLabel: anchorLineLabel(anchor), text: diffNotes.get(anchor) ?? '' })
+                            if (currentSelectionRange) {
+                              const key = diffSelectionKey(selectedFilePath, currentSelectionRange)
+                              setDraftNote({
+                                rowKey: key,
+                                range: currentSelectionRange,
+                                lineLabel: diffSelectionLineLabel(currentSelectionRange),
+                                text: diffNotes.get(key)?.text ?? '',
+                              })
                             }
                           }}
                         >
                           <text fg={theme.cyan} bg={theme.surface3} wrapMode="none">[+]</text>
                         </box>
-                      ) : hasNote && !hasDraft ? (
+                      ) : noteCards.length > 0 ? (
                         <text fg={theme.violet} wrapMode="none"> ● </text>
                       ) : (
                         <text fg={theme.dim} wrapMode="none">{'   '}</text>
                       )}
                     </box>
-                    {hasDraft ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
-                    {hasNote && !hasDraft ? renderNoteCard(anchor ?? '', diffNotes, rightW, selectedFilePath, theme) : null}
+                    {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
+                    {noteCards.map(({ key, note, label }) => (
+                      <React.Fragment key={key}>
+                        {renderNoteCard(note, rightW, selectedFilePath, theme, label)}
+                      </React.Fragment>
+                    ))}
                   </React.Fragment>
                 )
               })}
@@ -1215,21 +1408,49 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                 if (!showHunkHeaders && row.tone === 'hunk') return null
                 const isCursor = focusSide === 'right' && idx === diffCursorRow
                 const anchor = splitRowAnchor(row, selectedFilePath)
-                const hasDraft = anchor !== null && draftNote?.rowKey === anchor
-                const hasNote = anchor !== null && diffNotes.has(anchor)
+                const point = diffSelectionPointForSplitRow(row)
+                const singleRowSelection = point
+                  ? {
+                      start: point.lineNumber,
+                      side: point.side,
+                      end: point.lineNumber,
+                      endSide: point.side,
+                    }
+                  : null
+                const isSelectedDiffRow = focusSide === 'right' && idx >= diffSelectionStartIndex && idx <= diffSelectionEndIndex
+                const currentSelectionRange = isSelectedDiffRow ? (diffSelectionCurrentSelection ?? singleRowSelection) : singleRowSelection
+                const hasDraft = diffDraftSpan?.endIndex === idx
+                const noteCards = (diffNotesByEndIndex.get(idx) ?? []).filter(({ key }) => draftNote?.rowKey !== key)
                 // Full-width header rows (file label, hunk header, tree summary)
                 if (row.tone !== 'split-change' && row.tone !== 'split-context') {
                   const fg = row.tone === 'file' || row.tone === 'hunk' ? theme.cyan : theme.dim
-                  const bg = row.tone === 'hunk' ? theme.diffMetaBg : row.tone === 'file' ? theme.surface2 : undefined
+                  const bg = isSelectedDiffRow
+                    ? theme.surface3
+                    : row.tone === 'hunk'
+                      ? theme.diffMetaBg
+                      : row.tone === 'file'
+                        ? theme.surface2
+                        : undefined
                   return (
                     <React.Fragment key={row.key}>
-                      <box width={rightW} backgroundColor={bg} onMouseUp={() => setDiffCursorRow(idx)}>
+                      <box
+                        width={rightW}
+                        backgroundColor={bg}
+                        onMouseUp={() => {
+                          setDiffCursorRow(idx)
+                          setDiffSelectionAnchorRow(null)
+                        }}
+                      >
                         <text fg={isCursor ? theme.cyan : fg} wrapMode="none">
                           {fitTerminalText((isCursor ? '▶ ' : '') + (row.text ?? ''), rightW - 1)}
                         </text>
                       </box>
-                      {hasDraft ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
-                      {hasNote && !hasDraft ? renderNoteCard(anchor ?? '', diffNotes, rightW, selectedFilePath, theme) : null}
+                      {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
+                      {noteCards.map(({ key, note, label }) => (
+                        <React.Fragment key={key}>
+                          {renderNoteCard(note, rightW, selectedFilePath, theme, label)}
+                        </React.Fragment>
+                      ))}
                     </React.Fragment>
                   )
                 }
@@ -1240,9 +1461,13 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                     <box
                       width={rightW}
                       flexDirection="row"
+                      backgroundColor={isSelectedDiffRow ? theme.surface3 : undefined}
                       onMouseOver={() => activateDiffHover(row.key)}
                       onMouseMove={() => activateDiffHover(row.key)}
-                      onMouseUp={() => setDiffCursorRow(idx)}
+                      onMouseUp={() => {
+                        setDiffCursorRow(idx)
+                        setDiffSelectionAnchorRow(null)
+                      }}
                     >
                       {renderSplitSide(row.left, splitHalfW, splitLeftTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
                       {isHoveredSplit ? (
@@ -1250,22 +1475,32 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                           width={1}
                           onMouseUp={() => {
                             setDiffCursorRow(idx)
-                            if (anchor) {
-                              setDraftNote({ rowKey: anchor, lineLabel: anchorLineLabel(anchor), text: diffNotes.get(anchor) ?? '' })
+                            if (currentSelectionRange) {
+                              const key = diffSelectionKey(selectedFilePath, currentSelectionRange)
+                              setDraftNote({
+                                rowKey: key,
+                                range: currentSelectionRange,
+                                lineLabel: diffSelectionLineLabel(currentSelectionRange),
+                                text: diffNotes.get(key)?.text ?? '',
+                              })
                             }
                           }}
                         >
                           <text fg={theme.cyan} bg={theme.surface3} wrapMode="none">+</text>
                         </box>
                       ) : (
-                        <text fg={hasNote && !hasDraft ? theme.violet : isCursor ? theme.cyan : theme.border}>
-                          {hasNote && !hasDraft ? '●' : '│'}
+                        <text fg={noteCards.length > 0 ? theme.violet : isCursor ? theme.cyan : theme.border}>
+                          {noteCards.length > 0 ? '●' : '│'}
                         </text>
                       )}
                       {renderSplitSide(row.right, splitRightHalfW, splitRightTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
                     </box>
-                    {hasDraft ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
-                    {hasNote && !hasDraft ? renderNoteCard(anchor ?? '', diffNotes, rightW, selectedFilePath, theme) : null}
+                    {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
+                    {noteCards.map(({ key, note, label }) => (
+                      <React.Fragment key={key}>
+                        {renderNoteCard(note, rightW, selectedFilePath, theme, label)}
+                      </React.Fragment>
+                    ))}
                   </React.Fragment>
                 )
               })}
