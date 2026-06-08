@@ -170,6 +170,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
       zIndex={50}
       flexDirection="column"
       title=" Session analytics "
+      titleColor={theme.cyan}
       titleAlignment="left"
     >
       {/* Tabs */}

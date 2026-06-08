@@ -553,6 +553,25 @@ function claudeRuntimeDetailCardLines(payload: SystemMessagePayload): TuiTranscr
   })
 }
 
+function claudeHookAdditionalContextLines(payload: SystemMessagePayload): TuiTranscriptCardLine[] {
+  const direct = typeof payload.additionalContext === 'string' ? payload.additionalContext.trim() : ''
+  const hookOutput = payload.hookSpecificOutput && typeof payload.hookSpecificOutput === 'object'
+    ? payload.hookSpecificOutput as Record<string, unknown>
+    : null
+  const nested = typeof hookOutput?.additionalContext === 'string' ? hookOutput.additionalContext.trim() : ''
+  const additionalContext = direct || nested
+  if (!additionalContext) return []
+  const lines = sanitizeLine(additionalContext)
+    .split('\n')
+    .map((s) => s.trimEnd())
+    .filter((s) => s.length > 0)
+    .slice(0, 4)
+  return [
+    line('  additional context:', 'system'),
+    ...lines.map((entry) => line(`    ${truncateLine(entry)}`, 'dim')),
+  ]
+}
+
 function resultRawTextOf(thread: ToolThread): string | null {
   if (thread.toolUse.name === 'Read') {
     const summary = readSummaryOf(thread)
@@ -1167,7 +1186,10 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
       if (block.subtype === 'hook_response') {
         const name = typeof block.payload.hook_name === 'string' ? block.payload.hook_name : 'hook'
         const outcome = typeof block.payload.outcome === 'string' ? block.payload.outcome : ''
-        return [line(withClaudeRuntimeSuffix(`hook ${name}${outcome ? ` ${outcome}` : ''}`, block.payload), 'system')]
+        return [
+          line(withClaudeRuntimeSuffix(`hook ${name}${outcome ? ` ${outcome}` : ''}`, block.payload), 'system'),
+          ...claudeHookAdditionalContextLines(block.payload),
+        ]
       }
       if (block.subtype === 'memory_recall') {
         const memories = Array.isArray(block.payload.memories) ? block.payload.memories as Array<Record<string, unknown>> : []
@@ -2004,12 +2026,19 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
       }
       if (block.subtype === 'result') {
         const resultSubtype = typeof block.payload.result_subtype === 'string' ? block.payload.result_subtype : ''
-        const isError = resultSubtype && resultSubtype !== 'success'
-        const head = isError ? `run ended: ${resultSubtype.replace(/_/g, ' ')}` : 'run completed'
+        const stopReason = typeof block.payload.stop_reason === 'string' ? block.payload.stop_reason : ''
+        const isRefusal = stopReason === 'refusal'
+        const isError = isRefusal || (resultSubtype && resultSubtype !== 'success')
+        const head = isRefusal
+          ? 'run refused'
+          : isError
+          ? `run ended: ${resultSubtype.replace(/_/g, ' ')}`
+          : 'run completed'
         const lines: TuiTranscriptCardLine[] = [line(head, isError ? 'result_error' : 'result_ok')]
         if (typeof block.payload.num_turns === 'number') lines.push(line(`  ${block.payload.num_turns} turn${block.payload.num_turns === 1 ? '' : 's'}`, 'dim'))
         if (typeof block.payload.duration_ms === 'number') lines.push(line(`  ${(block.payload.duration_ms / 1000).toFixed(1)}s`, 'dim'))
         if (typeof block.payload.total_cost_usd === 'number') lines.push(line(`  $${block.payload.total_cost_usd.toFixed(4)}`, 'dim'))
+        if (stopReason) lines.push(line(`  stop: ${stopReason}`, isRefusal ? 'result_error' : 'dim'))
         const errors = Array.isArray(block.payload.errors) ? block.payload.errors as unknown[] : []
         for (const e of errors.slice(0, 3)) {
           if (typeof e === 'string' && e.trim()) lines.push(line(`  ${truncateLine(e.trim())}`, 'result_error'))

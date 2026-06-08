@@ -3166,6 +3166,7 @@ function TranscriptCardInner({
         backgroundColor={cardBg}
         flexDirection="column"
         title={cardTitle}
+        titleColor={accent}
       >
         <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={1}>
           {shouldRenderSyntaxMarkdown && card.markdownContent && syntaxStyle ? (
@@ -9215,6 +9216,7 @@ export default function OpenTuiApp() {
             backgroundColor={theme.surface}
             flexDirection="column"
             title={sidebarSortHeader}
+            titleColor={theme.cyan}
           >
             <box flexGrow={1} paddingX={1}>
               {loadingSessions && sessions.length === 0 ? (
@@ -9287,6 +9289,7 @@ export default function OpenTuiApp() {
             backgroundColor={theme.surface}
             flexDirection="column"
             title={headerStatusRight}
+            titleColor={providerAccent}
           >
           {!focusMode ? (
             <box paddingX={1} paddingTop={1}>
@@ -9525,6 +9528,7 @@ export default function OpenTuiApp() {
                   zIndex={70}
                   flexDirection="column"
                   title=" Composer settings "
+                  titleColor={composerAccentColor}
                   titleAlignment="left"
                 >
                   <box height={2} paddingX={1} flexDirection="row" alignItems="center">
@@ -10193,6 +10197,7 @@ export default function OpenTuiApp() {
           zIndex={60}
           flexDirection="column"
           title=" Composer "
+          titleColor={composerAccentColor}
           titleAlignment="left"
         >
           <box

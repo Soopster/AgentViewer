@@ -289,6 +289,7 @@ export function TaskPanelPopover({
       zIndex={50}
       flexDirection="column"
       title=" Tasks "
+      titleColor={theme.cyan}
       titleAlignment="left"
     >
       <box

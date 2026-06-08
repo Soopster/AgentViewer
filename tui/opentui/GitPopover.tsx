@@ -258,6 +258,29 @@ function splitSideBg(side: TuiSplitRowSide, theme: TuiThemePalette): string | un
   return undefined
 }
 
+function nextHunkRowIndex(
+  rows: Array<TuiPierreDiffRow | TuiPierreSplitRow>,
+  currentIndex: number,
+  direction: 1 | -1,
+  showHunkHeaders: boolean,
+): number | null {
+  if (rows.length === 0) return null
+  const hunkIndexes = rows
+    .map((row, index) => row.tone === 'hunk' ? index : -1)
+    .filter((index) => index >= 0)
+  if (hunkIndexes.length === 0) return null
+
+  const next = direction > 0
+    ? hunkIndexes.find((index) => index > currentIndex) ?? hunkIndexes[0]
+    : [...hunkIndexes].reverse().find((index) => index < currentIndex) ?? hunkIndexes[hunkIndexes.length - 1]
+  if (showHunkHeaders) return next
+
+  for (let index = next + 1; index < rows.length; index += 1) {
+    if (rows[index]?.tone !== 'hunk') return index
+  }
+  return next
+}
+
 function splitSideIndicator(side: TuiSplitRowSide): string {
   if (side.kind === 'deletion') return '-'
   if (side.kind === 'addition') return '+'
@@ -646,6 +669,16 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       return
     }
 
+    if ((key.sequence === '{' || key.sequence === '}') && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
+      const rows = diffLayout === 'split' ? rightDiffViewRef.current?.splitRows : rightDiffViewRef.current?.rows
+      const nextIndex = rows ? nextHunkRowIndex(rows, diffCursorRow, key.sequence === '}' ? 1 : -1, showHunkHeaders) : null
+      if (nextIndex != null) {
+        setDiffCursorRow(nextIndex)
+        diffScrollRef.current?.scrollTo(nextIndex)
+      }
+      return
+    }
+
     if (key.sequence === '[' || key.sequence === ']') {
       if (leftPaneMode === 'hidden') setLeftPaneMode('normal')
       setLeftPaneWidth((current) => {
@@ -810,7 +843,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       return
     }
   }, [data, diffCursorRow, diffLayout, diffNotes, draftNote, expandedDirs, fileDiffMode, focusSide,
-      leftPaneMode, onClose, pane, repoCwd, treeCursor, visibleNodes])
+      leftPaneMode, onClose, pane, repoCwd, showHunkHeaders, treeCursor, visibleNodes])
 
   // Register key handler with parent
   useEffect(() => {
@@ -848,7 +881,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
   const fileDiffLabel = fileDiffMode === 'viewer'
-    ? `v plain  ${diffHighlights ? '●' : '○'} syntax  s ${diffLayout}  n ${showLineNumbers ? '#' : 'no#'}  m ${showHunkHeaders ? '@@' : 'no@@'}  a:note  x:del`
+    ? `v plain  ${diffHighlights ? '●' : '○'} syntax  s ${diffLayout}  n ${showLineNumbers ? '#' : 'no#'}  m ${showHunkHeaders ? '@@' : 'no@@'}  {} hunk  a:note  x:del`
     : 'v parsed'
 
   function statusColor(x: string, y: string): string {
@@ -927,6 +960,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       zIndex={50}
       flexDirection="row"
       title=" Git "
+      titleColor={theme.cyan}
       titleAlignment="left"
     >
       {/* ── Left column ─────────────────────────────────── */}

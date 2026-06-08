@@ -3988,6 +3988,15 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
   const [hovered, setHovered] = useState(false)
   const { subtype, payload } = block
   const content = typeof payload.content === 'string' ? payload.content : ''
+  const stopReason = typeof payload.stop_reason === 'string' ? payload.stop_reason : ''
+  const isRefusal = subtype === 'result' && stopReason === 'refusal'
+  const additionalContext = typeof payload.additionalContext === 'string' && payload.additionalContext.trim()
+    ? payload.additionalContext.trim()
+    : payload.hookSpecificOutput
+      && typeof payload.hookSpecificOutput === 'object'
+      && typeof (payload.hookSpecificOutput as Record<string, unknown>).additionalContext === 'string'
+    ? String((payload.hookSpecificOutput as Record<string, unknown>).additionalContext).trim()
+    : ''
   const headerLabel = subtype.replace(/_/g, ' ').toUpperCase()
   const errorCode = typeof payload.error === 'string' ? payload.error : ''
   const apiErrorStatus = typeof payload.api_error_status === 'number' ? payload.api_error_status : null
@@ -4105,7 +4114,9 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       const durationMs = typeof payload.duration_ms === 'number' ? payload.duration_ms : null
       const turns = typeof payload.num_turns === 'number' ? payload.num_turns : null
       const errors = Array.isArray(payload.errors) ? payload.errors : []
-      const head = resultSubtype && resultSubtype !== 'success'
+      const head = isRefusal
+        ? 'Run refused'
+        : resultSubtype && resultSubtype !== 'success'
         ? resultSubtype.replace(/_/g, ' ')
         : 'Run completed'
       const parts: string[] = [head]
@@ -4122,7 +4133,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       }
     }
     return withRuntime('Claude system event')
-  }, [apiErrorStatus, content, errorSummary, payload, runtimeCountText, subtype])
+  }, [apiErrorStatus, content, errorSummary, isRefusal, payload, runtimeCountText, subtype])
   const hookOutcome = typeof payload.outcome === 'string' ? payload.outcome : ''
   const isHardError = errorCode === 'model_not_found'
     || errorCode === 'authentication_failed'
@@ -4157,7 +4168,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     : subtype === 'local_command_output'
     ? 'var(--cyan)'
     : subtype === 'result'
-    ? (typeof payload.result_subtype === 'string' && payload.result_subtype !== 'success' ? 'var(--red)' : 'var(--green)')
+    ? (isRefusal || (typeof payload.result_subtype === 'string' && payload.result_subtype !== 'success') ? 'var(--red)' : 'var(--green)')
     : 'var(--text-3)'
   const badges = useMemo(() => {
     const nextBadges: string[] = []
@@ -4170,6 +4181,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     if (typeof payload.hook_name === 'string') nextBadges.push(payload.hook_name)
     if (typeof payload.hook_event === 'string') nextBadges.push(payload.hook_event)
     if (typeof payload.outcome === 'string') nextBadges.push(payload.outcome)
+    if (stopReason) nextBadges.push(`stop ${stopReason}`)
     if (typeof payload.mcp_server_name === 'string') nextBadges.push(payload.mcp_server_name)
     if (typeof payload.subagent_type === 'string') nextBadges.push(payload.subagent_type)
     if (typeof payload.task_type === 'string' && payload.task_type !== payload.subagent_type) nextBadges.push(payload.task_type)
@@ -4189,7 +4201,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       if (typeof compact.pre_tokens === 'number') nextBadges.push(`${fmtTokens(compact.pre_tokens)} pre`)
     }
     return [...new Set(nextBadges)]
-  }, [apiErrorStatus, errorCode, payload, subtype])
+  }, [apiErrorStatus, errorCode, payload, stopReason, subtype])
 
   const body = useMemo(() => {
     let main = ''
@@ -4216,6 +4228,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
         typeof payload.output === 'string' ? payload.output : '',
         typeof payload.stdout === 'string' ? payload.stdout : '',
         typeof payload.stderr === 'string' ? payload.stderr : '',
+        additionalContext ? `Additional context:\n${additionalContext}` : '',
       ].filter(Boolean).join('\n\n')
     }
     else if (subtype === 'memory_recall') {
@@ -4297,12 +4310,12 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     else if (subtype === 'result') {
       const errors = Array.isArray(payload.errors) ? payload.errors.filter((e): e is string => typeof e === 'string') : []
       const lines = [
-        typeof payload.result_subtype === 'string' ? `Outcome: ${payload.result_subtype}` : '',
+        isRefusal ? 'Outcome: refused' : typeof payload.result_subtype === 'string' ? `Outcome: ${payload.result_subtype}` : '',
         typeof payload.num_turns === 'number' ? `Turns: ${payload.num_turns}` : '',
         typeof payload.duration_ms === 'number' ? `Duration: ${(payload.duration_ms / 1000).toFixed(1)}s` : '',
         typeof payload.duration_api_ms === 'number' ? `API time: ${(payload.duration_api_ms / 1000).toFixed(1)}s` : '',
         typeof payload.total_cost_usd === 'number' ? `Cost: $${payload.total_cost_usd.toFixed(4)}` : '',
-        typeof payload.stop_reason === 'string' ? `Stop: ${payload.stop_reason}` : '',
+        stopReason ? `Stop: ${stopReason}` : '',
         ...errors,
       ].filter(Boolean)
       main = lines.join('\n')
@@ -4310,7 +4323,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
       main = content
     }
     return [main, runtimeDetailBody].filter(Boolean).join('\n\n')
-  }, [content, payload, runtimeDetailBody, subtype])
+  }, [additionalContext, content, isRefusal, payload, runtimeDetailBody, stopReason, subtype])
   const payloadJson = useMemo(() => safeJson(payload), [payload])
 
   return (

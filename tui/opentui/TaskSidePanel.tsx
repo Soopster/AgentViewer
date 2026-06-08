@@ -184,6 +184,9 @@ export function TaskSidePanel({
   const borderColor = tab === 'agents'
     ? (runningAgentCount > 0 ? theme.amber : doneAgentCount > 0 ? theme.green : theme.border)
     : (inProgressCount > 0 ? theme.amber : blockedCount > 0 ? theme.red : doneCount === registry.size && registry.size > 0 ? theme.green : theme.border)
+  const titleColor = tab === 'agents'
+    ? (runningAgentCount > 0 ? theme.amber : doneAgentCount > 0 ? theme.green : theme.violet)
+    : (inProgressCount > 0 ? theme.amber : blockedCount > 0 ? theme.red : doneCount === registry.size && registry.size > 0 ? theme.green : theme.cyan)
 
   return (
     <box
@@ -195,6 +198,7 @@ export function TaskSidePanel({
       backgroundColor={theme.surface}
       flexDirection="column"
       title={tab === 'agents' ? ' Agents ' : ' Tasks '}
+      titleColor={titleColor}
       titleAlignment="left"
     >
       {/* Tab header */}
