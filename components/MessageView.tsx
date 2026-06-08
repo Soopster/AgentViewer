@@ -1709,7 +1709,11 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           : bookmarked
             ? 'color-mix(in srgb, var(--t-bookmark) 7%, transparent)'
             : 'transparent',
-        transition: 'box-shadow 180ms ease, background 180ms ease, padding 180ms ease',
+        // Only transition compositor-friendly properties (box-shadow, background).
+        // Animating padding would be layout-affecting and re-trigger the per-row
+        // ResizeObserver the virtual scroll relies on for measurement — let
+        // padding changes (streamMode toggles) apply instantly instead.
+        transition: 'box-shadow 180ms ease, background 180ms ease',
       }}
     >
       {bookmarked && !streamMode && (
