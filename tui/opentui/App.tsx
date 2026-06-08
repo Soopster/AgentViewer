@@ -913,6 +913,37 @@ function fitText(value: string, width: number): string {
   return `${value.slice(0, width - 1)}…`
 }
 
+type InlineTextSegment = {
+  text: string
+  fg: string
+}
+
+function clipText(value: string, width: number): string {
+  if (width <= 0) return ''
+  if (value.length <= width) return value
+  if (width === 1) return value.slice(0, 1)
+  return `${value.slice(0, width - 1)}…`
+}
+
+function renderInlineTextSegments(segments: InlineTextSegment[], width: number, padFg: string): React.ReactNode[] {
+  if (width <= 0) return []
+  const out: React.ReactNode[] = []
+  let remaining = width
+  for (let i = 0; i < segments.length; i += 1) {
+    if (remaining <= 0) break
+    const segment = segments[i]
+    if (!segment?.text) continue
+    const clipped = clipText(segment.text, remaining)
+    if (!clipped) continue
+    out.push(<span key={i} fg={segment.fg}>{clipped}</span>)
+    remaining -= clipped.length
+  }
+  if (remaining > 0) {
+    out.push(<span key="pad" fg={padFg}>{' '.repeat(remaining)}</span>)
+  }
+  return out
+}
+
 function stableHash(value: string): number {
   let hash = 2166136261
   for (let i = 0; i < value.length; i++) {
@@ -2842,6 +2873,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'search',     label: 'Search messages',        key: '/',  category: 'Transcript' },
   { id: 'fold',       label: 'Fold/expand card',       key: 'e',  category: 'Transcript' },
   { id: 'copy',       label: 'Copy selected message',  key: 'y',  category: 'Transcript' },
+  { id: 'reply',      label: 'Reply to selected message', key: '⇧Q', category: 'Transcript' },
   { id: 'bookmark-toggle', label: 'Bookmark message',  key: 'b',  category: 'Transcript' },
   { id: 'bookmark-jump',   label: 'Jump to next bookmark', key: '[ ]', category: 'Transcript' },
   { id: 'bookmark-all',    label: 'Browse all bookmarks', key: '⇧B', category: 'Transcript' },
@@ -3055,6 +3087,7 @@ function TranscriptCardInner({
     card.category === 'diff' ? `s ${diffLayout}` : null,
     isSearchHit ? 'match' : null,
     isSelected ? card.usageSummary ?? null : null,
+    hasCursor ? 'y copy  b bookmark  Q reply' : null,
   ])
   const bookmarkGlyph = bookmarked ? '★ ' : ''
   const cardTitleFull = `${marker} ${bookmarkGlyph}${categoryEmoji}${card.label}${titleMeta ? `  ${titleMeta}` : ''}`
@@ -4186,31 +4219,65 @@ export default function OpenTuiApp() {
   }, [composerTargetSession, contextUsage, selectedSessionKey])
   // One-line chip summarising the active model, explicit effort, and any
   // provider-specific send knobs.
-  const composerKnobsChip = useMemo(() => {
-    const parts: string[] = []
-    if (composerCurrentModel) parts.push(`model:${composerCurrentModel}`)
-    if (composerContextUsage) parts.push(`ctx:${composerContextUsage}`)
-    parts.push(`effort:${tuiEffort}`)
+  const composerKnobSegments = useMemo<InlineTextSegment[]>(() => {
+    const parts: InlineTextSegment[] = []
+    if (composerCurrentModel) parts.push({ text: `model:${composerCurrentModel}`, fg: composerAccentColor })
+    if (composerContextUsage) parts.push({ text: `ctx:${composerContextUsage}`, fg: theme.green })
+    parts.push({ text: `effort:${tuiEffort}`, fg: theme.amber })
     if (composerTargetSession?.provider === 'opencode' && tuiOpenCodeAgent) {
-      parts.push(`agent:${tuiOpenCodeAgent}`)
+      parts.push({ text: `agent:${tuiOpenCodeAgent}`, fg: theme.cyan })
     }
     if (composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default') {
-      parts.push(`mode:${composerPermissionMode}`)
+      parts.push({ text: `mode:${composerPermissionMode}`, fg: theme.violet })
     }
     if (composerTargetSession?.provider === 'copilot' && tuiCopilotMode !== 'interactive') {
-      parts.push(`mode:${tuiCopilotMode}`)
+      parts.push({ text: `mode:${tuiCopilotMode}`, fg: theme.cyan })
     }
-    return parts.length > 0 ? `· ${parts.join(' · ')}` : ''
-  }, [composerContextUsage, composerCurrentModel, composerPermissionMode, composerTargetSession?.provider, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+    return parts
+  }, [composerAccentColor, composerContextUsage, composerCurrentModel, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.green, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+  const composerKnobsChip = useMemo(
+    () => composerKnobSegments.length > 0
+      ? `· ${composerKnobSegments.map((part) => part.text).join(' · ')}`
+      : '',
+    [composerKnobSegments],
+  )
   const composerWorkingDirectory = composerTargetSessionInfo?.cwd ?? composerTargetSession?.cwd ?? null
   const composerGitBranch = composerTargetSessionInfo?.gitBranch ?? null
-  const composerLocationChip = useMemo(
-    () => joinMeta([
-      composerWorkingDirectory ? `cwd ${composerWorkingDirectory}` : null,
-      composerGitBranch ? `⎇ ${composerGitBranch}` : null,
-    ]),
-    [composerGitBranch, composerWorkingDirectory],
-  )
+  const composerLocationSegments = useMemo<InlineTextSegment[]>(() => {
+    const parts: InlineTextSegment[] = []
+    if (composerWorkingDirectory) parts.push({ text: `cwd ${composerWorkingDirectory}`, fg: theme.dim })
+    if (composerGitBranch) parts.push({ text: `⎇ ${composerGitBranch}`, fg: theme.violet })
+    return parts
+  }, [composerGitBranch, composerWorkingDirectory, theme.dim, theme.violet])
+  const buildComposerStatsSegments = (lineCount: number): InlineTextSegment[] => {
+    const segments: InlineTextSegment[] = []
+    if (composerDraft.length === 0) {
+      segments.push({ text: composerConfig.glyph, fg: composerAccentColor })
+      segments.push({ text: ` ${composerConfig.label}`, fg: composerAccentColor })
+    } else {
+      segments.push({ text: `${lineCount} line${lineCount === 1 ? '' : 's'}`, fg: composerAccentColor })
+      segments.push({ text: ` · ${composerDraft.length} chars`, fg: theme.text })
+    }
+    if (composerAttachmentLabel) {
+      segments.push({ text: ' · ', fg: theme.dim })
+      segments.push({ text: composerAttachmentLabel, fg: theme.cyan })
+    }
+    if (composerKnobSegments.length > 0) {
+      segments.push({ text: ' · ', fg: theme.dim })
+      composerKnobSegments.forEach((segment, index) => {
+        if (index > 0) segments.push({ text: ' · ', fg: theme.dim })
+        segments.push(segment)
+      })
+    }
+    if (composerLocationSegments.length > 0) {
+      segments.push({ text: ' · ', fg: theme.dim })
+      composerLocationSegments.forEach((segment, index) => {
+        if (index > 0) segments.push({ text: ' · ', fg: theme.dim })
+        segments.push(segment)
+      })
+    }
+    return segments
+  }
   const composerWaitingSuffix = useMemo(() => {
     const parts: string[] = []
     if (composerKnobsChip) parts.push(composerKnobsChip.replace(/^·\s*/, ''))
@@ -7259,7 +7326,7 @@ export default function OpenTuiApp() {
 
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b bookmark  [ ] jump marks  S-B all marks  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  s diff:${diffLayout}  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  V ${velocityScrollEnabled ? 'velocity off' : 'velocity on'}  r refresh  ? commands  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b bookmark  [ ] jump marks  S-B all marks  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  s diff:${diffLayout}  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  V ${velocityScrollEnabled ? 'velocity off' : 'velocity on'}  y copy  Q reply  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
     [width, diffLayout, transcriptView, density, showToolCalls, velocityScrollEnabled],
@@ -7619,6 +7686,35 @@ export default function OpenTuiApp() {
     }
   })
 
+  const replySelectedMessage = useEffectEvent(() => {
+    const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
+    if (!card) {
+      showNotice('error', 'No message selected')
+      return
+    }
+    const text = cardClipboardText(card).trim()
+    if (!text) {
+      showNotice('error', 'Selected message has no reply text')
+      return
+    }
+
+    const quoted = text
+      .split('\n')
+      .map((line) => `> ${line}`)
+      .join('\n')
+    const existing = composerTextareaRef.current?.plainText ?? composerDraft
+    const separator = existing.length > 0 ? (existing.endsWith('\n') ? '' : '\n\n') : ''
+    const next = `${existing}${separator}${quoted}\n\n`
+
+    applyComposerSnapshot({
+      text: next,
+      attachments: [...composerMentionAttachments],
+      promptParts: [...composerPromptParts],
+      cursorOffset: next.length,
+    })
+    setComposerActive(true)
+  })
+
   // Toggle a bookmark on the card under the transcript cursor.
   const toggleBookmarkForCursor = useEffectEvent(async () => {
     const target = selectedSessionTarget
@@ -7866,6 +7962,10 @@ export default function OpenTuiApp() {
       case 'copy':
         setFocusedPane('messages')
         void copySelectedMessage()
+        break
+      case 'reply':
+        setFocusedPane('messages')
+        replySelectedMessage()
         break
       case 'bookmark-toggle':
         setFocusedPane('messages')
@@ -8483,7 +8583,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (key.name === 'q' || key.name === 'escape' || isCtrl('c')) {
+    if ((key.name === 'q' && !key.shift) || key.name === 'escape' || isCtrl('c')) {
       handled(requestExit)
       return
     }
@@ -8765,6 +8865,13 @@ export default function OpenTuiApp() {
     if (effectiveFocus === 'messages' && key.name === 'b' && !key.shift) {
       handled(() => {
         void toggleBookmarkForCursor()
+      })
+      return
+    }
+
+    if (effectiveFocus === 'messages' && isShifted('Q')) {
+      handled(() => {
+        replySelectedMessage()
       })
       return
     }
@@ -9092,6 +9199,14 @@ export default function OpenTuiApp() {
     [composerDraft, composerMentionAttachments, composerPromptParts, prepareComposerSubmission],
   )
   const composerAttachmentLabel = attachmentCountLabel(composerActiveAttachments)
+  const composerDockStatsSegments = useMemo<InlineTextSegment[]>(
+    () => buildComposerStatsSegments(composerVisualLineCount),
+    [composerAccentColor, composerAttachmentLabel, composerConfig.glyph, composerConfig.label, composerDraft.length, composerKnobSegments, composerLocationSegments, composerVisualLineCount, theme.cyan, theme.dim, theme.text],
+  )
+  const composerWindowStatsSegments = useMemo<InlineTextSegment[]>(
+    () => buildComposerStatsSegments(composerWindowVisualLineCount),
+    [composerAccentColor, composerAttachmentLabel, composerConfig.glyph, composerConfig.label, composerDraft.length, composerKnobSegments, composerLocationSegments, composerWindowVisualLineCount, theme.cyan, theme.dim, theme.text],
+  )
   const composerBaseTextareaStyle = {
     backgroundColor: theme.surface,
     textColor: theme.text,
@@ -9103,32 +9218,6 @@ export default function OpenTuiApp() {
     ...composerBaseTextareaStyle,
     flexGrow: 1,
   }
-  const composerDockStats = composerDraft.length === 0
-    ? joinMeta([
-        `${composerConfig.glyph} ${composerConfig.label}`,
-        composerAttachmentLabel,
-        composerKnobsChip.replace(/^·\s*/, ''),
-        composerLocationChip || null,
-      ])
-    : joinMeta([
-        `${composerVisualLineCount} line${composerVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars`,
-        composerAttachmentLabel,
-        composerKnobsChip.replace(/^·\s*/, ''),
-        composerLocationChip || null,
-      ])
-  const composerWindowStats = composerDraft.length === 0
-    ? joinMeta([
-        `${composerConfig.glyph} ${composerConfig.label}`,
-        composerAttachmentLabel,
-        composerKnobsChip.replace(/^·\s*/, ''),
-        composerLocationChip || null,
-      ])
-    : joinMeta([
-        `${composerWindowVisualLineCount} line${composerWindowVisualLineCount === 1 ? '' : 's'} · ${composerDraft.length} chars`,
-        composerAttachmentLabel,
-        composerKnobsChip.replace(/^·\s*/, ''),
-        composerLocationChip || null,
-      ])
   const sendingHintBase = interruptPressActive
     ? composerConfig.footerHintSending.replace('⌃C cancel', '⌃C again to interrupt')
     : composerTargetSession?.provider === 'claude' && activeRunningToolCount > 0
@@ -10230,7 +10319,9 @@ export default function OpenTuiApp() {
           <box height={1} flexDirection="row" alignItems="center">
             <box width={composerDockFooterStatsWidth} overflow="hidden">
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
-                {fitText(composerSlashHint ? composerSlashHint : composerDockStats, composerDockFooterStatsWidth)}
+                {composerSlashHint
+                  ? fitText(composerSlashHint, composerDockFooterStatsWidth)
+                  : renderInlineTextSegments(composerDockStatsSegments, composerDockFooterStatsWidth, theme.dim)}
               </text>
             </box>
             <box flexGrow={1} />
@@ -10429,7 +10520,7 @@ export default function OpenTuiApp() {
             </text>
             <box flexGrow={1} />
             <text fg={theme.dim} wrapMode="none">
-              {fitText(composerWindowStats, Math.max(composerWindowContentWidth - 30, 12))}
+              {renderInlineTextSegments(composerWindowStatsSegments, Math.max(composerWindowContentWidth - 30, 12), theme.dim)}
             </text>
           </box>
 
@@ -10462,7 +10553,9 @@ export default function OpenTuiApp() {
           >
             <box width={composerWindowFooterStatsWidth} overflow="hidden">
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
-                {fitText(composerSlashHint || composerWindowStats, composerWindowFooterStatsWidth)}
+                {composerSlashHint
+                  ? fitText(composerSlashHint, composerWindowFooterStatsWidth)
+                  : renderInlineTextSegments(composerWindowStatsSegments, composerWindowFooterStatsWidth, theme.dim)}
               </text>
             </box>
             <box flexGrow={1} />
