@@ -115,7 +115,11 @@ const SAVE_BUTTON_STYLE: React.CSSProperties = {
  * region — mirrors GitPopover's annotation system so reviewers can leave notes
  * directly on agent-authored edits while reading the transcript.
  */
-export function useDiffComments(filePath: string) {
+export function useDiffComments(
+  filePath: string,
+  options: { onSendToComposer?: (comment: DiffComment) => void } = {},
+) {
+  const { onSendToComposer } = options
   const [comments, setComments] = useState<Map<string, DiffComment>>(() => new Map())
   const [draft, setDraft] = useState<DraftDiffComment | null>(null)
   const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(null)
@@ -425,21 +429,40 @@ export function useDiffComments(filePath: string) {
           </div>
         ) : null}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={() => openReplyDraft(thread)}
-            style={{
-              border: 'none',
-              background: 'transparent',
-              color: 'var(--cyan)',
-              cursor: 'pointer',
-              padding: 0,
-              fontSize: 11,
-              fontWeight: 600,
-            }}
-          >
-            Add reply...
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => openReplyDraft(thread)}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--cyan)',
+                cursor: 'pointer',
+                padding: 0,
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            >
+              Add reply...
+            </button>
+            {onSendToComposer ? (
+              <button
+                type="button"
+                onClick={() => onSendToComposer(thread)}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--green)',
+                  cursor: 'pointer',
+                  padding: 0,
+                  fontSize: 11,
+                  fontWeight: 600,
+                }}
+              >
+                Send to composer
+              </button>
+            ) : null}
+          </div>
           <button
             type="button"
             onClick={() => deleteComment(threadKey)}
@@ -457,7 +480,7 @@ export function useDiffComments(filePath: string) {
         </div>
       </div>
     )
-  }, [comments, draft])
+  }, [comments, draft, onSendToComposer])
 
   return {
     selectedLines,

@@ -7,6 +7,7 @@ import type { TuiThemePalette } from '../theme'
 import { prepareFileTreeInput } from '@pierre/trees'
 import { fetchGitData, fetchGitPaneContent, type GitData, type GitStatusEntry } from '../../lib/gitProvider'
 import { runGitCommand } from '../../lib/gitNodeProvider'
+import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
 import {
   buildPierreDiffView,
   loadDiffHighlights,
@@ -468,6 +469,7 @@ function renderNoteCard(
   filePath: string | null,
   theme: TuiThemePalette,
   lineLabel: string,
+  onSendToComposer?: () => void,
 ) {
   if (!note.text) return null
   const header = [filePath ?? '', lineLabel].filter(Boolean).join(' ')
@@ -478,11 +480,23 @@ function renderNoteCard(
           {fitTerminalText(`Note${header ? ` — ${header}` : ''}`, width - 6)}
         </text>
         <box flexGrow={1} />
+        {onSendToComposer ? (
+          <text fg={theme.green} wrapMode="none"> C:composer</text>
+        ) : null}
         <text fg={theme.dim} wrapMode="none"> x:del</text>
       </box>
       <box>
         <text fg={theme.text} wrapMode="none">{note.text}</text>
       </box>
+      {onSendToComposer ? (
+        <box flexDirection="row">
+          <box flexGrow={1} />
+          <text fg={theme.green} wrapMode="none" onMouseUp={(event) => {
+            event.stopPropagation()
+            onSendToComposer()
+          }}>Send to composer</text>
+        </box>
+      ) : null}
     </box>
   )
 }
@@ -510,9 +524,10 @@ type Props = {
   height: number
   onClose: () => void
   onKeyHandlerReady: (handler: (key: GitKeyEvent) => void) => void
+  onSendDiffNoteToComposer?: (prompt: string) => void
 }
 
-export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerReady }: Props) {
+export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer }: Props) {
   const repoCwd = cwd || process.cwd()
   const [data, setData] = useState<GitData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -979,8 +994,28 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       }
       return
     }
+    if (key.sequence === 'C' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right' && onSendDiffNoteToComposer) {
+      const rdv = rightDiffViewRef.current
+      const fp = selectedFilePathRef.current
+      const isSplit = diffLayout === 'split'
+      const rows = isSplit ? rdv?.splitRows : rdv?.rows
+      if (!rows || rows.length === 0) return
+      const currentIndex = clampNumber(diffCursorRow, 0, rows.length - 1)
+      const span = diffSelectionSpanFromRowRange(fp, rows, diffSelectionAnchorRow ?? currentIndex, currentIndex)
+      if (!span) return
+      const note = diffNotes.get(span.key)
+      if (!note) return
+      onSendDiffNoteToComposer(buildDiffCommentComposerPrompt({
+        filePath: fp ?? 'git diff',
+        range: note.range,
+        comment: note.text,
+        context: rightContent,
+        source: `Git popover ${span.label}`,
+      }))
+      return
+    }
   }, [data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
-      leftPaneMode, onClose, pane, repoCwd, showHunkHeaders, treeCursor, visibleNodes])
+      leftPaneMode, onClose, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes])
 
   // Register key handler with parent
   useEffect(() => {
@@ -1018,7 +1053,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
   const fileDiffLabel = fileDiffMode === 'viewer'
-    ? `v plain  ${diffHighlights ? '●' : '○'} syntax  s ${diffLayout}  n ${showLineNumbers ? '#' : 'no#'}  m ${showHunkHeaders ? '@@' : 'no@@'}  {} hunk  shift+j/k range  a:note  x:del`
+    ? `v plain  ${diffHighlights ? '●' : '○'} syntax  s ${diffLayout}  n ${showLineNumbers ? '#' : 'no#'}  m ${showHunkHeaders ? '@@' : 'no@@'}  {} hunk  shift+j/k range  a:note  C:composer  x:del`
     : 'v parsed'
 
   function statusColor(x: string, y: string): string {
@@ -1111,6 +1146,36 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     setLeftPaneMode(mode)
     setLeftPaneWidth(clampLeftPaneWidth(mode === 'expanded' ? maxLeftW : defaultLeftW))
     setFocusSide('left')
+  }
+
+  function beginDiffMouseSelection(event: MouseEvent, rowIndex: number) {
+    if (event.button !== 0) return
+    event.stopPropagation()
+    setFocusSide('right')
+    if (event.modifiers.shift) {
+      setDiffSelectionAnchorRow((anchor) => anchor ?? diffSelectionCurrentIndex)
+    } else {
+      setDiffSelectionAnchorRow(rowIndex)
+    }
+    setDiffCursorRow(rowIndex)
+  }
+
+  function updateDiffMouseSelection(event: MouseEvent, rowIndex: number) {
+    if (event.button !== 0 || (!event.isDragging && event.type !== 'drag')) return
+    event.stopPropagation()
+    setFocusSide('right')
+    setDiffCursorRow(rowIndex)
+  }
+
+  function sendDiffNoteToComposer(note: DiffNote, label: string) {
+    if (!onSendDiffNoteToComposer) return
+    onSendDiffNoteToComposer(buildDiffCommentComposerPrompt({
+      filePath: selectedFilePath ?? 'git diff',
+      range: note.range,
+      comment: note.text,
+      context: rightContent,
+      source: `Git popover ${label}`,
+    }))
   }
 
 
@@ -1325,11 +1390,20 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                       width={rightW}
                       flexDirection="row"
                       backgroundColor={rowBackground}
-                      onMouseOver={() => activateDiffHover(row.key)}
-                      onMouseMove={() => activateDiffHover(row.key)}
-                      onMouseUp={() => {
+                      onMouseDown={(event) => beginDiffMouseSelection(event, idx)}
+                      onMouseDrag={(event) => updateDiffMouseSelection(event, idx)}
+                      onMouseOver={(event) => {
+                        activateDiffHover(row.key)
+                        updateDiffMouseSelection(event, idx)
+                      }}
+                      onMouseMove={(event) => {
+                        activateDiffHover(row.key)
+                        updateDiffMouseSelection(event, idx)
+                      }}
+                      onMouseUp={(event) => {
+                        if (event.button !== 0) return
+                        event.stopPropagation()
                         setDiffCursorRow(idx)
-                        setDiffSelectionAnchorRow(null)
                       }}
                     >
                       {showLineNumbers ? (
@@ -1364,7 +1438,8 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                       {isHovered ? (
                         <box
                           width={DIFF_BADGE_WIDTH}
-                          onMouseUp={() => {
+                          onMouseUp={(event) => {
+                            event.stopPropagation()
                             setDiffCursorRow(idx)
                             if (currentSelectionRange) {
                               const key = diffSelectionKey(selectedFilePath, currentSelectionRange)
@@ -1388,7 +1463,14 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                     {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
                     {noteCards.map(({ key, note, label }) => (
                       <React.Fragment key={key}>
-                        {renderNoteCard(note, rightW, selectedFilePath, theme, label)}
+                        {renderNoteCard(
+                          note,
+                          rightW,
+                          selectedFilePath,
+                          theme,
+                          label,
+                          onSendDiffNoteToComposer ? () => sendDiffNoteToComposer(note, label) : undefined,
+                        )}
                       </React.Fragment>
                     ))}
                   </React.Fragment>
@@ -1436,9 +1518,14 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                       <box
                         width={rightW}
                         backgroundColor={bg}
-                        onMouseUp={() => {
+                        onMouseDown={(event) => beginDiffMouseSelection(event, idx)}
+                        onMouseDrag={(event) => updateDiffMouseSelection(event, idx)}
+                        onMouseOver={(event) => updateDiffMouseSelection(event, idx)}
+                        onMouseMove={(event) => updateDiffMouseSelection(event, idx)}
+                        onMouseUp={(event) => {
+                          if (event.button !== 0) return
+                          event.stopPropagation()
                           setDiffCursorRow(idx)
-                          setDiffSelectionAnchorRow(null)
                         }}
                       >
                         <text fg={isCursor ? theme.cyan : fg} wrapMode="none">
@@ -1448,7 +1535,14 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                       {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
                       {noteCards.map(({ key, note, label }) => (
                         <React.Fragment key={key}>
-                          {renderNoteCard(note, rightW, selectedFilePath, theme, label)}
+                          {renderNoteCard(
+                            note,
+                            rightW,
+                            selectedFilePath,
+                            theme,
+                            label,
+                            onSendDiffNoteToComposer ? () => sendDiffNoteToComposer(note, label) : undefined,
+                          )}
                         </React.Fragment>
                       ))}
                     </React.Fragment>
@@ -1462,18 +1556,28 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                       width={rightW}
                       flexDirection="row"
                       backgroundColor={isSelectedDiffRow ? theme.surface3 : undefined}
-                      onMouseOver={() => activateDiffHover(row.key)}
-                      onMouseMove={() => activateDiffHover(row.key)}
-                      onMouseUp={() => {
+                      onMouseDown={(event) => beginDiffMouseSelection(event, idx)}
+                      onMouseDrag={(event) => updateDiffMouseSelection(event, idx)}
+                      onMouseOver={(event) => {
+                        activateDiffHover(row.key)
+                        updateDiffMouseSelection(event, idx)
+                      }}
+                      onMouseMove={(event) => {
+                        activateDiffHover(row.key)
+                        updateDiffMouseSelection(event, idx)
+                      }}
+                      onMouseUp={(event) => {
+                        if (event.button !== 0) return
+                        event.stopPropagation()
                         setDiffCursorRow(idx)
-                        setDiffSelectionAnchorRow(null)
                       }}
                     >
                       {renderSplitSide(row.left, splitHalfW, splitLeftTextW, theme, showLineNumbers, splitGutterCols, rightDiffGutterWidth)}
                       {isHoveredSplit ? (
                         <box
                           width={1}
-                          onMouseUp={() => {
+                          onMouseUp={(event) => {
+                            event.stopPropagation()
                             setDiffCursorRow(idx)
                             if (currentSelectionRange) {
                               const key = diffSelectionKey(selectedFilePath, currentSelectionRange)
@@ -1498,7 +1602,14 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                     {hasDraft && draftNote ? renderNoteDraft(draftNote, rightW, selectedFilePath, theme) : null}
                     {noteCards.map(({ key, note, label }) => (
                       <React.Fragment key={key}>
-                        {renderNoteCard(note, rightW, selectedFilePath, theme, label)}
+                        {renderNoteCard(
+                          note,
+                          rightW,
+                          selectedFilePath,
+                          theme,
+                          label,
+                          onSendDiffNoteToComposer ? () => sendDiffNoteToComposer(note, label) : undefined,
+                        )}
                       </React.Fragment>
                     ))}
                   </React.Fragment>

@@ -42,8 +42,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { BookOpen, ChartNetwork, Filter, Minimize2, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
-import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, DEFAULT_DIFF_OPTIONS, type MessageDensity, type WebViewMode, type DiffOptions } from './MessageItem'
+import { BookOpen, ChartNetwork, Filter, Minimize2, Radio, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
+import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, DiffCommentComposerContext, DEFAULT_DIFF_OPTIONS, type MessageDensity, type WebViewMode, type DiffOptions } from './MessageItem'
 import type { PierreDiffStyle } from './PierreDiffView'
 import { LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb } from './messageItemShared'
 import { TaskRail } from './TaskRail'
@@ -67,6 +67,7 @@ import {
 
 const AnalyticsPopover = dynamic(() => import('./AnalyticsPopover'), { ssr: false })
 const PromptLibrary = dynamic(() => import('./PromptLibrary'), { ssr: false })
+const ChannelBridgePanel = dynamic(() => import('./ChannelBridgePanel'), { ssr: false })
 const PierrePatchDiffView = dynamic(() => import('./PierreDiffView').then((mod) => mod.PierrePatchDiffView), {
   ssr: false,
   loading: () => (
@@ -2291,6 +2292,7 @@ export default function MessageView({
   const mentionAbortRef = useRef<AbortController | null>(null)
   const mentionItemRefs = useRef<Array<HTMLButtonElement | null>>([])
   const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
+  const [channelBridgeOpen, setChannelBridgeOpen] = useState(false)
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashActiveIndex, setSlashActiveIndex] = useState(0)
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -4365,6 +4367,19 @@ export default function MessageView({
     focusComposer()
   }, [focusComposer])
 
+  const handleDiffCommentToComposer = useCallback((prompt: string) => {
+    const trimmed = prompt.trim()
+    if (!trimmed) return
+    const existing = inputTextRef.current
+    const separator = existing.length > 0 ? (existing.endsWith('\n') ? '\n' : '\n\n') : ''
+    const next = `${existing}${separator}${trimmed}\n\n`
+    setInputText(next)
+    inputTextRef.current = next
+    setHistoryIndex(-1)
+    draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
+    focusComposer()
+  }, [focusComposer])
+
   const handleEditFromMessage = useCallback((messageId: string, text: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -6301,6 +6316,7 @@ export default function MessageView({
               <ViewModeProvider mode={viewMode}>
               <DiffStyleProvider diffStyle={diffStyle}>
               <DiffOptionsProvider options={diffOptions}>
+              <DiffCommentComposerContext.Provider value={handleDiffCommentToComposer}>
                 <LiveSubagentTextContext.Provider value={liveSubagentText}>
                   <TaskActiveFormsContext.Provider value={taskActiveForms}>
                     {(() => {
@@ -6329,6 +6345,7 @@ export default function MessageView({
                     })()}
                   </TaskActiveFormsContext.Provider>
                 </LiveSubagentTextContext.Provider>
+              </DiffCommentComposerContext.Provider>
               </DiffOptionsProvider>
               </DiffStyleProvider>
               </ViewModeProvider>
@@ -7253,6 +7270,34 @@ export default function MessageView({
                   activeProvider={session?.provider}
                   onInsert={insertPromptText}
                   onClose={() => setPromptLibraryOpen(false)}
+                />
+              )}
+              <Button
+                type="button"
+                data-channel-bridge-trigger="true"
+                onClick={() => setChannelBridgeOpen((open) => !open)}
+                variant="outline"
+                aria-label="Live CLI bridge"
+                title="Live CLI bridge — push messages into a `claude` CLI session running alongside agentViewer"
+                style={{
+                  flexShrink: 0,
+                  width: 34,
+                  height: 34,
+                  padding: 0,
+                  background: channelBridgeOpen ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'var(--surface-2)',
+                  border: `1px solid ${channelBridgeOpen ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'var(--border-2)'}`,
+                  borderRadius: 6,
+                  color: channelBridgeOpen ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
+                  cursor: 'pointer',
+                  transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                }}
+              >
+                <Radio size={15} />
+              </Button>
+              {channelBridgeOpen && (
+                <ChannelBridgePanel
+                  accent={{ cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label }}
+                  onClose={() => setChannelBridgeOpen(false)}
                 />
               )}
               {sendState === 'sending' ? (

@@ -28,10 +28,15 @@ import type {
   TaskListOutput,
 } from '@anthropic-ai/claude-agent-sdk/sdk-tools'
 import { getAssistantLabel } from '@/lib/provider'
+import { buildDiffCommentComposerPrompt } from '@/lib/diffCommentComposer'
 import { Separator } from '@/components/ui/separator'
 import type { SelectedLineRange } from '@pierre/diffs'
 import type { PierreAnnotationMetadata, PierreChangeStyle, PierreDiffAnnotation, PierreDiffPresentation, PierreDiffStyle, PierreInlineDiffStyle } from './PierreDiffView'
 import { useDiffComments, type DiffComment } from './diffComments'
+
+type DiffCommentComposerSend = (prompt: string) => void
+
+export const DiffCommentComposerContext = createContext<DiffCommentComposerSend | null>(null)
 
 // ── Tool color palette ────────────────────────────────────────────────────────
 
@@ -505,6 +510,36 @@ function DiffThreadSummary({ count }: { count: number }) {
   )
 }
 
+function formatLinePrefixedBlock(prefix: string, text: string): string {
+  if (!text) return `${prefix} `
+  return text.split('\n').map((line) => `${prefix} ${line}`).join('\n')
+}
+
+function buildEditDiffContext(oldStr: string, newStr: string): string {
+  return [
+    '--- original',
+    formatLinePrefixedBlock('-', oldStr),
+    '+++ updated',
+    formatLinePrefixedBlock('+', newStr),
+  ].join('\n')
+}
+
+function useSendDiffCommentToComposer(filePath: string, context: string, source: string) {
+  const sendToComposer = use(DiffCommentComposerContext)
+  return useMemo(() => {
+    if (!sendToComposer) return undefined
+    return (comment: DiffComment) => {
+      sendToComposer(buildDiffCommentComposerPrompt({
+        filePath,
+        range: comment.range,
+        comment: comment.text,
+        context,
+        source,
+      }))
+    }
+  }, [context, filePath, sendToComposer, source])
+}
+
 function toggleDiffStyle(current: PierreDiffStyle): PierreDiffStyle {
   return current === 'stacked' ? 'split' : 'stacked'
 }
@@ -550,7 +585,9 @@ function EditToolCard({ thread }: { thread: ToolThread }) {
   const largeDiff = isLargeTextPayload(oldStr, newStr)
   const [open, setOpen] = useState(() => !largeDiff)
   const [presentation, diffStyle, toggleDiffStyleOverride] = useDiffPresentation()
-  const comments = useDiffComments(filePath)
+  const diffContext = useMemo(() => buildEditDiffContext(oldStr, newStr), [oldStr, newStr])
+  const sendDiffCommentToComposer = useSendDiffCommentToComposer(filePath, diffContext, 'Edit tool diff')
+  const comments = useDiffComments(filePath, { onSendToComposer: sendDiffCommentToComposer })
   const [hovered, setHovered] = useState(false)
   const delta    = countLines(newStr) - countLines(oldStr)
   const sign     = delta > 0 ? `+${delta}` : String(delta)
@@ -776,7 +813,8 @@ function FileChangeDiffRegion({
   accentColor: string
   presentation: PierreDiffPresentation
 }) {
-  const comments = useDiffComments(filePath)
+  const sendDiffCommentToComposer = useSendDiffCommentToComposer(filePath, diffText, 'FileChange tool diff')
+  const comments = useDiffComments(filePath, { onSendToComposer: sendDiffCommentToComposer })
   return (
     <div style={{ borderTop: index > 0 ? '1px solid var(--border)' : undefined }}>
       <div style={{
@@ -2374,7 +2412,9 @@ function MultiEditDiffRegion({
   filePath: string
   presentation: PierreDiffPresentation
 }) {
-  const comments = useDiffComments(filePath)
+  const diffContext = useMemo(() => buildEditDiffContext(oldStr, newStr), [oldStr, newStr])
+  const sendDiffCommentToComposer = useSendDiffCommentToComposer(filePath, diffContext, 'MultiEdit tool diff')
+  const comments = useDiffComments(filePath, { onSendToComposer: sendDiffCommentToComposer })
   return (
     <div>
       {total > 1 && (
