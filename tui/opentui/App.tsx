@@ -11359,6 +11359,10 @@ export default function OpenTuiApp() {
           borderColor={routeComposerToBridge || composerActive ? composerAccentColor : theme.border}
           height={composerDockHeight}
           flexDirection="column"
+          onMouseDown={(event) => {
+            if (event.button !== 0) return
+            if (!composerActive) setComposerActive(true)
+          }}
         >
           {renderComposerTextarea(submitComposerFromDock, {
             height: composerDockTextareaHeight,
