@@ -4795,6 +4795,12 @@ export default function OpenTuiApp() {
     jumpToTranscriptIndex(index)
     setFocusedPane('messages')
   }, [transcriptIndexByKey, jumpToTranscriptIndex])
+
+  const selectSidebarSession = useCallback((session: Session) => {
+    setSelectedSessionKey(sessionKey(session))
+    setError(null)
+    setFocusedPane('sessions')
+  }, [])
   const thinkingFullKeys = useMemo(() => {
     if (!thinkingMode) return new Set<string>()
     const next = new Set<string>()
@@ -6834,6 +6840,11 @@ export default function OpenTuiApp() {
         flexDirection="column"
         backgroundColor={selected ? theme.surface3 : theme.surface}
         marginBottom={density === 'comfortable' ? 1 : 0}
+        onMouseDown={(event) => {
+          if (event.button !== 0) return
+          if (sessionKey(entry.session) === renameSessionKey) return
+          selectSidebarSession(entry.session)
+        }}
       >
         {sessionKey(entry.session) === renameSessionKey ? (
           <box paddingX={1} backgroundColor={theme.surface3}>
@@ -6859,7 +6870,7 @@ export default function OpenTuiApp() {
         </box>
       </box>
     )
-  }), [sidebarEntries, selectedIndex, theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename])
+  }), [sidebarEntries, selectedIndex, theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession])
 
   // Stable scrollbar config objects so the two long-lived <scrollbox>
   // renderables don't see a fresh prop reference on every render.
