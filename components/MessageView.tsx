@@ -34,6 +34,7 @@ import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer
 import { extractCopilotPushedAttachments, extractPendingPermission, extractPermissionReply, type PendingPermission } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '@/lib/transientError'
+import { respondToChannelPermission, readBridgeConfigFromEnv, type ChannelPermissionRequestEvent } from '@/lib/channelBridge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -4292,6 +4293,22 @@ export default function MessageView({
   }, [session, sessionActionLoading])
 
   const respondToPermission = useCallback(async (permission: PendingPermission, response: 'once' | 'always' | 'reject') => {
+    // Bridge permissions are those without a sessionId (they came from the CLI bridge)
+    if (!permission.sessionId && !permission.provider) {
+      setSessionActionLoading(`permission:${permission.id}`)
+      setSessionActionError(null)
+      try {
+        const behavior = response === 'reject' ? 'deny' : 'allow'
+        await respondToChannelPermission(readBridgeConfigFromEnv(), permission.id, behavior)
+        setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
+      } catch (err) {
+        setSessionActionError(err instanceof Error ? err.message : 'Failed to respond to bridge permission')
+      } finally {
+        setSessionActionLoading(null)
+      }
+      return
+    }
+
     if (!session || sessionActionLoading) return
     setSessionActionLoading(`permission:${permission.id}`)
     setSessionActionError(null)
@@ -4609,6 +4626,26 @@ export default function MessageView({
           timestamp: new Date().toISOString(),
         })),
       ]
+    })
+  }, [channelBridge.entries.length])
+
+  // Sync bridge permission requests into the permission composer
+  useEffect(() => {
+    const permissionEntries = channelBridge.entries.filter(
+      (e): e is Extract<typeof e, { kind: 'permission' }> => e.kind === 'permission'
+    )
+    setPendingPermissions((prev) => {
+      const newPerms = permissionEntries
+        .filter((entry) => !prev.some((p) => p.id === entry.id))
+        .map((entry) => ({
+          id: entry.id,
+          title: entry.request.tool_name || 'CLI bridge permission',
+          detail: entry.request.description,
+          toolName: entry.request.tool_name,
+          reason: entry.request.input_preview,
+        }))
+      if (newPerms.length === 0) return prev
+      return [...prev, ...newPerms]
     })
   }, [channelBridge.entries.length])
 
