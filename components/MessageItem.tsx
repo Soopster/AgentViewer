@@ -4698,6 +4698,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   const [hydrated, setHydrated] = useState(false)
   const dc = use(MessageDensityContext)
   const viewMode = use(ViewModeContext)
+  const isBridgeMessage = message.origin?.kind === 'bridge'
   const style = ROLE_STYLE[message.role]
   const roleLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
@@ -4706,6 +4707,29 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   useEffect(() => {
     setHydrated(true)
   }, [])
+
+  // Bridge messages (CLI bridge ephemeral responses) rendered distinctly
+  if (isBridgeMessage) {
+    const textBlocks = message.blocks.filter((b) => b.type === 'text')
+    const bridgeLabel = message.role === 'user' ? '↳ sent' : '↲ reply'
+    return (
+      <div style={{ marginBottom: 8, marginLeft: 8, paddingLeft: 8, borderLeft: `2px solid var(--accent-dim, rgba(255,165,0,0.3))` }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: 'var(--text-3)', letterSpacing: '0.05em' }}>
+            🔌 {bridgeLabel}
+          </span>
+          {message.timestamp && (
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text-4)' }}>
+              {hydrated ? formatLocalMessageTime(message.timestamp) : formatStableMessageTime(message.timestamp)}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, lineHeight: 1.5 }}>
+          {textBlocks.length > 0 ? textBlocks.map((block, i) => renderBlock(block, i)) : <span style={{ color: 'var(--text-3)' }}>({message.role === 'user' ? 'message sent' : 'no reply'})</span>}
+        </div>
+      </div>
+    )
+  }
 
   if (viewMode === 'stream') {
     const textBlocks = message.blocks.filter((b) => b.type === 'text')

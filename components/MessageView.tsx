@@ -2305,6 +2305,10 @@ export default function MessageView({
   // its (already large) dependency array.
   const channelBridgeRef = useRef(channelBridge)
   channelBridgeRef.current = channelBridge
+  // Track bridge entries (sent + replies) with timestamps for inline transcript display
+  const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useState<
+    Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }>
+  >([])
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashActiveIndex, setSlashActiveIndex] = useState(0)
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -4509,6 +4513,28 @@ export default function MessageView({
     () => (showTools ? threadedFull : stripToolCallBlocks(threadedFull)),
     [threadedFull, showTools],
   )
+
+  // Merge bridge transcript messages into the main threaded view
+  const threadedWithBridge = useMemo(() => {
+    if (bridgeTranscriptEntries.length === 0) return threaded
+
+    const bridgeMessages: ThreadedMessage[] = bridgeTranscriptEntries.map((entry, i) => ({
+      role: entry.kind === 'sent' ? 'user' : 'assistant',
+      uuid: `bridge-${i}`,
+      timestamp: entry.timestamp,
+      origin: { kind: 'bridge' },
+      blocks: [{ type: 'text', text: entry.text } as any],
+    }))
+
+    // Merge chronologically by timestamp
+    const allMessages = [...threaded, ...bridgeMessages]
+    return allMessages.sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0
+      return aTime - bTime
+    })
+  }, [threaded, bridgeTranscriptEntries])
+
   // buildTaskActiveFormsForWeb returns a fresh Map every time `threaded`
   // changes identity (every poll that merges a delta), which would churn the
   // TaskActiveFormsContext value and re-render all mounted TaskCards even when
@@ -4516,7 +4542,7 @@ export default function MessageView({
   // value-equal so idle polls don't propagate through the context. Value-aware
   // (not size/keys-only): a TaskUpdate reuses a taskId key with a new form.
   const taskActiveForms = useMemo(() => {
-    const next = buildTaskActiveFormsForWeb(threaded)
+    const next = buildTaskActiveFormsForWeb(threadedWithBridge)
     const prev = taskActiveFormsRef.current
     let same = prev.size === next.size
     if (same) {
@@ -4527,9 +4553,9 @@ export default function MessageView({
     const result = same ? prev : next
     taskActiveFormsRef.current = result
     return result
-  }, [threaded])
+  }, [threadedWithBridge])
   const taskRegistry = useMemo(() => {
-    const registry = buildTaskRegistry(threaded)
+    const registry = buildTaskRegistry(threadedWithBridge)
     if (openCodeTodos && openCodeTodos.length > 0) {
       const todosRegistry = buildTaskRegistryFromTodos(openCodeTodos)
       for (const [id, task] of todosRegistry) {
@@ -4543,7 +4569,7 @@ export default function MessageView({
       }
     }
     return registry
-  }, [threaded, openCodeTodos, codexPlan])
+  }, [threadedWithBridge, openCodeTodos, codexPlan])
   const [taskRailOpen, setTaskRailOpen] = useState(true)
   const isProject = !!projectView
   const dirName  = projectView?.key ?? (pathBasename(session?.cwd) || session?.sessionId) ?? ''
@@ -4563,6 +4589,19 @@ export default function MessageView({
     if (channelBridgeOpenRequest <= 0) return
     setChannelBridgeOpen(true)
   }, [channelBridgeOpenRequest])
+
+  // Sync bridge sent/reply entries into the transcript view with synthetic timestamps
+  useEffect(() => {
+    const entries = channelBridge.entries.filter(
+      (e): e is Extract<typeof e, { kind: 'sent' | 'reply' }> => e.kind === 'sent' || e.kind === 'reply'
+    )
+    setBridgeTranscriptEntries(entries.map((e, i) => ({
+      kind: e.kind,
+      text: e.text,
+      // Use the index to create monotonic timestamps spread slightly apart
+      timestamp: new Date(Date.now() + i * 100).toISOString(),
+    })))
+  }, [channelBridge.entries])
 
   // The command palette toggles composer routing via a request counter (it lives
   // outside this component); flip the persisted binding when it bumps.
@@ -4668,9 +4707,12 @@ export default function MessageView({
     return new Set(baseline.keys)
   }, [messages, session?.sessionId, showLiveTimelineOverlay])
   const visibleThreaded = useMemo(() => {
-    if (!visiblePersistedMessageKeys) return threaded
-    return threaded.filter((msg) => visiblePersistedMessageKeys.has(threadedMessageKey(msg)))
-  }, [threaded, visiblePersistedMessageKeys])
+    if (!visiblePersistedMessageKeys) return threadedWithBridge
+    return threadedWithBridge.filter((msg) =>
+      // Always include bridge messages (ephemeral, not in persisted set)
+      msg.origin?.kind === 'bridge' || visiblePersistedMessageKeys.has(threadedMessageKey(msg))
+    )
+  }, [threadedWithBridge, visiblePersistedMessageKeys])
   const liveUserMessage = useMemo<ThreadedMessage | null>(() => (showLiveTimelineOverlay && optimisticUserText
     ? {
         role: 'user',
