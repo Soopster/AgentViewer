@@ -6,6 +6,7 @@ import { AnalyticsPopover } from './AnalyticsPopover'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { PromptLibraryPopover } from './PromptLibraryPopover'
 import { ChannelBridgePopover } from './ChannelBridgePopover'
+import { readBridgeConfigFromEnv, sendChannelMessage } from '../../lib/channelBridge'
 import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
 import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
@@ -3125,6 +3126,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'rename',     label: 'Rename session',         key: '^R', category: 'Session'    },
   { id: 'cli',        label: 'Copy CLI resume command', key: 'C',  category: 'Session'    },
   { id: 'channel-bridge', label: 'Channel bridge',      key: '⇧C', category: 'Session'    },
+  { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: 'route', category: 'Session' },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
   { id: 'handoff-brief', label: 'Handoff brief',       key: 'H',  category: 'Session'    },
@@ -4014,6 +4016,13 @@ export default function OpenTuiApp() {
   const promptLibraryKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => void) | null>(null)
   const [channelBridgeOpen, setChannelBridgeOpen] = useState(false)
   const channelBridgeKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => void) | null>(null)
+  // Global Channel Bridge binding: when on, the main composer's send routes to
+  // the live `claude` CLI session instead of the active provider (mirrors the
+  // web "route composer through bridge" toggle).
+  const [routeComposerToBridge, setRouteComposerToBridge] = useState(false)
+  const routeComposerToBridgeRef = useRef(false)
+  routeComposerToBridgeRef.current = routeComposerToBridge
+  const lastBridgeChatIdRef = useRef<string | undefined>(undefined)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
@@ -6787,6 +6796,29 @@ export default function OpenTuiApp() {
       : prepareComposerSubmission(visibleText, composerMentionAttachments, composerPromptParts)
     const trimmed = submission.messageText
     if ((!trimmed && submission.attachments.length === 0) || !composerTargetSession) return
+
+    // Global Channel Bridge binding: divert the send to the live `claude` CLI
+    // session instead of the active provider. Fire-and-forget — replies and
+    // permission prompts surface in the bridge popover (⇧C). Never diverts an
+    // auto-retry, and requires actual text (the bridge has no attachment path).
+    if (!isRetry && routeComposerToBridgeRef.current && trimmed) {
+      composerTextareaRef.current?.setText('')
+      setComposerDraft('')
+      setComposerMentionAttachments([])
+      setComposerPromptParts([])
+      composerTextareaRef.current?.extmarks.clear()
+      setComposerHistoryOpen(false)
+      setComposerHistoryIndex(0)
+      try {
+        const result = await sendChannelMessage(readBridgeConfigFromEnv(), trimmed, lastBridgeChatIdRef.current)
+        lastBridgeChatIdRef.current = result.chat_id
+        showNotice('info', 'Sent to the live CLI bridge')
+      } catch (err) {
+        showNotice('error', err instanceof Error ? err.message : 'Failed to reach the channel bridge')
+      }
+      return
+    }
+
     const sendAttachments = submission.attachments
     // Native CLIs queue a follow-up prompt while the active turn streams.
     // Mirror that here: when sending, stash this draft and flush it after. A
@@ -8486,6 +8518,14 @@ export default function OpenTuiApp() {
     setChannelBridgeOpen(true)
   })
 
+  const toggleComposerBridgeRoute = useEffectEvent(() => {
+    setRouteComposerToBridge((on) => {
+      const next = !on
+      showNotice('info', next ? 'Composer now routes to the live CLI bridge' : 'Composer back to the active provider')
+      return next
+    })
+  })
+
   const insertComposerPromptText = useEffectEvent((text: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -8745,6 +8785,9 @@ export default function OpenTuiApp() {
         break
       case 'channel-bridge':
         openChannelBridge()
+        break
+      case 'channel-bridge-route':
+        toggleComposerBridgeRoute()
         break
       case 'sort': {
         const next: TuiSidebarSort = sidebarSort === 'project' ? 'time' : 'project'
@@ -9169,6 +9212,13 @@ export default function OpenTuiApp() {
       }
       if (isCtrl('o')) {
         handled(toggleComposerWindow)
+        return
+      }
+      // Toggle the Channel Bridge composer routing right from the composer —
+      // same key as the bridge popover's ^R, so the binding is consistent
+      // whether or not the panel is open.
+      if (isCtrl('r')) {
+        handled(toggleComposerBridgeRoute)
         return
       }
       if (composerHistoryOpen) {
@@ -10085,9 +10135,11 @@ export default function OpenTuiApp() {
     : composerTargetSession?.provider === 'claude' && activeRunningToolCount > 0
     ? `${composerConfig.footerHintSending} · ⌃B background`
     : composerConfig.footerHintSending
-  const composerDockFooterHint = composerSendState === 'sending'
+  const composerDockFooterHint = routeComposerToBridge
+    ? '● → live CLI bridge · ⌃R off · ⇧C panel'
+    : composerSendState === 'sending'
     ? sendingHintBase
-    : `${composerIdleFooterHint} · ⌃O expand`
+    : `${composerIdleFooterHint} · ⌃R bridge · ⌃O expand`
   // Size the hint box to exactly fit its text, capped by available width minus
   // 24 chars reserved for the stats side. Avoids the old proportional cap (62
   // chars) that truncated the full idle hint (~72 chars on most terminals).
@@ -11170,7 +11222,7 @@ export default function OpenTuiApp() {
           backgroundColor={theme.surface}
           border
           borderStyle="single"
-          borderColor={composerActive ? composerAccentColor : theme.border}
+          borderColor={routeComposerToBridge || composerActive ? composerAccentColor : theme.border}
           height={composerDockHeight}
           flexDirection="column"
         >
@@ -11334,6 +11386,8 @@ export default function OpenTuiApp() {
           accentColor={composerAccentColor}
           width={width}
           height={height}
+          routeComposer={routeComposerToBridge}
+          onToggleRoute={toggleComposerBridgeRoute}
           onClose={() => setChannelBridgeOpen(false)}
           onNotice={showNotice}
           onKeyHandlerReady={(handler) => { channelBridgeKeyHandlerRef.current = handler }}

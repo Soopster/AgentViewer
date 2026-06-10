@@ -4,11 +4,10 @@ import type { ScrollBoxRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 import {
   channelPermissionToPending,
-  DEFAULT_CHANNEL_BRIDGE_URL,
+  readBridgeConfigFromEnv,
   respondToChannelPermission,
   sendChannelMessage,
   subscribeToChannelEvents,
-  type ChannelBridgeConfig,
   type ChannelBridgeStatus,
   type ChannelEvent,
   type ChannelPermissionRequestEvent,
@@ -26,6 +25,8 @@ type Props = {
   accentColor: string
   width: number
   height: number
+  routeComposer: boolean
+  onToggleRoute: () => void
   onClose: () => void
   onNotice: (tone: 'info' | 'error', text: string) => void
   onKeyHandlerReady: (handler: (key: ChannelBridgeKeyEvent) => void) => void
@@ -62,22 +63,18 @@ function statusColor(status: ChannelBridgeStatus, theme: TuiThemePalette): strin
   }
 }
 
-function readBridgeConfig(): ChannelBridgeConfig {
-  const baseUrl = process.env.AGENTVIEWER_CHANNEL_URL?.trim() || DEFAULT_CHANNEL_BRIDGE_URL
-  const token = process.env.AGENTVIEWER_CHANNEL_TOKEN?.trim() || undefined
-  return { baseUrl, token }
-}
-
 export function ChannelBridgePopover({
   theme,
   accentColor,
   width,
   height,
+  routeComposer,
+  onToggleRoute,
   onClose,
   onNotice,
   onKeyHandlerReady,
 }: Props) {
-  const config = useMemo(readBridgeConfig, [])
+  const config = useMemo(readBridgeConfigFromEnv, [])
   const [status, setStatus] = useState<ChannelBridgeStatus>('idle')
   const [entries, setEntries] = useState<LogEntry[]>([])
   const [draft, setDraft] = useState('')
@@ -146,12 +143,13 @@ export function ChannelBridgePopover({
 
   const handleKey = useCallback((key: ChannelBridgeKeyEvent) => {
     if (key.name === 'escape') { onClose(); return }
+    if (key.ctrl && (key.name === 'r' || key.sequence === '\x12')) { onToggleRoute(); return }
     if (key.name === 'return') { void send(); return }
     if (key.name === 'backspace' || key.name === 'delete') { setDraft((d) => d.slice(0, -1)); return }
     if (key.ctrl && (key.name === 'y' || key.sequence === '')) { void answerLatestPermission('allow'); return }
     if (key.ctrl && (key.name === 'n' || key.sequence === '')) { void answerLatestPermission('deny'); return }
     if (isPrintable(key)) { setDraft((d) => d + key.sequence); return }
-  }, [answerLatestPermission, onClose, send])
+  }, [answerLatestPermission, onClose, onToggleRoute, send])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -187,6 +185,13 @@ export function ChannelBridgePopover({
           <text fg={theme.dim} wrapMode="none">{'  '}{config.baseUrl.replace(/^https?:\/\//, '')}</text>
           <box flexGrow={1} />
           <text fg={theme.dim} wrapMode="none">enter send · ^Y allow · ^N deny · esc close</text>
+        </box>
+        <box flexDirection="row" alignItems="center">
+          <text fg={routeComposer ? accentColor : theme.dim} wrapMode="none">
+            {routeComposer ? '● composer → bridge' : '○ composer → provider'}
+          </text>
+          <box flexGrow={1} />
+          <text fg={theme.dim} wrapMode="none">^R toggle composer routing</text>
         </box>
       </box>
 

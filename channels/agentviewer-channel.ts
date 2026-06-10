@@ -107,59 +107,83 @@ function withCors(response: Response) {
   return response
 }
 
-Bun.serve({
-  port: PORT,
-  hostname: '127.0.0.1',
-  idleTimeout: 0, // keep SSE streams open
-  async fetch(req) {
-    const url = new URL(req.url)
-    if (req.method === 'OPTIONS') return withCors(new Response(null, { status: 204 }))
-    if (!authorized(req, url)) return withCors(new Response('forbidden', { status: 403 }))
+// The bridge binds a fixed port, so only one bridged `claude` session can run
+// at a time. If a stale session is still holding it, Bun.serve throws
+// EADDRINUSE — surface that as an actionable line (Claude shows this in the
+// MCP server logs) instead of letting the process crash with an opaque
+// "failed". The MCP stdio side is already connected, so we exit deliberately.
+function startBridge() {
+  try {
+    Bun.serve({
+      port: PORT,
+      hostname: '127.0.0.1',
+      idleTimeout: 0, // keep SSE streams open
+      async fetch(req) {
+        const url = new URL(req.url)
+        if (req.method === 'OPTIONS') return withCors(new Response(null, { status: 204 }))
+        if (!authorized(req, url)) return withCors(new Response('forbidden', { status: 403 }))
 
-    // SSE: agentViewer subscribes here for replies and permission prompts.
-    if (req.method === 'GET' && url.pathname === '/events') {
-      const stream = new ReadableStream({
-        start(ctrl) {
-          ctrl.enqueue(': connected\n\n')
-          const emit = (chunk: string) => ctrl.enqueue(chunk)
-          listeners.add(emit)
-          req.signal.addEventListener('abort', () => listeners.delete(emit))
-        },
-      })
-      return withCors(
-        new Response(stream, {
-          headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
-        }),
+        // SSE: agentViewer subscribes here for replies and permission prompts.
+        if (req.method === 'GET' && url.pathname === '/events') {
+          const stream = new ReadableStream({
+            start(ctrl) {
+              ctrl.enqueue(': connected\n\n')
+              const emit = (chunk: string) => ctrl.enqueue(chunk)
+              listeners.add(emit)
+              req.signal.addEventListener('abort', () => listeners.delete(emit))
+            },
+          })
+          return withCors(
+            new Response(stream, {
+              headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
+            }),
+          )
+        }
+
+        // Inbound: agentViewer's composer posts a message here to inject it into the CLI session.
+        if (req.method === 'POST' && url.pathname === '/message') {
+          const { text, chat_id } = (await req.json()) as { text: string; chat_id?: string }
+          const id = chat_id ?? String(nextChatId++)
+          await mcp.notification({
+            method: 'notifications/claude/channel',
+            params: { content: text, meta: { chat_id: id } },
+          })
+          return withCors(Response.json({ chat_id: id }))
+        }
+
+        // Outbound verdict: agentViewer's permission UI posts the user's allow/deny here.
+        if (req.method === 'POST' && url.pathname === '/permission') {
+          const { request_id, behavior } = (await req.json()) as {
+            request_id: string
+            behavior: 'allow' | 'deny'
+          }
+          await mcp.notification({
+            method: 'notifications/claude/channel/permission',
+            params: { request_id, behavior },
+          })
+          return withCors(new Response('ok'))
+        }
+
+        return withCors(new Response('not found', { status: 404 }))
+      },
+    })
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code
+    if (code === 'EADDRINUSE') {
+      console.error(
+        `[agentviewer-channel] port ${PORT} is already in use — another bridged \`claude\` ` +
+          `session is holding the agentViewer bridge. Quit that session (its bridge frees the ` +
+          `port), or set AGENTVIEWER_CHANNEL_PORT to a free port and point agentViewer's bridge ` +
+          `URL at it, then reconnect this session.`,
       )
+    } else {
+      console.error(`[agentviewer-channel] failed to start HTTP bridge on port ${PORT}:`, err)
     }
+    process.exit(1)
+  }
+}
 
-    // Inbound: agentViewer's composer posts a message here to inject it into the CLI session.
-    if (req.method === 'POST' && url.pathname === '/message') {
-      const { text, chat_id } = (await req.json()) as { text: string; chat_id?: string }
-      const id = chat_id ?? String(nextChatId++)
-      await mcp.notification({
-        method: 'notifications/claude/channel',
-        params: { content: text, meta: { chat_id: id } },
-      })
-      return withCors(Response.json({ chat_id: id }))
-    }
-
-    // Outbound verdict: agentViewer's permission UI posts the user's allow/deny here.
-    if (req.method === 'POST' && url.pathname === '/permission') {
-      const { request_id, behavior } = (await req.json()) as {
-        request_id: string
-        behavior: 'allow' | 'deny'
-      }
-      await mcp.notification({
-        method: 'notifications/claude/channel/permission',
-        params: { request_id, behavior },
-      })
-      return withCors(new Response('ok'))
-    }
-
-    return withCors(new Response('not found', { status: 404 }))
-  },
-})
+startBridge()
 
 // stdout is the MCP transport — log to stderr only.
 console.error(`[agentviewer-channel] listening on http://127.0.0.1:${PORT}`)

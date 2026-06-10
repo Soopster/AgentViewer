@@ -5,45 +5,23 @@
 // sent here land in that terminal session as <channel source="agentviewer">
 // events; replies and permission prompts stream back over SSE.
 //
+// Connection, config, log, and the "route composer through bridge" binding are
+// owned by the shared useChannelBridge hook (components/useChannelBridge.ts) so
+// the main composer can send through the same connection. This component is the
+// presentational surface over that controller.
+//
 // See channels/agentviewer-channel.ts and lib/channelBridge.ts.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Radio, Send, Settings2, X } from 'lucide-react'
 import {
   channelPermissionToPending,
   DEFAULT_CHANNEL_BRIDGE_URL,
-  respondToChannelPermission,
-  sendChannelMessage,
-  subscribeToChannelEvents,
-  type ChannelBridgeConfig,
   type ChannelBridgeStatus,
-  type ChannelEvent,
-  type ChannelPermissionRequestEvent,
 } from '@/lib/channelBridge'
+import type { ChannelBridge, ChannelLogEntry } from './useChannelBridge'
 
 export type ChannelBridgeAccent = { cssVar: string; cssRgb: string; label: string }
-
-type LogEntry =
-  | { kind: 'sent'; id: string; text: string; chatId: string }
-  | { kind: 'reply'; id: string; text: string; chatId: string }
-  | { kind: 'permission'; id: string; request: ChannelPermissionRequestEvent; resolved?: 'allow' | 'deny' }
-
-const STORAGE_KEY = 'agentviewer:channel-bridge-config'
-
-function loadStoredConfig(): { baseUrl: string; token: string } {
-  if (typeof window === 'undefined') return { baseUrl: DEFAULT_CHANNEL_BRIDGE_URL, token: '' }
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { baseUrl: DEFAULT_CHANNEL_BRIDGE_URL, token: '' }
-    const parsed = JSON.parse(raw) as { baseUrl?: unknown; token?: unknown }
-    return {
-      baseUrl: typeof parsed.baseUrl === 'string' && parsed.baseUrl ? parsed.baseUrl : DEFAULT_CHANNEL_BRIDGE_URL,
-      token: typeof parsed.token === 'string' ? parsed.token : '',
-    }
-  } catch {
-    return { baseUrl: DEFAULT_CHANNEL_BRIDGE_URL, token: '' }
-  }
-}
 
 function statusLabel(status: ChannelBridgeStatus): string {
   switch (status) {
@@ -60,12 +38,6 @@ function statusColor(status: ChannelBridgeStatus): string {
     case 'error': return 'rgba(248,113,113,0.85)'
     default: return 'var(--text-3)'
   }
-}
-
-let entrySeq = 0
-function nextEntryId(prefix: string): string {
-  entrySeq += 1
-  return `${prefix}-${entrySeq}`
 }
 
 const panelStyle: React.CSSProperties = {
@@ -135,56 +107,39 @@ const bubbleBaseStyle: React.CSSProperties = {
 
 export default function ChannelBridgePanel({
   accent,
+  bridge,
   onClose,
 }: {
   accent: ChannelBridgeAccent
+  bridge: ChannelBridge
   onClose: () => void
 }) {
-  const [stored] = useState(loadStoredConfig)
-  const [baseUrl, setBaseUrl] = useState(stored.baseUrl)
-  const [token, setToken] = useState(stored.token)
+  const {
+    baseUrl,
+    token,
+    setBaseUrl,
+    setToken,
+    status,
+    entries,
+    sending,
+    sendError,
+    setSendError,
+    routeComposer,
+    setRouteComposer,
+    send,
+    respond,
+  } = bridge
+
   const [configOpen, setConfigOpen] = useState(false)
-  const [status, setStatus] = useState<ChannelBridgeStatus>('idle')
-  const [entries, setEntries] = useState<LogEntry[]>([])
   const [draft, setDraft] = useState('')
-  const [sendError, setSendError] = useState<string | null>(null)
-  const [sending, setSending] = useState(false)
 
   const rootRef = useRef<HTMLDivElement | null>(null)
   const logRef = useRef<HTMLDivElement | null>(null)
   const draftRef = useRef<HTMLTextAreaElement | null>(null)
-  const lastChatIdRef = useRef<string | undefined>(undefined)
 
   const accentColor = `var(${accent.cssVar})`
   const accentBg = `rgba(${accent.cssRgb},0.16)`
   const accentBorder = `rgba(${accent.cssRgb},0.4)`
-
-  const config = useMemo<ChannelBridgeConfig>(() => ({ baseUrl, token: token || undefined }), [baseUrl, token])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ baseUrl, token }))
-  }, [baseUrl, token])
-
-  useEffect(() => {
-    setStatus('idle')
-    const unsubscribe = subscribeToChannelEvents(
-      config,
-      (event: ChannelEvent) => {
-        if (event.type === 'reply') {
-          lastChatIdRef.current = event.chat_id
-          setEntries((prev) => [
-            ...prev,
-            { kind: 'reply', id: nextEntryId('reply'), text: event.text, chatId: event.chat_id },
-          ])
-        } else {
-          setEntries((prev) => [...prev, { kind: 'permission', id: nextEntryId('perm'), request: event }])
-        }
-      },
-      (next) => setStatus(next),
-    )
-    return unsubscribe
-  }, [config])
 
   useEffect(() => {
     const node = logRef.current
@@ -214,32 +169,21 @@ export default function ChannelBridgePanel({
   const handleSend = useCallback(async () => {
     const text = draft.trim()
     if (!text || sending) return
-    setSending(true)
-    setSendError(null)
     try {
-      const result = await sendChannelMessage(config, text, lastChatIdRef.current)
-      lastChatIdRef.current = result.chat_id
-      setEntries((prev) => [...prev, { kind: 'sent', id: nextEntryId('sent'), text, chatId: result.chat_id }])
+      await send(text)
       setDraft('')
-    } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'Failed to reach the channel bridge')
+    } catch {
+      // error surfaced via bridge.sendError
     } finally {
-      setSending(false)
       draftRef.current?.focus()
     }
-  }, [draft, sending, config])
+  }, [draft, sending, send])
 
   const handleVerdict = useCallback(
-    async (entry: Extract<LogEntry, { kind: 'permission' }>, behavior: 'allow' | 'deny') => {
-      setEntries((prev) => prev.map((item) => (item.id === entry.id ? { ...item, resolved: behavior } : item)))
-      try {
-        await respondToChannelPermission(config, entry.request.request_id, behavior)
-      } catch (err) {
-        setEntries((prev) => prev.map((item) => (item.id === entry.id ? { ...item, resolved: undefined } : item)))
-        setSendError(err instanceof Error ? err.message : 'Failed to send the verdict')
-      }
+    (entry: Extract<ChannelLogEntry, { kind: 'permission' }>, behavior: 'allow' | 'deny') => {
+      void respond(entry, behavior)
     },
-    [config],
+    [respond],
   )
 
   const onDraftKeyDown = useCallback(
@@ -267,7 +211,7 @@ export default function ChannelBridgePanel({
         <div style={{ flex: 1 }} />
         <button
           type="button"
-          onClick={() => setConfigOpen((open) => !open)}
+          onClick={() => setConfigOpen((o) => !o)}
           style={{ ...iconButtonStyle, color: configOpen ? accentColor : 'var(--text-3)' }}
           title="Connection settings"
           aria-label="Connection settings"
@@ -278,6 +222,63 @@ export default function ChannelBridgePanel({
           <X size={14} />
         </button>
       </div>
+
+      <button
+        type="button"
+        onClick={() => setRouteComposer(!routeComposer)}
+        title="When on, messages typed in the main composer send to this live CLI session instead of the active provider."
+        aria-pressed={routeComposer}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          width: '100%',
+          padding: '7px 10px',
+          borderBottom: '1px solid var(--border)',
+          background: routeComposer ? accentBg : 'var(--surface)',
+          border: 'none',
+          borderTop: 'none',
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            position: 'relative',
+            flexShrink: 0,
+            width: 30,
+            height: 17,
+            borderRadius: 999,
+            background: routeComposer ? accentColor : 'var(--surface-3, var(--border-2))',
+            border: `1px solid ${routeComposer ? accentBorder : 'var(--border-2)'}`,
+            transition: 'background 0.15s',
+          }}
+        >
+          <span
+            style={{
+              position: 'absolute',
+              top: 1,
+              left: routeComposer ? 14 : 1,
+              width: 13,
+              height: 13,
+              borderRadius: '50%',
+              background: 'var(--surface)',
+              transition: 'left 0.15s',
+            }}
+          />
+        </span>
+        <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: routeComposer ? accentColor : 'var(--text)' }}>
+            Route composer through bridge
+          </span>
+          <span style={{ fontSize: 9.5, color: 'var(--text-3)', lineHeight: 1.4 }}>
+            {routeComposer
+              ? 'Main composer sends land in the live CLI session'
+              : 'Main composer sends go to the active provider'}
+          </span>
+        </span>
+      </button>
 
       {configOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
@@ -386,7 +387,7 @@ export default function ChannelBridgePanel({
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button
                       type="button"
-                      onClick={() => { void handleVerdict(entry, 'allow') }}
+                      onClick={() => handleVerdict(entry, 'allow')}
                       style={{
                         flex: 1,
                         padding: '6px 0',
@@ -403,7 +404,7 @@ export default function ChannelBridgePanel({
                     </button>
                     <button
                       type="button"
-                      onClick={() => { void handleVerdict(entry, 'deny') }}
+                      onClick={() => handleVerdict(entry, 'deny')}
                       style={{
                         flex: 1,
                         padding: '6px 0',
@@ -430,8 +431,16 @@ export default function ChannelBridgePanel({
       </div>
 
       {sendError && (
-        <div style={{ padding: '6px 10px', fontSize: 11, color: 'rgba(248,113,113,0.85)', borderTop: '1px solid var(--border)' }}>
-          {sendError}
+        <div style={{ padding: '6px 10px', fontSize: 11, color: 'rgba(248,113,113,0.85)', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ flex: 1 }}>{sendError}</span>
+          <button
+            type="button"
+            onClick={() => setSendError(null)}
+            style={{ ...iconButtonStyle, width: 18, height: 18 }}
+            aria-label="Dismiss error"
+          >
+            <X size={12} />
+          </button>
         </div>
       )}
 

@@ -32,6 +32,16 @@ export type ChannelEvent = ChannelReplyEvent | ChannelPermissionRequestEvent
 
 export type ChannelBridgeStatus = 'idle' | 'connecting' | 'connected' | 'error'
 
+// Reads bridge connection settings from the environment. TUI-only — the web
+// UI persists its config in localStorage instead (see useChannelBridge). Safe
+// to leave unused in the browser bundle; it only touches process.env when called.
+export function readBridgeConfigFromEnv(): ChannelBridgeConfig {
+  const baseUrl =
+    (typeof process !== 'undefined' && process.env?.AGENTVIEWER_CHANNEL_URL?.trim()) || DEFAULT_CHANNEL_BRIDGE_URL
+  const token = (typeof process !== 'undefined' && process.env?.AGENTVIEWER_CHANNEL_TOKEN?.trim()) || undefined
+  return { baseUrl, token }
+}
+
 function authHeaders(config: ChannelBridgeConfig): Record<string, string> {
   return config.token ? { 'x-agentviewer-token': config.token } : {}
 }

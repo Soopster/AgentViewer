@@ -31,6 +31,7 @@ type CommandPaletteProps = {
   canOpenTasks: boolean
   canOpenPromptLibrary: boolean
   canOpenChannelBridge: boolean
+  channelBridgeRouting: boolean
   onSelectSession: (session: Session, targetMessageId?: string) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onChangeProvider: (provider: ProviderSelection) => void
@@ -41,6 +42,7 @@ type CommandPaletteProps = {
   onOpenTasks: () => void
   onOpenPromptLibrary: () => void
   onOpenChannelBridge: () => void
+  onToggleChannelBridgeRoute: () => void
   onOpenBookmarks: () => void
 }
 
@@ -307,6 +309,7 @@ export default function CommandPalette({
   canOpenTasks,
   canOpenPromptLibrary,
   canOpenChannelBridge,
+  channelBridgeRouting,
   onSelectSession,
   onSelectProject,
   onChangeProvider,
@@ -317,6 +320,7 @@ export default function CommandPalette({
   onOpenTasks,
   onOpenPromptLibrary,
   onOpenChannelBridge,
+  onToggleChannelBridgeRoute,
   onOpenBookmarks,
 }: CommandPaletteProps) {
   const { state: sidebarState, toggleSidebar } = useSidebar()
@@ -522,6 +526,23 @@ export default function CommandPalette({
         },
       },
       {
+        id: 'toggle-channel-bridge-route',
+        label: channelBridgeRouting ? 'Stop routing composer to channel bridge' : 'Route composer to channel bridge',
+        description: canOpenChannelBridge
+          ? (channelBridgeRouting
+            ? 'Composer sends go to the live `claude` CLI session — switch back to the active provider'
+            : 'Send composer messages to the live `claude` CLI session instead of the active provider')
+          : 'Select a session first',
+        icon: <Radio size={16} />,
+        shortcut: channelBridgeRouting ? 'Bridge on' : 'Bridge',
+        group: 'actions',
+        keywords: ['channel', 'bridge', 'route', 'routing', 'cli', 'claude', 'live', 'composer', 'send', 'toggle'],
+        score: 0,
+        run: () => {
+          if (canOpenChannelBridge) onToggleChannelBridgeRoute()
+        },
+      },
+      {
         id: 'open-bookmarks',
         label: 'View all bookmarks',
         description: 'Browse every bookmarked message across all sessions and providers',
@@ -585,7 +606,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {
