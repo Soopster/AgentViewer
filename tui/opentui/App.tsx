@@ -403,6 +403,18 @@ const THEME_GROUPS: Array<{ label: string; themes: TuiThemeMode[] }> = [
 const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
 const DETAIL_REFRESH_MS = 2000
+// Debounce before opening a selected session's transcript. Scrubbing quickly
+// through the sidebar (mouse or keyboard) lands on many sessions in passing;
+// without this every fly-by would load + reformat a full transcript only to be
+// discarded a few ms later. Short enough to feel instant once you settle.
+const DETAIL_OPEN_DELAY_MS = 200
+// While browsing (sidebar focused) only the last N cards of the selected
+// session are mounted. OpenTUI's scrollbox lays out EVERY mounted card to
+// compute scroll height (viewportCulling only skips paint, not layout), so a
+// large transcript costs O(cards) — hundreds of ms to seconds — on every open.
+// Capping the preview keeps browsing snappy; the full transcript mounts only
+// when you focus the messages pane to actually read it.
+const PREVIEW_CARD_CAP = 60
 // Safety net: max time to wait for a completed turn's persisted rows before
 // force-revealing the polled transcript, so the "Syncing…" state can't hang
 // forever on a lost/delayed write. Generous vs the 2s detail poll.
@@ -4213,6 +4225,15 @@ export default function OpenTuiApp() {
   const liveTextTargetSessionRef = useRef<Session | null>(null)
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadingDetailRef = useRef(false)
+  // Single-flight coalescing for foreground detail loads. The threading worker
+  // processes transcripts serially and can't cancel in-flight work, so firing a
+  // load per settled session while scrubbing backs its queue up — opens start
+  // fast then get progressively slower as the backlog grows. We run at most one
+  // foreground load at a time and remember only the latest target requested
+  // while it's busy; the in-flight load picks that up when it frees, skipping
+  // every fly-by session in between.
+  const foregroundLoadInFlightRef = useRef(false)
+  const pendingForegroundLoadRef = useRef<Session | null>(null)
   const backgroundRefreshInFlightRef = useRef(new Set<string>())
   const sessionDetailMtimeRef = useRef(new Map<string, number>())
   const selectedSessionKeyRef = useRef<string | null>(null)
@@ -4451,6 +4472,48 @@ export default function OpenTuiApp() {
         }
       : null
   ), [selectedSessionIdentity])
+  // The session that the currently-loaded `sessionDetail` actually belongs to.
+  // Memoized on `info` alone so its identity is stable as long as the detail is
+  // — this is what keeps the transcript card cache from being busted mid-scrub.
+  const detailSession = useMemo<Session | null>(() => {
+    const info = sessionDetail?.info
+    if (!info) return null
+    return { sessionId: info.sessionId, provider: info.provider }
+  }, [sessionDetail?.info])
+  // Key the transcript off the session the detail belongs to, not the live
+  // selection. While scrubbing quickly, `selectedSessionTarget` races ahead of
+  // the debounced `sessionDetail` load; using it here would mismatch
+  // `threadedMessages` and force a full uncached reformat of the (large) visible
+  // transcript on every step. Falling back to `detailSession` keeps a stable
+  // identity (cache hit) until the load we land on commits.
+  const transcriptSession = useMemo<Session | null>(() => {
+    if (!detailSession) return selectedSessionTarget
+    if (
+      selectedSessionTarget
+      && selectedSessionTarget.sessionId === detailSession.sessionId
+      && (selectedSessionTarget.provider ?? 'claude') === (detailSession.provider ?? 'claude')
+    ) {
+      return selectedSessionTarget
+    }
+    return detailSession
+  }, [detailSession, selectedSessionTarget])
+  // Key of the session whose transcript is actually on screen. Lags the live
+  // `selectedSessionKey` by the open-debounce: while scrubbing it stays pinned
+  // to the displayed session, so per-session effects (reader-state reset,
+  // cursor reconcile, bookmark load) that would otherwise reset/rebuild the
+  // transcript on every step simply don't fire until you settle. This is the
+  // load-bearing guard against scrub jank on large sessions.
+  const committedSessionKey = useMemo(
+    () => (transcriptSession ? sessionKey(transcriptSession) : null),
+    [transcriptSession],
+  )
+  // True while the live selection has moved ahead of the displayed transcript —
+  // i.e. you're mid-scrub and the debounced open hasn't landed yet. Building the
+  // full transcript element tree is O(cards) and costs 100s of ms–1s+ on large
+  // sessions (OpenTUI lays out every card to compute scroll height, even with
+  // viewportCulling). Keeping it mounted makes EVERY commit that size, so we
+  // unmount it while scrubbing and rebuild once, when the selection settles.
+  const isScrubbing = selectedSessionKey != null && selectedSessionKey !== committedSessionKey
   const providerRunningSessions = useMemo(() => (
     runningSessions.filter((running) => provider === 'all' || running.provider === provider)
   ), [provider, runningSessions])
@@ -4588,11 +4651,11 @@ export default function OpenTuiApp() {
   // when sessionDetail/density/showToolCalls actually change.
   const baseTranscriptCards = useMemo<TuiTranscriptCard[]>(() => {
     const profileStart = CARD_PROFILE ? performance.now() : 0
-    if (!selectedSessionTarget || !sessionDetail) return []
+    if (!transcriptSession || !sessionDetail) return []
     let cards: TuiTranscriptCard[]
     let recomputed = 0
     const cachedSync = getTranscriptCardsSync(
-      selectedSessionTarget,
+      transcriptSession,
       sessionDetail.threadedMessages,
       density,
       showToolCalls,
@@ -4618,7 +4681,7 @@ export default function OpenTuiApp() {
       })
     }
     return cards
-  }, [density, sessionDetail, selectedSessionTarget, showToolCalls])
+  }, [density, sessionDetail, transcriptSession, showToolCalls])
 
   // ── Task context for live cards — stable across streaming deltas ───────────
   // buildTaskActiveForms and buildTaskRegistry scan the full base transcript.
@@ -4753,21 +4816,21 @@ export default function OpenTuiApp() {
   // UI responsive in the meantime; this effect just ensures subsequent toggles
   // hit the cache instead of running a main-thread format every time.
   useEffect(() => {
-    if (!sessionDetail || !selectedSessionTarget) return
+    if (!sessionDetail || !transcriptSession) return
     const cachedSync = getTranscriptCardsSync(
-      selectedSessionTarget,
+      transcriptSession,
       sessionDetail.threadedMessages,
       density,
       showToolCalls,
     )
     if (cachedSync) return
     void formatTranscriptCardsAsync(
-      selectedSessionTarget,
+      transcriptSession,
       sessionDetail.threadedMessages,
       density,
       showToolCalls,
     ).catch(() => { /* worker errors surface elsewhere */ })
-  }, [density, sessionDetail, selectedSessionTarget, showToolCalls])
+  }, [density, sessionDetail, transcriptSession, showToolCalls])
   const transcriptIndexByKey = useMemo(() => {
     const indexByKey = new Map<string, number>()
     visibleTranscriptCards.forEach((card, index) => {
@@ -5821,8 +5884,24 @@ export default function OpenTuiApp() {
   // — they only re-run this memo, whose per-card work is cheap (Set lookup).
   const searchMatchSet = useMemo(() => new Set(searchMatches), [searchMatches])
   const activeMatchTargetIndex = searchMatches[searchMatchIndex] ?? -1
-  const transcriptChildren = useMemo(() => (
-    visibleTranscriptCards.map((card, index) => {
+  // Diff-note namespace tracks the session whose transcript is actually
+  // displayed (the debounced `transcriptSession`), NOT the live selection.
+  // Keying it off `selectedSessionIdentity` would (a) mislabel notes during the
+  // open-debounce window when the old transcript is still showing, and (b) — far
+  // worse for perf — make the `transcriptChildren` memo below rebuild all N card
+  // elements on every scrub step, since it reads this value. Stable during a
+  // scrub → the whole transcript subtree keeps element identity and React skips
+  // reconciling it.
+  const transcriptNoteNamespace = committedSessionKey ?? 'no-session'
+  // Full transcript only when the reader pane is focused; otherwise cap to the
+  // most-recent PREVIEW_CARD_CAP cards so browsing never pays to lay out a giant
+  // session. The tail is what stickyScroll/followTail wants anyway.
+  const transcriptRenderStart = effectiveFocus === 'messages'
+    ? 0
+    : Math.max(0, visibleTranscriptCards.length - PREVIEW_CARD_CAP)
+  const transcriptChildren = useMemo(() => {
+    const cards: React.ReactNode[] = visibleTranscriptCards.slice(transcriptRenderStart).map((card, i) => {
+      const index = transcriptRenderStart + i
       const display = cardDisplayData[index]
       if (!display) return null
       const isSelected = card.key === transcriptCursorKey
@@ -5850,7 +5929,7 @@ export default function OpenTuiApp() {
           diffLayout={diffLayout}
           imessageStyle={imessageStyle}
           streamMode={transcriptView === 'stream'}
-          noteNamespace={selectedSessionIdentity ?? 'no-session'}
+          noteNamespace={transcriptNoteNamespace}
           diffNotes={transcriptDiffNotes}
           diffDraft={transcriptDiffDraft}
           hoveredDiffAnchor={hoveredTranscriptDiffAnchor}
@@ -5867,8 +5946,19 @@ export default function OpenTuiApp() {
         />
       )
     })
-  ), [
+    if (transcriptRenderStart > 0) {
+      cards.unshift(
+        <box key="preview-cap-hint" paddingX={1}>
+          <text fg={theme.dim} wrapMode="none">
+            {fitText(`↑ ${transcriptRenderStart} earlier message${transcriptRenderStart === 1 ? '' : 's'} — open the session (Enter) to view all`, rightPaneWidth - 2)}
+          </text>
+        </box>,
+      )
+    }
+    return cards
+  }, [
     visibleTranscriptCards,
+    transcriptRenderStart,
     cardDisplayData,
     transcriptCursorKey,
     effectiveFocus,
@@ -5885,7 +5975,7 @@ export default function OpenTuiApp() {
     diffLayout,
     imessageStyle,
     transcriptView,
-    selectedSessionIdentity,
+    transcriptNoteNamespace,
     transcriptDiffNotes,
     transcriptDiffDraft,
     hoveredTranscriptDiffAnchor,
@@ -6111,6 +6201,20 @@ export default function OpenTuiApp() {
     // rather than flashing a spinner while disk IO / JSON parsing runs. A
     // background refresh still fires below so the UI catches up.
     if (foreground) {
+      // Coalesce FIRST, before touching the display: if a foreground load is
+      // already running, the user is still scrubbing — just remember the latest
+      // target and bail without rendering this fly-by session. The in-flight
+      // load's finally runs the latest pending target when the worker frees, so
+      // neither the worker queue nor the transcript view churns mid-scrub.
+      if (foregroundLoadInFlightRef.current) {
+        pendingForegroundLoadRef.current = session
+        return
+      }
+      foregroundLoadInFlightRef.current = true
+
+      // Worker idle → this is a settled open. Show the last-known detail
+      // immediately (cache hit) rather than flashing a spinner while the
+      // background refresh below runs.
       const cached = sessionDetailCacheRef.current.get(cacheKeyForGuards)
       if (cached) {
         setSessionDetail(cached)
@@ -6210,6 +6314,17 @@ export default function OpenTuiApp() {
     } finally {
       if (requestId === detailRequestRef.current && foreground) setLoadingDetail(false)
       if (!foreground) backgroundRefreshInFlightRef.current.delete(cacheKeyForGuards)
+      if (foreground) {
+        foregroundLoadInFlightRef.current = false
+        // Run only the most-recent target requested while we were busy — every
+        // session scrubbed past in between is skipped, so the worker never sees
+        // a backlog.
+        const next = pendingForegroundLoadRef.current
+        if (next) {
+          pendingForegroundLoadRef.current = null
+          void refreshSelectedSessionDetail(next, true)
+        }
+      }
     }
   }, [])
 
@@ -6816,7 +6931,7 @@ export default function OpenTuiApp() {
   // array also lets OpenTUI's reconciler bail on the whole subtree when nothing
   // here changed. `timeAgo` output refreshes whenever sidebarEntries does (the
   // 5s sessions poll produces a new array), which is frequent enough.
-  const sidebarRowElements = useMemo(() => sidebarEntries.map((entry) => {
+  const buildSidebarRow = useCallback((entry: typeof sidebarEntries[number], selected: boolean) => {
     if (entry.type === 'project') {
       const countLabel = `${entry.count}`
       const dashes = '─'.repeat(Math.max(sidebarInnerWidth - 2 - entry.projectName.length - countLabel.length - 3, 1))
@@ -6835,7 +6950,6 @@ export default function OpenTuiApp() {
       )
     }
 
-    const selected = entry.absoluteIndex === selectedIndex
     const sessionAccent = getProviderAccent(entry.session.provider ?? 'claude')
     const activityTime = entry.session.lastModified ?? entry.session.createdAt
     const ago = timeAgo(activityTime)
@@ -6880,7 +6994,41 @@ export default function OpenTuiApp() {
         </box>
       </box>
     )
-  }), [sidebarEntries, selectedIndex, theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession])
+  }, [theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession])
+
+  // Per-row element cache. Moving the selection highlight only changes TWO rows
+  // (the de-selected and newly-selected), but the memo re-runs on every
+  // selectedIndex change. Rebuilding all N rows — each doing getProviderAccent /
+  // timeAgo / fitText / formatSessionTitle — was O(sessions) per scrub step;
+  // fast scrubbing through a large list backed the render queue up and got
+  // progressively slower. Reuse the cached element for any row whose inputs are
+  // unchanged so only the two flipped rows actually rebuild.
+  const sidebarRowCacheRef = useRef(new Map<string, {
+    entry: unknown
+    selected: boolean
+    build: typeof buildSidebarRow
+    element: React.ReactNode
+  }>())
+  const sidebarRowElements = useMemo(() => {
+    const cache = sidebarRowCacheRef.current
+    const live = new Set<string>()
+    const rows = sidebarEntries.map((entry) => {
+      live.add(entry.key)
+      const selected = entry.type !== 'project' && entry.absoluteIndex === selectedIndex
+      const prev = cache.get(entry.key)
+      // `entry` identity changes only when the session list polls (new array),
+      // and `build` carries theme/density/width/rename state via its deps — so a
+      // matching (entry, selected, build) triple means the element is identical.
+      if (prev && prev.entry === entry && prev.selected === selected && prev.build === buildSidebarRow) {
+        return prev.element
+      }
+      const element = buildSidebarRow(entry, selected)
+      cache.set(entry.key, { entry, selected, build: buildSidebarRow, element })
+      return element
+    })
+    for (const key of cache.keys()) if (!live.has(key)) cache.delete(key)
+    return rows
+  }, [sidebarEntries, selectedIndex, buildSidebarRow])
 
   // Stable scrollbar config objects so the two long-lived <scrollbox>
   // renderables don't see a fresh prop reference on every render.
@@ -7703,9 +7851,20 @@ export default function OpenTuiApp() {
       return
     }
 
-    const cachedDetail = sessionDetailCacheRef.current.get(sessionKey(selectedSessionTarget)) ?? null
-    setSessionDetail(cachedDetail)
-    void refreshSelectedSessionDetail(selectedSessionTarget, true)
+    // Debounce the actual open so rapid scrubbing through the sidebar doesn't
+    // load + reformat a transcript for every session passed through. The
+    // cleanup clears the pending timer when the selection changes again, so
+    // only the session we land on (and hold for DETAIL_OPEN_DELAY_MS) renders.
+    // The previously-shown transcript stays visible during the wait — no flash.
+    const target = selectedSessionTarget
+    const timer = setTimeout(() => {
+      // Display is owned by refreshSelectedSessionDetail's cache-first branch,
+      // which is single-flight-gated: if a load is already running (still
+      // scrubbing) it defers without rendering this session, so intermediates
+      // never open. The previously-shown transcript stays put until we settle.
+      void refreshSelectedSessionDetail(target, true)
+    }, DETAIL_OPEN_DELAY_MS)
+    return () => clearTimeout(timer)
   }, [bootstrapped, refreshSelectedSessionDetail, selectedSession?.isPending, selectedSessionIdentity, selectedSessionTarget])
 
   // Clear stale live todos on session switch
@@ -7797,12 +7956,12 @@ export default function OpenTuiApp() {
     setSearchQuery('')
     setSearchMatchIndex(0)
     setRestoredReaderState({
-      sessionKey: selectedSessionKey,
-      loaded: selectedSessionKey == null,
+      sessionKey: committedSessionKey,
+      loaded: committedSessionKey == null,
       state: null,
     })
 
-    if (!selectedSessionKey) {
+    if (!committedSessionKey) {
       return () => {
         cancelled = true
       }
@@ -7810,10 +7969,10 @@ export default function OpenTuiApp() {
 
     void (async () => {
       try {
-        const state = await readTuiSessionReaderState(selectedSessionKey)
+        const state = await readTuiSessionReaderState(committedSessionKey)
         if (cancelled) return
         setRestoredReaderState({
-          sessionKey: selectedSessionKey,
+          sessionKey: committedSessionKey,
           loaded: true,
           state,
         })
@@ -7829,7 +7988,7 @@ export default function OpenTuiApp() {
       } catch {
         if (cancelled) return
         setRestoredReaderState({
-          sessionKey: selectedSessionKey,
+          sessionKey: committedSessionKey,
           loaded: true,
           state: null,
         })
@@ -7839,7 +7998,7 @@ export default function OpenTuiApp() {
     return () => {
       cancelled = true
     }
-  }, [selectedSessionKey])
+  }, [committedSessionKey])
 
   useEffect(() => {
     // Skip building the `allowed` Set when both sets are empty — the common
@@ -7874,18 +8033,18 @@ export default function OpenTuiApp() {
   useEffect(() => {
     const currentKeys = transcriptCards.map((card) => card.key)
     const previous = previousTranscriptRef.current
-    const sameSession = previous.sessionKey === selectedSessionKey
+    const sameSession = previous.sessionKey === committedSessionKey
 
     if (currentKeys.length === 0) {
       setTranscriptCursorKey(null)
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
-      previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
+      previousTranscriptRef.current = { sessionKey: committedSessionKey, keys: currentKeys }
       return
     }
 
     if (!sameSession) {
-      if (restoredReaderState.sessionKey !== selectedSessionKey || !restoredReaderState.loaded) return
+      if (restoredReaderState.sessionKey !== committedSessionKey || !restoredReaderState.loaded) return
       const restoredState = restoredReaderState.state
       if (restoredState?.followTail === false) {
         const restoredIndex = restoredState.cursorKey ? (transcriptIndexByKey.get(restoredState.cursorKey) ?? -1) : -1
@@ -7903,7 +8062,7 @@ export default function OpenTuiApp() {
     setUnreadBoundaryKey(null)
         setResumeMarkerKey(null)
       }
-      previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
+      previousTranscriptRef.current = { sessionKey: committedSessionKey, keys: currentKeys }
       return
     }
 
@@ -7911,7 +8070,7 @@ export default function OpenTuiApp() {
       setTranscriptCursorKey(visibleTranscriptCards[visibleTranscriptCards.length - 1].key)
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
-      previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
+      previousTranscriptRef.current = { sessionKey: committedSessionKey, keys: currentKeys }
       return
     }
 
@@ -7933,7 +8092,7 @@ export default function OpenTuiApp() {
       if (current && currentKeys.includes(current)) return current
       return visibleTranscriptCards[Math.max(cursorIndex, 0)]?.key ?? visibleTranscriptCards[0].key
     })
-    previousTranscriptRef.current = { sessionKey: selectedSessionKey, keys: currentKeys }
+    previousTranscriptRef.current = { sessionKey: committedSessionKey, keys: currentKeys }
     // cursorIndex is intentionally omitted from deps: the effect reconciles
     // cursor/pending state when transcriptCards changes, and the cursorIndex
     // fallback only fires when the current cursor key is missing from the new
@@ -7943,22 +8102,25 @@ export default function OpenTuiApp() {
   }, [
     followTail,
     restoredReaderState,
-    selectedSessionKey,
+    committedSessionKey,
     transcriptCards,
     visibleTranscriptCards,
     transcriptIndexByKey,
   ])
 
-  // Load the active session's bookmarks whenever the selection changes.
+  // Load bookmarks for the session whose transcript is actually displayed.
+  // Keyed on the committed (debounced) session, not the live selection, so
+  // scrubbing doesn't fire a fetch — and a stale resolve doesn't churn
+  // bookmarkKeys (a transcriptChildren dep) while an older transcript shows.
   useEffect(() => {
-    const target = selectedSessionTarget
+    const target = transcriptSession
     if (!target) { setBookmarkKeys(new Set()); return }
     let cancelled = false
     void readTuiSessionBookmarkIds({ sessionId: target.sessionId, provider: target.provider } as Session)
       .then((ids) => { if (!cancelled) setBookmarkKeys(new Set(ids)) })
       .catch(() => { if (!cancelled) setBookmarkKeys(new Set()) })
     return () => { cancelled = true }
-  }, [selectedSessionIdentity])
+  }, [committedSessionKey])
 
   // Land on a bookmark target once its session transcript has loaded. Runs
   // after the cursor-reconcile effect above, so it wins the final cursor state.
@@ -10688,7 +10850,11 @@ export default function OpenTuiApp() {
                 >
                 <box height={TRANSCRIPT_TOP_MARGIN} />
                 <TuiErrorBoundary>
-                  {transcriptChildren}
+                  {isScrubbing ? (
+                    <box paddingX={1}>
+                      <text fg={theme.dim} wrapMode="none">…</text>
+                    </box>
+                  ) : transcriptChildren}
                 </TuiErrorBoundary>
 
                 {composerSendState === 'sending' && composerLiveText && !codexLiveAssistantTextVisible ? (
