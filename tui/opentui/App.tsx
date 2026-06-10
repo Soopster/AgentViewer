@@ -4801,6 +4801,14 @@ export default function OpenTuiApp() {
     setError(null)
     setFocusedPane('sessions')
   }, [])
+
+  const toggleSidebarSort = useCallback(() => {
+    setSidebarSort((current) => {
+      const next: TuiSidebarSort = current === 'project' ? 'time' : 'project'
+      void writeTuiSidebarSort(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store sidebar sort'))
+      return next
+    })
+  }, [])
   const thinkingFullKeys = useMemo(() => {
     if (!thinkingMode) return new Set<string>()
     const next = new Set<string>()
@@ -8898,12 +8906,9 @@ export default function OpenTuiApp() {
       case 'channel-bridge-route':
         toggleComposerBridgeRoute()
         break
-      case 'sort': {
-        const next: TuiSidebarSort = sidebarSort === 'project' ? 'time' : 'project'
-        setSidebarSort(next)
-        void writeTuiSidebarSort(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store sidebar sort'))
+      case 'sort':
+        toggleSidebarSort()
         break
-      }
       case 'refresh':
         void refreshSessions(provider)
         if (selectedSessionTarget) void refreshSelectedSessionDetail(selectedSessionTarget, false)
@@ -9593,9 +9598,7 @@ export default function OpenTuiApp() {
 
     if (effectiveFocus === 'sessions' && isShifted('S')) {
       handled(() => {
-        const next: TuiSidebarSort = sidebarSort === 'project' ? 'time' : 'project'
-        setSidebarSort(next)
-        void writeTuiSidebarSort(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store sidebar sort'))
+        toggleSidebarSort()
       })
       return
     }
@@ -10480,6 +10483,12 @@ export default function OpenTuiApp() {
             flexDirection="column"
             title={sidebarSortHeader}
             titleColor={theme.cyan}
+            onMouseDown={(event) => {
+              if (event.button !== 0) return
+              if (event.target && event.y === event.target.y) {
+                toggleSidebarSort()
+              }
+            }}
           >
             <box flexGrow={1} paddingX={1}>
               {loadingSessions && sessions.length === 0 ? (
@@ -10524,6 +10533,16 @@ export default function OpenTuiApp() {
                 showUnderline={false}
                 showScrollArrows={true}
                 wrapSelection={false}
+                onMouseDown={(event) => {
+                  if (event.button !== 0) return
+                  const instance = tabSelectRef.current
+                  if (!instance) return
+                  const scrollOffset = (instance as unknown as { scrollOffset: number }).scrollOffset ?? 0
+                  const localX = event.x - instance.x
+                  const index = scrollOffset + Math.floor(localX / tabWidth)
+                  const tab = visibleTabSessions[index]
+                  if (tab) selectTabSession(tab)
+                }}
                 onChange={(index) => {
                   const tab = visibleTabSessions[index]
                   if (tab) selectTabSession(tab)
