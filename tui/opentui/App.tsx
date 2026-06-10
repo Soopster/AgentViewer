@@ -22,7 +22,7 @@ import {
 } from './pierreDiffView'
 import type { SelectedLineRange } from '@pierre/diffs'
 import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
-import type { BaseRenderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
+import type { BaseRenderable, BoxRenderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
   formatProviderLabel,
@@ -4160,6 +4160,7 @@ export default function OpenTuiApp() {
 
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
   const sidebarScrollRef = useRef<ScrollBoxRenderable>(null)
+  const sidebarBoxRef = useRef<BoxRenderable>(null)
   const pausedTranscriptScrollTopRef = useRef<number | null>(null)
   const prevFollowTailRef = useRef(true)
   // Velocity scroll: ramps the per-tick cursor step up smoothly the longer j/k/↑/↓
@@ -6850,6 +6851,7 @@ export default function OpenTuiApp() {
         marginBottom={density === 'comfortable' ? 1 : 0}
         onMouseDown={(event) => {
           if (event.button !== 0) return
+          event.stopPropagation()
           if (sessionKey(entry.session) === renameSessionKey) return
           selectSidebarSession(entry.session)
         }}
@@ -10475,6 +10477,7 @@ export default function OpenTuiApp() {
       <box flexGrow={1} padding={1} gap={1} height={mainContentHeight} flexDirection="row" backgroundColor={theme.bg}>
         {showRail ? (
           <box
+            ref={sidebarBoxRef}
             width={sidebarWidth}
             border
             borderStyle="single"
@@ -10485,7 +10488,10 @@ export default function OpenTuiApp() {
             titleColor={theme.cyan}
             onMouseDown={(event) => {
               if (event.button !== 0) return
-              if (event.target && event.y === event.target.y) {
+              const box = sidebarBoxRef.current
+              // Only the top border row (where the title is drawn) toggles sort —
+              // a click on this box itself (not a child row) means the border/title.
+              if (box && event.target === box && event.y === box.y) {
                 toggleSidebarSort()
               }
             }}
