@@ -6,7 +6,7 @@ import { AnalyticsPopover } from './AnalyticsPopover'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { PromptLibraryPopover } from './PromptLibraryPopover'
 import { ChannelBridgePopover } from './ChannelBridgePopover'
-import { readBridgeConfigFromEnv, sendChannelMessage } from '../../lib/channelBridge'
+import { readBridgeConfigFromEnv, sendChannelMessage, subscribeToChannelEvents, type ChannelEvent } from '../../lib/channelBridge'
 import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
 import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
@@ -4023,6 +4023,10 @@ export default function OpenTuiApp() {
   const routeComposerToBridgeRef = useRef(false)
   routeComposerToBridgeRef.current = routeComposerToBridge
   const lastBridgeChatIdRef = useRef<string | undefined>(undefined)
+  // Track bridge sent/reply entries for inline display in the transcript
+  const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useState<
+    Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }>
+  >([])
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
@@ -4305,6 +4309,26 @@ export default function OpenTuiApp() {
     if (composerActive) setFocusedPane('messages')
   }, [composerActive])
 
+  // Subscribe to bridge channel events and track entries for inline display
+  useEffect(() => {
+    const config = readBridgeConfigFromEnv()
+    let entrySeq = 0
+    const unsubscribe = subscribeToChannelEvents(
+      config,
+      (event: ChannelEvent) => {
+        if (event.type === 'reply') {
+          const timestamp = new Date(Date.now() + entrySeq * 100).toISOString()
+          setBridgeTranscriptEntries((prev) => [...prev, { kind: 'reply', text: event.text, timestamp }])
+          entrySeq += 1
+        } else if (event.type === 'permission_request') {
+          // Skip permission requests, only show sent/reply messages
+        }
+      },
+      () => {}, // Don't update status in main view (ChannelBridgePopover handles that)
+    )
+    return unsubscribe
+  }, [])
+
 
   useEffect(() => {
     if (!selectedSessionKey) {
@@ -4566,7 +4590,6 @@ export default function OpenTuiApp() {
 
   // ── Live overlay — O(N_live) per delta, base cards always cache-hit ────────
   const transcriptCards = useMemo<TuiTranscriptCard[]>(() => {
-    if (liveTranscriptMessagesForSession.length === 0) return baseTranscriptCards
     const profileStart = CARD_PROFILE ? performance.now() : 0
     const liveMessages = showToolCalls
       ? liveTranscriptMessagesForSession
@@ -4575,17 +4598,41 @@ export default function OpenTuiApp() {
       ...formatTranscriptCard(message, density, baseTaskContext.activeForms, baseTaskContext.taskRegistry),
       key: `live:${message.uuid}`,
     }))
+
+    // Convert bridge transcript entries to cards
+    const bridgeCards: TuiTranscriptCard[] = bridgeTranscriptEntries.map((entry, i) => {
+      const bridgeMessage: ThreadedMessage = {
+        role: entry.kind === 'sent' ? 'user' : 'assistant',
+        uuid: `bridge-${i}`,
+        timestamp: entry.timestamp,
+        origin: { kind: 'bridge' },
+        blocks: [{ type: 'text', text: entry.text }],
+      }
+      return {
+        ...formatTranscriptCard(bridgeMessage, density, baseTaskContext.activeForms, baseTaskContext.taskRegistry),
+        key: `bridge:${i}`,
+      }
+    })
+
+    const allCards = [...baseTranscriptCards, ...liveCards, ...bridgeCards]
+    // Sort by timestamp to interleave bridge messages chronologically
+    const sortedCards = allCards.sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0
+      return aTime - bTime
+    })
+
     if (CARD_PROFILE) {
       logCardRecompute({
         scope: 'transcriptCards',
-        totalCards: baseTranscriptCards.length + liveCards.length,
-        recomputed: liveCards.length,
+        totalCards: sortedCards.length,
+        recomputed: liveCards.length + bridgeCards.length,
         liveCards: liveCards.length,
         durationMs: performance.now() - profileStart,
       })
     }
-    return [...baseTranscriptCards, ...liveCards]
-  }, [baseTranscriptCards, baseTaskContext, density, liveTranscriptMessagesForSession, showToolCalls])
+    return sortedCards
+  }, [baseTranscriptCards, baseTaskContext, bridgeTranscriptEntries, density, liveTranscriptMessagesForSession, showToolCalls])
 
   // In 'continue' and 'stream' modes, hide technical/diff/system cards entirely
   // so only the conversation layer (user + assistant text) is visible.
@@ -6810,8 +6857,10 @@ export default function OpenTuiApp() {
       setComposerHistoryOpen(false)
       setComposerHistoryIndex(0)
       try {
+        const timestamp = new Date().toISOString()
         const result = await sendChannelMessage(readBridgeConfigFromEnv(), trimmed, lastBridgeChatIdRef.current)
         lastBridgeChatIdRef.current = result.chat_id
+        setBridgeTranscriptEntries((prev) => [...prev, { kind: 'sent', text: trimmed, timestamp }])
         showNotice('info', 'Sent to the live CLI bridge')
       } catch (err) {
         showNotice('error', err instanceof Error ? err.message : 'Failed to reach the channel bridge')
