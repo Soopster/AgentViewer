@@ -3473,7 +3473,7 @@ function TranscriptCardInner({
         { text: '{} hunk  ', fg: theme.cyan },
         { text: 'shift+j/k range  ', fg: theme.cyan },
         { text: 'a:note  ', fg: theme.cyan },
-        { text: 'C:composer  ', fg: theme.cyan },
+        { text: 'A:composer  ', fg: theme.cyan },
         { text: 'x:del', fg: theme.cyan },
       ]
     : null
@@ -8003,10 +8003,10 @@ export default function OpenTuiApp() {
 
   const footerText = useMemo(
     () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b bookmark  [ ] jump marks  S-B all marks  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  s diff:${diffLayout}  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  V ${velocityScrollEnabled ? 'velocity off' : 'velocity on'}  y copy  Q reply  r refresh  ? commands  q quit`,
+      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b ${effectiveFocus === 'sessions' ? 'tabs' : 'bookmark'}  [ ] jump marks  S-B all marks  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  s diff:${diffLayout}  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  V ${velocityScrollEnabled ? 'velocity off' : 'velocity on'}  y copy  Q reply  r refresh  ? commands  q quit`,
       Math.max(width - 4, 20),
     ),
-    [width, diffLayout, transcriptView, density, showToolCalls, velocityScrollEnabled],
+    [width, diffLayout, transcriptView, density, showToolCalls, velocityScrollEnabled, effectiveFocus],
   )
 
   const composerStatusMessage = composerError
@@ -9715,7 +9715,7 @@ export default function OpenTuiApp() {
         })
         return
       }
-      if (key.sequence === 'C') {
+      if (key.sequence === 'A') {
         handled(() => {
           if (!noteSelectionKey) {
             showNotice('info', 'No diff row selected')
@@ -9822,7 +9822,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (sequence === 'N' && !composerActive) {
+    if (sequence === 'N' && !composerActive && normalizedSearchQuery.length === 0) {
       handled(() => {
         const targetProvider = provider === 'all'
           ? (selectedSession?.provider ?? 'claude')
