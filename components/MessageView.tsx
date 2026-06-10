@@ -4590,18 +4590,27 @@ export default function MessageView({
     setChannelBridgeOpen(true)
   }, [channelBridgeOpenRequest])
 
-  // Sync bridge sent/reply entries into the transcript view with synthetic timestamps
+  // Listen for new bridge sent/reply entries from the hook
   useEffect(() => {
     const entries = channelBridge.entries.filter(
       (e): e is Extract<typeof e, { kind: 'sent' | 'reply' }> => e.kind === 'sent' || e.kind === 'reply'
     )
-    setBridgeTranscriptEntries(entries.map((e, i) => ({
-      kind: e.kind,
-      text: e.text,
-      // Use the index to create monotonic timestamps spread slightly apart
-      timestamp: new Date(Date.now() + i * 100).toISOString(),
-    })))
-  }, [channelBridge.entries])
+    setBridgeTranscriptEntries((prev) => {
+      // Find entries we haven't already added
+      const newEntries = entries.filter((entry) =>
+        !prev.some((p) => p.kind === entry.kind && p.text === entry.text)
+      )
+      if (newEntries.length === 0) return prev
+      return [
+        ...prev,
+        ...newEntries.map((e) => ({
+          kind: e.kind,
+          text: e.text,
+          timestamp: new Date().toISOString(),
+        })),
+      ]
+    })
+  }, [channelBridge.entries.length])
 
   // The command palette toggles composer routing via a request counter (it lives
   // outside this component); flip the persisted binding when it bumps.
@@ -4615,6 +4624,70 @@ export default function MessageView({
   useEffect(() => {
     onChannelBridgeRoutingChange?.(channelBridge.routeComposer)
   }, [channelBridge.routeComposer, onChannelBridgeRoutingChange])
+
+  // Track which bridge entries we've already persisted
+  const persistedBridgeCountRef = useRef(0)
+
+  // Load persisted bridge messages when session changes
+  useEffect(() => {
+    if (!session) {
+      setBridgeTranscriptEntries([])
+      persistedBridgeCountRef.current = 0
+      return
+    }
+    let isMounted = true
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/bridge-messages?provider=${encodeURIComponent(session.provider ?? 'claude')}&sessionId=${encodeURIComponent(session.sessionId)}`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = await res.json() as { messages: Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }> }
+        if (isMounted) {
+          setBridgeTranscriptEntries(data.messages)
+          persistedBridgeCountRef.current = data.messages.length
+        }
+      } catch (err) {
+        console.error('[bridge-messages] Failed to load:', err)
+      }
+    })()
+    return () => { isMounted = false }
+  }, [session?.provider, session?.sessionId])
+
+  // Persist new bridge messages to disk when they arrive
+  useEffect(() => {
+    if (!session) return
+    const newCount = bridgeTranscriptEntries.length
+    const persistedCount = persistedBridgeCountRef.current
+    if (newCount <= persistedCount) return
+
+    // Persist only the new entries
+    const newEntries = bridgeTranscriptEntries.slice(persistedCount)
+    let cancelled = false
+    ;(async () => {
+      for (const entry of newEntries) {
+        if (cancelled) return
+        try {
+          const res = await fetch('/api/bridge-messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              provider: session.provider,
+              sessionId: session.sessionId,
+              kind: entry.kind,
+              text: entry.text,
+              timestamp: entry.timestamp,
+            }),
+          })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        } catch (err) {
+          console.error('[bridge-messages] Failed to save:', err)
+        }
+      }
+      if (!cancelled) {
+        persistedBridgeCountRef.current = newCount
+      }
+    })()
+    return () => { cancelled = true }
+  }, [session?.provider, session?.sessionId, bridgeTranscriptEntries.length])
 
   // Auto-focus the composer for a brand-new pending session — same as opening
   // a CLI and landing at the prompt. Gated on `isPending` to avoid stealing
