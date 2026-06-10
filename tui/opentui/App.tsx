@@ -7,6 +7,7 @@ import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { PromptLibraryPopover } from './PromptLibraryPopover'
 import { ChannelBridgePopover } from './ChannelBridgePopover'
 import { readBridgeConfigFromEnv, sendChannelMessage, subscribeToChannelEvents, type ChannelEvent } from '../../lib/channelBridge'
+import { loadBridgeMessagesForSession, addBridgeMessage } from '../../lib/bridgeMessages'
 import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
 import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
@@ -4027,6 +4028,8 @@ export default function OpenTuiApp() {
   const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useState<
     Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }>
   >([])
+  // Track which bridge entries we've persisted to disk
+  const persistedBridgeCountRef = useRef(0)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
@@ -4500,6 +4503,52 @@ export default function OpenTuiApp() {
     const value = (theme as unknown as Record<string, string>)[key]
     return value ?? theme.cyan
   }, [composerConfig.tuiAccentKey, theme])
+
+  // Load persisted bridge messages when selected session changes
+  useEffect(() => {
+    if (!selectedSessionTarget) {
+      setBridgeTranscriptEntries([])
+      persistedBridgeCountRef.current = 0
+      return
+    }
+    let isMounted = true
+    ;(async () => {
+      const persisted = await loadBridgeMessagesForSession(selectedSessionTarget.provider, selectedSessionTarget.sessionId)
+      if (isMounted) {
+        const entries = persisted.map((msg) => ({
+          kind: msg.kind,
+          text: msg.text,
+          timestamp: msg.timestamp,
+        }))
+        setBridgeTranscriptEntries(entries)
+        persistedBridgeCountRef.current = entries.length
+      }
+    })().catch(console.error)
+    return () => { isMounted = false }
+  }, [selectedSessionTarget?.provider, selectedSessionTarget?.sessionId])
+
+  // Persist new bridge messages to disk when they arrive
+  useEffect(() => {
+    if (!selectedSessionTarget) return
+    const newCount = bridgeTranscriptEntries.length
+    const persistedCount = persistedBridgeCountRef.current
+    if (newCount <= persistedCount) return
+
+    // Persist only the new entries
+    const newEntries = bridgeTranscriptEntries.slice(persistedCount)
+    let cancelled = false
+    ;(async () => {
+      for (const entry of newEntries) {
+        if (cancelled) return
+        await addBridgeMessage(selectedSessionTarget.provider, selectedSessionTarget.sessionId, entry.kind, entry.text, entry.timestamp)
+      }
+      if (!cancelled) {
+        persistedBridgeCountRef.current = newCount
+      }
+    })().catch(console.error)
+    return () => { cancelled = true }
+  }, [selectedSessionTarget?.provider, selectedSessionTarget?.sessionId, bridgeTranscriptEntries.length])
+
   const liveTranscriptMessagesCacheRef = useRef<ThreadedMessage[] | null>(null)
   const liveTranscriptMessagesForSession = useMemo(() => {
     if (!selectedSessionTarget) return []
