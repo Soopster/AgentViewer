@@ -441,12 +441,20 @@ const TASK_PANEL_MAX_WIDTH = 60
 const TASK_PANEL_RESIZE_STEP = 4
 // Cached TuiSessionDetail bundles include the full transcript, blocks, and
 // derived landmarks, so this cap bounds the resident footprint on long-running
-// TUI sessions. 6 covers a realistic scrub/compare neighbourhood — paired with
-// the foreground mtime guard it makes revisiting a recent session free (no
-// worker re-read, no reformat). Matches the spirit of THREADING_CACHE_LIMIT
-// (10) in threadingWorkerClient.ts, which already holds threaded messages +
-// cards for the same neighbourhood.
-const SESSION_CACHE_LIMIT = 6
+// TUI sessions. 8 covers the settled session plus its prefetched neighbourhood
+// (NEIGHBOR_PREFETCH_RADIUS on each side) with room for a couple of recents —
+// paired with the foreground mtime guard it makes revisiting a recent session
+// free (no worker re-read, no reformat). Matches the spirit of
+// THREADING_CACHE_LIMIT (10) in threadingWorkerClient.ts, which already holds
+// threaded messages + cards for the same neighbourhood.
+const SESSION_CACHE_LIMIT = 8
+// After a settle, warm the detail cache for the sessions adjacent to the
+// current one in sidebar order so the *first* visit to a neighbour opens from
+// cache instead of paying the full worker read (150ms–1s on big sessions).
+// The delay keeps the worker free for the settled session's own load first;
+// prefetches run one at a time and yield to any real open.
+const NEIGHBOR_PREFETCH_DELAY_MS = 450
+const NEIGHBOR_PREFETCH_RADIUS = 2
 const EXIT_CLEANUP_TIMEOUT_MS = 1500
 const MESSAGE_SCROLL_ACCEL = new MacOSScrollAccel()
 // Velocity scroll tuning — see velocityScrollStep(). A gap longer than the
@@ -5049,6 +5057,13 @@ export default function OpenTuiApp() {
       return idx === undefined ? entry : { ...entry, absoluteIndex: idx }
     })
   }, [filteredSessionsForSidebar, sessions, sidebarSort])
+  // Ref mirror for the neighbour-prefetch effect: it needs the current sidebar
+  // order at fire time without re-triggering on every 5s sessions poll (the
+  // entries array gets a fresh identity each refresh).
+  const sidebarEntriesRef = useRef<SidebarEntry[]>([])
+  useEffect(() => {
+    sidebarEntriesRef.current = sidebarEntries
+  }, [sidebarEntries])
   const sidebarSortLabel = sidebarSort === 'project' ? 'PROJECT' : 'TIME'
   const selectedSidebarEntryIndex = useMemo(() => {
     const idx = sidebarEntries.findIndex((e) => e.type === 'session' && e.absoluteIndex === selectedIndex)
@@ -6495,6 +6510,53 @@ export default function OpenTuiApp() {
           void refreshSelectedSessionDetail(next, true)
         }
       }
+    }
+  }, [])
+
+  // Cache-only warm read for a sidebar neighbour. Never touches display state,
+  // detailRequestRef, or loading/error flags — its only output is a filled
+  // sessionDetailCache + mtime record, so the user's next settle on this
+  // session takes refreshSelectedSessionDetail's cached-and-unchanged fast
+  // path (instant open, no worker read).
+  const prefetchSessionDetail = useCallback(async (session: Session): Promise<void> => {
+    const key = sessionKey(session)
+    if (backgroundRefreshInFlightRef.current.has(key)) return
+    if (liveTranscriptBaselineRef.current.has(key)) return
+    const lastModified = typeof session.lastModified === 'number'
+      ? session.lastModified
+      : sessionsByKeyRef.current.get(key)?.lastModified
+    const cached = sessionDetailCacheRef.current.has(key)
+    if (cached) {
+      // Fresh enough already — and without an mtime to compare, whatever is
+      // cached is good enough for a prefetch (the open's background refresh
+      // catches real staleness).
+      if (typeof lastModified !== 'number') return
+      const recorded = sessionDetailMtimeRef.current.get(key)
+      if (recorded != null && recorded >= lastModified) return
+    }
+    backgroundRefreshInFlightRef.current.add(key)
+    try {
+      const detail = await readTuiSessionDetailAsync(session, densityRef.current, showToolCallsRef.current)
+      if (typeof lastModified === 'number') sessionDetailMtimeRef.current.set(key, lastModified)
+      touchMapEntry(sessionDetailCacheRef.current, key, detail)
+      if (detail.contextUsage) {
+        touchMapEntry(sessionContextUsageCacheRef.current, key, detail.contextUsage)
+      }
+      const pinnedKeys = new Set([
+        ...openTabSessionsRef.current.map((openSession) => sessionKey(openSession)),
+        selectedSessionKeyRef.current,
+      ].filter((pinned): pinned is string => Boolean(pinned)))
+      pruneSessionCaches(
+        sessionDetailCacheRef.current,
+        sessionContextUsageCacheRef.current,
+        sessionMetadataFetchedAtRef.current,
+        pinnedKeys,
+      )
+    } catch {
+      // Best-effort: a failed prefetch just means the eventual open pays the
+      // normal read (which surfaces its own error if it also fails).
+    } finally {
+      backgroundRefreshInFlightRef.current.delete(key)
     }
   }, [])
 
@@ -8036,6 +8098,46 @@ export default function OpenTuiApp() {
     }, DETAIL_OPEN_DELAY_MS)
     return () => clearTimeout(timer)
   }, [bootstrapped, refreshSelectedSessionDetail, selectedSession?.isPending, selectedSessionIdentity, selectedSessionTarget])
+
+  // Neighbour prefetch: once a session settles (committedSessionKey catches up
+  // to the selection), warm the detail cache for the sessions around it in
+  // sidebar order — nearest first, alternating below/above — so scrubbing one
+  // step in either direction opens instantly instead of paying the first-visit
+  // worker read. Keyed on the SETTLED key so it never fires mid-scrub, and
+  // each step re-checks that no real open is (or is about to be) running —
+  // the threading worker is serial, so a prefetch posted ahead of a real open
+  // would delay it.
+  useEffect(() => {
+    if (!bootstrapped || !committedSessionKey) return undefined
+    let cancelled = false
+    const run = async () => {
+      const sessionEntries = sidebarEntriesRef.current.filter(
+        (entry): entry is Extract<SidebarEntry, { type: 'session' }> => entry.type === 'session',
+      )
+      const idx = sessionEntries.findIndex((entry) => sessionKey(entry.session) === committedSessionKey)
+      if (idx < 0) return
+      const neighbors: Session[] = []
+      for (let distance = 1; distance <= NEIGHBOR_PREFETCH_RADIUS; distance++) {
+        const below = sessionEntries[idx + distance]
+        if (below && !below.session.isPending) neighbors.push(below.session)
+        const above = sessionEntries[idx - distance]
+        if (above && !above.session.isPending) neighbors.push(above.session)
+      }
+      for (const neighbor of neighbors) {
+        if (cancelled) return
+        // Yield to real work: an open in flight (or queued), or the user has
+        // already scrubbed off the settled session.
+        if (foregroundLoadInFlightRef.current || pendingForegroundLoadRef.current) return
+        if (selectedSessionKeyRef.current !== committedSessionKey) return
+        await prefetchSessionDetail(neighbor)
+      }
+    }
+    const timer = setTimeout(() => { void run() }, NEIGHBOR_PREFETCH_DELAY_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [bootstrapped, committedSessionKey, prefetchSessionDetail])
 
   // Clear stale live todos on session switch
   useEffect(() => {
