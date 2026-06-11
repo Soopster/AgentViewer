@@ -415,6 +415,11 @@ const DETAIL_OPEN_DELAY_MS = 200
 // Capping the preview keeps browsing snappy; the full transcript mounts only
 // when you focus the messages pane to actually read it.
 const PREVIEW_CARD_CAP = 60
+// Above this many threaded messages, never format cards synchronously on the
+// render thread (the fallback in baseTranscriptCards) — formatTranscriptCard ×
+// N is a multi-second freeze on big sessions. The worker formats instead and
+// the transcript pops in when it lands (usually within one frame budget).
+const SYNC_FORMAT_CARD_LIMIT = 400
 // Safety net: max time to wait for a completed turn's persisted rows before
 // force-revealing the polled transcript, so the "Syncing…" state can't hang
 // forever on a lost/delayed write. Generous vs the 2s detail poll.
@@ -428,10 +433,13 @@ const TASK_PANEL_DEFAULT_WIDTH = 32
 const TASK_PANEL_MAX_WIDTH = 60
 const TASK_PANEL_RESIZE_STEP = 4
 // Cached TuiSessionDetail bundles include the full transcript, blocks, and
-// derived landmarks. Cap at 2 — active + one neighbour — to halve the worst-
-// case resident footprint on long-running TUI sessions. Switching further back
-// re-fetches and re-threads, which the workers already do off the main thread.
-const SESSION_CACHE_LIMIT = 2
+// derived landmarks, so this cap bounds the resident footprint on long-running
+// TUI sessions. 6 covers a realistic scrub/compare neighbourhood — paired with
+// the foreground mtime guard it makes revisiting a recent session free (no
+// worker re-read, no reformat). Matches the spirit of THREADING_CACHE_LIMIT
+// (10) in threadingWorkerClient.ts, which already holds threaded messages +
+// cards for the same neighbourhood.
+const SESSION_CACHE_LIMIT = 6
 const EXIT_CLEANUP_TIMEOUT_MS = 1500
 const MESSAGE_SCROLL_ACCEL = new MacOSScrollAccel()
 // Velocity scroll tuning — see velocityScrollStep(). A gap longer than the
@@ -4649,6 +4657,11 @@ export default function OpenTuiApp() {
   // over all base messages + formatTranscriptCard × N_base on the main thread
   // (60–800ms per delta for a 63–136 card session). Now that work runs only
   // when sessionDetail/density/showToolCalls actually change.
+  // Bumped when the warm-cache effect finishes an off-thread format, so the
+  // memo below re-runs its (now-hitting) sync cache lookup. Only relevant for
+  // sessions above SYNC_FORMAT_CARD_LIMIT, where the main-thread fallback is
+  // skipped.
+  const [workerCardCacheVersion, setWorkerCardCacheVersion] = useState(0)
   const baseTranscriptCards = useMemo<TuiTranscriptCard[]>(() => {
     const profileStart = CARD_PROFILE ? performance.now() : 0
     if (!transcriptSession || !sessionDetail) return []
@@ -4662,6 +4675,11 @@ export default function OpenTuiApp() {
     )
     if (cachedSync) {
       cards = cachedSync
+    } else if (sessionDetail.threadedMessages.length > SYNC_FORMAT_CARD_LIMIT) {
+      // Too large to format on the render thread (this path is a multi-second
+      // freeze on big sessions). The warm-cache effect below formats in the
+      // worker and bumps workerCardCacheVersion when the cards are ready.
+      cards = []
     } else {
       const filtered = showToolCalls
         ? sessionDetail.threadedMessages
@@ -4681,7 +4699,7 @@ export default function OpenTuiApp() {
       })
     }
     return cards
-  }, [density, sessionDetail, transcriptSession, showToolCalls])
+  }, [density, sessionDetail, transcriptSession, showToolCalls, workerCardCacheVersion])
 
   // ── Task context for live cards — stable across streaming deltas ───────────
   // buildTaskActiveForms and buildTaskRegistry scan the full base transcript.
@@ -4690,8 +4708,12 @@ export default function OpenTuiApp() {
   // Live messages occasionally contain TaskCreate/TaskUpdate calls; their task
   // events appear in the persisted transcript (and therefore here) on the next
   // poll, which is the correct behaviour — the live overlay is ephemeral.
+  // Only the live/bridge overlay cards consume this context (base cards are
+  // formatted in the worker), so skip the two O(N_base) scans entirely when no
+  // overlay exists — i.e. on every settled scrub/open of an idle session.
+  const hasTranscriptOverlay = liveTranscriptMessagesForSession.length > 0 || bridgeTranscriptEntries.length > 0
   const baseTaskContext = useMemo(() => {
-    if (!sessionDetail) return { activeForms: new Map() as ReturnType<typeof buildTaskActiveForms>, taskRegistry: new Map() as ReturnType<typeof buildTaskRegistry> }
+    if (!sessionDetail || !hasTranscriptOverlay) return { activeForms: new Map() as ReturnType<typeof buildTaskActiveForms>, taskRegistry: new Map() as ReturnType<typeof buildTaskRegistry> }
     const filtered = showToolCalls
       ? sessionDetail.threadedMessages
       : stripToolCallBlocks(sessionDetail.threadedMessages)
@@ -4699,11 +4721,27 @@ export default function OpenTuiApp() {
       activeForms: buildTaskActiveForms(filtered),
       taskRegistry: buildTaskRegistry(filtered),
     }
-  }, [sessionDetail, showToolCalls])
+  }, [sessionDetail, hasTranscriptOverlay, showToolCalls])
 
   // ── Live overlay — O(N_live) per delta, base cards always cache-hit ────────
   const transcriptCards = useMemo<TuiTranscriptCard[]>(() => {
     const profileStart = CARD_PROFILE ? performance.now() : 0
+    // No overlay (the common case, and always the case while browsing/scrubbing):
+    // return the base array as-is. Skipping the copy + sort keeps array identity
+    // stable so every downstream per-card WeakMap cache keeps hitting, and avoids
+    // an O(N log N) pass over the whole session on every recompute.
+    if (liveTranscriptMessagesForSession.length === 0 && bridgeTranscriptEntries.length === 0) {
+      if (CARD_PROFILE) {
+        logCardRecompute({
+          scope: 'transcriptCards',
+          totalCards: baseTranscriptCards.length,
+          recomputed: 0,
+          liveCards: 0,
+          durationMs: performance.now() - profileStart,
+        })
+      }
+      return baseTranscriptCards
+    }
     const liveMessages = showToolCalls
       ? liveTranscriptMessagesForSession
       : stripToolCallBlocks(liveTranscriptMessagesForSession)
@@ -4728,12 +4766,10 @@ export default function OpenTuiApp() {
     })
 
     const allCards = [...baseTranscriptCards, ...liveCards, ...bridgeCards]
-    // Sort by timestamp to interleave bridge messages chronologically
-    const sortedCards = allCards.sort((a, b) => {
-      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0
-      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0
-      return aTime - bTime
-    })
+    // Sort by timestamp to interleave bridge messages chronologically.
+    // timestampMs is pre-parsed by formatTranscriptCard — constructing a Date
+    // per comparison cost O(N log N) parses over the full session.
+    const sortedCards = allCards.sort((a, b) => (a.timestampMs ?? 0) - (b.timestampMs ?? 0))
 
     if (CARD_PROFILE) {
       logCardRecompute({
@@ -4824,12 +4860,21 @@ export default function OpenTuiApp() {
       showToolCalls,
     )
     if (cachedSync) return
+    let cancelled = false
     void formatTranscriptCardsAsync(
       transcriptSession,
       sessionDetail.threadedMessages,
       density,
       showToolCalls,
-    ).catch(() => { /* worker errors surface elsewhere */ })
+    ).then(() => {
+      // Re-render so baseTranscriptCards picks the cards up from the sync
+      // cache — required for over-SYNC_FORMAT_CARD_LIMIT sessions, which
+      // render empty until this format lands.
+      if (!cancelled) setWorkerCardCacheVersion((version) => version + 1)
+    }).catch(() => { /* worker errors surface elsewhere */ })
+    return () => {
+      cancelled = true
+    }
   }, [density, sessionDetail, transcriptSession, showToolCalls])
   const transcriptIndexByKey = useMemo(() => {
     const indexByKey = new Map<string, number>()
@@ -5707,6 +5752,22 @@ export default function OpenTuiApp() {
     [sidebarInnerWidth, sidebarSortLabel, sessions.length, filteredSessionsForSidebar.length, normalizedSessionQuery, sessionSearchQuery],
   )
 
+  // Full transcript only when the reader pane is focused; otherwise cap to the
+  // most-recent PREVIEW_CARD_CAP cards so browsing never pays for a giant
+  // session. The tail is what stickyScroll/followTail wants anyway. This window
+  // bounds the ENTIRE per-card pipeline below (stableCardData → allLandmarks →
+  // cardDisplayData → transcriptChildren), not just element construction —
+  // renderedBodyLines/cardDiffView over every card of a freshly opened large
+  // session was the dominant settle cost while scrubbing the sidebar.
+  const transcriptRenderStart = effectiveFocus === 'messages'
+    ? 0
+    : Math.max(0, visibleTranscriptCards.length - PREVIEW_CARD_CAP)
+  const renderedTranscriptCards = useMemo(
+    () => transcriptRenderStart === 0
+      ? visibleTranscriptCards
+      : visibleTranscriptCards.slice(transcriptRenderStart),
+    [transcriptRenderStart, visibleTranscriptCards],
+  )
   // Stable per-card data: body lines, diffs, code blocks. Cached by card reference so
   // when only one card's expansion toggles (transcriptCards ref unchanged), the other
   // cards reuse their prior StableCardData object — TranscriptCard memo then bails out.
@@ -5720,7 +5781,7 @@ export default function OpenTuiApp() {
     const cache = stableCardCacheRef.current
     const profileStart = CARD_PROFILE ? performance.now() : 0
     let recomputed = 0
-    const result = visibleTranscriptCards.map((card) => {
+    const result = renderedTranscriptCards.map((card) => {
       const isExpanded = resolvedExpandedKeys.has(card.key)
       const thinkingFull = thinkingFullKeys.has(card.key)
       const prev = cache.get(card)
@@ -5745,27 +5806,29 @@ export default function OpenTuiApp() {
     if (CARD_PROFILE) {
       logCardRecompute({
         scope: 'stableCardData',
-        totalCards: visibleTranscriptCards.length,
+        totalCards: renderedTranscriptCards.length,
         recomputed,
         liveCards: liveTranscriptMessagesForSession.length,
         durationMs: performance.now() - profileStart,
       })
     }
     return result
-  }, [visibleTranscriptCards, resolvedExpandedKeys, densityState.bodyLines, thinkingFullKeys])
+  }, [renderedTranscriptCards, resolvedExpandedKeys, densityState.bodyLines, thinkingFullKeys])
 
   const allLandmarksRef = useRef<CardLandmark[][] | null>(null)
   const allLandmarks = useMemo(() => {
+    // Marker indices are absolute; shift them into window space. A marker that
+    // falls before the preview window goes negative and simply never matches.
     const next = computeAllLandmarks(
-      visibleTranscriptCards,
-      resumeMarkerIndex,
-      unreadBoundaryIndex,
+      renderedTranscriptCards,
+      resumeMarkerIndex - transcriptRenderStart,
+      unreadBoundaryIndex - transcriptRenderStart,
       pendingNewCount,
       allLandmarksRef.current,
     )
     allLandmarksRef.current = next
     return next
-  }, [visibleTranscriptCards, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount])
+  }, [renderedTranscriptCards, transcriptRenderStart, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount])
 
   const cardDisplayCacheRef = useRef(new WeakMap<TuiTranscriptCard, {
     inputs: {
@@ -5784,9 +5847,11 @@ export default function OpenTuiApp() {
     const cache = cardDisplayCacheRef.current
     const profileStart = CARD_PROFILE ? performance.now() : 0
     let recomputed = 0
-    const result = visibleTranscriptCards.map((card, index) => {
+    const result = renderedTranscriptCards.map((card, index) => {
       const isExpanded = resolvedExpandedKeys.has(card.key)
-      const isLatest = index === visibleTranscriptCards.length - 1
+      // The window is the transcript tail, so the last windowed card is the
+      // last card overall.
+      const isLatest = index === renderedTranscriptCards.length - 1
       const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
       const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
       const stable = stableCardData[index] ?? {
@@ -5856,7 +5921,7 @@ export default function OpenTuiApp() {
     if (CARD_PROFILE) {
       logCardRecompute({
         scope: 'cardDisplayData',
-        totalCards: visibleTranscriptCards.length,
+        totalCards: renderedTranscriptCards.length,
         recomputed,
         liveCards: liveTranscriptMessagesForSession.length,
         durationMs: performance.now() - profileStart,
@@ -5866,7 +5931,7 @@ export default function OpenTuiApp() {
   }, [
     allLandmarks,
     stableCardData,
-    visibleTranscriptCards,
+    renderedTranscriptCards,
     resolvedExpandedKeys,
     transcriptView,
     provider,
@@ -5893,22 +5958,18 @@ export default function OpenTuiApp() {
   // scrub → the whole transcript subtree keeps element identity and React skips
   // reconciling it.
   const transcriptNoteNamespace = committedSessionKey ?? 'no-session'
-  // Full transcript only when the reader pane is focused; otherwise cap to the
-  // most-recent PREVIEW_CARD_CAP cards so browsing never pays to lay out a giant
-  // session. The tail is what stickyScroll/followTail wants anyway.
-  const transcriptRenderStart = effectiveFocus === 'messages'
-    ? 0
-    : Math.max(0, visibleTranscriptCards.length - PREVIEW_CARD_CAP)
   const transcriptChildren = useMemo(() => {
-    const cards: React.ReactNode[] = visibleTranscriptCards.slice(transcriptRenderStart).map((card, i) => {
-      const index = transcriptRenderStart + i
-      const display = cardDisplayData[index]
+    const cards: React.ReactNode[] = renderedTranscriptCards.map((card, i) => {
+      // cardDisplayData/stableCardData are window-relative (index i); search
+      // matches are absolute indices into visibleTranscriptCards.
+      const absoluteIndex = transcriptRenderStart + i
+      const display = cardDisplayData[i]
       if (!display) return null
       const isSelected = card.key === transcriptCursorKey
       const hasCursor = isSelected && effectiveFocus === 'messages'
       const isExpanded = resolvedExpandedKeys.has(card.key)
-      const isSearchHit = searchMatchSet.has(index)
-      const isActiveMatch = isSearchHit && activeMatchTargetIndex === index
+      const isSearchHit = searchMatchSet.has(absoluteIndex)
+      const isActiveMatch = isSearchHit && activeMatchTargetIndex === absoluteIndex
       return (
         <TranscriptCard
           key={card.key}
@@ -5957,7 +6018,7 @@ export default function OpenTuiApp() {
     }
     return cards
   }, [
-    visibleTranscriptCards,
+    renderedTranscriptCards,
     transcriptRenderStart,
     cardDisplayData,
     transcriptCursorKey,
@@ -6219,6 +6280,28 @@ export default function OpenTuiApp() {
       if (cached) {
         setSessionDetail(cached)
         setLoadingDetail(false)
+        // Session file unchanged since the cached detail was read → the worker
+        // re-read would return identical content. Skip it entirely so settling
+        // on a recently-visited session costs nothing (the same guard the
+        // background poll uses; the next sessions-list refresh catches a stale
+        // lastModified). Never skip while a live turn is in flight.
+        const recordedMtime = sessionDetailMtimeRef.current.get(cacheKeyForGuards)
+        if (
+          typeof session.lastModified === 'number'
+          && recordedMtime != null
+          && recordedMtime >= session.lastModified
+          && !awaitingPersistedTurnRef.current
+          && !liveTranscriptBaselineRef.current.has(cacheKeyForGuards)
+        ) {
+          setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
+          foregroundLoadInFlightRef.current = false
+          const next = pendingForegroundLoadRef.current
+          if (next) {
+            pendingForegroundLoadRef.current = null
+            void refreshSelectedSessionDetail(next, true)
+          }
+          return
+        }
       } else {
         setLoadingDetail(true)
       }
@@ -9103,7 +9186,11 @@ export default function OpenTuiApp() {
       action()
     }
     const selectedTranscriptCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
-    const selectedTranscriptCardDisplay = cursorIndex >= 0 ? cardDisplayData[cursorIndex] : null
+    // cardDisplayData is window-relative (preview cap while browsing); shift
+    // the absolute cursor index into window space.
+    const selectedTranscriptCardDisplay = cursorIndex >= transcriptRenderStart
+      ? cardDisplayData[cursorIndex - transcriptRenderStart] ?? null
+      : null
 
     if (exitConfirmOpen) {
       if (key.name === 'return' || key.name === 'y') {

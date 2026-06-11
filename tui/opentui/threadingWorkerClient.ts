@@ -184,11 +184,17 @@ export function formatTranscriptCardsAsync(
     pending.set(id, {
       kind: 'format',
       resolve: (transcriptCards) => {
+        // (Re)create the entry when it was evicted or holds a different
+        // threaded identity — getTranscriptCardsSync compares identity against
+        // the caller's `threaded`, so an entry keyed to anything else can never
+        // serve the transcript this format was requested for. A fresher detail
+        // read simply re-caches on its own resolve.
         const existing = threadingCacheByKey.get(key)
-        if (existing && existing.threadedMessages === threaded) {
-          rememberCardsVariant(existing, density, showToolCalls, transcriptCards)
-          touchThreadingCache(key, existing)
-        }
+        const entry = existing && existing.threadedMessages === threaded
+          ? existing
+          : { threadedMessages: threaded, cardsByVariant: new Map<string, TuiTranscriptCard[]>() }
+        rememberCardsVariant(entry, density, showToolCalls, transcriptCards)
+        touchThreadingCache(key, entry)
         resolve(transcriptCards)
       },
       reject,
