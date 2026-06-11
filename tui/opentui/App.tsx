@@ -420,6 +420,13 @@ const PREVIEW_CARD_CAP = 60
 // N is a multi-second freeze on big sessions. The worker formats instead and
 // the transcript pops in when it lands (usually within one frame budget).
 const SYNC_FORMAT_CARD_LIMIT = 400
+// Stable empty set for browse-mode preview rendering (all cards collapsed).
+const EMPTY_EXPANDED_KEYS: ReadonlySet<string> = new Set<string>()
+// Composer affordances (slash commands / agent options) cache. Refreshing
+// these for a Claude session spawns a CLI subprocess, so cache generously —
+// command lists change rarely (new files in .claude/commands etc.).
+const COMPOSER_AFFORDANCES_TTL_MS = 5 * 60_000
+const COMPOSER_AFFORDANCES_CACHE_MAX = 64
 // Safety net: max time to wait for a completed turn's persisted rows before
 // force-revealing the polled transcript, so the "Syncing…" state can't hang
 // forever on a lost/delayed write. Generous vs the 2s detail poll.
@@ -4399,6 +4406,18 @@ export default function OpenTuiApp() {
     if (!selectedSessionKey) return 0
     return sessions.findIndex((session) => sessionKey(session) === selectedSessionKey)
   }, [selectedSessionKey, sessions])
+  // Latest sessions list keyed for ref-time lookups. refreshSelectedSessionDetail
+  // receives identity-stable SKELETON sessions ({sessionId, provider} — see
+  // selectedSessionTarget), so it must resolve list-level metadata like
+  // lastModified here; reading it off the passed session silently disabled the
+  // mtime guards (typeof undefined !== 'number') and made every 2s poll and
+  // every scrub settle re-read the full session file.
+  const sessionsByKeyRef = useRef(new Map<string, Session>())
+  useEffect(() => {
+    const byKey = new Map<string, Session>()
+    for (const session of sessions) byKey.set(sessionKey(session), session)
+    sessionsByKeyRef.current = byKey
+  }, [sessions])
   // Fall back to openTabSessions when the key doesn't match anything in
   // `sessions` — that's the case for freshly created pending provider sessions
   // (added to openTabSessions immediately, but only appears in `sessions` once
@@ -5169,51 +5188,91 @@ export default function OpenTuiApp() {
     return filterSlashCommands(merged, composerFirstLine.slice(1))
   }, [composerSlashOpen, composerFirstLine, selectedSession?.provider, composerLiveSlashCommands])
 
+  const composerAffordancesCacheRef = useRef(new Map<string, {
+    commands: SlashCommandSuggestion[]
+    options: Awaited<ReturnType<typeof readViewSessionComposerOptions>>
+    ts: number
+  }>())
+  // Composer affordances (slash commands, agent pickers). For Claude,
+  // readViewSessionSlashCommands SPAWNS a full `claude` CLI subprocess
+  // (createSessionControlQuery → query({resume}), ~1–3s) — so this must never
+  // track the live selection or the raw `selectedSession` object:
+  // - per scrub step it spawned one subprocess per session passed through, and
+  //   the backlog of overlapping spawns is what made scrubbing progressively
+  //   slower the longer it went on (CPU-profiled: sdk.mjs + spawn + dlopen);
+  // - the `selectedSession` identity also changes on every 5s sessions poll,
+  //   which re-fired this effect (one subprocess every 5s while idle).
+  // Keyed on the SETTLED session (committedSessionKey lags the selection by
+  // the open debounce and is poll-stable) with a per-session TTL cache so
+  // revisits during a scrub spawn nothing.
   useEffect(() => {
-    if (!selectedSession) {
+    const target = transcriptSession
+    const clearAffordances = () => {
       setComposerLiveSlashCommands([])
       setComposerAgentOptions([])
       setComposerMentionAgents([])
       setTuiOpenCodeAgent('')
+    }
+    if (!target || !committedSessionKey) {
+      clearAffordances()
+      return
+    }
+    const applyAffordances = (
+      commands: SlashCommandSuggestion[],
+      composerOptions: Awaited<ReturnType<typeof readViewSessionComposerOptions>>,
+    ) => {
+      setComposerLiveSlashCommands(commands)
+      const agentOptions = composerOptions.agents ?? []
+      setComposerAgentOptions(agentOptions)
+      setComposerMentionAgents(composerOptions.mentionAgents ?? [])
+      if (target.provider === 'opencode') {
+        const currentAgent = composerOptions.currentAgent
+        setTuiOpenCodeAgent(
+          currentAgent && agentOptions.some((agent) => agent.value === currentAgent)
+            ? currentAgent
+            : agentOptions[0]?.value ?? '',
+        )
+      } else {
+        setTuiOpenCodeAgent('')
+      }
+    }
+    const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
+    if (cached && Date.now() - cached.ts < COMPOSER_AFFORDANCES_TTL_MS) {
+      applyAffordances(cached.commands, cached.options)
       return
     }
     let cancelled = false
     void (async () => {
       try {
         const [live, composerOptions] = await Promise.all([
-          readViewSessionSlashCommands(selectedSession.sessionId, selectedSession.provider),
-          readViewSessionComposerOptions(selectedSession.sessionId, selectedSession.provider),
+          readViewSessionSlashCommands(target.sessionId, target.provider),
+          readViewSessionComposerOptions(target.sessionId, target.provider),
         ])
-        if (cancelled) return
-        setComposerLiveSlashCommands(live.map((entry) => ({
+        const commands = live.map((entry) => ({
           command: entry.command,
           description: entry.description,
           argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
-        })))
-        const agentOptions = composerOptions.agents ?? []
-        setComposerAgentOptions(agentOptions)
-        setComposerMentionAgents(composerOptions.mentionAgents ?? [])
-        if (selectedSession.provider === 'opencode') {
-          const currentAgent = composerOptions.currentAgent
-          setTuiOpenCodeAgent(
-            currentAgent && agentOptions.some((agent) => agent.value === currentAgent)
-              ? currentAgent
-              : agentOptions[0]?.value ?? '',
-          )
-        } else {
-          setTuiOpenCodeAgent('')
+        }))
+        // Cache even when this effect was superseded — the work is done, and
+        // the next visit to this session should not spawn again.
+        touchMapEntry(composerAffordancesCacheRef.current, committedSessionKey, {
+          commands,
+          options: composerOptions,
+          ts: Date.now(),
+        })
+        while (composerAffordancesCacheRef.current.size > COMPOSER_AFFORDANCES_CACHE_MAX) {
+          const oldest = composerAffordancesCacheRef.current.keys().next().value
+          if (oldest === undefined) break
+          composerAffordancesCacheRef.current.delete(oldest)
         }
+        if (cancelled) return
+        applyAffordances(commands, composerOptions)
       } catch {
-        if (!cancelled) {
-          setComposerLiveSlashCommands([])
-          setComposerAgentOptions([])
-          setComposerMentionAgents([])
-          setTuiOpenCodeAgent('')
-        }
+        if (!cancelled) clearAffordances()
       }
     })()
     return () => { cancelled = true }
-  }, [selectedSession?.sessionId, selectedSession?.provider, selectedSession])
+  }, [committedSessionKey])
   const composerSlashHint = useMemo(() => {
     if (!composerSlashOpen) return ''
     const provider = selectedSession?.provider ?? 'claude'
@@ -5768,6 +5827,15 @@ export default function OpenTuiApp() {
       : visibleTranscriptCards.slice(transcriptRenderStart),
     [transcriptRenderStart, visibleTranscriptCards],
   )
+  // Browse-mode preview renders every card COLLAPSED. Text cards are expanded
+  // by default in conversation view, and an expanded card mounts its entire
+  // body — for prompt-heavy sessions that means feeding 100KB+ of markdown to
+  // OpenTUI's <markdown> renderable, whose marked lexer alone cost seconds of
+  // main-thread time per scrub settle (CPU-profiled: ~25% in marked block
+  // regexes). Collapsed bodies are truncated to densityState.bodyLines lines,
+  // so a preview mount is bounded no matter what the cards contain. Expansion
+  // state applies only once the reader pane is focused.
+  const expandedKeysForRender = effectiveFocus === 'messages' ? resolvedExpandedKeys : EMPTY_EXPANDED_KEYS
   // Stable per-card data: body lines, diffs, code blocks. Cached by card reference so
   // when only one card's expansion toggles (transcriptCards ref unchanged), the other
   // cards reuse their prior StableCardData object — TranscriptCard memo then bails out.
@@ -5782,7 +5850,7 @@ export default function OpenTuiApp() {
     const profileStart = CARD_PROFILE ? performance.now() : 0
     let recomputed = 0
     const result = renderedTranscriptCards.map((card) => {
-      const isExpanded = resolvedExpandedKeys.has(card.key)
+      const isExpanded = expandedKeysForRender.has(card.key)
       const thinkingFull = thinkingFullKeys.has(card.key)
       const prev = cache.get(card)
       if (
@@ -5813,7 +5881,7 @@ export default function OpenTuiApp() {
       })
     }
     return result
-  }, [renderedTranscriptCards, resolvedExpandedKeys, densityState.bodyLines, thinkingFullKeys])
+  }, [renderedTranscriptCards, expandedKeysForRender, densityState.bodyLines, thinkingFullKeys])
 
   const allLandmarksRef = useRef<CardLandmark[][] | null>(null)
   const allLandmarks = useMemo(() => {
@@ -5848,7 +5916,7 @@ export default function OpenTuiApp() {
     const profileStart = CARD_PROFILE ? performance.now() : 0
     let recomputed = 0
     const result = renderedTranscriptCards.map((card, index) => {
-      const isExpanded = resolvedExpandedKeys.has(card.key)
+      const isExpanded = expandedKeysForRender.has(card.key)
       // The window is the transcript tail, so the last windowed card is the
       // last card overall.
       const isLatest = index === renderedTranscriptCards.length - 1
@@ -5932,7 +6000,7 @@ export default function OpenTuiApp() {
     allLandmarks,
     stableCardData,
     renderedTranscriptCards,
-    resolvedExpandedKeys,
+    expandedKeysForRender,
     transcriptView,
     provider,
     shouldEnableSyntaxHighlighting,
@@ -5967,7 +6035,7 @@ export default function OpenTuiApp() {
       if (!display) return null
       const isSelected = card.key === transcriptCursorKey
       const hasCursor = isSelected && effectiveFocus === 'messages'
-      const isExpanded = resolvedExpandedKeys.has(card.key)
+      const isExpanded = expandedKeysForRender.has(card.key)
       const isSearchHit = searchMatchSet.has(absoluteIndex)
       const isActiveMatch = isSearchHit && activeMatchTargetIndex === absoluteIndex
       return (
@@ -6023,7 +6091,7 @@ export default function OpenTuiApp() {
     cardDisplayData,
     transcriptCursorKey,
     effectiveFocus,
-    resolvedExpandedKeys,
+    expandedKeysForRender,
     searchMatchSet,
     activeMatchTargetIndex,
     bookmarkKeys,
@@ -6244,6 +6312,12 @@ export default function OpenTuiApp() {
 
   const refreshSelectedSessionDetail = useCallback(async (session: Session, foreground = true) => {
     const cacheKeyForGuards = sessionKey(session)
+    // Callers pass identity-stable skeleton sessions; pull lastModified from
+    // the latest sessions list (see sessionsByKeyRef) or the guards below
+    // never fire and every poll/settle re-reads the full session file.
+    const sessionLastModified = typeof session.lastModified === 'number'
+      ? session.lastModified
+      : sessionsByKeyRef.current.get(cacheKeyForGuards)?.lastModified
     if (!foreground && (loadingDetailRef.current || backgroundRefreshInFlightRef.current.has(cacheKeyForGuards))) return
     if (!foreground && liveTranscriptBaselineRef.current.has(cacheKeyForGuards) && !awaitingPersistedTurnRef.current) return
 
@@ -6252,12 +6326,10 @@ export default function OpenTuiApp() {
     // full message file every interval for idle sessions. Worst case the
     // sidebar's lastModified is stale and we skip one poll; the next sidebar
     // refresh catches us up.
-    if (!foreground && !awaitingPersistedTurnRef.current && typeof session.lastModified === 'number') {
+    if (!foreground && !awaitingPersistedTurnRef.current && typeof sessionLastModified === 'number') {
       const recordedMtime = sessionDetailMtimeRef.current.get(cacheKeyForGuards)
-      if (recordedMtime != null && recordedMtime >= session.lastModified) return
+      if (recordedMtime != null && recordedMtime >= sessionLastModified) return
     }
-    const requestId = ++detailRequestRef.current
-
     // Cache-first for foreground loads — show the last-known detail immediately
     // rather than flashing a spinner while disk IO / JSON parsing runs. A
     // background refresh still fires below so the UI catches up.
@@ -6287,9 +6359,9 @@ export default function OpenTuiApp() {
         // lastModified). Never skip while a live turn is in flight.
         const recordedMtime = sessionDetailMtimeRef.current.get(cacheKeyForGuards)
         if (
-          typeof session.lastModified === 'number'
+          typeof sessionLastModified === 'number'
           && recordedMtime != null
-          && recordedMtime >= session.lastModified
+          && recordedMtime >= sessionLastModified
           && !awaitingPersistedTurnRef.current
           && !liveTranscriptBaselineRef.current.has(cacheKeyForGuards)
         ) {
@@ -6306,11 +6378,45 @@ export default function OpenTuiApp() {
         setLoadingDetail(true)
       }
     }
+    // Take the request id only once this call is actually going to read.
+    // Taking it before the coalesce branch above meant every DEFERRED call
+    // (each scrub settle while a load was running) bumped the counter and
+    // invalidated the in-flight read — whose completed result was then thrown
+    // away wholesale, cache fill included. Scrubbing through big sessions
+    // degenerated into a chain of full reads that never displayed and never
+    // cached, which read as the TUI getting progressively slower.
+    const requestId = ++detailRequestRef.current
     if (!foreground) backgroundRefreshInFlightRef.current.add(cacheKeyForGuards)
     setError((current) => current?.startsWith('Failed to load session detail') ? null : current)
 
     try {
       const detail = await readTuiSessionDetailAsync(session, densityRef.current, showToolCallsRef.current)
+      // Cache the completed read BEFORE the staleness gate. A newer request
+      // superseding this one only makes the result too old to display — the
+      // read itself is still the freshest snapshot of this session, and
+      // discarding it forced the next visit to pay the full read again.
+      if (typeof sessionLastModified === 'number') {
+        sessionDetailMtimeRef.current.set(cacheKeyForGuards, sessionLastModified)
+      }
+      const cacheKey = sessionKey(session)
+      const pinnedKeys = new Set([
+        ...openTabSessionsRef.current.map((openSession) => sessionKey(openSession)),
+        selectedSessionKeyRef.current,
+      ].filter((key): key is string => Boolean(key)))
+      touchMapEntry(sessionDetailCacheRef.current, cacheKey, detail)
+      if (detail.contextUsage) {
+        touchMapEntry(sessionContextUsageCacheRef.current, cacheKey, detail.contextUsage)
+      }
+      pruneSessionCaches(
+        sessionDetailCacheRef.current,
+        sessionContextUsageCacheRef.current,
+        sessionMetadataFetchedAtRef.current,
+        pinnedKeys,
+      )
+      // Still scrubbing — a newer settle queued while this read ran. Cache
+      // only (above); the chained call in `finally` opens the latest target,
+      // so fly-by sessions never pay a transcript mount.
+      if (foreground && pendingForegroundLoadRef.current) return
       if (requestId !== detailRequestRef.current) return
       const liveBaseline = liveTranscriptBaselineRef.current.get(cacheKeyForGuards)
       if (liveBaseline) {
@@ -6339,15 +6445,6 @@ export default function OpenTuiApp() {
           }
         }
       }
-      if (typeof session.lastModified === 'number') {
-        sessionDetailMtimeRef.current.set(cacheKeyForGuards, session.lastModified)
-      }
-      const cacheKey = sessionKey(session)
-      const cachedDetail = sessionDetailCacheRef.current.get(cacheKey)
-      const pinnedKeys = new Set([
-        ...openTabSessionsRef.current.map((openSession) => sessionKey(openSession)),
-        selectedSessionKeyRef.current,
-      ].filter((key): key is string => Boolean(key)))
       startTransition(() => {
         setSessionDetail((prev) => {
           if (
@@ -6358,29 +6455,19 @@ export default function OpenTuiApp() {
             prev.info?.currentModel === detail.info?.currentModel &&
             prev.info?.customTitle === detail.info?.customTitle
           ) {
+            // Content unchanged → keep the displayed object, and put IT back
+            // in the cache (the fresh-read `detail` was cached above) so the
+            // cached and displayed identities stay the same — a later
+            // cache-first display of a different object would force a full
+            // downstream reformat for content that didn't change.
+            touchMapEntry(sessionDetailCacheRef.current, cacheKey, prev)
             return prev
           }
-          touchMapEntry(sessionDetailCacheRef.current, cacheKey, detail)
-          pruneSessionCaches(
-            sessionDetailCacheRef.current,
-            sessionContextUsageCacheRef.current,
-            sessionMetadataFetchedAtRef.current,
-            pinnedKeys,
-          )
           return detail
         })
-        if (detail.contextUsage) {
-          touchMapEntry(sessionContextUsageCacheRef.current, cacheKey, detail.contextUsage)
-          pruneSessionCaches(
-            sessionDetailCacheRef.current,
-            sessionContextUsageCacheRef.current,
-            sessionMetadataFetchedAtRef.current,
-            pinnedKeys,
-          )
-          if (cacheKey === selectedSessionKeyRef.current) {
-            setContextUsage(detail.contextUsage)
-            setContextUsageStatus('ready')
-          }
+        if (detail.contextUsage && cacheKey === selectedSessionKeyRef.current) {
+          setContextUsage(detail.contextUsage)
+          setContextUsageStatus('ready')
         }
       })
 
