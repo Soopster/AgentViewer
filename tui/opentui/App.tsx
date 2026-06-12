@@ -415,6 +415,38 @@ const DETAIL_OPEN_DELAY_MS = 200
 // Capping the preview keeps browsing snappy; the full transcript mounts only
 // when you focus the messages pane to actually read it.
 const PREVIEW_CARD_CAP = 60
+// Reader-mode virtualization. The messages pane used to mount the FULL
+// transcript, so opening a huge session paid an O(cards) Yoga layout once and
+// every commit while reading stayed that size. Instead mount a sliding window
+// of READER_CARD_WINDOW cards: keyboard navigation recenters the window when
+// the cursor nears an edge, and a scroll poll slides it when the user
+// wheels/drags near the top or bottom of the mounted content. Sessions at or
+// under the window size behave exactly as before (full mount, no sliding).
+// Env override is a test hook (lets a harness exercise sliding against a
+// modest session) and an escape hatch for very tall terminals.
+const READER_CARD_WINDOW = Math.max(
+  40,
+  Number.parseInt(process.env.AGENT_VIEWER_READER_WINDOW ?? '', 10) || 240,
+)
+// Cards the window shifts per edge slide. Big enough that consecutive slides
+// are rare while wheel-scrolling, small enough that a slide's remount stays
+// cheap (slide-size new cards + one layout of the window).
+const READER_WINDOW_SLIDE = Math.floor(READER_CARD_WINDOW / 2)
+// Keyboard recenter margin: when the cursor gets within this many cards of a
+// window edge (and more cards exist beyond it), recenter the window.
+const READER_WINDOW_MARGIN = Math.max(8, Math.floor(READER_CARD_WINDOW / 10))
+// Scroll poll: OpenTUI's scrollbox emits no scroll events, so while a window
+// is active we poll scrollTop on an interval (two property reads — negligible)
+// and slide when the viewport is within READER_EDGE_ROWS of the content edge.
+const READER_EDGE_ROWS = 8
+const READER_SCROLL_POLL_MS = 120
+// Post-slide scroll fixups must wait for the next Yoga layout pass (layout is
+// computed per render frame, not at React commit). The executor retries on a
+// short timer until the anchor card's content offset moves (a slide always
+// changes it — content was added/removed above the anchor), bounded by
+// READER_FIXUP_MAX_TRIES as a safety net.
+const READER_FIXUP_RETRY_MS = 16
+const READER_FIXUP_MAX_TRIES = 12
 // Above this many threaded messages, never format cards synchronously on the
 // render thread (the fallback in baseTranscriptCards) — formatTranscriptCard ×
 // N is a multi-second freeze on big sessions. The worker formats instead and
@@ -4098,6 +4130,10 @@ export default function OpenTuiApp() {
   // that session's transcript has loaded.
   const pendingBookmarkCursorRef = useRef<{ sessionKey: string; uuid: string } | null>(null)
   const [followTail, setFollowTail] = useState(true)
+  // Absolute index (into visibleTranscriptCards) of the first mounted reader
+  // card when the window is detached from the tail. null = pinned to the tail
+  // (derived), which is also the followTail shape. See READER_CARD_WINDOW.
+  const [readerWindowStart, setReaderWindowStart] = useState<number | null>(null)
   const [pendingNewCount, setPendingNewCount] = useState(0)
   const [unreadBoundaryKey, setUnreadBoundaryKey] = useState<string | null>(null)
   const [resumeMarkerKey, setResumeMarkerKey] = useState<string | null>(null)
@@ -4194,6 +4230,17 @@ export default function OpenTuiApp() {
   const [openTabSessions, setOpenTabSessions] = useState<Session[]>([])
 
   const transcriptScrollRef = useRef<ScrollBoxRenderable>(null)
+  // Pending scroll correction for the commit that slides the reader window.
+  // 'anchor' restores the pre-slide visual position relative to a card mounted
+  // in both windows; 'cursor' scrolls the cursor card into view once mounted.
+  const readerScrollFixupRef = useRef<
+    | { kind: 'anchor'; anchorKey: string; prevContentOffset: number; viewportOffset: number }
+    | { kind: 'cursor'; cardKey: string }
+    | null
+  >(null)
+  // Metrics-only mirror of the mounted card window (assigned during render,
+  // read by the gauge timer).
+  const readerWindowGaugeRef = useRef({ start: 0, end: 0, total: 0 })
   const sidebarScrollRef = useRef<ScrollBoxRenderable>(null)
   const sidebarBoxRef = useRef<BoxRenderable>(null)
   const pausedTranscriptScrollTopRef = useRef<number | null>(null)
@@ -4303,6 +4350,9 @@ export default function OpenTuiApp() {
     liveTranscriptBaseline: liveTranscriptBaselineRef.current.size,
     backgroundRefreshInFlight: backgroundRefreshInFlightRef.current.size,
     sessionDetailMtime: sessionDetailMtimeRef.current.size,
+    readerWindowStart: readerWindowGaugeRef.current.start,
+    readerWindowEnd: readerWindowGaugeRef.current.end,
+    readerWindowTotal: readerWindowGaugeRef.current.total,
   })), [sessions.length, sessionDetail])
   useEffect(() => {
     if (!composerActive && composerWindowOpen) setComposerWindowOpen(false)
@@ -5826,22 +5876,38 @@ export default function OpenTuiApp() {
     [sidebarInnerWidth, sidebarSortLabel, sessions.length, filteredSessionsForSidebar.length, normalizedSessionQuery, sessionSearchQuery],
   )
 
-  // Full transcript only when the reader pane is focused; otherwise cap to the
-  // most-recent PREVIEW_CARD_CAP cards so browsing never pays for a giant
-  // session. The tail is what stickyScroll/followTail wants anyway. This window
-  // bounds the ENTIRE per-card pipeline below (stableCardData → allLandmarks →
-  // cardDisplayData → transcriptChildren), not just element construction —
-  // renderedBodyLines/cardDiffView over every card of a freshly opened large
-  // session was the dominant settle cost while scrubbing the sidebar.
-  const transcriptRenderStart = effectiveFocus === 'messages'
-    ? 0
-    : Math.max(0, visibleTranscriptCards.length - PREVIEW_CARD_CAP)
+  // Mounted-card window. Browsing (sidebar focused) caps to the most-recent
+  // PREVIEW_CARD_CAP cards so scrubbing never pays for a giant session; the
+  // focused reader mounts a READER_CARD_WINDOW slice that follows the tail
+  // (followTail) or the detached readerWindowStart anchor (slides/recenters).
+  // This window bounds the ENTIRE per-card pipeline below (stableCardData →
+  // allLandmarks → cardDisplayData → transcriptChildren), not just element
+  // construction — and OpenTUI's scrollbox lays out every mounted card on
+  // every commit (viewportCulling only skips paint), so it also bounds the
+  // per-commit Yoga layout cost while reading.
+  const totalTranscriptCards = visibleTranscriptCards.length
+  let transcriptRenderStart: number
+  let transcriptRenderEnd: number
+  if (effectiveFocus !== 'messages') {
+    transcriptRenderStart = Math.max(0, totalTranscriptCards - PREVIEW_CARD_CAP)
+    transcriptRenderEnd = totalTranscriptCards
+  } else if (totalTranscriptCards <= READER_CARD_WINDOW) {
+    transcriptRenderStart = 0
+    transcriptRenderEnd = totalTranscriptCards
+  } else if (followTail || readerWindowStart == null) {
+    transcriptRenderStart = totalTranscriptCards - READER_CARD_WINDOW
+    transcriptRenderEnd = totalTranscriptCards
+  } else {
+    transcriptRenderStart = clamp(readerWindowStart, 0, totalTranscriptCards - READER_CARD_WINDOW)
+    transcriptRenderEnd = transcriptRenderStart + READER_CARD_WINDOW
+  }
   const renderedTranscriptCards = useMemo(
-    () => transcriptRenderStart === 0
+    () => transcriptRenderStart === 0 && transcriptRenderEnd === visibleTranscriptCards.length
       ? visibleTranscriptCards
-      : visibleTranscriptCards.slice(transcriptRenderStart),
-    [transcriptRenderStart, visibleTranscriptCards],
+      : visibleTranscriptCards.slice(transcriptRenderStart, transcriptRenderEnd),
+    [transcriptRenderStart, transcriptRenderEnd, visibleTranscriptCards],
   )
+  readerWindowGaugeRef.current = { start: transcriptRenderStart, end: transcriptRenderEnd, total: totalTranscriptCards }
   // Browse-mode preview renders every card COLLAPSED. Text cards are expanded
   // by default in conversation view, and an expanded card mounts its entire
   // body — for prompt-heavy sessions that means feeding 100KB+ of markdown to
@@ -5932,9 +5998,9 @@ export default function OpenTuiApp() {
     let recomputed = 0
     const result = renderedTranscriptCards.map((card, index) => {
       const isExpanded = expandedKeysForRender.has(card.key)
-      // The window is the transcript tail, so the last windowed card is the
-      // last card overall.
-      const isLatest = index === renderedTranscriptCards.length - 1
+      // Latest = last card of the FULL transcript; a detached reader window
+      // may end before it.
+      const isLatest = transcriptRenderStart + index === totalTranscriptCards - 1
       const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
       const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
       const stable = stableCardData[index] ?? {
@@ -6015,6 +6081,8 @@ export default function OpenTuiApp() {
     allLandmarks,
     stableCardData,
     renderedTranscriptCards,
+    transcriptRenderStart,
+    totalTranscriptCards,
     expandedKeysForRender,
     transcriptView,
     provider,
@@ -6094,7 +6162,22 @@ export default function OpenTuiApp() {
       cards.unshift(
         <box key="preview-cap-hint" paddingX={1}>
           <text fg={theme.dim} wrapMode="none">
-            {fitText(`↑ ${transcriptRenderStart} earlier message${transcriptRenderStart === 1 ? '' : 's'} — open the session (Enter) to view all`, rightPaneWidth - 2)}
+            {fitText(
+              effectiveFocus === 'messages'
+                ? `↑ ${transcriptRenderStart} earlier message${transcriptRenderStart === 1 ? '' : 's'} — scroll up to load`
+                : `↑ ${transcriptRenderStart} earlier message${transcriptRenderStart === 1 ? '' : 's'} — open the session (Enter) to view all`,
+              rightPaneWidth - 2,
+            )}
+          </text>
+        </box>,
+      )
+    }
+    if (transcriptRenderEnd < totalTranscriptCards) {
+      const laterCount = totalTranscriptCards - transcriptRenderEnd
+      cards.push(
+        <box key="reader-window-tail-hint" paddingX={1}>
+          <text fg={theme.dim} wrapMode="none">
+            {fitText(`↓ ${laterCount} later message${laterCount === 1 ? '' : 's'} — scroll down to load, G for latest`, rightPaneWidth - 2)}
           </text>
         </box>,
       )
@@ -6103,6 +6186,8 @@ export default function OpenTuiApp() {
   }, [
     renderedTranscriptCards,
     transcriptRenderStart,
+    transcriptRenderEnd,
+    totalTranscriptCards,
     cardDisplayData,
     transcriptCursorKey,
     effectiveFocus,
@@ -8520,6 +8605,148 @@ export default function OpenTuiApp() {
     return () => clearTimeout(timer)
   }, [followTail, transcriptCursorKey])
 
+  // ── Reader window management ───────────────────────────────────────────────
+  // Reset the detached window whenever the displayed session changes or the
+  // reader re-engages the tail — the derived tail window takes over.
+  useEffect(() => {
+    setReaderWindowStart(null)
+    readerScrollFixupRef.current = null
+  }, [committedSessionKey])
+  useEffect(() => {
+    if (followTail) setReaderWindowStart(null)
+  }, [followTail])
+
+  // Keyboard recenter: when the cursor (absolute index) leaves the comfortable
+  // middle of the mounted window — within READER_WINDOW_MARGIN of an edge that
+  // has more cards beyond it, or outside the window entirely (search jump,
+  // bookmark jump, g) — recenter the window on the cursor. The fixup scrolls
+  // the cursor card into view once the new window has mounted and laid out.
+  // Gated on the cursor actually MOVING: wheel-scrolling slides the window
+  // away from a stationary cursor, and recentering on it then would yank the
+  // window straight back — a slide/recenter livelock against the scroll poll.
+  const recenterCursorKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    const cursorMoved = transcriptCursorKey !== recenterCursorKeyRef.current
+    recenterCursorKeyRef.current = transcriptCursorKey
+    if (!cursorMoved) return
+    if (effectiveFocus !== 'messages' || followTail) return
+    if (totalTranscriptCards <= READER_CARD_WINDOW) return
+    if (cursorIndex < 0) return
+    const nearStart = transcriptRenderStart > 0
+      && cursorIndex < transcriptRenderStart + READER_WINDOW_MARGIN
+    const nearEnd = transcriptRenderEnd < totalTranscriptCards
+      && cursorIndex >= transcriptRenderEnd - READER_WINDOW_MARGIN
+    if (!nearStart && !nearEnd) return
+    const nextStart = clamp(
+      cursorIndex - Math.floor(READER_CARD_WINDOW / 2),
+      0,
+      totalTranscriptCards - READER_CARD_WINDOW,
+    )
+    if (nextStart === transcriptRenderStart) return
+    const cursorCard = visibleTranscriptCards[cursorIndex]
+    if (cursorCard) readerScrollFixupRef.current = { kind: 'cursor', cardKey: cursorCard.key }
+    setReaderWindowStart(nextStart)
+  }, [cursorIndex, transcriptCursorKey, effectiveFocus, followTail, totalTranscriptCards, transcriptRenderStart, transcriptRenderEnd, visibleTranscriptCards])
+
+  // Mouse-scroll slide: the scrollbox emits no scroll events, so while a
+  // window is active poll scrollTop and slide when the viewport nears an edge
+  // of the mounted content. The anchor card (first card retained by both
+  // windows) pins the visual position across the slide.
+  useEffect(() => {
+    if (effectiveFocus !== 'messages' || isScrubbing) return undefined
+    if (totalTranscriptCards <= READER_CARD_WINDOW) return undefined
+    const interval = setInterval(() => {
+      if (readerScrollFixupRef.current) return
+      const sb = transcriptScrollRef.current
+      if (!sb) return
+      // Content not laid out yet (fresh mount) or shorter than the viewport —
+      // scrollTop reads 0 and would spuriously trigger a top-edge slide.
+      if (sb.scrollHeight <= sb.viewport.height) return
+      const scrollTop = sb.scrollTop
+      const beginSlide = (nextStart: number, anchorIndex: number): boolean => {
+        const anchorCard = visibleTranscriptCards[anchorIndex]
+        if (!anchorCard) return false
+        const el = sb.content.findDescendantById(`card:${anchorCard.key}`)
+        if (!el) return false
+        const prevContentOffset = el.y - sb.content.y
+        readerScrollFixupRef.current = {
+          kind: 'anchor',
+          anchorKey: anchorCard.key,
+          prevContentOffset,
+          viewportOffset: prevContentOffset - scrollTop,
+        }
+        setReaderWindowStart(nextStart)
+        return true
+      }
+      if (scrollTop <= READER_EDGE_ROWS && transcriptRenderStart > 0) {
+        // Anchor on the old window's first card — retained, near the viewport.
+        const slid = beginSlide(
+          Math.max(0, transcriptRenderStart - READER_WINDOW_SLIDE),
+          transcriptRenderStart,
+        )
+        // Scrolling far up off the tail means reading history; the tail-pinned
+        // derivation (and its scroll-to-bottom effects) must let go.
+        if (slid && followTail) setFollowTail(false)
+        return
+      }
+      const maxScroll = Math.max(0, sb.scrollHeight - sb.viewport.height)
+      if (maxScroll - scrollTop <= READER_EDGE_ROWS && transcriptRenderEnd < totalTranscriptCards) {
+        const nextStart = Math.min(
+          transcriptRenderStart + READER_WINDOW_SLIDE,
+          totalTranscriptCards - READER_CARD_WINDOW,
+        )
+        // Anchor on the new window's first card — the first card both windows share.
+        beginSlide(nextStart, nextStart)
+      }
+    }, READER_SCROLL_POLL_MS)
+    return () => clearInterval(interval)
+  }, [effectiveFocus, isScrubbing, followTail, totalTranscriptCards, transcriptRenderStart, transcriptRenderEnd, visibleTranscriptCards])
+
+  // Fixup executor: runs after the commit that changed the window. Yoga layout
+  // happens on the next render frame, not at commit, so retry on a short timer
+  // until layout has visibly run (the anchor's content offset moved / the
+  // cursor card has a height), then correct the scroll position.
+  useEffect(() => {
+    const fixup = readerScrollFixupRef.current
+    if (!fixup) return undefined
+    readerScrollFixupRef.current = null
+    let cancelled = false
+    let tries = 0
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const attempt = () => {
+      if (cancelled) return
+      const sb = transcriptScrollRef.current
+      if (!sb) return
+      tries += 1
+      if (fixup.kind === 'cursor') {
+        const el = sb.content.findDescendantById(`card:${fixup.cardKey}`)
+        if ((!el || el.height <= 0) && tries < READER_FIXUP_MAX_TRIES) {
+          timer = setTimeout(attempt, READER_FIXUP_RETRY_MS)
+          return
+        }
+        if (el) {
+          sb.scrollChildIntoView(`card:${fixup.cardKey}`)
+          pausedTranscriptScrollTopRef.current = sb.scrollTop
+        }
+        return
+      }
+      const el = sb.content.findDescendantById(`card:${fixup.anchorKey}`)
+      if (!el) return // anchor unmounted (session switched mid-slide) — drop
+      const contentOffset = el.y - sb.content.y
+      if (contentOffset === fixup.prevContentOffset && tries < READER_FIXUP_MAX_TRIES) {
+        timer = setTimeout(attempt, READER_FIXUP_RETRY_MS)
+        return
+      }
+      sb.scrollTo(Math.max(0, contentOffset - fixup.viewportOffset))
+      pausedTranscriptScrollTopRef.current = sb.scrollTop
+    }
+    timer = setTimeout(attempt, READER_FIXUP_RETRY_MS)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [transcriptRenderStart, transcriptRenderEnd])
+
   useLayoutEffect(() => {
     if (!followTail) return
     if (visibleTranscriptCards.length === 0) return
@@ -9375,9 +9602,9 @@ export default function OpenTuiApp() {
       action()
     }
     const selectedTranscriptCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
-    // cardDisplayData is window-relative (preview cap while browsing); shift
-    // the absolute cursor index into window space.
-    const selectedTranscriptCardDisplay = cursorIndex >= transcriptRenderStart
+    // cardDisplayData is window-relative (preview cap while browsing, sliding
+    // window while reading); shift the absolute cursor index into window space.
+    const selectedTranscriptCardDisplay = cursorIndex >= transcriptRenderStart && cursorIndex < transcriptRenderEnd
       ? cardDisplayData[cursorIndex - transcriptRenderStart] ?? null
       : null
 
