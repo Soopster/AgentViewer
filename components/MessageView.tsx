@@ -2142,6 +2142,8 @@ export default function MessageView({
   // CLIs queue an arbitrary number of follow-ups; a single overwritten slot
   // silently dropped all but the most recent draft.
   const [queuedSends, setQueuedSends] = useState<Array<{ text: string; attachments: SendAttachment[] }>>([])
+  const queuedSendsRef = useRef<Array<{ text: string; attachments: SendAttachment[] }>>([])
+  useEffect(() => { queuedSendsRef.current = queuedSends }, [queuedSends])
   // Last message delivered INTO the running turn via native steering — shown
   // in the composer status line while the turn is still streaming.
   const [steeredNotice, setSteeredNotice] = useState<string | null>(null)
@@ -2269,6 +2271,9 @@ export default function MessageView({
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
   const [sessionActionNotice, setSessionActionNotice] = useState<string | null>(null)
   const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
+  // Messages steered INTO the running turn — echoed in the live overlay until
+  // the persisted transcript reconciles (same lifecycle as optimisticUserText).
+  const [steeredUserTexts, setSteeredUserTexts] = useState<string[]>([])
   const [backgroundingTasks, setBackgroundingTasks] = useState(false)
   // True from when the user hits stop until the interrupted turn's partial
   // output reconciles (or the awaitingPersistedTurn escape hatch fires). Lets
@@ -2826,6 +2831,7 @@ export default function MessageView({
     setComposerOptions({})
     setPendingPermissions([])
     setOptimisticUserText(null)
+    setSteeredUserTexts([])
     clearLiveAssistantText()
     setLiveToolActivities([])
     setLiveThreadedMessages([])
@@ -3123,6 +3129,7 @@ export default function MessageView({
 
     if (persistedTurnArrived && (persistedAssistantArrived || !liveAssistantVisible)) {
       setOptimisticUserText(null)
+      setSteeredUserTexts([])
       clearLiveAssistantText()
       setLiveToolActivities([])
       setLiveThreadedMessages([])
@@ -3146,6 +3153,7 @@ export default function MessageView({
     if (!awaitingPersistedTurn) return
     const timer = window.setTimeout(() => {
       setOptimisticUserText(null)
+      setSteeredUserTexts([])
       clearLiveAssistantText()
       setLiveToolActivities([])
       setLiveThreadedMessages([])
@@ -3192,6 +3200,20 @@ export default function MessageView({
     sendInFlightRef.current = false
     setSendError(null)
     setSendState('idle')
+    // The user interrupted to change course — auto-firing queued follow-ups
+    // would be a surprise-send. Pop their text back into the composer instead
+    // so they can edit and re-send.
+    const interruptQueuedTexts = queuedSendsRef.current.map((entry) => entry.text).filter(Boolean)
+    if (interruptQueuedTexts.length > 0) {
+      setQueuedSends([])
+      setInputText((current) => {
+        const restored = [current.trim(), ...interruptQueuedTexts].filter(Boolean).join('\n\n')
+        inputTextRef.current = restored
+        if (textareaRef.current) textareaRef.current.value = restored
+        return restored
+      })
+      window.requestAnimationFrame(resizeComposer)
+    }
     if (pendingMessageBaselineRef.current) {
       // The turn had started: keep whatever the agent produced visible and
       // transition into the 'Interrupting…' / syncing state so the interrupted
@@ -3208,6 +3230,7 @@ export default function MessageView({
       awaitingPersistedTurnRef.current = false
       setAwaitingPersistedTurn(false)
       setOptimisticUserText(null)
+      setSteeredUserTexts([])
       clearLiveAssistantText()
       setLiveToolActivities([])
       setLiveThreadedMessages([])
@@ -3217,7 +3240,7 @@ export default function MessageView({
       liveToolInputJsonRef.current.clear()
     }
     textareaRef.current?.focus()
-  }, [clearLiveAssistantText, clearLiveSubagentText, optimisticUserText, session])
+  }, [clearLiveAssistantText, clearLiveSubagentText, optimisticUserText, resizeComposer, session])
 
   const backgroundClaudeTasks = useCallback(async () => {
     if (!session || session.provider !== 'claude' || session.isPending || backgroundingTasks) return
@@ -3297,6 +3320,9 @@ export default function MessageView({
             const json = await res.json().catch(() => ({})) as { result?: { delivered?: unknown } }
             if (json.result?.delivered === true) {
               setSteeredNotice(queueText)
+              // Echo it into the live overlay immediately — it's part of the
+              // running turn now, like typing in the provider's native CLI.
+              setSteeredUserTexts((prev) => [...prev, queueText])
               return
             }
           }
@@ -3334,6 +3360,7 @@ export default function MessageView({
     setFailedSend(null)
     setInterrupting(false)
     setOptimisticUserText(text)
+    setSteeredUserTexts([])
     clearLiveAssistantText()
     setLiveToolActivities([])
     setLiveThreadedMessages([])
@@ -3488,6 +3515,7 @@ export default function MessageView({
             } catch { /* ignore malformed command result */ }
             pendingMessageBaselineRef.current = null
             setOptimisticUserText(null)
+            setSteeredUserTexts([])
             clearLiveAssistantText()
             setLiveToolActivities([])
             setLiveThreadedMessages([])
@@ -3736,12 +3764,21 @@ export default function MessageView({
       setSendError(errorMessage)
       setLiveStatus(null)
       setFailedSend({ text, attachments: sendAttachments })
+      // Restore the failed draft AND any queued follow-ups into the composer —
+      // auto-firing the queue after a failed turn is a surprise-send, but
+      // discarding it loses typed text. (Queued attachments can't be rebuilt
+      // into composer state; their text still restores.)
+      const queuedTexts = queuedSendsRef.current.map((entry) => entry.text).filter(Boolean)
+      setQueuedSends([])
       setInputText((current) => {
-        if (current.trim()) return current
-        inputTextRef.current = text
-        return text
+        const base = current.trim() ? current : text
+        const restored = [base, ...queuedTexts].filter(Boolean).join('\n\n')
+        inputTextRef.current = restored
+        if (textareaRef.current) textareaRef.current.value = restored
+        return restored
       })
       setOptimisticUserText(null)
+      setSteeredUserTexts([])
       clearLiveAssistantText()
       setLiveToolActivities([])
       setLiveThreadedMessages([])
@@ -3764,7 +3801,9 @@ export default function MessageView({
   useEffect(() => {
     if (queuedSends.length === 0) return
     if (sendInFlightRef.current || awaitingPersistedTurnRef.current) return
-    if (sendState === 'sending' || awaitingPersistedTurn) return
+    // Gate on strict idle: flushing while sendState is 'error' would auto-fire
+    // a queued send after a failed turn (and clobber the restored draft).
+    if (sendState !== 'idle' || awaitingPersistedTurn) return
     const next = queuedSends[0]
     setQueuedSends((prev) => prev.slice(1))
     setInputText(next.text)
@@ -4994,6 +5033,22 @@ export default function MessageView({
       })
     })
 
+    // Messages steered into the running turn — newest input, shown last.
+    steeredUserTexts.forEach((text, index) => {
+      rows.push({
+        key: `live:steered:${index}`,
+        message: {
+          role: 'user',
+          uuid: `live-user-steer-${index}`,
+          sessionId: session?.sessionId,
+          provider: session?.provider,
+          blocks: [{ type: 'text', text }],
+        },
+        showSession: false,
+        dimmed: true,
+      })
+    })
+
     return rows
   }, [
     awaitingPersistedTurn,
@@ -5005,7 +5060,9 @@ export default function MessageView({
     liveTurnTone,
     liveUserMessage,
     session?.provider,
+    session?.sessionId,
     showLiveTimelineOverlay,
+    steeredUserTexts,
   ])
   const timelineRows = useMemo<TimelineRow[]>(() => {
     if (persistedTimelineRows.length === 0) return liveTimelineRows

@@ -1856,10 +1856,10 @@ function hasPersistedAssistantAfterBaseline(rawMessages: import('../../lib/types
   return durableMessages.slice(start).some((message) => message.type === 'assistant')
 }
 
-function makeLiveUserMessage(session: Session, text: string): ThreadedMessage {
+function makeLiveUserMessage(session: Session, text: string, uuid = 'live-user'): ThreadedMessage {
   return {
     role: 'user',
-    uuid: 'live-user',
+    uuid,
     sessionId: session.sessionId,
     provider: session.provider ?? 'claude',
     blocks: [{ type: 'text', text }],
@@ -4191,11 +4191,15 @@ export default function OpenTuiApp() {
   // Reasoning streams on its own dim channel (see liveReasoning render below).
   const [composerLiveReasoning, setComposerLiveReasoning] = useState('')
   const [liveTranscriptMessages, setLiveTranscriptMessages] = useState<ThreadedMessage[]>([])
-  // Queued prompt waiting for the active turn to finish (CLI-style queue).
-  const [queuedComposerSend, setQueuedComposerSend] = useState<{ text: string; attachments: SendAttachment[] } | null>(null)
+  // Queued prompts waiting for the active turn to finish (CLI-style FIFO —
+  // a single slot here used to silently overwrite the first queued message).
+  const [queuedComposerSends, setQueuedComposerSends] = useState<Array<{ text: string; attachments: SendAttachment[] }>>([])
+  const queuedComposerSendsRef = useRef<Array<{ text: string; attachments: SendAttachment[] }>>([])
+  useEffect(() => { queuedComposerSendsRef.current = queuedComposerSends }, [queuedComposerSends])
   // Last message delivered INTO the running turn via native steering — shown
   // in the composer status line while the turn is still streaming.
   const [steeredSendNotice, setSteeredSendNotice] = useState<string | null>(null)
+  const steeredEchoCounterRef = useRef(0)
   const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
   const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | 'retrying' | null>(null)
   const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
@@ -5795,7 +5799,7 @@ export default function OpenTuiApp() {
   const hasComposerStatusMessage = Boolean(
     composerError
     || awaitingPersistedTurn
-    || queuedComposerSend
+    || queuedComposerSends.length > 0
     || (composerSendState === 'sending' && (composerLiveText || activeRunningToolCount > 0))
   )
   const composerStatusBlockHeight = (() => {
@@ -6871,7 +6875,7 @@ export default function OpenTuiApp() {
     if (exitInProgressRef.current) return
     exitInProgressRef.current = true
     setExitCleanupInProgress(true)
-    setQueuedComposerSend(null)
+    setQueuedComposerSends([])
 
     const cleanupPromise = activeComposerSendCleanupRef.current
     const controller = composerAbortRef.current
@@ -7170,6 +7174,17 @@ export default function OpenTuiApp() {
     }
     setPendingPermissions([])
     setPermissionOptionIndex(0)
+    // The user interrupted to change course — auto-firing queued follow-ups
+    // would be a surprise-send. Pop their text back into the composer instead
+    // (after any text typed since), so they can edit and re-send.
+    const interruptQueuedTexts = queuedComposerSendsRef.current.map((entry) => entry.text).filter(Boolean)
+    if (interruptQueuedTexts.length > 0) {
+      setQueuedComposerSends([])
+      const currentDraft = composerTextareaRef.current?.plainText ?? composerDraft
+      const restored = [currentDraft.trim(), ...interruptQueuedTexts].filter(Boolean).join('\n\n')
+      composerTextareaRef.current?.setText(restored)
+      setComposerDraft(restored)
+    }
     if (reconcileInterrupt) {
       // Keep committed partial cards (liveTranscriptMessages) + baseline for the
       // reconcile, but drop the transient streaming previews right away.
@@ -7485,13 +7500,22 @@ export default function OpenTuiApp() {
           const result = await runTuiSessionAction(steerTarget, { action: 'steer', message: trimmed })
           if (result.delivered === true) {
             setSteeredSendNotice(trimmed)
+            // Echo the steered message into the live transcript immediately —
+            // it's part of the running turn now, exactly like typing in the
+            // native CLI. The persisted reconcile replaces this echo when the
+            // turn lands.
+            steeredEchoCounterRef.current += 1
+            setLiveTranscriptMessages((prev) => [
+              ...prev,
+              makeLiveUserMessage(steerTarget, trimmed, `live-user-steer-${steeredEchoCounterRef.current}`),
+            ])
             return
           }
         } catch {
           // Steering is best-effort; the queue below is the reliable path.
         }
       }
-      setQueuedComposerSend({ text: trimmed, attachments: sendAttachments })
+      setQueuedComposerSends((prev) => [...prev, { text: trimmed, attachments: sendAttachments }])
       return
     }
 
@@ -8104,14 +8128,18 @@ export default function OpenTuiApp() {
       setLiveStatus(null)
       setLiveToolActivities([])
       setAwaitingPersistedTurn(false)
-      // Drop any queued follow-up: auto-sending it blind after a failed turn is
-      // a surprise-send, and keeping it would clobber the restored failedDraft
-      // the moment a keystroke flips error->idle (handleComposerContentChange).
-      setQueuedComposerSend(null)
+      // Don't auto-fire queued follow-ups after a failed turn (surprise-send) —
+      // but never discard them either: restore their text into the composer
+      // after the failed draft so nothing the user typed is lost. (Attachments
+      // on queued sends can't be reconstructed into mention state; their text
+      // still restores.)
+      const queuedTexts = queuedComposerSendsRef.current.map((entry) => entry.text).filter(Boolean)
+      setQueuedComposerSends([])
       liveToolIndexesRef.current.clear()
       liveToolInputJsonRef.current.clear()
-      composerTextareaRef.current?.setText(failedDraft)
-      setComposerDraft(failedDraft)
+      const restoredDraft = [failedDraft, ...queuedTexts].filter(Boolean).join('\n\n')
+      composerTextareaRef.current?.setText(restoredDraft)
+      setComposerDraft(restoredDraft)
     } finally {
       void reader?.cancel()
       composerAbortRef.current = null
@@ -8163,15 +8191,15 @@ export default function OpenTuiApp() {
   // surprise-send. On error we clear the queue (see the error branch above),
   // so the only state that reaches here with a queued send is a clean idle.
   useEffect(() => {
-    if (!queuedComposerSend) return
+    if (queuedComposerSends.length === 0) return
     if (composerSendState !== 'idle') return
-    const next = queuedComposerSend
-    setQueuedComposerSend(null)
+    const next = queuedComposerSends[0]
+    setQueuedComposerSends((prev) => prev.slice(1))
     composerTextareaRef.current?.setText(next.text)
     setComposerDraft(next.text)
     setComposerMentionAttachments(next.attachments)
     void sendComposerMessage(next.text, next.attachments)
-  }, [composerSendState, queuedComposerSend, sendComposerMessage])
+  }, [composerSendState, queuedComposerSends, sendComposerMessage])
 
   useEffect(() => {
     let cancelled = false
@@ -8901,8 +8929,10 @@ export default function OpenTuiApp() {
     ? composerError
     : awaitingPersistedTurn
       ? 'Syncing transcript…'
-      : queuedComposerSend && composerSendState === 'sending'
-        ? `Queued · sends after current turn: "${queuedComposerSend.text.slice(0, 60)}${queuedComposerSend.text.length > 60 ? '…' : ''}"`
+      : queuedComposerSends.length > 0 && composerSendState === 'sending'
+        ? (queuedComposerSends.length === 1
+          ? `Queued · sends after current turn: "${queuedComposerSends[0].text.slice(0, 60)}${queuedComposerSends[0].text.length > 60 ? '…' : ''}"`
+          : `${queuedComposerSends.length} queued · send in order after current turn`)
         : steeredSendNotice && composerSendState === 'sending'
           ? `Steered · delivered to the running turn: "${steeredSendNotice.slice(0, 60)}${steeredSendNotice.length > 60 ? '…' : ''}"`
           : composerSendState === 'sending'
