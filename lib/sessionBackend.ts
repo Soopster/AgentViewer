@@ -29,6 +29,7 @@ import {
   type CanUseTool,
   type PermissionResult,
   type PermissionUpdate,
+  type Query,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import {
@@ -1930,6 +1931,30 @@ async function resumeCodexThread(sessionId: string): Promise<CodexThreadResumeRe
   })
 }
 
+// Threads already resumed on the current app-server process, mapped to the
+// model reported at resume time. thread/resume materializes the rollout
+// server-side; once done the thread stays live for the process lifetime, so
+// paying the RPC on every send just added a serial round-trip ahead of
+// turn/start (first-token latency). Cleared wholesale when the app-server
+// child exits — a respawned server has no live threads — and per-thread when
+// turn/start reports a missing rollout (see createCodexStream's retry).
+const codexResumedThreads = new Map<string, string | null>()
+let codexResumeInvalidatorInstalled = false
+
+async function ensureCodexThreadResumed(sessionId: string): Promise<{ model: string | null }> {
+  const client = getCodexClient()
+  if (!codexResumeInvalidatorInstalled) {
+    codexResumeInvalidatorInstalled = true
+    client.subscribeDisconnect(() => codexResumedThreads.clear())
+  }
+  const cached = codexResumedThreads.get(sessionId)
+  if (cached !== undefined) return { model: cached }
+  const resume = await resumeCodexThread(sessionId)
+  const model = typeof resume?.model === 'string' ? resume.model : null
+  codexResumedThreads.set(sessionId, model)
+  return { model }
+}
+
 async function listOpenCodeSessions({ dir }: ListParams): Promise<Session[]> {
   const client = await getOpenCodeClient()
   const response = await client.session.list({
@@ -3779,7 +3804,10 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       })
 
       try {
-        const resume = await resumeCodexThread(sessionId).catch(() => null)
+        // Resume is cached per app-server process — consecutive turns in the
+        // same thread skip the round-trip entirely (it sat serially ahead of
+        // turn/start, adding to first-token latency on every send).
+        const resume = await ensureCodexThreadResumed(sessionId).catch(() => null)
         currentModel = model ?? resume?.model ?? currentModel
         safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`)
 
@@ -3803,7 +3831,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           return
         }
 
-        const started = await client.request<CodexTurnStartResponse>('turn/start', {
+        const turnStartParams = {
           threadId: sessionId,
           model: model ?? undefined,
           reasoningEffort: codexEffort,
@@ -3812,7 +3840,18 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           // what makes the exec/patch approval prompts appear interactively.
           ...(approvalPolicy ? { approvalPolicy } : {}),
           input: buildCodexInput(userMessage, attachments),
-        })
+        }
+        let started: CodexTurnStartResponse
+        try {
+          started = await client.request<CodexTurnStartResponse>('turn/start', turnStartParams)
+        } catch (err) {
+          // The resume cache said this thread was live but the server lost it
+          // (e.g. a restart raced the disconnect listener). Re-resume once.
+          if (!isCodexMissingRolloutError(err)) throw err
+          codexResumedThreads.delete(sessionId)
+          await ensureCodexThreadResumed(sessionId)
+          started = await client.request<CodexTurnStartResponse>('turn/start', turnStartParams)
+        }
 
         activateTargetTurn(started.turn.id)
       } catch (err) {
@@ -4790,6 +4829,54 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
   })
 }
 
+/**
+ * Warm the send path for a session before the user hits Enter. Fired by the
+ * composer UI when it gains focus, so the expensive per-session setup overlaps
+ * with the user typing instead of sitting in front of the first token:
+ * - claude: spawn the warm pool Query the send will attach to (the CLI boot is
+ *   ~1-3s — the dominant first-send cost). Skipped when an entry already
+ *   exists so a prewarm can never recycle a live or in-turn entry.
+ * - codex: start the app-server if needed and resume the thread (cached).
+ * - pi: open the pooled AgentSession (createAgentSession runs resource loading
+ *   + package resolution on a cold open; the pool makes this idempotent).
+ * - copilot: resume the SDK session (cached by the copilot client).
+ * Opencode connects through a long-lived local server — cheap per-send.
+ * Best-effort: failures just mean the send pays the usual cold cost.
+ */
+export async function prewarmViewSession(params: {
+  sessionId: string
+  provider?: AgentProvider
+  cwd?: string
+  model?: string
+  effort?: ReasoningEffortLevel
+}): Promise<void> {
+  const provider = await resolveProvider(params.provider)
+  if (provider === 'claude') {
+    if (peekClaudeSession(params.sessionId)) return
+    acquireClaudeSession({
+      sessionId: params.sessionId,
+      cwd: params.cwd,
+      model: params.model,
+      fallbackModel: claudeFallbackModelChain(),
+      effort: params.effort,
+    })
+    return
+  }
+  if (provider === 'codex') {
+    await ensureCodexThreadResumed(params.sessionId)
+    return
+  }
+  if (provider === 'copilot') {
+    await acquireCopilotSession(params.sessionId)
+    return
+  }
+  if (provider === 'pi') {
+    await openPiAgentSession(params.sessionId)
+    return
+  }
+  // opencode connects through a long-lived local server — no spawn to hide.
+}
+
 export async function streamViewSessionTurn(params: SendMessageParams): Promise<Response> {
   const userMessage = String(params.body.message ?? '').trim()
   if (!userMessage) {
@@ -5075,14 +5162,23 @@ export async function readViewSessionComposerOptions(sessionId: string, provider
 export async function readViewSessionSlashCommands(sessionId: string, providerOverride?: AgentProvider): Promise<Array<{ command: string; description: string; argumentHint?: string }>> {
   const provider = await resolveProvider(providerOverride)
   if (provider === 'claude') {
+    // Prefer the warm pool entry's persistent Query (composer prewarm or a
+    // recent send) — supportedCommands is then a control RPC on the existing
+    // subprocess instead of a fresh ~1-3s CLI spawn.
+    const mapCommands = (commands: Awaited<ReturnType<Query['supportedCommands']>>) => commands.map((command) => ({
+      command: command.name.startsWith('/') ? command.name : `/${command.name}`,
+      description: command.description ?? '',
+      argumentHint: command.argumentHint && command.argumentHint.trim() ? command.argumentHint : undefined,
+    }))
+    const warm = peekClaudeSession(sessionId)
+    if (warm) {
+      const commands = await warm.query.supportedCommands().catch(() => [])
+      return mapCommands(commands)
+    }
     const q = createSessionControlQuery(sessionId)
     try {
       const commands = await q.supportedCommands().catch(() => [])
-      return commands.map((command) => ({
-        command: command.name.startsWith('/') ? command.name : `/${command.name}`,
-        description: command.description ?? '',
-        argumentHint: command.argumentHint && command.argumentHint.trim() ? command.argumentHint : undefined,
-      }))
+      return mapCommands(commands)
     } finally {
       q.close()
     }

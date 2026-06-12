@@ -76,6 +76,7 @@ import {
   runTuiSessionAction,
   streamTuiSessionTurn,
   interruptTuiSessionTurn,
+  prewarmTuiSession,
   writeTuiDensity,
   writeTuiDiffLayout,
   writeTuiFocusMode,
@@ -5353,17 +5354,44 @@ export default function OpenTuiApp() {
     void fetchComposerAffordances(target, committedSessionKey)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [committedSessionKey, fetchComposerAffordances])
-  // Deferred Claude fetch: fires when the composer is engaged for a session
-  // whose affordances aren't cached yet.
+  // Composer engagement: warm the send path while the user types, then fetch
+  // the deferred Claude affordances. Prewarm spawns the pool Query the send
+  // will attach to (removing the ~1-3s CLI boot from first-token latency) or
+  // resumes the Codex thread; running the affordances fetch AFTER it lets the
+  // Claude branch reuse the warm Query instead of spawning a second CLI.
+  const composerPrewarmInFlightRef = useRef(new Set<string>())
   useEffect(() => {
     if (!composerActive) return
     const target = transcriptSession
     if (!target || !committedSessionKey) return
-    const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
-    if (cached && Date.now() - cached.ts < COMPOSER_AFFORDANCES_TTL_MS) return
-    void fetchComposerAffordances(target, committedSessionKey)
+    const fullSession = sessionsByKeyRef.current.get(committedSessionKey)
+    if (fullSession?.isPending) return // cold path by definition — nothing to warm
+    const needsAffordances = (() => {
+      const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
+      return !cached || Date.now() - cached.ts >= COMPOSER_AFFORDANCES_TTL_MS
+    })()
+    let cancelled = false
+    const prewarm = composerPrewarmInFlightRef.current.has(committedSessionKey)
+      ? Promise.resolve()
+      : (() => {
+          composerPrewarmInFlightRef.current.add(committedSessionKey)
+          return prewarmTuiSession(
+            { ...target, cwd: fullSession?.cwd },
+            {
+              model: tuiModelOverride[committedSessionKey] || undefined,
+              effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+            },
+          ).catch(() => { /* best-effort: the send pays the usual cold cost */ })
+            .finally(() => { composerPrewarmInFlightRef.current.delete(committedSessionKey) })
+        })()
+    if (needsAffordances) {
+      void prewarm.then(() => {
+        if (!cancelled) void fetchComposerAffordances(target, committedSessionKey)
+      })
+    }
+    return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [composerActive, committedSessionKey, fetchComposerAffordances])
+  }, [composerActive, committedSessionKey, fetchComposerAffordances, tuiEffort, tuiModelOverride])
   const composerSlashHint = useMemo(() => {
     if (!composerSlashOpen) return ''
     const provider = selectedSession?.provider ?? 'claude'

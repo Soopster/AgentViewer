@@ -40,6 +40,7 @@ import {
   listViewSessions,
   patchViewSession,
   interruptViewSession,
+  prewarmViewSession,
   readViewSessionDiagnostics,
   readViewSessionInfo,
   readViewSessionModels,
@@ -287,6 +288,20 @@ export async function streamTuiSessionTurn(
 
 export async function interruptTuiSessionTurn(session: { sessionId: string }): Promise<void> {
   await interruptViewSession(session.sessionId)
+}
+
+/** Warm the send path (Claude pool spawn, Codex thread resume) while the user types. */
+export async function prewarmTuiSession(
+  session: Session,
+  opts?: { model?: string; effort?: import('../types').ReasoningEffortLevel },
+): Promise<void> {
+  await prewarmViewSession({
+    sessionId: session.sessionId,
+    provider: session.provider as AgentProvider | undefined,
+    cwd: session.cwd ?? undefined,
+    model: opts?.model,
+    effort: opts?.effort,
+  })
 }
 
 export async function readTuiSessionDiagnostics(
