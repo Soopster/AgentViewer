@@ -195,6 +195,12 @@ type InternalEntry = {
   /** FIFO mutex tail. Each turn appends to this chain. */
   turnTail: Promise<void>
   lastActivityAt: number
+  /**
+   * True while a run() turn holds this entry. LRU eviction and the idle sweep
+   * must never recycle an in-turn entry — that kills a live turn out from
+   * under its SSE stream ("recycled mid-turn").
+   */
+  inTurn: boolean
   alive: boolean
   /**
    * Mutable per-turn bridge. The query's canUseTool / onElicitation delegate to
@@ -311,6 +317,7 @@ class ClaudePool {
       endInput,
       turnTail: Promise.resolve(),
       lastActivityAt: Date.now(),
+      inTurn: false,
       alive: true,
       bridgeBox,
     }
@@ -323,6 +330,10 @@ class ClaudePool {
     try {
       for await (const message of entry.query) {
         if (!entry.alive) break
+        // A streaming query is active by definition — keep the LRU/idle-sweep
+        // ordering honest even when no run() subscriber is attached (e.g. a
+        // steered follow-up turn the CLI started after the stream detached).
+        entry.lastActivityAt = Date.now()
         // Fan messages out to harness observers (second tabs, a page reloaded
         // mid-turn) so the events SSE can refetch the canonical window in real
         // time — independent of the single turn subscriber. Skip `stream_event`
@@ -413,8 +424,12 @@ class ClaudePool {
 
   private ensureCapacity(): void {
     if (this.entries.size < MAX_POOL_SIZE) return
+    // Only idle entries are eviction candidates. An in-turn entry's
+    // lastActivityAt can look ancient mid-turn, but recycling it would kill a
+    // live turn; if every entry is mid-turn, temporarily exceed the cap.
     let oldest: InternalEntry | null = null
     for (const entry of this.entries.values()) {
+      if (entry.inTurn) continue
       if (!oldest || entry.lastActivityAt < oldest.lastActivityAt) oldest = entry
     }
     if (oldest) this.recycleInternal(oldest, 'lru-evict')
@@ -432,6 +447,7 @@ class ClaudePool {
   private sweep(): void {
     const now = Date.now()
     for (const entry of [...this.entries.values()]) {
+      if (entry.inTurn) continue
       if (now - entry.lastActivityAt > IDLE_TTL_MS) {
         this.recycleInternal(entry, 'idle-evict')
       }
@@ -531,6 +547,7 @@ class ClaudePool {
       endInput,
       turnTail: Promise.resolve(),
       lastActivityAt: Date.now(),
+      inTurn: false,
       alive: true,
       // Reuse the bridgeBox from the cold-path spawn so its delegation closure
       // (already frozen into the Query) routes through the same object.
@@ -562,6 +579,10 @@ class ClaudePool {
       releaseMutex()
       throw new Error('Claude pool entry was recycled before turn could start')
     }
+
+    // From here until the finally below, this entry must be immune to LRU
+    // eviction and the idle sweep.
+    entry.inTurn = true
 
     let resolveTurn!: () => void
     let rejectTurn!: (err: Error) => void
@@ -618,6 +639,7 @@ class ClaudePool {
     entry.subscriber = subscriber
     for (const buffered of replay) subscriber.push(buffered)
     if (!entry.alive) {
+      entry.inTurn = false
       entry.subscriber = null
       clearTimeout(hardTimer)
       releaseMutex()
@@ -652,6 +674,7 @@ class ClaudePool {
       entry.bridgeBox.fn = null
       entry.bridgeBox.elicit = null
       entry.subscriber = null
+      entry.inTurn = false
       if (interruptFallbackTimer) clearTimeout(interruptFallbackTimer)
       clearTimeout(hardTimer)
       options.signal.removeEventListener('abort', abortHandler)
@@ -675,6 +698,7 @@ class ClaudePool {
       clearTimeout(hardTimer)
       options.signal.removeEventListener('abort', abortHandler)
       entry.subscriber = null
+      entry.inTurn = false
       entry.lastActivityAt = Date.now()
       try { broadcastClaudeTurnEnd(entry.sessionId) } catch { /* swallow */ }
       releaseMutex()
