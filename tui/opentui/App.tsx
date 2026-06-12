@@ -5260,84 +5260,110 @@ export default function OpenTuiApp() {
   }>())
   // Composer affordances (slash commands, agent pickers). For Claude,
   // readViewSessionSlashCommands SPAWNS a full `claude` CLI subprocess
-  // (createSessionControlQuery → query({resume}), ~1–3s) — so this must never
-  // track the live selection or the raw `selectedSession` object:
-  // - per scrub step it spawned one subprocess per session passed through, and
-  //   the backlog of overlapping spawns is what made scrubbing progressively
-  //   slower the longer it went on (CPU-profiled: sdk.mjs + spawn + dlopen);
-  // - the `selectedSession` identity also changes on every 5s sessions poll,
-  //   which re-fired this effect (one subprocess every 5s while idle).
-  // Keyed on the SETTLED session (committedSessionKey lags the selection by
-  // the open debounce and is poll-stable) with a per-session TTL cache so
-  // revisits during a scrub spawn nothing.
-  useEffect(() => {
-    const target = transcriptSession
-    const clearAffordances = () => {
-      setComposerLiveSlashCommands([])
-      setComposerAgentOptions([])
-      setComposerMentionAgents([])
+  // (createSessionControlQuery → query({resume}), ~1–3s of a CPU core) — so:
+  // - never track the live selection or a raw `selectedSession` object (one
+  //   spawn per scrub step / per 5s sessions poll — the original progressive
+  //   scrub slowdown);
+  // - key on the SETTLED committedSessionKey with a per-session TTL cache so
+  //   revisits spawn nothing;
+  // - for Claude, DON'T fetch on settle at all. Scrubbing across N distinct
+  //   sessions still spawned one CLI per settle, sustaining 3–5 concurrent
+  //   node processes for the whole scrub — enough system CPU pressure to
+  //   starve the render loop for seconds (measured: multi-second commit gaps
+  //   mid-scrub). Slash commands and agent pickers only matter once the user
+  //   actually engages the composer, so the Claude fetch is deferred to
+  //   composerActive. Other providers answer over their SDK/server (no
+  //   subprocess) and keep the eager fetch, e.g. for the OpenCode agent chip.
+  const committedSessionKeyRef = useRef<string | null>(null)
+  useEffect(() => { committedSessionKeyRef.current = committedSessionKey }, [committedSessionKey])
+  const composerAffordancesInFlightRef = useRef(new Set<string>())
+  const clearComposerAffordances = useCallback(() => {
+    setComposerLiveSlashCommands([])
+    setComposerAgentOptions([])
+    setComposerMentionAgents([])
+    setTuiOpenCodeAgent('')
+  }, [])
+  const applyComposerAffordances = useCallback((
+    target: Session,
+    commands: SlashCommandSuggestion[],
+    composerOptions: Awaited<ReturnType<typeof readViewSessionComposerOptions>>,
+  ) => {
+    setComposerLiveSlashCommands(commands)
+    const agentOptions = composerOptions.agents ?? []
+    setComposerAgentOptions(agentOptions)
+    setComposerMentionAgents(composerOptions.mentionAgents ?? [])
+    if (target.provider === 'opencode') {
+      const currentAgent = composerOptions.currentAgent
+      setTuiOpenCodeAgent(
+        currentAgent && agentOptions.some((agent) => agent.value === currentAgent)
+          ? currentAgent
+          : agentOptions[0]?.value ?? '',
+      )
+    } else {
       setTuiOpenCodeAgent('')
     }
-    if (!target || !committedSessionKey) {
-      clearAffordances()
-      return
-    }
-    const applyAffordances = (
-      commands: SlashCommandSuggestion[],
-      composerOptions: Awaited<ReturnType<typeof readViewSessionComposerOptions>>,
-    ) => {
-      setComposerLiveSlashCommands(commands)
-      const agentOptions = composerOptions.agents ?? []
-      setComposerAgentOptions(agentOptions)
-      setComposerMentionAgents(composerOptions.mentionAgents ?? [])
-      if (target.provider === 'opencode') {
-        const currentAgent = composerOptions.currentAgent
-        setTuiOpenCodeAgent(
-          currentAgent && agentOptions.some((agent) => agent.value === currentAgent)
-            ? currentAgent
-            : agentOptions[0]?.value ?? '',
-        )
-      } else {
-        setTuiOpenCodeAgent('')
+  }, [])
+  const fetchComposerAffordances = useCallback(async (target: Session, key: string) => {
+    if (composerAffordancesInFlightRef.current.has(key)) return
+    composerAffordancesInFlightRef.current.add(key)
+    try {
+      const [live, composerOptions] = await Promise.all([
+        readViewSessionSlashCommands(target.sessionId, target.provider),
+        readViewSessionComposerOptions(target.sessionId, target.provider),
+      ])
+      const commands = live.map((entry) => ({
+        command: entry.command,
+        description: entry.description,
+        argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
+      }))
+      // Cache even when the session has changed since — the work is done, and
+      // the next visit to this session should not spawn again.
+      touchMapEntry(composerAffordancesCacheRef.current, key, {
+        commands,
+        options: composerOptions,
+        ts: Date.now(),
+      })
+      while (composerAffordancesCacheRef.current.size > COMPOSER_AFFORDANCES_CACHE_MAX) {
+        const oldest = composerAffordancesCacheRef.current.keys().next().value
+        if (oldest === undefined) break
+        composerAffordancesCacheRef.current.delete(oldest)
       }
+      if (committedSessionKeyRef.current === key) applyComposerAffordances(target, commands, composerOptions)
+    } catch {
+      if (committedSessionKeyRef.current === key) clearComposerAffordances()
+    } finally {
+      composerAffordancesInFlightRef.current.delete(key)
+    }
+  }, [applyComposerAffordances, clearComposerAffordances])
+  useEffect(() => {
+    const target = transcriptSession
+    if (!target || !committedSessionKey) {
+      clearComposerAffordances()
+      return
     }
     const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
     if (cached && Date.now() - cached.ts < COMPOSER_AFFORDANCES_TTL_MS) {
-      applyAffordances(cached.commands, cached.options)
+      applyComposerAffordances(target, cached.commands, cached.options)
       return
     }
-    let cancelled = false
-    void (async () => {
-      try {
-        const [live, composerOptions] = await Promise.all([
-          readViewSessionSlashCommands(target.sessionId, target.provider),
-          readViewSessionComposerOptions(target.sessionId, target.provider),
-        ])
-        const commands = live.map((entry) => ({
-          command: entry.command,
-          description: entry.description,
-          argumentHint: entry.argumentHint && entry.argumentHint.trim() ? entry.argumentHint.trim() : undefined,
-        }))
-        // Cache even when this effect was superseded — the work is done, and
-        // the next visit to this session should not spawn again.
-        touchMapEntry(composerAffordancesCacheRef.current, committedSessionKey, {
-          commands,
-          options: composerOptions,
-          ts: Date.now(),
-        })
-        while (composerAffordancesCacheRef.current.size > COMPOSER_AFFORDANCES_CACHE_MAX) {
-          const oldest = composerAffordancesCacheRef.current.keys().next().value
-          if (oldest === undefined) break
-          composerAffordancesCacheRef.current.delete(oldest)
-        }
-        if (cancelled) return
-        applyAffordances(commands, composerOptions)
-      } catch {
-        if (!cancelled) clearAffordances()
-      }
-    })()
-    return () => { cancelled = true }
-  }, [committedSessionKey])
+    // Don't let the previous session's commands/agents linger while (or
+    // whether) this session's fetch runs.
+    clearComposerAffordances()
+    if ((target.provider ?? 'claude') === 'claude' && !composerActiveRef.current) return
+    void fetchComposerAffordances(target, committedSessionKey)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [committedSessionKey, fetchComposerAffordances])
+  // Deferred Claude fetch: fires when the composer is engaged for a session
+  // whose affordances aren't cached yet.
+  useEffect(() => {
+    if (!composerActive) return
+    const target = transcriptSession
+    if (!target || !committedSessionKey) return
+    const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
+    if (cached && Date.now() - cached.ts < COMPOSER_AFFORDANCES_TTL_MS) return
+    void fetchComposerAffordances(target, committedSessionKey)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composerActive, committedSessionKey, fetchComposerAffordances])
   const composerSlashHint = useMemo(() => {
     if (!composerSlashOpen) return ''
     const provider = selectedSession?.provider ?? 'claude'
