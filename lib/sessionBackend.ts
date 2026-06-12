@@ -70,7 +70,7 @@ import {
   type SessionEvent as CopilotSessionEvent,
   type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
-import { backgroundRunningSession, clearRunningSession, getRunningSession, interruptRunningSession, setRunningSession } from './sessionRuntime'
+import { backgroundRunningSession, clearRunningSession, getRunningSession, interruptRunningSession, setRunningSession, steerRunningSession } from './sessionRuntime'
 import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
 import type {
@@ -328,6 +328,8 @@ const OPENCODE_OPTIONS = {
 // consume loop would otherwise wait forever. After this much total silence the
 // watchdog probes session.status to confirm the turn really finished.
 const OPENCODE_WATCHDOG_IDLE_MS = 30000
+const CODEX_WATCHDOG_IDLE_MS = 30000
+const COPILOT_TURN_INACTIVITY_MS = 300_000
 
 function openCodeData<T>(response: T | { data: T }): T {
   if (response && typeof response === 'object' && 'data' in response) {
@@ -2217,6 +2219,20 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
   const resolvedProvider = await resolveProvider(provider)
   const action = typeof body.action === 'string' ? body.action : ''
 
+  // Provider-agnostic: deliver a user message into the running turn (native
+  // steering). `delivered: false` means no running turn / no steer primitive /
+  // the turn ended while the request was in flight — callers fall back to
+  // queueing the message for the next turn.
+  if (action === 'steer') {
+    const message = typeof body.message === 'string' ? body.message.trim() : ''
+    if (!message) throw new Error('message is required')
+    try {
+      return { delivered: await steerRunningSession(sessionId, message) }
+    } catch {
+      return { delivered: false }
+    }
+  }
+
   if (resolvedProvider === 'opencode') {
     const client = await getOpenCodeClient()
     if (action === 'share') {
@@ -3006,6 +3022,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         requestId: turnRequestId,
         interrupt: () => q.interrupt(),
         background: () => q.backgroundTasks(),
+        steer: async (text) => pushUserMessage(await buildClaudeUserMessage(text, [])),
       })
 
       let emittedSessionEvent = false
@@ -3176,6 +3193,9 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
         requestId: turnRequestId,
         interrupt: () => entry.query.interrupt(),
         background: () => entry.query.backgroundTasks(),
+        // Mid-turn user input rides the warm query's persistent input stream —
+        // the CLI queues it as steering, exactly like typing in Claude Code.
+        steer: async (text) => entry.pushUserMessage(await buildClaudeUserMessage(text, [])),
       })
 
       // Decouple the turn lifecycle from this HTTP request. A client disconnect
@@ -3557,9 +3577,12 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       let targetTurnObserved = false
       let directOperationStarted = false
       let completionCloseTimer: ReturnType<typeof setTimeout> | null = null
+      let lastActivityAt = Date.now()
+      let cancelWatchdog: (() => void) | null = null
 
       const safeEnqueue = (chunk: string) => {
         if (cleanedUp || downstreamClosed) return
+        lastActivityAt = Date.now()
         try {
           controller.enqueue(encoder.encode(chunk))
         } catch {
@@ -3584,6 +3607,8 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           clearTimeout(completionCloseTimer)
           completionCloseTimer = null
         }
+        cancelWatchdog?.()
+        cancelWatchdog = null
         clearRunningSession(sessionId)
         unsubscribe()
         safeClose()
@@ -3652,6 +3677,40 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           provider: 'codex',
           requestId: turnRequestId,
           interrupt: () => client.request('turn/interrupt', { threadId: sessionId, turnId }),
+          // Native mid-turn steering (the Codex CLI's type-while-running flow).
+          // expectedTurnId makes this fail cleanly if the turn just ended —
+          // the caller then falls back to queueing for the next turn.
+          steer: (text) => client.request('turn/steer', {
+            threadId: sessionId,
+            expectedTurnId: turnId,
+            input: buildCodexInput(text, []),
+          }),
+        })
+
+        // Backstop a dropped turn/completed: if the notification stream goes
+        // silent, ask the app-server for the turn's actual status. A legit
+        // long-running tool call reports `inProgress` and the watchdog keeps
+        // waiting; only a confirmed-finished (or vanished) turn closes the
+        // stream, so the composer can never wedge in 'sending' on a lost frame.
+        cancelWatchdog = startTurnWatchdog({
+          label: 'codex',
+          idleTimeoutMs: CODEX_WATCHDOG_IDLE_MS,
+          isClosed: () => cleanedUp || downstreamClosed,
+          lastActivityAt: () => lastActivityAt,
+          probe: async () => {
+            try {
+              const response = await client.request<{ data: Array<{ id: string; status: string }> }>(
+                'thread/turns/list',
+                { threadId: sessionId, limit: 5 },
+              )
+              const turn = response.data.find((candidate) => candidate.id === turnId)
+              if (!turn) return 'unknown'
+              return turn.status === 'inProgress' ? 'running' : 'idle'
+            } catch {
+              return 'unknown'
+            }
+          },
+          onResolved: () => scheduleCompletionClose(unsubscribe),
         })
 
         for (const notification of bufferedNotifications.splice(0)) {
@@ -3981,6 +4040,19 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
           safeEnqueue(`data: ${formatOpenCodeEvent({ type: 'permission.updated', properties: permission } as OpenCodeEvent)}\n\n`)
         }
 
+        // Sending another prompt while the session is busy queues it server-side
+        // (the native opencode TUI's type-while-running flow). The session stays
+        // busy until the queue drains, so this same stream keeps delivering the
+        // queued turn's events and closes on the final session.idle.
+        const steerOpenCode = (text: string) => client.session.promptAsync({
+          ...OPENCODE_OPTIONS,
+          path: { id: targetSessionId },
+          body: {
+            model: selectedModel ?? undefined,
+            agent: requestedAgent,
+            parts: buildOpenCodeParts(text, []),
+          },
+        })
         setRunningSession(sessionId, {
           provider: 'opencode',
           requestId: turnRequestId,
@@ -3988,6 +4060,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
             ...OPENCODE_OPTIONS,
             path: { id: targetSessionId },
           }),
+          steer: steerOpenCode,
         })
         if (targetSessionId !== sessionId) {
           setRunningSession(targetSessionId, {
@@ -3997,6 +4070,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
               ...OPENCODE_OPTIONS,
               path: { id: targetSessionId },
             }),
+            steer: steerOpenCode,
           })
         }
 
@@ -4226,6 +4300,22 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         }
       })
 
+      // Inactivity watchdog, NOT an absolute turn ceiling: re-armed by every
+      // session event, so it only fires after COPILOT_TURN_INACTIVITY_MS of
+      // total silence (no probe RPC exists in the Copilot SDK; the 1s history
+      // poll below is the recovery path for missed completions, this is the
+      // recovery path for a genuinely dead turn).
+      const armTurnInactivityTimeout = () => {
+        if (cleanedUp) return
+        if (turnTimeoutTimer != null) clearTimeout(turnTimeoutTimer)
+        turnTimeoutTimer = setTimeout(() => {
+          failTurn?.(new Error(`Copilot turn produced no events for ${COPILOT_TURN_INACTIVITY_MS / 1000}s`))
+        }, COPILOT_TURN_INACTIVITY_MS)
+        if (typeof turnTimeoutTimer === 'object' && turnTimeoutTimer && 'unref' in turnTimeoutTimer) {
+          (turnTimeoutTimer as { unref: () => void }).unref()
+        }
+      }
+
       try {
         const modelsById = new Map<string, CopilotModelInfo>()
         let activeContextTier = contextTier
@@ -4243,6 +4333,10 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
 
         const handleEvent = (event: CopilotSessionEvent) => {
           if (cleanedUp) return
+          // Any session event proves the turn is alive — push the inactivity
+          // deadline out. Only sustained SILENCE (no events at all) times out;
+          // a long autopilot run that keeps emitting is never killed.
+          armTurnInactivityTimeout()
           recordCopilotLiveTranscriptEvent(sessionId, event)
           broadcastLiveSessionActivity('copilot', sessionId)
           // Only the root agent's turn lifecycle ends our turn; sub-agent
@@ -4469,12 +4563,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           }
         }
 
-        turnTimeoutTimer = setTimeout(() => {
-          failTurn?.(new Error('Timeout after 300000ms waiting for Copilot turn completion'))
-        }, 300_000)
-        if (typeof turnTimeoutTimer === 'object' && turnTimeoutTimer && 'unref' in turnTimeoutTimer) {
-          (turnTimeoutTimer as { unref: () => void }).unref()
-        }
+        armTurnInactivityTimeout()
         const messageOptions: CopilotSendMessageOptions = {
           prompt: promptToSend,
           attachments: attachments.length > 0 ? attachments : undefined,
@@ -4706,6 +4795,9 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           provider: 'pi',
           requestId: turnRequestId,
           interrupt: () => agentSession.abort(),
+          // Pi's native steering queue (queue_update events already stream the
+          // pending entries to the composer's live status line).
+          steer: (text) => agentSession.steer(text),
         })
 
         signal.addEventListener('abort', () => {

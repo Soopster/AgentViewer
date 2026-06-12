@@ -4193,6 +4193,9 @@ export default function OpenTuiApp() {
   const [liveTranscriptMessages, setLiveTranscriptMessages] = useState<ThreadedMessage[]>([])
   // Queued prompt waiting for the active turn to finish (CLI-style queue).
   const [queuedComposerSend, setQueuedComposerSend] = useState<{ text: string; attachments: SendAttachment[] } | null>(null)
+  // Last message delivered INTO the running turn via native steering — shown
+  // in the composer status line while the turn is still streaming.
+  const [steeredSendNotice, setSteeredSendNotice] = useState<string | null>(null)
   const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
   const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | 'retrying' | null>(null)
   const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
@@ -7463,7 +7466,6 @@ export default function OpenTuiApp() {
     // transient auto-retry bypasses the queue — the prior (failed) turn already
     // settled, composerSendState just hasn't been cleared yet across the backoff.
     if (!isRetry && composerSendState === 'sending') {
-      setQueuedComposerSend({ text: trimmed, attachments: sendAttachments })
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
       setComposerMentionAttachments([])
@@ -7471,6 +7473,25 @@ export default function OpenTuiApp() {
       composerTextareaRef.current?.extmarks.clear()
       setComposerHistoryOpen(false)
       setComposerHistoryIndex(0)
+      // Native steering first: deliver the message INTO the running turn the
+      // way the provider's own CLI does (Claude Code/Codex/Pi/opencode all
+      // accept typed input mid-turn). Attachments can't ride a steer; and if
+      // the turn ends while the request is in flight the backend reports
+      // delivered:false — both fall back to the client-side queue, which
+      // sends as a fresh turn on idle.
+      const steerTarget = composerTargetSession
+      if (trimmed && sendAttachments.length === 0 && steerTarget) {
+        try {
+          const result = await runTuiSessionAction(steerTarget, { action: 'steer', message: trimmed })
+          if (result.delivered === true) {
+            setSteeredSendNotice(trimmed)
+            return
+          }
+        } catch {
+          // Steering is best-effort; the queue below is the reliable path.
+        }
+      }
+      setQueuedComposerSend({ text: trimmed, attachments: sendAttachments })
       return
     }
 
@@ -7487,6 +7508,7 @@ export default function OpenTuiApp() {
     activeComposerSendCleanupRef.current = turnCleanupPromise
     composerAbortRef.current = controller
     setComposerSendState('sending')
+    setSteeredSendNotice(null)
     setComposerSendStartedAt(sendStartedAt)
     setComposerWaitingSeed(`${targetSession.provider ?? 'claude'}:${targetSession.sessionId}:${sendStartedAt}:${trimmed}`)
     setComposerError(null)
@@ -8881,7 +8903,9 @@ export default function OpenTuiApp() {
       ? 'Syncing transcript…'
       : queuedComposerSend && composerSendState === 'sending'
         ? `Queued · sends after current turn: "${queuedComposerSend.text.slice(0, 60)}${queuedComposerSend.text.length > 60 ? '…' : ''}"`
-        : composerSendState === 'sending'
+        : steeredSendNotice && composerSendState === 'sending'
+          ? `Steered · delivered to the running turn: "${steeredSendNotice.slice(0, 60)}${steeredSendNotice.length > 60 ? '…' : ''}"`
+          : composerSendState === 'sending'
           ? activeRunningToolCount > 0
             ? `Using ${activeRunningToolCount} tool${activeRunningToolCount === 1 ? '' : 's'}.`
             : composerLiveText

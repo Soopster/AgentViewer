@@ -4,6 +4,13 @@ type RunningSession = {
   provider: AgentProvider
   interrupt: () => Promise<unknown>
   background?: () => Promise<unknown>
+  /**
+   * Deliver an additional user message INTO the running turn, the way the
+   * provider's own CLI does when you type while the agent works (Claude Code
+   * queues it as steering input, Codex `turn/steer`, Pi `steer()`). Absent
+   * when the provider has no mid-turn delivery primitive.
+   */
+  steer?: (text: string) => Promise<unknown>
   requestId?: string
 }
 
@@ -51,6 +58,18 @@ export async function interruptRunningSession(sessionId: string, requestId?: str
     (timer as { unref: () => void }).unref()
   }
   pendingInterrupts.set(sessionId, { requestId, timer })
+}
+
+/**
+ * Try to steer the session's in-flight turn with an extra user message.
+ * Returns false when there is no running turn or the provider can't steer —
+ * the caller should fall back to queueing the message for the next turn.
+ */
+export async function steerRunningSession(sessionId: string, text: string): Promise<boolean> {
+  const running = runningSessions.get(sessionId)
+  if (!running?.steer) return false
+  await running.steer(text)
+  return true
 }
 
 export async function backgroundRunningSession(sessionId: string): Promise<boolean> {

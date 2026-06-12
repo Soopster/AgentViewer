@@ -2142,6 +2142,9 @@ export default function MessageView({
   // CLIs queue an arbitrary number of follow-ups; a single overwritten slot
   // silently dropped all but the most recent draft.
   const [queuedSends, setQueuedSends] = useState<Array<{ text: string; attachments: SendAttachment[] }>>([])
+  // Last message delivered INTO the running turn via native steering — shown
+  // in the composer status line while the turn is still streaming.
+  const [steeredNotice, setSteeredNotice] = useState<string | null>(null)
   const [attachments, setAttachments] = useState<SendAttachment[]>([])
   const [attachmentType, setAttachmentType] = useState<SendAttachment['type']>('file')
   const [attachmentPath, setAttachmentPath] = useState('')
@@ -3272,12 +3275,36 @@ export default function MessageView({
     if (!retryOverride && (sendInFlightRef.current || awaitingPersistedTurnRef.current)) {
       const queueText = (textareaRef.current?.value ?? inputTextRef.current).trim()
       if (!queueText) return
-      setQueuedSends((prev) => [...prev, { text: queueText, attachments }])
+      const queueAttachments = attachments
       setInputText('')
       inputTextRef.current = ''
       textareaRef.current?.value !== undefined && (textareaRef.current!.value = '')
       setAttachments([])
       window.requestAnimationFrame(resizeComposer)
+      // Native steering first: deliver the message INTO the running turn
+      // (Claude pushes onto the warm query's input stream, Codex turn/steer,
+      // Pi steer(), opencode queues server-side). Attachments can't ride a
+      // steer, and a turn in post-stream reconcile has nothing to steer —
+      // those (and delivered:false / errors) fall back to the client queue.
+      if (sendInFlightRef.current && queueAttachments.length === 0) {
+        try {
+          const res = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'steer', message: queueText, provider: session.provider }),
+          })
+          if (res.ok) {
+            const json = await res.json().catch(() => ({})) as { result?: { delivered?: unknown } }
+            if (json.result?.delivered === true) {
+              setSteeredNotice(queueText)
+              return
+            }
+          }
+        } catch {
+          // Steering is best-effort; the queue below is the reliable path.
+        }
+      }
+      setQueuedSends((prev) => [...prev, { text: queueText, attachments: queueAttachments }])
       return
     }
 
@@ -3302,6 +3329,7 @@ export default function MessageView({
     setInputText('')
     inputTextRef.current = ''
     setSendState('sending')
+    setSteeredNotice(null)
     setSendError(null)
     setFailedSend(null)
     setInterrupting(false)
@@ -4773,6 +4801,8 @@ export default function MessageView({
     ? (queuedSends.length === 1
       ? 'Queued · sends after current turn'
       : `${queuedSends.length} queued · send in order after current turn`)
+    : steeredNotice && sendState === 'sending'
+    ? 'Steered · delivered to the running turn'
     : sendState === 'sending'
     ? 'Sending...'
     : awaitingPersistedTurn
