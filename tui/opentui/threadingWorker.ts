@@ -40,6 +40,14 @@ type WorkerResponse =
       rawMessages: SessionMessage[]
       threadedMessages: ThreadedMessage[]
       transcriptCards: TuiTranscriptCard[]
+      // How many leading entries of each array are object-identical (in this
+      // worker) to the previous detail response for the same session. postMessage
+      // cloning destroys identity, so the client uses these counts to splice its
+      // own previously-delivered objects back in — unchanged messages/cards keep
+      // their main-thread identity and every WeakMap/memo cache downstream hits.
+      rawPrefix: number
+      threadedPrefix: number
+      cardsPrefix: number
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[] }
   | { id: number; ok: false; error: string }
@@ -56,6 +64,24 @@ declare const self: {
 const THREADING_CACHE_LIMIT = 2
 const CARD_DENSITY_CACHE_LIMIT = 1
 const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
+
+// Arrays from the previous detail response per session, for the identity-prefix
+// counts in WorkerResponse. These hold references into threadingCacheByKey /
+// cardCacheByKey content, so the marginal memory is three array spines.
+type LastSentDetail = {
+  raw: SessionMessage[]
+  threaded: ThreadedMessage[]
+  cards: TuiTranscriptCard[]
+  cardsVariant: string
+}
+const lastSentByKey = new Map<string, LastSentDetail>()
+
+function sharedIdentityPrefix<T>(next: readonly T[], prev: readonly T[]): number {
+  const limit = Math.min(next.length, prev.length)
+  let i = 0
+  while (i < limit && next[i] === prev[i]) i++
+  return i
+}
 
 // Per-session card cache keyed by message content fingerprint -> density -> card.
 // Stable refs are returned across calls for the active density without keeping
@@ -75,6 +101,7 @@ function touchThreadingCache(key: string, cache: IncrementalThreadingCache): voi
     if (oldestKey === undefined) break
     threadingCacheByKey.delete(oldestKey)
     cardCacheByKey.delete(oldestKey)
+    lastSentByKey.delete(oldestKey)
   }
 }
 
@@ -100,13 +127,20 @@ function reuseCachedPrefix(
   return aligned
 }
 
-function threadMessages(session: Session, messages: SessionMessage[]): ThreadedMessage[] {
+// Returns the threaded transcript plus the message array actually cached —
+// content-identical to the input, but with previously-seen message objects
+// swapped in for the unchanged prefix. Posting THAT array (rather than the
+// fresh read) is what makes the worker-side identity-prefix counts meaningful.
+function threadMessages(
+  session: Session,
+  messages: SessionMessage[],
+): { threaded: ThreadedMessage[]; messages: SessionMessage[] } {
   const key = cacheKey(session)
   const cached = threadingCacheByKey.get(key)
 
   if (cached && sameMessageSequence(messages, cached.messages)) {
     touchThreadingCache(key, cached)
-    return cached.threaded
+    return { threaded: cached.threaded, messages: cached.messages }
   }
 
   let cacheMessages = messages
@@ -122,7 +156,7 @@ function threadMessages(session: Session, messages: SessionMessage[]): ThreadedM
 
   const nextThreaded = threaded ?? buildThreadedMessages(messages)
   touchThreadingCache(key, { messages: cacheMessages, threaded: nextThreaded })
-  return nextThreaded
+  return { threaded: nextThreaded, messages: cacheMessages }
 }
 
 function hasTaskListBlock(msg: ThreadedMessage): boolean {
@@ -154,10 +188,30 @@ function formatCards(
     const messageKey = threadedMessageFingerprint(msg)
     seenMessageKeys.add(messageKey)
     // TaskList rendering depends on the session-wide activeForms map, which
-    // can change as earlier TaskCreate/TaskUpdate calls arrive. Skip the
-    // per-message cache for these to avoid stale subjects.
+    // can change as earlier TaskCreate/TaskUpdate calls arrive, so these are
+    // always re-formatted. But when the output is unchanged, return the cached
+    // OBJECT — an always-new TaskList card caps the identity prefix at the
+    // first TaskList in the transcript and forfeits the downstream cache hits.
     if (hasTaskListBlock(msg)) {
-      cards[i] = formatTranscriptCard(msg, density, activeForms, taskRegistry)
+      const fresh = formatTranscriptCard(msg, density, activeForms, taskRegistry)
+      let perTaskMessage = perSession.get(messageKey)
+      if (!perTaskMessage) {
+        perTaskMessage = new Map()
+        perSession.set(messageKey, perTaskMessage)
+      }
+      const prevCard = perTaskMessage.get(density)
+      if (prevCard && JSON.stringify(prevCard) === JSON.stringify(fresh)) {
+        cards[i] = prevCard
+        continue
+      }
+      if (perTaskMessage.has(density)) perTaskMessage.delete(density)
+      perTaskMessage.set(density, fresh)
+      while (perTaskMessage.size > CARD_DENSITY_CACHE_LIMIT) {
+        const oldestDensity = perTaskMessage.keys().next().value
+        if (oldestDensity === undefined) break
+        perTaskMessage.delete(oldestDensity)
+      }
+      cards[i] = fresh
       continue
     }
     let perMessage = perSession.get(messageKey)
@@ -201,10 +255,33 @@ self.onmessage = async (event) => {
       return
     }
     const { info, rawMessages } = await readTuiSessionDetailSource(data.session)
-    const threadedMessages = threadMessages(data.session, rawMessages)
+    const { threaded: threadedMessages, messages: alignedMessages } = threadMessages(data.session, rawMessages)
     const sessionCacheKey = cacheKey(data.session)
     const transcriptCards = formatCards(sessionCacheKey, threadedMessages, data.density, data.showToolCalls)
-    self.postMessage({ id: data.id, ok: true, info, rawMessages, threadedMessages, transcriptCards })
+    const cardsVariant = `${data.density}|${data.showToolCalls ? 1 : 0}`
+    const prev = lastSentByKey.get(sessionCacheKey)
+    const rawPrefix = prev ? sharedIdentityPrefix(alignedMessages, prev.raw) : 0
+    const threadedPrefix = prev ? sharedIdentityPrefix(threadedMessages, prev.threaded) : 0
+    const cardsPrefix = prev && prev.cardsVariant === cardsVariant
+      ? sharedIdentityPrefix(transcriptCards, prev.cards)
+      : 0
+    lastSentByKey.set(sessionCacheKey, {
+      raw: alignedMessages,
+      threaded: threadedMessages,
+      cards: transcriptCards,
+      cardsVariant,
+    })
+    self.postMessage({
+      id: data.id,
+      ok: true,
+      info,
+      rawMessages: alignedMessages,
+      threadedMessages,
+      transcriptCards,
+      rawPrefix,
+      threadedPrefix,
+      cardsPrefix,
+    })
   } catch (err) {
     self.postMessage({
       id: data.id,

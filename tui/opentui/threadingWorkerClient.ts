@@ -20,6 +20,8 @@ type ThreadingClientCache = {
 type Pending =
   | {
       kind: 'detail'
+      sessionKey: string
+      cardsVariant: string
       resolve: (payload: SessionDetailPayload) => void
       reject: (error: Error) => void
     }
@@ -37,6 +39,9 @@ type WorkerResponse =
       rawMessages: SessionMessage[]
       threadedMessages: ThreadedMessage[]
       transcriptCards: TuiTranscriptCard[]
+      rawPrefix: number
+      threadedPrefix: number
+      cardsPrefix: number
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[] }
   | { id: number; ok: false; error: string }
@@ -50,6 +55,45 @@ const pending = new Map<number, Pending>()
 const THREADING_CACHE_LIMIT = 10
 const CARD_VARIANT_CACHE_LIMIT = 4
 const threadingCacheByKey = new Map<string, ThreadingClientCache>()
+
+// What the previous detail response for each session delivered to callers.
+// postMessage cloning mints fresh objects every read, which would miss every
+// identity-keyed cache downstream (App's WeakMaps, TranscriptCard memo, raw
+// message fingerprint cache). The worker reports how many leading entries are
+// unchanged since its previous response (identity prefixes); we splice our own
+// previously-delivered objects back in for that prefix so unchanged content
+// keeps its main-thread identity across polls.
+type LastDeliveredDetail = {
+  raw: SessionMessage[]
+  threaded: ThreadedMessage[]
+  cards: TuiTranscriptCard[]
+  cardsVariant: string
+}
+const lastDeliveredByKey = new Map<string, LastDeliveredDetail>()
+
+function touchLastDelivered(key: string, value: LastDeliveredDetail): void {
+  if (lastDeliveredByKey.has(key)) lastDeliveredByKey.delete(key)
+  lastDeliveredByKey.set(key, value)
+  while (lastDeliveredByKey.size > THREADING_CACHE_LIMIT) {
+    const oldestKey = lastDeliveredByKey.keys().next().value
+    if (oldestKey === undefined) break
+    lastDeliveredByKey.delete(oldestKey)
+  }
+}
+
+// Replace the unchanged prefix of a fresh-cloned array with the objects we
+// handed out last time. Falls back to the fresh array whenever the previous
+// delivery is missing or the prefix is empty — the response always carries the
+// full content, so reconciliation is purely an identity optimization.
+function spliceDelivered<T>(prev: T[] | undefined, fresh: T[], prefix: number): T[] {
+  if (!prev || prefix <= 0) return fresh
+  const n = Math.min(prefix, prev.length, fresh.length)
+  if (n <= 0) return fresh
+  if (n === fresh.length && prev.length === fresh.length) return prev
+  const out = fresh.slice()
+  for (let i = 0; i < n; i++) out[i] = prev[i]
+  return out
+}
 
 function cacheKey(session: Session): string {
   return `${session.provider ?? 'claude'}:${session.sessionId}`
@@ -99,11 +143,26 @@ function ensureWorker(): Worker {
       return
     }
     if (entry.kind === 'detail' && 'rawMessages' in data) {
+      const prev = lastDeliveredByKey.get(entry.sessionKey)
+      const variantMatches = prev?.cardsVariant === entry.cardsVariant
+      const rawMessages = spliceDelivered(prev?.raw, data.rawMessages, data.rawPrefix ?? 0)
+      const threadedMessages = spliceDelivered(prev?.threaded, data.threadedMessages, data.threadedPrefix ?? 0)
+      const transcriptCards = spliceDelivered(
+        variantMatches ? prev?.cards : undefined,
+        data.transcriptCards,
+        data.cardsPrefix ?? 0,
+      )
+      touchLastDelivered(entry.sessionKey, {
+        raw: rawMessages,
+        threaded: threadedMessages,
+        cards: transcriptCards,
+        cardsVariant: entry.cardsVariant,
+      })
       entry.resolve({
         info: data.info,
-        rawMessages: data.rawMessages,
-        threadedMessages: data.threadedMessages,
-        transcriptCards: data.transcriptCards,
+        rawMessages,
+        threadedMessages,
+        transcriptCards,
       })
     } else if (entry.kind === 'format') {
       entry.resolve(data.transcriptCards)
@@ -141,6 +200,8 @@ export function readAndBuildTranscriptAsync(
   return new Promise<SessionDetailPayload>((resolve, reject) => {
     pending.set(id, {
       kind: 'detail',
+      sessionKey: key,
+      cardsVariant: variantKey(density, showToolCalls),
       resolve: (payload) => {
         const cacheEntry = {
           threadedMessages: payload.threadedMessages,
