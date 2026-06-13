@@ -72,6 +72,30 @@ export async function steerRunningSession(sessionId: string, text: string): Prom
   return true
 }
 
+/**
+ * Snapshot of whether a turn is currently running server-side for a session.
+ * Used by clients to reattach to a live turn after navigating away or reloading
+ * (the turn keeps running with detachOnClientAbort). `process-local`: only
+ * reflects turns started in this process.
+ */
+export function getRunningSessionInfo(sessionId: string): {
+  running: boolean
+  provider?: AgentProvider
+  canSteer: boolean
+  canInterrupt: boolean
+  canBackground: boolean
+} {
+  const running = runningSessions.get(sessionId)
+  if (!running) return { running: false, canSteer: false, canInterrupt: false, canBackground: false }
+  return {
+    running: true,
+    provider: running.provider,
+    canSteer: typeof running.steer === 'function',
+    canInterrupt: true,
+    canBackground: typeof running.background === 'function',
+  }
+}
+
 export async function backgroundRunningSession(sessionId: string): Promise<boolean> {
   const running = runningSessions.get(sessionId)
   if (!running) throw new Error('No running session for this session')

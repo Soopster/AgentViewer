@@ -10,7 +10,7 @@ import { readBridgeConfigFromEnv, sendChannelMessage, subscribeToChannelEvents, 
 import { loadBridgeMessagesForSession, addBridgeMessage } from '../../lib/bridgeMessages'
 import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
-import { scheduleWriteComposerDraft, readComposerDraft } from '../../lib/tuiComposerState'
+import { scheduleWriteComposerDraft, readComposerDraft, readComposerSentHistory, appendComposerSentHistory } from '../../lib/tuiComposerState'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
 import { startTuiMetricsLogger, tuiMetricsEnabled, noteRenderFrame, registerTuiMetricsGauge, cardProfileEnabled, logCardRecompute } from './metricsLogger'
 import {
@@ -4224,7 +4224,9 @@ export default function OpenTuiApp() {
   const [modelPickerEffortIndex, setModelPickerEffortIndex] = useState(0)
   const [modelPickerLoading, setModelPickerLoading] = useState(false)
   const [modelPickerError, setModelPickerError] = useState<string | null>(null)
-  const [sentHistory, setSentHistory] = useState<ComposerDraftSnapshot[]>([])
+  const [sentHistory, setSentHistory] = useState<ComposerDraftSnapshot[]>(() =>
+    readComposerSentHistory().map((text) => ({ text, attachments: [], promptParts: [] })),
+  )
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [draftBeforeHistory, setDraftBeforeHistory] = useState<ComposerDraftSnapshot>({
     text: '',
@@ -5372,8 +5374,13 @@ export default function OpenTuiApp() {
     const target = transcriptSession
     if (!target || !committedSessionKey) return
     const fullSession = sessionsByKeyRef.current.get(committedSessionKey)
-    if (fullSession?.isPending) return // cold path by definition — nothing to warm
-    const needsAffordances = (() => {
+    const isPending = fullSession?.isPending === true
+    // A pending session's only warmable provider is Pi (its ~19s cold open is
+    // exactly what prewarm hides; createPiAgentSession is idempotent on the id).
+    // Claude/Codex/Copilot pending sessions run a cold path that abandons any
+    // prewarmed entry, so prewarmViewSession no-ops them — skip the work here too.
+    if (isPending && target.provider !== 'pi') return
+    const needsAffordances = !isPending && (() => {
       const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
       return !cached || Date.now() - cached.ts >= COMPOSER_AFFORDANCES_TTL_MS
     })()
@@ -5387,6 +5394,7 @@ export default function OpenTuiApp() {
             {
               model: tuiModelOverride[committedSessionKey] || undefined,
               effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+              isPending,
             },
           ).catch(() => { /* best-effort: the send pays the usual cold cost */ })
             .finally(() => { composerPrewarmInFlightRef.current.delete(committedSessionKey) })
@@ -8015,6 +8023,7 @@ export default function OpenTuiApp() {
         attachments: sendAttachments,
         promptParts: submission.promptParts,
       }])
+      appendComposerSentHistory(submission.visibleText)
       setHistoryIndex(-1)
       setDraftBeforeHistory({ text: '', attachments: [], promptParts: [] })
       setComposerHistoryOpen(false)
@@ -8200,6 +8209,28 @@ export default function OpenTuiApp() {
     setComposerMentionAttachments(next.attachments)
     void sendComposerMessage(next.text, next.attachments)
   }, [composerSendState, queuedComposerSends, sendComposerMessage])
+
+  // Pull the most-recently queued message back into the composer to edit it
+  // (cancels that one send). Any current draft is preserved by prepending it,
+  // mirroring the interrupt-restore ordering. Attachments restore too.
+  const popNewestQueuedComposerSend = useEffectEvent(() => {
+    const queue = queuedComposerSendsRef.current
+    if (queue.length === 0) return
+    const item = queue[queue.length - 1]!
+    setQueuedComposerSends((prev) => prev.slice(0, -1))
+    const currentDraft = (composerTextareaRef.current?.plainText ?? composerDraft).trim()
+    const restored = [currentDraft, item.text].filter(Boolean).join('\n\n')
+    composerTextareaRef.current?.setText(restored)
+    setComposerDraft(restored)
+    if (item.attachments.length > 0) setComposerMentionAttachments(item.attachments)
+    setComposerActive(true)
+  })
+
+  // Cancel every queued message at once without firing any of them.
+  const clearQueuedComposerSends = useEffectEvent(() => {
+    if (queuedComposerSendsRef.current.length === 0) return
+    setQueuedComposerSends([])
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -10103,6 +10134,15 @@ export default function OpenTuiApp() {
         handled(toggleComposerWindow)
         return
       }
+      // Queue management: ⌃Y pops the newest queued message back into the
+      // composer to edit (cancelling that send); ⌃Y with shift clears the queue.
+      if (isCtrl('y') && queuedComposerSends.length > 0) {
+        handled(() => {
+          if (key.shift) clearQueuedComposerSends()
+          else popNewestQueuedComposerSend()
+        })
+        return
+      }
       // Toggle the Channel Bridge composer routing right from the composer —
       // same key as the bridge popover's ^R, so the binding is consistent
       // whether or not the panel is open.
@@ -11244,6 +11284,44 @@ export default function OpenTuiApp() {
       </box>
     )
   }
+  // Always-visible queued-send list (no modal): shows what will fire after the
+  // current turn, in order, with the ⌃Y edit / ⇧⌃Y clear hint.
+  const renderComposerQueuePanel = (panelWidth: number, rowWidth: number) => {
+    if (!composerActive || queuedComposerSends.length === 0) return null
+    const visible = Math.min(queuedComposerSends.length, 4)
+    const hiddenCount = queuedComposerSends.length - visible
+    return (
+      <box
+        width={panelWidth}
+        height={visible + (hiddenCount > 0 ? 2 : 1) + 2}
+        paddingX={1}
+        backgroundColor={theme.surface2}
+        border
+        borderStyle="single"
+        borderColor={theme.amber ?? theme.border2}
+        flexDirection="column"
+      >
+        <text fg={theme.amber ?? composerAccentColor} wrapMode="none">
+          {fitText(`queued (${queuedComposerSends.length}) · sends in order after this turn · ⌃Y edit newest · ⇧⌃Y clear`, rowWidth)}
+        </text>
+        {queuedComposerSends.slice(0, visible).map((entry, index) => {
+          const compact = compactComposerEntryText(entry.text)
+          const attachmentLabel = attachmentCountLabel(entry.attachments)
+          const suffix = attachmentLabel ? `  ${attachmentLabel}` : ''
+          return (
+            <box key={`queued:${index}:${entry.text.length}`} flexDirection="row" height={1} width={rowWidth}>
+              <text fg={theme.dim} wrapMode="none">{`${index + 1}. `}</text>
+              <text fg={theme.text} wrapMode="none">{fitText(compact, Math.max(rowWidth - 6 - suffix.length, 8))}</text>
+              <text fg={theme.dim} wrapMode="none">{suffix}</text>
+            </box>
+          )
+        })}
+        {hiddenCount > 0 ? (
+          <text fg={theme.dim} wrapMode="none">{fitText(`  +${hiddenCount} more queued`, rowWidth)}</text>
+        ) : null}
+      </box>
+    )
+  }
 
   return (
     <box width={width} height={height} flexDirection="column" backgroundColor={theme.bg}>
@@ -12126,6 +12204,7 @@ export default function OpenTuiApp() {
 
       {!composerWindowOpen ? renderComposerHistoryPanel(width, Math.max(width - 4, 20)) : null}
       {!composerWindowOpen ? renderComposerStashPanel(width, Math.max(width - 4, 20)) : null}
+      {!composerWindowOpen && !composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(width, Math.max(width - 4, 20)) : null}
 
       {!composerWindowOpen ? (
         <box
@@ -12400,6 +12479,7 @@ export default function OpenTuiApp() {
           {!composerHistoryOpen && !composerStashOpen ? renderComposerSlashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12)) : null}
           {renderComposerHistoryPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
           {renderComposerStashPanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12))}
+          {!composerHistoryOpen && !composerStashOpen ? renderComposerQueuePanel(composerWindowContentWidth, Math.max(composerWindowContentWidth - 4, 12)) : null}
 
           <box
             height={composerWindowFooterHeight}

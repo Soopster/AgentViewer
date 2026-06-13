@@ -293,7 +293,7 @@ export async function interruptTuiSessionTurn(session: { sessionId: string }): P
 /** Warm the send path (Claude pool spawn, Codex thread resume) while the user types. */
 export async function prewarmTuiSession(
   session: Session,
-  opts?: { model?: string; effort?: import('../types').ReasoningEffortLevel },
+  opts?: { model?: string; effort?: import('../types').ReasoningEffortLevel; isPending?: boolean },
 ): Promise<void> {
   await prewarmViewSession({
     sessionId: session.sessionId,
@@ -301,6 +301,7 @@ export async function prewarmTuiSession(
     cwd: session.cwd ?? undefined,
     model: opts?.model,
     effort: opts?.effort,
+    isPending: opts?.isPending,
   })
 }
 

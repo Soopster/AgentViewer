@@ -70,7 +70,7 @@ import {
   type SessionEvent as CopilotSessionEvent,
   type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
-import { backgroundRunningSession, clearRunningSession, getRunningSession, interruptRunningSession, setRunningSession, steerRunningSession } from './sessionRuntime'
+import { backgroundRunningSession, clearRunningSession, getRunningSession, getRunningSessionInfo, interruptRunningSession, setRunningSession, steerRunningSession } from './sessionRuntime'
 import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
 import type {
@@ -4941,9 +4941,16 @@ export async function prewarmViewSession(params: {
   cwd?: string
   model?: string
   effort?: ReasoningEffortLevel
+  isPending?: boolean
 }): Promise<void> {
   const provider = await resolveProvider(params.provider)
   if (provider === 'claude') {
+    // A pending (not-yet-created) Claude session runs the cold path on first
+    // send, which spawns its own query and only adopts into the pool afterward.
+    // A prewarmed pool entry keyed on the client UUID would not be consulted by
+    // that path, so prewarming a pending Claude session has no effect — skip it
+    // rather than spawn a subprocess that the first send abandons.
+    if (params.isPending) return
     if (peekClaudeSession(params.sessionId)) return
     acquireClaudeSession({
       sessionId: params.sessionId,
@@ -4955,14 +4962,23 @@ export async function prewarmViewSession(params: {
     return
   }
   if (provider === 'codex') {
+    if (params.isPending) return
     await ensureCodexThreadResumed(params.sessionId)
     return
   }
   if (provider === 'copilot') {
+    if (params.isPending) return
     await acquireCopilotSession(params.sessionId)
     return
   }
   if (provider === 'pi') {
+    // Pi's cold open is the slowest (~19s) so a pending session is exactly where
+    // prewarm pays off. createPiAgentSession is idempotent on the id, so the
+    // first send reuses this pooled session instead of recreating it.
+    if (params.isPending) {
+      await createPiAgentSession(params.cwd ?? process.cwd(), { id: params.sessionId })
+      return
+    }
     await openPiAgentSession(params.sessionId)
     return
   }
@@ -5114,6 +5130,15 @@ export async function createNewViewSession({
 
 export async function interruptViewSession(sessionId: string, turnRequestId?: string): Promise<void> {
   await interruptRunningSession(sessionId, turnRequestId)
+}
+
+/**
+ * Whether a turn is currently running server-side for this session, so a client
+ * that navigated away or reloaded can reattach to the live turn. Process-local:
+ * only reflects turns started by this server process.
+ */
+export function readViewSessionRunning(sessionId: string): ReturnType<typeof getRunningSessionInfo> {
+  return getRunningSessionInfo(sessionId)
 }
 
 export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; currentContextTier?: CopilotContextTier | null; contextUsage: ContextUsage | null }> {

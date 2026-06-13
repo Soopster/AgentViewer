@@ -199,6 +199,31 @@ function useLazyRef<T>(create: () => T): { current: T } {
   return ref as { current: T }
 }
 
+const SENT_HISTORY_MAX = 200
+const SENT_HISTORY_STORAGE_KEY = 'agent-viewer:composer-sent-history'
+
+function readPersistedSentHistory(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(SENT_HISTORY_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((e): e is string => typeof e === 'string').slice(-SENT_HISTORY_MAX)
+  } catch {
+    return []
+  }
+}
+
+function writePersistedSentHistory(entries: string[]): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(SENT_HISTORY_STORAGE_KEY, JSON.stringify(entries))
+  } catch {
+    // best-effort; quota or privacy mode
+  }
+}
+
 const TRANSCRIPT_FILTERS: Array<{ key: TranscriptFilter; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'user', label: 'User' },
@@ -235,6 +260,7 @@ const TIMELINE_CALIBRATION_MAX_RATIO = 2
 // the durable rows are normally present within a poll or two; this only fires
 // when a write is lost/delayed so "Syncing transcript…" can never stick forever.
 const AWAITING_PERSISTED_TURN_TIMEOUT_MS = 15000
+const REATTACH_POLL_MS = 2500
 const PROGRAMMATIC_SCROLL_SUPPRESSION_MS = 120
 const ESTIMATED_CHARS_PER_LINE = 92
 const TIMELINE_BOTTOM_GUTTER_PX = 72
@@ -2280,6 +2306,14 @@ export default function MessageView({
   // the composer show a definite "Interrupting…" instead of snapping to idle
   // while the agent is still wrapping up server-side.
   const [interrupting, setInterrupting] = useState(false)
+  // Reattach: a turn is running server-side that this client does NOT own (it
+  // was started before a navigation/reload — turns keep running via
+  // detachOnClientAbort). Detected by polling /running while we're otherwise
+  // idle. When set, the composer reflects the live turn (stop button, steer on
+  // send) and the persisted poll surfaces output until the turn finishes.
+  const [reattachedRunning, setReattachedRunning] = useState(false)
+  const reattachedRunningRef = useRef(false)
+  useEffect(() => { reattachedRunningRef.current = reattachedRunning }, [reattachedRunning])
   const [liveAssistantText, setLiveAssistantText] = useState('')
   // Reasoning/thinking streams on its own channel so it renders as a distinct
   // dim block above the answer (like the native CLIs) instead of being folded
@@ -2299,7 +2333,7 @@ export default function MessageView({
   // streaming turn doesn't rebuild the whole transcript layout each frame.
   const [persistedMeasurementVersion, setPersistedMeasurementVersion] = useState(0)
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
-  const [sentHistory, setSentHistory] = useState<string[]>([])
+  const [sentHistory, setSentHistory] = useState<string[]>(readPersistedSentHistory)
   const [historyIndex, setHistoryIndex] = useState(-1)
   const draftBeforeHistoryRef = useRef<{ text: string; cursorPos: number }>({ text: '', cursorPos: 0 })
   const [mentionQuery, setMentionQuery] = useState<{ start: number; query: string } | null>(null)
@@ -3176,6 +3210,44 @@ export default function MessageView({
     }
   }, [awaitingPersistedTurn, interrupting])
 
+  // Poll for a server-side turn we don't own so we can reattach to it. Runs
+  // only while this client is idle (no owned stream); pauses the moment we
+  // start/own a turn, and clears as soon as the server reports the turn done.
+  useEffect(() => {
+    if (!session || projectView) {
+      setReattachedRunning(false)
+      return
+    }
+    const sessionId = session.sessionId
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const poll = async () => {
+      if (cancelled) return
+      // We own a live turn already — the stream renders it; don't double-track.
+      if (sendInFlightRef.current || awaitingPersistedTurnRef.current) {
+        if (reattachedRunningRef.current) setReattachedRunning(false)
+        timer = setTimeout(poll, REATTACH_POLL_MS)
+        return
+      }
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/running`, { cache: 'no-store' })
+        if (!cancelled && res.ok) {
+          const info = (await res.json().catch(() => null)) as { running?: boolean } | null
+          const running = info?.running === true
+          setReattachedRunning((prev) => (prev === running ? prev : running))
+        }
+      } catch {
+        // best-effort; a failed probe just leaves the prior state
+      }
+      if (!cancelled) timer = setTimeout(poll, REATTACH_POLL_MS)
+    }
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [session?.sessionId, projectView])
+
   const cancelSend = useCallback(() => {
     if (session) {
       fetch(`/api/sessions/${session.sessionId}/interrupt`, {
@@ -3225,6 +3297,9 @@ export default function MessageView({
       setAwaitingPersistedTurn(true)
     } else {
       // Nothing started yet — restore the draft and clear cleanly, as if unsent.
+      // (Also the reattach path: we don't own a stream, so stop just fires the
+      // server interrupt and drops back to idle; the /running poll reconciles.)
+      setReattachedRunning(false)
       if (optimisticUserText) setInputText((prev) => prev || optimisticUserText)
       setInterrupting(false)
       awaitingPersistedTurnRef.current = false
@@ -3295,7 +3370,7 @@ export default function MessageView({
     // while one is in flight, stash the draft and have the post-stream effect
     // flush it once the current turn lands. A transient auto-retry (retryOverride)
     // is never a queue candidate — it only fires after the failed turn settled.
-    if (!retryOverride && (sendInFlightRef.current || awaitingPersistedTurnRef.current)) {
+    if (!retryOverride && (sendInFlightRef.current || awaitingPersistedTurnRef.current || reattachedRunningRef.current)) {
       const queueText = (textareaRef.current?.value ?? inputTextRef.current).trim()
       if (!queueText) return
       const queueAttachments = attachments
@@ -3309,7 +3384,7 @@ export default function MessageView({
       // Pi steer(), opencode queues server-side). Attachments can't ride a
       // steer, and a turn in post-stream reconcile has nothing to steer —
       // those (and delivered:false / errors) fall back to the client queue.
-      if (sendInFlightRef.current && queueAttachments.length === 0) {
+      if ((sendInFlightRef.current || reattachedRunningRef.current) && queueAttachments.length === 0) {
         try {
           const res = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
             method: 'POST',
@@ -3342,13 +3417,19 @@ export default function MessageView({
     turnProducedOutputRef.current = false
 
     sendInFlightRef.current = true
+    // We now own a live stream — drop any reattach tracking so the turn renders
+    // from the stream, not the /running poll.
+    reattachedRunningRef.current = false
+    setReattachedRunning(false)
     pushedCopilotAttachmentsRef.current = []
     const sendAttachments = retryOverride ? retryOverride.attachments : attachments
     const effort = selectedEffort === 'auto' ? undefined : selectedEffort
     setSentHistory((prev) => {
       if (prev.length > 0 && prev[prev.length - 1] === text) return prev
       const next = [...prev, text]
-      return next.length > 50 ? next.slice(next.length - 50) : next
+      const capped = next.length > SENT_HISTORY_MAX ? next.slice(next.length - SENT_HISTORY_MAX) : next
+      writePersistedSentHistory(capped)
+      return capped
     })
     setHistoryIndex(-1)
     draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
@@ -3801,6 +3882,9 @@ export default function MessageView({
   useEffect(() => {
     if (queuedSends.length === 0) return
     if (sendInFlightRef.current || awaitingPersistedTurnRef.current) return
+    // A turn we reattached to is still running server-side — flushing now would
+    // start a second concurrent turn. Wait for the /running poll to clear.
+    if (reattachedRunning) return
     // Gate on strict idle: flushing while sendState is 'error' would auto-fire
     // a queued send after a failed turn (and clobber the restored draft).
     if (sendState !== 'idle' || awaitingPersistedTurn) return
@@ -3818,7 +3902,34 @@ export default function MessageView({
       resizeComposer()
       void sendMessage()
     })
-  }, [awaitingPersistedTurn, queuedSends, resizeComposer, sendMessage, sendState])
+  }, [awaitingPersistedTurn, queuedSends, reattachedRunning, resizeComposer, sendMessage, sendState])
+
+  // Remove a single queued message (× on its chip) without firing it.
+  const removeQueuedSend = useCallback((index: number) => {
+    setQueuedSends((prev) => prev.filter((_, i) => i !== index))
+  }, [])
+
+  // Pull a queued message back into the composer to edit it. Its attachments
+  // are still in memory so they restore too. The current draft is preserved by
+  // prepending the edited text only when the composer is empty; otherwise the
+  // queued text replaces the draft (matching ↑ history-recall behaviour).
+  const editQueuedSend = useCallback((index: number) => {
+    const item = queuedSendsRef.current[index]
+    if (!item) return
+    setQueuedSends((prev) => prev.filter((_, i) => i !== index))
+    setInputText(item.text)
+    inputTextRef.current = item.text
+    setAttachments(item.attachments ?? [])
+    window.requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (ta) {
+        ta.value = item.text
+        ta.focus()
+        ta.setSelectionRange(item.text.length, item.text.length)
+      }
+      resizeComposer()
+    })
+  }, [resizeComposer])
 
   const updateComposerHints = useCallback((text: string, cursor: number) => {
     const mention = detectMentionAtCursor(text, cursor)
@@ -4811,6 +4922,9 @@ export default function MessageView({
   }, [isProject, session])
   const activeToolCount = liveToolActivities.filter((activity) => activity.status === 'running').length
   const sendBusy = sendState === 'sending' || awaitingPersistedTurn
+  // A turn is live (whether we own its stream or reattached to it) — drives the
+  // stop button and the "busy" composer presentation.
+  const turnRunning = sendBusy || reattachedRunning
   const canSubmitMessage = Boolean(session && inputText.trim())
   const composerConfig = useMemo(() => getProviderComposer(session?.provider), [session?.provider])
   const composerExampleSeed = useMemo(() => {
@@ -4825,7 +4939,7 @@ export default function MessageView({
   )
   const composerPlaceholder = channelBridge.routeComposer
     ? 'Send to the live CLI bridge… (toggle off in the bridge panel)'
-    : sendBusy
+    : turnRunning
     ? composerConfig.placeholderStreaming
     : activeToolCount > 0
     ? `${composerConfig.label} is using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
@@ -4840,12 +4954,14 @@ export default function MessageView({
     ? (queuedSends.length === 1
       ? 'Queued · sends after current turn'
       : `${queuedSends.length} queued · send in order after current turn`)
-    : steeredNotice && sendState === 'sending'
+    : steeredNotice && (sendState === 'sending' || reattachedRunning)
     ? 'Steered · delivered to the running turn'
     : sendState === 'sending'
     ? 'Sending...'
     : awaitingPersistedTurn
     ? 'Waiting for saved response...'
+    : reattachedRunning
+    ? 'Turn running · reattached'
     : 'Ready'
   const composerStatusColor = sendState === 'error'
     ? 'var(--red, #f87171)'
@@ -4853,7 +4969,7 @@ export default function MessageView({
     ? (channelBridge.sendError ? 'var(--red, #f87171)' : `var(${composerConfig.cssAccentVar})`)
     : queuedSends.length > 0
     ? 'var(--amber, #eaaa40)'
-    : sendState === 'sending' || awaitingPersistedTurn
+    : sendState === 'sending' || awaitingPersistedTurn || reattachedRunning
     ? 'var(--cyan)'
     : 'var(--text-3)'
   const liveTurnTone: 'running' | 'syncing' = awaitingPersistedTurn ? 'syncing' : 'running'
@@ -7427,6 +7543,82 @@ export default function MessageView({
                 )
               })}
             </div>
+            {queuedSends.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                <span style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 9,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: 'var(--amber, #eaaa40)',
+                  opacity: 0.85,
+                }}>
+                  Queued ({queuedSends.length})
+                </span>
+                {queuedSends.map((entry, index) => {
+                  const preview = entry.text.replace(/\s+/g, ' ').trim()
+                  const short = preview.length > 48 ? `${preview.slice(0, 48)}…` : preview
+                  const attachmentSuffix = entry.attachments.length > 0 ? ` +${entry.attachments.length}` : ''
+                  return (
+                    <span
+                      key={`queued-${index}`}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        maxWidth: 280,
+                        height: 22,
+                        borderRadius: 5,
+                        border: '1px solid rgba(234,170,64,0.30)',
+                        background: 'rgba(234,170,64,0.08)',
+                        padding: '0 4px 0 8px',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 10,
+                        color: 'var(--amber, #eaaa40)',
+                      }}
+                    >
+                      <span style={{ color: 'var(--text-3)', fontSize: 9 }}>{index + 1}.</span>
+                      <button
+                        type="button"
+                        onClick={() => editQueuedSend(index)}
+                        title="Click to edit this queued message"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'inherit',
+                          cursor: 'pointer',
+                          padding: 0,
+                          maxWidth: 220,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          fontFamily: 'inherit',
+                          fontSize: 'inherit',
+                        }}
+                      >
+                        {short || '(empty)'}{attachmentSuffix}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeQueuedSend(index)}
+                        title="Remove from queue"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-3)',
+                          cursor: 'pointer',
+                          padding: '0 2px',
+                          fontSize: 12,
+                          lineHeight: 1,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )
+                })}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', position: 'relative' }}>
               {mentionQuery && mentionResults.length > 0 && (
                 <div style={composerPopoverStyle}>
@@ -7632,7 +7824,7 @@ export default function MessageView({
                   onClose={() => setChannelBridgeOpen(false)}
                 />
               )}
-              {sendState === 'sending' ? (
+              {sendState === 'sending' || reattachedRunning ? (
                 <div style={{ flexShrink: 0, display: 'flex', gap: 6, alignItems: 'center' }}>
                   <Button
                     type="button"

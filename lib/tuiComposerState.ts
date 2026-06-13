@@ -56,3 +56,54 @@ export function readComposerDraft(storageKey: string): string {
   const store = readStoreSync()
   return store[storageKey]?.text ?? ''
 }
+
+// --- Sent history (global, text-only, persisted across restarts) ---
+
+const SENT_HISTORY_FILE = path.join(DATA_DIR, 'sent-history.json')
+const SENT_HISTORY_MAX = 200
+
+type SentHistoryStore = { entries: string[] }
+
+function readSentHistorySync(): string[] {
+  try {
+    if (!existsSync(SENT_HISTORY_FILE)) return []
+    const raw = readFileSync(SENT_HISTORY_FILE, 'utf-8')
+    const parsed = JSON.parse(raw) as SentHistoryStore
+    return Array.isArray(parsed.entries) ? parsed.entries.filter((e) => typeof e === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+let sentHistoryCache: string[] | null = null
+let sentHistoryWriteTimer: ReturnType<typeof setTimeout> | null = null
+
+function flushSentHistory(): void {
+  sentHistoryWriteTimer = null
+  if (!sentHistoryCache) return
+  try {
+    ensureDir()
+    writeFileSync(SENT_HISTORY_FILE, JSON.stringify({ entries: sentHistoryCache }), 'utf-8')
+  } catch {
+    // best-effort; history is non-critical
+  }
+}
+
+/** Returns persisted sent messages, oldest first. */
+export function readComposerSentHistory(): string[] {
+  if (!sentHistoryCache) sentHistoryCache = readSentHistorySync()
+  return [...sentHistoryCache]
+}
+
+/** Appends a sent message (text-only), de-duping consecutive repeats, capped. */
+export function appendComposerSentHistory(text: string): void {
+  const trimmed = text.trim()
+  if (!trimmed) return
+  if (!sentHistoryCache) sentHistoryCache = readSentHistorySync()
+  if (sentHistoryCache[sentHistoryCache.length - 1] === trimmed) return
+  sentHistoryCache.push(trimmed)
+  if (sentHistoryCache.length > SENT_HISTORY_MAX) {
+    sentHistoryCache = sentHistoryCache.slice(sentHistoryCache.length - SENT_HISTORY_MAX)
+  }
+  if (!sentHistoryWriteTimer) sentHistoryWriteTimer = setTimeout(flushSentHistory, 300)
+}

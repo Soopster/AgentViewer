@@ -87,6 +87,18 @@ export async function getPiSessionEntries(sessionId: string): Promise<SessionEnt
 
 export async function createPiAgentSession(cwd: string, options: { id?: string } = {}): Promise<AgentSession> {
   try {
+    // Idempotent for a requested id: a prewarm (composer focus) and the first
+    // real send both call this for the same pending session. Reuse the pooled
+    // session instead of paying createAgentSession (resourceLoader.reload +
+    // package resolution) twice and orphaning the first AgentSession.
+    if (options.id) {
+      const cached = piSessionPool.get(options.id)
+      if (cached) {
+        cached.lastUsed = Date.now()
+        schedulePiEviction(options.id)
+        return cached.session
+      }
+    }
     const { SessionManager, createAgentSession } = await loadPiSdk()
     const sessionManager = options.id
       ? SessionManager.create(cwd, process.env.PI_SESSION_DIR, { id: options.id })
