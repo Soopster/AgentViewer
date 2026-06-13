@@ -11255,8 +11255,25 @@ export default function OpenTuiApp() {
   }
   const composerDockTextareaStyle = {
     ...composerBaseTextareaStyle,
+    backgroundColor: theme.surface2,
+    focusedBackgroundColor: theme.surface3,
     flexGrow: 1,
   }
+  const composerDockHeaderStatus = routeComposerToBridge
+    ? 'BRIDGE'
+    : composerSendState === 'sending'
+    ? 'SENDING'
+    : composerActive
+    ? 'FOCUSED'
+    : 'READY'
+  const composerDockTitleLeft = `◆ COMPOSER · ${composerConfig.label.toUpperCase()}`
+  const composerDockTitleWidth = Math.max(composerDockTextareaWidth - 2, 12)
+  const composerDockTitleGap = composerDockTitleWidth - composerDockTitleLeft.length - composerDockHeaderStatus.length
+  const composerDockEmphasized = routeComposerToBridge || composerActive
+  const composerDockTitleRule = composerDockEmphasized ? '━' : '─'
+  const composerDockBorderTitle = composerDockTitleGap > 0
+    ? `${composerDockTitleLeft}${composerDockTitleRule.repeat(composerDockTitleGap)}${composerDockHeaderStatus}`
+    : fitText(`${composerDockTitleLeft} · ${composerDockHeaderStatus}`, composerDockTitleWidth)
   const sendingHintBase = interruptPressActive
     ? composerConfig.footerHintSending.replace('⌃C cancel', '⌃C again to interrupt')
     : composerTargetSession?.provider === 'claude' && activeRunningToolCount > 0
@@ -12492,10 +12509,13 @@ export default function OpenTuiApp() {
       {!composerWindowOpen ? (
         <box
           paddingX={1}
-          backgroundColor={theme.surface}
+          backgroundColor={theme.surface2}
           border
-          borderStyle="single"
-          borderColor={routeComposerToBridge || composerActive ? composerAccentColor : theme.border}
+          borderStyle={composerDockEmphasized ? 'heavy' : 'rounded'}
+          borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
+          title={composerDockBorderTitle}
+          titleColor={composerDockEmphasized ? composerAccentColor : theme.dim}
+          titleAlignment="left"
           height={composerDockHeight}
           flexDirection="column"
           onMouseDown={(event) => {
@@ -12507,7 +12527,7 @@ export default function OpenTuiApp() {
             height: composerDockTextareaHeight,
             width: composerDockTextareaWidth,
           })}
-          <box height={1} flexDirection="row" alignItems="center">
+          <box height={1} flexDirection="row" alignItems="center" backgroundColor={theme.surface3}>
             <box width={composerDockFooterStatsWidth} overflow="hidden">
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
                 {composerSlashHint
@@ -12517,7 +12537,7 @@ export default function OpenTuiApp() {
             </box>
             <box flexGrow={1} />
             <box width={composerDockFooterHintWidth} overflow="hidden">
-              <text fg={composerSendState === 'sending' ? theme.dim : composerAccentColor} wrapMode="none">
+              <text fg={composerActive && composerSendState !== 'sending' ? composerAccentColor : theme.dim} wrapMode="none">
                 {fitText(composerDockFooterHint, composerDockFooterHintWidth)}
               </text>
             </box>
