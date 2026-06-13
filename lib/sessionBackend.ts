@@ -1442,9 +1442,27 @@ type PendingClaudePermission = {
   timer: ReturnType<typeof setTimeout>
   suggestions?: PermissionUpdate[]
   input?: Record<string, unknown>
+  // The exact `data` payload sent in the permission.requested frame, retained so
+  // a client that reconnects mid-turn can re-surface the still-pending prompt
+  // (the resolver stays valid and is answered by id, independent of the stream
+  // that created it).
+  requestData?: Record<string, unknown>
 }
 
 const pendingClaudePermissions = new Map<string, PendingClaudePermission>()
+
+// Pending Claude prompts (tool permissions + AskUserQuestion) still awaiting a
+// response for this session, as permission.requested `data` payloads. Lets a
+// reconnecting client re-arm in-flight prompts instead of waiting out the 5-min
+// timeout on a turn that's blocked on an answer it can no longer see.
+function listPendingClaudePrompts(sessionId: string): Record<string, unknown>[] {
+  const prefix = `${sessionId}:`
+  const prompts: Record<string, unknown>[] = []
+  for (const [key, pending] of pendingClaudePermissions) {
+    if (key.startsWith(prefix) && pending.requestData) prompts.push(pending.requestData)
+  }
+  return prompts
+}
 
 function pendingClaudePermissionKey(sessionId: string, permissionId: string): string {
   return `${sessionId}:${permissionId}`
@@ -1519,7 +1537,7 @@ function createClaudePermissionBridge(
   return (toolName, input, options) => {
     const requestId = options.toolUseID || `claude-${Date.now()}-${Math.random().toString(36).slice(2)}`
     activeIds.add(requestId)
-    enqueuePermissionEvent('permission.requested', {
+    const requestData: Record<string, unknown> = {
       requestId,
       sessionId,
       toolName,
@@ -1530,7 +1548,8 @@ function createClaudePermissionBridge(
       blockedPath: options.blockedPath,
       decisionReason: options.decisionReason,
       suggestions: options.suggestions,
-    })
+    }
+    enqueuePermissionEvent('permission.requested', requestData)
 
     return new Promise((resolve) => {
       const key = pendingClaudePermissionKey(sessionId, requestId)
@@ -1558,6 +1577,7 @@ function createClaudePermissionBridge(
       pendingClaudePermissions.set(key, {
         suggestions: options.suggestions,
         input,
+        requestData,
         timer,
         resolve: (result) => {
           clearTimeout(timer)
@@ -5179,10 +5199,14 @@ export async function interruptViewSession(sessionId: string, turnRequestId?: st
 /**
  * Whether a turn is currently running server-side for this session, so a client
  * that navigated away or reloaded can reattach to the live turn. Process-local:
- * only reflects turns started by this server process.
+ * only reflects turns started by this server process. `pendingPrompts` carries
+ * any Claude tool-permission / AskUserQuestion prompts still awaiting a response
+ * so a reconnecting client can re-arm and answer them.
  */
-export function readViewSessionRunning(sessionId: string): ReturnType<typeof getRunningSessionInfo> {
-  return getRunningSessionInfo(sessionId)
+export function readViewSessionRunning(
+  sessionId: string,
+): ReturnType<typeof getRunningSessionInfo> & { pendingPrompts: Record<string, unknown>[] } {
+  return { ...getRunningSessionInfo(sessionId), pendingPrompts: listPendingClaudePrompts(sessionId) }
 }
 
 export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; currentContextTier?: CopilotContextTier | null; contextUsage: ContextUsage | null }> {

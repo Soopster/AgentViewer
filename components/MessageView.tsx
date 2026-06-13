@@ -2122,6 +2122,123 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
 // Interactive answer surface for a Claude AskUserQuestion prompt. Collects a
 // selection per question (single or multi) and submits the answers map back to
 // the running turn. Lives in the composer's pending-approval area.
+// Plan-approval surface for Claude's ExitPlanMode. Shows the plan + the
+// prompt-based permissions it needs, and lets the user approve (exiting plan
+// mode into accept-edits or default) or keep planning.
+function PlanApprovalCard({
+  permission,
+  busy,
+  onApprove,
+  onReject,
+}: {
+  permission: PendingPermission
+  busy: boolean
+  onApprove: (mode: 'acceptEdits' | 'default') => void
+  onReject: () => void
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        padding: '10px 11px',
+        borderRadius: 6,
+        border: '1px solid rgba(45,212,160,0.30)',
+        background: 'rgba(45,212,160,0.06)',
+      }}
+    >
+      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--green)', letterSpacing: '0.06em' }}>
+        ● CLAUDE FINISHED PLANNING
+      </div>
+      {permission.plan && (
+        <div style={{
+          maxHeight: 260,
+          overflow: 'auto',
+          padding: '8px 10px',
+          borderRadius: 4,
+          background: 'var(--bg)',
+          border: '1px solid var(--border)',
+          fontFamily: "'IBM Plex Sans', sans-serif",
+          fontSize: 12,
+          lineHeight: 1.55,
+          color: 'var(--text-2)',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}>
+          {permission.plan}
+        </div>
+      )}
+      {permission.allowedPrompts && permission.allowedPrompts.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: 'var(--text-3)', letterSpacing: '0.06em' }}>
+            APPROVING ALLOWS
+          </div>
+          {permission.allowedPrompts.map((p, i) => (
+            <div key={i} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-2)' }}>
+              · {p}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+        <Button
+          type="button"
+          onClick={onReject}
+          disabled={busy}
+          variant="outline"
+          size="sm"
+          style={{
+            height: 26, padding: '0 10px', borderRadius: 4,
+            border: '1px solid rgba(234,170,64,0.30)',
+            background: 'rgba(234,170,64,0.08)',
+            color: 'var(--amber, #eaaa40)',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.06em',
+            cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          KEEP PLANNING
+        </Button>
+        <Button
+          type="button"
+          onClick={() => onApprove('default')}
+          disabled={busy}
+          variant="outline"
+          size="sm"
+          style={{
+            height: 26, padding: '0 10px', borderRadius: 4,
+            border: '1px solid rgba(45,212,160,0.30)',
+            background: 'rgba(45,212,160,0.08)',
+            color: 'var(--green)',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.06em',
+            cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          APPROVE · ASK PER TOOL
+        </Button>
+        <Button
+          type="button"
+          onClick={() => onApprove('acceptEdits')}
+          disabled={busy}
+          variant="outline"
+          size="sm"
+          style={{
+            height: 26, padding: '0 12px', borderRadius: 4,
+            border: '1px solid rgba(45,212,160,0.45)',
+            background: 'rgba(45,212,160,0.16)',
+            color: 'var(--green)',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.06em',
+            cursor: busy ? 'not-allowed' : 'pointer',
+            opacity: busy ? 0.55 : 1,
+          }}
+        >
+          {busy ? 'STARTING…' : 'APPROVE · AUTO-ACCEPT EDITS'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function AskUserQuestionPicker({
   permission,
   busy,
@@ -3450,9 +3567,27 @@ export default function MessageView({
       try {
         const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/running`, { cache: 'no-store' })
         if (!cancelled && res.ok) {
-          const info = (await res.json().catch(() => null)) as { running?: boolean } | null
+          const info = (await res.json().catch(() => null)) as
+            | { running?: boolean; pendingPrompts?: Record<string, unknown>[] }
+            | null
           const running = info?.running === true
           setReattachedRunning((prev) => (prev === running ? prev : running))
+          // Re-surface any tool-permission / AskUserQuestion / plan prompt the
+          // turn is blocked on (the original stream that delivered it is gone
+          // after a reload/navigation). Answering still resolves it server-side
+          // by id. This poll only runs while idle, so the server's list is the
+          // authoritative set of this session's pending Claude prompts —
+          // reconcile (add new, drop ones answered elsewhere / timed out).
+          const prompts = Array.isArray(info?.pendingPrompts) ? info!.pendingPrompts! : []
+          const reattached = prompts
+            .map((data) => extractPendingPermission({ type: 'claude_permission', event: { type: 'permission.requested', data } }))
+            .filter((p): p is PendingPermission => p !== null)
+          setPendingPermissions((prev) => {
+            const others = prev.filter((p) => !(p.provider === 'claude' && p.sessionId === sessionId))
+            const nextIds = [...others, ...reattached].map((p) => p.id).join('|')
+            const prevIds = prev.map((p) => p.id).join('|')
+            return nextIds === prevIds ? prev : [...others, ...reattached]
+          })
         }
       } catch {
         // best-effort; a failed probe just leaves the prior state
@@ -4765,6 +4900,21 @@ export default function MessageView({
       setSessionActionLoading(null)
     }
   }, [session, sessionActionLoading])
+
+  // Respond to an ExitPlanMode plan-approval. Approving allows the tool (the SDK
+  // exits plan mode for this turn) AND switches the composer + warm query to the
+  // chosen mode so subsequent turns aren't back in plan mode. Reject keeps planning.
+  const respondToPlan = useCallback(async (
+    permission: PendingPermission,
+    decision: 'acceptEdits' | 'default' | 'reject',
+  ) => {
+    if (decision === 'reject') {
+      await respondToPermission(permission, 'reject')
+      return
+    }
+    commitClaudePermissionSelection(decision)
+    await respondToPermission(permission, 'once')
+  }, [respondToPermission, commitClaudePermissionSelection])
 
   const handleFork = useCallback(async () => {
     if (!session || forking) return
@@ -7605,6 +7755,14 @@ export default function MessageView({
                       busy={sessionActionLoading === `permission:${permission.id}`}
                       onSubmit={(answers) => respondToQuestion(permission, answers)}
                       onCancel={() => respondToPermission(permission, 'reject')}
+                    />
+                  ) : permission.toolName === 'ExitPlanMode' ? (
+                    <PlanApprovalCard
+                      key={permission.id}
+                      permission={permission}
+                      busy={sessionActionLoading === `permission:${permission.id}`}
+                      onApprove={(mode) => respondToPlan(permission, mode)}
+                      onReject={() => respondToPlan(permission, 'reject')}
                     />
                   ) : (
                   <div

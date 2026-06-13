@@ -7290,6 +7290,19 @@ export default function OpenTuiApp() {
     }
   })
 
+  // Respond to an ExitPlanMode plan-approval. Approving allows the tool (the SDK
+  // exits plan mode for this turn) and switches the composer + warm query to the
+  // chosen mode so subsequent turns aren't back in plan mode. Reject keeps planning.
+  const respondToTuiPlan = useEffectEvent(async (permission: PendingPermission, decision: 'acceptEdits' | 'default' | 'reject') => {
+    if (decision === 'reject') {
+      await respondToTuiPermission(permission, 'reject')
+      return
+    }
+    const target = composerTargetSession
+    if (target) setClaudeComposerPermissionMode(target, decision)
+    await respondToTuiPermission(permission, 'once')
+  })
+
   // Toggle an AskUserQuestion option for the focused question. Single-select
   // replaces; multi-select adds/removes.
   const toggleTuiQuestionOption = useEffectEvent((qi: number, multiSelect: boolean, label: string) => {
@@ -10145,6 +10158,35 @@ export default function OpenTuiApp() {
       return
     }
 
+    // ExitPlanMode plan-approval: keep planning / approve (ask) / approve (auto).
+    if (pendingPermissions.length > 0 && !permissionActionLoading && pendingPermissions[0]!.toolName === 'ExitPlanMode') {
+      const activePermission = pendingPermissions[0]!
+      const planOptions = ['reject', 'default', 'acceptEdits'] as const
+      const idx = Math.min(permissionOptionIndex, planOptions.length - 1)
+      if (key.name === 'left') {
+        handled(() => setPermissionOptionIndex((i) => Math.max(0, i - 1)))
+        return
+      }
+      if (key.name === 'right' || key.name === 'tab') {
+        handled(() => setPermissionOptionIndex((i) => Math.min(planOptions.length - 1, i + 1)))
+        return
+      }
+      if (key.name === 'return') {
+        handled(() => { void respondToTuiPlan(activePermission, planOptions[idx]!) })
+        return
+      }
+      if (key.name === 'escape') {
+        handled(() => { void respondToTuiPlan(activePermission, 'reject') })
+        return
+      }
+      const planDigit = Number.parseInt(sequence, 10)
+      if (!Number.isNaN(planDigit) && planDigit >= 1 && planDigit <= planOptions.length) {
+        handled(() => { void respondToTuiPlan(activePermission, planOptions[planDigit - 1]!) })
+        return
+      }
+      return
+    }
+
     if (pendingPermissions.length > 0 && !permissionActionLoading) {
       const activePermission = pendingPermissions[0]!
       const options = permissionOptionsFor(activePermission)
@@ -12202,6 +12244,46 @@ export default function OpenTuiApp() {
                 {permissionActionLoading
                   ? 'submitting…'
                   : fitText(`↑/↓ option${questions.length > 1 ? ' · ←/→ question' : ''} · space/1-4 select · enter submit · esc skip`, innerWidth)}
+              </text>
+            </box>
+          </box>
+        )
+      })() : pendingPermissions.length > 0 && pendingPermissions[0]!.toolName === 'ExitPlanMode' ? (() => {
+        const permission = pendingPermissions[0]!
+        const innerWidth = Math.max(width - 8, 20)
+        const planLines = permission.plan ? permission.plan.split('\n').slice(0, 16) : []
+        const planOptions = [
+          { decision: 'reject' as const, label: 'keep planning' },
+          { decision: 'default' as const, label: 'approve · ask per tool' },
+          { decision: 'acceptEdits' as const, label: 'approve · auto-accept edits' },
+        ]
+        const idx = Math.min(permissionOptionIndex, planOptions.length - 1)
+        return (
+          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+            <box borderStyle="single" borderColor={theme.green} flexDirection="column" paddingX={1}>
+              <text fg={theme.green} wrapMode="none">{fitText('● Claude finished planning', innerWidth)}</text>
+              {planLines.map((planLine, index) => (
+                <text key={`plan:${index}`} fg={theme.text} wrapMode="none">{fitText(planLine || ' ', innerWidth)}</text>
+              ))}
+              {permission.plan && permission.plan.split('\n').length > planLines.length ? (
+                <text fg={theme.dim} wrapMode="none">{fitText('  … (plan truncated)', innerWidth)}</text>
+              ) : null}
+              {permission.allowedPrompts && permission.allowedPrompts.length > 0 ? (
+                <text fg={theme.dim} wrapMode="none">{fitText(`allows: ${permission.allowedPrompts.join(' · ')}`, innerWidth)}</text>
+              ) : null}
+              <box flexDirection="row" gap={2} marginTop={1} height={1}>
+                {planOptions.map((option, index) => {
+                  const selected = index === idx
+                  const color = option.decision === 'reject' ? theme.amber : theme.green
+                  return (
+                    <text key={option.decision} fg={selected ? color : theme.dim} wrapMode="none">
+                      {`${selected ? '▶' : ' '} [${index + 1}] ${option.label}`}
+                    </text>
+                  )
+                })}
+              </box>
+              <text fg={theme.dim} wrapMode="none">
+                {permissionActionLoading ? 'responding…' : '←/→ select · enter confirm · 1/2/3 quick · esc keep planning'}
               </text>
             </box>
           </box>

@@ -38,6 +38,11 @@ export type PendingPermission = {
   // interactive picker. When set, the surface collects answers and replies with
   // the `respondQuestion` action instead of an allow/deny permission decision.
   questions?: PendingQuestion[]
+  // Present only for ExitPlanMode: render a plan-approval card. `plan` is the
+  // plan markdown; `allowedPrompts` are the prompt-based permissions the plan
+  // needs (pre-approved when the plan is approved). Approving exits plan mode.
+  plan?: string
+  allowedPrompts?: string[]
 }
 
 export type PermissionResponse = 'once' | 'always' | 'reject'
@@ -358,6 +363,33 @@ export function extractClaudePermission(payload: unknown): PendingPermission | n
         title: questions.length === 1 ? questions[0].question : `Claude has ${questions.length} questions`,
         questions,
       }
+    }
+  }
+  // ExitPlanMode is a plan-approval gate, not a generic allow/deny. Surface the
+  // plan + the prompt-based permissions it needs so the surface can render a
+  // plan-approval card (approving exits plan mode).
+  if (toolName === 'ExitPlanMode') {
+    const plan = input ? stringField(input, 'plan') : undefined
+    const rawPrompts = input?.allowedPrompts
+    const allowedPrompts = Array.isArray(rawPrompts)
+      ? rawPrompts
+          .map((entry) => {
+            const r = asRecord(entry)
+            if (!r) return undefined
+            const tool = stringField(r, 'tool')
+            const prompt = stringField(r, 'prompt')
+            return prompt ? (tool ? `${tool}: ${prompt}` : prompt) : undefined
+          })
+          .filter((s): s is string => !!s)
+      : undefined
+    return {
+      id,
+      sessionId: stringField(data, 'sessionId'),
+      provider: 'claude',
+      toolName,
+      title: 'Claude finished planning',
+      plan,
+      allowedPrompts: allowedPrompts && allowedPrompts.length > 0 ? allowedPrompts : undefined,
     }
   }
   const command = input ? stringField(input, 'command') : undefined
