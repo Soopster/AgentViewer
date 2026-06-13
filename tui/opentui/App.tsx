@@ -1065,8 +1065,8 @@ function timeAgo(value?: string | number): string {
 const COMPOSER_MIN_HEIGHT = 6
 const COMPOSER_MAX_HEIGHT = 12
 const COMPOSER_DOCK_CHROME_HEIGHT = 3
-const COMPOSER_WINDOW_MAX_WIDTH = 96
-const COMPOSER_WINDOW_MAX_HEIGHT = 36
+const COMPOSER_WINDOW_MAX_WIDTH = 88
+const COMPOSER_WINDOW_MAX_HEIGHT = 24
 const CODEX_LIVE_ASSISTANT_UUID = 'live-codex-assistant'
 type ComposerKeyBinding = { name: string; action: TextareaAction; shift?: boolean; alt?: boolean; meta?: boolean; ctrl?: boolean }
 const TUI_SLASH_HINTS: Record<string, string[]> = {
@@ -5894,14 +5894,14 @@ export default function OpenTuiApp() {
     20,
     Math.min(
       Math.max(width - 4, 20),
-      Math.max(72, Math.min(COMPOSER_WINDOW_MAX_WIDTH, Math.floor(width * 0.84))),
+      Math.max(64, Math.min(COMPOSER_WINDOW_MAX_WIDTH, Math.floor(width * 0.78))),
     ),
   )
   const composerWindowHeight = Math.max(
     10,
     Math.min(
       Math.max(height - 4, 10),
-      Math.max(16, Math.min(COMPOSER_WINDOW_MAX_HEIGHT, Math.floor(height * 0.72))),
+      Math.max(14, Math.min(COMPOSER_WINDOW_MAX_HEIGHT, Math.floor(height * 0.62))),
     ),
   )
   const composerWindowLeft = Math.max(1, Math.floor((width - composerWindowWidth) / 2))
@@ -11242,10 +11242,32 @@ export default function OpenTuiApp() {
     () => buildComposerStatsSegments(composerVisualLineCount),
     [composerAccentColor, composerAttachmentLabel, composerConfig.glyph, composerConfig.label, composerDraft.length, composerKnobSegments, composerLocationSegments, composerVisualLineCount, theme.cyan, theme.dim, theme.text],
   )
-  const composerWindowStatsSegments = useMemo<InlineTextSegment[]>(
-    () => buildComposerStatsSegments(composerWindowVisualLineCount),
-    [composerAccentColor, composerAttachmentLabel, composerConfig.glyph, composerConfig.label, composerDraft.length, composerKnobSegments, composerLocationSegments, composerWindowVisualLineCount, theme.cyan, theme.dim, theme.text],
-  )
+  const composerWindowMetaSegments = useMemo<InlineTextSegment[]>(() => {
+    const segments: InlineTextSegment[] = []
+    composerKnobSegments.forEach((segment, index) => {
+      if (index > 0) segments.push({ text: ' · ', fg: theme.dim })
+      segments.push(segment)
+    })
+    if (composerLocationSegments.length > 0) {
+      if (segments.length > 0) segments.push({ text: ' · ', fg: theme.dim })
+      composerLocationSegments.forEach((segment, index) => {
+        if (index > 0) segments.push({ text: ' · ', fg: theme.dim })
+        segments.push(segment)
+      })
+    }
+    return segments
+  }, [composerKnobSegments, composerLocationSegments, theme.dim])
+  const composerWindowDraftSegments = useMemo<InlineTextSegment[]>(() => {
+    const segments: InlineTextSegment[] = [
+      { text: `${composerWindowVisualLineCount} line${composerWindowVisualLineCount === 1 ? '' : 's'}`, fg: theme.dim },
+      { text: ` · ${composerDraft.length} chars`, fg: theme.dim },
+    ]
+    if (composerAttachmentLabel) {
+      segments.push({ text: ' · ', fg: theme.dim })
+      segments.push({ text: composerAttachmentLabel, fg: theme.cyan })
+    }
+    return segments
+  }, [composerAttachmentLabel, composerDraft.length, composerWindowVisualLineCount, theme.cyan, theme.dim])
   const composerBaseTextareaStyle = {
     backgroundColor: theme.surface,
     textColor: theme.text,
@@ -11274,6 +11296,13 @@ export default function OpenTuiApp() {
   const composerDockBorderTitle = composerDockTitleGap > 0
     ? `${composerDockTitleLeft}${composerDockTitleRule.repeat(composerDockTitleGap)}${composerDockHeaderStatus}`
     : fitText(`${composerDockTitleLeft} · ${composerDockHeaderStatus}`, composerDockTitleWidth)
+  const composerWindowHeaderStatus = composerSendState === 'sending' ? 'SENDING' : 'EXPANDED'
+  const composerWindowTitleLeft = `◆ COMPOSER · ${composerConfig.label.toUpperCase()}`
+  const composerWindowTitleWidth = Math.max(composerWindowWidth - 4, 12)
+  const composerWindowTitleGap = composerWindowTitleWidth - composerWindowTitleLeft.length - composerWindowHeaderStatus.length
+  const composerWindowBorderTitle = composerWindowTitleGap > 0
+    ? `${composerWindowTitleLeft}${'━'.repeat(composerWindowTitleGap)}${composerWindowHeaderStatus}`
+    : fitText(`${composerWindowTitleLeft} · ${composerWindowHeaderStatus}`, composerWindowTitleWidth)
   const sendingHintBase = interruptPressActive
     ? composerConfig.footerHintSending.replace('⌃C cancel', '⌃C again to interrupt')
     : composerTargetSession?.provider === 'claude' && activeRunningToolCount > 0
@@ -12738,12 +12767,12 @@ export default function OpenTuiApp() {
           width={composerWindowWidth}
           height={composerWindowHeight}
           border
-          borderStyle="single"
-          borderColor={composerActive ? composerAccentColor : theme.border2}
-          backgroundColor={theme.surface}
+          borderStyle="heavy"
+          borderColor={composerAccentColor}
+          backgroundColor={theme.surface2}
           zIndex={60}
           flexDirection="column"
-          title=" Composer "
+          title={composerWindowBorderTitle}
           titleColor={composerAccentColor}
           titleAlignment="left"
         >
@@ -12753,15 +12782,12 @@ export default function OpenTuiApp() {
             border={['bottom']}
             borderStyle="single"
             borderColor={theme.border}
+            backgroundColor={theme.surface2}
             flexDirection="row"
             alignItems="center"
           >
-            <text fg={composerAccentColor} wrapMode="none">
-              {fitText(`${composerConfig.glyph} ${composerConfig.label}`, Math.min(28, composerWindowContentWidth))}
-            </text>
-            <box flexGrow={1} />
             <text fg={theme.dim} wrapMode="none">
-              {renderInlineTextSegments(composerWindowStatsSegments, Math.max(composerWindowContentWidth - 30, 12), theme.dim)}
+              {renderInlineTextSegments(composerWindowMetaSegments, composerWindowContentWidth, theme.dim)}
             </text>
           </box>
 
@@ -12771,6 +12797,7 @@ export default function OpenTuiApp() {
             paddingY={1}
             flexDirection="column"
             overflow="hidden"
+            backgroundColor={theme.surface}
           >
             {renderComposerTextarea(submitComposerFromWindow, {
               height: Math.max(composerWindowEditorHeight - 2, 2),
@@ -12790,6 +12817,7 @@ export default function OpenTuiApp() {
             border={['top']}
             borderStyle="single"
             borderColor={theme.border}
+            backgroundColor={theme.surface2}
             flexDirection="row"
             alignItems="center"
           >
@@ -12797,12 +12825,12 @@ export default function OpenTuiApp() {
               <text fg={composerSlashHint ? composerAccentColor : theme.dim} wrapMode="none">
                 {composerSlashHint
                   ? fitText(composerSlashHint, composerWindowFooterStatsWidth)
-                  : renderInlineTextSegments(composerWindowStatsSegments, composerWindowFooterStatsWidth, theme.dim)}
+                  : renderInlineTextSegments(composerWindowDraftSegments, composerWindowFooterStatsWidth, theme.dim)}
               </text>
             </box>
             <box flexGrow={1} />
             <box width={composerWindowFooterHintWidth} overflow="hidden">
-              <text fg={composerSendState === 'sending' ? theme.dim : composerAccentColor} wrapMode="none">
+              <text fg={theme.dim} wrapMode="none">
                 {fitText(composerWindowFooterHint, composerWindowFooterHintWidth)}
               </text>
             </box>
