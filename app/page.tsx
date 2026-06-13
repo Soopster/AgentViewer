@@ -367,6 +367,7 @@ export default function Home() {
   const codexPlanForView = planForSessionId === selectedSession?.sessionId && sessionPlan.plan.length > 0
     ? sessionPlan
     : undefined
+  const canUseChannelBridge = !selectedProject && !!selectedSession && (selectedSession.provider ?? 'claude') === 'claude'
 
   const toggleMessagePane = useCallback(() => {
     setMessagePaneCollapsed((prev) => {
@@ -1212,7 +1213,7 @@ export default function Home() {
                   canOpenGit={!!activeProjectDir}
                   canOpenTasks={!selectedProject && (selectedSession?.provider ?? provider) === 'claude'}
                   canOpenPromptLibrary={!selectedProject && !!selectedSession}
-                  canOpenChannelBridge={!selectedProject && !!selectedSession}
+                  canOpenChannelBridge={canUseChannelBridge}
                   channelBridgeRouting={channelBridgeRouting}
                   onSelectSession={selectCommandPaletteSession}
                   onSelectProject={selectProject}

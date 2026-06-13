@@ -2678,7 +2678,10 @@ export default function MessageView({
   const mentionItemRefs = useRef<Array<HTMLButtonElement | null>>([])
   const [promptLibraryOpen, setPromptLibraryOpen] = useState(false)
   const [channelBridgeOpen, setChannelBridgeOpen] = useState(false)
-  const channelBridge = useChannelBridge({ open: channelBridgeOpen })
+  const canUseChannelBridge = !projectView && !!session && (session.provider ?? 'claude') === 'claude'
+  const channelBridge = useChannelBridge({ open: channelBridgeOpen, available: canUseChannelBridge })
+  const handledChannelBridgeOpenRequestRef = useRef(channelBridgeOpenRequest)
+  const handledChannelBridgeRouteRequestRef = useRef(channelBridgeRouteToggleRequest)
   // Read the latest bridge controller from inside sendMessage without widening
   // its (already large) dependency array.
   const channelBridgeRef = useRef(channelBridge)
@@ -2687,6 +2690,7 @@ export default function MessageView({
   const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useState<
     Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }>
   >([])
+  const persistedBridgeCountRef = useRef(0)
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashActiveIndex, setSlashActiveIndex] = useState(0)
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -3703,7 +3707,7 @@ export default function MessageView({
     // panel — so we just push the text, clear the composer, and return before
     // any of the provider streaming machinery runs.
     const bridge = channelBridgeRef.current
-    if (!retryOverride && bridge.routeComposer) {
+    if (!retryOverride && canUseChannelBridge && bridge.routeComposer) {
       const text = (textareaRef.current?.value ?? inputTextRef.current).trim()
       if (!text) return
       try {
@@ -4228,7 +4232,7 @@ export default function MessageView({
       activeTurnRequestIdRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, clearLiveAssistantText, clearLiveSubagentText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, canUseChannelBridge, clearLiveAssistantText, clearLiveSubagentText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
@@ -5182,9 +5186,19 @@ export default function MessageView({
   }, [promptLibraryOpenRequest])
 
   useEffect(() => {
-    if (channelBridgeOpenRequest <= 0) return
+    if (channelBridgeOpenRequest <= handledChannelBridgeOpenRequestRef.current) return
+    handledChannelBridgeOpenRequestRef.current = channelBridgeOpenRequest
+    if (!canUseChannelBridge) return
     setChannelBridgeOpen(true)
-  }, [channelBridgeOpenRequest])
+  }, [canUseChannelBridge, channelBridgeOpenRequest])
+
+  useEffect(() => {
+    if (canUseChannelBridge) return
+    setChannelBridgeOpen(false)
+    setBridgeTranscriptEntries([])
+    setPendingPermissions((prev) => prev.filter((permission) => permission.sessionId || permission.provider))
+    persistedBridgeCountRef.current = 0
+  }, [canUseChannelBridge])
 
   // Listen for new bridge sent/reply entries from the hook
   useEffect(() => {
@@ -5231,22 +5245,21 @@ export default function MessageView({
   // The command palette toggles composer routing via a request counter (it lives
   // outside this component); flip the persisted binding when it bumps.
   useEffect(() => {
-    if (channelBridgeRouteToggleRequest <= 0) return
+    if (channelBridgeRouteToggleRequest <= handledChannelBridgeRouteRequestRef.current) return
+    handledChannelBridgeRouteRequestRef.current = channelBridgeRouteToggleRequest
+    if (!canUseChannelBridge) return
     const bridge = channelBridgeRef.current
     bridge.setRouteComposer(!bridge.routeComposer)
-  }, [channelBridgeRouteToggleRequest])
+  }, [canUseChannelBridge, channelBridgeRouteToggleRequest])
 
   // Mirror the current routing state up so the palette label can reflect it.
   useEffect(() => {
     onChannelBridgeRoutingChange?.(channelBridge.routeComposer)
   }, [channelBridge.routeComposer, onChannelBridgeRoutingChange])
 
-  // Track which bridge entries we've already persisted
-  const persistedBridgeCountRef = useRef(0)
-
   // Load persisted bridge messages when session changes
   useEffect(() => {
-    if (!session) {
+    if (!canUseChannelBridge || !session) {
       setBridgeTranscriptEntries([])
       persistedBridgeCountRef.current = 0
       return
@@ -5266,11 +5279,11 @@ export default function MessageView({
       }
     })()
     return () => { isMounted = false }
-  }, [session?.provider, session?.sessionId])
+  }, [canUseChannelBridge, session?.provider, session?.sessionId])
 
   // Persist new bridge messages to disk when they arrive
   useEffect(() => {
-    if (!session) return
+    if (!canUseChannelBridge || !session) return
     const newCount = bridgeTranscriptEntries.length
     const persistedCount = persistedBridgeCountRef.current
     if (newCount <= persistedCount) return
@@ -5303,7 +5316,7 @@ export default function MessageView({
       }
     })()
     return () => { cancelled = true }
-  }, [session?.provider, session?.sessionId, bridgeTranscriptEntries.length])
+  }, [canUseChannelBridge, session?.provider, session?.sessionId, bridgeTranscriptEntries.length])
 
   // Auto-focus the composer for a brand-new pending session — same as opening
   // a CLI and landing at the prompt. Gated on `isPending` to avoid stealing
@@ -5338,7 +5351,7 @@ export default function MessageView({
     () => pickProviderExample(session?.provider, composerExampleSeed),
     [composerExampleSeed, session?.provider],
   )
-  const composerPlaceholder = channelBridge.routeComposer
+  const composerPlaceholder = canUseChannelBridge && channelBridge.routeComposer
     ? 'Send to the live CLI bridge… (toggle off in the bridge panel)'
     : turnRunning
     ? composerConfig.placeholderStreaming
@@ -5347,7 +5360,7 @@ export default function MessageView({
     : composerExample
   const composerStatus = sendState === 'error'
     ? 'Failed'
-    : channelBridge.routeComposer
+    : canUseChannelBridge && channelBridge.routeComposer
     ? (channelBridge.sendError ? 'Bridge error' : 'Bridge · sends to live CLI')
     : interrupting
     ? 'Interrupting…'
@@ -5366,7 +5379,7 @@ export default function MessageView({
     : 'Ready'
   const composerStatusColor = sendState === 'error'
     ? 'var(--red, #f87171)'
-    : channelBridge.routeComposer
+    : canUseChannelBridge && channelBridge.routeComposer
     ? (channelBridge.sendError ? 'var(--red, #f87171)' : `var(${composerConfig.cssAccentVar})`)
     : queuedSends.length > 0
     ? 'var(--amber, #eaaa40)'
@@ -8141,7 +8154,7 @@ export default function MessageView({
                   border: `1px solid ${
                     sendState === 'error'
                       ? 'rgba(248,113,113,0.4)'
-                      : channelBridge.routeComposer
+                      : canUseChannelBridge && channelBridge.routeComposer
                       ? `rgba(${composerConfig.cssAccentRgb},0.45)`
                       : 'var(--border-2)'
                   }`,
@@ -8187,56 +8200,58 @@ export default function MessageView({
                   onClose={() => setPromptLibraryOpen(false)}
                 />
               )}
-              <Button
-                type="button"
-                data-channel-bridge-trigger="true"
-                onClick={() => setChannelBridgeOpen((open) => !open)}
-                variant="outline"
-                aria-label="Live CLI bridge"
-                aria-pressed={channelBridge.routeComposer}
-                title={channelBridge.routeComposer
-                  ? 'Live CLI bridge — composer is routing to the live `claude` CLI session (click to open)'
-                  : 'Live CLI bridge — push messages into a `claude` CLI session running alongside agentViewer'}
-                style={{
-                  position: 'relative',
-                  flexShrink: 0,
-                  width: 34,
-                  height: 34,
-                  padding: 0,
-                  background: channelBridgeOpen || channelBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'var(--surface-2)',
-                  border: `1px solid ${channelBridgeOpen || channelBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'var(--border-2)'}`,
-                  borderRadius: 6,
-                  color: channelBridgeOpen || channelBridge.routeComposer ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
-                  cursor: 'pointer',
-                  transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-                }}
-              >
-                <Radio size={15} />
-                {channelBridge.unread > 0 && !channelBridgeOpen && (
-                  <span
-                    aria-hidden
-                    style={{
-                      position: 'absolute',
-                      top: 3,
-                      right: 3,
-                      minWidth: 13,
-                      height: 13,
-                      padding: '0 3px',
-                      borderRadius: 999,
-                      background: `var(${composerConfig.cssAccentVar})`,
-                      color: 'var(--surface)',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 8,
-                      fontWeight: 700,
-                      lineHeight: '13px',
-                      textAlign: 'center',
-                    }}
-                  >
-                    {channelBridge.unread > 9 ? '9+' : channelBridge.unread}
-                  </span>
-                )}
-              </Button>
-              {channelBridgeOpen && (
+              {canUseChannelBridge ? (
+                <Button
+                  type="button"
+                  data-channel-bridge-trigger="true"
+                  onClick={() => setChannelBridgeOpen((open) => !open)}
+                  variant="outline"
+                  aria-label="Live CLI bridge"
+                  aria-pressed={channelBridge.routeComposer}
+                  title={channelBridge.routeComposer
+                    ? 'Live CLI bridge — composer is routing to the live `claude` CLI session (click to open)'
+                    : 'Live CLI bridge — push messages into a `claude` CLI session running alongside agentViewer'}
+                  style={{
+                    position: 'relative',
+                    flexShrink: 0,
+                    width: 34,
+                    height: 34,
+                    padding: 0,
+                    background: channelBridgeOpen || channelBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'var(--surface-2)',
+                    border: `1px solid ${channelBridgeOpen || channelBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'var(--border-2)'}`,
+                    borderRadius: 6,
+                    color: channelBridgeOpen || channelBridge.routeComposer ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                  }}
+                >
+                  <Radio size={15} />
+                  {channelBridge.unread > 0 && !channelBridgeOpen && (
+                    <span
+                      aria-hidden
+                      style={{
+                        position: 'absolute',
+                        top: 3,
+                        right: 3,
+                        minWidth: 13,
+                        height: 13,
+                        padding: '0 3px',
+                        borderRadius: 999,
+                        background: `var(${composerConfig.cssAccentVar})`,
+                        color: 'var(--surface)',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 8,
+                        fontWeight: 700,
+                        lineHeight: '13px',
+                        textAlign: 'center',
+                      }}
+                    >
+                      {channelBridge.unread > 9 ? '9+' : channelBridge.unread}
+                    </span>
+                  )}
+                </Button>
+              ) : null}
+              {canUseChannelBridge && channelBridgeOpen && (
                 <ChannelBridgePanel
                   accent={{ cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label }}
                   bridge={channelBridge}

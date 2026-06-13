@@ -60,6 +60,9 @@ export async function GET(request: NextRequest) {
   if (!sessionId) {
     return NextResponse.json({ error: 'Missing sessionId' }, { status: 400 })
   }
+  if (provider && provider !== 'claude') {
+    return NextResponse.json({ error: 'The channel bridge is only available for Claude sessions' }, { status: 400 })
+  }
 
   const store = await loadStore()
   const key = storeKey(provider, sessionId)
@@ -78,6 +81,9 @@ export async function POST(request: NextRequest) {
 
   if (!sessionId || !kind || !text) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
+  }
+  if (provider && provider !== 'claude') {
+    return NextResponse.json({ error: 'The channel bridge is only available for Claude sessions' }, { status: 400 })
   }
 
   const store = await loadStore()

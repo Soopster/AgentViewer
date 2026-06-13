@@ -73,12 +73,16 @@ async function saveStore(store: BridgeMessageStore): Promise<void> {
 }
 
 export async function loadBridgeMessagesForSession(provider: AgentProvider | undefined, sessionId: string): Promise<BridgeMessage[]> {
+  if (provider && provider !== 'claude') return []
   const store = await loadStore()
   const key = storeKey(provider, sessionId)
   return store[key] ?? []
 }
 
 export async function addBridgeMessage(provider: AgentProvider | undefined, sessionId: string, kind: 'sent' | 'reply', text: string, timestamp?: string): Promise<void> {
+  if (provider && provider !== 'claude') {
+    throw new Error('The channel bridge is only available for Claude sessions')
+  }
   const store = await loadStore()
   const key = storeKey(provider, sessionId)
   const message: BridgeMessage = {
@@ -94,6 +98,7 @@ export async function addBridgeMessage(provider: AgentProvider | undefined, sess
 }
 
 export async function clearBridgeMessagesForSession(provider: AgentProvider | undefined, sessionId: string): Promise<void> {
+  if (provider && provider !== 'claude') return
   const store = await loadStore()
   const key = storeKey(provider, sessionId)
   delete store[key]

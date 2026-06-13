@@ -515,7 +515,7 @@ export default function CommandPalette({
       {
         id: 'open-channel-bridge',
         label: 'Open channel bridge',
-        description: canOpenChannelBridge ? 'Push composer messages into a side-by-side `claude` CLI session' : 'Select a session first',
+        description: canOpenChannelBridge ? 'Push composer messages into a side-by-side `claude` CLI session' : 'Select a Claude session first',
         icon: <Radio size={16} />,
         shortcut: 'Bridge',
         group: 'actions',
@@ -532,7 +532,7 @@ export default function CommandPalette({
           ? (channelBridgeRouting
             ? 'Composer sends go to the live `claude` CLI session — switch back to the active provider'
             : 'Send composer messages to the live `claude` CLI session instead of the active provider')
-          : 'Select a session first',
+          : 'Select a Claude session first',
         icon: <Radio size={16} />,
         shortcut: channelBridgeRouting ? 'Bridge on' : 'Bridge',
         group: 'actions',
@@ -589,6 +589,14 @@ export default function CommandPalette({
         run: () => onToggleWorktrees(!includeWorktrees),
       },
     ]
+
+    if (!canOpenChannelBridge) {
+      for (let index = items.length - 1; index >= 0; index -= 1) {
+        if (items[index]?.id === 'open-channel-bridge' || items[index]?.id === 'toggle-channel-bridge-route') {
+          items.splice(index, 1)
+        }
+      }
+    }
 
     for (const item of PROVIDER_ITEMS) {
       items.push({

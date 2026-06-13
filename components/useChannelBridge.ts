@@ -78,11 +78,11 @@ export type ChannelBridge = {
 // `open` reflects whether the dedicated panel is visible. The connection stays
 // live whenever the panel is open OR composer routing is enabled, and unread
 // counting only accrues while the panel is closed.
-export function useChannelBridge({ open }: { open: boolean }): ChannelBridge {
+export function useChannelBridge({ open, available }: { open: boolean; available: boolean }): ChannelBridge {
   const [stored] = useState(loadStoredConfig)
   const [baseUrl, setBaseUrl] = useState(stored.baseUrl)
   const [token, setToken] = useState(stored.token)
-  const [routeComposer, setRouteComposerState] = useState(loadStoredRoute)
+  const [routeComposerState, setRouteComposerState] = useState(loadStoredRoute)
   const [status, setStatus] = useState<ChannelBridgeStatus>('idle')
   const [entries, setEntries] = useState<ChannelLogEntry[]>([])
   const [sending, setSending] = useState(false)
@@ -94,7 +94,8 @@ export function useChannelBridge({ open }: { open: boolean }): ChannelBridge {
   openRef.current = open
 
   const config = useMemo<ChannelBridgeConfig>(() => ({ baseUrl, token: token || undefined }), [baseUrl, token])
-  const enabled = open || routeComposer
+  const routeComposer = available && routeComposerState
+  const enabled = available && (open || routeComposer)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -102,11 +103,23 @@ export function useChannelBridge({ open }: { open: boolean }): ChannelBridge {
   }, [baseUrl, token])
 
   const setRouteComposer = useCallback((value: boolean) => {
-    setRouteComposerState(value)
+    const next = available && value
+    setRouteComposerState(next)
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem(ROUTE_STORAGE_KEY, value ? '1' : '0')
+      window.localStorage.setItem(ROUTE_STORAGE_KEY, next ? '1' : '0')
     }
-  }, [])
+  }, [available])
+
+  useEffect(() => {
+    if (available) return
+    if (routeComposerState) setRouteComposer(false)
+    lastChatIdRef.current = undefined
+    setEntries([])
+    setUnread(0)
+    setSending(false)
+    setSendError(null)
+    setStatus('idle')
+  }, [available, routeComposerState, setRouteComposer])
 
   // Clear the unread badge whenever the panel is opened.
   useEffect(() => {
@@ -139,6 +152,7 @@ export function useChannelBridge({ open }: { open: boolean }): ChannelBridge {
 
   const send = useCallback(
     async (text: string) => {
+      if (!available) throw new Error('The channel bridge is only available for Claude sessions')
       const trimmed = text.trim()
       if (!trimmed) throw new Error('Cannot send an empty message')
       setSending(true)
@@ -156,11 +170,15 @@ export function useChannelBridge({ open }: { open: boolean }): ChannelBridge {
         setSending(false)
       }
     },
-    [config],
+    [available, config],
   )
 
   const respond = useCallback(
     async (entry: Extract<ChannelLogEntry, { kind: 'permission' }>, behavior: 'allow' | 'deny') => {
+      if (!available) {
+        setSendError('The channel bridge is only available for Claude sessions')
+        return
+      }
       setEntries((prev) => prev.map((item) => (item.id === entry.id ? { ...item, resolved: behavior } : item)))
       try {
         await respondToChannelPermission(config, entry.request.request_id, behavior)
@@ -169,7 +187,7 @@ export function useChannelBridge({ open }: { open: boolean }): ChannelBridge {
         setSendError(err instanceof Error ? err.message : 'Failed to send the verdict')
       }
     },
-    [config],
+    [available, config],
   )
 
   return {

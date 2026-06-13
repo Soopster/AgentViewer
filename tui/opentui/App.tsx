@@ -4428,27 +4428,6 @@ export default function OpenTuiApp() {
     if (composerActive) setFocusedPane('messages')
   }, [composerActive])
 
-  // Subscribe to bridge channel events and track entries for inline display
-  useEffect(() => {
-    const config = readBridgeConfigFromEnv()
-    let entrySeq = 0
-    const unsubscribe = subscribeToChannelEvents(
-      config,
-      (event: ChannelEvent) => {
-        if (event.type === 'reply') {
-          const timestamp = new Date(Date.now() + entrySeq * 100).toISOString()
-          setBridgeTranscriptEntries((prev) => [...prev, { kind: 'reply', text: event.text, timestamp }])
-          entrySeq += 1
-        } else if (event.type === 'permission_request') {
-          // Skip permission requests, only show sent/reply messages
-        }
-      },
-      () => {}, // Don't update status in main view (ChannelBridgePopover handles that)
-    )
-    return unsubscribe
-  }, [])
-
-
   useEffect(() => {
     if (!selectedSessionKey) {
       setContextUsage(null)
@@ -4644,6 +4623,12 @@ export default function OpenTuiApp() {
 
     return selectedSession
   }, [providerRunningSessions, selectedSession, sessions])
+  const canUseChannelBridge = Boolean(
+    selectedSessionTarget
+    && (selectedSessionTarget.provider ?? 'claude') === 'claude'
+    && composerTargetSession
+    && (composerTargetSession.provider ?? 'claude') === 'claude',
+  )
   const composerAutoTargetingRunning = Boolean(
     composerTargetSession
     && selectedSession
@@ -4674,9 +4659,37 @@ export default function OpenTuiApp() {
     return value ?? theme.cyan
   }, [composerConfig.tuiAccentKey, theme])
 
+  useEffect(() => {
+    if (canUseChannelBridge) return
+    setChannelBridgeOpen(false)
+    setRouteComposerToBridge(false)
+    setBridgeTranscriptEntries([])
+    persistedBridgeCountRef.current = 0
+    lastBridgeChatIdRef.current = undefined
+  }, [canUseChannelBridge])
+
+  // Subscribe only while a Claude session can actively use the bridge.
+  useEffect(() => {
+    if (!canUseChannelBridge || (!channelBridgeOpen && !routeComposerToBridge)) return
+    const config = readBridgeConfigFromEnv()
+    let entrySeq = 0
+    const unsubscribe = subscribeToChannelEvents(
+      config,
+      (event: ChannelEvent) => {
+        if (event.type === 'reply') {
+          const timestamp = new Date(Date.now() + entrySeq * 100).toISOString()
+          setBridgeTranscriptEntries((prev) => [...prev, { kind: 'reply', text: event.text, timestamp }])
+          entrySeq += 1
+        }
+      },
+      () => {},
+    )
+    return unsubscribe
+  }, [canUseChannelBridge, channelBridgeOpen, routeComposerToBridge])
+
   // Load persisted bridge messages when selected session changes
   useEffect(() => {
-    if (!selectedSessionTarget) {
+    if (!canUseChannelBridge || !selectedSessionTarget) {
       setBridgeTranscriptEntries([])
       persistedBridgeCountRef.current = 0
       return
@@ -4695,11 +4708,11 @@ export default function OpenTuiApp() {
       }
     })().catch(console.error)
     return () => { isMounted = false }
-  }, [selectedSessionTarget?.provider, selectedSessionTarget?.sessionId])
+  }, [canUseChannelBridge, selectedSessionTarget?.provider, selectedSessionTarget?.sessionId])
 
   // Persist new bridge messages to disk when they arrive
   useEffect(() => {
-    if (!selectedSessionTarget) return
+    if (!canUseChannelBridge || !selectedSessionTarget) return
     const newCount = bridgeTranscriptEntries.length
     const persistedCount = persistedBridgeCountRef.current
     if (newCount <= persistedCount) return
@@ -4717,7 +4730,7 @@ export default function OpenTuiApp() {
       }
     })().catch(console.error)
     return () => { cancelled = true }
-  }, [selectedSessionTarget?.provider, selectedSessionTarget?.sessionId, bridgeTranscriptEntries.length])
+  }, [canUseChannelBridge, selectedSessionTarget?.provider, selectedSessionTarget?.sessionId, bridgeTranscriptEntries.length])
 
   const liveTranscriptMessagesCacheRef = useRef<ThreadedMessage[] | null>(null)
   const liveTranscriptMessagesForSession = useMemo(() => {
@@ -6992,10 +7005,13 @@ export default function OpenTuiApp() {
   }, [])
 
   const filteredCommands = useMemo(() => {
+    const availableCommands = canUseChannelBridge
+      ? COMMANDS
+      : COMMANDS.filter((cmd) => cmd.id !== 'channel-bridge' && cmd.id !== 'channel-bridge-route')
     const q = commandPaletteQuery.toLowerCase()
-    if (!q) return COMMANDS
-    return COMMANDS.filter((cmd) => cmd.label.toLowerCase().includes(q))
-  }, [commandPaletteQuery])
+    if (!q) return availableCommands
+    return availableCommands.filter((cmd) => cmd.label.toLowerCase().includes(q))
+  }, [canUseChannelBridge, commandPaletteQuery])
 
   useEffect(() => {
     currentThemeRef.current = themeMode
@@ -7556,7 +7572,7 @@ export default function OpenTuiApp() {
     // session instead of the active provider. Fire-and-forget — replies and
     // permission prompts surface in the bridge popover (⇧C). Never diverts an
     // auto-retry, and requires actual text (the bridge has no attachment path).
-    if (!isRetry && routeComposerToBridgeRef.current && trimmed) {
+    if (!isRetry && canUseChannelBridge && routeComposerToBridgeRef.current && trimmed) {
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
       setComposerMentionAttachments([])
@@ -8266,6 +8282,7 @@ export default function OpenTuiApp() {
       resolveTurnCleanup()
     }
   }, [
+    canUseChannelBridge,
     composerTargetSession,
     composerDraft,
     composerSendState,
@@ -9527,10 +9544,18 @@ export default function OpenTuiApp() {
   })
 
   const openChannelBridge = useEffectEvent(() => {
+    if (!canUseChannelBridge) {
+      showNotice('error', 'Select a Claude session to use the channel bridge')
+      return
+    }
     setChannelBridgeOpen(true)
   })
 
   const toggleComposerBridgeRoute = useEffectEvent(() => {
+    if (!canUseChannelBridge) {
+      showNotice('error', 'Select a Claude session to route the composer through the channel bridge')
+      return
+    }
     setRouteComposerToBridge((on) => {
       const next = !on
       showNotice('info', next ? 'Composer now routes to the live CLI bridge' : 'Composer back to the active provider')
@@ -10321,7 +10346,7 @@ export default function OpenTuiApp() {
       // Toggle the Channel Bridge composer routing right from the composer —
       // same key as the bridge popover's ^R, so the binding is consistent
       // whether or not the panel is open.
-      if (isCtrl('r')) {
+      if (isCtrl('r') && canUseChannelBridge) {
         handled(toggleComposerBridgeRoute)
         return
       }
@@ -10500,7 +10525,7 @@ export default function OpenTuiApp() {
     }
 
     // Global live CLI channel bridge — push composer messages into a side-by-side `claude` session
-    if (isShifted('C')) {
+    if (isShifted('C') && canUseChannelBridge) {
       handled(openChannelBridge)
       return
     }
@@ -11237,11 +11262,13 @@ export default function OpenTuiApp() {
     : composerTargetSession?.provider === 'claude' && activeRunningToolCount > 0
     ? `${composerConfig.footerHintSending} · ⌃B background`
     : composerConfig.footerHintSending
-  const composerDockFooterHint = routeComposerToBridge
+  const composerDockFooterHint = canUseChannelBridge && routeComposerToBridge
     ? '● → live CLI bridge · ⌃R off · ⇧C panel'
     : composerSendState === 'sending'
     ? sendingHintBase
-    : `${composerIdleFooterHint} · ⌃R bridge · ⌃O expand`
+    : canUseChannelBridge
+    ? `${composerIdleFooterHint} · ⌃R bridge · ⌃O expand`
+    : `${composerIdleFooterHint} · ⌃O expand`
   // Size the hint box to exactly fit its text, capped by available width minus
   // 24 chars reserved for the stats side. Avoids the old proportional cap (62
   // chars) that truncated the full idle hint (~72 chars on most terminals).
@@ -12618,7 +12645,7 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
-      {channelBridgeOpen ? (
+      {canUseChannelBridge && channelBridgeOpen ? (
         <box
           position="absolute"
           top={0}
@@ -12630,7 +12657,7 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
-      {channelBridgeOpen ? (
+      {canUseChannelBridge && channelBridgeOpen ? (
         <ChannelBridgePopover
           theme={theme}
           accentColor={composerAccentColor}
