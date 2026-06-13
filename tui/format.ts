@@ -855,21 +855,47 @@ function parseAskUserAnswers(raw: string | null): AskUserAnswers {
   return {}
 }
 
-function selectedOptionLabels(question: AskUserQuestion, answers: AskUserAnswers['answers']): Set<string> {
+function selectedOptionLabels(
+  question: AskUserQuestion,
+  answers: AskUserAnswers['answers'],
+  rawResult?: string | null,
+): Set<string> {
   const raw = answers?.[question.question]
-  if (typeof raw !== 'string' || !raw) return new Set()
-  // multi-select answers are comma-separated per AskUserQuestionOutput schema
-  const parts = raw.split(',').map((p) => p.trim()).filter(Boolean)
-  return new Set(parts)
+  if (typeof raw === 'string' && raw) {
+    // multi-select answers are comma-separated per AskUserQuestionOutput schema
+    return new Set(raw.split(',').map((p) => p.trim()).filter(Boolean))
+  }
+  // Fallback: the tool result is often a plain confirmation string
+  // (`...="Blue"`) rather than a JSON answers map — match option labels in it
+  // so the answered selection still renders (mirrors the web card).
+  if (rawResult) {
+    const hits = question.options
+      .map((o) => o.label)
+      .filter((label) => rawResult.includes(`"${label}"`) || rawResult.includes(`=${label}`))
+    if (hits.length > 0) return new Set(hits)
+  }
+  return new Set()
 }
 
 function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean): TuiTranscriptCardLine[] {
-  const input = thread.toolUse.input as { questions?: AskUserQuestion[] }
-  const questions = Array.isArray(input.questions) ? input.questions : []
+  const input = thread.toolUse.input as { questions?: Array<Partial<AskUserQuestion>> }
+  // Normalize defensively: a streaming/partial tool call can arrive before
+  // `options` (or `question`) exists, and downstream code assumes `q.options`
+  // is always an array (q.options.slice would otherwise throw).
+  const questions: AskUserQuestion[] = (Array.isArray(input.questions) ? input.questions : [])
+    .filter((q): q is Partial<AskUserQuestion> => !!q && typeof q === 'object')
+    .map((q) => ({
+      question: typeof q.question === 'string' ? q.question : '',
+      header: typeof q.header === 'string' ? q.header : undefined,
+      multiSelect: q.multiSelect === true,
+      options: Array.isArray(q.options) ? q.options : [],
+    }))
   const raw = resultTextOf(thread)
   const isError = thread.result?.is_error === true
   const parsed = parseAskUserAnswers(raw)
-  const answered = !!thread.result && !isError && !!parsed.answers && Object.keys(parsed.answers).length > 0
+  // A completed, non-error result means the questions were answered — the answer
+  // may be a JSON map OR a plain confirmation string, so don't require the map.
+  const answered = !!thread.result && !isError
 
   const stateTone: TuiTranscriptLineTone = isError
     ? 'result_error'
@@ -897,7 +923,7 @@ function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean): TuiTr
   if (!expanded) {
     if (questions.length === 1) {
       const q = questions[0]
-      const selected = selectedOptionLabels(q, parsed.answers)
+      const selected = selectedOptionLabels(q, parsed.answers, raw)
       const maxOptions = Math.max(MAX_CARD_LINES, 4)
       const visible = q.options.slice(0, maxOptions)
       for (const opt of visible) {
@@ -913,7 +939,7 @@ function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean): TuiTr
       }
     } else {
       for (const q of questions.slice(0, 3)) {
-        const selected = selectedOptionLabels(q, parsed.answers)
+        const selected = selectedOptionLabels(q, parsed.answers, raw)
         const answer = selected.size > 0
           ? [...selected].join(', ')
           : (answered ? '—' : 'pending')
@@ -936,7 +962,7 @@ function formatAskUserQuestionTool(thread: ToolThread, expanded: boolean): TuiTr
     const mode = q.multiSelect ? ' (multi-select)' : ''
     lines.push(line(`${headerChip}${truncateLine(q.question)}${mode}`, 'system'))
 
-    const selected = selectedOptionLabels(q, parsed.answers)
+    const selected = selectedOptionLabels(q, parsed.answers, raw)
     for (const opt of q.options) {
       const hit = selected.has(opt.label)
       const marker = hit

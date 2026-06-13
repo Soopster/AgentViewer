@@ -2119,6 +2119,224 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   )
 })
 
+// Interactive answer surface for a Claude AskUserQuestion prompt. Collects a
+// selection per question (single or multi) and submits the answers map back to
+// the running turn. Lives in the composer's pending-approval area.
+function AskUserQuestionPicker({
+  permission,
+  busy,
+  onSubmit,
+  onCancel,
+}: {
+  permission: PendingPermission
+  busy: boolean
+  onSubmit: (answers: Record<string, string>) => void
+  onCancel: () => void
+}) {
+  const questions = permission.questions ?? []
+  const [selections, setSelections] = useState<Record<number, string[]>>({})
+  const [openPreview, setOpenPreview] = useState<string | null>(null)
+
+  const toggle = (qi: number, multiSelect: boolean, label: string) => {
+    setSelections((prev) => {
+      const current = prev[qi] ?? []
+      let next: string[]
+      if (multiSelect) {
+        next = current.includes(label) ? current.filter((l) => l !== label) : [...current, label]
+      } else {
+        next = current.length === 1 && current[0] === label ? current : [label]
+      }
+      return { ...prev, [qi]: next }
+    })
+  }
+
+  const allAnswered = questions.every((_, qi) => (selections[qi]?.length ?? 0) > 0)
+
+  const submit = () => {
+    if (!allAnswered || busy) return
+    const answers: Record<string, string> = {}
+    questions.forEach((q, qi) => {
+      const sel = selections[qi]
+      if (sel && sel.length > 0) answers[q.question] = sel.join(', ')
+    })
+    onSubmit(answers)
+  }
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        padding: '10px 11px',
+        borderRadius: 6,
+        border: '1px solid rgba(139,128,240,0.30)',
+        background: 'rgba(139,128,240,0.06)',
+      }}
+    >
+      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--violet)', letterSpacing: '0.06em' }}>
+        {questions.length === 1 ? 'CLAUDE ASKS' : `CLAUDE ASKS · ${questions.length} QUESTIONS`}
+      </div>
+      {questions.map((q, qi) => {
+        const selected = selections[qi] ?? []
+        return (
+          <div key={qi} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
+              {q.header && (
+                <span style={{
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 10, fontWeight: 600, letterSpacing: '0.06em',
+                  color: 'var(--text-3)',
+                  background: 'var(--surface-3)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 3,
+                  padding: '1px 5px',
+                  flexShrink: 0,
+                }}>
+                  {q.header.toUpperCase()}
+                </span>
+              )}
+              <span>{q.question}{q.multiSelect ? <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--text-3)', fontWeight: 400 }}>(select all that apply)</span> : null}</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {q.options.map((opt, oi) => {
+                const isSelected = selected.includes(opt.label)
+                const previewKey = `${qi}:${oi}`
+                const previewOpen = openPreview === previewKey
+                return (
+                  <div key={oi}>
+                    <button
+                      type="button"
+                      onClick={() => toggle(qi, q.multiSelect === true, opt.label)}
+                      disabled={busy}
+                      style={{
+                        width: '100%',
+                        textAlign: 'left',
+                        display: 'flex', alignItems: 'flex-start', gap: 8,
+                        padding: '6px 10px',
+                        borderRadius: 4,
+                        border: `1px solid ${isSelected ? 'rgba(139,128,240,0.55)' : 'var(--border)'}`,
+                        background: isSelected
+                          ? 'linear-gradient(to right, rgba(139,128,240,0.16), rgba(139,128,240,0.05))'
+                          : 'var(--surface)',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                        transition: 'border-color 0.14s ease, background 0.14s ease',
+                      }}
+                    >
+                      <span style={{
+                        width: 14, height: 14,
+                        borderRadius: q.multiSelect ? 3 : '50%',
+                        border: `1.5px solid ${isSelected ? 'var(--violet)' : 'var(--border-2)'}`,
+                        background: isSelected ? 'var(--violet)' : 'transparent',
+                        flexShrink: 0,
+                        marginTop: 2,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        {isSelected && <span style={{ fontSize: 8, color: 'var(--bg)', lineHeight: 1, fontWeight: 700 }}>✓</span>}
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{
+                          display: 'flex', alignItems: 'center', gap: 6,
+                          fontFamily: "'IBM Plex Sans', sans-serif",
+                          fontSize: 13, fontWeight: isSelected ? 600 : 400,
+                          color: isSelected ? 'var(--text)' : 'var(--text-2)',
+                        }}>
+                          {opt.label}
+                          {opt.preview && (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => { e.stopPropagation(); setOpenPreview(previewOpen ? null : previewKey) }}
+                              style={{
+                                fontFamily: "'IBM Plex Mono', monospace",
+                                fontSize: 10, color: 'var(--text-3)',
+                                border: '1px solid var(--border)',
+                                borderRadius: 3,
+                                padding: '0 4px',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {previewOpen ? '▲ preview' : '▼ preview'}
+                            </span>
+                          )}
+                        </span>
+                        {opt.description && (
+                          <span style={{
+                            display: 'block',
+                            fontFamily: "'IBM Plex Sans', sans-serif",
+                            fontSize: 11, color: 'var(--text-3)',
+                            marginTop: 2, lineHeight: 1.5,
+                          }}>
+                            {opt.description}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                    {opt.preview && previewOpen && (
+                      <pre style={{
+                        margin: '2px 0 0',
+                        padding: '8px 12px',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 11, lineHeight: 1.6,
+                        color: 'var(--text-2)',
+                        background: 'var(--bg)',
+                        border: '1px solid var(--border)',
+                        borderTop: 'none',
+                        borderRadius: '0 0 4px 4px',
+                        overflowX: 'auto',
+                        whiteSpace: 'pre',
+                      }}>
+                        {opt.preview}
+                      </pre>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        <Button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          variant="outline"
+          size="sm"
+          style={{
+            height: 26, padding: '0 10px', borderRadius: 4,
+            border: '1px solid rgba(248,113,113,0.24)',
+            background: 'rgba(248,113,113,0.08)',
+            color: 'var(--red, #f87171)',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.06em',
+            cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          SKIP
+        </Button>
+        <Button
+          type="button"
+          onClick={submit}
+          disabled={!allAnswered || busy}
+          variant="outline"
+          size="sm"
+          style={{
+            height: 26, padding: '0 12px', borderRadius: 4,
+            border: '1px solid rgba(139,128,240,0.40)',
+            background: 'rgba(139,128,240,0.14)',
+            color: 'var(--violet)',
+            fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, letterSpacing: '0.06em',
+            cursor: (!allAnswered || busy) ? 'not-allowed' : 'pointer',
+            opacity: (!allAnswered || busy) ? 0.55 : 1,
+          }}
+        >
+          {busy ? 'SENDING…' : 'SUBMIT'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export default function MessageView({
   messages,
   loading,
@@ -4510,6 +4728,39 @@ export default function MessageView({
       ))
     } catch (err) {
       setSessionActionError(err instanceof Error ? err.message : 'Failed to respond to permission')
+    } finally {
+      setSessionActionLoading(null)
+    }
+  }, [session, sessionActionLoading])
+
+  // Submit answers to an AskUserQuestion prompt. `answers` is keyed by question
+  // text; multi-select values are comma-joined per the SDK output schema.
+  const respondToQuestion = useCallback(async (
+    permission: PendingPermission,
+    answers: Record<string, string>,
+  ) => {
+    if (!session || sessionActionLoading) return
+    setSessionActionLoading(`permission:${permission.id}`)
+    setSessionActionError(null)
+    try {
+      const targetSessionId = permission.sessionId ?? session.sessionId
+      const res = await fetch(`/api/sessions/${targetSessionId}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'respondQuestion',
+          permissionId: permission.id,
+          answers,
+          provider: session.provider,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      setPendingPermissions((prev) => prev.filter((entry) =>
+        entry.id !== permission.id || (permission.sessionId !== undefined && entry.sessionId !== permission.sessionId)
+      ))
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to submit answer')
     } finally {
       setSessionActionLoading(null)
     }
@@ -7347,6 +7598,15 @@ export default function MessageView({
             {pendingPermissions.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
                 {pendingPermissions.map((permission) => (
+                  permission.questions && permission.questions.length > 0 ? (
+                    <AskUserQuestionPicker
+                      key={permission.id}
+                      permission={permission}
+                      busy={sessionActionLoading === `permission:${permission.id}`}
+                      onSubmit={(answers) => respondToQuestion(permission, answers)}
+                      onCancel={() => respondToPermission(permission, 'reject')}
+                    />
+                  ) : (
                   <div
                     key={permission.id}
                     style={{
@@ -7422,6 +7682,7 @@ export default function MessageView({
                       <PierrePatchDiffView patch={permission.diff} maxHeight={180} />
                     )}
                   </div>
+                  )
                 ))}
               </div>
             )}

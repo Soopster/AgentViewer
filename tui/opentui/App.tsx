@@ -1856,6 +1856,12 @@ function hasPersistedAssistantAfterBaseline(rawMessages: import('../../lib/types
   return durableMessages.slice(start).some((message) => message.type === 'assistant')
 }
 
+function hasPersistedUserAfterBaseline(rawMessages: import('../../lib/types').SessionMessage[], baselineCount: number): boolean {
+  const durableMessages = rawMessages.filter(isDurableSessionMessage)
+  if (durableMessages.length <= baselineCount) return false
+  return durableMessages.slice(baselineCount).some((message) => message.type === 'user')
+}
+
 function makeLiveUserMessage(session: Session, text: string, uuid = 'live-user'): ThreadedMessage {
   return {
     role: 'user',
@@ -4185,6 +4191,11 @@ export default function OpenTuiApp() {
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
   const [permissionActionLoading, setPermissionActionLoading] = useState<string | null>(null)
   const [permissionOptionIndex, setPermissionOptionIndex] = useState(0)
+  // AskUserQuestion picker state (keyed off the active pending permission's id).
+  const [questionFocusIndex, setQuestionFocusIndex] = useState(0)
+  const [questionOptionIndex, setQuestionOptionIndex] = useState(0)
+  const [questionSelections, setQuestionSelections] = useState<Record<number, string[]>>({})
+  const questionPermissionIdRef = useRef<string | null>(null)
   const [composerWaitingSeed, setComposerWaitingSeed] = useState('')
   const [composerError, setComposerError] = useState<string | null>(null)
   const [composerLiveText, setComposerLiveText] = useState('')
@@ -4895,10 +4906,20 @@ export default function OpenTuiApp() {
     const liveAssistantVisible = Boolean(composerLiveText.trim())
       || hasLiveAssistantMessage(liveTranscriptMessagesForSession, key)
     if (liveAssistantVisible && !hasPersistedAssistantAfterBaseline(sessionDetail.rawMessages, baseline.count)) {
-      setLiveTranscriptMessages((prev) => {
-        const next = prev.filter((message) => !(liveMessageSessionKey(message) === key && message.role === 'user'))
-        return next.length === prev.length ? prev : next
-      })
+      // The assistant is still streaming. Swap the live user echo for the real
+      // persisted row ONLY once that row has actually landed as a durable
+      // message — `persistedTurnArrived` is a coarse change signal (count OR
+      // fingerprint OR sequence), so removing the echo on any change can drop
+      // the user's message before its persisted card exists, leaving a
+      // poll-timed gap until the assistant finishes. Keep the echo until the
+      // persisted user message is genuinely present (which also avoids a
+      // duplicate, since echo and persisted row have different uuids).
+      if (hasPersistedUserAfterBaseline(sessionDetail.rawMessages, baseline.count)) {
+        setLiveTranscriptMessages((prev) => {
+          const next = prev.filter((message) => !(liveMessageSessionKey(message) === key && message.role === 'user'))
+          return next.length === prev.length ? prev : next
+        })
+      }
       return
     }
 
@@ -7268,6 +7289,65 @@ export default function OpenTuiApp() {
       setPermissionActionLoading(null)
     }
   })
+
+  // Toggle an AskUserQuestion option for the focused question. Single-select
+  // replaces; multi-select adds/removes.
+  const toggleTuiQuestionOption = useEffectEvent((qi: number, multiSelect: boolean, label: string) => {
+    setQuestionSelections((prev) => {
+      const current = prev[qi] ?? []
+      const next = multiSelect
+        ? (current.includes(label) ? current.filter((l) => l !== label) : [...current, label])
+        : [label]
+      return { ...prev, [qi]: next }
+    })
+  })
+
+  // Submit the AskUserQuestion answers back into the running turn (allows the
+  // tool with the user's selections merged into its input).
+  const submitTuiQuestion = useEffectEvent(async (permission: PendingPermission) => {
+    const target = composerTargetSession
+    if (!target || permissionActionLoading) return
+    const questions = permission.questions ?? []
+    const answers: Record<string, string> = {}
+    for (let i = 0; i < questions.length; i += 1) {
+      const sel = questionSelections[i]
+      if (!sel || sel.length === 0) {
+        // Jump focus to the first unanswered question instead of submitting.
+        setQuestionFocusIndex(i)
+        setQuestionOptionIndex(0)
+        return
+      }
+      answers[questions[i]!.question] = sel.join(', ')
+    }
+    setPermissionActionLoading(permission.id)
+    try {
+      await runTuiSessionAction(
+        { ...target, sessionId: permission.sessionId ?? target.sessionId },
+        { action: 'respondQuestion', permissionId: permission.id, answers, provider: target.provider },
+      )
+      setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
+      setQuestionSelections({})
+      setQuestionFocusIndex(0)
+      setQuestionOptionIndex(0)
+    } catch (err) {
+      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
+      setNotice({ tone: 'error', text: err instanceof Error ? err.message : 'Failed to submit answer' })
+    } finally {
+      setPermissionActionLoading(null)
+    }
+  })
+
+  // Reset picker state whenever the active question prompt changes.
+  useEffect(() => {
+    const active = pendingPermissions[0]
+    const qid = active?.questions && active.questions.length > 0 ? active.id : null
+    if (questionPermissionIdRef.current !== qid) {
+      questionPermissionIdRef.current = qid
+      setQuestionSelections({})
+      setQuestionFocusIndex(0)
+      setQuestionOptionIndex(0)
+    }
+  }, [pendingPermissions])
 
   // Keep the ref in sync on every render so commitRename always reads the latest draft,
   // regardless of which version of the callback is held by onSubmit or the keyboard handler.
@@ -10012,6 +10092,59 @@ export default function OpenTuiApp() {
     // A pending tool approval blocks the turn — capture option nav / confirm /
     // number shortcuts so the user can allow or reject it. Other keys (scroll,
     // Ctrl+C interrupt) still fall through.
+    // AskUserQuestion picker: navigate options, toggle, and submit. Takes over
+    // the pending-approval keys when the active prompt carries questions.
+    if (pendingPermissions.length > 0 && !permissionActionLoading && (pendingPermissions[0]!.questions?.length ?? 0) > 0) {
+      const activePermission = pendingPermissions[0]!
+      const questions = activePermission.questions ?? []
+      const qi = Math.min(questionFocusIndex, questions.length - 1)
+      const question = questions[qi]!
+      const optionCount = question.options.length
+      const optIndex = Math.min(questionOptionIndex, optionCount - 1)
+      if (key.name === 'up' || key.name === 'k') {
+        handled(() => setQuestionOptionIndex((i) => Math.max(0, Math.min(i, optionCount - 1) - 1)))
+        return
+      }
+      if (key.name === 'down' || key.name === 'j') {
+        handled(() => setQuestionOptionIndex((i) => Math.min(optionCount - 1, Math.min(i, optionCount - 1) + 1)))
+        return
+      }
+      if ((key.name === 'left' || key.name === 'right' || key.name === 'tab') && questions.length > 1) {
+        const delta = key.name === 'left' ? -1 : 1
+        handled(() => {
+          setQuestionFocusIndex((i) => (i + delta + questions.length) % questions.length)
+          setQuestionOptionIndex(0)
+        })
+        return
+      }
+      if (sequence === ' ') {
+        const opt = question.options[optIndex]
+        if (opt) handled(() => toggleTuiQuestionOption(qi, question.multiSelect === true, opt.label))
+        return
+      }
+      const qDigit = Number.parseInt(sequence, 10)
+      if (!Number.isNaN(qDigit) && qDigit >= 1 && qDigit <= optionCount) {
+        const opt = question.options[qDigit - 1]!
+        handled(() => {
+          setQuestionOptionIndex(qDigit - 1)
+          toggleTuiQuestionOption(qi, question.multiSelect === true, opt.label)
+        })
+        return
+      }
+      if (key.name === 'return') {
+        // Single-select advances to the next unanswered question; otherwise
+        // submit (submit also jumps to any still-unanswered question).
+        handled(() => { void submitTuiQuestion(activePermission) })
+        return
+      }
+      // Esc skips the whole prompt (declines the tool), matching the web SKIP.
+      if (key.name === 'escape') {
+        handled(() => { void respondToTuiPermission(activePermission, 'reject') })
+        return
+      }
+      return
+    }
+
     if (pendingPermissions.length > 0 && !permissionActionLoading) {
       const activePermission = pendingPermissions[0]!
       const options = permissionOptionsFor(activePermission)
@@ -12032,7 +12165,48 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {pendingPermissions.length > 0 ? (() => {
+      {pendingPermissions.length > 0 && (pendingPermissions[0]!.questions?.length ?? 0) > 0 ? (() => {
+        const permission = pendingPermissions[0]!
+        const questions = permission.questions ?? []
+        const innerWidth = Math.max(width - 8, 20)
+        const focusIndex = Math.min(questionFocusIndex, questions.length - 1)
+        return (
+          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+            <box borderStyle="single" borderColor={theme.violet ?? theme.amber} flexDirection="column" paddingX={1}>
+              <text fg={theme.violet ?? theme.amber} wrapMode="none">
+                {fitText(questions.length === 1 ? '● Claude asks' : `● Claude asks · ${questions.length} questions`, innerWidth)}
+              </text>
+              {questions.map((q, qi) => {
+                const focused = qi === focusIndex
+                const selected = questionSelections[qi] ?? []
+                return (
+                  <box key={`q:${qi}`} flexDirection="column" marginTop={qi === 0 ? 0 : 1}>
+                    <text fg={focused ? theme.text : theme.dim} wrapMode="word">
+                      {fitText(`${questions.length > 1 ? `${focused ? '▶ ' : '  '}` : ''}${q.header ? `[${q.header}] ` : ''}${q.question}${q.multiSelect ? ' (multi)' : ''}`, innerWidth)}
+                    </text>
+                    {q.options.map((opt, oi) => {
+                      const isSelected = selected.includes(opt.label)
+                      const isCursor = focused && oi === Math.min(questionOptionIndex, q.options.length - 1)
+                      const marker = isSelected ? (q.multiSelect ? '☑' : '●') : (q.multiSelect ? '☐' : '○')
+                      const color = isCursor ? (theme.violet ?? theme.cyan) : isSelected ? theme.green : theme.dim
+                      return (
+                        <text key={`q:${qi}:o:${oi}`} fg={color} wrapMode="none">
+                          {fitText(`  ${isCursor ? '▶' : ' '} ${marker} [${oi + 1}] ${opt.label}`, innerWidth)}
+                        </text>
+                      )
+                    })}
+                  </box>
+                )
+              })}
+              <text fg={theme.dim} wrapMode="none">
+                {permissionActionLoading
+                  ? 'submitting…'
+                  : fitText(`↑/↓ option${questions.length > 1 ? ' · ←/→ question' : ''} · space/1-4 select · enter submit · esc skip`, innerWidth)}
+              </text>
+            </box>
+          </box>
+        )
+      })() : pendingPermissions.length > 0 ? (() => {
         const permission = pendingPermissions[0]!
         const options = permissionOptionsFor(permission)
         const selectedIndex = Math.min(permissionOptionIndex, options.length - 1)

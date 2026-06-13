@@ -1229,8 +1229,10 @@ type AUQOption  = { label: string; description?: string; preview?: string }
 type AUQQuestion = { question: string; header?: string; multiSelect?: boolean; options: AUQOption[] }
 
 function AskUserQuestionCard({ thread }: { thread: ToolThread }) {
-  const input = thread.toolUse.input as { questions?: AUQQuestion[] }
-  const questions = input.questions ?? []
+  const input = thread.toolUse.input as { questions?: Array<AUQQuestion | null | undefined> }
+  // A streaming/partial tool call can omit fields; keep only well-formed objects
+  // so downstream access (q.header, q.options.map) never throws.
+  const questions = (input.questions ?? []).filter((q): q is AUQQuestion => !!q && typeof q === 'object')
   const resultStr = thread.result ? resultToString(thread.result.content) : ''
   const answered  = !!resultStr
 
@@ -1312,7 +1314,7 @@ function AUQQuestionBlock({ q, resultStr }: { q: AUQQuestion; resultStr: string 
 
       {/* Options */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {q.options.map((opt, oi) => {
+        {(Array.isArray(q.options) ? q.options : []).map((opt, oi) => {
           const selected = resultStr.includes(`"${opt.label}"`) || resultStr.includes(`=${opt.label}`)
           const previewOpen = expandedPreview === oi
 

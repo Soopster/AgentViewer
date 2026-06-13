@@ -8,6 +8,16 @@
 
 import type { AgentProvider, SendAttachment } from './types'
 
+// A single AskUserQuestion prompt the user must answer interactively. Mirrors
+// the Claude SDK AskUserQuestionInput shape (one entry per question).
+export type PendingQuestionOption = { label: string; description?: string; preview?: string }
+export type PendingQuestion = {
+  question: string
+  header?: string
+  multiSelect?: boolean
+  options: PendingQuestionOption[]
+}
+
 export type PendingPermission = {
   id: string
   sessionId?: string
@@ -24,6 +34,10 @@ export type PendingPermission = {
   paths?: string[]
   url?: string
   reason?: string
+  // Present only for AskUserQuestion: the structured questions to render as an
+  // interactive picker. When set, the surface collects answers and replies with
+  // the `respondQuestion` action instead of an allow/deny permission decision.
+  questions?: PendingQuestion[]
 }
 
 export type PermissionResponse = 'once' | 'always' | 'reject'
@@ -285,6 +299,41 @@ export function extractCopilotPushedAttachments(payload: unknown): SendAttachmen
   })
 }
 
+// Parse AskUserQuestion tool input into the structured questions the picker
+// renders. Tolerant of partial/streaming input — drops malformed entries.
+export function parsePendingQuestions(input: Record<string, unknown> | null | undefined): PendingQuestion[] | undefined {
+  const rawQuestions = input?.questions
+  if (!Array.isArray(rawQuestions)) return undefined
+  const questions: PendingQuestion[] = []
+  for (const rawQuestion of rawQuestions) {
+    const q = asRecord(rawQuestion)
+    if (!q) continue
+    const question = typeof q.question === 'string' ? q.question : ''
+    if (!question) continue
+    const rawOptions = Array.isArray(q.options) ? q.options : []
+    const options: PendingQuestionOption[] = []
+    for (const rawOption of rawOptions) {
+      const o = asRecord(rawOption)
+      if (!o) continue
+      const label = typeof o.label === 'string' ? o.label : ''
+      if (!label) continue
+      options.push({
+        label,
+        description: typeof o.description === 'string' ? o.description : undefined,
+        preview: typeof o.preview === 'string' ? o.preview : undefined,
+      })
+    }
+    if (options.length === 0) continue
+    questions.push({
+      question,
+      header: typeof q.header === 'string' ? q.header : undefined,
+      multiSelect: q.multiSelect === true,
+      options,
+    })
+  }
+  return questions.length > 0 ? questions : undefined
+}
+
 export function extractClaudePermission(payload: unknown): PendingPermission | null {
   const record = asRecord(payload)
   if (!record || record.type !== 'claude_permission') return null
@@ -296,6 +345,21 @@ export function extractClaudePermission(payload: unknown): PendingPermission | n
   if (!id) return null
   const toolName = stringField(data, 'toolName')
   const input = asRecord(data.input)
+  // AskUserQuestion is not a permission to allow/deny — it's a question to
+  // answer. Surface its structured questions so the picker takes over.
+  if (toolName === 'AskUserQuestion') {
+    const questions = parsePendingQuestions(input)
+    if (questions) {
+      return {
+        id,
+        sessionId: stringField(data, 'sessionId'),
+        provider: 'claude',
+        toolName,
+        title: questions.length === 1 ? questions[0].question : `Claude has ${questions.length} questions`,
+        questions,
+      }
+    }
+  }
   const command = input ? stringField(input, 'command') : undefined
   const url = input ? stringField(input, 'url') : undefined
   const path = input ? (stringField(input, 'file_path') ?? stringField(input, 'path')) : undefined

@@ -1473,6 +1473,24 @@ function claudePermissionDecision(
   }
 }
 
+// Resolve an AskUserQuestion by allowing the tool with the user's answers
+// merged into its input — the SDK's AskUserQuestion tool echoes `answers`
+// (and optional freeform `response`/`annotations`) straight into its output.
+function claudeQuestionDecision(
+  pending: Pick<PendingClaudePermission, 'input'>,
+  payload: { answers: Record<string, string>; response?: string; annotations?: Record<string, { preview?: string; notes?: string }> },
+): PermissionResult {
+  return {
+    behavior: 'allow',
+    updatedInput: {
+      ...(pending.input ?? {}),
+      answers: payload.answers,
+      ...(payload.response ? { response: payload.response } : {}),
+      ...(payload.annotations ? { annotations: payload.annotations } : {}),
+    },
+  }
+}
+
 function claudePermissionEvent(type: 'permission.requested' | 'permission.completed', data: Record<string, unknown>): string {
   return JSON.stringify({
     type: 'claude_permission',
@@ -2339,6 +2357,32 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       }
       if (!pending) throw new Error('Permission request is no longer pending')
       pending.resolve(claudePermissionDecision(response, pending))
+      return { ok: true }
+    }
+    // Answer an AskUserQuestion prompt: allow the tool with the user's selected
+    // options (and any freeform text) merged into its input.
+    if (action === 'respondQuestion') {
+      const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
+      if (!permissionId) throw new Error('permissionId is required')
+      const answers = (body.answers && typeof body.answers === 'object' && !Array.isArray(body.answers))
+        ? body.answers as Record<string, string>
+        : null
+      if (!answers) throw new Error('answers is required')
+      const response = typeof body.response === 'string' && body.response.trim() ? body.response.trim() : undefined
+      const annotations = (body.annotations && typeof body.annotations === 'object' && !Array.isArray(body.annotations))
+        ? body.annotations as Record<string, { preview?: string; notes?: string }>
+        : undefined
+      const key = pendingClaudePermissionKey(sessionId, permissionId)
+      let pending = pendingClaudePermissions.get(key)
+      if (!pending) {
+        for (const [pendingKey, candidate] of pendingClaudePermissions) {
+          if (!pendingKey.endsWith(`:${permissionId}`)) continue
+          pending = candidate
+          break
+        }
+      }
+      if (!pending) throw new Error('Question is no longer pending')
+      pending.resolve(claudeQuestionDecision(pending, { answers, response, annotations }))
       return { ok: true }
     }
     if (action === 'setModel') {
