@@ -1046,6 +1046,44 @@ function clipText(value: string, width: number): string {
   return `${value.slice(0, width - 1)}…`
 }
 
+function cleanLivePreviewText(value: string): string {
+  return value
+    .replace(/\r/g, '')
+    .replace(/^```[^\n]*$/gm, '')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/(\*\*|__|`)/g, '')
+}
+
+function wrapLivePreviewTail(value: string, width: number, maxLines: number): string[] {
+  if (width <= 0 || maxLines <= 0) return []
+  const cleaned = cleanLivePreviewText(value).trimEnd()
+  if (!cleaned) return []
+
+  // Live buffers can grow large. Only inspect enough trailing source to fill
+  // the fixed preview card so streaming updates stay bounded.
+  const sourceLimit = Math.max(width * maxLines * 6, 1024)
+  const source = cleaned.slice(-sourceLimit)
+  const wrapped: string[] = []
+
+  for (const rawLine of source.split('\n')) {
+    let remaining = rawLine.replace(/\s+/g, ' ').trim()
+    if (!remaining) {
+      if (wrapped.length > 0 && wrapped[wrapped.length - 1] !== '') wrapped.push('')
+      continue
+    }
+    while (remaining.length > width) {
+      let splitAt = remaining.lastIndexOf(' ', width)
+      if (splitAt < Math.floor(width * 0.4)) splitAt = width
+      wrapped.push(remaining.slice(0, splitAt).trimEnd())
+      remaining = remaining.slice(splitAt).trimStart()
+    }
+    if (remaining) wrapped.push(remaining)
+  }
+
+  return wrapped.slice(-maxLines)
+}
+
 function renderInlineTextSegments(segments: InlineTextSegment[], width: number, padFg: string): React.ReactNode[] {
   if (width <= 0) return []
   const out: React.ReactNode[] = []
@@ -1063,6 +1101,50 @@ function renderInlineTextSegments(segments: InlineTextSegment[], width: number, 
     out.push(<span key="pad" fg={padFg}>{' '.repeat(remaining)}</span>)
   }
   return out
+}
+
+const LIVE_PREVIEW_HEIGHT = 6
+const LIVE_PREVIEW_BODY_LINES = LIVE_PREVIEW_HEIGHT - 2
+
+function LivePreviewCard({
+  title,
+  lines,
+  accentColor,
+  bodyColor,
+  theme,
+}: {
+  title: string
+  lines: string[]
+  accentColor: string
+  bodyColor: string
+  theme: TuiThemePalette
+}) {
+  const lastLineIndex = lines.length - 1
+  return (
+    <box backgroundColor={theme.surface2} paddingX={1} height={LIVE_PREVIEW_HEIGHT}>
+      <box
+        border
+        borderStyle="single"
+        borderColor={accentColor}
+        backgroundColor={theme.surface}
+        height={LIVE_PREVIEW_HEIGHT}
+        flexGrow={1}
+        flexDirection="column"
+        paddingX={1}
+        overflow="hidden"
+        title={` ${title} `}
+        titleColor={accentColor}
+        titleAlignment="left"
+      >
+        {lines.map((line, index) => (
+          <text key={`${index}:${line}`} wrapMode="none">
+            <span fg={bodyColor}>{line || ' '}</span>
+            {index === lastLineIndex ? <span fg={accentColor}> ▌</span> : null}
+          </text>
+        ))}
+      </box>
+    </box>
+  )
 }
 
 function stableHash(value: string): number {
@@ -5930,19 +6012,24 @@ export default function OpenTuiApp() {
   )
   const composerStatusBlockHeight = (() => {
     let rows = 0
-    if (composerSendState === 'sending' && !composerLiveText && activeRunningToolCount === 0) rows += 2
+    if (
+      composerSendState === 'sending'
+      && !composerLiveText
+      && !composerLiveReasoning.trim()
+      && activeRunningToolCount === 0
+    ) rows += 2
     if (hasSubagentTail) rows += 2
     if (liveToolActivities.length > 0 && activeRunningToolCount > 0) rows += 2
     if (livePromptSuggestion && composerSendState !== 'sending') rows += 2
     if (composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default') rows += 2
     if (hasComposerStatusMessage) {
-      const streamingMarkdown = composerSendState === 'sending' && composerLiveText && syntaxStyle && !composerError
-      rows += streamingMarkdown ? 6 : 2
+      const streamingResponse = composerSendState === 'sending' && composerLiveText && !composerError
+      rows += streamingResponse ? LIVE_PREVIEW_HEIGHT : 2
     }
     if (awaitingPersistedTurn) rows += 2
     if (composerAutoTargetingRunning && composerTargetSession) rows += 1
     if ((liveStatus === 'retrying' || liveStatus === 'compacting') && composerSendState === 'sending') rows += 2
-    if (composerSendState === 'sending' && composerLiveReasoning.trim()) rows += 2
+    if (composerSendState === 'sending' && composerLiveReasoning.trim()) rows += LIVE_PREVIEW_HEIGHT
     if (pendingPermissions.length > 0) {
       const permission = pendingPermissions[0]!
       // border(2) + outer padding(1) + title(1) + options(1) + hint(1)
@@ -6009,6 +6096,15 @@ export default function OpenTuiApp() {
   const composerWindowEditorHeight = Math.max(
     4,
     composerWindowHeight - composerWindowHeaderHeight - composerWindowFooterHeight - composerWindowSuggestionHeight - 2,
+  )
+  const livePreviewContentWidth = Math.max(width - 8, 14)
+  const liveAssistantPreviewLines = useMemo(
+    () => wrapLivePreviewTail(composerLiveText, livePreviewContentWidth, LIVE_PREVIEW_BODY_LINES),
+    [composerLiveText, livePreviewContentWidth],
+  )
+  const liveReasoningPreviewLines = useMemo(
+    () => wrapLivePreviewTail(composerLiveReasoning, livePreviewContentWidth, LIVE_PREVIEW_BODY_LINES),
+    [composerLiveReasoning, livePreviewContentWidth],
   )
 
   const isPreviewMode = tabsEnabled && !!selectedSessionKey && !openTabSessions.some((s) => sessionKey(s) === selectedSessionKey)
@@ -12042,6 +12138,7 @@ export default function OpenTuiApp() {
               const overlayWidth = Math.min(78, Math.max(width - 4, 44))
               const overlayHeight = Math.min(18, Math.max(height - 2, 12))
               const contentWidth = Math.max(overlayWidth - 5, 38)
+              const headerWidth = Math.max(overlayWidth - 4, 40)
               const modelWidth = Math.max(Math.floor(contentWidth * 0.6), 22)
               const effortWidth = Math.max(contentWidth - modelWidth - 1, 15)
               return (
@@ -12061,12 +12158,16 @@ export default function OpenTuiApp() {
                   titleColor={composerAccentColor}
                   titleAlignment="left"
                 >
-                  <box height={2} paddingX={1} flexDirection="row" alignItems="center">
+                  <box height={2} paddingX={1} flexDirection="column">
                     <text fg={ot.text} wrapMode="none">
-                      {`${String(modelPickerTarget?.provider ?? 'session').toUpperCase()} · MODEL & EFFORT`}
+                      {fitText(
+                        `${String(modelPickerTarget?.provider ?? 'session').toUpperCase()} · MODEL & EFFORT`,
+                        headerWidth,
+                      )}
                     </text>
-                    <box flexGrow={1} />
-                    <text fg={ot.dim} wrapMode="none">type to filter · ↑/↓ choose · tab switch · enter apply · esc close</text>
+                    <text fg={ot.dim} wrapMode="none">
+                      {fitText('type to filter · ↑/↓ choose · tab switch · enter apply · esc close', headerWidth)}
+                    </text>
                   </box>
                   <box flexGrow={1} paddingX={1} paddingBottom={1} flexDirection="row" gap={1}>
                     <box width={modelWidth} flexDirection="column">
@@ -12585,19 +12686,16 @@ export default function OpenTuiApp() {
       ) : null}
 
       {composerSendState === 'sending' && composerLiveReasoning.trim() ? (
-        <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
-          <text fg={theme.violet} wrapMode="none">{'▌ '}</text>
-          <text fg={theme.dim} wrapMode="none">
-            {(() => {
-              const t = composerLiveReasoning.replace(/\s+/g, ' ').trim()
-              const preview = t.length > 100 ? `…${t.slice(-98)}` : t
-              return fitText(`✻ thinking · ${preview}`, Math.max(width - 6, 16))
-            })()}
-          </text>
-        </box>
+        <LivePreviewCard
+          title={`✻ THINKING · ${String(composerProvider ?? 'agent').toUpperCase()} · ${tuiEffort.toUpperCase()}`}
+          lines={liveReasoningPreviewLines}
+          accentColor={theme.violet}
+          bodyColor={theme.muted}
+          theme={theme}
+        />
       ) : null}
 
-      {composerSendState === 'sending' && !composerLiveText && activeRunningToolCount === 0 ? (
+      {composerSendState === 'sending' && !composerLiveText && !composerLiveReasoning.trim() && activeRunningToolCount === 0 ? (
         <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
           <text fg={theme.cyan} wrapMode="none">{'▌ '}</text>
           <box flexGrow={1}>
@@ -12666,20 +12764,14 @@ export default function OpenTuiApp() {
       ) : null}
 
       {composerStatusMessage ? (
-        composerSendState === 'sending' && composerLiveText && syntaxStyle && !composerError ? (
-          // OpenTUI's <box height={n}> does not clip <markdown> overflow — once
-          // the streaming preview grows beyond 4 rows it bleeds onto the
-          // composer below. Render only the tail as plain wrapped text so the
-          // preview always fits the reserved row slot.
-          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1} height={5} overflow="hidden">
-            <text fg={theme.dim} wrapMode="word">
-              {composerLiveText
-                .replace(/\s+$/g, '')
-                .split('\n')
-                .slice(-4)
-                .join('\n')}
-            </text>
-          </box>
+        composerSendState === 'sending' && composerLiveText && !composerError ? (
+          <LivePreviewCard
+            title={`● ASSISTANT · ${String(composerProvider ?? 'agent').toUpperCase()} · STREAMING`}
+            lines={liveAssistantPreviewLines}
+            accentColor={composerAccentColor}
+            bodyColor={theme.text}
+            theme={theme}
+          />
         ) : (
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
             <text fg={composerError ? theme.red : theme.dim} wrapMode="none">
