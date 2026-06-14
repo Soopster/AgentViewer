@@ -12152,8 +12152,16 @@ export default function OpenTuiApp() {
               zIndex={30}
               flexDirection="column"
             >
-              <box paddingX={1} paddingTop={1} paddingBottom={1}>
-                <text fg={theme.dim}>{fitText(`> ${commandPaletteQuery}█  j/k  enter  esc${positionHint}`, paletteW - 4)}</text>
+              <box paddingX={1} paddingTop={1} paddingBottom={1} backgroundColor={theme.surface2}>
+                <text wrapMode="none">
+                  {renderInlineTextSegments([
+                    { text: '> ', fg: theme.dim },
+                    { text: commandPaletteQuery || 'type to filter', fg: commandPaletteQuery ? theme.text : theme.dim },
+                    { text: '█', fg: theme.cyan },
+                    { text: '  j/k move · ⏎ run · esc close', fg: theme.dim },
+                    { text: positionHint, fg: theme.muted },
+                  ], paletteW - 4, theme.dim)}
+                </text>
               </box>
               {hiddenAbove > 0 ? (
                 <box paddingX={1}>
@@ -12167,8 +12175,9 @@ export default function OpenTuiApp() {
               ) : visibleRows.map((row, i) => {
                 if (row.kind === 'header') {
                   return (
-                    <box key={`palette-row:${i}`} paddingX={1} backgroundColor={theme.surface2}>
-                      <text fg={theme.dim}>{row.label.toUpperCase()}</text>
+                    <box key={`palette-row:${i}`} paddingX={1} backgroundColor={theme.surface2} flexDirection="row">
+                      <text fg={theme.cyan} wrapMode="none">{'┄ '}</text>
+                      <text fg={theme.cyan} wrapMode="none">{row.label.toUpperCase()}</text>
                     </box>
                   )
                 }
@@ -12180,9 +12189,10 @@ export default function OpenTuiApp() {
                     backgroundColor={isSelected ? theme.surface3 : theme.surface}
                     flexDirection="row"
                   >
+                    <text fg={theme.cyan} wrapMode="none">{isSelected ? '▎' : ' '}</text>
                     <box flexGrow={1}>
                       <text fg={isSelected ? theme.text : theme.muted} wrapMode="none">
-                        {fitText(row.cmd.label, labelW)}
+                        {fitText(row.cmd.label, labelW - 1)}
                       </text>
                     </box>
                     <text fg={isSelected ? theme.cyan : theme.dim}>{row.cmd.key}</text>
