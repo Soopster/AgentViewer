@@ -1382,6 +1382,12 @@ const METADATA_REQUEST_TIMEOUT_MS = 4_000
 // least this long. Tuned high enough that quick replies don't bell the user.
 const NOTIFY_AFTER_MS = 8_000
 const NOTIFY_PREVIEW_CHARS = 140
+// If the Claude send stream goes fully silent for this long — no data AND no
+// heartbeat (the server pulses one every 15s) — the socket is presumed dead.
+// We stop reading and let the persisted-detail poll surface the rest of the
+// still-running turn instead of blocking on read() for minutes.
+const CLAUDE_STREAM_STALL_MS = 45_000
+const STREAM_STALL_SENTINEL = Symbol('claude-stream-stall')
 const MAX_CODE_BLOCK_RENDER_LINES = 240
 const MAX_MARKDOWN_SYNTAX_CHARS = 80_000
 
@@ -8088,6 +8094,8 @@ export default function OpenTuiApp() {
       const activeSubagentIdRef = { current: '' }
 
       const handleFrame = (frame: SseFrame) => {
+        // Liveness pulse only — receiving it already reset the stall race.
+        if (frame.event === 'heartbeat') return
         let parsed: unknown = null
         try {
           parsed = JSON.parse(frame.data)
@@ -8442,8 +8450,30 @@ export default function OpenTuiApp() {
         }
       }
 
+      // Stall watchdog: only Claude emits server heartbeats, so only Claude can
+      // be confidently judged dead-vs-slow. Race each read against a timeout; on
+      // a stall, stop owning the stream and fall through to the completion path
+      // (awaitingPersistedTurn + a detail refresh) so the still-running turn keeps
+      // rendering from the persisted log instead of a frozen "sending" spinner.
+      const stallGuard = targetSession.provider === 'claude'
+      let streamStalled = false
       while (true) {
-        const { done, value } = await reader.read()
+        let readResult: ReadableStreamReadResult<Uint8Array>
+        if (stallGuard) {
+          const readPromise = reader.read()
+          readPromise.catch(() => {}) // abandoned on stall; swallow its rejection
+          let stallTimer: ReturnType<typeof setTimeout> | undefined
+          const stallPromise = new Promise<typeof STREAM_STALL_SENTINEL>((resolve) => {
+            stallTimer = setTimeout(() => resolve(STREAM_STALL_SENTINEL), CLAUDE_STREAM_STALL_MS)
+          })
+          const raced = await Promise.race([readPromise, stallPromise])
+          if (stallTimer) clearTimeout(stallTimer)
+          if (raced === STREAM_STALL_SENTINEL) { streamStalled = true; break }
+          readResult = raced
+        } else {
+          readResult = await reader.read()
+        }
+        const { done, value } = readResult
         if (done) break
         sseBuffer += decoder.decode(value, { stream: true })
         const { frames, remaining } = extractSseFrames(sseBuffer)
@@ -8451,6 +8481,10 @@ export default function OpenTuiApp() {
         for (const frame of frames) {
           handleFrame(frame)
         }
+      }
+
+      if (streamStalled) {
+        setNotice({ tone: 'info', text: 'Live stream stalled — turn still running; syncing transcript.' })
       }
 
       if (sseBuffer.trim()) {

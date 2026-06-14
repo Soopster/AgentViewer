@@ -261,6 +261,15 @@ const TIMELINE_CALIBRATION_MAX_RATIO = 2
 // when a write is lost/delayed so "Syncing transcript…" can never stick forever.
 const AWAITING_PERSISTED_TURN_TIMEOUT_MS = 15000
 const REATTACH_POLL_MS = 2500
+// If the Claude send stream goes fully silent for this long — no data AND no
+// heartbeat (the server pulses one every 15s) — the socket is presumed dead.
+// We stop owning the stream and hand off to the persisted-window SSE + /running
+// reattach poll, which keep rendering the still-running turn. Three missed
+// heartbeats is a confident "dead, not slow" signal.
+const CLAUDE_STREAM_STALL_MS = 45000
+// Unique marker so the read/stall race can tell a stall timeout from a real
+// ReadableStream read result.
+const STREAM_STALL_SENTINEL = Symbol('claude-stream-stall')
 const PROGRAMMATIC_SCROLL_SUPPRESSION_MS = 120
 const ESTIMATED_CHARS_PER_LINE = 92
 const TIMELINE_BOTTOM_GUTTER_PX = 72
@@ -3894,14 +3903,41 @@ export default function MessageView({
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let sseBuffer = ''
+      // Stall watchdog: only Claude emits server heartbeats, so only Claude can
+      // be confidently judged dead-vs-slow. Race each read against a timeout; if
+      // neither data nor a heartbeat lands within the window, treat the socket as
+      // dead and recover via reattach instead of blocking on read() for minutes.
+      const stallGuard = session.provider === 'claude'
+      let streamStalled = false
       while (true) {
-        const { done, value } = await reader.read()
+        let readResult: ReadableStreamReadResult<Uint8Array>
+        if (stallGuard) {
+          const readPromise = reader.read()
+          readPromise.catch(() => {}) // abandoned on stall; swallow its rejection
+          let stallTimer: ReturnType<typeof setTimeout> | undefined
+          const stallPromise = new Promise<typeof STREAM_STALL_SENTINEL>((resolve) => {
+            stallTimer = setTimeout(() => resolve(STREAM_STALL_SENTINEL), CLAUDE_STREAM_STALL_MS)
+          })
+          const raced = await Promise.race([readPromise, stallPromise])
+          if (stallTimer) clearTimeout(stallTimer)
+          if (raced === STREAM_STALL_SENTINEL) { streamStalled = true; break }
+          readResult = raced
+        } else {
+          readResult = await reader.read()
+        }
+        const { done, value } = readResult
         if (done) break
         sseBuffer += decoder.decode(value, { stream: true })
         const { frames, remaining } = extractSseFrames(sseBuffer)
         sseBuffer = remaining
 
         for (const frame of frames) {
+          if (frame.event === 'heartbeat') {
+            // Liveness pulse only — receiving it already reset the stall race on
+            // this iteration; nothing else to do.
+            continue
+          }
+
           if (frame.event === 'context-usage') {
             try { setContextUsage(JSON.parse(frame.data)) } catch { /* ignore */ }
             continue
@@ -4162,6 +4198,31 @@ export default function MessageView({
           }
         }
       }
+
+      if (streamStalled) {
+        // The send stream went silent past CLAUDE_STREAM_STALL_MS. The turn keeps
+        // running server-side (detachOnClientAbort), so don't interrupt it — drop
+        // our dead live stream and let the persisted-window SSE + /running
+        // reattach poll render the rest. Keeps the partial output visible and the
+        // composer honest ("turn still running") instead of a frozen spinner.
+        try { await reader.cancel() } catch { /* already torn down */ }
+        flushLiveAssistantTextNow()
+        setSendState('idle')
+        setLiveStatus(null)
+        setSessionActionNotice('Live stream stalled — reconnected to the running turn.')
+        // We know a turn is in flight; mark reattached so the composer reflects it
+        // immediately. The /running poll reconciles and clears it when it ends.
+        reattachedRunningRef.current = true
+        setReattachedRunning(true)
+        // Reconcile the partial overlay against the persisted timeline as it
+        // streams in over the always-on events SSE.
+        if (pendingMessageBaselineRef.current) {
+          awaitingPersistedTurnRef.current = true
+          setAwaitingPersistedTurn(true)
+        }
+        return
+      }
+
       sseBuffer += decoder.decode()
 
       if (sseBuffer.trim()) {

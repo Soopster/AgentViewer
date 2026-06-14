@@ -2871,6 +2871,15 @@ function claudeResultErrorMessage(msg: Record<string, unknown>): string | null {
   return null
 }
 
+// Heartbeat cadence for the Claude POST send stream. Unlike the GET events SSE,
+// the send stream can legitimately go quiet for long stretches (waiting on the
+// first token, a slow tool call) with no frames. A periodic heartbeat keeps
+// intermediaries (proxies, load balancers) from idle-closing the connection and
+// gives the client a liveness pulse so it can distinguish "model still working"
+// from "socket silently died" — the client stall watchdog keys off it. 15s sits
+// comfortably under common 30–60s proxy idle timeouts.
+const CLAUDE_STREAM_HEARTBEAT_MS = 15_000
+
 async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
@@ -3101,6 +3110,16 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         steer: async (text) => pushUserMessage(await buildClaudeUserMessage(text, [])),
       })
 
+      // Keep the connection warm and the client's stall watchdog fed during the
+      // cold path's first-token wait (the highest-latency window). Routed through
+      // safeEnqueue so it no-ops once downstream closes.
+      const heartbeat = setInterval(() => {
+        safeEnqueue(`event: heartbeat\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`)
+      }, CLAUDE_STREAM_HEARTBEAT_MS)
+      if (typeof heartbeat === 'object' && heartbeat && 'unref' in heartbeat) {
+        (heartbeat as { unref?: () => void }).unref?.()
+      }
+
       let emittedSessionEvent = false
       let realizedSessionId: string | undefined
       let adopted = false
@@ -3169,6 +3188,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
         }
       } finally {
+        clearInterval(heartbeat)
         // Clear the bridge in case adoption didn't happen (error, abort) so the
         // box isn't left pointing at a dead stream controller.
         bridgeBox.fn = null
@@ -3287,6 +3307,18 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
       // have to wait for the SDK's init message.
       controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: entry.sessionId })}\n\n`))
 
+      // Keep the connection warm and the client's stall watchdog fed while the
+      // turn runs. Heartbeats are best-effort: a throw means downstream closed,
+      // which the turn-decoupling logic already tolerates.
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(`event: heartbeat\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`))
+        } catch { /* downstream closed; turn keeps running in the pool */ }
+      }, CLAUDE_STREAM_HEARTBEAT_MS)
+      if (typeof heartbeat === 'object' && heartbeat && 'unref' in heartbeat) {
+        (heartbeat as { unref?: () => void }).unref?.()
+      }
+
       // Cheap freebie: the persistent Query lets us read context usage without
       // spinning up a subprocess. Fire it WITHOUT awaiting so the turn starts
       // immediately — blocking here adds a control-RPC round-trip to first-token
@@ -3354,6 +3386,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
           }
         }
       } finally {
+        clearInterval(heartbeat)
         clearRunningSession(entry.sessionId)
         resolvePendingClaudePermissions(entry.sessionId, bridgedPermissionIds, 'Permission request ended before a response was received')
         try { controller.close() } catch { /* idempotent */ }
