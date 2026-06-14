@@ -1053,6 +1053,32 @@ type InlineTextSegment = {
   fg: string
 }
 
+function composerSendingHintSegments(value: string, theme: TuiThemePalette): InlineTextSegment[] {
+  const segments: InlineTextSegment[] = []
+  value.split(' · ').forEach((group, index) => {
+    if (index > 0) segments.push({ text: ' · ', fg: theme.dim })
+    const match = group.match(/^(\S+)(?:\s+(.*))?$/)
+    const key = match?.[1] ?? group
+    const label = match?.[2]
+    const normalized = group.toLowerCase()
+    const color = normalized.includes('cancel') || normalized.includes('interrupt')
+      ? theme.red
+      : normalized.includes('queue') || normalized.includes('background')
+        ? theme.amber
+        : normalized.includes('running') || normalized.includes('streaming') || normalized.includes('thinking') || normalized.includes('responding')
+          ? theme.green
+          : theme.cyan
+
+    if (!label) {
+      segments.push({ text: group, fg: color })
+      return
+    }
+    segments.push({ text: key, fg: color })
+    segments.push({ text: ` ${label}`, fg: color })
+  })
+  return segments
+}
+
 function clipText(value: string, width: number): string {
   if (width <= 0) return ''
   if (value.length <= width) return value
@@ -11596,6 +11622,9 @@ export default function OpenTuiApp() {
     : canUseChannelBridge
     ? `${composerIdleFooterHint} · ⌃R bridge · ⌃O expand`
     : `${composerIdleFooterHint} · ⌃O expand`
+  const composerDockSendingHintSegments = composerSendState === 'sending'
+    ? composerSendingHintSegments(composerDockFooterHint, theme)
+    : null
   // Size the hint box to exactly fit its text, capped by available width minus
   // 24 chars reserved for the stats side. Avoids the old proportional cap (62
   // chars) that truncated the full idle hint (~72 chars on most terminals).
@@ -11607,6 +11636,9 @@ export default function OpenTuiApp() {
   const composerWindowFooterHint = composerSendState === 'sending'
     ? `${sendingHintBase} · ⌃O dock`
     : '⏎ send · ⌥M model/effort · ⇧⏎ newline · ⌃O dock · Esc close'
+  const composerWindowSendingHintSegments = composerSendState === 'sending'
+    ? composerSendingHintSegments(composerWindowFooterHint, theme)
+    : null
   const composerWindowFooterHintWidth = Math.max(
     18,
     Math.min(composerWindowFooterHint.length + 1, composerWindowContentWidth - 16),
@@ -12884,7 +12916,9 @@ export default function OpenTuiApp() {
             <box flexGrow={1} />
             <box width={composerDockFooterHintWidth} overflow="hidden">
               <text fg={composerActive && composerSendState !== 'sending' ? composerAccentColor : theme.dim} wrapMode="none">
-                {fitText(composerDockFooterHint, composerDockFooterHintWidth)}
+                {composerDockSendingHintSegments
+                  ? renderInlineTextSegments(composerDockSendingHintSegments, composerDockFooterHintWidth, theme.dim)
+                  : fitText(composerDockFooterHint, composerDockFooterHintWidth)}
               </text>
             </box>
           </box>
@@ -13152,7 +13186,9 @@ export default function OpenTuiApp() {
             <box flexGrow={1} />
             <box width={composerWindowFooterHintWidth} overflow="hidden">
               <text fg={theme.dim} wrapMode="none">
-                {fitText(composerWindowFooterHint, composerWindowFooterHintWidth)}
+                {composerWindowSendingHintSegments
+                  ? renderInlineTextSegments(composerWindowSendingHintSegments, composerWindowFooterHintWidth, theme.dim)
+                  : fitText(composerWindowFooterHint, composerWindowFooterHintWidth)}
               </text>
             </box>
           </box>
