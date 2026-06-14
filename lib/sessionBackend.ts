@@ -2440,6 +2440,18 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       const backgrounded = await backgroundRunningSession(sessionId)
       return { ok: true, backgrounded }
     }
+    if (action === 'stopTask') {
+      const taskId = typeof body.taskId === 'string' ? body.taskId.trim() : ''
+      if (!taskId) throw new Error('taskId is required')
+      // A background task only exists inside the live Query that spawned it; a
+      // fresh control query (different subprocess) wouldn't know about it. So
+      // unlike the MCP RPCs above there's no cold fallback — without a warm
+      // entry there's nothing running to stop.
+      const warm = peekClaudeSession(sessionId)
+      if (!warm) return { ok: true, applied: 'cold', stopped: false }
+      await warm.query.stopTask(taskId)
+      return { ok: true, applied: 'live', stopped: true }
+    }
     if (action === 'reconnectMcpServer') {
       const serverName = typeof body.serverName === 'string' ? body.serverName : ''
       if (!serverName) throw new Error('serverName is required')

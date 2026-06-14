@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react'
 import type { TaskGroup, TaskRegistry, TaskState } from '@/lib/taskRegistry'
-import { groupAndSortTasks } from '@/lib/taskRegistry'
+import { groupAndSortTasks, isStoppableTask } from '@/lib/taskRegistry'
 
 const STATUS_ICON: Record<TaskState['status'], string> = {
   pending: '○',
@@ -135,10 +135,14 @@ export function TaskRail({
   registry,
   onJumpToEvent,
   onClose,
+  onStopTask,
 }: {
   registry: TaskRegistry
   onJumpToEvent: (uuid: string) => void
   onClose: () => void
+  /** Cancel a running SDK background task via query.stopTask(). Absent when the
+   *  viewed provider/session can't stop tasks (only Claude warm sessions can). */
+  onStopTask?: (taskId: string) => void
 }) {
   const groups = useMemo(() => groupAndSortTasks(registry), [registry])
   const completedIds = useMemo(() => {
@@ -219,6 +223,7 @@ export function TaskRail({
                   isBlocked={group === 'blocked'}
                   completedIds={completedIds}
                   onJump={() => onJumpToEvent(task.latestEventUuid)}
+                  onStop={onStopTask && isStoppableTask(task) ? () => onStopTask(task.id) : undefined}
                 />
               ))}
             </section>
@@ -234,11 +239,14 @@ function TaskRailRow({
   isBlocked,
   completedIds,
   onJump,
+  onStop,
 }: {
   task: TaskState
   isBlocked: boolean
   completedIds: Set<string>
   onJump: () => void
+  /** Present only for a running SDK background task on a Claude warm session. */
+  onStop?: () => void
 }) {
   const openBlockers = isBlocked
     ? task.blockedBy.filter((id) => !completedIds.has(id))
@@ -255,7 +263,41 @@ function TaskRailRow({
     : 'var(--text)'
 
   return (
-    <button
+    <div
+      style={{ position: 'relative' }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-3)' }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+    >
+      {onStop && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onStop() }}
+          title={`Stop task #${task.id}`}
+          aria-label={`Stop task #${task.id}`}
+          style={{
+            position: 'absolute',
+            top: 6,
+            right: 8,
+            zIndex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            border: '1px solid var(--red)',
+            borderRadius: 4,
+            background: 'var(--surface)',
+            color: 'var(--red)',
+            cursor: 'pointer',
+            padding: '1px 6px',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10,
+            lineHeight: 1.4,
+            letterSpacing: '0.04em',
+          }}
+        >
+          ■ stop
+        </button>
+      )}
+      <button
       type="button"
       onClick={onJump}
       title={taskTooltip(task, title, detail, meta)}
@@ -266,11 +308,9 @@ function TaskRailRow({
         background: 'transparent',
         border: 'none',
         padding: '7px 12px',
+        paddingRight: onStop ? 64 : 12,
         cursor: 'pointer',
-        transition: 'background 0.12s ease',
       }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-3)' }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
         <span
@@ -343,6 +383,7 @@ function TaskRailRow({
           )}
         </div>
       </div>
-    </button>
+      </button>
+    </div>
   )
 }
