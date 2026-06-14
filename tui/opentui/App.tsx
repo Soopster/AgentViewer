@@ -3010,6 +3010,15 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
 type TuiEffort = 'auto' | ReasoningEffortLevel
 type ModelPickerOption = SelectOption & Pick<SessionModelInfo, 'supportsEffort' | 'supportedEffortLevels'>
 
+function filterModelPickerOptions(options: ModelPickerOption[], query: string): ModelPickerOption[] {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return options
+  return options.filter((option) => {
+    const haystack = `${option.name} ${String(option.value ?? '')} ${option.description ?? ''}`.toLowerCase()
+    return terms.every((term) => haystack.includes(term))
+  })
+}
+
 const EFFORT_DESCRIPTIONS: Record<TuiEffort, string> = {
   auto: 'Use the model or session default',
   off: 'Disable extended reasoning',
@@ -4297,6 +4306,7 @@ export default function OpenTuiApp() {
   const [modelPickerTarget, setModelPickerTarget] = useState<Session | null>(null)
   const [modelPickerFocus, setModelPickerFocus] = useState<'model' | 'effort'>('model')
   const [modelPickerOptions, setModelPickerOptions] = useState<ModelPickerOption[]>([])
+  const [modelPickerQuery, setModelPickerQuery] = useState('')
   const [modelPickerIndex, setModelPickerIndex] = useState(0)
   const [modelPickerEffortIndex, setModelPickerEffortIndex] = useState(0)
   const [modelPickerLoading, setModelPickerLoading] = useState(false)
@@ -5257,7 +5267,11 @@ export default function OpenTuiApp() {
     const model = formatModelChipValue(rawModel)
     return model && model.toLowerCase() !== 'unknown' ? model : null
   }, [composerTargetSession, composerTargetSessionInfo, contextUsage, selectedSessionKey, tuiModelOverride])
-  const highlightedModelPickerOption = modelPickerOptions[modelPickerIndex]
+  const filteredModelPickerOptions = useMemo(
+    () => filterModelPickerOptions(modelPickerOptions, modelPickerQuery),
+    [modelPickerOptions, modelPickerQuery],
+  )
+  const highlightedModelPickerOption = filteredModelPickerOptions[modelPickerIndex]
   const modelPickerEffortOptions = useMemo(
     () => effortPickerOptions(modelPickerTarget?.provider, highlightedModelPickerOption),
     [highlightedModelPickerOption, modelPickerTarget?.provider],
@@ -5345,6 +5359,10 @@ export default function OpenTuiApp() {
     const index = modelPickerEffortOptions.findIndex((option) => option.value === tuiEffort)
     setModelPickerEffortIndex(index >= 0 ? index : 0)
   }, [modelPickerEffortOptions, modelPickerOpen, tuiEffort])
+  useEffect(() => {
+    if (!modelPickerOpen) return
+    setModelPickerIndex((current) => Math.min(current, Math.max(filteredModelPickerOptions.length - 1, 0)))
+  }, [filteredModelPickerOptions.length, modelPickerOpen])
   const composerWaitingStatusSeed = composerWaitingSeed
     || `${composerTargetSession?.provider ?? 'unknown'}:${composerTargetSession?.sessionId ?? 'pending'}:${composerDraft}`
   const composerFirstLine = composerDraft.split('\n')[0] ?? ''
@@ -7032,6 +7050,7 @@ export default function OpenTuiApp() {
     setModelPickerFocus('model')
     setModelPickerError(null)
     setModelPickerOptions([])
+    setModelPickerQuery('')
     setModelPickerIndex(0)
     setModelPickerLoading(true)
     setModelPickerOpen(true)
@@ -7061,6 +7080,21 @@ export default function OpenTuiApp() {
       setModelPickerError(err instanceof Error ? err.message : 'Failed to load models')
     } finally {
       setModelPickerLoading(false)
+    }
+  })
+
+  const applyModelPickerOption = useEffectEvent((selectedOption?: ModelPickerOption) => {
+    const option = selectedOption ?? filteredModelPickerOptions[modelPickerIndex]
+    const target = modelPickerTarget ?? composerTargetSession ?? selectedSession
+    const value = typeof option?.value === 'string' ? option.value : ''
+    if (!target || !value) return
+    setTuiModelOverride((prev) => ({ ...prev, [sessionKey(target)]: value }))
+    pushClaudeControl(target, { action: 'setModel', model: value })
+    if (effortPickerOptions(target.provider, option).length > 1) {
+      setModelPickerFocus('effort')
+    } else {
+      setTuiEffort('auto')
+      setModelPickerOpen(false)
     }
   })
 
@@ -10102,11 +10136,26 @@ export default function OpenTuiApp() {
         handled(() => setModelPickerOpen(false))
         return
       }
-      if (key.name === 'tab' || key.name === 'left' || key.name === 'right') {
+      if (
+        key.name === 'tab'
+        || (modelPickerFocus === 'effort' && (key.name === 'left' || key.name === 'right'))
+      ) {
         handled(() => setModelPickerFocus((current) => current === 'model' ? 'effort' : 'model'))
         return
       }
-      if (key.name === 'q' || isCtrl('c')) {
+      if (modelPickerFocus === 'model' && (key.name === 'up' || key.name === 'down')) {
+        handled(() => {
+          setModelPickerIndex((current) => {
+            const lastIndex = filteredModelPickerOptions.length - 1
+            if (lastIndex < 0) return 0
+            return key.name === 'up'
+              ? Math.max(current - 1, 0)
+              : Math.min(current + 1, lastIndex)
+          })
+        })
+        return
+      }
+      if ((modelPickerFocus === 'effort' && key.name === 'q') || isCtrl('c')) {
         handled(requestExit)
       }
       return
@@ -12017,12 +12066,12 @@ export default function OpenTuiApp() {
                       {`${String(modelPickerTarget?.provider ?? 'session').toUpperCase()} · MODEL & EFFORT`}
                     </text>
                     <box flexGrow={1} />
-                    <text fg={ot.dim} wrapMode="none">tab/←/→ switch · enter apply · esc close</text>
+                    <text fg={ot.dim} wrapMode="none">type to filter · ↑/↓ choose · tab switch · enter apply · esc close</text>
                   </box>
                   <box flexGrow={1} paddingX={1} paddingBottom={1} flexDirection="row" gap={1}>
                     <box width={modelWidth} flexDirection="column">
                       <text fg={modelPickerFocus === 'model' ? ot.cyan : ot.dim} wrapMode="none">
-                        {modelPickerFocus === 'model' ? '▸ MODEL' : '  MODEL'}
+                        {`${modelPickerFocus === 'model' ? '▸' : ' '} MODEL · ${filteredModelPickerOptions.length}/${modelPickerOptions.length}`}
                       </text>
                       {modelPickerLoading ? (
                         <text fg={ot.dim} wrapMode="none">Loading provider models…</text>
@@ -12031,36 +12080,46 @@ export default function OpenTuiApp() {
                       ) : modelPickerOptions.length === 0 ? (
                         <text fg={ot.dim} wrapMode="none">No models available</text>
                       ) : (
-                        <select
-                          style={{ height: Math.max(overlayHeight - 6, 6) }}
-                          focused={modelPickerFocus === 'model'}
-                          options={modelPickerOptions}
-                          selectedIndex={modelPickerIndex}
-                          selectedBackgroundColor={ot.surface3}
-                          selectedTextColor={ot.text}
-                          textColor={ot.muted}
-                          descriptionColor={ot.dim}
-                          selectedDescriptionColor={ot.cyan}
-                          backgroundColor={ot.surface}
-                          focusedBackgroundColor={ot.surface}
-                          showScrollIndicator={false}
-                          itemSpacing={0}
-                          onChange={(index) => setModelPickerIndex(index)}
-                          onSelect={(_, option) => {
-                            const target = modelPickerTarget ?? composerTargetSession ?? selectedSession
-                            const value = typeof option?.value === 'string' ? option.value : ''
-                            if (target && value) {
-                              setTuiModelOverride((prev) => ({ ...prev, [sessionKey(target)]: value }))
-                              pushClaudeControl(target, { action: 'setModel', model: value })
-                            }
-                            if (modelPickerEffortOptions.length > 1) {
-                              setModelPickerFocus('effort')
-                            } else {
-                              setTuiEffort('auto')
-                              setModelPickerOpen(false)
-                            }
-                          }}
-                        />
+                        <>
+                          <box height={1} flexDirection="row">
+                            <text fg={modelPickerFocus === 'model' ? ot.cyan : ot.dim}>/ </text>
+                            <input
+                              style={{ flexGrow: 1 }}
+                              focused={modelPickerFocus === 'model'}
+                              value={modelPickerQuery}
+                              placeholder="Search name or model ID..."
+                              maxLength={80}
+                              onInput={(value) => {
+                                setModelPickerQuery(value)
+                                setModelPickerIndex(0)
+                              }}
+                              onSubmit={() => applyModelPickerOption()}
+                            />
+                          </box>
+                          {filteredModelPickerOptions.length === 0 ? (
+                            <text fg={ot.dim} wrapMode="none">No matching models</text>
+                          ) : (
+                            <select
+                              style={{ height: Math.max(overlayHeight - 7, 5) }}
+                              focused={false}
+                              options={filteredModelPickerOptions}
+                              selectedIndex={modelPickerIndex}
+                              selectedBackgroundColor={ot.surface3}
+                              selectedTextColor={ot.text}
+                              textColor={ot.muted}
+                              descriptionColor={ot.dim}
+                              selectedDescriptionColor={ot.cyan}
+                              backgroundColor={ot.surface}
+                              focusedBackgroundColor={ot.surface}
+                              showScrollIndicator={false}
+                              itemSpacing={0}
+                              onChange={(index) => setModelPickerIndex(index)}
+                              onSelect={(_, option) => {
+                                if (option) applyModelPickerOption(option as ModelPickerOption)
+                              }}
+                            />
+                          )}
+                        </>
                       )}
                     </box>
                     <box width={effortWidth} flexDirection="column">
