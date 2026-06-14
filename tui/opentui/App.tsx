@@ -1388,6 +1388,13 @@ const NOTIFY_PREVIEW_CHARS = 140
 // still-running turn instead of blocking on read() for minutes.
 const CLAUDE_STREAM_STALL_MS = 45_000
 const STREAM_STALL_SENTINEL = Symbol('claude-stream-stall')
+// Coalesce live streaming-text flushes to ~30fps. Uses a timer, NOT
+// requestAnimationFrame: OpenTUI's RAF only fires on the renderer's frame loop,
+// which goes idle during a pure-text streaming turn (deltas touch a ref and
+// schedule a flush with no React commit to drive a frame), freezing the preview
+// after the first token. A timer is render-loop-independent and each flush's
+// setState drives a repaint.
+const LIVE_TEXT_FLUSH_MS = 33
 const MAX_CODE_BLOCK_RENDER_LINES = 240
 const MAX_MARKDOWN_SYNTAX_CHARS = 80_000
 
@@ -4560,7 +4567,7 @@ export default function OpenTuiApp() {
   }>())
   const liveTranscriptMessagesRef = useRef<ThreadedMessage[]>([])
   const awaitingPersistedTurnRef = useRef(false)
-  const liveTextFlushFrameRef = useRef<number | null>(null)
+  const liveTextFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingLiveTextRef = useRef('')
   const pendingLiveReasoningRef = useRef('')
   const liveTextTargetSessionRef = useRef<Session | null>(null)
@@ -7570,9 +7577,9 @@ export default function OpenTuiApp() {
     }
     liveToolIndexesRef.current.clear()
     liveToolInputJsonRef.current.clear()
-    if (liveTextFlushFrameRef.current != null) {
-      cancelAnimationFrame(liveTextFlushFrameRef.current)
-      liveTextFlushFrameRef.current = null
+    if (liveTextFlushTimerRef.current != null) {
+      clearTimeout(liveTextFlushTimerRef.current)
+      liveTextFlushTimerRef.current = null
     }
     pendingLiveTextRef.current = ''
     pendingLiveReasoningRef.current = ''
@@ -7896,7 +7903,7 @@ export default function OpenTuiApp() {
     [theme.muted, theme.surface2],
   )
   const flushLiveText = useCallback(() => {
-    liveTextFlushFrameRef.current = null
+    liveTextFlushTimerRef.current = null
     const text = pendingLiveTextRef.current
     const session = liveTextTargetSessionRef.current
     if (!session) return
@@ -8006,9 +8013,9 @@ export default function OpenTuiApp() {
     pendingLiveTextRef.current = ''
     pendingLiveReasoningRef.current = ''
     liveTextTargetSessionRef.current = targetSession
-    if (liveTextFlushFrameRef.current != null) {
-      cancelAnimationFrame(liveTextFlushFrameRef.current)
-      liveTextFlushFrameRef.current = null
+    if (liveTextFlushTimerRef.current != null) {
+      clearTimeout(liveTextFlushTimerRef.current)
+      liveTextFlushTimerRef.current = null
     }
     setComposerLiveText('')
     setComposerLiveReasoning('')
@@ -8398,8 +8405,8 @@ export default function OpenTuiApp() {
           setLiveStatus(null)
           pendingLiveReasoningRef.current = `${pendingLiveReasoningRef.current}${reasoningDelta}`
           liveTextTargetSessionRef.current = targetSession
-          if (liveTextFlushFrameRef.current == null) {
-            liveTextFlushFrameRef.current = requestAnimationFrame(flushLiveText)
+          if (liveTextFlushTimerRef.current == null) {
+            liveTextFlushTimerRef.current = setTimeout(flushLiveText, LIVE_TEXT_FLUSH_MS)
           }
         }
 
@@ -8441,12 +8448,13 @@ export default function OpenTuiApp() {
         }
         pendingLiveTextRef.current = replace ? delta : `${pendingLiveTextRef.current}${delta}`
         liveTextTargetSessionRef.current = targetSession
-        if (liveTextFlushFrameRef.current == null) {
-          if (targetSession.provider === 'opencode') {
-            flushLiveText()
-          } else {
-            liveTextFlushFrameRef.current = requestAnimationFrame(flushLiveText)
-          }
+        // One flush path for every provider: coalesce through a render-loop-
+        // independent timer (see LIVE_TEXT_FLUSH_MS — must NOT be
+        // requestAnimationFrame). opencode used to flush synchronously here, but
+        // that was only a workaround for the OpenTUI RAF freeze the timer now
+        // solves generically — so the provider split is gone.
+        if (liveTextFlushTimerRef.current == null) {
+          liveTextFlushTimerRef.current = setTimeout(flushLiveText, LIVE_TEXT_FLUSH_MS)
         }
       }
 
@@ -8541,9 +8549,9 @@ export default function OpenTuiApp() {
       void refreshSessions(provider, true, false)
       void refreshSelectedSessionDetail(targetSession, true)
 
-      if (liveTextFlushFrameRef.current != null) {
-        cancelAnimationFrame(liveTextFlushFrameRef.current)
-        liveTextFlushFrameRef.current = null
+      if (liveTextFlushTimerRef.current != null) {
+        clearTimeout(liveTextFlushTimerRef.current)
+        liveTextFlushTimerRef.current = null
       }
       pendingLiveTextRef.current = ''
       liveTextTargetSessionRef.current = null
@@ -8569,9 +8577,9 @@ export default function OpenTuiApp() {
           composerInterruptPendingRef.current = false
           liveToolIndexesRef.current.clear()
           liveToolInputJsonRef.current.clear()
-          if (liveTextFlushFrameRef.current != null) {
-            cancelAnimationFrame(liveTextFlushFrameRef.current)
-            liveTextFlushFrameRef.current = null
+          if (liveTextFlushTimerRef.current != null) {
+            clearTimeout(liveTextFlushTimerRef.current)
+            liveTextFlushTimerRef.current = null
           }
           pendingLiveTextRef.current = ''
           liveTextTargetSessionRef.current = null
@@ -8582,9 +8590,9 @@ export default function OpenTuiApp() {
         setAwaitingPersistedTurn(false)
         liveToolIndexesRef.current.clear()
         liveToolInputJsonRef.current.clear()
-        if (liveTextFlushFrameRef.current != null) {
-          cancelAnimationFrame(liveTextFlushFrameRef.current)
-          liveTextFlushFrameRef.current = null
+        if (liveTextFlushTimerRef.current != null) {
+          clearTimeout(liveTextFlushTimerRef.current)
+          liveTextFlushTimerRef.current = null
         }
         pendingLiveTextRef.current = ''
         liveTextTargetSessionRef.current = null
@@ -8639,9 +8647,9 @@ export default function OpenTuiApp() {
     } finally {
       void reader?.cancel()
       composerAbortRef.current = null
-      if (liveTextFlushFrameRef.current != null) {
-        cancelAnimationFrame(liveTextFlushFrameRef.current)
-        liveTextFlushFrameRef.current = null
+      if (liveTextFlushTimerRef.current != null) {
+        clearTimeout(liveTextFlushTimerRef.current)
+        liveTextFlushTimerRef.current = null
       }
       pendingLiveTextRef.current = ''
       liveTextTargetSessionRef.current = null
