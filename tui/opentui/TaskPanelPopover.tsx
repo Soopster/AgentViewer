@@ -6,6 +6,7 @@ import type { ThreadedMessage } from '../../lib/threading'
 import {
   buildTaskRegistry,
   groupAndSortTasks,
+  isStoppableTask,
   type TaskGroup,
   type TaskState,
 } from '../../lib/taskRegistry'
@@ -20,6 +21,9 @@ type Props = {
   onClose: () => void
   onSelectTask: (eventUuid: string) => void
   onKeyHandlerReady: (handler: (key: TaskPanelKeyEvent) => void) => void
+  /** Cancel a running SDK background task via query.stopTask(). Absent when the
+   *  viewed provider/session can't stop tasks (only Claude warm sessions can). */
+  onStopTask?: (taskId: string) => void
 }
 
 const STATUS_ICON: Record<TaskState['status'], string> = {
@@ -185,6 +189,7 @@ export function TaskPanelPopover({
   onClose,
   onSelectTask,
   onKeyHandlerReady,
+  onStopTask,
 }: Props) {
   const registry = useMemo(() => buildTaskRegistry(messages), [messages])
   const completedIds = useMemo(() => {
@@ -255,6 +260,14 @@ export function TaskPanelPopover({
       if (row?.kind === 'task') onSelectTask(row.task.createdEventUuid ?? row.task.latestEventUuid)
       return
     }
+    if (key.name === 'x') {
+      if (!onStopTask) return
+      const flatIdx = taskRowIndexes[clampedSelected]
+      if (flatIdx == null) return
+      const row = rows[flatIdx]
+      if (row?.kind === 'task' && isStoppableTask(row.task)) onStopTask(row.task.id)
+      return
+    }
     if (key.name === 'return' || key.name === 'enter') {
       const flatIdx = taskRowIndexes[clampedSelected]
       if (flatIdx == null) return
@@ -262,7 +275,7 @@ export function TaskPanelPopover({
       if (row?.kind === 'task') onSelectTask(row.task.latestEventUuid)
       return
     }
-  }, [clampedSelected, onClose, onSelectTask, rows, taskRowIndexes])
+  }, [clampedSelected, onClose, onSelectTask, onStopTask, rows, taskRowIndexes])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -303,6 +316,9 @@ export function TaskPanelPopover({
         <text fg={theme.muted}>
           {`${registry.size} task${registry.size === 1 ? '' : 's'}`}
         </text>
+        {onStopTask && highlightedTask && isStoppableTask(highlightedTask) ? (
+          <text fg={theme.amber}>{`  x stop #${highlightedTask.id}`}</text>
+        ) : null}
         <box flexGrow={1} />
         <text fg={theme.dim}>{'j/k navigate · d/u scroll · enter latest · c create · esc close'}</text>
       </box>

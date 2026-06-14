@@ -3703,6 +3703,28 @@ export default function MessageView({
     }
   }, [backgroundingTasks, session])
 
+  // Cancel a running Claude SDK background task via query.stopTask(). Routes at
+  // the live warm pool entry server-side, so it only works while the session is
+  // warm (the backend reports stopped:false otherwise).
+  const stopClaudeTask = useCallback(async (taskId: string) => {
+    if (!session || session.provider !== 'claude' || session.isPending) return
+    setSessionActionError(null)
+    setSessionActionNotice(null)
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'claude', action: 'stopTask', taskId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const stopped = data.result?.stopped === true
+      setSessionActionNotice(stopped ? `Stopped task #${taskId}.` : 'No running task to stop (session not warm).')
+    } catch (err) {
+      setSessionActionError(err instanceof Error ? err.message : 'Failed to stop task')
+    }
+  }, [session])
+
   const sendMessage = useCallback(async (retryOverride?: { text: string; attachments: SendAttachment[] }) => {
     if (!session) return
 
@@ -7239,6 +7261,7 @@ export default function MessageView({
           registry={taskRegistry}
           onJumpToEvent={handleJumpToMessage}
           onClose={() => setTaskRailOpen(false)}
+          onStopTask={session?.provider === 'claude' ? stopClaudeTask : undefined}
         />
       )}
       </div>

@@ -7603,6 +7603,31 @@ export default function OpenTuiApp() {
     }
   })
 
+  // Cancel a running Claude SDK background task via query.stopTask(). Routed at
+  // the live warm pool entry (a fresh control query wouldn't know the task), so
+  // it only works while the session is warm — the backend reports stopped:false
+  // otherwise.
+  const stopComposerTask = useEffectEvent(async (taskId: string) => {
+    const target = composerTargetSession
+    if (!target || target.provider !== 'claude' || target.isPending) return
+    try {
+      const result = await runTuiSessionAction(target, { action: 'stopTask', taskId, provider: 'claude' })
+      const stopped = result.stopped === true
+      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
+      setNotice({
+        tone: stopped ? 'info' : 'error',
+        text: stopped ? `Stopped task #${taskId}` : 'No running task to stop (session not warm)',
+      })
+      noticeTimeoutRef.current = setTimeout(() => {
+        setNotice((current) => current?.text.includes('task') ? null : current)
+        noticeTimeoutRef.current = null
+      }, 3500)
+    } catch (err) {
+      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
+      setNotice({ tone: 'error', text: err instanceof Error ? err.message : 'Failed to stop task' })
+    }
+  })
+
   const respondToTuiPermission = useEffectEvent(async (permission: PendingPermission, response: PermissionResponse) => {
     const target = composerTargetSession
     if (!target || permissionActionLoading) return
@@ -13139,6 +13164,11 @@ export default function OpenTuiApp() {
             if (idx >= 0) jumpToTranscriptIndex(idx)
           }}
           onKeyHandlerReady={(handler) => { taskPopoverKeyHandlerRef.current = handler }}
+          onStopTask={
+            composerTargetSession?.provider === 'claude'
+              ? (taskId) => { void stopComposerTask(taskId) }
+              : undefined
+          }
         />
       ) : null}
 

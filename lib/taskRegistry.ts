@@ -669,6 +669,23 @@ export function buildTaskRegistryFromTodos(todos: OpenCodeTodo[]): TaskRegistry 
 
 export type TaskGroup = 'in_progress' | 'blocked' | 'paused' | 'pending' | 'failed' | 'stopped' | 'completed'
 
+// Event kinds emitted only by the Claude Agent SDK background-task stream
+// (task_started/task_progress/task_notification). Todo-list tasks parsed from
+// Task-tool input never carry these, so the presence of one means `task.id` is
+// a real SDK task_id that `query.stopTask()` can act on. ('updated' is shared
+// with the todo path, so it is deliberately excluded.)
+const SDK_TASK_EVENT_KINDS: ReadonlySet<TaskEventKind> = new Set(['started', 'progress', 'notified'])
+
+/**
+ * True for a still-running Claude SDK background task — the only kind
+ * `query.stopTask(taskId)` can cancel. Todo-list entries and already-finished
+ * tasks return false. Drives the "stop" affordance in the task panel.
+ */
+export function isStoppableTask(task: TaskState): boolean {
+  if (task.status !== 'in_progress' && task.status !== 'paused') return false
+  return task.events.some((event) => SDK_TASK_EVENT_KINDS.has(event.kind))
+}
+
 /**
  * Sort tasks for display: in_progress first, then pending tasks with open
  * blockers, then plain pending, then completed. Within a group, sort by most
