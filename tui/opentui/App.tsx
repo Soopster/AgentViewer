@@ -4503,6 +4503,25 @@ export default function OpenTuiApp() {
   const composerDraftRef = useRef('')
   const searchModeRef = useRef(false)
   const sessionSearchModeRef = useRef(false)
+  const composerFocusBlocked = Boolean(
+    exitConfirmOpen
+    || searchMode
+    || sessionSearchMode
+    || gitOpen
+    || analyticsOpen
+    || handoffBriefOpen
+    || promptLibraryOpen
+    || channelBridgeOpen
+    || bookmarksOverlayOpen
+    || taskPopoverOpen
+    || diagnosticsOpen
+    || renameSessionKey
+    || providerMenuOpen
+    || modelPickerOpen
+    || themeMenuOpen
+    || commandPaletteOpen
+    || transcriptDiffDraft,
+  )
   useEffect(() => { densityRef.current = density }, [density])
   useEffect(() => { showToolCallsRef.current = showToolCalls }, [showToolCalls])
   useEffect(() => { composerActiveRef.current = composerActive }, [composerActive])
@@ -4537,14 +4556,16 @@ export default function OpenTuiApp() {
     if (!composerActive && composerWindowOpen) setComposerWindowOpen(false)
   }, [composerActive, composerWindowOpen])
   useLayoutEffect(() => {
-    if (!composerActive) return
-    const offset = composerCursorOffsetRef.current
-    if (offset == null) return
+    if (!composerActive || composerFocusBlocked) return
     const renderable = composerTextareaRef.current
     if (!renderable) return
-    renderable.cursorOffset = Math.min(offset, renderable.plainText.length)
-    composerCursorOffsetRef.current = null
-  }, [composerActive, composerWindowOpen])
+    const offset = composerCursorOffsetRef.current
+    if (offset != null) {
+      renderable.cursorOffset = Math.min(offset, renderable.plainText.length)
+      composerCursorOffsetRef.current = null
+    }
+    if (renderer.currentFocusedRenderable !== renderable) renderable.focus()
+  }, [composerActive, composerFocusBlocked, composerWindowOpen, renderer])
   useEffect(() => { awaitingPersistedTurnRef.current = awaitingPersistedTurn }, [awaitingPersistedTurn])
   useEffect(() => {
     setActiveTheme(themeMode)
@@ -12815,6 +12836,7 @@ export default function OpenTuiApp() {
           onMouseDown={(event) => {
             if (event.button !== 0) return
             if (!composerActive) setComposerActive(true)
+            composerTextareaRef.current?.focus()
           }}
         >
           {renderComposerTextarea(submitComposerFromDock, {
@@ -13040,6 +13062,10 @@ export default function OpenTuiApp() {
           title={composerWindowBorderTitle}
           titleColor={composerAccentColor}
           titleAlignment="left"
+          onMouseDown={(event) => {
+            if (event.button !== 0) return
+            composerTextareaRef.current?.focus()
+          }}
         >
           <box
             height={composerWindowHeaderHeight}
