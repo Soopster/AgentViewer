@@ -946,6 +946,29 @@ function renderContextBar(totalTokens: number, maxTokens: number, percentage: nu
   return `${fmtTokens(totalTokens)} / ${fmtTokens(maxTokens)}  ${bar}  ${percentage}%`
 }
 
+// Segmented context gauge: the filled portion takes the threshold color (green →
+// amber → red), the track stays dim, and the numbers read muted — so context
+// pressure registers as a glanceable color, not a number you have to parse.
+function contextBarSegments(
+  totalTokens: number,
+  maxTokens: number,
+  percentage: number,
+  theme: TuiThemePalette,
+  barWidth = 18,
+): InlineTextSegment[] {
+  const pct = Math.max(0, Math.min(100, Math.round(percentage)))
+  const filled = Math.round((pct / 100) * barWidth)
+  const fillColor = contextBarColor(pct, theme)
+  return [
+    { text: `${fmtTokens(totalTokens)}/${fmtTokens(maxTokens)}  `, fg: theme.muted },
+    { text: '▕', fg: theme.dim },
+    { text: '█'.repeat(filled), fg: fillColor },
+    { text: '░'.repeat(barWidth - filled), fg: theme.dim },
+    { text: '▏', fg: theme.dim },
+    { text: ` ${pct}%`, fg: fillColor },
+  ]
+}
+
 function formatContextUsageChip(usage: Pick<ContextUsage, 'totalTokens' | 'maxTokens' | 'percentage'>): string {
   const total = fmtTokens(usage.totalTokens)
   if (usage.maxTokens <= 0) return total
@@ -3639,7 +3662,7 @@ function TranscriptCardInner({
       <box
         id={`card:${card.key}`}
         border
-        borderStyle="single"
+        borderStyle={hasCursor ? 'heavy' : 'single'}
         borderColor={borderColor}
         backgroundColor={cardBg}
         flexDirection="column"
@@ -7487,15 +7510,17 @@ export default function OpenTuiApp() {
             />
           </box>
         ) : (
-          <box paddingX={1} backgroundColor={selected ? theme.surface3 : theme.surface}>
+          <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
+            <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
             <text fg={selected ? theme.text : theme.muted} wrapMode="none">
-              {fitText(formatSessionTitle(entry.session), sidebarInnerWidth - 2)}
+              {fitText(formatSessionTitle(entry.session), sidebarInnerWidth - 3)}
             </text>
           </box>
         )}
-        <box paddingX={1} backgroundColor={selected ? theme.surface3 : theme.surface}>
+        <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
+          <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
           <text fg={selected ? sessionAccent : theme.dim} wrapMode="none">
-            {fitText(metaLine, sidebarInnerWidth - 2)}
+            {fitText(metaLine, sidebarInnerWidth - 3)}
           </text>
         </box>
       </box>
@@ -9058,13 +9083,30 @@ export default function OpenTuiApp() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transcriptView])
 
-  const footerText = useMemo(
-    () => fitText(
-      `tab focus  j/k move  ctrl-u/d page  ←/→ tabs  w close tab  b ${effectiveFocus === 'sessions' ? 'tabs' : 'bookmark'}  [ ] jump marks  S-B all marks  () convo  {} tech  u unread  m mark  / search  n/N hits  f live  e fold  s diff:${diffLayout}  v ${transcriptView}  d ${density}  h rail  S-T tasks  z focus  ^O composer  p provider  i thinking  X ${showToolCalls ? 'hide tools' : 'show tools'}  V ${velocityScrollEnabled ? 'velocity off' : 'velocity on'}  y copy  Q reply  r refresh  ? commands  q quit`,
-      Math.max(width - 4, 20),
-    ),
-    [width, diffLayout, transcriptView, density, showToolCalls, velocityScrollEnabled, effectiveFocus],
-  )
+  // Status bar: grouped keybindings rendered as colored inline segments —
+  // keys pop in the accent color, labels stay muted, groups split by a dim
+  // divider so the bar scans at a glance instead of reading as one dim wall.
+  const footerSegments = useMemo<InlineTextSegment[]>(() => {
+    const groups: Array<Array<[string, string]>> = [
+      [['j/k', 'move'], ['⌃u/d', 'page'], ['tab', 'focus'], ['←/→', 'tabs'], ['w', 'close']],
+      [['/', 'search'], ['n/N', 'hits'], ['u', 'unread'], ['f', 'live']],
+      [['m', 'mark'], ['[ ]', 'jump'], ['⇧B', 'all'], ['b', effectiveFocus === 'sessions' ? 'tabs' : 'bookmark']],
+      [['()', 'convo'], ['{}', 'tech'], ['e', 'fold'], ['v', transcriptView], ['s', `diff:${diffLayout}`], ['d', density], ['i', 'think'], ['X', showToolCalls ? 'hide tools' : 'tools']],
+      [['h', 'rail'], ['⇧T', 'tasks'], ['z', 'focus'], ['V', velocityScrollEnabled ? 'vel off' : 'vel on']],
+      [['⌃O', 'composer'], ['p', 'provider'], ['y', 'copy'], ['Q', 'reply'], ['r', 'refresh']],
+      [['?', 'help'], ['q', 'quit']],
+    ]
+    const segs: InlineTextSegment[] = []
+    groups.forEach((group, gi) => {
+      if (gi > 0) segs.push({ text: ' │ ', fg: theme.dim })
+      group.forEach((binding, bi) => {
+        if (bi > 0) segs.push({ text: '  ', fg: theme.dim })
+        segs.push({ text: binding[0], fg: theme.cyan })
+        segs.push({ text: ` ${binding[1]}`, fg: theme.muted })
+      })
+    })
+    return segs
+  }, [diffLayout, transcriptView, density, showToolCalls, velocityScrollEnabled, effectiveFocus, theme])
 
   const composerStatusMessage = composerError
     ? composerError
@@ -11679,20 +11721,25 @@ export default function OpenTuiApp() {
             titleColor={providerAccent}
           >
           {!focusMode ? (
-            <box paddingX={1} paddingTop={1}>
-              <box width={Math.max(rightPaneWidth - 16, 16)} overflow="hidden">
-                <text fg={theme.text}>{fitText(readerTitle, Math.max(rightPaneWidth - 16, 16))}</text>
+            <box paddingX={1} paddingTop={1} flexDirection="row" alignItems="center">
+              <text fg={providerAccent} wrapMode="none">{'● '}</text>
+              <box flexGrow={1} overflow="hidden">
+                <text fg={theme.text} wrapMode="none">{fitText(readerTitle, Math.max(rightPaneWidth - 18, 12))}</text>
               </box>
-              <box width={12} overflow="hidden">
-                <text fg={providerAccent}>{fitText(providerSummary, 12)}</text>
+              <box width={14} overflow="hidden">
+                <text fg={providerAccent} wrapMode="none">{fitText(providerSummary, 14)}</text>
               </box>
             </box>
           ) : null}
 
           {!focusMode && contextUsage ? (
             <box paddingX={1}>
-              <text fg={contextBarColor(contextUsage.percentage, theme)}>
-                {fitText(renderContextBar(contextUsage.totalTokens, contextUsage.maxTokens, contextUsage.percentage), rightPaneWidth - 4)}
+              <text wrapMode="none">
+                {renderInlineTextSegments(
+                  contextBarSegments(contextUsage.totalTokens, contextUsage.maxTokens, contextUsage.percentage, theme),
+                  rightPaneWidth - 4,
+                  theme.dim,
+                )}
               </text>
             </box>
           ) : !focusMode && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
@@ -12575,8 +12622,8 @@ export default function OpenTuiApp() {
       ) : null}
 
       {!searchMode ? (
-        <box backgroundColor={theme.surface} paddingX={1}>
-          <text fg={theme.dim}>{footerText}</text>
+        <box backgroundColor={theme.surface2} paddingX={1}>
+          <text wrapMode="none">{renderInlineTextSegments(footerSegments, Math.max(width - 2, 20), theme.dim)}</text>
         </box>
       ) : null}
 
