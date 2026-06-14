@@ -4546,7 +4546,12 @@ export default function OpenTuiApp() {
   const terminalSelectionRef = useRef<{ text: string; capturedAt: number } | null>(null)
   const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
   const liveToolInputJsonRef = useRef<Map<number, string>>(new Map())
-  const liveTranscriptBaselineRef = useRef(new Map<string, { count: number; lastFingerprint: string | null; sequenceFingerprint: string }>())
+  const liveTranscriptBaselineRef = useRef(new Map<string, {
+    count: number
+    lastFingerprint: string | null
+    sequenceFingerprint: string
+    startedAt: number
+  }>())
   const liveTranscriptMessagesRef = useRef<ThreadedMessage[]>([])
   const awaitingPersistedTurnRef = useRef(false)
   const liveTextFlushFrameRef = useRef<number | null>(null)
@@ -5093,6 +5098,9 @@ export default function OpenTuiApp() {
       taskRegistry: buildTaskRegistry(filtered),
     }
   }, [sessionDetail, hasTranscriptOverlay, showToolCalls])
+  const liveTurnStartedAt = selectedSessionTarget
+    ? liveTranscriptBaselineRef.current.get(sessionKey(selectedSessionTarget))?.startedAt
+    : undefined
 
   // ── Live overlay — O(N_live) per delta, base cards always cache-hit ────────
   const transcriptCards = useMemo<TuiTranscriptCard[]>(() => {
@@ -5116,10 +5124,20 @@ export default function OpenTuiApp() {
     const liveMessages = showToolCalls
       ? liveTranscriptMessagesForSession
       : stripToolCallBlocks(liveTranscriptMessagesForSession)
-    const liveCards = liveMessages.map((message) => ({
-      ...formatTranscriptCard(message, density, baseTaskContext.activeForms, baseTaskContext.taskRegistry),
-      key: `live:${message.uuid}`,
-    }))
+    const latestBaseTimestamp = baseTranscriptCards.reduce(
+      (latest, card) => Math.max(latest, card.timestampMs ?? 0),
+      0,
+    )
+    const liveTimestampBase = liveTurnStartedAt ?? latestBaseTimestamp + 1
+    const liveCards = liveMessages.map((message, index) => {
+      const timestampedMessage = message.timestamp
+        ? message
+        : { ...message, timestamp: new Date(liveTimestampBase + index).toISOString() }
+      return {
+        ...formatTranscriptCard(timestampedMessage, density, baseTaskContext.activeForms, baseTaskContext.taskRegistry),
+        key: `live:${message.uuid}`,
+      }
+    })
 
     // Convert bridge transcript entries to cards
     const bridgeCards: TuiTranscriptCard[] = bridgeTranscriptEntries.map((entry, i) => {
@@ -5152,7 +5170,7 @@ export default function OpenTuiApp() {
       })
     }
     return sortedCards
-  }, [baseTranscriptCards, baseTaskContext, bridgeTranscriptEntries, density, liveTranscriptMessagesForSession, showToolCalls])
+  }, [baseTranscriptCards, baseTaskContext, bridgeTranscriptEntries, density, liveTranscriptMessagesForSession, liveTurnStartedAt, showToolCalls])
 
   // In 'continue' and 'stream' modes, hide technical/diff/system cards entirely
   // so only the conversation layer (user + assistant text) is visible.
@@ -7983,6 +8001,7 @@ export default function OpenTuiApp() {
       count: baselineMessages.length,
       lastFingerprint: sessionMessageFingerprint(baselineMessages.at(-1)),
       sequenceFingerprint: sessionMessageSequenceFingerprint(baselineMessages),
+      startedAt: sendStartedAt,
     })
     liveToolIndexesRef.current.clear()
     liveToolInputJsonRef.current.clear()
