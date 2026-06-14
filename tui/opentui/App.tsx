@@ -2480,6 +2480,23 @@ function diffRowIndicator(row: TuiPierreDiffRow): string {
   }
 }
 
+// Editor-style sign column: a continuous left gutter bar tinted by change type
+// (green add / red remove / cyan file·hunk / faint border for context) so a
+// diff's shape reads at a glance, matching the ▎ accent bars used elsewhere.
+function diffGutterBar(row: TuiPierreDiffRow, theme: TuiThemePalette): string {
+  switch (row.tone) {
+    case 'addition':
+      return theme.green
+    case 'deletion':
+      return theme.red
+    case 'file':
+    case 'hunk':
+      return theme.cyan
+    default:
+      return theme.border
+  }
+}
+
 function splitDiffSideColor(side: TuiSplitRowSide, theme: TuiThemePalette): string {
   if (side.kind === 'deletion') return theme.red
   if (side.kind === 'addition') return theme.green
@@ -3515,7 +3532,7 @@ function TranscriptCardInner({
     1,
   )
   const diffBadgeWidth = 3
-  const diffTextWidth = Math.max(bodyInnerWidth - (diffShowLineNumbers ? (diffGutterWidth * 2 + 2) : 0) - 5 - diffBadgeWidth, 12)
+  const diffTextWidth = Math.max(bodyInnerWidth - (diffShowLineNumbers ? (diffGutterWidth * 2 + 2) : 0) - 5 - diffBadgeWidth - 1, 12)
   const splitLineNumbers = diffShowLineNumbers
     ? splitDiffRows.flatMap((row) => [
         row.left?.lineNum,
@@ -3872,6 +3889,7 @@ function TranscriptCardInner({
                           setDiffRowCursor(card.key, rowIndex, true)
                         }}
                       >
+                        <text fg={diffGutterBar(row, theme)} wrapMode="none">▎</text>
                         {diffShowLineNumbers ? (
                           <>
                             <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>

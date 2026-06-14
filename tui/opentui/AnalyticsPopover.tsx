@@ -243,7 +243,7 @@ function SummaryPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette
   return (
     <box flexDirection="column" paddingX={1} width={width}>
       <box marginBottom={1}>
-        <text fg={theme.muted}>Session totals · {a.provider ?? '—'} · {a.model}</text>
+        <text wrapMode="none"><span fg={theme.cyan}>┄ Session totals</span><span fg={theme.dim}>{`  ${a.provider ?? '—'} · ${a.model}`}</span></text>
       </box>
 
       {/* KPI grid */}
@@ -313,7 +313,7 @@ function SummaryPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette
 
       {/* Token composition */}
       <box marginTop={1} marginBottom={1}>
-        <text fg={theme.muted}>Token composition</text>
+        <text fg={theme.cyan} wrapMode="none">┄ Token composition</text>
       </box>
       <CompositionBar theme={theme} width={width - 2} segments={[
         { label: 'input',      value: a.inputTokens,       color: theme.cyan },
@@ -325,7 +325,7 @@ function SummaryPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette
       {/* Cost composition */}
       {a.cost > 0 ? (
         <box marginTop={1} flexDirection="column">
-          <text fg={theme.muted}>Cost composition</text>
+          <text fg={theme.cyan} wrapMode="none">┄ Cost composition</text>
           <CompositionBar theme={theme} width={width - 2} segments={[
             { label: `input ${fmtCost(a.costByCategory.input)}`,         value: a.costByCategory.input,      color: theme.cyan },
             { label: `output ${fmtCost(a.costByCategory.output)}`,       value: a.costByCategory.output,     color: theme.violet },
@@ -338,7 +338,7 @@ function SummaryPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette
       {/* Rates */}
       {rateInPerMin !== null ? (
         <box marginTop={1} flexDirection="column">
-          <text fg={theme.muted}>Throughput</text>
+          <text fg={theme.cyan} wrapMode="none">┄ Throughput</text>
           <box><text fg={theme.text}>{`  input  ${fmtNum(rateInPerMin)} tok/min`}</text></box>
           <box><text fg={theme.text}>{`  output ${fmtNum(rateOutPerMin ?? 0)} tok/min`}</text></box>
         </box>
@@ -347,7 +347,7 @@ function SummaryPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette
       {/* Models */}
       {a.models.length > 0 ? (
         <box marginTop={1} flexDirection="column">
-          <text fg={theme.muted}>By model</text>
+          <text fg={theme.cyan} wrapMode="none">┄ By model</text>
           {a.models.slice(0, 6).map((m) => (
             <box key={m.model} flexDirection="row" width={width - 2}>
               <box width={24}><text fg={theme.text} wrapMode="none">{m.model}</text></box>
@@ -446,11 +446,11 @@ function TokensPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette;
 
   return (
     <box flexDirection="column" paddingX={1} width={width}>
-      <box><text fg={theme.muted}>Output tokens per message</text></box>
+      <box><text fg={theme.cyan} wrapMode="none">┄ Output tokens per message</text></box>
       <Sparkline values={outputSeries} width={chartW} height={chartH} theme={theme}
                  colors={[theme.cyan, theme.violet, theme.pink]} />
 
-      <box marginTop={1}><text fg={theme.muted}>Input tokens per message</text></box>
+      <box marginTop={1}><text fg={theme.cyan} wrapMode="none">┄ Input tokens per message</text></box>
       <Sparkline values={inputSeries} width={chartW} height={chartH} theme={theme}
                  colors={[theme.green, theme.cyan]} />
 
@@ -458,20 +458,20 @@ function TokensPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette;
       <Sparkline values={cumulative} width={chartW} height={chartH / 2} theme={theme}
                  colors={[theme.amber]} />
 
-      <box marginTop={1}><text fg={theme.muted}>Cache read tokens per message</text></box>
+      <box marginTop={1}><text fg={theme.cyan} wrapMode="none">┄ Cache read tokens per message</text></box>
       <Sparkline values={cacheSeries} width={chartW} height={chartH / 2} theme={theme}
                  colors={[theme.green]} />
 
       {a.cost > 0 ? (
         <box marginTop={1} flexDirection="column">
-          <text fg={theme.muted}>{`Cumulative cost (${fmtCost(a.cost)} total)`}</text>
+          <text wrapMode="none"><span fg={theme.cyan}>┄ Cumulative cost</span><span fg={theme.dim}>{`  ${fmtCost(a.cost)} total`}</span></text>
           <Sparkline values={a.cumulativeCost} width={chartW} height={chartH / 2} theme={theme}
                      colors={[theme.green, theme.amber]} />
         </box>
       ) : null}
 
       <box marginTop={1} flexDirection="column">
-        <text fg={theme.muted}>Top token-producing turns</text>
+        <text fg={theme.cyan} wrapMode="none">┄ Top token-producing turns</text>
         {a.timeline
           .toSorted((x, y) => y.outputTokens - x.outputTokens)
           .slice(0, 8)
@@ -496,7 +496,7 @@ function TokensPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette;
       </box>
 
       <box marginTop={1} flexDirection="column">
-        <text fg={theme.muted}>Message size distribution (tokens)</text>
+        <text fg={theme.cyan} wrapMode="none">┄ Message size distribution (tokens)</text>
         <SizeHistogram values={a.messageSizes} theme={theme} width={width - 2} />
       </box>
     </box>
@@ -592,7 +592,7 @@ function ActivityPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
              sub={`${ops.searches} searches · ${ops.webFetches} web`} />
       </box>
 
-      <box marginTop={1} marginBottom={1}><text fg={theme.muted}>Operations breakdown</text></box>
+      <box marginTop={1} marginBottom={1}><text fg={theme.cyan} wrapMode="none">┄ Operations breakdown</text></box>
       {rows.map((r) => (
         <box key={r.label} flexDirection="row" width={width - 2}>
           <box width={labelW}><text fg={theme.text} wrapMode="none">{r.label}</text></box>
@@ -637,7 +637,7 @@ function ActivityPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
       {/* Top shell commands */}
       {ops.bashByVerb.size > 0 ? (
         <box flexDirection="column" width={width} marginTop={1}>
-          <text fg={theme.muted}>Top shell commands</text>
+          <text fg={theme.cyan} wrapMode="none">┄ Top shell commands</text>
           <RankedBars theme={theme} width={width - 2}
             entries={[...ops.bashByVerb.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)}
             color={theme.amber} />
@@ -669,7 +669,7 @@ function ActivityPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
       {/* Latency histogram */}
       {latencies.length > 0 ? (
         <box flexDirection="column" width={width} marginTop={1}>
-          <text fg={theme.muted}>{`Response latency distribution (${latencies.length} paired turns)`}</text>
+          <text wrapMode="none"><span fg={theme.cyan}>┄ Response latency distribution</span><span fg={theme.dim}>{`  ${latencies.length} paired turns`}</span></text>
           <LatencyHistogram latencies={latencies} theme={theme} width={width - 4} />
         </box>
       ) : null}
@@ -779,22 +779,22 @@ function TimelinePane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
       <Sparkline values={msgCounts} width={buckets} height={8} theme={theme}
                  colors={[theme.cyan, theme.violet]} />
 
-      <box marginTop={1}><text fg={theme.muted}>Output tokens per bucket</text></box>
+      <box marginTop={1}><text fg={theme.cyan} wrapMode="none">┄ Output tokens per bucket</text></box>
       <Sparkline values={outTokens} width={buckets} height={8} theme={theme}
                  colors={[theme.green, theme.amber, theme.pink]} />
 
       <box marginTop={1} flexDirection="column">
-        <text fg={theme.muted}>Role distribution over time</text>
+        <text fg={theme.cyan} wrapMode="none">┄ Role distribution over time</text>
         <RoleStrip theme={theme} timeline={a.timeline} width={Math.max(16, width - 4)} />
       </box>
 
       <box marginTop={1} flexDirection="column">
-        <text fg={theme.muted}>Activity by hour of day (local)</text>
+        <text fg={theme.cyan} wrapMode="none">┄ Activity by hour of day (local)</text>
         <HourHeatmap counts={a.hourActivity} theme={theme} width={Math.max(48, width - 4)} />
       </box>
 
       <box marginTop={1} flexDirection="column">
-        <text fg={theme.muted}>Activity by day of week (local)</text>
+        <text fg={theme.cyan} wrapMode="none">┄ Activity by day of week (local)</text>
         <DayOfWeekBar counts={a.dayOfWeekActivity} theme={theme} width={Math.max(28, width - 4)} />
       </box>
     </box>
@@ -953,7 +953,7 @@ function InsightsPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalett
       {topTakeaways.length > 0 ? (
         <box flexDirection="column" marginBottom={1}>
           <box marginBottom={0}>
-            <text fg={theme.muted}>Top takeaways</text>
+            <text fg={theme.cyan} wrapMode="none">┄ Top takeaways</text>
           </box>
           {topTakeaways.map((ins, i) => {
             const c = accentForSeverity(ins.severity)
@@ -1108,7 +1108,7 @@ function ProfilePane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette
       </box>
 
       <box marginTop={1} marginBottom={1}>
-        <text fg={theme.muted}>Activity by day of week</text>
+        <text fg={theme.cyan} wrapMode="none">┄ Activity by day of week</text>
       </box>
       <DayOfWeekBar counts={a.dayOfWeekActivity} theme={theme} width={width - 2} />
 
@@ -1140,7 +1140,7 @@ function ProfilePane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette
       ]} />
 
       <box marginTop={1} marginBottom={1}>
-        <text fg={theme.muted}>Message size distribution</text>
+        <text fg={theme.cyan} wrapMode="none">┄ Message size distribution</text>
       </box>
       <SizeHistogram values={a.messageSizes} theme={theme} width={width - 2} />
     </box>

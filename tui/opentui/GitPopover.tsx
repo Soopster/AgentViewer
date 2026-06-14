@@ -1258,8 +1258,10 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                   key={node.path}
                   width={Math.max(0, leftW - 3)}
                   paddingX={1}
+                  flexDirection="row"
                   backgroundColor={isCursor ? theme.surface3 : 'transparent'}
                 >
+                  <text fg={theme.cyan} wrapMode="none">{isCursor ? '▎' : ' '}</text>
                   <text fg={labelColor} wrapMode="none">{label}</text>
                 </box>
               )
@@ -1291,7 +1293,8 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
               const isCurrent = b === data?.branch
               const isSel = i === branchIndex && pane === 3
               return (
-                <box key={b} paddingX={1} backgroundColor={isSel ? theme.surface3 : 'transparent'}>
+                <box key={b} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'}>
+                  <text fg={theme.cyan} wrapMode="none">{isSel ? '▎' : ' '}</text>
                   <text fg={isCurrent ? theme.green : isSel ? theme.text : theme.muted} wrapMode="none">
                     {isCurrent ? `* ${b}` : `  ${b}`}
                   </text>
@@ -1319,9 +1322,10 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
               const msg = spaceIdx > 0 ? c.slice(spaceIdx + 1) : ''
               return (
                 <box key={c} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'}>
+                  <text fg={theme.cyan} wrapMode="none">{isSel ? '▎' : ' '}</text>
                   <text fg={theme.amber} wrapMode="none">{hash} </text>
                   <text fg={isSel ? theme.text : theme.dim} wrapMode="none">
-                    {msg.slice(0, leftW - hash.length - 5)}
+                    {msg.slice(0, leftW - hash.length - 6)}
                   </text>
                 </box>
               )
@@ -1347,8 +1351,24 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
 
       {/* ── Right column ────────────────────────────────── */}
       <box flexGrow={1} flexDirection="column">
-        <box paddingX={1} flexDirection="row">
-          <text fg={theme.cyan}>{`${focusLabel}  ·  ${PANE_TITLES[pane]}  ·  1-4 sections  ·  ${fileDiffLabel}  ·  [ ] resize  ·  w wide  ·  - hide/show  ·  j/k move  ·  h/l collapse/expand  ·  enter toggle  ·  r refresh  ·  esc close`}</text>
+        <box paddingX={1} flexDirection="row" backgroundColor={theme.surface2}>
+          {(() => {
+            const groups: Array<[string, string]> = [
+              ['1-4', 'sections'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide/show'],
+              ['j/k', 'move'], ['h/l', 'fold'], ['⏎', 'toggle'], ['r', 'refresh'], ['esc', 'close'],
+            ]
+            const segs: React.ReactNode[] = [
+              <span key="focus" fg={theme.cyan}>{focusLabel}</span>,
+              <span key="pane" fg={theme.dim}>{`  ${PANE_TITLES[pane]}  `}</span>,
+              <span key="diff" fg={theme.muted}>{fileDiffLabel}</span>,
+            ]
+            groups.forEach(([k, l], i) => {
+              segs.push(<span key={`d${i}`} fg={theme.dim}>{i === 0 ? '  │  ' : '  '}</span>)
+              segs.push(<span key={`k${i}`} fg={theme.cyan}>{k}</span>)
+              segs.push(<span key={`l${i}`} fg={theme.muted}>{` ${l}`}</span>)
+            })
+            return <text wrapMode="none">{segs}</text>
+          })()}
         </box>
         <scrollbox
           ref={diffScrollRef}
