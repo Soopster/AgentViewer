@@ -279,13 +279,13 @@ function ComposerWaitingStatus({
   startedAt,
   seed,
   suffix,
-  fg,
+  theme,
   width,
 }: {
   startedAt: number | null
   seed: string
   suffix: string | null
-  fg: string
+  theme: TuiThemePalette
   width: number
 }) {
   const [frame, setFrame] = useState(0)
@@ -303,10 +303,35 @@ function ComposerWaitingStatus({
   }, [])
 
   const elapsed = formatElapsedClock(startedAt == null ? 0 : Math.max(now - startedAt, 0))
-  const status = suffix
-    ? `${frames[frame % frames.length]} ${message}... (${elapsed} · ${suffix})`
-    : `${frames[frame % frames.length]} ${message}... (${elapsed})`
-  return <text fg={fg} wrapMode="none">{fitText(status, width)}</text>
+  // Segment the status so the live metadata reads as labelled chips: spinner +
+  // message in accent, elapsed bright, then each "key:value" pair with a dim
+  // key and a brighter value (ctx % colored by pressure).
+  const segs: InlineTextSegment[] = [
+    { text: `${frames[frame % frames.length]} `, fg: theme.cyan },
+    { text: `${message}…`, fg: theme.text },
+    { text: `  ${elapsed}`, fg: theme.cyan },
+  ]
+  if (suffix) {
+    for (const chip of suffix.split(' · ')) {
+      segs.push({ text: '  ·  ', fg: theme.dim })
+      const colon = chip.indexOf(':')
+      if (colon > 0) {
+        const key = chip.slice(0, colon)
+        const value = chip.slice(colon + 1)
+        segs.push({ text: `${key} `, fg: theme.dim })
+        if (key === 'ctx') {
+          const m = value.match(/(\d+)%/)
+          const valColor = m ? contextBarColor(Number(m[1]), theme) : theme.muted
+          segs.push({ text: value, fg: valColor })
+        } else {
+          segs.push({ text: value, fg: theme.muted })
+        }
+      } else {
+        segs.push({ text: chip, fg: theme.muted })
+      }
+    }
+  }
+  return <text wrapMode="none">{renderInlineTextSegments(segs, width, theme.dim)}</text>
 }
 
 const PROVIDERS: ProviderSelection[] = ['claude', 'codex', 'opencode', 'copilot', 'pi', 'all']
@@ -12469,46 +12494,59 @@ export default function OpenTuiApp() {
       })() : null}
 
       {(liveStatus === 'retrying' || liveStatus === 'compacting') && composerSendState === 'sending' ? (
-        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+        <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
+          <text fg={theme.amber} wrapMode="none">{'▌ '}</text>
           <text fg={theme.amber} wrapMode="none">
             {fitText(
               liveStatus === 'retrying'
                 ? '● Retrying after a transient error…'
                 : '● Compacting conversation to free up context…',
-              Math.max(width - 4, 20),
+              Math.max(width - 6, 16),
             )}
           </text>
         </box>
       ) : null}
 
       {composerSendState === 'sending' && composerLiveReasoning.trim() ? (
-        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+        <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
+          <text fg={theme.violet} wrapMode="none">{'▌ '}</text>
           <text fg={theme.dim} wrapMode="none">
             {(() => {
               const t = composerLiveReasoning.replace(/\s+/g, ' ').trim()
               const preview = t.length > 100 ? `…${t.slice(-98)}` : t
-              return fitText(`✻ thinking · ${preview}`, Math.max(width - 4, 20))
+              return fitText(`✻ thinking · ${preview}`, Math.max(width - 6, 16))
             })()}
           </text>
         </box>
       ) : null}
 
       {composerSendState === 'sending' && !composerLiveText && activeRunningToolCount === 0 ? (
-        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
-          <ComposerWaitingStatus
-            startedAt={composerSendStartedAt}
-            seed={composerWaitingStatusSeed}
-            suffix={composerWaitingSuffix}
-            fg={theme.cyan}
-            width={Math.max(width - 4, 20)}
-          />
+        <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
+          <text fg={theme.cyan} wrapMode="none">{'▌ '}</text>
+          <box flexGrow={1}>
+            <ComposerWaitingStatus
+              startedAt={composerSendStartedAt}
+              seed={composerWaitingStatusSeed}
+              suffix={composerWaitingSuffix}
+              theme={theme}
+              width={Math.max(width - 6, 16)}
+            />
+          </box>
         </box>
       ) : null}
 
       {liveToolActivities.length > 0 && activeRunningToolCount > 0 ? (
-        <box backgroundColor={theme.surface} paddingX={1} paddingTop={1} gap={1}>
-          <text fg={theme.dim} wrapMode="none">
-            {fitText(`tools: ${liveToolActivities.map((a) => `${a.label}${a.status === 'running' ? ' ●' : ' ✓'}`).join('  ')}`, Math.max(width - 4, 20))}
+        <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
+          <text fg={theme.green} wrapMode="none">{'▌ '}</text>
+          <text wrapMode="none">
+            {renderInlineTextSegments([
+              { text: 'tools  ', fg: theme.dim },
+              ...liveToolActivities.flatMap((a, i): InlineTextSegment[] => [
+                ...(i > 0 ? [{ text: '  ', fg: theme.dim }] : []),
+                { text: a.label, fg: a.status === 'running' ? theme.text : theme.muted },
+                { text: a.status === 'running' ? ' ●' : ' ✓', fg: a.status === 'running' ? theme.green : theme.dim },
+              ]),
+            ], Math.max(width - 6, 16), theme.dim)}
           </text>
         </box>
       ) : null}
@@ -12519,9 +12557,10 @@ export default function OpenTuiApp() {
         const [, latest] = subagentEntries[subagentEntries.length - 1]
         const tail = latest.replace(/\s+/g, ' ').trim().slice(-80)
         return (
-          <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
+          <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
+            <text fg={theme.pink} wrapMode="none">{'▌ '}</text>
             <text fg={theme.dim} wrapMode="none">
-              {fitText(`↪ subagent: ${tail}`, Math.max(width - 4, 20))}
+              {fitText(`↪ subagent · ${tail}`, Math.max(width - 6, 16))}
             </text>
           </box>
         )
