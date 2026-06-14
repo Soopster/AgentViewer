@@ -77,6 +77,7 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'oceanic-next',
   'papercolor-dark',
   'snazzy',
+  'slack-dark',
   'tomorrow-night',
   'ethereal',
   'hackerman',

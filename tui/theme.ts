@@ -78,6 +78,7 @@ export type TuiThemeMode =
   | 'nvidia'
   | 'mongodb'
   | 'slack'
+  | 'slack-dark'
   | 'cohere'
   | 'mistral'
   | 'cursor'
@@ -1831,6 +1832,28 @@ export const SLACK_THEME: TuiThemePalette = {
   userBg: '#f9f0ff',
 } as const
 
+export const SLACK_DARK_THEME: TuiThemePalette = {
+  bg: '#1a1d21',
+  surface: '#222529',
+  surface2: '#2a2d31',
+  surface3: '#35373b',
+  diffAddBg: '#1f3a32',
+  diffRemoveBg: '#48262f',
+  diffMetaBg: '#24364a',
+  border: '#35373b',
+  border2: '#7c3085',
+  text: '#d1d2d3',
+  muted: '#ababad',
+  dim: '#7b7d80',
+  violet: '#d49ce8',
+  cyan: '#36c5f0',
+  green: '#2eb67d',
+  red: '#e01e5a',
+  amber: '#ecb22e',
+  pink: '#e891b2',
+  userBg: '#3a2340',
+} as const
+
 export const COHERE_THEME: TuiThemePalette = {
   bg: '#ffffff',
   surface: '#eeece7',
@@ -2154,6 +2177,7 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'nvidia': return NVIDIA_THEME
     case 'mongodb': return MONGODB_THEME
     case 'slack': return SLACK_THEME
+    case 'slack-dark': return SLACK_DARK_THEME
     case 'cohere': return COHERE_THEME
     case 'mistral': return MISTRAL_THEME
     case 'cursor': return CURSOR_THEME
