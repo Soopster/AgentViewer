@@ -20,6 +20,10 @@ export type TuiThemeMode =
   | 'iceberg-light'
   | 'material-lighter'
   | 'min-light'
+  | 'alabaster'
+  | 'light-owl'
+  | 'papercolor-light'
+  | 'tomorrow'
   | 'imessage'
   | 'dark'
   | 'solarized-dark'
@@ -45,6 +49,10 @@ export type TuiThemeMode =
   | 'iceberg'
   | 'zenburn'
   | 'material-darker'
+  | 'oceanic-next'
+  | 'papercolor-dark'
+  | 'snazzy'
+  | 'tomorrow-night'
   | 'ethereal'
   | 'hackerman'
   | 'lumon'
@@ -1097,6 +1105,182 @@ export const MIN_LIGHT_THEME: TuiThemePalette = {
   userBg: '#f0f0f0',
 } as const
 
+export const ALABASTER_THEME: TuiThemePalette = {
+  bg: '#f7f7f7',
+  surface: '#ffffff',
+  surface2: '#f0f0f0',
+  surface3: '#e0e0e0',
+  diffAddBg: '#e3f0de',
+  diffRemoveBg: '#f3dfdd',
+  diffMetaBg: '#e0eafe',
+  border: '#d7d7d7',
+  border2: '#007acc',
+  text: '#000000',
+  muted: '#777777',
+  dim: '#aaaaaa',
+  violet: '#7a3e9d',
+  cyan: '#007acc',
+  green: '#448c27',
+  red: '#aa3731',
+  amber: '#b06a00',
+  pink: '#7a3e9d',
+  userBg: '#bfdbfe',
+} as const
+
+export const LIGHT_OWL_THEME: TuiThemePalette = {
+  bg: '#f6f6f6',
+  surface: '#fbfbfb',
+  surface2: '#f0f0f0',
+  surface3: '#e0e7ea',
+  diffAddBg: '#d9f1e8',
+  diffRemoveBg: '#f9dddd',
+  diffMetaBg: '#d3e8f8',
+  border: '#d9d9d9',
+  border2: '#2aa298',
+  text: '#403f53',
+  muted: '#65737e',
+  dim: '#93a1a1',
+  violet: '#994cc3',
+  cyan: '#2aa298',
+  green: '#08916a',
+  red: '#de3d3b',
+  amber: '#daaa01',
+  pink: '#d6438a',
+  userBg: '#d3e8f8',
+} as const
+
+export const PAPERCOLOR_LIGHT_THEME: TuiThemePalette = {
+  bg: '#eeeeee',
+  surface: '#f7f7f7',
+  surface2: '#dedede',
+  surface3: '#c4c4c4',
+  diffAddBg: '#dcebdc',
+  diffRemoveBg: '#f1dada',
+  diffMetaBg: '#d7e5ec',
+  border: '#c4c4c4',
+  border2: '#444444',
+  text: '#5e5e5e',
+  muted: '#6b6b6b',
+  dim: '#858585',
+  violet: '#8700af',
+  cyan: '#0087af',
+  green: '#008700',
+  red: '#d70000',
+  amber: '#d75f00',
+  pink: '#af0000',
+  userBg: '#d7e5ec',
+} as const
+
+export const TOMORROW_THEME: TuiThemePalette = {
+  bg: '#ffffff',
+  surface: '#ffffff',
+  surface2: '#f2f2f2',
+  surface3: '#e0e0e0',
+  diffAddBg: '#e4ecd6',
+  diffRemoveBg: '#f3dddd',
+  diffMetaBg: '#dce6f2',
+  border: '#c5c8c6',
+  border2: '#373b41',
+  text: '#373b41',
+  muted: '#969896',
+  dim: '#b4b7b4',
+  violet: '#8959a8',
+  cyan: '#3e999f',
+  green: '#718c00',
+  red: '#c82829',
+  amber: '#b58900',
+  pink: '#a3685a',
+  userBg: '#dce6f2',
+} as const
+
+export const OCEANIC_NEXT_THEME: TuiThemePalette = {
+  bg: '#1b2b34',
+  surface: '#243640',
+  surface2: '#343d46',
+  surface3: '#4f5b66',
+  diffAddBg: '#2c4536',
+  diffRemoveBg: '#4a2f34',
+  diffMetaBg: '#293e54',
+  border: '#4f5b66',
+  border2: '#a7adba',
+  text: '#c0c5ce',
+  muted: '#a7adba',
+  dim: '#65737e',
+  violet: '#c594c5',
+  cyan: '#5fb3b3',
+  green: '#99c794',
+  red: '#ec5f67',
+  amber: '#fac863',
+  pink: '#c594c5',
+  userBg: '#293e54',
+} as const
+
+export const PAPERCOLOR_DARK_THEME: TuiThemePalette = {
+  bg: '#1c1c1c',
+  surface: '#292929',
+  surface2: '#363636',
+  surface3: '#424242',
+  diffAddBg: '#29402f',
+  diffRemoveBg: '#482b37',
+  diffMetaBg: '#293b47',
+  border: '#585858',
+  border2: '#b8b8b8',
+  text: '#b8b8b8',
+  muted: '#9e9e9e',
+  dim: '#808080',
+  violet: '#af87d7',
+  cyan: '#00afaf',
+  green: '#5faf5f',
+  red: '#ff5faf',
+  amber: '#ffaf00',
+  pink: '#af005f',
+  userBg: '#293b47',
+} as const
+
+export const SNAZZY_THEME: TuiThemePalette = {
+  bg: '#282a36',
+  surface: '#30323e',
+  surface2: '#34353e',
+  surface3: '#43454f',
+  diffAddBg: '#284337',
+  diffRemoveBg: '#4b2d36',
+  diffMetaBg: '#2d3c50',
+  border: '#43454f',
+  border2: '#a5a5a9',
+  text: '#e2e4e5',
+  muted: '#a5a5a9',
+  dim: '#78787e',
+  violet: '#ff6ac1',
+  cyan: '#9aedfe',
+  green: '#5af78e',
+  red: '#ff5c57',
+  amber: '#f3f99d',
+  pink: '#ff6ac1',
+  userBg: '#2d3c50',
+} as const
+
+export const TOMORROW_NIGHT_THEME: TuiThemePalette = {
+  bg: '#1d1f21',
+  surface: '#242629',
+  surface2: '#282a2e',
+  surface3: '#373b41',
+  diffAddBg: '#303c2d',
+  diffRemoveBg: '#442d2f',
+  diffMetaBg: '#2a3542',
+  border: '#373b41',
+  border2: '#b4b7b4',
+  text: '#c5c8c6',
+  muted: '#b4b7b4',
+  dim: '#969896',
+  violet: '#b294bb',
+  cyan: '#8abeb7',
+  green: '#b5bd68',
+  red: '#cc6666',
+  amber: '#f0c674',
+  pink: '#b294bb',
+  userBg: '#2a3542',
+} as const
+
 export const ETHEREAL_THEME: TuiThemePalette = {
   bg: '#060B1E',
   surface: '#0c1330',
@@ -1937,6 +2121,14 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'material-darker': return MATERIAL_DARKER_THEME
     case 'material-lighter': return MATERIAL_LIGHTER_THEME
     case 'min-light': return MIN_LIGHT_THEME
+    case 'alabaster': return ALABASTER_THEME
+    case 'light-owl': return LIGHT_OWL_THEME
+    case 'papercolor-light': return PAPERCOLOR_LIGHT_THEME
+    case 'tomorrow': return TOMORROW_THEME
+    case 'oceanic-next': return OCEANIC_NEXT_THEME
+    case 'papercolor-dark': return PAPERCOLOR_DARK_THEME
+    case 'snazzy': return SNAZZY_THEME
+    case 'tomorrow-night': return TOMORROW_NIGHT_THEME
     case 'ethereal': return ETHEREAL_THEME
     case 'hackerman': return HACKERMAN_THEME
     case 'lumon': return LUMON_THEME
