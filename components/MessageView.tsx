@@ -355,10 +355,16 @@ function LiveSpinner({ label }: { label: string }) {
         fontFamily: "'IBM Plex Mono', monospace",
         fontSize: 11,
         letterSpacing: '0.08em',
-        color: 'var(--text-3)',
+        color: 'var(--violet)',
       }}
     >
-      <span aria-hidden="true" style={{ color: 'var(--cyan)' }}>
+      <span
+        aria-hidden="true"
+        style={{
+          color: 'var(--cyan)',
+          filter: 'drop-shadow(0 0 5px var(--cyan))',
+        }}
+      >
         {SPINNER_FRAMES[frame]}
       </span>
       <span>{label}</span>
@@ -7191,9 +7197,9 @@ export default function MessageView({
                   gap: 8,
                   padding: '6px 10px',
                   borderRadius: 999,
-                  border: '1px solid rgba(56,217,245,0.22)',
-                  background: 'var(--surface)',
-                  boxShadow: '0 10px 30px rgba(56,217,245,0.08)',
+                  border: '1px solid color-mix(in srgb, var(--cyan) 35%, var(--border))',
+                  background: 'linear-gradient(110deg, color-mix(in srgb, var(--cyan) 10%, var(--surface)), color-mix(in srgb, var(--violet) 10%, var(--surface)))',
+                  boxShadow: '0 10px 30px var(--cyan-glow), inset 0 0 14px var(--violet-glow)',
                 }}
               >
                 <LiveSpinner label="waiting for new messages" />

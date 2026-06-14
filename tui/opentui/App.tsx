@@ -251,17 +251,32 @@ class TuiErrorBoundary extends React.Component<
   }
 }
 
-function Spinner({ label, fg, frames = SPINNER_FRAMES }: { label: string; fg: string; frames?: readonly string[] }) {
+function Spinner({
+  label,
+  fg,
+  labelFg = fg,
+  frames = SPINNER_FRAMES,
+}: {
+  label: string
+  fg: string
+  labelFg?: string
+  frames?: readonly string[]
+}) {
   const [frame, setFrame] = useState(0)
   useEffect(() => {
     const id = setInterval(() => setFrame((f) => (f + 1) % frames.length), 80)
     return () => clearInterval(id)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  return <text fg={fg}>{`${frames[frame % frames.length]} ${label}`}</text>
+  return (
+    <text wrapMode="none">
+      <span fg={fg}>{frames[frame % frames.length]}</span>
+      <span fg={labelFg}>{` ${label}`}</span>
+    </text>
+  )
 }
 
-function IdleTicker({ seed, fg }: { seed: string; fg: string }) {
+function IdleTicker({ seed, theme }: { seed: string; theme: TuiThemePalette }) {
   const hash = stableHash(seed)
   const spinnerFrames = IDLE_TICKER_SPINNER_VARIANTS[hash % IDLE_TICKER_SPINNER_VARIANTS.length]!
   const [phraseIndex, setPhraseIndex] = useState(() => (hash >>> 8) % IDLE_TICKER_PHRASES.length)
@@ -272,7 +287,14 @@ function IdleTicker({ seed, fg }: { seed: string; fg: string }) {
     )
     return () => clearInterval(id)
   }, [])
-  return <Spinner label={IDLE_TICKER_PHRASES[phraseIndex]!} fg={fg} frames={spinnerFrames} />
+  return (
+    <Spinner
+      label={IDLE_TICKER_PHRASES[phraseIndex]!}
+      fg={theme.cyan}
+      labelFg={theme.violet}
+      frames={spinnerFrames}
+    />
+  )
 }
 
 function ComposerWaitingStatus({
@@ -12148,7 +12170,7 @@ export default function OpenTuiApp() {
 
           {followTail && visibleTranscriptCards.length > 0 ? (
             <box paddingX={2} paddingBottom={1}>
-              <IdleTicker seed={selectedSessionKey ?? ''} fg={theme.dim} />
+              <IdleTicker seed={selectedSessionKey ?? ''} theme={theme} />
             </box>
           ) : null}
           </box>
