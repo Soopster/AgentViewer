@@ -1382,6 +1382,30 @@ const METADATA_REQUEST_TIMEOUT_MS = 4_000
 // least this long. Tuned high enough that quick replies don't bell the user.
 const NOTIFY_AFTER_MS = 8_000
 const NOTIFY_PREVIEW_CHARS = 140
+
+// OpenTUI's OSC escape writers — desktop notifications (OSC 9/99) and clipboard
+// (OSC 52) — call straight into the native renderer (opentui.dll) over FFI. On
+// Windows that native path is implicated in hard segfaults; critically, a fault
+// in native code CANNOT be caught by a surrounding JS try/catch, so the existing
+// "silently ignore" guard offers false reassurance — a faulting OSC write would
+// take the whole process down. We disable the native OSC calls on Windows, and
+// elsewhere gate them on the terminal actually advertising the capability.
+const IS_WINDOWS = typeof process !== 'undefined' && process.platform === 'win32'
+const NATIVE_OSC_ENABLED = !IS_WINDOWS
+
+// Strip non-BMP (astral-plane) codepoints and variation selectors before handing
+// text to a native OSC writer — terminal renderers truncate/choke on them, and
+// they are a documented Windows render hazard (see CLAUDE.md BMP-safe-glyph rule).
+function toBmpSafe(text: string): string {
+  let out = ''
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0
+    if (cp > 0xffff) continue // astral plane: emoji, etc.
+    if (cp === 0xfe0e || cp === 0xfe0f) continue // variation selectors
+    out += ch
+  }
+  return out
+}
 // If the Claude send stream goes fully silent for this long — no data AND no
 // heartbeat (the server pulses one every 15s) — the socket is presumed dead.
 // We stop reading and let the persisted-detail poll surface the rest of the
@@ -8562,10 +8586,18 @@ export default function OpenTuiApp() {
         const preview = firstLine.length > NOTIFY_PREVIEW_CHARS
           ? `${firstLine.slice(0, NOTIFY_PREVIEW_CHARS - 1)}…`
           : firstLine || 'Reply ready'
-        try {
-          renderer.triggerNotification(preview, `agent-viewer · ${formatSessionTitle(targetSession)}`)
-        } catch {
-          // terminal doesn't support OSC notifications — silently ignore
+        // Native OSC FFI: off on Windows, and only when the terminal advertises
+        // notification support (capabilities is null when unknown — try anyway).
+        // BMP-sanitize the model-generated preview/title before the boundary.
+        if (NATIVE_OSC_ENABLED && renderer.capabilities?.notifications !== false) {
+          try {
+            renderer.triggerNotification(
+              toBmpSafe(preview),
+              toBmpSafe(`agent-viewer · ${formatSessionTitle(targetSession)}`),
+            )
+          } catch {
+            // terminal doesn't support OSC notifications — silently ignore
+          }
         }
       }
     } catch (err) {
@@ -9768,8 +9800,13 @@ export default function OpenTuiApp() {
     if (!text.trim()) return
     terminalSelectionRef.current = { text, capturedAt: Date.now() }
     // Auto-copy via OSC 52 so Cmd+C / Ctrl+Shift+C work immediately after
-    // dragging to select, without needing to press y.
-    renderer.copyToClipboardOSC52(text)
+    // dragging to select, without needing to press y. Native OSC FFI: off on
+    // Windows (same opentui.dll segfault surface as notifications), and only
+    // when the terminal advertises OSC 52 support. Clipboard text is copied
+    // verbatim — not BMP-sanitized — so selections keep their exact contents.
+    if (NATIVE_OSC_ENABLED && renderer.capabilities?.osc52 !== false) {
+      renderer.copyToClipboardOSC52(text)
+    }
   })
 
   usePaste((event) => {
