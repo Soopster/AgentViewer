@@ -6477,7 +6477,13 @@ export default function OpenTuiApp() {
       const isTechnical = card.category === 'technical'
       const isDiff = card.category === 'diff'
       const isSystem = card.category === 'system'
-      const categoryEmoji = isInsight ? '✨ ' : isTechnical ? '🔧 ' : isDiff ? '✏️ ' : isSystem ? '⚙️ ' : ''
+      // BMP-safe category glyphs (all < U+FFFF, text presentation, no variation
+      // selectors). The prior set used an astral wrench (U+1F527) and pencil/gear
+      // with U+FE0F variation selectors; those rendered into every card header and
+      // fed the native text-width/layout pass — exactly the documented Windows
+      // render hazard and a candidate trigger for the opentui.dll layout-recursion
+      // segfault.
+      const categoryEmoji = isInsight ? '✦ ' : isTechnical ? '⚒ ' : isDiff ? '✎ ' : isSystem ? '⚙ ' : ''
       const markdownFallbackLines = (isExpanded && card.markdownContent && !card.hasMermaidDiagrams && !shouldEnableSyntaxHighlighting)
         ? card.markdownContent.split('\n')
         : null
