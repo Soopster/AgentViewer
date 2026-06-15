@@ -132,6 +132,14 @@ export type ClaudePoolAcquireOptions = {
 
 export type ClaudePoolEntry = {
   sessionId: string
+  /**
+   * True when acquire() returned an existing warm entry (reused subprocess)
+   * rather than a fresh spawn. Callers use this to gate a liveness backstop:
+   * only a reused subprocess can have silently died since the prior turn, so
+   * only a reused entry is worth probing + respawning. A fresh spawn is the
+   * already-reliable path and may simply be slow to answer during init.
+   */
+  reused?: boolean
   /** Push a user message onto the persistent input stream. */
   pushUserMessage(message: SDKUserMessage): void
   /** The underlying Query — exposed so the SSE adapter can call interrupt(). */
@@ -239,14 +247,14 @@ class ClaudePool {
       void this.applyLiveChanges(existing, opts)
       existing.lastActivityAt = Date.now()
       this.ensureSweep()
-      return this.toPublic(existing)
+      return { ...this.toPublic(existing), reused: true }
     }
     if (existing) this.recycleInternal(existing, 'options-changed')
     this.ensureCapacity()
     const entry = this.spawn(opts)
     this.entries.set(opts.sessionId, entry)
     this.ensureSweep()
-    return this.toPublic(entry)
+    return { ...this.toPublic(entry), reused: false }
   }
 
   recycle(sessionId: string): void {

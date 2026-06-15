@@ -37,6 +37,7 @@ import {
   adoptClaudeSession,
   type ClaudeBridgeBox,
   type ClaudeElicitationHandler,
+  type ClaudePoolEntry,
   claudePoolSize,
   CLAUDE_QUERY_ENV,
   createInputStream,
@@ -2880,6 +2881,22 @@ function claudeResultErrorMessage(msg: Record<string, unknown>): string | null {
 // comfortably under common 30–60s proxy idle timeouts.
 const CLAUDE_STREAM_HEARTBEAT_MS = 15_000
 
+// A reused warm pool subprocess can die silently between turns (the model API
+// socket drops, the OS reaps the child, or an internal CLI fault hasn't yet
+// surfaced as an iterator throw). Its `isAlive()` flag still reads true, so
+// acquire() hands it back and the pushed user message lands in an input stream
+// nothing drains — the turn then hangs until the pool's 10-min hard timeout
+// while server heartbeats keep the client's socket watchdog satisfied (so the
+// existing stall-reconnect never fires either). getContextUsage() is a
+// control-channel RPC the subprocess answers in a few ms regardless of model
+// latency, so a reused entry that can't answer within this window — and has
+// emitted no turn frames — is treated as dead: we recycle it and respawn a
+// fresh subprocess for one transparent retry. 4s is ~100x the healthy answer
+// time, far below the hang it replaces, and a false positive costs only one
+// invisible respawn, not a broken turn.
+const CLAUDE_WARM_LIVENESS_PROBE_MS = 4000
+const CLAUDE_WARM_MAX_RESPAWN = 1
+
 async function createClaudeStream(sessionId: string, signal: AbortSignal, body: Record<string, unknown>): Promise<Response> {
   const userMessage = String(body.message ?? '').trim()
   const turnRequestId = parseTurnRequestId(body)
@@ -3265,34 +3282,19 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
 
   const stream = new ReadableStream({
     async start(controller) {
-      let entry
-      try {
-        entry = acquireClaudeSession({
-          sessionId,
-          cwd: cwdOverride,
-          model,
-          fallbackModel,
-          permissionMode,
-          effort,
-          taskBudgetTokens: taskBudgetTotal,
-        })
-      } catch (err) {
-        controller.enqueue(encoder.encode(
-          `event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`,
-        ))
-        controller.close()
-        return
-      }
-
-      setRunningSession(entry.sessionId, {
-        provider: 'claude',
-        requestId: turnRequestId,
-        interrupt: () => entry.query.interrupt(),
-        background: () => entry.query.backgroundTasks(),
-        // Mid-turn user input rides the warm query's persistent input stream —
-        // the CLI queues it as steering, exactly like typing in Claude Code.
-        steer: async (text) => entry.pushUserMessage(await buildClaudeUserMessage(text, [])),
-      })
+      // Per-stream state that survives a warm respawn. The pooled path never
+      // pends, so the session id is fixed for the whole stream — running-session
+      // registration, permission cleanup, and the session frame all key off
+      // `sessionId` directly rather than a particular pool entry.
+      const bridgedPermissionIds = new Set<string>()
+      const bridgeInstalled = manualPermissions
+        && permissionMode !== 'bypassPermissions'
+        && permissionMode !== 'plan'
+      const bridge = bridgeInstalled
+        ? createClaudePermissionBridge(sessionId, controller, encoder, bridgedPermissionIds)
+        : undefined
+      // Elicitation isn't gated on manual permissions — install it every turn.
+      const elicit = createClaudeElicitationBridge(sessionId, controller, encoder)
 
       // Decouple the turn lifecycle from this HTTP request. A client disconnect
       // (tab closed, navigation, network blip) must NOT interrupt an in-flight
@@ -3305,7 +3307,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
 
       // We already know the session id — emit immediately so the client doesn't
       // have to wait for the SDK's init message.
-      controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId: entry.sessionId })}\n\n`))
+      controller.enqueue(encoder.encode(`event: session\ndata: ${JSON.stringify({ sessionId })}\n\n`))
 
       // Keep the connection warm and the client's stall watchdog fed while the
       // turn runs. Heartbeats are best-effort: a throw means downstream closed,
@@ -3319,76 +3321,151 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
         (heartbeat as { unref?: () => void }).unref?.()
       }
 
-      // Cheap freebie: the persistent Query lets us read context usage without
-      // spinning up a subprocess. Fire it WITHOUT awaiting so the turn starts
-      // immediately — blocking here adds a control-RPC round-trip to first-token
-      // latency. The usage frame is enqueued out-of-band when it resolves.
-      void entry.query.getContextUsage()
-        .then((usage) => {
-          try {
-            controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
-          } catch { /* downstream already closed */ }
+      const emitUsage = (usage: Awaited<ReturnType<Query['getContextUsage']>>) => {
+        try {
+          controller.enqueue(encoder.encode(codexContextUsageToEventData(usage)))
+        } catch { /* downstream already closed */ }
+      }
+
+      // Liveness probe for a reused warm entry: getContextUsage() answers from
+      // the control channel in a few ms when the subprocess is healthy, so a
+      // reused entry that can't answer within the window is treated as silently
+      // dead. Doubles as the usage-frame source on success — no extra RPC.
+      const probeWarmLiveness = (e: ClaudePoolEntry): Promise<'live' | 'dead'> => {
+        let timer: ReturnType<typeof setTimeout> | null = null
+        const timeout = new Promise<'dead'>((resolve) => {
+          timer = setTimeout(() => resolve('dead'), CLAUDE_WARM_LIVENESS_PROBE_MS)
+          if (typeof timer === 'object' && timer && 'unref' in timer) {
+            (timer as { unref?: () => void }).unref?.()
+          }
         })
-        .catch(() => {})
+        const answered: Promise<'live' | 'dead'> = e.query.getContextUsage().then(
+          (usage) => { emitUsage(usage); return 'live' },
+          () => 'dead',
+        )
+        return Promise.race([answered, timeout]).finally(() => { if (timer) clearTimeout(timer) })
+      }
 
-      // Per-turn bridge for interactive permission approvals. Installed into the
-      // pool entry's bridgeBox so the warm subprocess routes permission requests
-      // through this turn's SSE stream without being recycled between turns.
-      // bypass/plan handle all tool decisions via permissionMode so no bridge needed.
-      const bridgedPermissionIds = new Set<string>()
-      const bridgeInstalled = manualPermissions
-        && permissionMode !== 'bypassPermissions'
-        && permissionMode !== 'plan'
-      const bridge = bridgeInstalled
-        ? createClaudePermissionBridge(entry.sessionId, controller, encoder, bridgedPermissionIds)
-        : undefined
-      // Elicitation isn't gated on manual permissions — install it every turn.
-      const elicit = createClaudeElicitationBridge(entry.sessionId, controller, encoder)
-
+      let attempt = 0
       try {
-        await entry.run(pushMessage, {
-          signal: turnAbort.signal,
-          bridge,
-          elicit,
-          onMessage: (msg) => {
-            try {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
-              const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
-              if (resultError) {
-                controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: resultError })}\n\n`))
-              }
-            } catch {
-              /* downstream closed; ignore — the turn keeps running in the pool */
-            }
-          },
-          onError: (err) => {
-            // If the pool entry died mid-turn, drop it so the next acquire
-            // gets a fresh subprocess.
-            recycleClaudeSession(entry.sessionId)
-            if (signal.aborted) return
-            try {
-              controller.enqueue(encoder.encode(
-                `event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`,
-              ))
-            } catch {
-              /* ignore */
-            }
-          },
-        })
-      } catch (err) {
-        if (!signal.aborted) {
+        while (true) {
+          attempt += 1
+          let entry: ClaudePoolEntry
           try {
-            controller.enqueue(encoder.encode(
-              `event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`,
-            ))
-          } catch {
-            /* ignore */
+            entry = acquireClaudeSession({
+              sessionId,
+              cwd: cwdOverride,
+              model,
+              fallbackModel,
+              permissionMode,
+              effort,
+              taskBudgetTokens: taskBudgetTotal,
+            })
+          } catch (err) {
+            if (!signal.aborted) {
+              try {
+                controller.enqueue(encoder.encode(
+                  `event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`,
+                ))
+              } catch { /* ignore */ }
+            }
+            break
+          }
+
+          const activeEntry = entry
+          setRunningSession(sessionId, {
+            provider: 'claude',
+            requestId: turnRequestId,
+            interrupt: () => activeEntry.query.interrupt(),
+            background: () => activeEntry.query.backgroundTasks(),
+            // Mid-turn user input rides the warm query's persistent input stream —
+            // the CLI queues it as steering, exactly like typing in Claude Code.
+            steer: async (text) => activeEntry.pushUserMessage(await buildClaudeUserMessage(text, [])),
+          })
+
+          let sawActivity = false
+          // Set when we deliberately recycle a dead-looking warm entry, so the
+          // catch below knows the run() rejection is our own doing — not a real
+          // turn failure to surface — and the retry path stays silent.
+          let respawnRequested = false
+
+          if (activeEntry.reused && attempt <= CLAUDE_WARM_MAX_RESPAWN) {
+            void probeWarmLiveness(activeEntry).then((verdict) => {
+              if (verdict === 'dead' && !sawActivity) {
+                respawnRequested = true
+                // Recycling pushes null to the turn subscriber, so the pending
+                // run() below rejects promptly — caught and respawned fresh.
+                recycleClaudeSession(sessionId)
+              }
+            })
+          } else {
+            // Fresh spawn (or a retry): surface context usage without gating —
+            // a fresh spawn is the already-reliable path and may be slow to
+            // answer during init, which must never trigger a respawn.
+            void activeEntry.query.getContextUsage().then(emitUsage).catch(() => {})
+          }
+
+          try {
+            await activeEntry.run(pushMessage, {
+              signal: turnAbort.signal,
+              bridge,
+              elicit,
+              onMessage: (msg) => {
+                // Any frame proves the subprocess is alive — cancels a pending
+                // dead verdict so a slow-but-healthy turn is never respawned.
+                sawActivity = true
+                try {
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
+                  const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
+                  if (resultError) {
+                    controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: resultError })}\n\n`))
+                  }
+                } catch {
+                  /* downstream closed; ignore — the turn keeps running in the pool */
+                }
+              },
+              onError: (err) => {
+                // A respawn we triggered ourselves: stay silent and let the
+                // retry below reconnect on a fresh subprocess.
+                if (respawnRequested) return
+                // If the pool entry died mid-turn, drop it so the next acquire
+                // gets a fresh subprocess.
+                recycleClaudeSession(sessionId)
+                if (signal.aborted) return
+                try {
+                  controller.enqueue(encoder.encode(
+                    `event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`,
+                  ))
+                } catch {
+                  /* ignore */
+                }
+              },
+            })
+            break
+          } catch (err) {
+            // Transparent recovery: a reused warm subprocess that answered no
+            // control RPC and produced no frames is dead — respawn once. The
+            // client only ever saw heartbeats, so this is invisible aside from
+            // a small first-token delay.
+            if (respawnRequested && !sawActivity && attempt <= CLAUDE_WARM_MAX_RESPAWN) {
+              continue
+            }
+            if (!signal.aborted) {
+              try {
+                controller.enqueue(encoder.encode(
+                  `event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`,
+                ))
+              } catch {
+                /* ignore */
+              }
+            }
+            break
           }
         }
       } finally {
         clearInterval(heartbeat)
-        clearRunningSession(entry.sessionId)
-        resolvePendingClaudePermissions(entry.sessionId, bridgedPermissionIds, 'Permission request ended before a response was received')
+        clearRunningSession(sessionId)
+        resolvePendingClaudePermissions(sessionId, bridgedPermissionIds, 'Permission request ended before a response was received')
         try { controller.close() } catch { /* idempotent */ }
       }
     },
