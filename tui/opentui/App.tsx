@@ -4814,6 +4814,30 @@ export default function OpenTuiApp() {
     setHoveredTranscriptDiffAnchor(null)
     setTranscriptDiffSelectionAnchorByCardKey({})
   }, [selectedSessionIdentity])
+  // Reflect the active session in the terminal tab/window title so users with
+  // several terminals can tell them apart, with a ● prefix while its turn runs.
+  // Gated like the other native-OSC features (off on Windows); the computed
+  // string is memoized so setTerminalTitle only fires when the title changes.
+  const selectedSessionBusy = useMemo(() => {
+    if (!selectedSession) return false
+    const sid = selectedSession.sessionId
+    const prov = selectedSession.provider ?? 'claude'
+    return runningSessions.some((running) => running.sessionId === sid && running.provider === prov)
+  }, [runningSessions, selectedSession])
+  const terminalTitle = useMemo(() => {
+    if (!selectedSession) return 'agent-viewer'
+    const label = formatProviderLabel(selectedSession.provider)
+    const name = formatSessionTitle(selectedSession).slice(0, 48)
+    return toBmpSafe(`${selectedSessionBusy ? '● ' : ''}agent-viewer · ${label} · ${name}`)
+  }, [selectedSession, selectedSessionBusy])
+  useEffect(() => {
+    if (!NATIVE_OSC_ENABLED) return
+    try {
+      renderer.setTerminalTitle(terminalTitle)
+    } catch {
+      // terminal doesn't support OSC title sequences — ignore
+    }
+  }, [renderer, terminalTitle])
   useEffect(() => () => {
     if (transcriptDiffHoverTimeoutRef.current) clearTimeout(transcriptDiffHoverTimeoutRef.current)
   }, [])
