@@ -9,6 +9,9 @@ import { ChannelBridgePopover } from './ChannelBridgePopover'
 import { readBridgeConfigFromEnv, sendChannelMessage, subscribeToChannelEvents, type ChannelEvent } from '../../lib/channelBridge'
 import { IdeBridgePopover } from './IdeBridgePopover'
 import { readIdeBridgeConfigFromEnv, sendIdeAtMention } from '../../lib/ideBridge'
+import { ToastOverlay, useToasts } from './ToastOverlay'
+import { toast } from './toastStore'
+import { toBmpSafe } from './bmp'
 import { loadBridgeMessagesForSession, addBridgeMessage } from '../../lib/bridgeMessages'
 import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
@@ -1395,19 +1398,8 @@ const NOTIFY_PREVIEW_CHARS = 140
 const IS_WINDOWS = typeof process !== 'undefined' && process.platform === 'win32'
 const NATIVE_OSC_ENABLED = !IS_WINDOWS
 
-// Strip non-BMP (astral-plane) codepoints and variation selectors before handing
-// text to a native OSC writer — terminal renderers truncate/choke on them, and
-// they are a documented Windows render hazard (see CLAUDE.md BMP-safe-glyph rule).
-function toBmpSafe(text: string): string {
-  let out = ''
-  for (const ch of text) {
-    const cp = ch.codePointAt(0) ?? 0
-    if (cp > 0xffff) continue // astral plane: emoji, etc.
-    if (cp === 0xfe0e || cp === 0xfe0f) continue // variation selectors
-    out += ch
-  }
-  return out
-}
+// toBmpSafe (astral-plane / variation-selector stripping for native OSC writers)
+// now lives in ./bmp and is imported above — shared with the toast store.
 // If the Claude send stream goes fully silent for this long — no data AND no
 // heartbeat (the server pulses one every 15s) — the socket is presumed dead.
 // We stop reading and let the persisted-detail poll surface the rest of the
@@ -4348,7 +4340,7 @@ export default function OpenTuiApp() {
   const [refreshingSessions, setRefreshingSessions] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<{ tone: NoticeTone; text: string } | null>(null)
+  const toasts = useToasts()
   const [focusedPane, setFocusedPane] = useState<PaneFocus>('sessions')
   const [providerMenuOpen, setProviderMenuOpen] = useState(false)
   const [providerMenuIndex, setProviderMenuIndex] = useState(0)
@@ -4608,7 +4600,6 @@ export default function OpenTuiApp() {
   const pendingLiveTextRef = useRef('')
   const pendingLiveReasoningRef = useRef('')
   const liveTextTargetSessionRef = useRef<Session | null>(null)
-  const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadingDetailRef = useRef(false)
   // Single-flight coalescing for foreground detail loads. The threading worker
   // processes transcripts serially and can't cancel in-flight work, so firing a
@@ -4735,10 +4726,6 @@ export default function OpenTuiApp() {
   useEffect(() => {
     collapsedKeysRevisionRef.current += 1
   }, [collapsedCardKeys])
-
-  useEffect(() => () => {
-    if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
-  }, [])
 
   useEffect(() => {
     if (composerActive) setFocusedPane('messages')
@@ -7348,7 +7335,7 @@ export default function OpenTuiApp() {
   const openModelPicker = useEffectEvent(async () => {
     const target = composerTargetSession ?? selectedSession
     if (!target) {
-      setNotice({ tone: 'info', text: 'Pick a session first' })
+      showNotice('info', 'Pick a session first')
       return
     }
     setModelPickerTarget(target)
@@ -7678,18 +7665,9 @@ export default function OpenTuiApp() {
     try {
       const result = await runTuiSessionAction(target, { action: 'backgroundTasks', provider: 'claude' })
       const backgrounded = result.backgrounded === true
-      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
-      setNotice({
-        tone: 'info',
-        text: backgrounded ? 'Claude task moved to background' : 'No foreground Claude task to background',
-      })
-      noticeTimeoutRef.current = setTimeout(() => {
-        setNotice((current) => current?.text.includes('background') ? null : current)
-        noticeTimeoutRef.current = null
-      }, 3500)
+      showNotice('info', backgrounded ? 'Claude task moved to background' : 'No foreground Claude task to background', 3500)
     } catch (err) {
-      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
-      setNotice({ tone: 'error', text: err instanceof Error ? err.message : 'Failed to background Claude task' })
+      showNotice('error', err instanceof Error ? err.message : 'Failed to background Claude task')
     } finally {
       setBackgroundingTasks(false)
     }
@@ -7705,18 +7683,9 @@ export default function OpenTuiApp() {
     try {
       const result = await runTuiSessionAction(target, { action: 'stopTask', taskId, provider: 'claude' })
       const stopped = result.stopped === true
-      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
-      setNotice({
-        tone: stopped ? 'info' : 'error',
-        text: stopped ? `Stopped task #${taskId}` : 'No running task to stop (session not warm)',
-      })
-      noticeTimeoutRef.current = setTimeout(() => {
-        setNotice((current) => current?.text.includes('task') ? null : current)
-        noticeTimeoutRef.current = null
-      }, 3500)
+      showNotice(stopped ? 'info' : 'error', stopped ? `Stopped task #${taskId}` : 'No running task to stop (session not warm)', 3500)
     } catch (err) {
-      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
-      setNotice({ tone: 'error', text: err instanceof Error ? err.message : 'Failed to stop task' })
+      showNotice('error', err instanceof Error ? err.message : 'Failed to stop task')
     }
   })
 
@@ -7732,8 +7701,7 @@ export default function OpenTuiApp() {
       setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
       setPermissionOptionIndex(0)
     } catch (err) {
-      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
-      setNotice({ tone: 'error', text: err instanceof Error ? err.message : 'Failed to respond to permission' })
+      showNotice('error', err instanceof Error ? err.message : 'Failed to respond to permission')
     } finally {
       setPermissionActionLoading(null)
     }
@@ -7792,8 +7760,7 @@ export default function OpenTuiApp() {
       setQuestionFocusIndex(0)
       setQuestionOptionIndex(0)
     } catch (err) {
-      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
-      setNotice({ tone: 'error', text: err instanceof Error ? err.message : 'Failed to submit answer' })
+      showNotice('error', err instanceof Error ? err.message : 'Failed to submit answer')
     } finally {
       setPermissionActionLoading(null)
     }
@@ -8237,7 +8204,7 @@ export default function OpenTuiApp() {
         // transient banner without disturbing the live turn state.
         if (frame.event === 'turn-notice' && parsed) {
           const message = (parsed as { message?: unknown }).message
-          if (typeof message === 'string' && message.trim()) setNotice({ tone: 'info', text: message.trim() })
+          if (typeof message === 'string' && message.trim()) showNotice('info', message.trim())
           return
         }
         if (frame.event === 'session' && parsed) {
@@ -8287,13 +8254,7 @@ export default function OpenTuiApp() {
             setTuiCopilotMode(result.mode)
           }
           if (typeof result.message === 'string' && result.message.trim()) {
-            const text = result.message.trim()
-            if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
-            setNotice({ tone: 'info', text })
-            noticeTimeoutRef.current = setTimeout(() => {
-              setNotice((current) => current?.text === text ? null : current)
-              noticeTimeoutRef.current = null
-            }, 2000)
+            showNotice('info', result.message.trim())
           }
           return
         }
@@ -8595,7 +8556,7 @@ export default function OpenTuiApp() {
       }
 
       if (streamStalled) {
-        setNotice({ tone: 'info', text: 'Live stream stalled — turn still running; syncing transcript.' })
+        showNotice('info', 'Live stream stalled — turn still running; syncing transcript.')
       }
 
       if (sseBuffer.trim()) {
@@ -9625,13 +9586,13 @@ export default function OpenTuiApp() {
     setTaskPanelWidth(Math.round(nextWidth / TASK_PANEL_RESIZE_STEP) * TASK_PANEL_RESIZE_STEP)
   })
 
-  const showNotice = useCallback((tone: NoticeTone, text: string) => {
-    if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current)
-    setNotice({ tone, text })
-    noticeTimeoutRef.current = setTimeout(() => {
-      setNotice((current) => current?.text === text ? null : current)
-      noticeTimeoutRef.current = null
-    }, 2000)
+  // Adapter over the toast store, kept as the single feedback entry point (also
+  // handed to popovers via their `onNotice` prop). info/error tones map to the
+  // matching toast kinds; the store handles stacking and per-toast auto-dismiss.
+  const showNotice = useCallback((tone: NoticeTone, text: string, durationMs?: number) => {
+    const options = durationMs != null ? { durationMs } : undefined
+    if (tone === 'error') toast.error(text, options)
+    else toast.info(text, options)
   }, [])
 
   const rememberComposerCursor = useCallback(() => {
@@ -11593,12 +11554,9 @@ export default function OpenTuiApp() {
             setSelectedSessionKey(sessionKey(draft))
             await refreshSessions(provider, true, false)
             setComposerActive(true)
-            setNotice({
-              tone: 'info',
-              text: result.isPending
-                ? `New ${formatProviderLabel(result.provider)} session ready — first message will create it.`
-                : 'New session created.',
-            })
+            showNotice('info', result.isPending
+              ? `New ${formatProviderLabel(result.provider)} session ready — first message will create it.`
+              : 'New session created.')
           } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to create session')
           }
@@ -11659,7 +11617,7 @@ export default function OpenTuiApp() {
         setVelocityScrollEnabled((v) => {
           const next = !v
           void writeTuiVelocityScroll(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store velocity scroll'))
-          setNotice({ tone: 'info', text: next ? 'Velocity scroll enabled' : 'Velocity scroll disabled' })
+          showNotice('info', next ? 'Velocity scroll enabled' : 'Velocity scroll disabled')
           return next
         })
       })
@@ -12239,14 +12197,6 @@ export default function OpenTuiApp() {
           ) : showPreviewBar && selectedSession ? (
             <box paddingX={1} backgroundColor={theme.surface2}>
               <text fg={theme.cyan} wrapMode="none">{previewBarText}</text>
-            </box>
-          ) : null}
-
-          {notice ? (
-            <box paddingX={1} backgroundColor={notice.tone === 'error' ? theme.diffRemoveBg : theme.surface3}>
-              <text fg={notice.tone === 'error' ? theme.red : theme.cyan} wrapMode="none">
-                {fitText(notice.text, Math.max(rightPaneWidth - 2, 16))}
-              </text>
             </box>
           ) : null}
 
@@ -13574,6 +13524,8 @@ export default function OpenTuiApp() {
           </box>
         )
       })() : null}
+
+      <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} />
 
       {exitConfirmOpen ? (
         <box
