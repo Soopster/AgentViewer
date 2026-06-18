@@ -1,5 +1,25 @@
 # CLAUDE.md
 
+> _"Ship with care, read before you write, and leave the codebase better than you found it. Every small, well-made change compounds."_
+>
+> _"Simplicity is the soul of efficiency — the best code is the code you didn't have to write."_
+>
+> _"Slow is smooth, and smooth is fast. Understand the problem before you reach for the keyboard."_
+>
+> _"Name things so the next reader needs no comment; the clearest code explains itself."_
+>
+> _"Delete more than you add. Dead code is a debt the next reader pays in confusion."_
+>
+> _"Make it work, make it right, make it fast — and never skip the middle step."_
+>
+> _"Leave a trail the next reader can follow; today's obvious choice is tomorrow's mystery."_
+>
+> _"Match the code around you; consistency is a kindness that outlives cleverness."_
+>
+> _"Test the seams, not the center; bugs hide where two certainties meet."_
+>
+> _"Fix the cause, not the symptom; a patched crack still runs to the foundation."_
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands

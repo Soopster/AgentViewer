@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, Radio, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -32,6 +32,8 @@ type CommandPaletteProps = {
   canOpenPromptLibrary: boolean
   canOpenChannelBridge: boolean
   channelBridgeRouting: boolean
+  canOpenIdeBridge: boolean
+  ideBridgeRouting: boolean
   onSelectSession: (session: Session, targetMessageId?: string) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
   onChangeProvider: (provider: ProviderSelection) => void
@@ -43,6 +45,8 @@ type CommandPaletteProps = {
   onOpenPromptLibrary: () => void
   onOpenChannelBridge: () => void
   onToggleChannelBridgeRoute: () => void
+  onOpenIdeBridge: () => void
+  onToggleIdeBridgeRoute: () => void
   onOpenBookmarks: () => void
 }
 
@@ -310,6 +314,8 @@ export default function CommandPalette({
   canOpenPromptLibrary,
   canOpenChannelBridge,
   channelBridgeRouting,
+  canOpenIdeBridge,
+  ideBridgeRouting,
   onSelectSession,
   onSelectProject,
   onChangeProvider,
@@ -321,6 +327,8 @@ export default function CommandPalette({
   onOpenPromptLibrary,
   onOpenChannelBridge,
   onToggleChannelBridgeRoute,
+  onOpenIdeBridge,
+  onToggleIdeBridgeRoute,
   onOpenBookmarks,
 }: CommandPaletteProps) {
   const { state: sidebarState, toggleSidebar } = useSidebar()
@@ -543,6 +551,36 @@ export default function CommandPalette({
         },
       },
       {
+        id: 'open-ide-bridge',
+        label: 'Open IDE bridge',
+        description: canOpenIdeBridge ? 'Host a Claude Code IDE endpoint a `claude` CLI session connects to' : 'Select a Claude session first',
+        icon: <Plug size={16} />,
+        shortcut: 'IDE',
+        group: 'actions',
+        keywords: ['ide', 'bridge', 'mcp', 'websocket', 'claude', 'editor', 'diff', 'mention', 'vscode', 'neovim', 'lock', 'composer'],
+        score: 0,
+        run: () => {
+          if (canOpenIdeBridge) onOpenIdeBridge()
+        },
+      },
+      {
+        id: 'toggle-ide-bridge-route',
+        label: ideBridgeRouting ? 'Stop routing composer to IDE bridge' : 'Route composer to IDE bridge',
+        description: canOpenIdeBridge
+          ? (ideBridgeRouting
+            ? 'Composer lines push as @mentions to the connected `claude` session — switch back to the active provider'
+            : 'Push composer lines as @file mentions into the connected `claude` session instead of the active provider')
+          : 'Select a Claude session first',
+        icon: <Plug size={16} />,
+        shortcut: ideBridgeRouting ? 'IDE on' : 'IDE',
+        group: 'actions',
+        keywords: ['ide', 'bridge', 'route', 'routing', 'mcp', 'claude', 'mention', 'composer', 'send', 'toggle'],
+        score: 0,
+        run: () => {
+          if (canOpenIdeBridge) onToggleIdeBridgeRoute()
+        },
+      },
+      {
         id: 'open-bookmarks',
         label: 'View all bookmarks',
         description: 'Browse every bookmarked message across all sessions and providers',
@@ -598,6 +636,14 @@ export default function CommandPalette({
       }
     }
 
+    if (!canOpenIdeBridge) {
+      for (let index = items.length - 1; index >= 0; index -= 1) {
+        if (items[index]?.id === 'open-ide-bridge' || items[index]?.id === 'toggle-ide-bridge-route') {
+          items.splice(index, 1)
+        }
+      }
+    }
+
     for (const item of PROVIDER_ITEMS) {
       items.push({
         id: `provider:${item.provider}`,
@@ -614,7 +660,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

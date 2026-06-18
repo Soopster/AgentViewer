@@ -7,6 +7,8 @@ import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { PromptLibraryPopover } from './PromptLibraryPopover'
 import { ChannelBridgePopover } from './ChannelBridgePopover'
 import { readBridgeConfigFromEnv, sendChannelMessage, subscribeToChannelEvents, type ChannelEvent } from '../../lib/channelBridge'
+import { IdeBridgePopover } from './IdeBridgePopover'
+import { readIdeBridgeConfigFromEnv, sendIdeAtMention } from '../../lib/ideBridge'
 import { loadBridgeMessagesForSession, addBridgeMessage } from '../../lib/bridgeMessages'
 import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
@@ -3476,6 +3478,8 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'cli',        label: 'Copy CLI resume command', key: 'C',  category: 'Session'    },
   { id: 'channel-bridge', label: 'Channel bridge',      key: '⇧C', category: 'Session'    },
   { id: 'channel-bridge-route', label: 'Toggle composer → bridge routing', key: 'route', category: 'Session' },
+  { id: 'ide-bridge', label: 'IDE bridge',              key: '⇧I', category: 'Session'    },
+  { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: 'route', category: 'Session' },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
   { id: 'handoff-brief', label: 'Handoff brief',       key: 'H',  category: 'Session'    },
@@ -4372,6 +4376,15 @@ export default function OpenTuiApp() {
   const [routeComposerToBridge, setRouteComposerToBridge] = useState(false)
   const routeComposerToBridgeRef = useRef(false)
   routeComposerToBridgeRef.current = routeComposerToBridge
+  // IDE bridge — third Claude composer flow (agentViewer hosts a Claude Code IDE
+  // endpoint a `claude` CLI connects to; see channels/agentviewer-ide.ts).
+  const [ideBridgeOpen, setIdeBridgeOpen] = useState(false)
+  const ideBridgeKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => void) | null>(null)
+  // When on, the main composer pushes its line as an @file mention into the
+  // connected `claude` session instead of sending a provider turn.
+  const [routeComposerToIde, setRouteComposerToIde] = useState(false)
+  const routeComposerToIdeRef = useRef(false)
+  routeComposerToIdeRef.current = routeComposerToIde
   const lastBridgeChatIdRef = useRef<string | undefined>(undefined)
   // Track bridge sent/reply entries for inline display in the transcript
   const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useState<
@@ -4635,6 +4648,7 @@ export default function OpenTuiApp() {
     || handoffBriefOpen
     || promptLibraryOpen
     || channelBridgeOpen
+    || ideBridgeOpen
     || bookmarksOverlayOpen
     || taskPopoverOpen
     || diagnosticsOpen
@@ -4931,6 +4945,8 @@ export default function OpenTuiApp() {
     && composerTargetSession
     && (composerTargetSession.provider ?? 'claude') === 'claude',
   )
+  // The IDE bridge shares the channel bridge's Claude-only availability gate.
+  const canUseIdeBridge = canUseChannelBridge
   const composerAutoTargetingRunning = Boolean(
     composerTargetSession
     && selectedSession
@@ -4969,6 +4985,12 @@ export default function OpenTuiApp() {
     persistedBridgeCountRef.current = 0
     lastBridgeChatIdRef.current = undefined
   }, [canUseChannelBridge])
+
+  useEffect(() => {
+    if (canUseIdeBridge) return
+    setIdeBridgeOpen(false)
+    setRouteComposerToIde(false)
+  }, [canUseIdeBridge])
 
   // Subscribe only while a Claude session can actively use the bridge.
   useEffect(() => {
@@ -7364,13 +7386,16 @@ export default function OpenTuiApp() {
   }, [])
 
   const filteredCommands = useMemo(() => {
-    const availableCommands = canUseChannelBridge
+    const bridgeFiltered = canUseChannelBridge
       ? COMMANDS
       : COMMANDS.filter((cmd) => cmd.id !== 'channel-bridge' && cmd.id !== 'channel-bridge-route')
+    const availableCommands = canUseIdeBridge
+      ? bridgeFiltered
+      : bridgeFiltered.filter((cmd) => cmd.id !== 'ide-bridge' && cmd.id !== 'ide-bridge-route')
     const q = commandPaletteQuery.toLowerCase()
     if (!q) return availableCommands
     return availableCommands.filter((cmd) => cmd.label.toLowerCase().includes(q))
-  }, [canUseChannelBridge, commandPaletteQuery])
+  }, [canUseChannelBridge, canUseIdeBridge, commandPaletteQuery])
 
   useEffect(() => {
     currentThemeRef.current = themeMode
@@ -7974,6 +7999,30 @@ export default function OpenTuiApp() {
         showNotice('info', 'Sent to the live CLI bridge')
       } catch (err) {
         showNotice('error', err instanceof Error ? err.message : 'Failed to reach the channel bridge')
+      }
+      return
+    }
+
+    // Global IDE Bridge binding: push the composer line as an @file mention into
+    // the connected `claude` session instead of sending a provider turn. Accepts
+    // "path" or "path:start-end". Tool calls / diffs surface in the IDE popover (⇧I).
+    if (!isRetry && canUseIdeBridge && routeComposerToIdeRef.current && trimmed) {
+      composerTextareaRef.current?.setText('')
+      setComposerDraft('')
+      setComposerMentionAttachments([])
+      setComposerPromptParts([])
+      composerTextareaRef.current?.extmarks.clear()
+      setComposerHistoryOpen(false)
+      setComposerHistoryIndex(0)
+      try {
+        const match = trimmed.match(/^(.*?):(\d+)(?:-(\d+))?$/)
+        const filePath = match ? match[1] : trimmed
+        const lineStart = match ? Number(match[2]) : undefined
+        const lineEnd = match ? (match[3] ? Number(match[3]) : lineStart) : undefined
+        const result = await sendIdeAtMention(readIdeBridgeConfigFromEnv(), filePath, lineStart, lineEnd)
+        showNotice(result.delivered ? 'info' : 'error', result.delivered ? 'Pushed @mention to the IDE session' : 'No `claude` session is connected to the IDE host yet')
+      } catch (err) {
+        showNotice('error', err instanceof Error ? err.message : 'Failed to reach the IDE host')
       }
       return
     }
@@ -8707,6 +8756,7 @@ export default function OpenTuiApp() {
     }
   }, [
     canUseChannelBridge,
+    canUseIdeBridge,
     composerTargetSession,
     composerDraft,
     composerSendState,
@@ -10009,6 +10059,26 @@ export default function OpenTuiApp() {
     })
   })
 
+  const openIdeBridge = useEffectEvent(() => {
+    if (!canUseIdeBridge) {
+      showNotice('error', 'Select a Claude session to use the IDE bridge')
+      return
+    }
+    setIdeBridgeOpen(true)
+  })
+
+  const toggleComposerIdeRoute = useEffectEvent(() => {
+    if (!canUseIdeBridge) {
+      showNotice('error', 'Select a Claude session to route the composer through the IDE bridge')
+      return
+    }
+    setRouteComposerToIde((on) => {
+      const next = !on
+      showNotice('info', next ? 'Composer now pushes @mentions to the IDE session' : 'Composer back to the active provider')
+      return next
+    })
+  })
+
   const insertComposerPromptText = useEffectEvent((text: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -10272,6 +10342,12 @@ export default function OpenTuiApp() {
       case 'channel-bridge-route':
         toggleComposerBridgeRoute()
         break
+      case 'ide-bridge':
+        openIdeBridge()
+        break
+      case 'ide-bridge-route':
+        toggleComposerIdeRoute()
+        break
       case 'sort':
         toggleSidebarSort()
         break
@@ -10365,6 +10441,11 @@ export default function OpenTuiApp() {
 
     if (channelBridgeOpen) {
       handled(() => { channelBridgeKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (ideBridgeOpen) {
+      handled(() => { ideBridgeKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -10988,6 +11069,12 @@ export default function OpenTuiApp() {
     // Global live CLI channel bridge — push composer messages into a side-by-side `claude` session
     if (isShifted('C') && canUseChannelBridge) {
       handled(openChannelBridge)
+      return
+    }
+
+    // Global IDE bridge — host a Claude Code IDE endpoint a `claude` session connects to
+    if (isShifted('I') && canUseIdeBridge) {
+      handled(openIdeBridge)
       return
     }
 
@@ -11744,6 +11831,8 @@ export default function OpenTuiApp() {
   }
   const composerDockHeaderStatus = routeComposerToBridge
     ? 'BRIDGE'
+    : routeComposerToIde
+    ? 'IDE'
     : composerSendState === 'sending'
     ? 'SENDING'
     : composerActive
@@ -11752,7 +11841,7 @@ export default function OpenTuiApp() {
   const composerDockTitleLeft = `◆ COMPOSER · ${composerConfig.label.toUpperCase()}`
   const composerDockTitleWidth = Math.max(composerDockTextareaWidth - 2, 12)
   const composerDockTitleGap = composerDockTitleWidth - composerDockTitleLeft.length - composerDockHeaderStatus.length
-  const composerDockEmphasized = routeComposerToBridge || composerActive
+  const composerDockEmphasized = routeComposerToBridge || routeComposerToIde || composerActive
   const composerDockTitleRule = composerDockEmphasized ? '━' : '─'
   const composerDockBorderTitle = composerDockTitleGap > 0
     ? `${composerDockTitleLeft}${composerDockTitleRule.repeat(composerDockTitleGap)}${composerDockHeaderStatus}`
@@ -11771,6 +11860,8 @@ export default function OpenTuiApp() {
     : composerConfig.footerHintSending
   const composerDockFooterHint = canUseChannelBridge && routeComposerToBridge
     ? '● → live CLI bridge · ⌃R off · ⇧C panel'
+    : canUseIdeBridge && routeComposerToIde
+    ? '● → IDE @mentions · ⇧I panel'
     : composerSendState === 'sending'
     ? sendingHintBase
     : canUseChannelBridge
@@ -13222,6 +13313,33 @@ export default function OpenTuiApp() {
           onClose={() => setChannelBridgeOpen(false)}
           onNotice={showNotice}
           onKeyHandlerReady={(handler) => { channelBridgeKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
+      {canUseIdeBridge && ideBridgeOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {canUseIdeBridge && ideBridgeOpen ? (
+        <IdeBridgePopover
+          theme={theme}
+          accentColor={composerAccentColor}
+          width={width}
+          height={height}
+          routeComposer={routeComposerToIde}
+          onToggleRoute={toggleComposerIdeRoute}
+          onClose={() => setIdeBridgeOpen(false)}
+          onNotice={showNotice}
+          onKeyHandlerReady={(handler) => { ideBridgeKeyHandlerRef.current = handler }}
+          onSendComment={(text) => insertComposerPromptText(text)}
         />
       ) : null}
 

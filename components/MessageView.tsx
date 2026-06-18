@@ -43,9 +43,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { BookOpen, ChartNetwork, Filter, Minimize2, Radio, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
+import { BookOpen, ChartNetwork, Filter, Minimize2, Plug, Radio, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, DiffCommentComposerContext, DEFAULT_DIFF_OPTIONS, type MessageDensity, type WebViewMode, type DiffOptions } from './MessageItem'
 import { useChannelBridge } from './useChannelBridge'
+import { useIdeBridge } from './useIdeBridge'
 import type { PierreDiffStyle } from './PierreDiffView'
 import { LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb } from './messageItemShared'
 import { TaskRail } from './TaskRail'
@@ -70,6 +71,7 @@ import {
 const AnalyticsPopover = dynamic(() => import('./AnalyticsPopover'), { ssr: false })
 const PromptLibrary = dynamic(() => import('./PromptLibrary'), { ssr: false })
 const ChannelBridgePanel = dynamic(() => import('./ChannelBridgePanel'), { ssr: false })
+const IdeBridgePanel = dynamic(() => import('./IdeBridgePanel'), { ssr: false })
 const PierrePatchDiffView = dynamic(() => import('./PierreDiffView').then((mod) => mod.PierrePatchDiffView), {
   ssr: false,
   loading: () => (
@@ -102,6 +104,9 @@ type Props = {
   channelBridgeOpenRequest?: number
   channelBridgeRouteToggleRequest?: number
   onChannelBridgeRoutingChange?: (routing: boolean) => void
+  ideBridgeOpenRequest?: number
+  ideBridgeRouteToggleRequest?: number
+  onIdeBridgeRoutingChange?: (routing: boolean) => void
   openCodeTodos?: OpenCodeTodo[]
   codexPlan?: { plan: CodexPlanStep[]; explanation: string | null }
 }
@@ -2487,6 +2492,9 @@ export default function MessageView({
   channelBridgeOpenRequest = 0,
   channelBridgeRouteToggleRequest = 0,
   onChannelBridgeRoutingChange,
+  ideBridgeOpenRequest = 0,
+  ideBridgeRouteToggleRequest = 0,
+  onIdeBridgeRoutingChange,
   openCodeTodos,
   codexPlan,
 }: Props) {
@@ -2701,6 +2709,16 @@ export default function MessageView({
   // its (already large) dependency array.
   const channelBridgeRef = useRef(channelBridge)
   channelBridgeRef.current = channelBridge
+  // IDE bridge — the third Claude composer flow (agentViewer hosts an IDE
+  // endpoint an external `claude` connects to; see channels/agentviewer-ide.ts).
+  // Shares the Claude-only availability gate with the channel bridge.
+  const [ideBridgeOpen, setIdeBridgeOpen] = useState(false)
+  const canUseIdeBridge = !projectView && !!session && (session.provider ?? 'claude') === 'claude'
+  const ideBridge = useIdeBridge({ open: ideBridgeOpen, available: canUseIdeBridge })
+  const handledIdeBridgeOpenRequestRef = useRef(ideBridgeOpenRequest)
+  const handledIdeBridgeRouteRequestRef = useRef(ideBridgeRouteToggleRequest)
+  const ideBridgeRef = useRef(ideBridge)
+  ideBridgeRef.current = ideBridge
   // Track bridge entries (sent + replies) with timestamps for inline transcript display
   const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useState<
     Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }>
@@ -3759,6 +3777,26 @@ export default function MessageView({
       }
       return
     }
+    // Global IDE Bridge binding: like the channel bridge above, but pushes the
+    // composer line as an @file mention into the `claude` session connected to
+    // agentViewer's IDE host instead of sending a chat turn. Fire-and-forget —
+    // tool calls / diffs surface in the IDE panel.
+    const ide = ideBridgeRef.current
+    if (!retryOverride && canUseIdeBridge && ide.routeComposer) {
+      const text = (textareaRef.current?.value ?? inputTextRef.current).trim()
+      if (!text) return
+      try {
+        await ide.send(text)
+        setInputText('')
+        inputTextRef.current = ''
+        if (textareaRef.current) textareaRef.current.value = ''
+        setAttachments([])
+        window.requestAnimationFrame(resizeComposer)
+      } catch {
+        // error surfaced via the IDE bridge panel (ide.sendError)
+      }
+      return
+    }
     // Native CLIs (Claude, Codex) accept a follow-up prompt while the current
     // turn is still streaming — they queue it. Mirror that: if a send fires
     // while one is in flight, stash the draft and have the post-stream effect
@@ -4321,7 +4359,7 @@ export default function MessageView({
       activeTurnRequestIdRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, canUseChannelBridge, clearLiveAssistantText, clearLiveSubagentText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
@@ -5345,6 +5383,31 @@ export default function MessageView({
   useEffect(() => {
     onChannelBridgeRoutingChange?.(channelBridge.routeComposer)
   }, [channelBridge.routeComposer, onChannelBridgeRoutingChange])
+
+  // IDE bridge: same open/route/mirror plumbing as the channel bridge above.
+  useEffect(() => {
+    if (ideBridgeOpenRequest <= handledIdeBridgeOpenRequestRef.current) return
+    handledIdeBridgeOpenRequestRef.current = ideBridgeOpenRequest
+    if (!canUseIdeBridge) return
+    setIdeBridgeOpen(true)
+  }, [canUseIdeBridge, ideBridgeOpenRequest])
+
+  useEffect(() => {
+    if (canUseIdeBridge) return
+    setIdeBridgeOpen(false)
+  }, [canUseIdeBridge])
+
+  useEffect(() => {
+    if (ideBridgeRouteToggleRequest <= handledIdeBridgeRouteRequestRef.current) return
+    handledIdeBridgeRouteRequestRef.current = ideBridgeRouteToggleRequest
+    if (!canUseIdeBridge) return
+    const bridge = ideBridgeRef.current
+    bridge.setRouteComposer(!bridge.routeComposer)
+  }, [canUseIdeBridge, ideBridgeRouteToggleRequest])
+
+  useEffect(() => {
+    onIdeBridgeRoutingChange?.(ideBridge.routeComposer)
+  }, [ideBridge.routeComposer, onIdeBridgeRoutingChange])
 
   // Load persisted bridge messages when session changes
   useEffect(() => {
@@ -8346,6 +8409,65 @@ export default function MessageView({
                   accent={{ cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label }}
                   bridge={channelBridge}
                   onClose={() => setChannelBridgeOpen(false)}
+                />
+              )}
+              {canUseIdeBridge ? (
+                <Button
+                  type="button"
+                  data-ide-bridge-trigger="true"
+                  onClick={() => setIdeBridgeOpen((open) => !open)}
+                  variant="outline"
+                  aria-label="IDE bridge"
+                  aria-pressed={ideBridge.routeComposer}
+                  title={ideBridge.routeComposer
+                    ? 'IDE bridge — composer is pushing @mentions to the connected `claude` session (click to open)'
+                    : 'IDE bridge — host a Claude Code IDE endpoint a `claude` CLI session connects to'}
+                  style={{
+                    position: 'relative',
+                    flexShrink: 0,
+                    width: 34,
+                    height: 34,
+                    padding: 0,
+                    background: ideBridgeOpen || ideBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.18)` : 'var(--surface-2)',
+                    border: `1px solid ${ideBridgeOpen || ideBridge.routeComposer ? `rgba(${composerConfig.cssAccentRgb},0.4)` : 'var(--border-2)'}`,
+                    borderRadius: 6,
+                    color: ideBridgeOpen || ideBridge.routeComposer ? `var(${composerConfig.cssAccentVar})` : 'var(--text-2)',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                  }}
+                >
+                  <Plug size={15} />
+                  {ideBridge.unread > 0 && !ideBridgeOpen && (
+                    <span
+                      aria-hidden
+                      style={{
+                        position: 'absolute',
+                        top: 3,
+                        right: 3,
+                        minWidth: 13,
+                        height: 13,
+                        padding: '0 3px',
+                        borderRadius: 999,
+                        background: `var(${composerConfig.cssAccentVar})`,
+                        color: 'var(--surface)',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: 8,
+                        fontWeight: 700,
+                        lineHeight: '13px',
+                        textAlign: 'center',
+                      }}
+                    >
+                      {ideBridge.unread > 9 ? '9+' : ideBridge.unread}
+                    </span>
+                  )}
+                </Button>
+              ) : null}
+              {canUseIdeBridge && ideBridgeOpen && (
+                <IdeBridgePanel
+                  accent={{ cssVar: composerConfig.cssAccentVar, cssRgb: composerConfig.cssAccentRgb, label: composerConfig.label }}
+                  bridge={ideBridge}
+                  onClose={() => setIdeBridgeOpen(false)}
+                  onSendComment={handleDiffCommentToComposer}
                 />
               )}
               {sendState === 'sending' || reattachedRunning ? (

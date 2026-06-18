@@ -319,6 +319,9 @@ export default function Home() {
   const [channelBridgeOpenRequest, setChannelBridgeOpenRequest] = useState(0)
   const [channelBridgeRouteToggleRequest, setChannelBridgeRouteToggleRequest] = useState(0)
   const [channelBridgeRouting, setChannelBridgeRouting] = useState(false)
+  const [ideBridgeOpenRequest, setIdeBridgeOpenRequest] = useState(0)
+  const [ideBridgeRouteToggleRequest, setIdeBridgeRouteToggleRequest] = useState(0)
+  const [ideBridgeRouting, setIdeBridgeRouting] = useState(false)
   const documentVisible = useDocumentVisible()
   // Tracks the absolute transcript offset immediately after the latest loaded
   // message window. This is not always messages.length because session loads
@@ -368,6 +371,7 @@ export default function Home() {
     ? sessionPlan
     : undefined
   const canUseChannelBridge = !selectedProject && !!selectedSession && (selectedSession.provider ?? 'claude') === 'claude'
+  const canUseIdeBridge = canUseChannelBridge
 
   const toggleMessagePane = useCallback(() => {
     setMessagePaneCollapsed((prev) => {
@@ -387,6 +391,8 @@ export default function Home() {
   const openPromptLibrary = useCallback(() => setPromptLibraryOpenRequest((value) => value + 1), [])
   const openChannelBridge = useCallback(() => setChannelBridgeOpenRequest((value) => value + 1), [])
   const toggleChannelBridgeRoute = useCallback(() => setChannelBridgeRouteToggleRequest((value) => value + 1), [])
+  const openIdeBridge = useCallback(() => setIdeBridgeOpenRequest((value) => value + 1), [])
+  const toggleIdeBridgeRoute = useCallback(() => setIdeBridgeRouteToggleRequest((value) => value + 1), [])
 
   const fetchProjectSessions = useCallback(async (dir: string, selection: ProviderSelection) => {
     const params = new URLSearchParams()
@@ -1194,6 +1200,9 @@ export default function Home() {
                   channelBridgeOpenRequest={channelBridgeOpenRequest}
                   channelBridgeRouteToggleRequest={channelBridgeRouteToggleRequest}
                   onChannelBridgeRoutingChange={setChannelBridgeRouting}
+                  ideBridgeOpenRequest={ideBridgeOpenRequest}
+                  ideBridgeRouteToggleRequest={ideBridgeRouteToggleRequest}
+                  onIdeBridgeRoutingChange={setIdeBridgeRouting}
                   openCodeTodos={openCodeTodosForView}
                   codexPlan={codexPlanForView}
                 />
@@ -1215,6 +1224,8 @@ export default function Home() {
                   canOpenPromptLibrary={!selectedProject && !!selectedSession}
                   canOpenChannelBridge={canUseChannelBridge}
                   channelBridgeRouting={channelBridgeRouting}
+                  canOpenIdeBridge={canUseIdeBridge}
+                  ideBridgeRouting={ideBridgeRouting}
                   onSelectSession={selectCommandPaletteSession}
                   onSelectProject={selectProject}
                   onChangeProvider={handleChangeProvider}
@@ -1226,6 +1237,8 @@ export default function Home() {
                   onOpenPromptLibrary={openPromptLibrary}
                   onOpenChannelBridge={openChannelBridge}
                   onToggleChannelBridgeRoute={toggleChannelBridgeRoute}
+                  onOpenIdeBridge={openIdeBridge}
+                  onToggleIdeBridgeRoute={toggleIdeBridgeRoute}
                   onOpenBookmarks={() => setBookmarksPanelOpen(true)}
                 />
               ) : null}
