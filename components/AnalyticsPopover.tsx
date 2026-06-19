@@ -5,6 +5,8 @@ import { AreaChart, Area, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tool
 import type { Analytics, AnalyticsInput, FileOps, TimelinePoint } from '@/lib/analytics'
 import { computeAnalytics, fmtCost, fmtDuration, fmtNum } from '@/lib/analytics'
 import { type Insight, type InsightSeverity, buildInsights, median, percentile, sortInsights, summarizeActivity, summarizeCache, summarizePace, summarizeRisk } from '@/lib/analyticsInsights'
+import { type HealthGrade, type HealthReport, archetypeLabel, computeHealthReport, penaltyLabel } from '@/lib/healthScore'
+import type { CoachInsight } from '@/lib/coachInsights'
 
 type PaneId = 0 | 1 | 2 | 3 | 4 | 5 | 6
 
@@ -29,6 +31,7 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
   const [pane, setPane] = useState<PaneId>(0)
   const [hoveredPane, setHoveredPane] = useState<PaneId | null>(null)
   const analytics = useMemo(() => computeAnalytics(open ? input : null), [open, input])
+  const health = useMemo(() => computeHealthReport(open ? input : null), [open, input])
 
   useEffect(() => {
     if (!open) return
@@ -165,12 +168,12 @@ export default function AnalyticsPopover({ open, onClose, input }: Props) {
             fontSize: 12,
           }}
         >
-          {pane === 0 && <SummaryPane a={analytics} />}
+          {pane === 0 && <SummaryPane a={analytics} health={health} />}
           {pane === 1 && <TokensPane a={analytics} />}
           {pane === 2 && <ToolsPane a={analytics} />}
           {pane === 3 && <ActivityPane a={analytics} />}
           {pane === 4 && <TimelinePane a={analytics} />}
-          {pane === 5 && <InsightsPane a={analytics} />}
+          {pane === 5 && <InsightsPane a={analytics} input={input} />}
           {pane === 6 && <ProfilePane a={analytics} />}
         </div>
       </div>
@@ -336,7 +339,81 @@ function Sparkline({
 // Summary pane
 // ---------------------------------------------------------------------------
 
-function SummaryPane({ a }: { a: Analytics }) {
+function gradeColor(grade: HealthGrade): string {
+  switch (grade) {
+    case 'A': return 'var(--green, #4ade80)'
+    case 'B': return 'var(--cyan, #5eead4)'
+    case 'C': return 'var(--amber, #fbbf24)'
+    case 'D': return 'var(--orange, #fb923c)'
+    case 'F': return 'var(--red, #f87171)'
+    default:  return 'var(--text-3)'
+  }
+}
+
+function HealthCard({ health }: { health: HealthReport }) {
+  const color = gradeColor(health.grade)
+  const penalties = Object.entries(health.penalties).sort((a, b) => b[1] - a[1])
+  const scored = health.score !== null
+  return (
+    <div style={{
+      display: 'flex', gap: 14, alignItems: 'stretch',
+      padding: 12, marginBottom: 8,
+      border: '1px solid var(--border-2)', borderRadius: 8, background: 'var(--surface-2)',
+    }}>
+      <div style={{
+        flex: '0 0 96px', display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', gap: 2,
+        borderRight: '1px solid var(--border)', paddingRight: 12,
+      }}>
+        <div style={{ fontSize: 44, lineHeight: 1, fontWeight: 700, color, fontFamily: "'Oxanium', monospace" }}>
+          {scored ? health.grade : '–'}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+          {scored ? `${health.score}/100` : 'not scored'}
+        </div>
+      </div>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            Session health
+          </span>
+          <Chip label={archetypeLabel(health.archetype)} />
+          <Chip label={`outcome: ${health.outcome.outcome}`} />
+        </div>
+        {!scored && (
+          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+            {health.outcome.isRecent ? 'Session still active — scored once it settles.' : 'Too little signal to grade this session.'}
+          </div>
+        )}
+        {scored && penalties.length === 0 && (
+          <div style={{ fontSize: 12, color: 'var(--green, #4ade80)' }}>No penalties — clean session.</div>
+        )}
+        {scored && penalties.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {penalties.map(([key, pts]) => (
+              <div key={key} style={{ display: 'flex', gap: 8, fontSize: 12, color: 'var(--text-2)' }}>
+                <span style={{ flex: '0 0 38px', color: 'var(--red, #f87171)', textAlign: 'right' }}>−{pts}</span>
+                <span style={{ minWidth: 0 }}>{penaltyLabel(key)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function Chip({ label }: { label: string }) {
+  return (
+    <span style={{
+      fontSize: 10, padding: '2px 7px', borderRadius: 999,
+      border: '1px solid var(--border-2)', background: 'var(--surface-3)',
+      color: 'var(--text-2)', letterSpacing: '0.04em', whiteSpace: 'nowrap',
+    }}>{label}</span>
+  )
+}
+
+function SummaryPane({ a, health }: { a: Analytics; health: HealthReport }) {
   const rateInPerMin = a.durationMs && a.durationMs > 0 ? a.inputTokens / (a.durationMs / 60_000) : null
   const rateOutPerMin = a.durationMs && a.durationMs > 0 ? a.outputTokens / (a.durationMs / 60_000) : null
 
@@ -345,6 +422,8 @@ function SummaryPane({ a }: { a: Analytics }) {
       <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>
         Session totals · {a.provider ?? '—'} · {a.model}
       </div>
+
+      <HealthCard health={health} />
 
       <KpiRow>
         <Kpi label="Messages" value={String(a.messages)} accent="var(--cyan, #5eead4)"
@@ -897,7 +976,7 @@ const SEVERITY_COLORS: Record<InsightSeverity, { fg: string; bg: string; border:
   tip:  { fg: 'var(--violet)',          bg: 'rgba(139,128,240,0.08)', border: 'rgba(139,128,240,0.30)' },
 }
 
-function InsightsPane({ a }: { a: Analytics }) {
+function InsightsPane({ a, input }: { a: Analytics; input: AnalyticsInput | null }) {
   const insights = useMemo(() => buildInsights(a), [a])
   const topTakeaways = useMemo(() => sortInsights(insights).slice(0, 3), [insights])
   const risk     = useMemo(() => summarizeRisk(a),     [a])
@@ -970,6 +1049,95 @@ function InsightsPane({ a }: { a: Analytics }) {
           </div>
         )
       })}
+
+      <AICoachSection input={input} />
+    </div>
+  )
+}
+
+function AICoachSection({ input }: { input: AnalyticsInput | null }) {
+  const sessionId = input?.info?.sessionId
+  const provider = input?.info?.provider
+  const [state, setState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+  const [insights, setInsights] = useState<CoachInsight[]>([])
+  const [error, setError] = useState<string>('')
+
+  async function generate() {
+    if (!sessionId) return
+    setState('loading')
+    setError('')
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/insights`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(typeof data?.error === 'string' ? data.error : `Request failed (${res.status})`)
+        setState('error')
+        return
+      }
+      setInsights(Array.isArray(data?.insights) ? data.insights : [])
+      setState('done')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Network error')
+      setState('error')
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 8, paddingTop: 12, borderTop: '1px solid var(--border-2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-2)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+          AI coaching
+        </span>
+        <span style={{ fontSize: 10, color: 'var(--text-3)' }}>opt-in · sends only aggregate metrics, never transcript</span>
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={generate}
+          disabled={!sessionId || state === 'loading'}
+          style={{
+            padding: '5px 12px',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+            color: state === 'loading' ? 'var(--text-3)' : 'var(--surface)',
+            background: state === 'loading' ? 'var(--surface-3)' : 'var(--violet)',
+            border: '1px solid var(--border-2)',
+            borderRadius: 5,
+            cursor: !sessionId || state === 'loading' ? 'default' : 'pointer',
+          }}
+        >
+          {state === 'loading' ? 'Generating…' : state === 'done' ? 'Regenerate' : 'Generate coaching'}
+        </button>
+      </div>
+
+      {state === 'error' && (
+        <div style={{ fontSize: 12, color: 'var(--red, #f87171)' }}>{error}</div>
+      )}
+      {state === 'idle' && (
+        <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5 }}>
+          Generate model-written suggestions across prompt maturity, context setup, workflow hygiene, tool reliability, and cost — derived entirely from the deterministic metrics above.
+        </div>
+      )}
+      {state === 'done' && insights.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {insights.map((ins) => (
+            <div key={ins.kind} style={{ padding: '10px 12px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6 }}>
+              <div style={{ fontSize: 12, color: 'var(--violet)', fontWeight: 500, marginBottom: 4 }}>{ins.title}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.5 }}>{ins.summary}</div>
+              {ins.recommendations.length > 0 && (
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {ins.recommendations.map((rec, i) => (
+                    <li key={i} style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5 }}>{rec}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -6,6 +6,7 @@ import type { TuiSessionDetail } from '../../lib/tui/service'
 import { computeAnalyticsAsync } from './analyticsWorkerClient'
 import type { Analytics, TimelinePoint } from '../../lib/analytics'
 import { fmtCost, fmtDuration, fmtNum } from '../../lib/analytics'
+import { type HealthGrade, type HealthReport, archetypeLabel, computeHealthReport, penaltyLabel } from '../../lib/healthScore'
 import {
   type Insight,
   type InsightSeverity,
@@ -100,6 +101,9 @@ function Sparkline({
 
 export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyHandlerReady }: Props) {
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
+  // Health is a cheap single-pass computation, so it stays on the main thread
+  // rather than round-tripping through the analytics worker.
+  const health = useMemo(() => computeHealthReport(detail), [detail])
   const requestRef = useRef(0)
   const [pane, setPane] = React.useState<PaneId>(0)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
@@ -209,7 +213,7 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
       >
         {analytics ? (
           <>
-            {pane === 0 ? <SummaryPane a={analytics} theme={theme} width={popW - 4} /> : null}
+            {pane === 0 ? <SummaryPane a={analytics} health={health} theme={theme} width={popW - 4} /> : null}
             {pane === 1 ? <TokensPane a={analytics} theme={theme} width={popW - 4} /> : null}
             {pane === 2 ? <ToolsPane a={analytics} theme={theme} width={popW - 4} /> : null}
             {pane === 3 ? <ActivityPane a={analytics} theme={theme} width={popW - 4} /> : null}
@@ -231,7 +235,47 @@ export function AnalyticsPopover({ detail, theme, width, height, onClose, onKeyH
 // Summary pane
 // ---------------------------------------------------------------------------
 
-function SummaryPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette; width: number }) {
+function tuiGradeColor(grade: HealthGrade, theme: TuiThemePalette): string {
+  switch (grade) {
+    case 'A': return theme.green
+    case 'B': return theme.cyan
+    case 'C': return theme.amber
+    case 'D': return theme.amber
+    case 'F': return theme.red
+    default:  return theme.dim
+  }
+}
+
+function HealthBlock({ health, theme, width }: { health: HealthReport; theme: TuiThemePalette; width: number }) {
+  const color = tuiGradeColor(health.grade, theme)
+  const penalties = Object.entries(health.penalties).sort((a, b) => b[1] - a[1])
+  const scored = health.score !== null
+  const gradeText = scored ? `${health.grade} ${health.score}/100` : '– not scored'
+  return (
+    <box flexDirection="column" marginBottom={1} width={width} border borderStyle="single" borderColor={theme.border} paddingX={1}>
+      <box flexDirection="row">
+        <text wrapMode="none"><span fg={theme.cyan}>┄ Session health  </span><span fg={color}>{gradeText}</span></text>
+      </box>
+      <box marginTop={0}>
+        <text fg={theme.dim} wrapMode="none">{`  ${archetypeLabel(health.archetype)} · outcome: ${health.outcome.outcome}`}</text>
+      </box>
+      {!scored ? (
+        <box><text fg={theme.dim} wrapMode="none">{`  ${health.outcome.isRecent ? 'still active — scored once it settles' : 'too little signal to grade'}`}</text></box>
+      ) : penalties.length === 0 ? (
+        <box><text fg={theme.green} wrapMode="none">{'  no penalties — clean session'}</text></box>
+      ) : (
+        penalties.map(([key, pts]) => (
+          <box key={key} flexDirection="row" width={width - 2}>
+            <box width={5}><text fg={theme.red} wrapMode="none">{`−${pts}`}</text></box>
+            <box flexGrow={1}><text fg={theme.text} wrapMode="none">{penaltyLabel(key)}</text></box>
+          </box>
+        ))
+      )}
+    </box>
+  )
+}
+
+function SummaryPane({ a, health, theme, width }: { a: Analytics; health: HealthReport; theme: TuiThemePalette; width: number }) {
   const colWidth = Math.floor((width - 2) / 2)
   const rateInPerMin = a.durationMs && a.durationMs > 0
     ? (a.inputTokens / (a.durationMs / 60_000))
@@ -245,6 +289,8 @@ function SummaryPane({ a, theme, width }: { a: Analytics; theme: TuiThemePalette
       <box marginBottom={1}>
         <text wrapMode="none"><span fg={theme.cyan}>┄ Session totals</span><span fg={theme.dim}>{`  ${a.provider ?? '—'} · ${a.model}`}</span></text>
       </box>
+
+      <HealthBlock health={health} theme={theme} width={width} />
 
       {/* KPI grid */}
       <box flexDirection="row" width={width}>
