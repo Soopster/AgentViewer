@@ -12918,7 +12918,7 @@ export default function OpenTuiApp() {
                 })}
               </box>
               <text fg={theme.dim} wrapMode="none">
-                {permissionActionLoading ? 'responding…' : '←/→ select · enter confirm · 1/2/3 quick · esc keep planning'}
+                {fitText(permissionActionLoading ? 'responding…' : '←/→ select · enter confirm · 1/2/3 quick · esc keep planning', innerWidth)}
               </text>
             </box>
           </box>
@@ -12966,7 +12966,7 @@ export default function OpenTuiApp() {
                 })}
               </box>
               <text fg={theme.dim} wrapMode="none">
-                {permissionActionLoading ? 'responding…' : '←/→ select · enter confirm · 1/2/3 quick'}
+                {fitText(permissionActionLoading ? 'responding…' : '←/→ select · enter confirm · 1/2/3 quick', innerWidth)}
               </text>
             </box>
           </box>
