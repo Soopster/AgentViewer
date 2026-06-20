@@ -12937,7 +12937,11 @@ export default function OpenTuiApp() {
                 <text fg={theme.dim} wrapMode="word">{permission.reason}</text>
               ) : null}
               {permission.command ? (
-                <text fg={theme.text} wrapMode="none">{fitText(`$ ${permission.command}`, innerWidth)}</text>
+                permission.command.split('\n').slice(0, 12).map((line, index) => (
+                  <text key={`perm-cmd:${index}`} fg={theme.text} wrapMode="none">
+                    {fitText(index === 0 ? `$ ${line}` : line, innerWidth)}
+                  </text>
+                ))
               ) : null}
               {permission.url ? (
                 <text fg={theme.cyan} wrapMode="none">{fitText(`URL: ${permission.url}`, innerWidth)}</text>
