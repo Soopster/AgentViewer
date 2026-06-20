@@ -1239,25 +1239,25 @@ export const PAPERCOLOR_DARK_THEME: TuiThemePalette = {
 } as const
 
 export const SNAZZY_THEME: TuiThemePalette = {
-  bg: '#282a36',
-  surface: '#30323e',
-  surface2: '#34353e',
-  surface3: '#43454f',
-  diffAddBg: '#284337',
-  diffRemoveBg: '#4b2d36',
-  diffMetaBg: '#2d3c50',
-  border: '#43454f',
-  border2: '#a5a5a9',
-  text: '#e2e4e5',
-  muted: '#a5a5a9',
-  dim: '#78787e',
+  bg: '#1e1f29',
+  surface: '#282a36',
+  surface2: '#2d303d',
+  surface3: '#3b3f50',
+  diffAddBg: '#243f35',
+  diffRemoveBg: '#472c36',
+  diffMetaBg: '#28394c',
+  border: '#3a3d4d',
+  border2: '#6c7394',
+  text: '#eff0eb',
+  muted: '#b0b2bd',
+  dim: '#747784',
   violet: '#ff6ac1',
   cyan: '#9aedfe',
   green: '#5af78e',
   red: '#ff5c57',
   amber: '#f3f99d',
   pink: '#ff6ac1',
-  userBg: '#2d3c50',
+  userBg: '#26394d',
 } as const
 
 export const TOMORROW_NIGHT_THEME: TuiThemePalette = {

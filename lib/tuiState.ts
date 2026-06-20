@@ -105,6 +105,7 @@ type TuiState = {
   density?: unknown
   diffLayout?: unknown
   transcriptView?: unknown
+  transcriptWidth?: unknown
   tabsEnabled?: unknown
   showToolCalls?: unknown
   velocityScroll?: unknown
@@ -114,6 +115,7 @@ type TuiState = {
 
 export type TuiSidebarSort = 'project' | 'time'
 export type TuiDiffLayout = 'stack' | 'split'
+export type TuiTranscriptWidth = 'centered' | 'full'
 
 export type TuiSessionReaderState = {
   followTail: boolean
@@ -238,6 +240,15 @@ export async function getConfiguredTuiTranscriptView(): Promise<TuiTranscriptVie
 
 export async function setConfiguredTuiTranscriptView(transcriptView: TuiTranscriptView): Promise<void> {
   await writeTuiState({ transcriptView })
+}
+
+export async function getConfiguredTuiTranscriptWidth(): Promise<TuiTranscriptWidth> {
+  const parsed = await readTuiState()
+  return parsed.transcriptWidth === 'full' ? 'full' : 'centered'
+}
+
+export async function setConfiguredTuiTranscriptWidth(transcriptWidth: TuiTranscriptWidth): Promise<void> {
+  await writeTuiState({ transcriptWidth })
 }
 
 export async function getConfiguredTuiTabsEnabled(): Promise<boolean> {

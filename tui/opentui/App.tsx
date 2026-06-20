@@ -70,6 +70,7 @@ import {
   readTuiTabsEnabled,
   readTuiTheme,
   readTuiTranscriptView,
+  readTuiTranscriptWidth,
   readTuiVelocityScroll,
   readTuiSessionBookmarkIds,
   readTuiAllBookmarks,
@@ -95,10 +96,12 @@ import {
   writeTuiTheme,
   writeTuiThemeSync,
   writeTuiTranscriptView,
+  writeTuiTranscriptWidth,
   writeTuiVelocityScroll,
   type TuiSessionDetail,
   type TuiDiffLayout,
   type TuiSidebarSort,
+  type TuiTranscriptWidth,
 } from '../../lib/tui/service'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
 import {
@@ -3490,6 +3493,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'density',    label: 'Toggle density',         key: 'd',  category: 'View'       },
   { id: 'diff-layout', label: 'Toggle diff layout',    key: 's',  category: 'View'       },
   { id: 'view',       label: 'Toggle transcript view', key: 'v',  category: 'View'       },
+  { id: 'width',      label: 'Toggle transcript width', key: '⇧W', category: 'View'       },
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
   { id: 'tools',      label: 'Toggle tool calls',      key: 'X',  category: 'View'       },
@@ -3553,6 +3557,11 @@ function pruneSessionCaches(
 
 type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number }
 
+// Conversation prose becomes difficult to scan when cards stretch across an
+// ultrawide terminal. Keep normal cards at a readable measure while allowing
+// diffs to use the full reader width for side-by-side content.
+const MAX_TRANSCRIPT_CARD_WIDTH = 144
+
 type TranscriptCardProps = {
   card: TuiTranscriptCard
   display: CardDisplayData
@@ -3570,6 +3579,7 @@ type TranscriptCardProps = {
   thinkingMode: boolean
   diffLayout: TuiDiffLayout
   imessageStyle: boolean
+  transcriptWidth: TuiTranscriptWidth
   streamMode: boolean
   noteNamespace: string
   diffNotes: Map<string, TranscriptDiffNote>
@@ -3640,6 +3650,7 @@ function TranscriptCardInner({
   thinkingMode,
   diffLayout,
   imessageStyle,
+  transcriptWidth,
   streamMode,
   noteNamespace,
   diffNotes,
@@ -3695,7 +3706,15 @@ function TranscriptCardInner({
               : card.role === 'user'
                 ? accent
                 : theme.border
-  const maxTitleWidth = Math.max(rightPaneWidth - 6, 20)
+  const availableCardWidth = Math.max(rightPaneWidth - 4, 20)
+  const readableCardWidth = card.category === 'diff' || transcriptWidth === 'full'
+    ? availableCardWidth
+    : Math.min(availableCardWidth, MAX_TRANSCRIPT_CARD_WIDTH)
+  const imessageUserBubble = transcriptWidth === 'centered' && imessageStyle && card.role === 'user'
+  const cardWidth = imessageUserBubble
+    ? Math.max(Math.min(Math.floor(readableCardWidth * 0.7), readableCardWidth), 20)
+    : readableCardWidth
+  const maxTitleWidth = Math.max(cardWidth - 4, 20)
   const titleMeta = joinMeta([
     headerMeta,
     card.category === 'diff' ? `s ${diffLayout}` : null,
@@ -3708,13 +3727,9 @@ function TranscriptCardInner({
   const cardTitle = cardTitleFull.length > maxTitleWidth
     ? cardTitleFull.slice(0, maxTitleWidth - 1) + '…'
     : cardTitleFull
-  const imessageUserBubble = imessageStyle && card.role === 'user'
-  const userBubbleWidth = imessageUserBubble
-    ? Math.max(Math.min(Math.floor(rightPaneWidth * 0.7), rightPaneWidth - 4), 20)
-    : undefined
   const bubbleTextColor = imessageUserBubble ? '#ffffff' : theme.text
-  const bodyInnerWidth = Math.max((userBubbleWidth ?? rightPaneWidth) - densityState.bodyIndent - 8, 16)
-  const markdownWidth = Math.max((userBubbleWidth ?? rightPaneWidth) - densityState.bodyIndent - 8, 20)
+  const bodyInnerWidth = Math.max(cardWidth - densityState.bodyIndent - 8, 16)
+  const markdownWidth = Math.max(cardWidth - densityState.bodyIndent - 8, 20)
   const effectiveDiffLayout = diffLayout === 'split' && (diffView?.splitRows.length ?? 0) > 0
     ? 'split'
     : 'stack'
@@ -3839,7 +3854,7 @@ function TranscriptCardInner({
     event.stopPropagation()
     setDiffRowCursor(card.key, rowIndex, true)
   }
-  const landmarkWidth = rightPaneWidth - 4
+  const landmarkWidth = cardWidth - 4
   const selectionColors = terminalSelectionColors(theme)
 
   if (streamMode) {
@@ -3888,8 +3903,8 @@ function TranscriptCardInner({
     <box
       flexDirection="column"
       marginBottom={densityState.cardGap}
-      alignSelf={imessageUserBubble ? 'flex-end' : undefined}
-      width={userBubbleWidth}
+      alignSelf={imessageUserBubble ? 'flex-end' : card.category === 'diff' || transcriptWidth === 'full' ? undefined : 'center'}
+      width={cardWidth}
     >
       {landmarks.map((landmark, landmarkIndex) => {
         const color = landmark.kind === 'resume'
@@ -4324,6 +4339,7 @@ export default function OpenTuiApp() {
   const [transcriptDiffRowCursorByCardKey, setTranscriptDiffRowCursorByCardKey] = useState<Record<string, number>>({})
   const [transcriptDiffSelectionAnchorByCardKey, setTranscriptDiffSelectionAnchorByCardKey] = useState<Record<string, number>>({})
   const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
+  const [transcriptWidth, setTranscriptWidth] = useState<TuiTranscriptWidth>('centered')
   const [focusMode, setFocusMode] = useState(false)
   const [railVisible, setRailVisible] = useState(true)
   const [tabsEnabled, setTabsEnabled] = useState(true)
@@ -6622,6 +6638,7 @@ export default function OpenTuiApp() {
           thinkingMode={thinkingMode}
           diffLayout={diffLayout}
           imessageStyle={imessageStyle}
+          transcriptWidth={transcriptWidth}
           streamMode={transcriptView === 'stream'}
           noteNamespace={transcriptNoteNamespace}
           diffNotes={transcriptDiffNotes}
@@ -6685,6 +6702,7 @@ export default function OpenTuiApp() {
     thinkingMode,
     diffLayout,
     imessageStyle,
+    transcriptWidth,
     transcriptView,
     transcriptNoteNamespace,
     transcriptDiffNotes,
@@ -8839,6 +8857,7 @@ export default function OpenTuiApp() {
           configuredDensity,
           configuredDiffLayout,
           configuredTranscriptView,
+          configuredTranscriptWidth,
           configuredTabsEnabled,
           configuredSidebarSort,
           configuredSidebarWidth,
@@ -8852,6 +8871,7 @@ export default function OpenTuiApp() {
           readTuiDensity(),
           readTuiDiffLayout(),
           readTuiTranscriptView(),
+          readTuiTranscriptWidth(),
           readTuiTabsEnabled(),
           readTuiSidebarSort(),
           readTuiSidebarWidth(),
@@ -8867,6 +8887,7 @@ export default function OpenTuiApp() {
         setDensity(configuredDensity)
         setDiffLayout(configuredDiffLayout)
         setTranscriptView(configuredTranscriptView)
+        setTranscriptWidth(configuredTranscriptWidth)
         setTabsEnabled(configuredTabsEnabled)
         setSidebarSort(configuredSidebarSort)
         setSidebarWidthPreference(configuredSidebarWidth)
@@ -9550,7 +9571,7 @@ export default function OpenTuiApp() {
       [['j/k', 'move'], ['⌃u/d', 'page'], ['tab', 'focus'], ['←/→', 'tabs'], ['w', 'close']],
       [['/', 'search'], ['n/N', 'hits'], ['u', 'unread'], ['f', 'live']],
       [['m', 'mark'], ['[ ]', 'jump'], ['⇧B', 'all'], ['b', effectiveFocus === 'sessions' ? 'tabs' : 'bookmark']],
-      [['()', 'convo'], ['{}', 'tech'], ['e', 'fold'], ['v', transcriptView], ['s', `diff:${diffLayout}`], ['d', density], ['i', 'think'], ['X', showToolCalls ? 'hide tools' : 'tools']],
+      [['()', 'convo'], ['{}', 'tech'], ['e', 'fold'], ['v', transcriptView], ['s', `diff:${diffLayout}`], ['d', density], ['⇧W', transcriptWidth], ['i', 'think'], ['X', showToolCalls ? 'hide tools' : 'tools']],
       [['h', 'rail'], ['⇧T', 'tasks'], ['z', 'focus'], ['V', velocityScrollEnabled ? 'vel off' : 'vel on']],
       [['⌃O', 'composer'], ['p', 'provider'], ['y', 'copy'], ['Q', 'reply'], ['r', 'refresh']],
       [['?', 'help'], ['q', 'quit']],
@@ -9565,7 +9586,7 @@ export default function OpenTuiApp() {
       })
     })
     return segs
-  }, [diffLayout, transcriptView, density, showToolCalls, velocityScrollEnabled, effectiveFocus, theme])
+  }, [diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, effectiveFocus, theme])
 
   const composerStatusMessage = composerError
     ? composerError
@@ -10221,6 +10242,12 @@ export default function OpenTuiApp() {
         const next = cycleTranscriptViewValue(transcriptView)
         setTranscriptView(next)
         void writeTuiTranscriptView(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store transcript view'))
+        break
+      }
+      case 'width': {
+        const next: TuiTranscriptWidth = transcriptWidth === 'centered' ? 'full' : 'centered'
+        setTranscriptWidth(next)
+        void writeTuiTranscriptWidth(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store transcript width'))
         break
       }
       case 'live':
@@ -11719,6 +11746,17 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (isShifted('W')) {
+      handled(() => {
+        const next: TuiTranscriptWidth = transcriptWidth === 'centered' ? 'full' : 'centered'
+        setTranscriptWidth(next)
+        void writeTuiTranscriptWidth(next).catch((err) => {
+          setError(err instanceof Error ? err.message : 'Failed to store transcript width')
+        })
+      })
+      return
+    }
+
     if (sequence === 'v' && !key.ctrl && !key.meta) {
       handled(() => {
         const next = cycleTranscriptViewValue(transcriptView)
@@ -11739,36 +11777,32 @@ export default function OpenTuiApp() {
   })
 
   const statusLabel = loadingSessions ? 'syncing' : refreshingSessions ? 'refreshing' : 'live'
-  const readerMode = followTail ? 'live mode' : pendingNewCount > 0 ? 'new content waiting' : 'reading mode'
-  const sessionIdLabel = selectedSession?.sessionId
-    ? `id ${selectedSession.sessionId.slice(-8)}`
-    : null
+  const readerMode = followTail ? null : pendingNewCount > 0 ? 'new content' : 'reading'
   const headerStatusRight = useMemo(
     () => fitText(
       joinMeta([
-        statusLabel,
-        `position ${visibleTranscriptCards.length === 0 ? '0' : `${Math.max(cursorIndex, 0) + 1}`}/${visibleTranscriptCards.length}`,
-        readerMode,
-        sessionIdLabel,
+        statusLabel.toUpperCase(),
+        visibleTranscriptCards.length === 0 ? '0/0' : `${Math.max(cursorIndex, 0) + 1}/${visibleTranscriptCards.length}`,
+        readerMode?.toUpperCase() ?? null,
         themeMode.toUpperCase(),
-        provider.toUpperCase(),
         density.toUpperCase(),
+        transcriptWidth.toUpperCase(),
         pendingNewCount > 0 ? `+${pendingNewCount} new` : null,
         !railVisible ? 'h show rail' : null,
       ]),
-      Math.max(Math.floor(width * 0.55), 20),
+      Math.max(Math.floor(width * 0.45), 20),
     ),
-    [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, sessionIdLabel, themeMode, provider, density, pendingNewCount, railVisible, width],
+    [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, themeMode, density, transcriptWidth, pendingNewCount, railVisible, width],
   )
-  const headerContextLeft = useMemo(
+  const readerContextMeta = useMemo(
     () => fitText(
       joinMeta([
-        `project ${currentProjectName(selectedSession)}`,
-        `model ${readerModel}`,
+        currentProjectName(selectedSession),
+        readerModel,
       ]),
-      Math.max(Math.floor(width * 0.45) - 16, 12),
+      Math.min(Math.max(Math.floor(rightPaneWidth * 0.28), 18), 42),
     ),
-    [selectedSession, readerModel, width],
+    [selectedSession, readerModel, rightPaneWidth],
   )
   const previewBarText = useMemo(
     () => selectedSession
@@ -11782,7 +11816,6 @@ export default function OpenTuiApp() {
 
   const providerOptions = PROVIDER_SELECT_OPTIONS
   const providerAccent = getProviderAccent(provider)
-  const providerSummary = provider.toUpperCase()
   const composerPlaceholder = composerTargetSession
     ? (composerSendState === 'sending'
         ? composerConfig.placeholderStreaming
@@ -12236,13 +12269,15 @@ export default function OpenTuiApp() {
             titleColor={providerAccent}
           >
           {!focusMode ? (
-            <box paddingX={1} paddingTop={1} flexDirection="row" alignItems="center">
+            <box paddingX={2} paddingTop={1} flexDirection="row" alignItems="center">
               <text fg={providerAccent} wrapMode="none">{'● '}</text>
               <box flexGrow={1} overflow="hidden">
-                <text fg={theme.text} wrapMode="none">{fitText(readerTitle, Math.max(rightPaneWidth - 18, 12))}</text>
+                <text fg={theme.text} wrapMode="none">
+                  {fitText(readerTitle, Math.max(rightPaneWidth - readerContextMeta.length - 10, 12))}
+                </text>
               </box>
-              <box width={14} overflow="hidden">
-                <text fg={providerAccent} wrapMode="none">{fitText(providerSummary, 14)}</text>
+              <box width={readerContextMeta.length} overflow="hidden">
+                <text fg={theme.dim} wrapMode="none">{readerContextMeta}</text>
               </box>
             </box>
           ) : null}
@@ -12339,7 +12374,7 @@ export default function OpenTuiApp() {
                 ref={transcriptScrollRef}
                 style={{ height: transcriptViewportRows }}
                 focused={effectiveFocus === 'messages'}
-                backgroundColor={theme.surface2}
+                backgroundColor={theme.bg}
                 stickyScroll={followTail}
                 stickyStart="bottom"
                 scrollY

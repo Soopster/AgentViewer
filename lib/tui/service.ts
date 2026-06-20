@@ -17,6 +17,7 @@ import {
   getConfiguredTuiTabsEnabled,
   getConfiguredTuiTheme,
   getConfiguredTuiTranscriptView,
+  getConfiguredTuiTranscriptWidth,
   getConfiguredTuiVelocityScroll,
   setConfiguredTuiDensity,
   setConfiguredTuiDiffLayout,
@@ -30,10 +31,12 @@ import {
   setConfiguredTuiTheme,
   setConfiguredTuiThemeSync,
   setConfiguredTuiTranscriptView,
+  setConfiguredTuiTranscriptWidth,
   setConfiguredTuiVelocityScroll,
   type TuiSessionReaderState,
   type TuiDiffLayout,
   type TuiSidebarSort,
+  type TuiTranscriptWidth,
 } from '../tuiState'
 import {
   listViewSessionMessages,
@@ -151,6 +154,14 @@ export async function writeTuiTranscriptView(transcriptView: TuiTranscriptView):
   await setConfiguredTuiTranscriptView(transcriptView)
 }
 
+export async function readTuiTranscriptWidth(): Promise<TuiTranscriptWidth> {
+  return getConfiguredTuiTranscriptWidth()
+}
+
+export async function writeTuiTranscriptWidth(transcriptWidth: TuiTranscriptWidth): Promise<void> {
+  await setConfiguredTuiTranscriptWidth(transcriptWidth)
+}
+
 export async function readTuiTabsEnabled(): Promise<boolean> {
   return getConfiguredTuiTabsEnabled()
 }
@@ -183,7 +194,7 @@ export async function writeTuiSidebarSort(sidebarSort: TuiSidebarSort): Promise<
   await setConfiguredTuiSidebarSort(sidebarSort)
 }
 
-export type { TuiDiffLayout, TuiSidebarSort }
+export type { TuiDiffLayout, TuiSidebarSort, TuiTranscriptWidth }
 
 export async function readTuiSessionReaderState(sessionKey: string): Promise<TuiSessionReaderState | null> {
   return getConfiguredTuiSessionReaderState(sessionKey)
