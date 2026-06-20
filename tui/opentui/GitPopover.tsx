@@ -481,7 +481,7 @@ function renderNoteCard(
         </text>
         <box flexGrow={1} />
         {onSendToComposer ? (
-          <text fg={theme.green} wrapMode="none"> C:composer</text>
+          <text fg={theme.green} wrapMode="none"> A:composer</text>
         ) : null}
         <text fg={theme.dim} wrapMode="none"> x:del</text>
       </box>
@@ -994,7 +994,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       }
       return
     }
-    if (key.sequence === 'C' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right' && onSendDiffNoteToComposer) {
+    if (key.sequence === 'A' && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right' && onSendDiffNoteToComposer) {
       const rdv = rightDiffViewRef.current
       const fp = selectedFilePathRef.current
       const isSplit = diffLayout === 'split'
@@ -1066,7 +1066,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           ['{}', 'hunk'],
           ['⇧j/k', 'range'],
           ['a', 'note'],
-          ['C', 'composer'],
+          ['A', 'composer'],
           ['x', 'del'],
         ]
         const nodes: React.ReactNode[] = []
