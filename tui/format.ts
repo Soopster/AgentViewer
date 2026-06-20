@@ -1254,6 +1254,23 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
       if (block.subtype === 'notification' && typeof block.payload.text === 'string') {
         return [line(`notice: ${truncateLine(block.payload.text)}`, 'system')]
       }
+      if (block.subtype === 'model_refusal_fallback') {
+        const from = typeof block.payload.original_model === 'string' ? block.payload.original_model : '?'
+        const to = typeof block.payload.fallback_model === 'string' ? block.payload.fallback_model : '?'
+        const category = typeof block.payload.api_refusal_category === 'string' ? block.payload.api_refusal_category : ''
+        const verb = block.payload.direction === 'revert' ? 'reverted' : 'fell back'
+        return [line(`refusal: ${verb} ${from} → ${to}${category ? ` (${category})` : ''}`, 'result_error')]
+      }
+      if (block.subtype === 'informational') {
+        const text = typeof block.payload.content === 'string' && block.payload.content.trim()
+          ? block.payload.content.replace(/\s+/g, ' ').trim()
+          : 'informational'
+        const stopped = block.payload.prevent_continuation === true ? ' · stopped' : ''
+        const kind = block.payload.level === 'warning' ? 'result_error'
+          : block.payload.level === 'suggestion' ? 'result_ok'
+          : 'system'
+        return [line(`${truncateLine(text)}${stopped}`, kind)]
+      }
       return [line(withClaudeRuntimeSuffix(`system ${block.subtype}`, block.payload), 'system')]
     }
     case 'image':

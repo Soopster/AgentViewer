@@ -4481,6 +4481,9 @@ export default function OpenTuiApp() {
   const [composerLiveText, setComposerLiveText] = useState('')
   // Reasoning streams on its own dim channel (see liveReasoning render below).
   const [composerLiveReasoning, setComposerLiveReasoning] = useState('')
+  // Live thinking-token estimate (SDK `thinking_tokens` messages); shown on the
+  // THINKING preview header, reset each turn.
+  const [composerThinkingTokens, setComposerThinkingTokens] = useState(0)
   const [liveTranscriptMessages, setLiveTranscriptMessages] = useState<ThreadedMessage[]>([])
   // Queued prompts waiting for the active turn to finish (CLI-style FIFO —
   // a single slot here used to silently overwrite the first queued message).
@@ -7633,6 +7636,7 @@ export default function OpenTuiApp() {
       setLiveStatus(null)
       setComposerLiveText('')
       setComposerLiveReasoning('')
+      setComposerThinkingTokens(0)
       pendingLiveReasoningRef.current = ''
       return
     }
@@ -7653,6 +7657,7 @@ export default function OpenTuiApp() {
     setComposerSendState('idle')
     setComposerLiveText('')
     setComposerLiveReasoning('')
+    setComposerThinkingTokens(0)
     setLiveStatus(null)
     setLiveSubagentText({})
     setLiveToolActivities([])
@@ -8089,6 +8094,7 @@ export default function OpenTuiApp() {
     }
     setComposerLiveText('')
     setComposerLiveReasoning('')
+    setComposerThinkingTokens(0)
     setLivePromptSuggestion(null)
     setLiveStatus(null)
     setLiveSubagentText({})
@@ -8290,6 +8296,25 @@ export default function OpenTuiApp() {
         // (same as Pi's native retry); it clears on the next delta/result.
         if (parsedRecord.type === 'system' && parsedRecord.subtype === 'api_retry') {
           setLiveStatus('retrying')
+        }
+        if (parsedRecord.type === 'system' && parsedRecord.subtype === 'thinking_tokens') {
+          if (typeof parsedRecord.estimated_tokens === 'number') {
+            setComposerThinkingTokens(parsedRecord.estimated_tokens)
+          }
+        }
+        // A model refusal fell back to another model — evict the refused partial
+        // from the live overlay so it doesn't linger (the banner arrives via the
+        // normal threaded path).
+        if (parsedRecord.type === 'system' && parsedRecord.subtype === 'model_refusal_fallback') {
+          const uuids = Array.isArray(parsedRecord.retracted_message_uuids)
+            ? parsedRecord.retracted_message_uuids.filter((u): u is string => typeof u === 'string')
+            : []
+          if (uuids.length > 0) {
+            const retracted = new Set(uuids)
+            setLiveTranscriptMessages((prev) => prev.filter((m) => !retracted.has(m.uuid)))
+          }
+          setComposerLiveText('')
+          setComposerLiveReasoning('')
         }
         // Pi surfaces auto-retry / auto-compaction as non-fatal progress so the
         // turn doesn't look hung while it recovers (mirrors native Pi).
@@ -12993,7 +13018,7 @@ export default function OpenTuiApp() {
 
       {composerSendState === 'sending' && composerLiveReasoning.trim() ? (
         <LivePreviewCard
-          title={`✻ THINKING · ${String(composerProvider ?? 'agent').toUpperCase()} · ${tuiEffort.toUpperCase()}`}
+          title={`✻ THINKING · ${String(composerProvider ?? 'agent').toUpperCase()} · ${tuiEffort.toUpperCase()}${composerThinkingTokens > 0 ? ` · ~${composerThinkingTokens >= 1000 ? `${(composerThinkingTokens / 1000).toFixed(1)}k` : composerThinkingTokens} tok` : ''}`}
           lines={liveReasoningPreviewLines}
           accentColor={theme.violet}
           bodyColor={theme.muted}

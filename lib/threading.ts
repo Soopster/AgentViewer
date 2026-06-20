@@ -216,7 +216,10 @@ function toSystemPayload(msg: SessionMessage): SystemMessagePayload | null {
 // these — they pile up in the transcript and break the "continuing a session"
 // illusion. The events are still persisted to the session file; we just hide
 // them from the rendered timeline.
-const HIDDEN_PLUMBING_SUBTYPES = new Set(['init', 'status'])
+// `thinking_tokens` is a high-frequency live estimate (token count + delta) the
+// SDK streams during a turn; it's surfaced on the live THINKING preview card, not
+// as a persisted transcript row, so hide it from the rendered timeline.
+const HIDDEN_PLUMBING_SUBTYPES = new Set(['init', 'status', 'thinking_tokens'])
 
 function isHiddenPlumbingMessage(payload: SystemMessagePayload): boolean {
   if (HIDDEN_PLUMBING_SUBTYPES.has(payload.subtype)) return true
@@ -268,11 +271,22 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
   for (const msg of messages) seen.set(`${msg.provider ?? 'claude'}:${msg.uuid}`, msg)
   const deduped = [...seen.values()]
 
-  // Pass 1: collect all tool results and mark plumbing turns
+  // Pass 1: collect all tool results, mark plumbing turns, and gather any
+  // messages retracted by a model_refusal_fallback. When a model refuses and the
+  // SDK falls back to another model, it emits the refused partial's wire uuids in
+  // `retracted_message_uuids` so consumers evict that stale content. Eviction is
+  // idempotent — unknown/already-removed uuids are a no-op.
   const resultMap = new Map<string, ToolResultBlock>()
   const plumbingUuids = new Set<string>()
+  const retractedUuids = new Set<string>()
 
   for (const msg of deduped) {
+    const payload = toSystemPayload(msg)
+    if (payload?.subtype === 'model_refusal_fallback' && Array.isArray(payload.retracted_message_uuids)) {
+      for (const uuid of payload.retracted_message_uuids) {
+        if (typeof uuid === 'string') retractedUuids.add(uuid)
+      }
+    }
     if (!isPlumbingTurn(msg)) continue
     plumbingUuids.add(msg.uuid)
     for (const b of toBlocks(msg)) {
@@ -281,11 +295,12 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
     }
   }
 
-  // Pass 2: build threaded messages, skipping plumbing turns
+  // Pass 2: build threaded messages, skipping plumbing and retracted turns
   const out: ThreadedMessage[] = []
 
   for (const msg of deduped) {
     if (plumbingUuids.has(msg.uuid)) continue
+    if (retractedUuids.has(msg.uuid)) continue
 
     const systemPayload = toSystemPayload(msg)
     if (systemPayload) {

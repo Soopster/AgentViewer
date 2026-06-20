@@ -198,6 +198,11 @@ type TimelineEstimateSample = {
   measuredHeight: number
 }
 
+// Compact thinking-token estimate for the live preview (e.g. 12345 → "12.3k").
+function formatLiveThinkingTokens(tokens: number): string {
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : `${tokens}`
+}
+
 function useLazyRef<T>(create: () => T): { current: T } {
   const ref = useRef<T | null>(null)
   if (ref.current === null) ref.current = create()
@@ -2677,6 +2682,9 @@ export default function MessageView({
   // dim block above the answer (like the native CLIs) instead of being folded
   // into the reply text.
   const [liveReasoningText, setLiveReasoningText] = useState('')
+  // Live estimate of thinking tokens for the current turn, streamed by the SDK
+  // as `thinking_tokens` system messages. Surfaced on the THINKING preview only.
+  const [liveThinkingTokens, setLiveThinkingTokens] = useState(0)
   const [liveToolActivities, setLiveToolActivities] = useState<LiveToolActivity[]>([])
   const [liveThreadedMessages, setLiveThreadedMessages] = useState<ThreadedMessage[]>([])
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
@@ -2891,6 +2899,7 @@ export default function MessageView({
     liveReasoningTextRef.current = ''
     pendingLiveReasoningTextRef.current = null
     setLiveReasoningText('')
+    setLiveThinkingTokens(0)
   }, [])
 
   const queueLiveAssistantText = useCallback((deltaText: string, replace: boolean) => {
@@ -4213,6 +4222,24 @@ export default function MessageView({
             if (reasoningDelta) {
               setLiveStatus(null)
               queueLiveReasoningText(reasoningDelta)
+            }
+
+            if (parsed?.type === 'system' && parsed.subtype === 'thinking_tokens') {
+              const estimate = typeof parsed.estimated_tokens === 'number' ? parsed.estimated_tokens : null
+              if (estimate != null) setLiveThinkingTokens(estimate)
+            }
+
+            // A model refusal triggered a fallback to another model. Evict the
+            // refused partial from the live overlay so it doesn't linger; the
+            // banner itself arrives through the normal threaded path.
+            if (parsed?.type === 'system' && parsed.subtype === 'model_refusal_fallback') {
+              const retracted = Array.isArray(parsed.retracted_message_uuids)
+                ? new Set(parsed.retracted_message_uuids.filter((u: unknown): u is string => typeof u === 'string'))
+                : null
+              if (retracted && retracted.size > 0) {
+                setLiveThreadedMessages((prev) => prev.filter((m) => !retracted.has(m.uuid)))
+              }
+              clearLiveAssistantText()
             }
 
             const codexCompletionItem = parsed?.type === 'codex_item_completed' && parsed.item && typeof parsed.item === 'object'
@@ -5599,9 +5626,9 @@ export default function MessageView({
               || (activeToolCount > 0
                 ? `Using ${activeToolCount} tool${activeToolCount === 1 ? '' : 's'}…`
                 : liveReasoningText.trim()
-                ? 'Thinking…'
+                ? `Thinking…${liveThinkingTokens > 0 ? ` (~${formatLiveThinkingTokens(liveThinkingTokens)} tokens)` : ''}`
                 : sendState === 'sending'
-                ? 'Working…'
+                ? `Working…${liveThinkingTokens > 0 ? ` (~${formatLiveThinkingTokens(liveThinkingTokens)} thinking tokens)` : ''}`
                 : 'Waiting for saved response…'),
           },
         ],
@@ -5611,6 +5638,7 @@ export default function MessageView({
       awaitingPersistedTurn,
       liveAssistantText,
       liveReasoningText,
+      liveThinkingTokens,
       sendState,
       session?.provider,
       session?.sessionId,

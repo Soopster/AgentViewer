@@ -4152,6 +4152,17 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
   const detailPreview = useMemo(() => {
     const withRuntime = (value: string) => runtimeCountText ? `${value} · ${runtimeCountText}` : value
     if (errorSummary) return apiErrorStatus ? `${errorSummary} (HTTP ${apiErrorStatus})` : errorSummary
+    if (subtype === 'model_refusal_fallback') {
+      const from = typeof payload.original_model === 'string' ? payload.original_model : '?'
+      const to = typeof payload.fallback_model === 'string' ? payload.fallback_model : '?'
+      const category = typeof payload.api_refusal_category === 'string' ? payload.api_refusal_category : ''
+      const verb = payload.direction === 'revert' ? 'Reverted' : 'Fell back'
+      return withRuntime(`${verb} ${from} → ${to}${category ? ` · refusal: ${category}` : ' · refusal'}`)
+    }
+    if (subtype === 'informational' && content.trim()) {
+      const stopped = payload.prevent_continuation === true ? ' · stopped' : ''
+      return withRuntime(`${content.replace(/\s+/g, ' ').trim()}${stopped}`)
+    }
     if (content.trim()) return withRuntime(content.replace(/\s+/g, ' ').trim())
     if (subtype === 'compact_boundary') return withRuntime('Conversation compacted')
     if (subtype === 'task_started' && typeof payload.description === 'string') return withRuntime(payload.description)
@@ -4298,6 +4309,10 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     ? 'var(--yellow)'
     : subtype === 'session_state_changed'
     ? 'var(--violet)'
+    : subtype === 'model_refusal_fallback'
+    ? 'var(--yellow)'
+    : subtype === 'informational'
+    ? (payload.level === 'suggestion' ? 'var(--green)' : payload.level === 'notice' ? 'var(--text-3)' : 'var(--cyan)')
     : subtype === 'local_command_output'
     ? 'var(--cyan)'
     : subtype === 'result'
@@ -4326,6 +4341,16 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     }
     if (subtype === 'notification' && typeof payload.priority === 'string') nextBadges.push(payload.priority)
     if (subtype === 'plugin_install' && typeof payload.name === 'string') nextBadges.push(payload.name)
+    if (subtype === 'model_refusal_fallback') {
+      if (typeof payload.original_model === 'string') nextBadges.push(payload.original_model)
+      if (typeof payload.fallback_model === 'string') nextBadges.push(`→ ${payload.fallback_model}`)
+      if (typeof payload.api_refusal_category === 'string') nextBadges.push(payload.api_refusal_category)
+      if (typeof payload.direction === 'string') nextBadges.push(payload.direction)
+    }
+    if (subtype === 'informational') {
+      if (typeof payload.level === 'string' && payload.level !== 'info') nextBadges.push(payload.level)
+      if (payload.prevent_continuation === true) nextBadges.push('stopped')
+    }
     nextBadges.push(...formatClaudeRuntimeCounts(payload))
     if (subtype === 'memory_recall' && typeof payload.mode === 'string') nextBadges.push(payload.mode)
     if (subtype === 'compact_boundary' && payload.compact_metadata && typeof payload.compact_metadata === 'object') {
