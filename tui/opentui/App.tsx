@@ -5484,7 +5484,9 @@ export default function OpenTuiApp() {
     ?? '(untitled session)'
   ), [selectedSession, sessionDetail?.info])
 
-  const readerModel = sessionDetail?.info?.currentModel ?? 'unknown'
+  // null (not 'unknown') so joinMeta drops it — a session whose model we can't
+  // resolve shows just its project, never a dangling "· unknown".
+  const readerModel = sessionDetail?.info?.currentModel ?? null
   const gitRepoCwd = sessionDetail?.info?.cwd ?? selectedSession?.cwd ?? null
   const projectCount = useMemo(
     () => new Set(sessions.map((session) => formatSessionProject(session))).size,
@@ -11809,20 +11811,30 @@ export default function OpenTuiApp() {
   const statusLabel = loadingSessions ? 'syncing' : refreshingSessions ? 'refreshing' : 'live'
   const readerMode = followTail ? null : pendingNewCount > 0 ? 'new content' : 'reading'
   const headerStatusRight = useMemo(
-    () => fitText(
-      joinMeta([
-        statusLabel.toUpperCase(),
+    () => {
+      // Solid dot = live; hollow = a fetch is in flight (syncing/refreshing).
+      const statusGlyph = statusLabel === 'live' ? '●' : '◌'
+      // Primary group: the live/reader state that actually changes as you work.
+      const livePart = joinMeta([
+        `${statusGlyph} ${statusLabel.toUpperCase()}`,
         visibleTranscriptCards.length === 0 ? '0/0' : `${Math.max(cursorIndex, 0) + 1}/${visibleTranscriptCards.length}`,
         readerMode?.toUpperCase() ?? null,
+        pendingNewCount > 0 ? `+${pendingNewCount} NEW` : null,
+      ])
+      // Secondary group: display config, split off with the same ` │ ` divider
+      // the footer uses so it stops competing with live status. Density/width
+      // are intentionally omitted — the footer already shows their live values
+      // (d/⇧W), so repeating them here was pure duplication.
+      const settingsPart = joinMeta([
         themeMode.toUpperCase(),
-        density.toUpperCase(),
-        transcriptWidth.toUpperCase(),
-        pendingNewCount > 0 ? `+${pendingNewCount} new` : null,
         !railVisible ? 'h show rail' : null,
-      ]),
-      Math.max(Math.floor(width * 0.45), 20),
-    ),
-    [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, themeMode, density, transcriptWidth, pendingNewCount, railVisible, width],
+      ])
+      return fitText(
+        settingsPart ? `${livePart} │ ${settingsPart}` : livePart,
+        Math.max(Math.floor(width * 0.45), 20),
+      )
+    },
+    [statusLabel, visibleTranscriptCards.length, cursorIndex, readerMode, themeMode, pendingNewCount, railVisible, width],
   )
   const readerContextMeta = useMemo(
     () => fitText(
