@@ -12849,7 +12849,7 @@ export default function OpenTuiApp() {
         const focusIndex = Math.min(questionFocusIndex, questions.length - 1)
         return (
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
-            <box borderStyle="single" borderColor={theme.violet ?? theme.amber} flexDirection="column" paddingX={1}>
+            <box borderStyle="single" borderColor={theme.violet ?? theme.amber} backgroundColor={theme.surface} flexDirection="column" paddingX={1}>
               <text fg={theme.violet ?? theme.amber} wrapMode="none">
                 {fitText(questions.length === 1 ? '● Claude asks' : `● Claude asks · ${questions.length} questions`, innerWidth)}
               </text>
@@ -12895,7 +12895,7 @@ export default function OpenTuiApp() {
         const idx = Math.min(permissionOptionIndex, planOptions.length - 1)
         return (
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
-            <box borderStyle="single" borderColor={theme.green} flexDirection="column" paddingX={1}>
+            <box borderStyle="single" borderColor={theme.green} backgroundColor={theme.surface} flexDirection="column" paddingX={1}>
               <text fg={theme.green} wrapMode="none">{fitText('● Claude finished planning', innerWidth)}</text>
               {planLines.map((planLine, index) => (
                 <text key={`plan:${index}`} fg={theme.text} wrapMode="none">{fitText(planLine || ' ', innerWidth)}</text>
@@ -12931,7 +12931,7 @@ export default function OpenTuiApp() {
         const diffLines = permission.diff ? permission.diff.split('\n').slice(0, 12) : []
         return (
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
-            <box borderStyle="single" borderColor={theme.amber} flexDirection="column" paddingX={1}>
+            <box borderStyle="single" borderColor={theme.amber} backgroundColor={theme.surface} flexDirection="column" paddingX={1}>
               <text fg={theme.amber} wrapMode="none">{fitText(`● ${permission.title}`, innerWidth)}</text>
               {permission.reason ? (
                 <text fg={theme.dim} wrapMode="word">{permission.reason}</text>
