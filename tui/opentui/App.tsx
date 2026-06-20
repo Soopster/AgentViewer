@@ -11302,14 +11302,18 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'messages' && (key.name === 'j' || key.name === 'down')) {
+    // Unshifted only — Shift+j/k (and Shift+↑/↓) are reserved for the diff
+    // card's row range-select block below; without the !key.shift guard these
+    // card-cursor moves would swallow the shifted keys first (same precedence
+    // trap as the resume-marker `m`).
+    if (effectiveFocus === 'messages' && (key.name === 'j' || key.name === 'down') && !key.shift) {
       handled(() => {
         moveCursor(velocityScrollStep(1))
       })
       return
     }
 
-    if (effectiveFocus === 'messages' && (key.name === 'k' || key.name === 'up')) {
+    if (effectiveFocus === 'messages' && (key.name === 'k' || key.name === 'up') && !key.shift) {
       handled(() => {
         moveCursor(-velocityScrollStep(-1))
       })
@@ -11379,7 +11383,16 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'messages' && key.name === 'm') {
+    // Resume-marker jump yields to the diff card's own `m` (toggle hunk
+    // headers) when the cursor is on an interactive diff — this global handler
+    // sits above the diff key block, so without the guard it would swallow `m`
+    // before the diff block (below) ever sees it, leaving the documented
+    // per-card shortcut dead.
+    if (
+      effectiveFocus === 'messages'
+      && key.name === 'm'
+      && !(selectedTranscriptCard?.category === 'diff' && selectedTranscriptCardDisplay?.diffView)
+    ) {
       handled(() => {
         jumpToResumeMarker()
       })
