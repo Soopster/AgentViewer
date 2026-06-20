@@ -12234,7 +12234,7 @@ export default function OpenTuiApp() {
             width={sidebarWidth}
             border
             borderStyle="single"
-            borderColor={effectiveFocus === 'sessions' ? theme.border2 : theme.border}
+            borderColor={effectiveFocus === 'sessions' ? theme.cyan : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
             title={sidebarSortHeader}
@@ -12318,7 +12318,10 @@ export default function OpenTuiApp() {
             flexGrow={1}
             border
             borderStyle="single"
-            borderColor={theme.border}
+            // Focused pane lights its frame in its own title color (transcript →
+            // provider accent, like the sidebar → cyan) so it's obvious which
+            // side has focus instead of the frame staying uniformly dim.
+            borderColor={effectiveFocus === 'messages' ? providerAccent : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
             title={headerStatusRight}
