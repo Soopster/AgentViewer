@@ -1052,9 +1052,37 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   // Estimate remaining rows for Commits (used for manual slicing while Commits lacks scrollbox).
   const rightH = popH - 2
   const focusLabel = focusSide === 'right' ? 'shift-tab return left' : 'tab focus right'
-  const fileDiffLabel = fileDiffMode === 'viewer'
-    ? `v plain  ${diffHighlights ? '●' : '○'} syntax  s ${diffLayout}  n ${showLineNumbers ? '#' : 'no#'}  m ${showHunkHeaders ? '@@' : 'no@@'}  {} hunk  shift+j/k range  a:note  C:composer  x:del`
-    : 'v parsed'
+  // Diff controls render with the same key-cyan / label-muted convention as the
+  // keybinding groups beside them (and the transcript diff strip), instead of a
+  // flat muted wall. `syntax` is a status chip (● = highlights loaded), not a
+  // fake keybinding.
+  const fileDiffSegs: React.ReactNode[] = fileDiffMode === 'viewer'
+    ? (() => {
+        const controls: Array<[string, string]> = [
+          ['v', 'plain'],
+          ['s', diffLayout],
+          ['n', showLineNumbers ? '#' : 'no#'],
+          ['m', showHunkHeaders ? '@@' : 'no@@'],
+          ['{}', 'hunk'],
+          ['⇧j/k', 'range'],
+          ['a', 'note'],
+          ['C', 'composer'],
+          ['x', 'del'],
+        ]
+        const nodes: React.ReactNode[] = []
+        controls.forEach(([k, l], i) => {
+          if (i > 0) nodes.push(<span key={`fd-sep${i}`} fg={theme.dim}>{'  '}</span>)
+          nodes.push(<span key={`fd-k${i}`} fg={theme.cyan}>{k}</span>)
+          nodes.push(<span key={`fd-l${i}`} fg={theme.muted}>{` ${l}`}</span>)
+        })
+        nodes.push(<span key="fd-syn-dot" fg={diffHighlights ? theme.green : theme.dim}>{'   ● '}</span>)
+        nodes.push(<span key="fd-syn" fg={theme.muted}>syntax</span>)
+        return nodes
+      })()
+    : [
+        <span key="fd-parsed-k" fg={theme.cyan}>v</span>,
+        <span key="fd-parsed-l" fg={theme.muted}> parsed</span>,
+      ]
 
   function statusColor(x: string, y: string): string {
     if (x === '?' && y === '?') return theme.red  // untracked
@@ -1360,7 +1388,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
             const segs: React.ReactNode[] = [
               <span key="focus" fg={theme.cyan}>{focusLabel}</span>,
               <span key="pane" fg={theme.dim}>{`  ${PANE_TITLES[pane]}  `}</span>,
-              <span key="diff" fg={theme.muted}>{fileDiffLabel}</span>,
+              ...fileDiffSegs,
             ]
             groups.forEach(([k, l], i) => {
               segs.push(<span key={`d${i}`} fg={theme.dim}>{i === 0 ? '  │  ' : '  '}</span>)
