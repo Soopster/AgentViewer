@@ -1378,7 +1378,7 @@ const composerKeyBindings: ComposerKeyBinding[] = [
   { name: 'j', ctrl: true, action: 'newline' },
   { name: 'linefeed', action: 'newline' },
 ]
-const TRANSCRIPT_TOP_MARGIN = 2
+const TRANSCRIPT_TOP_MARGIN = 1
 // Metadata refresh is intentionally slow because Claude control queries are
 // expensive and can still cause main-thread pressure when they complete.
 const CLAUDE_METADATA_REFRESH_MS = 5 * 60_000
@@ -3561,6 +3561,7 @@ type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number }
 // ultrawide terminal. Keep normal cards at a readable measure while allowing
 // diffs to use the full reader width for side-by-side content.
 const MAX_TRANSCRIPT_CARD_WIDTH = 144
+const MAX_USER_CARD_WIDTH = 112
 
 type TranscriptCardProps = {
   card: TuiTranscriptCard
@@ -3682,12 +3683,12 @@ function TranscriptCardInner({
 
   const diffTextForComposer = card.category === 'diff' ? cardDiffText(card, isExpanded) : null
   const marker = hasCursor ? '>' : isSelected ? ':' : card.role === 'user' ? '▸' : '●'
-  const cardBg = hasCursor
-    ? theme.surface3
-    : isSelected
-      ? theme.surface2
-      : card.role === 'user'
-        ? theme.userBg
+  const cardBg = card.role === 'user'
+    ? theme.userBg
+    : hasCursor
+      ? theme.surface3
+      : isSelected
+        ? theme.surface2
         : isInsight
           ? theme.surface2
           : theme.surface
@@ -3707,13 +3708,15 @@ function TranscriptCardInner({
                 ? accent
                 : theme.border
   const availableCardWidth = Math.max(rightPaneWidth - 4, 20)
-  const readableCardWidth = card.category === 'diff' || transcriptWidth === 'full'
-    ? availableCardWidth
-    : Math.min(availableCardWidth, MAX_TRANSCRIPT_CARD_WIDTH)
-  const imessageUserBubble = transcriptWidth === 'centered' && imessageStyle && card.role === 'user'
-  const cardWidth = imessageUserBubble
-    ? Math.max(Math.min(Math.floor(readableCardWidth * 0.7), readableCardWidth), 20)
+  const centeredCard = card.category !== 'diff' && transcriptWidth === 'centered'
+  const readableCardWidth = centeredCard
+    ? Math.min(availableCardWidth, MAX_TRANSCRIPT_CARD_WIDTH)
+    : availableCardWidth
+  const userBubble = centeredCard && card.role === 'user'
+  const cardWidth = userBubble
+    ? Math.min(Math.max(Math.floor(readableCardWidth * 0.78), 20), MAX_USER_CARD_WIDTH)
     : readableCardWidth
+  const imessageUserBubble = userBubble && imessageStyle
   const maxTitleWidth = Math.max(cardWidth - 4, 20)
   const titleMeta = joinMeta([
     headerMeta,
@@ -3854,7 +3857,7 @@ function TranscriptCardInner({
     event.stopPropagation()
     setDiffRowCursor(card.key, rowIndex, true)
   }
-  const landmarkWidth = cardWidth - 4
+  const landmarkWidth = readableCardWidth - 4
   const selectionColors = terminalSelectionColors(theme)
 
   if (streamMode) {
@@ -3903,8 +3906,8 @@ function TranscriptCardInner({
     <box
       flexDirection="column"
       marginBottom={densityState.cardGap}
-      alignSelf={imessageUserBubble ? 'flex-end' : card.category === 'diff' || transcriptWidth === 'full' ? undefined : 'center'}
-      width={cardWidth}
+      alignSelf={centeredCard ? 'center' : undefined}
+      width={readableCardWidth}
     >
       {landmarks.map((landmark, landmarkIndex) => {
         const color = landmark.kind === 'resume'
@@ -3923,6 +3926,8 @@ function TranscriptCardInner({
 
       <box
         id={`card:${card.key}`}
+        alignSelf={userBubble ? 'flex-end' : undefined}
+        width={cardWidth}
         border
         borderStyle={hasCursor ? 'heavy' : 'single'}
         borderColor={borderColor}
@@ -9567,15 +9572,24 @@ export default function OpenTuiApp() {
   // keys pop in the accent color, labels stay muted, groups split by a dim
   // divider so the bar scans at a glance instead of reading as one dim wall.
   const footerSegments = useMemo<InlineTextSegment[]>(() => {
-    const groups: Array<Array<[string, string]>> = [
-      [['j/k', 'move'], ['⌃u/d', 'page'], ['tab', 'focus'], ['←/→', 'tabs'], ['w', 'close']],
-      [['/', 'search'], ['n/N', 'hits'], ['u', 'unread'], ['f', 'live']],
-      [['m', 'mark'], ['[ ]', 'jump'], ['⇧B', 'all'], ['b', effectiveFocus === 'sessions' ? 'tabs' : 'bookmark']],
-      [['()', 'convo'], ['{}', 'tech'], ['e', 'fold'], ['v', transcriptView], ['s', `diff:${diffLayout}`], ['d', density], ['⇧W', transcriptWidth], ['i', 'think'], ['X', showToolCalls ? 'hide tools' : 'tools']],
-      [['h', 'rail'], ['⇧T', 'tasks'], ['z', 'focus'], ['V', velocityScrollEnabled ? 'vel off' : 'vel on']],
-      [['⌃O', 'composer'], ['p', 'provider'], ['y', 'copy'], ['Q', 'reply'], ['r', 'refresh']],
-      [['?', 'help'], ['q', 'quit']],
-    ]
+    const groups: Array<Array<[string, string]>> = composerActive
+      ? [[
+          ['Esc', 'transcript'],
+          ['⇧⏎', 'newline'],
+          ['⌃O', 'expand'],
+          ...(composerSendState === 'sending'
+            ? [['⌃C', 'cancel'], ['↵', 'queue']] as Array<[string, string]>
+            : [['↵', 'send']] as Array<[string, string]>),
+        ]]
+      : [
+          [['j/k', 'move'], ['⌃u/d', 'page'], ['tab', 'focus'], ['←/→', 'tabs'], ['w', 'close']],
+          [['/', 'search'], ['n/N', 'hits'], ['u', 'unread'], ['f', 'live']],
+          [['m', 'mark'], ['[ ]', 'jump'], ['⇧B', 'all'], ['b', effectiveFocus === 'sessions' ? 'tabs' : 'bookmark']],
+          [['()', 'convo'], ['{}', 'tech'], ['e', 'fold'], ['v', transcriptView], ['s', `diff:${diffLayout}`], ['d', density], ['⇧W', transcriptWidth], ['i', 'think'], ['X', showToolCalls ? 'hide tools' : 'tools']],
+          [['h', 'rail'], ['⇧T', 'tasks'], ['z', 'focus'], ['V', velocityScrollEnabled ? 'vel off' : 'vel on']],
+          [['⌃O', 'composer'], ['p', 'provider'], ['y', 'copy'], ['Q', 'reply'], ['r', 'refresh']],
+          [['?', 'help'], ['q', 'quit']],
+        ]
     const segs: InlineTextSegment[] = []
     groups.forEach((group, gi) => {
       if (gi > 0) segs.push({ text: ' │ ', fg: theme.dim })
@@ -9586,7 +9600,7 @@ export default function OpenTuiApp() {
       })
     })
     return segs
-  }, [diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, effectiveFocus, theme])
+  }, [composerActive, composerSendState, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, effectiveFocus, theme])
 
   const composerStatusMessage = composerError
     ? composerError
@@ -11881,8 +11895,9 @@ export default function OpenTuiApp() {
   const composerDockTitleLeft = `◆ COMPOSER · ${composerConfig.label.toUpperCase()}`
   const composerDockTitleWidth = Math.max(composerDockTextareaWidth - 2, 12)
   const composerDockTitleGap = composerDockTitleWidth - composerDockTitleLeft.length - composerDockHeaderStatus.length
-  const composerDockEmphasized = routeComposerToBridge || routeComposerToIde || composerActive
-  const composerDockTitleRule = composerDockEmphasized ? '━' : '─'
+  const composerDockRouted = routeComposerToBridge || routeComposerToIde
+  const composerDockEmphasized = composerDockRouted || composerActive
+  const composerDockTitleRule = composerDockRouted ? '━' : '─'
   const composerDockBorderTitle = composerDockTitleGap > 0
     ? `${composerDockTitleLeft}${composerDockTitleRule.repeat(composerDockTitleGap)}${composerDockHeaderStatus}`
     : fitText(`${composerDockTitleLeft} · ${composerDockHeaderStatus}`, composerDockTitleWidth)
@@ -12262,7 +12277,7 @@ export default function OpenTuiApp() {
             flexGrow={1}
             border
             borderStyle="single"
-            borderColor={effectiveFocus === 'messages' ? theme.border2 : theme.border}
+            borderColor={theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
             title={headerStatusRight}
@@ -13171,7 +13186,7 @@ export default function OpenTuiApp() {
           paddingX={1}
           backgroundColor={theme.surface2}
           border
-          borderStyle={composerDockEmphasized ? 'heavy' : 'rounded'}
+          borderStyle={composerDockRouted ? 'heavy' : 'rounded'}
           borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
           title={composerDockBorderTitle}
           titleColor={composerDockEmphasized ? composerAccentColor : theme.dim}
