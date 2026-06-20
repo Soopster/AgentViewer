@@ -3828,19 +3828,35 @@ function TranscriptCardInner({
     && syntaxStyle
     && canRenderMarkdownWithSyntax(card.markdownContent),
   )
+  // Keys pop in cyan, labels stay muted — same scan-at-a-glance convention as
+  // the main status bar (see footerSegments). The `syntax` status is rendered
+  // as a real status chip (green dot = active), not disguised as a keybinding,
+  // and only when parsed mode is actually highlighting.
   const diffFooterSegments = card.category === 'diff'
-    ? [
-        { text: `v ${diffPlain ? 'parsed' : 'plain'}  `, fg: theme.cyan },
-        { text: '● syntax  ', fg: theme.cyan },
-        { text: `s ${diffLayout}  `, fg: theme.cyan },
-        { text: `n ${diffShowLineNumbers ? '#' : 'no#'}  `, fg: theme.cyan },
-        { text: `m ${diffShowHunkHeaders ? '@@' : 'no@@'}  `, fg: theme.cyan },
-        { text: '{} hunk  ', fg: theme.cyan },
-        { text: 'shift+j/k range  ', fg: theme.cyan },
-        { text: 'a:note  ', fg: theme.cyan },
-        { text: 'A:composer  ', fg: theme.cyan },
-        { text: 'x:del', fg: theme.cyan },
-      ]
+    ? (() => {
+        const controls: Array<[string, string]> = [
+          ['v', diffPlain ? 'parsed' : 'plain'],
+          ['s', diffLayout],
+          ['n', diffShowLineNumbers ? '#' : 'no#'],
+          ['m', diffShowHunkHeaders ? '@@' : 'no@@'],
+          ['{}', 'hunk'],
+          ['⇧j/k', 'range'],
+          ['a', 'note'],
+          ['A', 'composer'],
+          ['x', 'del'],
+        ]
+        const segs: InlineTextSegment[] = []
+        controls.forEach(([keyGlyph, label], i) => {
+          if (i > 0) segs.push({ text: '  ', fg: theme.dim })
+          segs.push({ text: keyGlyph, fg: theme.cyan })
+          segs.push({ text: ` ${label}`, fg: theme.muted })
+        })
+        if (!diffPlain) {
+          segs.push({ text: '   ● ', fg: theme.green })
+          segs.push({ text: 'syntax', fg: theme.muted })
+        }
+        return segs
+      })()
     : null
   const beginDiffMouseSelection = (event: MouseEvent, rowIndex: number) => {
     if (event.button !== 0) return
