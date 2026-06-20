@@ -41,6 +41,10 @@ minimumReleaseAgeExclude:
   # 2026-06-20 update-all (user-approved): versions adopted by npm/bun this
   # round that are younger than the 7-day quarantine. Version-pinned - future
   # releases are still quarantined.
+  # Transitive deps surfaced when rebuilding pnpm-lock from a fresh resolution
+  # (the stale lock pinned older versions); routine bumps already in the tree.
+  - '@mistralai/mistralai@2.2.6'
+  - undici@8.5.0
   - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.183'
   - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.183'
   - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.183'
