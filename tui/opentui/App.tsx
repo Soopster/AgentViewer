@@ -2596,10 +2596,11 @@ function transcriptColor(line: TuiTranscriptCardLine, theme: TuiThemePalette): s
 
 function transcriptBackground(line: TuiTranscriptCardLine, theme: TuiThemePalette): string | undefined {
   switch (line.tone) {
-    case 'result_ok':
-      return theme.diffAddBg
-    case 'result_error':
-      return theme.diffRemoveBg
+    // Tool result summaries (✓ OK, ✓ -2 +10 lines, command output) previously
+    // reused the diff add/remove fills as a full-width band, which read as a
+    // saturated highlight bar dominating the transcript. The green/red text color
+    // + ✓/✗ glyph already carry the success/error semantic, so no band is needed —
+    // the diff fills stay reserved for actual diff content below.
     case 'diff_add':
       return theme.diffAddBg
     case 'diff_remove':
