@@ -38,6 +38,48 @@ allowBuilds:
   protobufjs: set this to true or false
   sharp: set this to true or false
 minimumReleaseAgeExclude:
+  # 2026-06-28 update-all (user-approved): versions adopted by npm/bun this
+  # round that are younger than the 7-day quarantine. Version-pinned - future
+  # releases are still quarantined. Routine bumps of packages already in the
+  # tree (Claude/Pi/Copilot/OpenCode SDKs, OpenTUI, recharts, shadcn,
+  # @types/node) plus their platform binaries.
+  - '@anthropic-ai/claude-agent-sdk@0.3.195'
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.195'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.195'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.195'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.195'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.195'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.195'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.195'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.195'
+  - '@earendil-works/pi-agent-core@0.80.2'
+  - '@earendil-works/pi-ai@0.80.2'
+  - '@earendil-works/pi-coding-agent@0.80.2'
+  - '@earendil-works/pi-tui@0.80.2'
+  - '@github/copilot-sdk@1.0.4'
+  - '@github/copilot@1.0.65'
+  - '@github/copilot-darwin-arm64@1.0.65'
+  - '@github/copilot-darwin-x64@1.0.65'
+  - '@github/copilot-linux-arm64@1.0.65'
+  - '@github/copilot-linux-x64@1.0.65'
+  - '@github/copilot-linuxmusl-arm64@1.0.65'
+  - '@github/copilot-linuxmusl-x64@1.0.65'
+  - '@github/copilot-win32-arm64@1.0.65'
+  - '@github/copilot-win32-x64@1.0.65'
+  - '@opencode-ai/sdk@1.17.11'
+  - '@opentui/core@0.4.2'
+  - '@opentui/core-darwin-arm64@0.4.2'
+  - '@opentui/core-darwin-x64@0.4.2'
+  - '@opentui/core-linux-arm64@0.4.2'
+  - '@opentui/core-linux-arm64-musl@0.4.2'
+  - '@opentui/core-linux-x64@0.4.2'
+  - '@opentui/core-linux-x64-musl@0.4.2'
+  - '@opentui/core-win32-arm64@0.4.2'
+  - '@opentui/core-win32-x64@0.4.2'
+  - '@opentui/react@0.4.2'
+  - '@types/node@26.0.1'
+  - recharts@3.9.0
+  - shadcn@4.12.0
   # 2026-06-20 update-all (user-approved): versions adopted by npm/bun this
   # round that are younger than the 7-day quarantine. Version-pinned - future
   # releases are still quarantined.
