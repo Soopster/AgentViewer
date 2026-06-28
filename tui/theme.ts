@@ -426,7 +426,7 @@ export const TOKYO_NIGHT_THEME: TuiThemePalette = {
 
 export const CATPPUCCIN_MOCHA_THEME: TuiThemePalette = {
   bg: '#1e1e2e',
-  surface: '#181825',
+  surface: '#262638',
   surface2: '#313244',
   surface3: '#45475a',
   diffAddBg: '#2d4332',
@@ -557,8 +557,8 @@ export const EVERFOREST_LIGHT_THEME: TuiThemePalette = {
 } as const
 
 export const ONE_DARK_THEME: TuiThemePalette = {
-  bg: '#282c34',
-  surface: '#21252b',
+  bg: '#21252b',
+  surface: '#282c34',
   surface2: '#2c313a',
   surface3: '#3e4451',
   diffAddBg: '#2c3e2e',
@@ -580,7 +580,7 @@ export const ONE_DARK_THEME: TuiThemePalette = {
 
 export const MONOKAI_THEME: TuiThemePalette = {
   bg: '#272822',
-  surface: '#1e1f1c',
+  surface: '#2c2d27',
   surface2: '#34352f',
   surface3: '#49483e',
   diffAddBg: '#374d2c',
@@ -602,7 +602,7 @@ export const MONOKAI_THEME: TuiThemePalette = {
 
 export const KANAGAWA_THEME: TuiThemePalette = {
   bg: '#1f1f28',
-  surface: '#16161d',
+  surface: '#23232e',
   surface2: '#2a2a37',
   surface3: '#363646',
   diffAddBg: '#2b3328',
@@ -624,7 +624,7 @@ export const KANAGAWA_THEME: TuiThemePalette = {
 
 export const EVERFOREST_DARK_THEME: TuiThemePalette = {
   bg: '#2d353b',
-  surface: '#232a2e',
+  surface: '#30393f',
   surface2: '#343f44',
   surface3: '#3d484d',
   diffAddBg: '#3a4b33',
@@ -734,7 +734,7 @@ export const GITHUB_DARK_THEME: TuiThemePalette = {
 
 export const AYU_DARK_THEME: TuiThemePalette = {
   bg: '#0a0e14',
-  surface: '#0d1017',
+  surface: '#10151c',
   surface2: '#1f2430',
   surface3: '#273747',
   diffAddBg: '#1c3320',
@@ -762,7 +762,7 @@ export const ROSE_PINE_THEME: TuiThemePalette = {
   diffAddBg: '#1f3a35',
   diffRemoveBg: '#3f2234',
   diffMetaBg: '#2a2845',
-  border: '#26233a',
+  border: '#403d52',
   border2: '#c4a7e7',
   text: '#e0def4',
   muted: '#908caa',
@@ -800,7 +800,7 @@ export const SYNTHWAVE_THEME: TuiThemePalette = {
 
 export const PALENIGHT_THEME: TuiThemePalette = {
   bg: '#292d3e',
-  surface: '#1f2233',
+  surface: '#2d3143',
   surface2: '#34374a',
   surface3: '#444267',
   diffAddBg: '#2a4435',
@@ -1020,7 +1020,7 @@ export const ICEBERG_LIGHT_THEME: TuiThemePalette = {
 
 export const ZENBURN_THEME: TuiThemePalette = {
   bg: '#3f3f3f',
-  surface: '#2b2b2b',
+  surface: '#454545',
   surface2: '#4f4f4f',
   surface3: '#5e5e5e',
   diffAddBg: '#475a3f',
@@ -1042,7 +1042,7 @@ export const ZENBURN_THEME: TuiThemePalette = {
 
 export const MATERIAL_DARKER_THEME: TuiThemePalette = {
   bg: '#212121',
-  surface: '#1a1a1a',
+  surface: '#272727',
   surface2: '#2a2a2a',
   surface3: '#353535',
   diffAddBg: '#2c4632',
@@ -1334,7 +1334,7 @@ export const LUMON_THEME: TuiThemePalette = {
   diffAddBg: '#1f3a2a',
   diffRemoveBg: '#3a1f2a',
   diffMetaBg: '#1f3a55',
-  border: '#1b2d40',
+  border: '#2d4860',
   border2: '#f2fcff',
   text: '#d6e2ee',
   muted: '#b1d8ee',
@@ -1378,7 +1378,7 @@ export const MIASMA_THEME: TuiThemePalette = {
   diffAddBg: '#2a3a25',
   diffRemoveBg: '#3a2a25',
   diffMetaBg: '#2a2f3d',
-  border: '#000000',
+  border: '#3d3d3d',
   border2: '#78824b',
   text: '#c2c2b0',
   muted: '#d7c483',
