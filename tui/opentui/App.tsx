@@ -2397,14 +2397,18 @@ function densityConfig(density: TuiDensity): {
   bodyIndent: number
   bodyLines: number
   headerRows: number
+  bodyPad: number
 } {
   switch (density) {
+    // bodyPad is the trailing blank row inside each card. Comfortable keeps it
+    // for breathing room; balanced/dense drop it so the bottom border hugs the
+    // last line and the transcript packs tighter.
     case 'comfortable':
-      return { cardGap: 1, bodyIndent: 3, bodyLines: 6, headerRows: 2 }
+      return { cardGap: 1, bodyIndent: 3, bodyLines: 6, headerRows: 2, bodyPad: 1 }
     case 'dense':
-      return { cardGap: 0, bodyIndent: 1, bodyLines: 12, headerRows: 1 }
+      return { cardGap: 0, bodyIndent: 1, bodyLines: 12, headerRows: 1, bodyPad: 0 }
     default:
-      return { cardGap: 1, bodyIndent: 2, bodyLines: 8, headerRows: 2 }
+      return { cardGap: 1, bodyIndent: 2, bodyLines: 8, headerRows: 2, bodyPad: 0 }
   }
 }
 
@@ -3577,7 +3581,7 @@ function pruneSessionCaches(
   }
 }
 
-type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number }
+type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number; bodyPad: number }
 
 // Conversation prose becomes difficult to scan when cards stretch across an
 // ultrawide terminal. Keep normal cards at a readable measure while allowing
@@ -4038,7 +4042,7 @@ function TranscriptCardInner({
           onSelectCard(card.key)
         }}
       >
-        <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={1}>
+        <box flexDirection="column" paddingLeft={densityState.bodyIndent} paddingBottom={densityState.bodyPad}>
           {shouldRenderSyntaxMarkdown && card.markdownContent && syntaxStyle ? (
             <box paddingX={1}>
               <SelectableMarkdown
@@ -12518,7 +12522,13 @@ export default function OpenTuiApp() {
                 ref={transcriptScrollRef}
                 style={{ height: transcriptViewportRows }}
                 focused={effectiveFocus === 'messages'}
-                backgroundColor={theme.bg}
+                // Match the card surface, not theme.bg: cards render on `surface`,
+                // so when bg is darker than surface (e.g. SENTRY #150f23 vs
+                // #1f1633) the cardGap rows between cards revealed bg as dark
+                // bands in comfortable/balanced (dense has cardGap 0, no gaps).
+                // Surfacing the viewport makes the gaps blend; borders still
+                // delineate cards, and cursor/selected cards keep surface2/3.
+                backgroundColor={theme.surface}
                 stickyScroll={followTail}
                 stickyStart="bottom"
                 scrollY
