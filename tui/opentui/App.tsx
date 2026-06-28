@@ -2840,7 +2840,15 @@ function renderedBodyLines(
   } else {
     base = source.slice(0, previewLimit)
   }
-  return base.length > 0 ? base : [{ text: 'No visible content', tone: 'dim' }]
+  if (base.length > 0) return base
+  // A thinking card with thinking hidden has nothing to show here — the
+  // thinking-mode hint rendered beneath already explains the empty state, so the
+  // "No visible content" placeholder is pure noise (and it stacked up on every
+  // hidden-thinking turn). Suppress it for thinking cards; keep it elsewhere so a
+  // genuinely empty non-thinking card still says something. Both cardHeight and
+  // the renderer call this, so the row count stays in lockstep.
+  const isThinkingCard = card.lines.some((line) => line.tone === 'thinking')
+  return isThinkingCard ? [] : [{ text: 'No visible content', tone: 'dim' }]
 }
 
 function cardDiffText(card: TuiTranscriptCard, isExpanded: boolean): string | null {
@@ -3142,6 +3150,15 @@ function codeBlockLabel(block: TuiTranscriptCodeBlock): string {
   return block.lang
 }
 
+// Collapsed system cards (session notices, thinking_tokens, init) carry no
+// actionable body — only a label and timestamp. Rendering each in a full
+// bordered box wastes ~4 rows of dead space apiece and visually shouts over
+// the conversation. When folded we render them as a single quiet line; the
+// full box returns on expand. Height math below must mirror that branch.
+function isCompactSystemCard(card: TuiTranscriptCard, isExpanded: boolean): boolean {
+  return card.category === 'system' && !isExpanded
+}
+
 function cardHeight(
   cards: TuiTranscriptCard[],
   index: number,
@@ -3155,6 +3172,10 @@ function cardHeight(
 ): number {
   const card = cards[index]
   const isExpanded = expandedKeys.has(card.key)
+  if (isCompactSystemCard(card, isExpanded)) {
+    const landmarkRows = transcriptLandmarks(cards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount).length
+    return landmarkRows + 1 + cardGap
+  }
   const thinkingFull = thinkingFullKeys.has(card.key)
   const useMarkdown = isExpanded && !!card.markdownContent && !card.hasMermaidDiagrams
   const landmarkRows = transcriptLandmarks(cards, index, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount).length
@@ -3918,6 +3939,66 @@ function TranscriptCardInner({
     )
   }
 
+  if (isCompactSystemCard(card, isExpanded)) {
+    const compactWidth = Math.max(readableCardWidth - 2, 16)
+    // The descriptor ("thinking_tokens", "session resumed", …) lives in the body,
+    // not the label, so fold the first body line in — minus a redundant leading
+    // "system " that the label already conveys.
+    const firstBody = bodyLines.length > 0 ? bodyLines[0].text.trim() : ''
+    const descriptor = firstBody && firstBody.toLowerCase() !== card.label.toLowerCase()
+      ? firstBody.replace(/^system[\s·:]+/i, '')
+      : ''
+    const headLabel = `${marker} ${bookmarkGlyph}${categoryEmoji}${card.label}${descriptor ? ` · ${descriptor}` : ''}`
+    const lineColor = hasCursor
+      ? accent
+      : isActiveMatch
+        ? theme.amber
+        : isSearchHit
+          ? theme.cyan
+          : theme.dim
+    const compactBg = hasCursor ? theme.surface3 : isSelected ? theme.surface2 : undefined
+    const labelWidth = Math.max(compactWidth - (headerMeta ? headerMeta.length + 2 : 0), 8)
+    return (
+      <box flexDirection="column" marginBottom={densityState.cardGap} width={readableCardWidth}>
+        {landmarks.map((landmark, landmarkIndex) => {
+          const color = landmark.kind === 'resume'
+            ? theme.cyan
+            : landmark.kind === 'unread'
+              ? theme.amber
+              : landmark.kind === 'day'
+                ? theme.violet
+                : theme.dim
+          return (
+            <box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
+              <text fg={color} selectable {...selectionColors}>{fitText(landmark.text, landmarkWidth)}</text>
+            </box>
+          )
+        })}
+        <box
+          id={`card:${card.key}`}
+          paddingX={1}
+          width={readableCardWidth}
+          flexDirection="row"
+          justifyContent="space-between"
+          backgroundColor={compactBg}
+          onMouseDown={(event) => {
+            if (event.button !== 0) return
+            onSelectCard(card.key)
+          }}
+        >
+          <text fg={lineColor} wrapMode="none" selectable {...selectionColors}>
+            {fitText(headLabel, labelWidth)}
+          </text>
+          {headerMeta ? (
+            <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+              {fitText(headerMeta, headerMeta.length)}
+            </text>
+          ) : null}
+        </box>
+      </box>
+    )
+  }
+
   return (
     <box
       flexDirection="column"
@@ -4311,9 +4392,9 @@ function TranscriptCardInner({
             </box>
           ) : null}
           {isThinkingCard ? (
-            <box paddingX={1} marginTop={1}>
+            <box paddingX={1} marginTop={bodyLines.length > 0 ? 1 : 0}>
               <text fg={thinkingMode ? theme.cyan : theme.dim}>
-                {thinkingMode ? 'Thinking mode on (T to disable)' : 'T toggles thinking mode for all thinking cards'}
+                {thinkingMode ? '✦ thinking shown · T to hide' : '✦ thinking hidden · T to show'}
               </text>
             </box>
           ) : null}
@@ -7935,7 +8016,10 @@ export default function OpenTuiApp() {
         ) : (
           <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
             <text fg={sessionAccent} wrapMode="none">{selected ? '▎' : ' '}</text>
-            <text fg={selected ? theme.text : theme.muted} wrapMode="none">
+            {/* Selection glows in the provider accent — bar, title, and meta all
+                lit in the session's identity color (accent = identity), matching
+                the focused-pane frame convention. */}
+            <text fg={selected ? sessionAccent : theme.muted} wrapMode="none">
               {fitText(formatSessionTitle(entry.session), sidebarInnerWidth - 3)}
             </text>
           </box>
