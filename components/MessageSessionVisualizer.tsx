@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   CheckCircle2,
+  CircleHelp,
   Clock3,
   ExternalLink,
   Eye,
@@ -651,6 +652,47 @@ function executionNodeKindLabel(kind: ExecutionNodeKind): string {
       return 'verify'
     case 'result':
       return 'result'
+  }
+}
+
+function executionNodeWhy(node: ExecutionNode): string {
+  const state = node.error
+    ? ' It is flagged because one or more linked tool results were errors.'
+    : node.pending
+      ? ' It is flagged because at least one linked tool call has no result yet.'
+      : ''
+  switch (node.kind) {
+    case 'request':
+      return `A user turn starts a new execution group. Later reasoning, tool, edit, verify, and result nodes attach to this request until the next user turn.${state}`
+    case 'reasoning':
+      return `This node came from assistant or system text without a tool call, so it is treated as reasoning/context for the current request.${state}`
+    case 'tool':
+      return `This node came from a tool_use block. Its state is inferred from the matching tool_result when one is available.${state}`
+    case 'edit':
+      return `This node is routed to Edits because the tool name is one of the file-changing tools.${state}`
+    case 'verify':
+      return `This node is routed to Verify because it uses a verification-looking command or note, such as tests, build, lint, type-check, or status checks.${state}`
+    case 'result':
+      return `This node is the latest assistant output associated with the request, so it is shown as the task result.${state}`
+  }
+}
+
+function executionNodeWhyShort(node: ExecutionNode): string {
+  if (node.error) return 'error result'
+  if (node.pending) return 'awaiting result'
+  switch (node.kind) {
+    case 'request':
+      return 'user turn'
+    case 'reasoning':
+      return 'agent text'
+    case 'tool':
+      return 'tool_use'
+    case 'edit':
+      return 'file tool'
+    case 'verify':
+      return 'check pattern'
+    case 'result':
+      return 'last output'
   }
 }
 
@@ -1358,6 +1400,7 @@ function ExecutionNodeButton({
   onInspectEntry: (entryId: string) => void
 }) {
   const Icon = executionNodeIcon(node.kind)
+  const why = executionNodeWhy(node)
   return (
     <button
       type="button"
@@ -1366,7 +1409,7 @@ function ExecutionNodeButton({
       style={{
         '--av-exec-node-color': node.tone,
       } as CSSProperties}
-      title={node.detail}
+      title={why}
     >
       <span>
         <Icon aria-hidden="true" />
@@ -1375,6 +1418,10 @@ function ExecutionNodeButton({
       <strong>{node.title}</strong>
       <p>{node.detail}</p>
       {(node.error || node.pending) && <em>{node.error ? 'error' : 'pending'}</em>}
+      <small className="av-session-viz-exec-why">
+        <CircleHelp aria-hidden="true" />
+        Why? {executionNodeWhyShort(node)}
+      </small>
     </button>
   )
 }

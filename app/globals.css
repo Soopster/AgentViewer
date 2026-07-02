@@ -2719,6 +2719,56 @@ button.av-session-viz-graph-node:disabled {
   cursor: default;
 }
 
+/* ── Tool result causality ──────────────────────────────────────────────── */
+.av-tool-result-why {
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--cyan) 5%, var(--surface));
+  color: var(--text-3);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+}
+
+.av-tool-result-why summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  cursor: pointer;
+  list-style: none;
+  padding: 5px 12px;
+}
+
+.av-tool-result-why summary::-webkit-details-marker {
+  display: none;
+}
+
+.av-tool-result-why summary svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--cyan);
+}
+
+.av-tool-result-why summary span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.av-tool-result-why div {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--cyan) 16%, var(--border));
+  padding: 8px 12px 10px 32px;
+}
+
+.av-tool-result-why p {
+  margin: 0;
+  line-height: 1.45;
+}
+
 .av-session-viz-graph-node.av-message-node {
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--bg) 62%, transparent),
@@ -3311,6 +3361,26 @@ button.av-session-viz-graph-node:disabled {
   text-transform: uppercase;
 }
 
+.av-session-viz-exec-why {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--av-exec-node-color) 72%, var(--text-3));
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.av-session-viz-exec-why svg {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
 @media (max-width: 1200px) {
   .av-session-viz-grid {
     grid-template-columns: 1fr;
@@ -3624,6 +3694,26 @@ button.av-session-viz-graph-node:disabled {
   color: var(--text-3);
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
+}
+
+.av-run-cause {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.av-run-cause svg {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+  color: var(--cyan);
 }
 
 .av-run-status {

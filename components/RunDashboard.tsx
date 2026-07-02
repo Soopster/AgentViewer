@@ -5,6 +5,7 @@ import type { CSSProperties } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
+  CircleHelp,
   Clock3,
   FolderGit2,
   GitBranch,
@@ -268,6 +269,10 @@ const RunRow = memo(function RunRow({
           <StatusBadge status={row.status} reason={row.statusReason} />
           <strong title={row.title}>{row.title}</strong>
           <em style={{ color: providerTone(row.provider) }}>{getAssistantLabel(row.provider)}</em>
+        </span>
+        <span className="av-run-cause" title={row.statusReason}>
+          <CircleHelp aria-hidden="true" />
+          Why? {row.statusReason}
         </span>
         <span className="av-run-last" title={row.lastEvent}>{row.lastEvent}</span>
       </span>

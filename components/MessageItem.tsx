@@ -6,7 +6,7 @@ import { LiveSubagentTextContext, TaskActiveFormsContext } from './messageItemSh
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
-import { PencilLine } from 'lucide-react'
+import { CircleHelp, PencilLine } from 'lucide-react'
 import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, ClaudeSystemBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
 import {
@@ -3398,6 +3398,66 @@ function resultToString(content: ToolResultBlock['content']): string {
   return JSON.stringify(content, null, 2)
 }
 
+type ToolResultWhy = {
+  headline: string
+  details: string[]
+}
+
+function explainToolResult(result: ToolResultBlock, toolName: string, raw: string, hasImage: boolean, readSummary: ClaudeReadFileSummary | null): ToolResultWhy {
+  const toolLabel = toolName || 'tool'
+  const resultId = result.tool_use_id ? `tool_use_id ${result.tool_use_id.slice(0, 8)}` : 'the originating tool call'
+  const outputShape = hasImage
+    ? 'image output'
+    : raw.trim()
+      ? `${countLines(raw)} text line${countLines(raw) === 1 ? '' : 's'}`
+      : 'no text output'
+
+  if (result.is_error) {
+    return {
+      headline: `${toolLabel} returned an error result.`,
+      details: [
+        `The provider paired this result with ${resultId} and marked it with is_error.`,
+        raw.trim() ? 'The visible output is the error payload returned by the tool runtime.' : 'No additional error text was returned by the tool runtime.',
+      ],
+    }
+  }
+
+  if (toolName === 'Read' && readSummary) {
+    return {
+      headline: 'Read output was normalized into a file preview.',
+      details: [
+        `The result matched ${resultId} and contains ${outputShape}.`,
+        `Read metadata identified ${formatClaudeReadKind(readSummary)} content, so the viewer renders it with file-oriented formatting instead of a generic log block.`,
+      ],
+    }
+  }
+
+  return {
+    headline: `${toolLabel} completed successfully.`,
+    details: [
+      `The result matched ${resultId} and was not marked as an error.`,
+      hasImage ? 'The payload includes an image content block, so the viewer renders media instead of text.' : `The payload contains ${outputShape}.`,
+    ],
+  }
+}
+
+function ToolResultWhyDisclosure({ why }: { why: ToolResultWhy }) {
+  return (
+    <details className="av-tool-result-why">
+      <summary>
+        <CircleHelp aria-hidden="true" />
+        Why?
+        <span>{why.headline}</span>
+      </summary>
+      <div>
+        {why.details.map((detail) => (
+          <p key={detail}>{detail}</p>
+        ))}
+      </div>
+    </details>
+  )
+}
+
 const EXPAND_BTN: React.CSSProperties = {
   display: 'block', width: '100%', padding: '6px 14px',
   fontFamily: "'IBM Plex Mono', monospace",
@@ -3623,37 +3683,45 @@ function ToolResultSection({ result, toolName, filePath }: { result: ToolResultB
     [imageBlock, readSummary?.content, result.content, toolName],
   )
   const nonEmpty = useMemo(() => raw.split('\n').filter(l => l.trim()), [raw])
+  const why = useMemo(
+    () => explainToolResult(result, toolName, raw, Boolean(imageBlock), readSummary),
+    [imageBlock, raw, readSummary, result, toolName],
+  )
+  const whyNode = <ToolResultWhyDisclosure why={why} />
 
-  if (imageBlock) return <ImageResultSection block={imageBlock} />
+  if (imageBlock) return <>{whyNode}<ImageResultSection block={imageBlock} /></>
 
-  if (result.is_error) return <GenericResultSection raw={readSummary?.content ?? raw} isError />
+  if (result.is_error) return <>{whyNode}<GenericResultSection raw={readSummary?.content ?? raw} isError /></>
 
   if (toolName === 'Read' && readSummary && readSummary.kind !== 'text') {
     const metadata = formatClaudeReadMetadata(readSummary).filter((entry) => entry !== 'token cap')
-    return <GenericResultSection raw={readSummary.content} note={metadata.length > 0 ? `· ${metadata.join(' · ')}` : undefined} />
+    return <>{whyNode}<GenericResultSection raw={readSummary.content} note={metadata.length > 0 ? `· ${metadata.join(' · ')}` : undefined} /></>
   }
 
-  if (toolName === 'Read') return <ReadResultSection raw={readSummary?.content ?? raw} filePath={filePath} summary={readSummary ?? undefined} />
+  if (toolName === 'Read') return <>{whyNode}<ReadResultSection raw={readSummary?.content ?? raw} filePath={filePath} summary={readSummary ?? undefined} /></>
 
   if (nonEmpty.length === 1 && raw.length < 140) {
     return (
-      <div style={{
-        padding: '4px 12px',
-        fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: 11, color: 'var(--green)',
-        background: 'rgba(45,212,160,0.05)',
-        borderTop: '1px solid rgba(45,212,160,0.15)',
-        letterSpacing: '0.03em',
-      }}>
-        ✓ {raw.trim()}
-      </div>
+      <>
+        {whyNode}
+        <div style={{
+          padding: '4px 12px',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11, color: 'var(--green)',
+          background: 'rgba(45,212,160,0.05)',
+          borderTop: '1px solid rgba(45,212,160,0.15)',
+          letterSpacing: '0.03em',
+        }}>
+          ✓ {raw.trim()}
+        </div>
+      </>
     )
   }
 
   const persistedMatch = raw.match(/<persisted-output>[\s\S]*?Preview[^\n]*:\n([\s\S]*)/)
-  if (persistedMatch) return <GenericResultSection raw={persistedMatch[1].trim()} note="· preview" />
+  if (persistedMatch) return <>{whyNode}<GenericResultSection raw={persistedMatch[1].trim()} note="· preview" /></>
 
-  return <GenericResultSection raw={raw} />
+  return <>{whyNode}<GenericResultSection raw={raw} /></>
 }
 
 // ── Block renderers ───────────────────────────────────────────────────────────
