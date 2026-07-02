@@ -16,6 +16,25 @@ export type GitData = {
   commits: string[]
 }
 
+export type GitReviewFile = {
+  path: string
+  x: string
+  y: string
+  status: string
+  staged: boolean
+  unstaged: boolean
+  untracked: boolean
+  additions: number
+  deletions: number
+  patch: string
+}
+
+export type GitReviewData = GitData & {
+  files: GitReviewFile[]
+  omittedFiles: number
+  generatedAt: number
+}
+
 export type GitPaneId = 0 | 1 | 2 | 3 | 4
 
 export type GitCommandRunner = (cwd: string, args: string[]) => Promise<string>
@@ -48,6 +67,42 @@ function parseGitStatus(statusRaw: string): GitStatusEntry[] {
     : []
 }
 
+function reviewPath(entry: GitStatusEntry): string {
+  const renameMarker = ' -> '
+  return entry.path.includes(renameMarker) ? entry.path.split(renameMarker).at(-1) ?? entry.path : entry.path
+}
+
+function statusLabel(entry: GitStatusEntry): string {
+  if (entry.x === '?' && entry.y === '?') return 'untracked'
+  if (entry.x === 'D' || entry.y === 'D') return 'deleted'
+  if (entry.x === 'A' || entry.y === 'A') return 'added'
+  if (entry.x === 'R' || entry.y === 'R') return 'renamed'
+  if (entry.x === 'C' || entry.y === 'C') return 'copied'
+  if (entry.x === 'U' || entry.y === 'U') return 'conflict'
+  return 'modified'
+}
+
+function countPatchLines(patch: string): { additions: number; deletions: number } {
+  let additions = 0
+  let deletions = 0
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) continue
+    if (line.startsWith('+')) additions += 1
+    else if (line.startsWith('-')) deletions += 1
+  }
+  return { additions, deletions }
+}
+
+async function fetchReviewPatch(cwd: string, runGit: GitCommandRunner, entry: GitStatusEntry): Promise<string> {
+  const path = reviewPath(entry)
+  if (entry.x === '?' && entry.y === '?') {
+    return await runGit(cwd, ['diff', '--no-index', '/dev/null', path]) || ''
+  }
+  return await runGit(cwd, ['diff', 'HEAD', '--', path])
+    || await runGit(cwd, ['diff', '--cached', '--', path])
+    || ''
+}
+
 export async function fetchGitData(cwd: string, runGit: GitCommandRunner): Promise<GitData> {
   // Full working-tree diffs are deferred to the per-pane loader so opening the
   // popover stays responsive on large repositories and slower platforms.
@@ -77,6 +132,35 @@ export async function fetchGitData(cwd: string, runGit: GitCommandRunner): Promi
     staged: '',
     branches: branchesRaw ? branchesRaw.split('\n').filter(Boolean) : [],
     commits: commitsRaw ? commitsRaw.split('\n').filter(Boolean) : [],
+  }
+}
+
+export async function fetchGitReviewData(cwd: string, runGit: GitCommandRunner): Promise<GitReviewData> {
+  const data = await fetchGitData(cwd, runGit)
+  const reviewLimit = 80
+  const files = await Promise.all(data.status.slice(0, reviewLimit).map(async (entry) => {
+    const patch = await fetchReviewPatch(cwd, runGit, entry)
+    const counts = countPatchLines(patch)
+    const path = reviewPath(entry)
+    return {
+      path,
+      x: entry.x,
+      y: entry.y,
+      status: statusLabel(entry),
+      staged: entry.x !== ' ' && entry.x !== '?',
+      unstaged: entry.y !== ' ' && entry.y !== '?',
+      untracked: entry.x === '?' && entry.y === '?',
+      additions: counts.additions,
+      deletions: counts.deletions,
+      patch,
+    }
+  }))
+
+  return {
+    ...data,
+    files,
+    omittedFiles: Math.max(data.status.length - files.length, 0),
+    generatedAt: Date.now(),
   }
 }
 

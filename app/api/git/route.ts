@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { fetchGitData, fetchGitPaneContent, isAllowedGitCommand, type GitData, type GitPaneId } from '@/lib/gitProvider'
+import { fetchGitData, fetchGitPaneContent, fetchGitReviewData, isAllowedGitCommand, type GitData, type GitPaneId } from '@/lib/gitProvider'
 import { runGitCommand } from '@/lib/gitNodeProvider'
 
 export async function POST(req: NextRequest) {
@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json() as {
       cwd?: string
       args?: unknown
-      action?: 'data' | 'content'
+      action?: 'data' | 'content' | 'review'
       data?: GitData
       pane?: GitPaneId
       selectedFilePath?: string | null
@@ -22,6 +22,11 @@ export async function POST(req: NextRequest) {
     if (body.action === 'data') {
       const data = await fetchGitData(body.cwd, runGitCommand)
       return NextResponse.json({ data })
+    }
+
+    if (body.action === 'review') {
+      const review = await fetchGitReviewData(body.cwd, runGitCommand)
+      return NextResponse.json({ review })
     }
 
     if (body.action === 'content') {

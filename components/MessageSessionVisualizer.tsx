@@ -6,10 +6,12 @@ import {
   Bot,
   ChevronDown,
   ChevronUp,
+  CheckCircle2,
   Clock3,
   ExternalLink,
   Eye,
   EyeOff,
+  FileCode2,
   Filter,
   Gauge,
   ImageIcon,
@@ -123,13 +125,40 @@ type VisualizerStats = {
 
 type VisualizerFilter = 'all' | 'user' | 'assistant' | 'system' | 'tools' | 'errors' | 'thinking' | 'media'
 type ActiveVisualizerFilter = Exclude<VisualizerFilter, 'all'>
-type VisualizerView = 'rows' | 'graph'
+type VisualizerView = 'rows' | 'graph' | 'execution'
 type GraphDensity = 'comfortable' | 'compact'
 
 type PhaseFocus = {
   label: string
   startIndex: number
   endIndex: number
+}
+
+type ExecutionNodeKind = 'request' | 'reasoning' | 'tool' | 'edit' | 'verify' | 'result'
+
+type ExecutionNode = {
+  id: string
+  kind: ExecutionNodeKind
+  entryId: string
+  title: string
+  detail: string
+  tone: string
+  error?: boolean
+  pending?: boolean
+}
+
+type ExecutionTask = {
+  id: string
+  index: number
+  request: ExecutionNode
+  reasoning: ExecutionNode[]
+  tools: ExecutionNode[]
+  edits: ExecutionNode[]
+  verification: ExecutionNode[]
+  result: ExecutionNode | null
+  entryIds: Set<string>
+  errorCount: number
+  pendingCount: number
 }
 
 const ROLE_META: Record<ThreadedMessage['role'], { label: string; color: string; glow: string; background: string }> = {
@@ -237,6 +266,8 @@ const FILTER_LABELS = new Map(FILTERS.map((filter) => [filter.key, filter.label]
 
 const VERIFY_RE = /\b(test|tests|type-check|typecheck|tsc|build|verify|verification|passes|passed|succeeded|success|lint|diagnostic|checked)\b/i
 const HANDOFF_RE = /\b(done|completed|wired|implemented|verification passed|ready|left|summary|final)\b/i
+const VERIFY_TOOL_RE = /\b(npm|pnpm|bun|yarn)\s+(run\s+)?(test|build|lint|typecheck|tui:check)\b|\bnpx\s+tsc\b|\btsc\s+--noEmit\b|\bgo\s+test\b|\bcargo\s+test\b|\bpytest\b|\bvitest\b|\bjest\b/i
+const EDIT_TOOL_NAMES = new Set(['Edit', 'MultiEdit', 'FileChange', 'Write', 'NotebookEdit'])
 
 function toolColor(name: string): string {
   return TOOL_COLORS[name] ?? 'var(--t-other)'
@@ -587,6 +618,158 @@ function buildHotEntries(entries: VisualizerEntry[], maxChars: number): Visualiz
     .sort((a, b) => b.score - a.score || a.entry.index - b.entry.index)
     .slice(0, 6)
     .map(({ entry }) => entry)
+}
+
+function executionNodeIcon(kind: ExecutionNodeKind): LucideIcon {
+  switch (kind) {
+    case 'request':
+      return Target
+    case 'reasoning':
+      return Sparkles
+    case 'tool':
+      return Wrench
+    case 'edit':
+      return FileCode2
+    case 'verify':
+      return CheckCircle2
+    case 'result':
+      return MessageSquareText
+  }
+}
+
+function executionNodeKindLabel(kind: ExecutionNodeKind): string {
+  switch (kind) {
+    case 'request':
+      return 'request'
+    case 'reasoning':
+      return 'reasoning'
+    case 'tool':
+      return 'tool'
+    case 'edit':
+      return 'edit'
+    case 'verify':
+      return 'verify'
+    case 'result':
+      return 'result'
+  }
+}
+
+function isVerificationTool(tool: ToolSummary): boolean {
+  return tool.name === 'Bash' && VERIFY_TOOL_RE.test(tool.target)
+}
+
+function toolToExecutionNode(entry: VisualizerEntry, tool: ToolSummary, index: number): ExecutionNode {
+  const isEdit = EDIT_TOOL_NAMES.has(tool.name)
+  const isVerify = isVerificationTool(tool)
+  const kind: ExecutionNodeKind = isEdit ? 'edit' : isVerify ? 'verify' : 'tool'
+  const tone = tool.error ? 'var(--red)' : tool.pending ? 'var(--amber)' : kind === 'verify' ? 'var(--green)' : kind === 'edit' ? 'var(--cyan)' : toolColor(tool.name)
+  return {
+    id: `${entry.id}:tool:${index}`,
+    kind,
+    entryId: entry.id,
+    title: tool.name,
+    detail: tool.target || entry.preview,
+    tone,
+    error: tool.error,
+    pending: tool.pending,
+  }
+}
+
+function entryToReasoningNode(entry: VisualizerEntry): ExecutionNode {
+  return {
+    id: `${entry.id}:reasoning`,
+    kind: 'reasoning',
+    entryId: entry.id,
+    title: entry.thinkingCount > 0 ? 'Reasoning' : entry.roleLabel,
+    detail: entry.preview,
+    tone: entry.thinkingCount > 0 ? 'var(--violet)' : ROLE_META[entry.role].color,
+    error: entry.errorCount > 0,
+    pending: entry.pendingToolCount > 0,
+  }
+}
+
+function entryToResultNode(entry: VisualizerEntry): ExecutionNode {
+  return {
+    id: `${entry.id}:result`,
+    kind: 'result',
+    entryId: entry.id,
+    title: entry.roleLabel,
+    detail: entry.preview,
+    tone: entry.errorCount > 0 ? 'var(--red)' : 'var(--text)',
+    error: entry.errorCount > 0,
+    pending: entry.pendingToolCount > 0,
+  }
+}
+
+function buildExecutionTasks(entries: VisualizerEntry[]): ExecutionTask[] {
+  const tasks: ExecutionTask[] = []
+  let current: ExecutionTask | null = null
+
+  const startTask = (entry: VisualizerEntry): ExecutionTask => {
+    const next: ExecutionTask = {
+      id: `task:${entry.id}`,
+      index: tasks.length,
+      request: {
+        id: `${entry.id}:request`,
+        kind: 'request',
+        entryId: entry.id,
+        title: `Request ${tasks.length + 1}`,
+        detail: entry.preview,
+        tone: ROLE_META.user.color,
+        error: entry.errorCount > 0,
+        pending: entry.pendingToolCount > 0,
+      },
+      reasoning: [],
+      tools: [],
+      edits: [],
+      verification: [],
+      result: null,
+      entryIds: new Set([entry.id]),
+      errorCount: entry.errorCount,
+      pendingCount: entry.pendingToolCount,
+    }
+    tasks.push(next)
+    return next
+  }
+
+  for (const entry of entries) {
+    if (entry.role === 'user') {
+      current = startTask(entry)
+      continue
+    }
+
+    if (!current) current = startTask(entry)
+    if (!current) continue
+
+    if (!current.entryIds.has(entry.id)) {
+      current.entryIds.add(entry.id)
+      current.errorCount += entry.errorCount
+      current.pendingCount += entry.pendingToolCount
+    }
+
+    if (entry.toolSummaries.length > 0) {
+      entry.toolSummaries.forEach((tool, index) => {
+        const node = toolToExecutionNode(entry, tool, index)
+        if (node.kind === 'edit') current!.edits.push(node)
+        else if (node.kind === 'verify') current!.verification.push(node)
+        else current!.tools.push(node)
+      })
+      continue
+    }
+
+    if (entry.role === 'assistant') {
+      const node = VERIFY_RE.test(entry.preview) ? { ...entryToResultNode(entry), kind: 'verify' as const, title: 'Verification note', tone: 'var(--green)' } : entryToReasoningNode(entry)
+      if (node.kind === 'verify') current.verification.push(node)
+      else {
+        current.reasoning.push(node)
+        current.result = entryToResultNode(entry)
+      }
+    } else if (entry.role === 'system') {
+      current.reasoning.push(entryToReasoningNode(entry))
+    }
+  }
+
+  return tasks
 }
 
 function entryMatchesFilter(entry: VisualizerEntry, filter: ActiveVisualizerFilter): boolean {
@@ -1165,6 +1348,154 @@ function NodeGraphView({
   )
 }
 
+function ExecutionNodeButton({
+  node,
+  selected,
+  onInspectEntry,
+}: {
+  node: ExecutionNode
+  selected: boolean
+  onInspectEntry: (entryId: string) => void
+}) {
+  const Icon = executionNodeIcon(node.kind)
+  return (
+    <button
+      type="button"
+      className={cn('av-session-viz-exec-node', node.error && 'av-error', node.pending && 'av-pending', selected && 'av-selected')}
+      onClick={() => onInspectEntry(node.entryId)}
+      style={{
+        '--av-exec-node-color': node.tone,
+      } as CSSProperties}
+      title={node.detail}
+    >
+      <span>
+        <Icon aria-hidden="true" />
+        {executionNodeKindLabel(node.kind)}
+      </span>
+      <strong>{node.title}</strong>
+      <p>{node.detail}</p>
+      {(node.error || node.pending) && <em>{node.error ? 'error' : 'pending'}</em>}
+    </button>
+  )
+}
+
+function ExecutionLane({
+  label,
+  nodes,
+  empty,
+  selectedEntryId,
+  onInspectEntry,
+}: {
+  label: string
+  nodes: ExecutionNode[]
+  empty: string
+  selectedEntryId: string | null
+  onInspectEntry: (entryId: string) => void
+}) {
+  return (
+    <div className="av-session-viz-exec-lane">
+      <span>{label}</span>
+      <div>
+        {nodes.length === 0 ? (
+          <em>{empty}</em>
+        ) : nodes.slice(0, 8).map((node) => (
+          <ExecutionNodeButton
+            key={node.id}
+            node={node}
+            selected={selectedEntryId === node.entryId}
+            onInspectEntry={onInspectEntry}
+          />
+        ))}
+        {nodes.length > 8 && <b>+{nodes.length - 8} more</b>}
+      </div>
+    </div>
+  )
+}
+
+function ExecutionTaskCard({
+  task,
+  selectedEntryId,
+  onInspectEntry,
+}: {
+  task: ExecutionTask
+  selectedEntryId: string | null
+  onInspectEntry: (entryId: string) => void
+}) {
+  const resultNodes = task.result ? [task.result] : []
+  const statusTone = task.errorCount > 0 ? 'var(--red)' : task.pendingCount > 0 ? 'var(--amber)' : 'var(--green)'
+  return (
+    <article className="av-session-viz-exec-task">
+      <div className="av-session-viz-exec-task-head">
+        <span style={{ '--av-exec-status': statusTone } as CSSProperties}>
+          {task.errorCount > 0 ? <AlertTriangle aria-hidden="true" /> : <CheckCircle2 aria-hidden="true" />}
+          Task {task.index + 1}
+        </span>
+        <strong title={task.request.detail}>{task.request.detail}</strong>
+        <em>
+          {task.entryIds.size} turns / {task.tools.length + task.edits.length + task.verification.length} actions
+          {task.errorCount > 0 ? ` / ${task.errorCount} errors` : ''}
+          {task.pendingCount > 0 ? ` / ${task.pendingCount} pending` : ''}
+        </em>
+      </div>
+      <div className="av-session-viz-exec-chain">
+        <ExecutionNodeButton
+          node={task.request}
+          selected={selectedEntryId === task.request.entryId}
+          onInspectEntry={onInspectEntry}
+        />
+        <ExecutionLane label="Reasoning" nodes={task.reasoning} empty="no agent text" selectedEntryId={selectedEntryId} onInspectEntry={onInspectEntry} />
+        <ExecutionLane label="Tools" nodes={task.tools} empty="no tools" selectedEntryId={selectedEntryId} onInspectEntry={onInspectEntry} />
+        <ExecutionLane label="Edits" nodes={task.edits} empty="no file edits" selectedEntryId={selectedEntryId} onInspectEntry={onInspectEntry} />
+        <ExecutionLane label="Verify" nodes={task.verification} empty="not seen" selectedEntryId={selectedEntryId} onInspectEntry={onInspectEntry} />
+        <ExecutionLane label="Result" nodes={resultNodes} empty="no final text" selectedEntryId={selectedEntryId} onInspectEntry={onInspectEntry} />
+      </div>
+    </article>
+  )
+}
+
+function ExecutionFlowView({
+  tasks,
+  selectedEntryId,
+  onInspectEntry,
+}: {
+  tasks: ExecutionTask[]
+  selectedEntryId: string | null
+  onInspectEntry: (entryId: string) => void
+}) {
+  if (tasks.length === 0) {
+    return (
+      <div className="av-session-viz-no-results">
+        No execution tasks match the current filter.
+      </div>
+    )
+  }
+
+  const errorCount = tasks.reduce((total, task) => total + task.errorCount, 0)
+  const actionCount = tasks.reduce((total, task) => total + task.tools.length + task.edits.length + task.verification.length, 0)
+
+  return (
+    <div className="av-session-viz-exec" aria-label="Execution timeline">
+      <div className="av-session-viz-exec-head">
+        <span>
+          <Network aria-hidden="true" />
+          Execution timeline
+        </span>
+        <em>{tasks.length} requests / {actionCount} actions / {errorCount} issues</em>
+      </div>
+      <div className="av-session-viz-exec-list">
+        {tasks.map((task) => (
+          <ExecutionTaskCard
+            key={task.id}
+            task={task}
+            selectedEntryId={selectedEntryId}
+            onInspectEntry={onInspectEntry}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ActiveFocusBar({
   activeFilters,
   phaseFocus,
@@ -1362,6 +1693,7 @@ function MessageSessionVisualizer({
     if (!normalizedQuery) return true
     return entry.searchText.includes(normalizedQuery)
   }), [activeFilters, activeTool, entries, normalizedQuery, phaseFocus])
+  const executionTasks = useMemo(() => buildExecutionTasks(filteredEntries), [filteredEntries])
   const selectedEntry = useMemo(() => {
     if (selectedEntryId) {
       const selected = entries.find((entry) => entry.id === selectedEntryId)
@@ -1485,6 +1817,14 @@ function MessageSessionVisualizer({
               </button>
               <button
                 type="button"
+                className={cn(activeView === 'execution' && 'av-active')}
+                onClick={() => setActiveView('execution')}
+              >
+                <Target aria-hidden="true" />
+                Execution
+              </button>
+              <button
+                type="button"
                 className={cn(timelineMaximized && 'av-active')}
                 onClick={() => setTimelineMaximized((value) => !value)}
                 title={timelineMaximized ? 'Restore side readout' : 'Maximise timeline'}
@@ -1545,8 +1885,14 @@ function MessageSessionVisualizer({
               />
             </aside>
           )}
-          <section className={cn('av-session-viz-flow', activeView === 'graph' && 'av-graph-mode')} aria-label="Message flow">
-            {activeView === 'graph' ? (
+          <section className={cn('av-session-viz-flow', activeView === 'graph' && 'av-graph-mode', activeView === 'execution' && 'av-execution-mode')} aria-label="Message flow">
+            {activeView === 'execution' ? (
+              <ExecutionFlowView
+                tasks={executionTasks}
+                selectedEntryId={selectedEntryId}
+                onInspectEntry={setSelectedEntryId}
+              />
+            ) : activeView === 'graph' ? (
               <NodeGraphView
                 entries={filteredEntries}
                 total={entries.length}

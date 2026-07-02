@@ -43,7 +43,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
-import { BookOpen, ChartNetwork, Filter, Minimize2, Plug, Radio, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
+import { BookOpen, ChartNetwork, FileCode2, Filter, Minimize2, Plug, Radio, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
 import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, DiffCommentComposerContext, DEFAULT_DIFF_OPTIONS, type MessageDensity, type WebViewMode, type DiffOptions } from './MessageItem'
 import { useChannelBridge } from './useChannelBridge'
 import { useIdeBridge } from './useIdeBridge'
@@ -72,6 +72,7 @@ const AnalyticsPopover = dynamic(() => import('./AnalyticsPopover'), { ssr: fals
 const PromptLibrary = dynamic(() => import('./PromptLibrary'), { ssr: false })
 const ChannelBridgePanel = dynamic(() => import('./ChannelBridgePanel'), { ssr: false })
 const IdeBridgePanel = dynamic(() => import('./IdeBridgePanel'), { ssr: false })
+const DiffReviewMode = dynamic(() => import('./DiffReviewMode'), { ssr: false })
 const PierrePatchDiffView = dynamic(() => import('./PierreDiffView').then((mod) => mod.PierrePatchDiffView), {
   ssr: false,
   loading: () => (
@@ -2567,6 +2568,14 @@ export default function MessageView({
     if (typeof window === 'undefined') return
     window.localStorage.setItem('agentViewer:messageVisualizer', showVisualizer ? 'true' : 'false')
   }, [showVisualizer])
+  const [showReviewMode, setShowReviewMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem('agentViewer:diffReviewMode') === 'true'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('agentViewer:diffReviewMode', showReviewMode ? 'true' : 'false')
+  }, [showReviewMode])
   const [transcriptFilters, setTranscriptFilters] = useState<ActiveTranscriptFilter[]>([])
   const [transcriptSearch, setTranscriptSearch] = useState('')
   const deferredTranscriptSearch = useDeferredValue(transcriptSearch)
@@ -6190,6 +6199,16 @@ export default function MessageView({
     })
   }, [commitTimelineScrollTop, markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
 
+  const handleReviewJumpToMessage = useCallback((messageId: string) => {
+    setShowReviewMode(false)
+    setShowVisualizer(false)
+    setTranscriptFilters([])
+    setTranscriptSearch('')
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => handleJumpToMessage(messageId))
+    })
+  }, [handleJumpToMessage])
+
   useLayoutEffect(() => {
     if (!timelineTargetMessageId || loading) return
     if (targetMessageRequestId && handledTargetMessageRequestRef.current === targetMessageRequestId) return
@@ -6780,11 +6799,18 @@ export default function MessageView({
               display: 'flex', flexDirection: 'column', gap: 0,
             }}>
               {/* Visualiser toggle */}
-              <button type="button" onClick={() => { setShowVisualizer(v => !v); setViewDropdownOpen(false) }}
+              <button type="button" onClick={() => { setShowVisualizer(v => !v); setShowReviewMode(false); setViewDropdownOpen(false) }}
                 style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showVisualizer ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
                 <ChartNetwork style={{ width: 13, height: 13, flexShrink: 0 }} />
                 {showVisualizer ? 'TRANSCRIPT' : 'VISUALISER'}
               </button>
+              {!isProject && session?.cwd && (
+                <button type="button" onClick={() => { setShowReviewMode(v => !v); setShowVisualizer(false); setViewDropdownOpen(false) }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'transparent', border: 0, cursor: 'pointer', color: showReviewMode ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
+                  <FileCode2 style={{ width: 13, height: 13, flexShrink: 0 }} />
+                  {showReviewMode ? 'TRANSCRIPT' : 'REVIEW'}
+                </button>
+              )}
               {/* Tasks toggle */}
               {!isProject && taskRegistry.size > 0 && (
                 <button type="button" onClick={() => { setTaskRailOpen(v => !v); setViewDropdownOpen(false) }}
@@ -7045,7 +7071,16 @@ export default function MessageView({
           overflow: 'hidden',
         }}
       >
-        {showVisualizer ? (
+        {showReviewMode && session && !isProject ? (
+          <DiffReviewMode
+            session={session}
+            messages={threadedFull}
+            diffStyle={diffStyle}
+            diffOptions={diffOptions}
+            onJumpToMessage={handleReviewJumpToMessage}
+            onClose={() => setShowReviewMode(false)}
+          />
+        ) : showVisualizer ? (
           <div
             style={{
               flex: 1,
