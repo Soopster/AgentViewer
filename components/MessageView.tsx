@@ -253,10 +253,19 @@ const ESTIMATED_TIMELINE_ROW_HEIGHT = 220
 // tool cards, this gives ResizeObserver more time to settle each row before
 // it enters view, which keeps the visible layout stable during fast scrolls.
 const TIMELINE_OVERSCAN_PX = 2400
+// High-frequency scroll paths only commit scrollTop to React state once the
+// drift from the last committed value exceeds this. The virtual window is
+// computed from committed state but overscans TIMELINE_OVERSCAN_PX on both
+// sides, so a sub-threshold stale window still covers the viewport — this
+// turns a fling from one full MessageView render per frame into one per
+// ~600px scrolled. Exact positions are re-committed at scroll idle.
+const TIMELINE_SCROLL_COMMIT_PX = 600
 // Milliseconds of inactivity after the last scroll event before we consider
 // the user "done scrolling" and start applying scrollTop anchor adjustments
 // again for direct scrollbar/touch scrubbing.
 const SCROLL_IDLE_MS = 140
+// Trailing-edge debounce for persisting the composer draft to localStorage.
+const COMPOSER_DRAFT_SAVE_DEBOUNCE_MS = 400
 // Wheel and trackpad scrolling benefits from keeping the visible row anchored
 // while overscanned rows settle. The window outlives the wheel event long
 // enough to cover ResizeObserver delivery and the following animation frame.
@@ -2691,6 +2700,14 @@ export default function MessageView({
   const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useState(false)
   const [autoFollow, setAutoFollow] = useState(false)
   const [timelineScrollTop, setTimelineScrollTop] = useState(0)
+  // Last scrollTop actually committed to state. All commits flow through
+  // commitTimelineScrollTop so quantized paths (RAF scroll handler, streaming
+  // pin) can measure their drift against it. See TIMELINE_SCROLL_COMMIT_PX.
+  const committedScrollTopRef = useRef(0)
+  const commitTimelineScrollTop = useCallback((value: number) => {
+    committedScrollTopRef.current = value
+    setTimelineScrollTop(value)
+  }, [])
   const [timelineViewportHeight, setTimelineViewportHeight] = useState(0)
   const [timelineHeightOverride, setTimelineHeightOverride] = useState<number | null>(null)
   const [rowMeasurementVersion, setRowMeasurementVersion] = useState(0)
@@ -3256,7 +3273,7 @@ export default function MessageView({
     setSendError(null)
     setFailedSend(null)
     setAutoFollow(false)
-    setTimelineScrollTop(0)
+    commitTimelineScrollTop(0)
     setTimelineViewportHeight(0)
     rowHeightsRef.current.clear()
     timelineEstimateCalibrationRef.current.clear()
@@ -3282,7 +3299,7 @@ export default function MessageView({
     liveToolIndexesRef.current.clear()
     liveToolInputJsonRef.current.clear()
     initialScrollDoneRef.current = false
-  }, [clearLiveAssistantText, session?.sessionId])
+  }, [clearLiveAssistantText, commitTimelineScrollTop, session?.sessionId])
 
   useEffect(() => {
     suppressDraftSaveRef.current = true
@@ -3299,13 +3316,40 @@ export default function MessageView({
 
   const autoFocusedSessionsRef = useRef<Set<string>>(new Set())
 
+  // Draft saves are debounced: a synchronous localStorage write (plus
+  // JSON.stringify) on every keystroke is measurable main-thread jank, and the
+  // draft only needs to survive tab/session switches. The latest value sits in
+  // pendingComposerDraftRef (with the key it belongs to, so a session switch
+  // flushes under the OLD key); flushes happen at the trailing edge, on
+  // draft-key change, on unmount, and on pagehide.
+  const pendingComposerDraftRef = useRef<{ key: string | null; draft: ComposerDraft } | null>(null)
+  const composerDraftTimerRef = useRef<number | null>(null)
+  const flushComposerDraft = useCallback(() => {
+    if (composerDraftTimerRef.current != null) {
+      window.clearTimeout(composerDraftTimerRef.current)
+      composerDraftTimerRef.current = null
+    }
+    const pending = pendingComposerDraftRef.current
+    pendingComposerDraftRef.current = null
+    if (pending) writeComposerDraft(pending.key, pending.draft)
+  }, [])
+
   useEffect(() => {
     if (suppressDraftSaveRef.current) return
-    writeComposerDraft(composerDraftKey, {
-      text: inputText,
-      attachments,
-    })
-  }, [attachments, composerDraftKey, inputText])
+    pendingComposerDraftRef.current = { key: composerDraftKey, draft: { text: inputText, attachments } }
+    composerDraftTimerRef.current ??= window.setTimeout(() => {
+      composerDraftTimerRef.current = null
+      flushComposerDraft()
+    }, COMPOSER_DRAFT_SAVE_DEBOUNCE_MS)
+  }, [attachments, composerDraftKey, flushComposerDraft, inputText])
+
+  useEffect(() => {
+    window.addEventListener('pagehide', flushComposerDraft)
+    return () => {
+      window.removeEventListener('pagehide', flushComposerDraft)
+      flushComposerDraft()
+    }
+  }, [composerDraftKey, flushComposerDraft])
 
   useEffect(() => () => {
     if (measurementFrameRef.current != null) {
@@ -3380,13 +3424,22 @@ export default function MessageView({
     userScrollingTimerRef.current = window.setTimeout(() => {
       userScrollingRef.current = false
       userScrollingTimerRef.current = null
-      activeTimelineScrollAnchorRef.current ??= captureTimelineScrollAnchor()
+      // Capture fresh (not ??=): scroll commits are quantized, so an anchor
+      // captured on the last commit can lag the real viewport by up to
+      // TIMELINE_SCROLL_COMMIT_PX — restoring it would yank the scroll
+      // position back. The viewport-top row is always mounted (overscan far
+      // exceeds the commit threshold), so this capture is exact.
+      activeTimelineScrollAnchorRef.current = captureTimelineScrollAnchor()
       timelineHeightOverrideRef.current = null
       pendingTimelineAnchorRestoreRef.current = true
       setTimelineHeightOverride(null)
+      // The scroll handler quantizes its commits; settle the exact resting
+      // position now that the gesture is over.
+      const node = timelineRef.current
+      if (node) commitTimelineScrollTop(node.scrollTop)
       scheduleTimelineMeasurementFlushRef.current()
     }, SCROLL_IDLE_MS)
-  }, [captureTimelineScrollAnchor])
+  }, [captureTimelineScrollAnchor, commitTimelineScrollTop])
 
   useEffect(() => {
     const node = timelineRef.current
@@ -3394,7 +3447,7 @@ export default function MessageView({
 
     const updateMetrics = () => {
       setTimelineViewportHeight(node.clientHeight)
-      setTimelineScrollTop(node.scrollTop)
+      commitTimelineScrollTop(node.scrollTop)
     }
 
     updateMetrics()
@@ -3413,7 +3466,7 @@ export default function MessageView({
       observer.disconnect()
       node.removeEventListener('wheel', handleWheel)
     }
-  }, [markTimelineUserScrolling, showDiagnostics, showVisualizer, session?.sessionId])
+  }, [commitTimelineScrollTop, markTimelineUserScrolling, showDiagnostics, showVisualizer, session?.sessionId])
 
   useEffect(() => {
     if (!rewindPreview || rewindPreview.userMessageId === rewindTargetId) return
@@ -3441,18 +3494,18 @@ export default function MessageView({
     suppressFollowEvalUntilRef.current = performance.now() + 200
     markProgrammaticTimelineScroll()
     node.scrollTop = targetTop
-    setTimelineScrollTop(node.scrollTop)
-  }, [markProgrammaticTimelineScroll])
+    commitTimelineScrollTop(node.scrollTop)
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll])
 
   const scrollTimelineToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const node = timelineRef.current
     if (!node) return
     const targetTop = Math.max(node.scrollHeight - node.clientHeight - TIMELINE_BOTTOM_GUTTER_PX, 0)
-    setTimelineScrollTop(targetTop)
+    commitTimelineScrollTop(targetTop)
     suppressFollowEvalUntilRef.current = performance.now() + 200
     markProgrammaticTimelineScroll(behavior === 'smooth' ? 700 : undefined)
     node.scrollTo({ top: targetTop, behavior })
-  }, [markProgrammaticTimelineScroll])
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll])
 
   const toggleLiveFollow = useCallback(() => {
     setAutoFollow((current) => {
@@ -3474,8 +3527,8 @@ export default function MessageView({
     suppressFollowEvalUntilRef.current = performance.now() + 200
     markProgrammaticTimelineScroll()
     node.scrollTop = targetTop
-    setTimelineScrollTop(targetTop)
-  }, [markProgrammaticTimelineScroll])
+    commitTimelineScrollTop(targetTop)
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll])
 
   const handleTimelineScroll = useCallback(() => {
     const isProgrammaticScroll = performance.now() < programmaticScrollUntilRef.current
@@ -3489,12 +3542,17 @@ export default function MessageView({
       const node = timelineRef.current
       if (!node) return
       scheduleTimelineMeasurementFlushRef.current()
-      setTimelineScrollTop(node.scrollTop)
+      // Quantized: re-render only once the window has meaningfully moved.
+      // The exact resting position is committed by the scroll-idle timer in
+      // markTimelineUserScrolling.
+      if (Math.abs(node.scrollTop - committedScrollTopRef.current) >= TIMELINE_SCROLL_COMMIT_PX) {
+        commitTimelineScrollTop(node.scrollTop)
+      }
       if (performance.now() < suppressFollowEvalUntilRef.current) return
       const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
       setAutoFollow(distanceFromBottom <= TIMELINE_BOTTOM_GUTTER_PX + 16)
     })
-  }, [markTimelineUserScrolling])
+  }, [commitTimelineScrollTop, markTimelineUserScrolling])
 
   const scrollMountedTimelineRowIntoView = useCallback((messageId: string): boolean => {
     const node = timelineRef.current
@@ -3518,10 +3576,10 @@ export default function MessageView({
     if (Math.abs(node.scrollTop - targetTop) > 1) {
       markProgrammaticTimelineScroll()
       node.scrollTop = targetTop
-      setTimelineScrollTop(targetTop)
+      commitTimelineScrollTop(targetTop)
     }
     return true
-  }, [markProgrammaticTimelineScroll])
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll])
 
   useLayoutEffect(() => {
     if (!awaitingPersistedTurn || !session) return
@@ -5845,7 +5903,7 @@ export default function MessageView({
       suppressFollowEvalUntilRef.current = performance.now() + 200
       markProgrammaticTimelineScroll()
       node.scrollTop = targetTop
-      setTimelineScrollTop(targetTop)
+      commitTimelineScrollTop(targetTop)
     }
     alignLastTimelineRowToViewportBottom()
 
@@ -5865,7 +5923,7 @@ export default function MessageView({
       cancelled = true
       if (frameId != null) window.cancelAnimationFrame(frameId)
     }
-  }, [alignLastTimelineRowToViewportBottom, hasLiveTimeline, loading, markProgrammaticTimelineScroll, messages.length, scrollTimelineToBottom, session?.sessionId, targetMessageId])
+  }, [alignLastTimelineRowToViewportBottom, commitTimelineScrollTop, hasLiveTimeline, loading, markProgrammaticTimelineScroll, messages.length, scrollTimelineToBottom, session?.sessionId, targetMessageId])
 
   useEffect(() => {
     const activeKeys = new Set(transcriptTimelineRows.map((row) => row.key))
@@ -6059,8 +6117,8 @@ export default function MessageView({
     suppressFollowEvalUntilRef.current = performance.now() + 200
     markProgrammaticTimelineScroll()
     node.scrollTop = targetTop
-    setTimelineScrollTop(node.scrollTop)
-  }, [markProgrammaticTimelineScroll, rowLayout])
+    commitTimelineScrollTop(node.scrollTop)
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll, rowLayout])
 
   useLayoutEffect(() => {
     if (timelineHeightOverride !== null || !pendingTimelineAnchorRestoreRef.current) return
@@ -6089,7 +6147,7 @@ export default function MessageView({
       suppressFollowEvalUntilRef.current = performance.now() + 300
       markProgrammaticTimelineScroll()
       node.scrollTop = targetTop
-      setTimelineScrollTop(targetTop)
+      commitTimelineScrollTop(targetTop)
     }
 
     window.requestAnimationFrame(() => {
@@ -6100,7 +6158,7 @@ export default function MessageView({
         }
       })
     })
-  }, [markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
 
   // Used by TaskRail to scroll the transcript to a task's most recent event.
   // Same scroll/highlight behavior as the visualizer-select path but without
@@ -6121,7 +6179,7 @@ export default function MessageView({
       suppressFollowEvalUntilRef.current = performance.now() + 300
       markProgrammaticTimelineScroll()
       node.scrollTop = targetTop
-      setTimelineScrollTop(targetTop)
+      commitTimelineScrollTop(targetTop)
     }
 
     window.requestAnimationFrame(() => {
@@ -6130,7 +6188,7 @@ export default function MessageView({
         if (!scrollMountedTimelineRowIntoView(messageId)) scrollToMessage()
       })
     })
-  }, [markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
+  }, [commitTimelineScrollTop, markProgrammaticTimelineScroll, scrollMountedTimelineRowIntoView])
 
   useLayoutEffect(() => {
     if (!timelineTargetMessageId || loading) return
@@ -6146,11 +6204,11 @@ export default function MessageView({
     suppressFollowEvalUntilRef.current = performance.now() + 300
     autoFollowRef.current = false
     setAutoFollow(false)
-    setTimelineScrollTop(targetTop)
+    commitTimelineScrollTop(targetTop)
     markProgrammaticTimelineScroll()
     node.scrollTop = targetTop
     setHighlightedMessageId(timelineTargetMessageId)
-  }, [loading, markProgrammaticTimelineScroll, rowLayout, targetMessageRequestId, transcriptTimelineRows, timelineTargetMessageId])
+  }, [commitTimelineScrollTop, loading, markProgrammaticTimelineScroll, rowLayout, targetMessageRequestId, transcriptTimelineRows, timelineTargetMessageId])
 
   useEffect(() => {
     if (!highlightedMessageId) return
@@ -6197,6 +6255,54 @@ export default function MessageView({
     })
   }, [timelineHeightOverride, virtualTimeline.totalHeight, virtualTimeline.visibleRows])
 
+  // Memoized element array for the mounted window. JSX elements are plain
+  // data — reusing the SAME array reference lets React bail out of the whole
+  // timeline subtree (up to a few hundred VirtualTimelineRow memo compares)
+  // when an unrelated part of this large component re-renders, most notably
+  // every composer keystroke. Every handler below is a stable useCallback;
+  // none depends on composer state.
+  const timelineRowElements = useMemo(() => {
+    const lastRowKey = transcriptTimelineRows.at(-1)?.key
+    const streamMode = viewMode === 'stream'
+    return virtualTimeline.visibleRows.map(({ row, top }) => (
+      <VirtualTimelineRow
+        key={row.key}
+        row={row}
+        top={top}
+        isLast={row.key === lastRowKey}
+        highlighted={highlightedMessageId === row.message.uuid}
+        forking={forkingMessageId === row.message.uuid}
+        resumeTarget={resumeFromMessageId === row.message.uuid}
+        bookmarked={bookmarkIds.has(row.message.uuid)}
+        streamMode={streamMode}
+        onMeasure={handleTimelineRowMeasure}
+        onLastRowRef={setLastTimelineRow}
+        onForkFromMessage={handleForkFromMessage}
+        onToggleResume={toggleResumeFromMessage}
+        onToggleBookmark={toggleBookmark}
+        onReusePrompt={handleReusePrompt}
+        onQuoteMessage={handleQuoteMessage}
+        onEditFromMessage={handleEditFromMessage}
+      />
+    ))
+  }, [
+    bookmarkIds,
+    forkingMessageId,
+    handleEditFromMessage,
+    handleForkFromMessage,
+    handleQuoteMessage,
+    handleReusePrompt,
+    handleTimelineRowMeasure,
+    highlightedMessageId,
+    resumeFromMessageId,
+    setLastTimelineRow,
+    toggleBookmark,
+    toggleResumeFromMessage,
+    transcriptTimelineRows,
+    viewMode,
+    virtualTimeline.visibleRows,
+  ])
+
   useLayoutEffect(() => {
     if (!timelineTargetMessageId || highlightedMessageId !== timelineTargetMessageId || loading) return
     scrollMountedTimelineRowIntoView(timelineTargetMessageId)
@@ -6229,13 +6335,19 @@ export default function MessageView({
       suppressFollowEvalUntilRef.current = performance.now() + 200
       markProgrammaticTimelineScroll()
       node.scrollTop = target
-      setTimelineScrollTop(target)
+      // Quantized: the DOM stays pinned every resize, but the state commit —
+      // which re-renders the whole view — only needs to track growth at
+      // window granularity. Streaming re-renders still happen through row
+      // measurements; this avoids doubling them.
+      if (Math.abs(target - committedScrollTopRef.current) >= TIMELINE_SCROLL_COMMIT_PX) {
+        commitTimelineScrollTop(target)
+      }
     }
     const observer = new ResizeObserver(() => pin())
     observer.observe(content)
     observer.observe(node)
     return () => observer.disconnect()
-  }, [hasLiveTimeline, markProgrammaticTimelineScroll, session?.sessionId, showVisualizer])
+  }, [commitTimelineScrollTop, hasLiveTimeline, markProgrammaticTimelineScroll, session?.sessionId, showVisualizer])
 
   // When autoFollow is first enabled, pin once.
   useEffect(() => {
@@ -7330,30 +7442,7 @@ export default function MessageView({
               <DiffCommentComposerContext.Provider value={handleDiffCommentToComposer}>
                 <LiveSubagentTextContext.Provider value={liveSubagentText}>
                   <TaskActiveFormsContext.Provider value={taskActiveForms}>
-                    {(() => {
-                      const lastRowKey = transcriptTimelineRows.at(-1)?.key
-                      return virtualTimeline.visibleRows.map(({ row, top }) => (
-                        <VirtualTimelineRow
-                          key={row.key}
-                          row={row}
-                          top={top}
-                          isLast={row.key === lastRowKey}
-                          highlighted={highlightedMessageId === row.message.uuid}
-                          forking={forkingMessageId === row.message.uuid}
-                          resumeTarget={resumeFromMessageId === row.message.uuid}
-                          bookmarked={bookmarkIds.has(row.message.uuid)}
-                          streamMode={viewMode === 'stream'}
-                          onMeasure={handleTimelineRowMeasure}
-                          onLastRowRef={setLastTimelineRow}
-                          onForkFromMessage={handleForkFromMessage}
-                          onToggleResume={toggleResumeFromMessage}
-                          onToggleBookmark={toggleBookmark}
-                          onReusePrompt={handleReusePrompt}
-                          onQuoteMessage={handleQuoteMessage}
-                          onEditFromMessage={handleEditFromMessage}
-                        />
-                      ))
-                    })()}
+                    {timelineRowElements}
                   </TaskActiveFormsContext.Provider>
                 </LiveSubagentTextContext.Provider>
               </DiffCommentComposerContext.Provider>

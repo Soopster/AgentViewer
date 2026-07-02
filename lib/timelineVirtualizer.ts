@@ -2,11 +2,16 @@ export type TimelineLayoutRow = {
   key: string
 }
 
+// Read-only key→index lookup. Kept minimal (only .get) so composed layouts
+// can chain a small overlay in front of a large base map instead of cloning
+// the base — see appendTimelineRowLayout.
+export type TimelineRowIndex = Pick<Map<string, number>, 'get'>
+
 export type TimelineRowLayout = {
   tops: Float64Array
   heights: Float64Array
   totalHeight: number
-  indexByKey: Map<string, number>
+  indexByKey: TimelineRowIndex
 }
 
 export type TimelineScrollAnchor = {
@@ -50,12 +55,15 @@ export function buildTimelineRowLayout<Row extends TimelineLayoutRow>(
 }
 
 // Compose a layout for [...baseRows, ...extraRows] by reusing a prebuilt
-// `base` layout for the prefix and appending only `extraRows`. The result is
-// byte-for-byte identical to buildTimelineRowLayout over the concatenation, but
-// it skips the per-row measured-height lookup + estimate for the (large,
-// invariant) prefix — only a typed-array memcpy + Map clone. Used to avoid
-// rebuilding the whole transcript's layout on every live-streaming frame, where
-// only a tiny live suffix actually changes.
+// `base` layout for the prefix and appending only `extraRows`. Equivalent to
+// buildTimelineRowLayout over the concatenation, but it skips the per-row
+// measured-height lookup + estimate for the (large, invariant) prefix — only
+// a typed-array memcpy plus a tiny overlay map for the extras. The overlay is
+// chained in front of the base index rather than cloning it: this runs on
+// every live-streaming frame, and an O(prefix) Map clone per frame dominated
+// the cost on multi-thousand-row transcripts. Row keys are unique across
+// base and extras (live rows are 'live:'-prefixed), so lookup order between
+// the two maps is immaterial.
 export function appendTimelineRowLayout<Row extends TimelineLayoutRow>(
   base: TimelineRowLayout,
   extraRows: readonly Row[],
@@ -69,7 +77,7 @@ export function appendTimelineRowLayout<Row extends TimelineLayoutRow>(
   const heights = new Float64Array(n)
   tops.set(base.tops)
   heights.set(base.heights)
-  const indexByKey = new Map(base.indexByKey)
+  const extraIndexByKey = new Map<string, number>()
   let totalHeight = base.totalHeight
 
   for (let i = 0; i < extraRows.length; i++) {
@@ -77,8 +85,13 @@ export function appendTimelineRowLayout<Row extends TimelineLayoutRow>(
     const idx = baseN + i
     tops[idx] = totalHeight
     heights[idx] = measuredHeights.get(row.key) ?? estimateHeight(row)
-    indexByKey.set(row.key, idx)
+    extraIndexByKey.set(row.key, idx)
     totalHeight += heights[idx]
+  }
+
+  const baseIndexByKey = base.indexByKey
+  const indexByKey: TimelineRowIndex = {
+    get: (key) => extraIndexByKey.get(key) ?? baseIndexByKey.get(key),
   }
 
   return { tops, heights, totalHeight, indexByKey }
