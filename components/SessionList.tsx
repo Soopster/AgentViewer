@@ -87,9 +87,11 @@ type Props = {
   switchingProvider: boolean
   selectedId: string | null
   selectedProject: string | null
+  dashboardSelected?: boolean
   scrollToSessionRequest?: { sessionKey: string; requestId: number } | null
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
+  onOpenDashboard: () => void
   onRename: (sessionId: string, title: string) => void
   onTag: (sessionId: string, tag: string | null) => void
   onChangeProvider: (provider: ProviderSelection) => void
@@ -681,9 +683,11 @@ function SessionListInner({
   switchingProvider,
   selectedId,
   selectedProject,
+  dashboardSelected = false,
   scrollToSessionRequest,
   onSelect,
   onSelectProject,
+  onOpenDashboard,
   onRename,
   onTag,
   onChangeProvider,
@@ -1013,6 +1017,19 @@ function SessionListInner({
             </button>
 
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 8 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setCollapsedPanel(null)
+                  onOpenDashboard()
+                }}
+                aria-label="Run dashboard"
+                title="Run dashboard"
+                className="av-hover-control"
+                style={collapsedIconButtonStyle(dashboardSelected)}
+              >
+                <LayoutDashboard size={20} strokeWidth={2.2} />
+              </button>
               <button
                 type="button"
                 onClick={() => handleCollapsedAction('provider')}
@@ -1644,6 +1661,31 @@ function SessionListInner({
                   minWidth: 0,
                 }}
               >
+                <Button
+                  onClick={onOpenDashboard}
+                  variant="outline"
+                  size="sm"
+                  title="Open run dashboard"
+                  className="av-hover-control"
+                  style={{
+                    height: 24,
+                    padding: '0 8px',
+                    borderRadius: 6,
+                    border: `1px solid ${dashboardSelected ? 'rgba(56,217,245,0.36)' : 'var(--border)'}`,
+                    background: dashboardSelected ? 'rgba(56,217,245,0.12)' : 'var(--surface-2)',
+                    color: dashboardSelected ? 'var(--cyan)' : 'var(--text-3)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    letterSpacing: '0.06em',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                  }}
+                >
+                  <LayoutDashboard size={12} strokeWidth={2.2} />
+                  DASH
+                </Button>
                 {onNewSession && (
                   <Button
                     onClick={onNewSession}

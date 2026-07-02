@@ -17,6 +17,7 @@ import type { CodexPlanStep } from '@/lib/taskRegistry'
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
 const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
+const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
 type ProjectSelection = {
@@ -61,6 +62,7 @@ const MESSAGE_STREAM_RETRY_MAX_MS = 30000
 // in browser memory for active dashboards without changing what's on-screen.
 const PROJECT_MESSAGE_TOTAL_MEMORY_LIMIT = 2500
 const PROJECT_MESSAGE_PER_SESSION_MEMORY_LIMIT = 200
+const RUN_DASHBOARD_KEY = '__run-dashboard__'
 
 type MessageStreamPayload = {
   sessionId?: string
@@ -322,6 +324,7 @@ export default function Home() {
   const [ideBridgeOpenRequest, setIdeBridgeOpenRequest] = useState(0)
   const [ideBridgeRouteToggleRequest, setIdeBridgeRouteToggleRequest] = useState(0)
   const [ideBridgeRouting, setIdeBridgeRouting] = useState(false)
+  const [dashboardContextSession, setDashboardContextSession] = useState<Session | null>(null)
   const documentVisible = useDocumentVisible()
   // Tracks the absolute transcript offset immediately after the latest loaded
   // message window. This is not always messages.length because session loads
@@ -344,15 +347,17 @@ export default function Home() {
   // page (which used to fire on every keystroke into the composer).
   const selectedSession = useMemo(
     () =>
+      selectedTabKey === RUN_DASHBOARD_KEY ? dashboardContextSession :
       openTabSessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
       sessions.find((s) => projectSessionKey(s) === selectedTabKey) ??
       null,
-    [openTabSessions, sessions, selectedTabKey],
+    [dashboardContextSession, openTabSessions, sessions, selectedTabKey],
   )
   selectedTabKeyRef.current = selectedTabKey
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
-  const messageAreaKey = selectedTabKey ?? (selectedProject ? `proj:${selectedProject.dir}` : '')
+  const dashboardSelected = selectedTabKey === RUN_DASHBOARD_KEY && !selectedProject
+  const messageAreaKey = dashboardSelected ? RUN_DASHBOARD_KEY : selectedTabKey ?? (selectedProject ? `proj:${selectedProject.dir}` : '')
   // Bundle the projectView prop so it only gets a new identity when one of
   // its fields actually changes — otherwise <MessageView /> sees a new object
   // on every parent render.
@@ -385,6 +390,13 @@ export default function Home() {
     if (!activeProjectDir) return
     setGitPopoverOpen(true)
   }, [activeProjectDir])
+
+  const openRunDashboard = useCallback(() => {
+    setDashboardContextSession(selectedSession)
+    setSelectedProject(null)
+    setTargetMessage(null)
+    setSelectedTabKey(RUN_DASHBOARD_KEY)
+  }, [selectedSession])
 
   const openCommandPalette = useCallback(() => setCommandPaletteOpen(true), [])
   const openTaskPanel = useCallback(() => setTaskPanelOpenRequest((value) => value + 1), [])
@@ -625,6 +637,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!selectedTabKey) return
+    if (selectedTabKey === RUN_DASHBOARD_KEY) return
     if (openTabSessions.some((s) => projectSessionKey(s) === selectedTabKey)) return
     if (sessions.some((s) => projectSessionKey(s) === selectedTabKey)) return
     setSelectedTabKey(null)
@@ -814,6 +827,7 @@ export default function Home() {
         .finally(() => setLoadingSessions(false))
     }
     startTransition(() => {
+      setDashboardContextSession(null)
       setOpenTabSessions((prev) => {
         const key = projectSessionKey(session)
         const alreadyOpen = prev.some((s) => projectSessionKey(s) === key)
@@ -1103,9 +1117,11 @@ export default function Home() {
             switchingProvider={switchingProvider}
             selectedId={selectedTabKey}
             selectedProject={selectedProject?.dir ?? null}
+            dashboardSelected={dashboardSelected}
             scrollToSessionRequest={sessionListScrollRequest}
             onSelect={selectSession}
             onSelectProject={selectProject}
+            onOpenDashboard={openRunDashboard}
             onRename={handleRename}
             onTag={handleTag}
             onChangeProvider={handleChangeProvider}
@@ -1182,30 +1198,42 @@ export default function Home() {
                 ›
               </button>
               <ViewTransition key={messageAreaKey} enter="fade-in" exit="fade-out" default="none">
-                <MessageView
-                  messages={messages}
-                  loading={loadingMessages}
-                  session={selectedSession}
-                  targetMessageId={targetMessage?.messageId ?? null}
-                  targetMessageRequestId={targetMessage?.requestId ?? 0}
-                  projectView={projectViewProp}
-                  onFork={handleFork}
-                  onDelete={handleDelete}
-                  openTabs={openTabSessions}
-                  selectedTabId={selectedTabKey}
-                  onSelectTab={selectOpenTab}
-                  onCloseTab={closeTab}
-                  taskPanelOpenRequest={taskPanelOpenRequest}
-                  promptLibraryOpenRequest={promptLibraryOpenRequest}
-                  channelBridgeOpenRequest={channelBridgeOpenRequest}
-                  channelBridgeRouteToggleRequest={channelBridgeRouteToggleRequest}
-                  onChannelBridgeRoutingChange={setChannelBridgeRouting}
-                  ideBridgeOpenRequest={ideBridgeOpenRequest}
-                  ideBridgeRouteToggleRequest={ideBridgeRouteToggleRequest}
-                  onIdeBridgeRoutingChange={setIdeBridgeRouting}
-                  openCodeTodos={openCodeTodosForView}
-                  codexPlan={codexPlanForView}
-                />
+                {dashboardSelected ? (
+                  <RunDashboard
+                    sessions={sessions}
+                    selectedSession={selectedSession}
+                    messages={messages}
+                    loading={loadingSessions}
+                    providerLabel={provider}
+                    scopeLabel={sessionScope === 'project' ? activeProjectName : null}
+                    onSelectSession={selectSession}
+                  />
+                ) : (
+                  <MessageView
+                    messages={messages}
+                    loading={loadingMessages}
+                    session={selectedSession}
+                    targetMessageId={targetMessage?.messageId ?? null}
+                    targetMessageRequestId={targetMessage?.requestId ?? 0}
+                    projectView={projectViewProp}
+                    onFork={handleFork}
+                    onDelete={handleDelete}
+                    openTabs={openTabSessions}
+                    selectedTabId={selectedTabKey}
+                    onSelectTab={selectOpenTab}
+                    onCloseTab={closeTab}
+                    taskPanelOpenRequest={taskPanelOpenRequest}
+                    promptLibraryOpenRequest={promptLibraryOpenRequest}
+                    channelBridgeOpenRequest={channelBridgeOpenRequest}
+                    channelBridgeRouteToggleRequest={channelBridgeRouteToggleRequest}
+                    onChannelBridgeRoutingChange={setChannelBridgeRouting}
+                    ideBridgeOpenRequest={ideBridgeOpenRequest}
+                    ideBridgeRouteToggleRequest={ideBridgeRouteToggleRequest}
+                    onIdeBridgeRoutingChange={setIdeBridgeRouting}
+                    openCodeTodos={openCodeTodosForView}
+                    codexPlan={codexPlanForView}
+                  />
+                )}
               </ViewTransition>
               {commandPaletteOpen ? (
                 <CommandPalette
