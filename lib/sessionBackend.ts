@@ -91,7 +91,7 @@ import type {
 type CopilotReasoningEffort = Extract<ReasoningEffortLevel, 'low' | 'medium' | 'high' | 'xhigh'>
 
 import { consumeReadModelsWarmQuery, createSessionControlQuery, openPrompt } from './sdkControlQuery'
-import { acquireCopilotSession, copilotPoolSize, evictCopilotSession, getCopilotClient, setCopilotPermissionHandler } from './copilotClient'
+import { acquireCopilotSession, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, setCopilotPermissionHandler } from './copilotClient'
 import { timeAsync } from './perfLog'
 import { registerDiagnosticsReporter } from './runtimeDiagnostics'
 import {
@@ -5028,6 +5028,12 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
               safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'queue_update', steering: event.steering, followUp: event.followUp })}\n\n`)
               return
             case 'session_info_changed':
+              // Pi auto-titles sessions mid-turn; forward the new name immediately
+              // instead of waiting for the next 5s session-list poll to pick it up.
+              if (event.name) {
+                safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'title_changed', name: event.name })}\n\n`)
+              }
+              return
             case 'thinking_level_changed':
               return
             default:
@@ -5302,6 +5308,7 @@ export async function createNewViewSession({
     const session = await client.createSession({
       workingDirectory: resolvedCwd,
       onPermissionRequest: approveAll,
+      ...copilotSessionConfigOverrides(),
     })
     return { sessionId: session.sessionId, provider, cwd: resolvedCwd, isPending: false }
   }

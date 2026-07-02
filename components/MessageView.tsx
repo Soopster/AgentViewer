@@ -4099,6 +4099,9 @@ export default function MessageView({
               if (parsed.status === 'retry_start') setLiveStatus('retrying')
               else if (parsed.status === 'compaction_start') setLiveStatus('compacting')
               else if (parsed.status === 'retry_end' || parsed.status === 'compaction_end') setLiveStatus(null)
+              else if (parsed.status === 'title_changed' && typeof parsed.name === 'string') {
+                setSessionInfo((prev) => prev ? { ...prev, customTitle: parsed.name } : prev)
+              }
             }
             if (parsed?.type === 'stream_event' && typeof parsed.parent_tool_use_id === 'string' && parsed.parent_tool_use_id) {
               const event = parsed.event

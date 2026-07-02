@@ -6,6 +6,7 @@ import {
   type CopilotSession,
   type PermissionHandler,
   type ResumeSessionConfig,
+  type SessionConfigBase,
 } from '@github/copilot-sdk'
 
 function normalizedEnv(value: string | undefined): string | undefined {
@@ -50,6 +51,30 @@ function createClientOptions(): CopilotClientOptions {
   }
 
   return options
+}
+
+// Session-level config shared by both createSession (new sessions) and
+// resumeSession (every poll/resume of an existing one) — SessionConfigBase
+// covers both. excludedBuiltinAgents/sessionLimits are opt-in via env since
+// they change what the agent can do; enableCitations is safe to default on,
+// since it's a no-op for providers that don't support it and copilotMapper's
+// applyCitations already renders the result as a plain sources footer.
+export function copilotSessionConfigOverrides(): Partial<SessionConfigBase> {
+  const overrides: Partial<SessionConfigBase> = {
+    enableCitations: true,
+  }
+
+  const excludedAgents = normalizedEnv(process.env.COPILOT_EXCLUDED_AGENTS)
+  if (excludedAgents) {
+    overrides.excludedBuiltinAgents = excludedAgents.split(',').map((name) => name.trim()).filter(Boolean)
+  }
+
+  const maxAiCredits = Number(normalizedEnv(process.env.COPILOT_MAX_AI_CREDITS))
+  if (Number.isFinite(maxAiCredits) && maxAiCredits > 0) {
+    overrides.sessionLimits = { maxAiCredits }
+  }
+
+  return overrides
 }
 
 // The Copilot SDK only accepts a permission handler at resume time, but our
@@ -106,6 +131,7 @@ async function resumeCopilotSession(
       // We're a read-mostly observer; suppress duplicate telemetry events
       // that would otherwise fire on every resume from session list polls.
       enableSessionTelemetry: false,
+      ...copilotSessionConfigOverrides(),
       ...overrides,
     })
   } catch (error) {

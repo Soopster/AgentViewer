@@ -1,4 +1,5 @@
 import type {
+  Citations,
   GetAuthStatusResponse,
   GetStatusResponse,
   ModelInfo,
@@ -69,6 +70,42 @@ function userMessageContent(event: Extract<SessionEvent, { type: 'user.message' 
   return parts.filter(Boolean).join('\n\n').trim()
 }
 
+// Citations are experimental (Anthropic models only, opt-in via enableCitations) and give
+// span->source provenance for generated text. Rather than a bespoke inline-marker renderer,
+// we insert numeric markers at each span's end offset and append a source list — plain
+// markdown that the existing text renderer already handles in both web and TUI.
+function applyCitations(content: string, citations: Citations | undefined): string {
+  if (!citations || citations.spans.length === 0) return content
+
+  const sourceIndexById = new Map<string, number>()
+  for (const span of citations.spans) {
+    for (const ref of span.references) {
+      if (!sourceIndexById.has(ref.sourceId)) sourceIndexById.set(ref.sourceId, sourceIndexById.size + 1)
+    }
+  }
+
+  const spansByEndDesc = [...citations.spans].sort((a, b) => b.endIndex - a.endIndex)
+  let marked = content
+  for (const span of spansByEndDesc) {
+    const indices = [...new Set(span.references.map((ref) => sourceIndexById.get(ref.sourceId)))]
+      .filter((n): n is number => n != null)
+      .sort((a, b) => a - b)
+    if (indices.length === 0) continue
+    const marker = indices.map((n) => `[${n}]`).join('')
+    const offset = Math.max(0, Math.min(span.endIndex, marked.length))
+    marked = `${marked.slice(0, offset)}${marker}${marked.slice(offset)}`
+  }
+
+  const orderedSources = [...sourceIndexById.entries()].sort((a, b) => a[1] - b[1])
+  const sourceLines = orderedSources.map(([sourceId, index]) => {
+    const source = citations.sources.find((s) => s.id === sourceId)
+    const label = source?.title || source?.path || source?.url || sourceId
+    return source?.url ? `${index}. [${label}](${source.url})` : `${index}. ${label}`
+  })
+
+  return `${marked}\n\n---\n**Sources:**\n${sourceLines.join('\n')}`
+}
+
 function assistantMessageContent(event: Extract<SessionEvent, { type: 'assistant.message' }>): ApiMessage['content'] {
   const blocks: ContentBlock[] = []
 
@@ -77,7 +114,7 @@ function assistantMessageContent(event: Extract<SessionEvent, { type: 'assistant
   }
 
   if (event.data.content.trim()) {
-    blocks.push({ type: 'text', text: event.data.content })
+    blocks.push({ type: 'text', text: applyCitations(event.data.content, event.data.citations) })
   }
 
   for (const toolRequest of event.data.toolRequests ?? []) {
