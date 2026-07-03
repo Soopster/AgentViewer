@@ -261,6 +261,14 @@ const TIMELINE_OVERSCAN_PX = 2400
 // turns a fling from one full MessageView render per frame into one per
 // ~600px scrolled. Exact positions are re-committed at scroll idle.
 const TIMELINE_SCROLL_COMMIT_PX = 600
+// Above this scroll velocity, rows ENTERING the virtual window mount as
+// lightweight placeholders instead of full message cards — full cards
+// (markdown, syntax highlighting, diffs) can't mount fast enough to keep up
+// with a fling or scrollbar drag, which left blank space until the gesture
+// ended. Rows already mounted keep their content. Hysteresis: enter fast,
+// exit slow; the scroll-idle timer always hydrates as a backstop.
+const FAST_SCROLL_ENTER_PX_PER_S = 3000
+const FAST_SCROLL_EXIT_PX_PER_S = 1200
 // Milliseconds of inactivity after the last scroll event before we consider
 // the user "done scrolling" and start applying scrollTop anchor adjustments
 // again for direct scrollbar/touch scrubbing.
@@ -2073,6 +2081,8 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   resumeTarget,
   bookmarked,
   streamMode,
+  placeholder,
+  placeholderHeight,
   onMeasure,
   onLastRowRef,
   onForkFromMessage,
@@ -2090,6 +2100,12 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   resumeTarget: boolean
   bookmarked: boolean
   streamMode: boolean
+  // Fast-scroll placeholder: render a cheap skeleton at the layout height
+  // instead of the full message card, and skip measurement so the skeleton
+  // can't poison the measured-height cache. placeholderHeight is 0 (stable)
+  // when placeholder is false.
+  placeholder: boolean
+  placeholderHeight: number
   onMeasure: (key: string, height: number) => void
   onLastRowRef: (node: HTMLDivElement | null) => void
   onForkFromMessage: (messageId: string) => void
@@ -2102,6 +2118,7 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   const rowRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (placeholder) return
     const node = rowRef.current
     if (!node) return
 
@@ -2114,7 +2131,7 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
     })
     observer.observe(node)
     return () => observer.disconnect()
-  }, [onMeasure, row.key])
+  }, [onMeasure, placeholder, row.key])
 
   useEffect(() => {
     if (!isLast) return
@@ -2136,20 +2153,35 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
         right: 0,
       }}
     >
-      <TimelineMessageRow
-        row={row}
-        highlighted={highlighted}
-        forking={forking}
-        resumeTarget={resumeTarget}
-        bookmarked={bookmarked}
-        streamMode={streamMode}
-        onForkFromMessage={onForkFromMessage}
-        onToggleResume={onToggleResume}
-        onToggleBookmark={onToggleBookmark}
-        onReusePrompt={onReusePrompt}
-        onQuoteMessage={onQuoteMessage}
-        onEditFromMessage={onEditFromMessage}
-      />
+      {placeholder ? (
+        // Explicit height matches the layout's height for this row exactly, so
+        // swapping placeholder ↔ full card never shifts surrounding rows.
+        <div style={{ height: placeholderHeight, padding: '6px 0', boxSizing: 'border-box' }}>
+          <div
+            style={{
+              height: '100%',
+              borderRadius: 8,
+              border: '1px solid rgba(128,128,128,0.10)',
+              background: 'rgba(128,128,128,0.05)',
+            }}
+          />
+        </div>
+      ) : (
+        <TimelineMessageRow
+          row={row}
+          highlighted={highlighted}
+          forking={forking}
+          resumeTarget={resumeTarget}
+          bookmarked={bookmarked}
+          streamMode={streamMode}
+          onForkFromMessage={onForkFromMessage}
+          onToggleResume={onToggleResume}
+          onToggleBookmark={onToggleBookmark}
+          onReusePrompt={onReusePrompt}
+          onQuoteMessage={onQuoteMessage}
+          onEditFromMessage={onEditFromMessage}
+        />
+      )}
     </div>
   )
 })
@@ -2729,6 +2761,16 @@ export default function MessageView({
       commitTimelineScrollTop(value)
     }
   }, [commitTimelineScrollTop])
+  // Fast-scroll mode: while the gesture outruns FAST_SCROLL_ENTER_PX_PER_S,
+  // rows entering the window render as placeholders. See the constant's doc.
+  const [fastScrolling, setFastScrolling] = useState(false)
+  const fastScrollingRef = useRef(false)
+  const scrollVelocitySampleRef = useRef<{ top: number; time: number } | null>(null)
+  const setFastScrollingMode = useCallback((value: boolean) => {
+    if (fastScrollingRef.current === value) return
+    fastScrollingRef.current = value
+    setFastScrolling(value)
+  }, [])
   const [timelineViewportHeight, setTimelineViewportHeight] = useState(0)
   const [timelineHeightOverride, setTimelineHeightOverride] = useState<number | null>(null)
   const [rowMeasurementVersion, setRowMeasurementVersion] = useState(0)
@@ -3466,12 +3508,15 @@ export default function MessageView({
       pendingTimelineAnchorRestoreRef.current = true
       setTimelineHeightOverride(null)
       // The scroll handler quantizes its commits; settle the exact resting
-      // position now that the gesture is over.
+      // position now that the gesture is over, and hydrate any placeholder
+      // rows left over from a fast fling.
+      scrollVelocitySampleRef.current = null
+      setFastScrollingMode(false)
       const node = timelineRef.current
       if (node) commitTimelineScrollTop(node.scrollTop)
       scheduleTimelineMeasurementFlushRef.current()
     }, SCROLL_IDLE_MS)
-  }, [captureTimelineScrollAnchor, commitTimelineScrollTop])
+  }, [captureTimelineScrollAnchor, commitTimelineScrollTop, setFastScrollingMode])
 
   useEffect(() => {
     const node = timelineRef.current
@@ -3574,15 +3619,29 @@ export default function MessageView({
       const node = timelineRef.current
       if (!node) return
       scheduleTimelineMeasurementFlushRef.current()
+      const now = performance.now()
+      if (now < programmaticScrollUntilRef.current) {
+        // A programmatic jump teleports scrollTop; reset the sample so the
+        // jump doesn't read as fling velocity on the next real scroll.
+        scrollVelocitySampleRef.current = { top: node.scrollTop, time: now }
+      } else {
+        const sample = scrollVelocitySampleRef.current
+        scrollVelocitySampleRef.current = { top: node.scrollTop, time: now }
+        if (sample && now > sample.time) {
+          const velocity = (Math.abs(node.scrollTop - sample.top) / (now - sample.time)) * 1000
+          if (velocity >= FAST_SCROLL_ENTER_PX_PER_S) setFastScrollingMode(true)
+          else if (velocity <= FAST_SCROLL_EXIT_PX_PER_S) setFastScrollingMode(false)
+        }
+      }
       // Quantized: re-render only once the window has meaningfully moved.
       // The exact resting position is committed by the scroll-idle timer in
       // markTimelineUserScrolling.
       commitTimelineScrollTopIfDrifted(node.scrollTop)
-      if (performance.now() < suppressFollowEvalUntilRef.current) return
+      if (now < suppressFollowEvalUntilRef.current) return
       const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
       setAutoFollow(distanceFromBottom <= TIMELINE_BOTTOM_GUTTER_PX + 16)
     })
-  }, [commitTimelineScrollTopIfDrifted, markTimelineUserScrolling])
+  }, [commitTimelineScrollTopIfDrifted, markTimelineUserScrolling, setFastScrollingMode])
 
   const scrollMountedTimelineRowIntoView = useCallback((messageId: string): boolean => {
     const node = timelineRef.current
@@ -6301,32 +6360,49 @@ export default function MessageView({
   // when an unrelated part of this large component re-renders, most notably
   // every composer keystroke. Every handler below is a stable useCallback;
   // none depends on composer state.
+  const fullRenderedRowKeysRef = useRef<Set<string>>(new Set())
   const timelineRowElements = useMemo(() => {
     const lastRowKey = transcriptTimelineRows.at(-1)?.key
     const streamMode = viewMode === 'stream'
-    return virtualTimeline.visibleRows.map(({ row, top }) => (
-      <VirtualTimelineRow
-        key={row.key}
-        row={row}
-        top={top}
-        isLast={row.key === lastRowKey}
-        highlighted={highlightedMessageId === row.message.uuid}
-        forking={forkingMessageId === row.message.uuid}
-        resumeTarget={resumeFromMessageId === row.message.uuid}
-        bookmarked={bookmarkIds.has(row.message.uuid)}
-        streamMode={streamMode}
-        onMeasure={handleTimelineRowMeasure}
-        onLastRowRef={setLastTimelineRow}
-        onForkFromMessage={handleForkFromMessage}
-        onToggleResume={toggleResumeFromMessage}
-        onToggleBookmark={toggleBookmark}
-        onReusePrompt={handleReusePrompt}
-        onQuoteMessage={handleQuoteMessage}
-        onEditFromMessage={handleEditFromMessage}
-      />
-    ))
+    // During fast scrolls, rows that were already rendered full keep their
+    // cards (their subtrees are reused by key), but rows ENTERING the window
+    // mount as cheap placeholders so the window always paints within a frame.
+    // The set is rebuilt each pass from the rows rendered full, so it tracks
+    // "currently mounted with content", not "ever seen".
+    const prevFullKeys = fullRenderedRowKeysRef.current
+    const nextFullKeys = new Set<string>()
+    const elements = virtualTimeline.visibleRows.map(({ row, top, height }) => {
+      const placeholder = fastScrolling && !prevFullKeys.has(row.key)
+      if (!placeholder) nextFullKeys.add(row.key)
+      return (
+        <VirtualTimelineRow
+          key={row.key}
+          row={row}
+          top={top}
+          isLast={row.key === lastRowKey}
+          highlighted={highlightedMessageId === row.message.uuid}
+          forking={forkingMessageId === row.message.uuid}
+          resumeTarget={resumeFromMessageId === row.message.uuid}
+          bookmarked={bookmarkIds.has(row.message.uuid)}
+          streamMode={streamMode}
+          placeholder={placeholder}
+          placeholderHeight={placeholder ? height : 0}
+          onMeasure={handleTimelineRowMeasure}
+          onLastRowRef={setLastTimelineRow}
+          onForkFromMessage={handleForkFromMessage}
+          onToggleResume={toggleResumeFromMessage}
+          onToggleBookmark={toggleBookmark}
+          onReusePrompt={handleReusePrompt}
+          onQuoteMessage={handleQuoteMessage}
+          onEditFromMessage={handleEditFromMessage}
+        />
+      )
+    })
+    fullRenderedRowKeysRef.current = nextFullKeys
+    return elements
   }, [
     bookmarkIds,
+    fastScrolling,
     forkingMessageId,
     handleEditFromMessage,
     handleForkFromMessage,
