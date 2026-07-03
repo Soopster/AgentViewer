@@ -2708,6 +2708,10 @@ export default function MessageView({
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
   const [awaitingPersistedTurn, setAwaitingPersistedTurn] = useState(false)
   const [autoFollow, setAutoFollow] = useState(false)
+  // Approximate: may trail the live node.scrollTop by up to
+  // TIMELINE_SCROLL_COMMIT_PX during user scrolls (see
+  // commitTimelineScrollTopIfDrifted). Consumers needing the exact position
+  // must read timelineRef.current.scrollTop.
   const [timelineScrollTop, setTimelineScrollTop] = useState(0)
   // Last scrollTop actually committed to state. All commits flow through
   // commitTimelineScrollTop so quantized paths (RAF scroll handler, streaming
@@ -2717,6 +2721,14 @@ export default function MessageView({
     committedScrollTopRef.current = value
     setTimelineScrollTop(value)
   }, [])
+  // Quantized commit for high-frequency paths (RAF scroll handler, streaming
+  // pin): only re-render when the position has drifted far enough to matter
+  // for the virtual window, which overscans well beyond the threshold.
+  const commitTimelineScrollTopIfDrifted = useCallback((value: number) => {
+    if (Math.abs(value - committedScrollTopRef.current) >= TIMELINE_SCROLL_COMMIT_PX) {
+      commitTimelineScrollTop(value)
+    }
+  }, [commitTimelineScrollTop])
   const [timelineViewportHeight, setTimelineViewportHeight] = useState(0)
   const [timelineHeightOverride, setTimelineHeightOverride] = useState<number | null>(null)
   const [rowMeasurementVersion, setRowMeasurementVersion] = useState(0)
@@ -3346,16 +3358,27 @@ export default function MessageView({
   useEffect(() => {
     if (suppressDraftSaveRef.current) return
     pendingComposerDraftRef.current = { key: composerDraftKey, draft: { text: inputText, attachments } }
-    composerDraftTimerRef.current ??= window.setTimeout(() => {
+    // Trailing debounce: reset the timer on every change so the write lands
+    // once typing pauses. Staleness is bounded by the flush-on-unmount /
+    // key-change / pagehide paths below.
+    if (composerDraftTimerRef.current != null) window.clearTimeout(composerDraftTimerRef.current)
+    composerDraftTimerRef.current = window.setTimeout(() => {
       composerDraftTimerRef.current = null
       flushComposerDraft()
     }, COMPOSER_DRAFT_SAVE_DEBOUNCE_MS)
   }, [attachments, composerDraftKey, flushComposerDraft, inputText])
 
   useEffect(() => {
+    // visibilitychange covers mobile tabs backgrounded then killed, which
+    // never fire pagehide.
+    const flushIfHidden = () => {
+      if (document.visibilityState === 'hidden') flushComposerDraft()
+    }
     window.addEventListener('pagehide', flushComposerDraft)
+    document.addEventListener('visibilitychange', flushIfHidden)
     return () => {
       window.removeEventListener('pagehide', flushComposerDraft)
+      document.removeEventListener('visibilitychange', flushIfHidden)
       flushComposerDraft()
     }
   }, [composerDraftKey, flushComposerDraft])
@@ -3554,14 +3577,12 @@ export default function MessageView({
       // Quantized: re-render only once the window has meaningfully moved.
       // The exact resting position is committed by the scroll-idle timer in
       // markTimelineUserScrolling.
-      if (Math.abs(node.scrollTop - committedScrollTopRef.current) >= TIMELINE_SCROLL_COMMIT_PX) {
-        commitTimelineScrollTop(node.scrollTop)
-      }
+      commitTimelineScrollTopIfDrifted(node.scrollTop)
       if (performance.now() < suppressFollowEvalUntilRef.current) return
       const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
       setAutoFollow(distanceFromBottom <= TIMELINE_BOTTOM_GUTTER_PX + 16)
     })
-  }, [commitTimelineScrollTop, markTimelineUserScrolling])
+  }, [commitTimelineScrollTopIfDrifted, markTimelineUserScrolling])
 
   const scrollMountedTimelineRowIntoView = useCallback((messageId: string): boolean => {
     const node = timelineRef.current
@@ -6358,15 +6379,13 @@ export default function MessageView({
       // which re-renders the whole view — only needs to track growth at
       // window granularity. Streaming re-renders still happen through row
       // measurements; this avoids doubling them.
-      if (Math.abs(target - committedScrollTopRef.current) >= TIMELINE_SCROLL_COMMIT_PX) {
-        commitTimelineScrollTop(target)
-      }
+      commitTimelineScrollTopIfDrifted(target)
     }
     const observer = new ResizeObserver(() => pin())
     observer.observe(content)
     observer.observe(node)
     return () => observer.disconnect()
-  }, [commitTimelineScrollTop, hasLiveTimeline, markProgrammaticTimelineScroll, session?.sessionId, showVisualizer])
+  }, [commitTimelineScrollTopIfDrifted, hasLiveTimeline, markProgrammaticTimelineScroll, session?.sessionId, showVisualizer])
 
   // When autoFollow is first enabled, pin once.
   useEffect(() => {

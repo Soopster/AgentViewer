@@ -64,6 +64,10 @@ export function buildTimelineRowLayout<Row extends TimelineLayoutRow>(
 // the cost on multi-thousand-row transcripts. Row keys are unique across
 // base and extras (live rows are 'live:'-prefixed), so lookup order between
 // the two maps is immaterial.
+//
+// `base` must be a flat buildTimelineRowLayout product, not itself the result
+// of appendTimelineRowLayout — chaining appends stacks overlay closures, so
+// every index lookup pays O(chain depth).
 export function appendTimelineRowLayout<Row extends TimelineLayoutRow>(
   base: TimelineRowLayout,
   extraRows: readonly Row[],
