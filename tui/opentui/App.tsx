@@ -82,6 +82,12 @@ import {
   runTuiSessionAction,
   streamTuiSessionTurn,
   interruptTuiSessionTurn,
+  listTuiRunningSessions,
+  createTuiWorktreeTask,
+  findTuiWorktreeTask,
+  mergeTuiWorktreeTask,
+  removeTuiWorktreeTask,
+  type WorktreeTask,
   prewarmTuiSession,
   writeTuiDensity,
   writeTuiDiffLayout,
@@ -118,7 +124,8 @@ import {
   getTranscriptCardsSync,
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
-import type { ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, ToolResultBlock } from '../../lib/types'
+import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, ToolResultBlock } from '../../lib/types'
+import { AttentionInboxPopover, type AttentionItem } from './AttentionInboxPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
@@ -474,6 +481,11 @@ const THEME_GROUPS: Array<{ label: string; themes: TuiThemeMode[] }> = [
 const SEARCH_MAX_CHARS = 80
 const SESSION_REFRESH_MS = 5000
 const DETAIL_REFRESH_MS = 2000
+// Cadence for reconciling against the in-process running-turn registry (a
+// cheap synchronous read — the TUI and its backend share one process).
+const REATTACH_POLL_MS = 1500
+// Most recent background turn completions kept in the attention inbox.
+const ATTENTION_DONE_LIMIT = 20
 // Debounce before opening a selected session's transcript. Scrubbing quickly
 // through the sidebar (mouse or keyboard) lands on many sessions in passing;
 // without this every fly-by would load + reformat a full transcript only to be
@@ -3503,6 +3515,11 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: 'route', category: 'Session' },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
+  { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
+  { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
+  { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
+  { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
+  { id: 'fleet',      label: 'Toggle fleet strip',      key: '⇧A', category: 'View'       },
   { id: 'handoff-brief', label: 'Handoff brief',       key: 'H',  category: 'Session'    },
   { id: 'prompt-library', label: 'Prompt library',     key: '⇧P', category: 'Session'    },
   { id: 'diagnostics', label: 'Session diagnostics',   key: 'D',  category: 'Session'    },
@@ -4507,6 +4524,40 @@ export default function OpenTuiApp() {
   >([])
   // Track which bridge entries we've persisted to disk
   const persistedBridgeCountRef = useRef(0)
+  // Attention inbox — cross-session triage of prompts blocked on a human and
+  // background turns that finished while the user was elsewhere.
+  const [attentionOpen, setAttentionOpen] = useState(false)
+  const attentionKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  // Pending Claude prompts from running sessions OTHER than the selected one
+  // (the selected session's prompts live in pendingPermissions). Fed by the
+  // registry poll.
+  const [backgroundPrompts, setBackgroundPrompts] = useState<PendingPermission[]>([])
+  // Turns that finished on sessions the user wasn't viewing; dismissed by
+  // opening the session, pressing x in the inbox, or falling off the cap.
+  const [attentionDone, setAttentionDone] = useState<Array<{
+    key: string
+    sessionId: string
+    provider: AgentProvider
+    sessionKey: string
+    title: string
+    createdAt: number
+  }>>([])
+  const [attentionRespondingId, setAttentionRespondingId] = useState<string | null>(null)
+  // Prompt ids already announced via desktop notification (notify once each).
+  const attentionNotifiedRef = useRef(new Set<string>())
+  // Worktree task orchestration: ⇧F names a task, which spawns a session in an
+  // isolated git worktree; merge/discard act on the selected session's task.
+  const [worktreeModalOpen, setWorktreeModalOpen] = useState(false)
+  const [worktreeDraft, setWorktreeDraft] = useState('')
+  const [worktreeBusy, setWorktreeBusy] = useState(false)
+  // The selected session's worktree task (cwd inside .agent-viewer-worktrees),
+  // or null. Drives the composer badge and gates merge/discard.
+  const [selectedWorktreeTask, setSelectedWorktreeTask] = useState<WorktreeTask | null>(null)
+  const [worktreeConfirm, setWorktreeConfirm] = useState<'merge' | 'discard' | null>(null)
+  const worktreeSubmitInFlightRef = useRef(false)
+  // Fleet strip visibility preference (the strip only renders when it has
+  // cells: running sessions or fresh background completions).
+  const [fleetStripEnabled, setFleetStripEnabled] = useState(true)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
@@ -4594,6 +4645,24 @@ export default function OpenTuiApp() {
   const [pendingPermissions, setPendingPermissions] = useState<PendingPermission[]>([])
   const [permissionActionLoading, setPermissionActionLoading] = useState<string | null>(null)
   const [permissionOptionIndex, setPermissionOptionIndex] = useState(0)
+  // A turn is running for the selected session that this composer does not own
+  // a stream for — the send stream died but the turn survived (turns are
+  // decoupled from their stream), or a turn from another view is still
+  // finishing. Detected by polling the in-process running registry while idle;
+  // mirrors the web composer's reattach flow.
+  const [reattachedRunning, setReattachedRunning] = useState(false)
+  const reattachedRunningRef = useRef(false)
+  useEffect(() => { reattachedRunningRef.current = reattachedRunning }, [reattachedRunning])
+  // Session key the registry poll currently reports as running-but-unowned.
+  // The detail poll consults this to keep refreshing a session whose leftover
+  // live baseline would otherwise pause background polls (the dead-stream case).
+  const reattachedRunningKeyRef = useRef<string | null>(null)
+  // Sidebar running marks added by the registry poll (as opposed to the send
+  // loop's own mark), so the poll only clears marks it added itself.
+  const reattachMarksRef = useRef(new Map<string, RunningSessionRef>())
+  // Session key of the turn the local send stream currently owns; the registry
+  // poll never treats that session as reattached.
+  const ownedTurnKeyRef = useRef<string | null>(null)
   // AskUserQuestion picker state (keyed off the active pending permission's id).
   const [questionFocusIndex, setQuestionFocusIndex] = useState(0)
   const [questionOptionIndex, setQuestionOptionIndex] = useState(0)
@@ -5092,6 +5161,137 @@ export default function OpenTuiApp() {
       || composerTargetSession.provider !== selectedSession.provider
     ),
   )
+  // Unified attention list: prompts blocking any running turn (selected
+  // session's from pendingPermissions, others' from the registry poll), then
+  // background turn completions. Prompt order is arrival order within each
+  // source; needs-input always sorts above finished.
+  const attentionItems = useMemo<AttentionItem[]>(() => {
+    const items: AttentionItem[] = []
+    const seenPromptIds = new Set<string>()
+    for (const prompt of [...pendingPermissions, ...backgroundPrompts]) {
+      if (!prompt.id || seenPromptIds.has(prompt.id)) continue
+      seenPromptIds.add(prompt.id)
+      const promptProvider = prompt.provider ?? composerTargetSession?.provider ?? 'claude'
+      // Stream-delivered prompts without a session id ride the composer's
+      // current target — that is the turn that produced them.
+      const sessionId = prompt.sessionId ?? composerTargetSession?.sessionId ?? ''
+      const key = sessionKey({ sessionId, provider: promptProvider })
+      const session = sessionsByKeyRef.current.get(key)
+      items.push({
+        key: `prompt:${prompt.id}`,
+        kind: prompt.questions && prompt.questions.length > 0
+          ? 'question'
+          : prompt.toolName === 'ExitPlanMode'
+          ? 'plan'
+          : 'permission',
+        sessionId,
+        provider: promptProvider,
+        sessionKey: key,
+        sessionTitle: session ? formatSessionTitle(session) : sessionId.slice(-8) || 'unknown session',
+        title: prompt.title,
+        detail: prompt.detail ?? prompt.command ?? prompt.paths?.[0] ?? prompt.url,
+        permission: prompt,
+        createdAt: 0,
+      })
+    }
+    for (const done of attentionDone) {
+      items.push({
+        key: done.key,
+        kind: 'turn-done',
+        sessionId: done.sessionId,
+        provider: done.provider,
+        sessionKey: done.sessionKey,
+        sessionTitle: done.title,
+        title: 'Turn finished',
+        createdAt: done.createdAt,
+      })
+    }
+    return items
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPermissions, backgroundPrompts, attentionDone, sessions, composerTargetSession])
+  const attentionNeedsInputCount = useMemo(
+    () => attentionItems.filter((item) => item.kind !== 'turn-done').length,
+    [attentionItems],
+  )
+
+  // Fleet strip: one cell per live session (running or blocked on input) plus
+  // recent background completions — mission-control ambient awareness while
+  // reading any single transcript. Digits 1-9 jump to a cell; ⇧A toggles.
+  const fleetEntries = useMemo<Array<{
+    key: string
+    sessionId: string
+    provider: AgentProvider
+    title: string
+    status: 'needs-input' | 'running' | 'done'
+  }>>(() => {
+    const needsInputKeys = new Set(
+      attentionItems.filter((item) => item.kind !== 'turn-done').map((item) => item.sessionKey),
+    )
+    const entries: Array<{
+      key: string
+      sessionId: string
+      provider: AgentProvider
+      title: string
+      status: 'needs-input' | 'running' | 'done'
+    }> = runningSessions.map((ref) => {
+      const key = sessionKey({ sessionId: ref.sessionId, provider: ref.provider })
+      const session = sessionsByKeyRef.current.get(key)
+      return {
+        key,
+        sessionId: ref.sessionId,
+        provider: ref.provider,
+        title: session ? formatSessionTitle(session) : ref.sessionId.slice(-8),
+        status: needsInputKeys.has(key) ? 'needs-input' as const : 'running' as const,
+      }
+    })
+    const liveKeys = new Set(entries.map((entry) => entry.key))
+    for (const done of attentionDone) {
+      if (liveKeys.has(done.sessionKey)) continue
+      entries.push({
+        key: done.sessionKey,
+        sessionId: done.sessionId,
+        provider: done.provider,
+        title: done.title,
+        status: 'done' as const,
+      })
+    }
+    // Blocked cells first — they are why the strip exists.
+    return entries.sort((a, b) => {
+      const rank = (status: string) => (status === 'needs-input' ? 0 : status === 'running' ? 1 : 2)
+      return rank(a.status) - rank(b.status)
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runningSessions, attentionItems, attentionDone, sessions])
+  const fleetStripVisible = fleetStripEnabled && !focusMode && fleetEntries.length > 0
+  const fleetStripSegments = useMemo<InlineTextSegment[]>(() => {
+    if (!fleetStripVisible) return []
+    const segs: InlineTextSegment[] = [{ text: 'FLEET  ', fg: theme.dim }]
+    fleetEntries.slice(0, 9).forEach((entry, index) => {
+      const selected = entry.key === selectedSessionKey
+      const accent = getProviderAccent(entry.provider)
+      const glyph = entry.status === 'needs-input' ? '⚠' : entry.status === 'running' ? '●' : '✓'
+      const glyphColor = entry.status === 'needs-input' ? theme.amber : entry.status === 'running' ? accent : theme.green
+      if (index > 0) segs.push({ text: '   ', fg: theme.dim })
+      segs.push({ text: `${index + 1} `, fg: selected ? accent : theme.dim })
+      segs.push({ text: `${glyph} `, fg: glyphColor })
+      segs.push({
+        text: entry.title.length > 18 ? `${entry.title.slice(0, 17)}…` : entry.title,
+        fg: selected ? theme.text : theme.muted,
+      })
+    })
+    if (fleetEntries.length > 9) segs.push({ text: `  +${fleetEntries.length - 9} more`, fg: theme.dim })
+    return segs
+  }, [fleetStripVisible, fleetEntries, selectedSessionKey, theme])
+
+  // Viewing a session resolves its "turn finished" notice.
+  useEffect(() => {
+    if (!selectedSessionKey) return
+    setAttentionDone((prev) => {
+      const next = prev.filter((done) => done.sessionKey !== selectedSessionKey)
+      return next.length === prev.length ? prev : next
+    })
+  }, [selectedSessionKey])
+
   const composerProvider = composerTargetSession?.provider ?? selectedSession?.provider ?? null
   const composerPermissionMode = useMemo<TuiPermissionMode>(() => {
     if (composerTargetSession?.provider !== 'claude') return 'default'
@@ -5714,8 +5914,15 @@ export default function OpenTuiApp() {
     const parts: InlineTextSegment[] = []
     if (composerWorkingDirectory) parts.push({ text: `cwd ${composerWorkingDirectory}`, fg: theme.dim })
     if (composerGitBranch) parts.push({ text: `⎇ ${composerGitBranch}`, fg: theme.violet })
+    if (selectedWorktreeTask) {
+      const counts = [
+        selectedWorktreeTask.dirtyFiles > 0 ? `${selectedWorktreeTask.dirtyFiles} dirty` : null,
+        selectedWorktreeTask.aheadCommits > 0 ? `+${selectedWorktreeTask.aheadCommits}` : null,
+      ].filter(Boolean).join(' ')
+      parts.push({ text: `⧉ worktree task${counts ? ` · ${counts}` : ''}`, fg: theme.amber })
+    }
     return parts
-  }, [composerGitBranch, composerWorkingDirectory, theme.dim, theme.violet])
+  }, [composerGitBranch, composerWorkingDirectory, selectedWorktreeTask, theme.amber, theme.dim, theme.violet])
   const buildComposerStatsSegments = (lineCount: number): InlineTextSegment[] => {
     const segments: InlineTextSegment[] = []
     if (composerDraft.length === 0) {
@@ -6327,6 +6534,9 @@ export default function OpenTuiApp() {
     || awaitingPersistedTurn
     || queuedComposerSends.length > 0
     || (composerSendState === 'sending' && (composerLiveText || activeRunningToolCount > 0))
+    // Steered notices render while a turn runs, owned or reattached — count
+    // them even before the turn streams any output.
+    || (steeredSendNotice && (composerSendState === 'sending' || reattachedRunning))
   )
   const composerStatusBlockHeight = (() => {
     let rows = 0
@@ -6348,6 +6558,8 @@ export default function OpenTuiApp() {
     if (composerAutoTargetingRunning && composerTargetSession) rows += 1
     if ((liveStatus === 'retrying' || liveStatus === 'compacting') && composerSendState === 'sending') rows += 2
     if (composerSendState === 'sending' && composerLiveReasoning.trim()) rows += LIVE_PREVIEW_HEIGHT
+    // Reattached-turn banner (rendered when a turn runs without an owned stream).
+    if (composerSendState !== 'sending' && reattachedRunning && !awaitingPersistedTurn) rows += 2
     if (pendingPermissions.length > 0) {
       const permission = pendingPermissions[0]!
       // border(2) + outer padding(1) + title(1) + options(1) + hint(1)
@@ -6434,7 +6646,14 @@ export default function OpenTuiApp() {
   const showTabs = tabsEnabled && visibleTabSessions.length > 0
   const showPreviewBar = false
   const TAB_BAR_HEIGHT = 1
-  const transcriptViewportRows = Math.max(mainContentHeight - (focusMode ? 4 : 7) - (showTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0), 8)
+  const transcriptViewportRows = Math.max(
+    mainContentHeight
+    - (focusMode ? 4 : 7)
+    - (showTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0)
+    // Fleet strip is one header row when visible.
+    - (fleetStripVisible ? 1 : 0),
+    8,
+  )
 
   const activeTabIndex = useMemo(() => {
     if (!selectedSessionKey) return -1
@@ -7028,7 +7247,15 @@ export default function OpenTuiApp() {
       ? session.lastModified
       : sessionsByKeyRef.current.get(cacheKeyForGuards)?.lastModified
     if (!foreground && (loadingDetailRef.current || backgroundRefreshInFlightRef.current.has(cacheKeyForGuards))) return
-    if (!foreground && liveTranscriptBaselineRef.current.has(cacheKeyForGuards) && !awaitingPersistedTurnRef.current) return
+    // A live baseline normally means an owned stream is rendering the turn, so
+    // background polls pause. Reattached turns have no stream — the poll is the
+    // only way their progress lands, so keep polling those.
+    if (
+      !foreground
+      && liveTranscriptBaselineRef.current.has(cacheKeyForGuards)
+      && !awaitingPersistedTurnRef.current
+      && reattachedRunningKeyRef.current !== cacheKeyForGuards
+    ) return
 
     // Skip background polls when the session file hasn't changed since the
     // cached detail was populated — avoids re-reading and re-threading the
@@ -7737,6 +7964,19 @@ export default function OpenTuiApp() {
       composerAbortRef.current.abort()
     }
     composerAbortRef.current = null
+    // Reattached turns have no local stream — the server interrupt above is
+    // the whole cancel. Drop the flag and the poll's sidebar mark now; the
+    // registry poll reconciles if the interrupt turns out to be a no-op.
+    reattachedRunningKeyRef.current = null
+    reattachedRunningRef.current = false
+    setReattachedRunning(false)
+    if (targetKey) {
+      const reattachMark = reattachMarksRef.current.get(targetKey)
+      if (reattachMark) {
+        reattachMarksRef.current.delete(targetKey)
+        clearSessionRunning(reattachMark)
+      }
+    }
     setInterruptPressActive(false)
     if (interruptPressTimeoutRef.current) {
       clearTimeout(interruptPressTimeoutRef.current)
@@ -7895,6 +8135,202 @@ export default function OpenTuiApp() {
       showNotice('error', err instanceof Error ? err.message : 'Failed to submit answer')
     } finally {
       setPermissionActionLoading(null)
+    }
+  })
+
+  // Desktop-notify that a background turn is blocked on a prompt the user
+  // can't see (mirrors the slow-send OSC notification; BMP-sanitized).
+  const notifyAttention = useEffectEvent((title: string, sessionId: string, sessionProvider: AgentProvider) => {
+    const key = sessionKey({ sessionId, provider: sessionProvider })
+    const session = sessionsByKeyRef.current.get(key)
+    const sessionTitle = session ? formatSessionTitle(session) : sessionId.slice(-8)
+    if (NATIVE_OSC_ENABLED && renderer.capabilities?.notifications !== false) {
+      try {
+        renderer.triggerNotification(
+          toBmpSafe(title),
+          toBmpSafe(`agent-viewer · needs input · ${sessionTitle}`),
+        )
+      } catch {
+        // terminal doesn't support OSC notifications — silently ignore
+      }
+    }
+  })
+
+  // A turn finished on a session the user wasn't viewing — record it in the
+  // attention inbox (one entry per session, newest first) and notify.
+  const recordAttentionTurnDone = useEffectEvent((ref: RunningSessionRef) => {
+    const key = sessionKey({ sessionId: ref.sessionId, provider: ref.provider })
+    const session = sessionsByKeyRef.current.get(key)
+    const title = session ? formatSessionTitle(session) : ref.sessionId.slice(-8)
+    setAttentionDone((prev) => [
+      { key: `done:${key}:${Date.now()}`, sessionId: ref.sessionId, provider: ref.provider, sessionKey: key, title, createdAt: Date.now() },
+      ...prev.filter((item) => item.sessionKey !== key),
+    ].slice(0, ATTENTION_DONE_LIMIT))
+    if (NATIVE_OSC_ENABLED && renderer.capabilities?.notifications !== false) {
+      try {
+        renderer.triggerNotification(
+          toBmpSafe('Turn finished'),
+          toBmpSafe(`agent-viewer · ${title}`),
+        )
+      } catch {
+        // terminal doesn't support OSC notifications — silently ignore
+      }
+    }
+  })
+
+  // Answer a plain tool permission straight from the inbox. Questions and plan
+  // approvals need their full pickers — those route through openAttentionSession.
+  const respondToAttentionItem = useEffectEvent(async (item: AttentionItem, response: PermissionResponse) => {
+    const permission = item.permission
+    if (!permission || attentionRespondingId) return
+    setAttentionRespondingId(permission.id)
+    try {
+      await runTuiSessionAction(
+        { sessionId: item.sessionId, provider: item.provider } as Session,
+        { action: 'respondPermission', permissionId: permission.id, response, provider: item.provider },
+      )
+      setPendingPermissions((prev) => prev.filter((p) => p.id !== permission.id))
+      setBackgroundPrompts((prev) => prev.filter((p) => p.id !== permission.id))
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Failed to respond to permission')
+    } finally {
+      setAttentionRespondingId(null)
+    }
+  })
+
+  const openAttentionSession = useEffectEvent((item: AttentionItem) => {
+    setAttentionOpen(false)
+    if (item.kind === 'turn-done') {
+      setAttentionDone((prev) => prev.filter((done) => done.key !== item.key))
+    }
+    if (!item.sessionId) return
+    if (item.sessionKey === selectedSessionKeyRef.current) {
+      setFocusedPane('messages')
+      return
+    }
+    const session = sessionsByKeyRef.current.get(item.sessionKey)
+      ?? ({ sessionId: item.sessionId, provider: item.provider } as Session)
+    selectTabSession(session)
+    setFocusedPane('messages')
+  })
+
+  const dismissAttentionItem = useEffectEvent((item: AttentionItem) => {
+    if (item.kind !== 'turn-done') return
+    setAttentionDone((prev) => prev.filter((done) => done.key !== item.key))
+  })
+
+  // ⌃N: jump straight to whatever needs a human next — prefer prompts over
+  // completions, and another session over the one already on screen.
+  const jumpToNextAttention = useEffectEvent(() => {
+    const needing = attentionItems.filter((item) => item.kind !== 'turn-done')
+    const pool = needing.length > 0 ? needing : attentionItems
+    if (pool.length === 0) {
+      showNotice('info', 'Nothing needs attention', 2500)
+      return
+    }
+    const target = pool.find((item) => item.sessionKey !== selectedSessionKeyRef.current) ?? pool[0]!
+    openAttentionSession(target)
+  })
+
+  // Digits 1-9 jump straight to a fleet cell while the strip is visible.
+  const jumpToFleetEntry = useEffectEvent((index: number) => {
+    const entry = fleetEntries[index]
+    if (!entry || entry.key === selectedSessionKeyRef.current) return
+    const session = sessionsByKeyRef.current.get(entry.key)
+      ?? ({ sessionId: entry.sessionId, provider: entry.provider } as Session)
+    selectTabSession(session)
+    setFocusedPane('messages')
+  })
+
+  // Resolve whether the selected session lives in an agent worktree — drives
+  // the composer badge and the merge/discard affordances.
+  const selectedSessionCwdForWorktree = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? null
+  useEffect(() => {
+    if (!selectedSessionCwdForWorktree) {
+      setSelectedWorktreeTask(null)
+      return
+    }
+    let cancelled = false
+    void findTuiWorktreeTask(selectedSessionCwdForWorktree)
+      .then((task) => { if (!cancelled) setSelectedWorktreeTask(task) })
+      .catch(() => { if (!cancelled) setSelectedWorktreeTask(null) })
+    return () => { cancelled = true }
+  }, [selectedSessionCwdForWorktree])
+
+  // Name → isolated worktree + branch + fresh session cwd'd into it, composer
+  // focused for the first prompt. The task then runs without touching the main
+  // checkout until the user merges it back.
+  const submitWorktreeTask = useEffectEvent(async () => {
+    const name = worktreeDraft.trim()
+    // Ref-guarded: Enter can arrive via both the input's onSubmit and the
+    // keyboard branch in the same tick, before worktreeBusy state lands.
+    if (!name || worktreeSubmitInFlightRef.current) return
+    worktreeSubmitInFlightRef.current = true
+    const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
+    setWorktreeBusy(true)
+    try {
+      const task = await createTuiWorktreeTask(baseCwd, name)
+      const targetProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
+      const result = await createNewViewSession({ provider: targetProvider, cwd: task.path, title: name })
+      const draft: Session = {
+        sessionId: result.sessionId,
+        provider: result.provider,
+        cwd: result.cwd,
+        createdAt: Date.now(),
+        lastModified: Date.now(),
+        summary: name,
+        isPending: result.isPending,
+      }
+      setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
+      setSelectedSessionKey(sessionKey(draft))
+      await refreshSessions(provider, true, false)
+      setWorktreeModalOpen(false)
+      setWorktreeDraft('')
+      setComposerActive(true)
+      showNotice('info', `Worktree task on ${task.branch} — the session runs in an isolated checkout.`, 5000)
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Failed to create worktree task')
+    } finally {
+      worktreeSubmitInFlightRef.current = false
+      setWorktreeBusy(false)
+    }
+  })
+
+  // Adopt the task's work: commit whatever the agent left uncommitted, then
+  // squash-merge into the main checkout, leaving the result STAGED for review.
+  const mergeSelectedWorktreeTask = useEffectEvent(async () => {
+    const task = selectedWorktreeTask
+    if (!task || worktreeBusy) return
+    setWorktreeBusy(true)
+    try {
+      const result = await mergeTuiWorktreeTask(task)
+      showNotice(
+        'info',
+        result.staged
+          ? `Merged ${task.branch} — changes are staged in the main checkout`
+          : `${task.branch} has no changes to merge`,
+        5000,
+      )
+      setSelectedWorktreeTask(await findTuiWorktreeTask(task.path).catch(() => null))
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Merge failed — resolve in the main checkout')
+    } finally {
+      setWorktreeBusy(false)
+    }
+  })
+
+  const discardSelectedWorktreeTask = useEffectEvent(async () => {
+    const task = selectedWorktreeTask
+    if (!task || worktreeBusy) return
+    setWorktreeBusy(true)
+    try {
+      await removeTuiWorktreeTask(task, { force: true })
+      setSelectedWorktreeTask(null)
+      showNotice('info', `Discarded worktree and branch ${task.branch}`, 5000)
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Failed to remove worktree')
+    } finally {
+      setWorktreeBusy(false)
     }
   })
 
@@ -8156,9 +8592,11 @@ export default function OpenTuiApp() {
     const sendAttachments = submission.attachments
     // Native CLIs queue a follow-up prompt while the active turn streams.
     // Mirror that here: when sending, stash this draft and flush it after. A
-    // transient auto-retry bypasses the queue — the prior (failed) turn already
-    // settled, composerSendState just hasn't been cleared yet across the backoff.
-    if (!isRetry && composerSendState === 'sending') {
+    // reattached turn (running server-side, no owned stream) counts as sending
+    // — starting a fresh turn now would run two concurrently. A transient
+    // auto-retry bypasses the queue — the prior (failed) turn already settled,
+    // composerSendState just hasn't been cleared yet across the backoff.
+    if (!isRetry && (composerSendState === 'sending' || reattachedRunningRef.current)) {
       composerTextareaRef.current?.setText('')
       setComposerDraft('')
       setComposerMentionAttachments([])
@@ -8238,6 +8676,9 @@ export default function OpenTuiApp() {
     }
     markSessionRunning(runningRef)
     const targetKey = sessionKey(targetSession)
+    // This send loop owns the turn's stream — the registry poll must not treat
+    // the session as reattached while the stream is alive.
+    ownedTurnKeyRef.current = targetKey
     const baselineDetail = sessionDetailCacheRef.current.get(targetKey)
       ?? (selectedSessionKeyRef.current === targetKey ? sessionDetail : null)
     const baselineMessages = baselineDetail?.rawMessages.filter(isDurableSessionMessage) ?? []
@@ -8355,6 +8796,7 @@ export default function OpenTuiApp() {
               liveTranscriptBaselineRef.current.delete(oldKey)
               liveTranscriptBaselineRef.current.set(newKey, baseline)
             }
+            if (ownedTurnKeyRef.current === oldKey) ownedTurnKeyRef.current = newKey
             setLiveTranscriptMessages((prev) => prev.map((message) =>
               liveMessageSessionKey(message) === oldKey
                 ? { ...message, sessionId: realId }
@@ -8856,6 +9298,32 @@ export default function OpenTuiApp() {
         }, transientRetryBackoffMs(attempt))
         return
       }
+      // The stream died but the turn survived in the running registry — hand
+      // off to the reattach poll instead of surfacing a send error (the web
+      // composer's stall recovery, in-process). Keep the live echo + baseline:
+      // the detail poll reconciles them once persisted rows land. Queued sends
+      // stay armed; the queue flush is gated on reattachedRunning.
+      let turnStillRunning = false
+      if (!targetSession.isPending) {
+        try {
+          turnStillRunning = listTuiRunningSessions().some((entry) =>
+            entry.sessionId === targetSession.sessionId
+            && entry.provider === (targetSession.provider ?? 'claude'))
+        } catch { /* registry probe is best-effort */ }
+      }
+      if (turnStillRunning) {
+        setComposerSendState('idle')
+        setComposerError(null)
+        setLiveStatus(null)
+        setLiveToolActivities([])
+        if (selectedSessionKeyRef.current === targetKey) {
+          reattachedRunningKeyRef.current = targetKey
+          reattachedRunningRef.current = true
+          setReattachedRunning(true)
+        }
+        showNotice('info', 'Send stream lost — reattached to the running turn', 3500)
+        return
+      }
       const failedDraft = draftOverride ?? composerDraft
       setComposerSendState('error')
       setComposerError(err instanceof Error ? err.message : 'Failed to send message')
@@ -8893,6 +9361,9 @@ export default function OpenTuiApp() {
       setLiveToolActivities([])
       setComposerSendStartedAt(null)
       clearSessionRunning(runningRef)
+      // Single stream at a time, so an unconditional clear is safe (targetKey
+      // may be stale after a pending→real session-id rename).
+      ownedTurnKeyRef.current = null
       if (activeComposerSendCleanupRef.current === turnCleanupPromise) {
         activeComposerSendCleanupRef.current = null
       }
@@ -8930,13 +9401,116 @@ export default function OpenTuiApp() {
   useEffect(() => {
     if (queuedComposerSends.length === 0) return
     if (composerSendState !== 'idle') return
+    // A turn we reattached to is still running server-side — flushing now
+    // would start a second concurrent turn. The registry poll clears the flag
+    // when the turn ends.
+    if (reattachedRunning) return
     const next = queuedComposerSends[0]
     setQueuedComposerSends((prev) => prev.slice(1))
     composerTextareaRef.current?.setText(next.text)
     setComposerDraft(next.text)
     setComposerMentionAttachments(next.attachments)
     void sendComposerMessage(next.text, next.attachments)
-  }, [composerSendState, queuedComposerSends, sendComposerMessage])
+  }, [composerSendState, queuedComposerSends, reattachedRunning, sendComposerMessage])
+
+  // Reattach to turns this composer doesn't own a stream for. The running
+  // registry is in-process (the TUI and its backend share one process), so
+  // this is a cheap synchronous read: reconcile sidebar running marks for
+  // every live session, flag the selected session as reattached when its turn
+  // runs unowned, and re-surface any pending Claude prompts the turn is
+  // blocked on (the stream that delivered them is gone after a stream death;
+  // answering still resolves them server-side by id).
+  useEffect(() => {
+    const poll = () => {
+      let entries: ReturnType<typeof listTuiRunningSessions>
+      try {
+        entries = listTuiRunningSessions()
+      } catch {
+        return // registry probe is best-effort
+      }
+      const runningByKey = new Map(entries.map((entry) => [
+        sessionKey({ sessionId: entry.sessionId, provider: entry.provider }),
+        entry,
+      ]))
+      const ownedKey = composerAbortRef.current ? ownedTurnKeyRef.current : null
+
+      // Sidebar liveness for turns nobody owns (started before a session
+      // switch, or surviving a dead stream).
+      for (const [key, entry] of runningByKey) {
+        if (key === ownedKey || reattachMarksRef.current.has(key)) continue
+        const ref: RunningSessionRef = { sessionId: entry.sessionId, provider: entry.provider }
+        reattachMarksRef.current.set(key, ref)
+        markSessionRunning(ref)
+      }
+      for (const [key, ref] of reattachMarksRef.current) {
+        if (runningByKey.has(key)) continue
+        reattachMarksRef.current.delete(key)
+        clearSessionRunning(ref)
+        // An unowned turn just finished — surface it in the attention inbox
+        // unless the user is already looking at that session.
+        if (key !== selectedSessionKeyRef.current) recordAttentionTurnDone(ref)
+      }
+
+      const selectedKey = selectedSessionKeyRef.current
+      const selectedEntry = selectedKey ? runningByKey.get(selectedKey) : undefined
+      const reattached = Boolean(selectedEntry) && selectedKey !== ownedKey && !awaitingPersistedTurnRef.current
+      reattachedRunningKeyRef.current = reattached ? selectedKey : null
+      setReattachedRunning((prev) => (prev === reattached ? prev : reattached))
+
+      // Prompts blocking running turns on OTHER sessions feed the attention
+      // inbox (the selected session's prompts reconcile into
+      // pendingPermissions below). Notify once per prompt — these are exactly
+      // the "an agent is waiting on you and you can't see it" moments.
+      const background: PendingPermission[] = []
+      for (const [key, entry] of runningByKey) {
+        if (key === ownedKey || key === selectedKey) continue
+        for (const data of entry.pendingPrompts) {
+          const prompt = extractPendingPermission({ type: 'claude_permission', event: { type: 'permission.requested', data } })
+          if (prompt) background.push(prompt)
+        }
+      }
+      setBackgroundPrompts((prev) => {
+        const nextIds = background.map((p) => p.id).join('|')
+        return nextIds === prev.map((p) => p.id).join('|') ? prev : background
+      })
+      const liveIds = new Set(background.map((p) => p.id))
+      for (const id of attentionNotifiedRef.current) {
+        if (!liveIds.has(id)) attentionNotifiedRef.current.delete(id)
+      }
+      for (const prompt of background) {
+        if (attentionNotifiedRef.current.has(prompt.id)) continue
+        attentionNotifiedRef.current.add(prompt.id)
+        notifyAttention(prompt.title, prompt.sessionId ?? '', prompt.provider ?? 'claude')
+      }
+
+      if (!selectedKey || selectedKey === ownedKey) return
+      if (selectedEntry?.provider === 'claude') {
+        // While idle for this session, the registry is the authoritative set
+        // of its pending Claude prompts — reconcile (add new, drop answered).
+        const prompts = selectedEntry.pendingPrompts
+          .map((data) => extractPendingPermission({ type: 'claude_permission', event: { type: 'permission.requested', data } }))
+          .filter((p): p is PendingPermission => p !== null)
+        setPendingPermissions((prev) => {
+          const others = prev.filter((p) => !(p.provider === 'claude' && p.sessionId === selectedEntry.sessionId))
+          const next = [...others, ...prompts]
+          return next.map((p) => p.id).join('|') === prev.map((p) => p.id).join('|') ? prev : next
+        })
+      } else if (!selectedEntry) {
+        // No turn running for the selected session — drop any reattached
+        // Claude prompts left behind by a turn that ended unanswered.
+        const selectedSessionForKey = sessionsByKeyRef.current.get(selectedKey)
+        if (selectedSessionForKey) {
+          setPendingPermissions((prev) => {
+            const next = prev.filter((p) => !(p.provider === 'claude' && p.sessionId === selectedSessionForKey.sessionId))
+            return next.length === prev.length ? prev : next
+          })
+        }
+      }
+    }
+    poll()
+    const timer = setInterval(poll, REATTACH_POLL_MS)
+    return () => clearInterval(timer)
+  }, [selectedSessionKey, markSessionRunning, clearSessionRunning])
 
   // Pull the most-recently queued message back into the composer to edit it
   // (cancels that one send). Any current draft is preserved by prepending it,
@@ -9702,6 +10276,13 @@ export default function OpenTuiApp() {
           [['?', 'help'], ['q', 'quit']],
         ]
     const segs: InlineTextSegment[] = []
+    // Attention badge leads the bar whenever an agent is blocked on a human —
+    // it must be visible regardless of which pane or mode has focus.
+    if (attentionNeedsInputCount > 0) {
+      segs.push({ text: `⚠ ${attentionNeedsInputCount}`, fg: theme.amber })
+      segs.push({ text: ' ! inbox · ⌃N next', fg: theme.muted })
+      segs.push({ text: ' │ ', fg: theme.dim })
+    }
     groups.forEach((group, gi) => {
       if (gi > 0) segs.push({ text: ' │ ', fg: theme.dim })
       group.forEach((binding, bi) => {
@@ -9711,17 +10292,18 @@ export default function OpenTuiApp() {
       })
     })
     return segs
-  }, [composerActive, composerSendState, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, effectiveFocus, theme])
+  }, [attentionNeedsInputCount, composerActive, composerSendState, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, effectiveFocus, theme])
 
+  const turnRunningForComposer = composerSendState === 'sending' || reattachedRunning
   const composerStatusMessage = composerError
     ? composerError
     : awaitingPersistedTurn
       ? 'Syncing transcript…'
-      : queuedComposerSends.length > 0 && composerSendState === 'sending'
+      : queuedComposerSends.length > 0 && turnRunningForComposer
         ? (queuedComposerSends.length === 1
           ? `Queued · sends after current turn: "${queuedComposerSends[0].text.slice(0, 60)}${queuedComposerSends[0].text.length > 60 ? '…' : ''}"`
           : `${queuedComposerSends.length} queued · send in order after current turn`)
-        : steeredSendNotice && composerSendState === 'sending'
+        : steeredSendNotice && turnRunningForComposer
           ? `Steered · delivered to the running turn: "${steeredSendNotice.slice(0, 60)}${steeredSendNotice.length > 60 ? '…' : ''}"`
           : composerSendState === 'sending'
           ? activeRunningToolCount > 0
@@ -9729,6 +10311,8 @@ export default function OpenTuiApp() {
             : composerLiveText
               ? 'Streaming assistant response.'
               : null
+          // Plain reattached state renders as its own banner row (counted in
+          // composerStatusBlockHeight), not through this message slot.
           : null
   const composerTargetMessage = composerAutoTargetingRunning && composerTargetSession
     ? `Auto-targeting running ${String(composerTargetSession.provider ?? 'claude').toUpperCase()} session ${composerTargetSession.sessionId.slice(-8)}`
@@ -10286,6 +10870,24 @@ export default function OpenTuiApp() {
         setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
         setProviderMenuOpen(true)
         break
+      case 'attention':
+        setAttentionOpen(true)
+        break
+      case 'worktree-new':
+        setWorktreeDraft('')
+        setWorktreeModalOpen(true)
+        break
+      case 'worktree-merge':
+        if (selectedWorktreeTask) setWorktreeConfirm('merge')
+        else showNotice('info', 'Selected session is not a worktree task', 3500)
+        break
+      case 'worktree-discard':
+        if (selectedWorktreeTask) setWorktreeConfirm('discard')
+        else showNotice('info', 'Selected session is not a worktree task', 3500)
+        break
+      case 'fleet':
+        setFleetStripEnabled((prev) => !prev)
+        break
       case 'theme': {
         openThemeMenu()
         break
@@ -10562,6 +11164,37 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (worktreeConfirm) {
+      if (key.name === 'return' || key.name === 'y') {
+        handled(() => {
+          const action = worktreeConfirm
+          setWorktreeConfirm(null)
+          if (action === 'merge') void mergeSelectedWorktreeTask()
+          else void discardSelectedWorktreeTask()
+        })
+        return
+      }
+      if (key.name === 'escape' || key.name === 'n') {
+        handled(() => setWorktreeConfirm(null))
+        return
+      }
+      handled(() => {})
+      return
+    }
+
+    if (worktreeModalOpen) {
+      if (key.name === 'escape') {
+        handled(() => {
+          setWorktreeModalOpen(false)
+          setWorktreeDraft('')
+        })
+      } else if (key.name === 'return') {
+        handled(() => { void submitWorktreeTask() })
+      }
+      // Other keys fall through to the focused name input.
+      return
+    }
+
     if (searchMode) {
       if (key.name === 'escape') {
         handled(() => {
@@ -10636,6 +11269,11 @@ export default function OpenTuiApp() {
 
     if (taskPopoverOpen) {
       handled(() => { taskPopoverKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (attentionOpen) {
+      handled(() => { attentionKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -10984,9 +11622,10 @@ export default function OpenTuiApp() {
           return
         }
         handled(() => {
-          // While a turn is running, Esc hides the composer so the user can
-          // read the transcript without cancelling. Use Ctrl+C to interrupt.
-          if (composerSendState === 'sending') {
+          // While a turn is running (owned stream or reattached), Esc hides the
+          // composer so the user can read the transcript without cancelling.
+          // Use Ctrl+C to interrupt.
+          if (composerSendState === 'sending' || reattachedRunning) {
             rememberComposerCursor()
             setComposerWindowOpen(false)
             setComposerActive(false)
@@ -11002,8 +11641,9 @@ export default function OpenTuiApp() {
         return
       }
       // Cancel in-flight send (Ctrl+C when composer is open) — requires two
-      // presses within 5 s to prevent accidental interrupts.
-      if (isCtrl('c') && composerSendState === 'sending') {
+      // presses within 5 s to prevent accidental interrupts. Also covers
+      // reattached turns, where the interrupt is fired without a local stream.
+      if (isCtrl('c') && (composerSendState === 'sending' || reattachedRunning)) {
         if (isKeyRepeat) {
           key.preventDefault()
           key.stopPropagation()
@@ -11216,9 +11856,41 @@ export default function OpenTuiApp() {
       return
     }
 
+    // Global attention inbox — everything blocked on a human, across sessions
+    if (sequence === '!') {
+      handled(() => setAttentionOpen(true))
+      return
+    }
+
+    // Jump to the next session that needs a human (prompt first, then done)
+    if (isCtrl('n')) {
+      handled(jumpToNextAttention)
+      return
+    }
+
+    // Fleet strip: ⇧A toggles, digits 1-9 jump to a cell
+    if (isShifted('A')) {
+      handled(() => setFleetStripEnabled((prev) => !prev))
+      return
+    }
+    if (fleetStripVisible && /^[1-9]$/.test(sequence) && !key.ctrl && !key.meta && !key.option) {
+      handled(() => jumpToFleetEntry(Number(sequence) - 1))
+      return
+    }
+
     // Global handoff brief popover
     if (isShifted('H')) {
       handled(openHandoffBrief)
+      return
+    }
+
+    // Worktree task orchestration: ⇧F forks the repo state into an isolated
+    // worktree task; merge/discard live in the command palette.
+    if (isShifted('F')) {
+      handled(() => {
+        setWorktreeDraft('')
+        setWorktreeModalOpen(true)
+      })
       return
     }
 
@@ -12023,6 +12695,8 @@ export default function OpenTuiApp() {
     ? 'IDE'
     : composerSendState === 'sending'
     ? 'SENDING'
+    : reattachedRunning
+    ? 'REATTACHED'
     : composerActive
     ? 'FOCUSED'
     : 'READY'
@@ -12035,7 +12709,11 @@ export default function OpenTuiApp() {
   const composerDockBorderTitle = composerDockTitleGap > 0
     ? `${composerDockTitleLeft}${composerDockTitleRule.repeat(composerDockTitleGap)}${composerDockHeaderStatus}`
     : fitText(`${composerDockTitleLeft} · ${composerDockHeaderStatus}`, composerDockTitleWidth)
-  const composerWindowHeaderStatus = composerSendState === 'sending' ? 'SENDING' : 'EXPANDED'
+  const composerWindowHeaderStatus = composerSendState === 'sending'
+    ? 'SENDING'
+    : reattachedRunning
+    ? 'REATTACHED'
+    : 'EXPANDED'
   const composerWindowTitleLeft = `◆ COMPOSER · ${composerConfig.label.toUpperCase()}`
   const composerWindowTitleWidth = Math.max(composerWindowWidth - 4, 12)
   const composerWindowTitleGap = composerWindowTitleWidth - composerWindowTitleLeft.length - composerWindowHeaderStatus.length
@@ -12051,12 +12729,12 @@ export default function OpenTuiApp() {
     ? '● → live CLI bridge · ⌃R off · ⇧C panel'
     : canUseIdeBridge && routeComposerToIde
     ? '● → IDE @mentions · ⇧I panel'
-    : composerSendState === 'sending'
+    : composerSendState === 'sending' || reattachedRunning
     ? sendingHintBase
     : canUseChannelBridge
     ? `${composerIdleFooterHint} · ⌃R bridge · ⌃O expand`
     : `${composerIdleFooterHint} · ⌃O expand`
-  const composerDockSendingHintSegments = composerSendState === 'sending'
+  const composerDockSendingHintSegments = composerSendState === 'sending' || reattachedRunning
     ? composerSendingHintSegments(composerDockFooterHint, theme)
     : null
   // Size the hint box to exactly fit its text, capped by available width minus
@@ -12067,10 +12745,10 @@ export default function OpenTuiApp() {
     Math.min(composerDockFooterHint.length + 1, composerDockTextareaWidth - 24),
   )
   const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
-  const composerWindowFooterHint = composerSendState === 'sending'
+  const composerWindowFooterHint = composerSendState === 'sending' || reattachedRunning
     ? `${sendingHintBase} · ⌃O dock`
     : '⏎ send · ⌥M model/effort · ⇧⏎ newline · ⌃O dock · Esc close'
-  const composerWindowSendingHintSegments = composerSendState === 'sending'
+  const composerWindowSendingHintSegments = composerSendState === 'sending' || reattachedRunning
     ? composerSendingHintSegments(composerWindowFooterHint, theme)
     : null
   const composerWindowFooterHintWidth = Math.max(
@@ -12451,6 +13129,14 @@ export default function OpenTuiApp() {
           ) : !focusMode && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
             <box paddingX={1}>
               <text fg={theme.dim}>{fitText('Context usage unavailable', rightPaneWidth - 4)}</text>
+            </box>
+          ) : null}
+
+          {fleetStripVisible ? (
+            <box paddingX={1} flexDirection="row" overflow="hidden">
+              <text wrapMode="none">
+                {renderInlineTextSegments(fleetStripSegments, rightPaneWidth - 4, theme.dim)}
+              </text>
             </box>
           ) : null}
 
@@ -13234,6 +13920,15 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
+      {composerSendState !== 'sending' && reattachedRunning && !awaitingPersistedTurn ? (
+        <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
+          <text fg={theme.cyan} wrapMode="none">{'▌ '}</text>
+          <text fg={theme.muted} wrapMode="none">
+            {fitText('● Turn running · reattached — output syncs as it persists · ⌃C interrupt', Math.max(width - 6, 16))}
+          </text>
+        </box>
+      ) : null}
+
       {liveToolActivities.length > 0 && activeRunningToolCount > 0 ? (
         <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
           <text fg={theme.green} wrapMode="none">{'▌ '}</text>
@@ -13419,6 +14114,33 @@ export default function OpenTuiApp() {
           height={height}
           onClose={() => setAnalyticsOpen(false)}
           onKeyHandlerReady={(handler) => { analyticsKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
+      {attentionOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {attentionOpen ? (
+        <AttentionInboxPopover
+          items={attentionItems}
+          theme={theme}
+          width={width}
+          height={height}
+          respondingId={attentionRespondingId}
+          onRespond={(item, response) => { void respondToAttentionItem(item, response) }}
+          onOpenSession={openAttentionSession}
+          onDismiss={dismissAttentionItem}
+          onClose={() => setAttentionOpen(false)}
+          onKeyHandlerReady={(handler) => { attentionKeyHandlerRef.current = handler }}
         />
       ) : null}
 
@@ -13748,6 +14470,97 @@ export default function OpenTuiApp() {
       })() : null}
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} />
+
+      {worktreeModalOpen || worktreeConfirm ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={69}
+        />
+      ) : null}
+
+      {worktreeModalOpen ? (() => {
+        const overlayWidth = Math.min(Math.max(width - 6, 40), 64)
+        const overlayHeight = 9
+        return (
+          <box
+            position="absolute"
+            top={Math.max(1, Math.floor((height - overlayHeight) / 2))}
+            left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
+            width={overlayWidth}
+            height={overlayHeight}
+            border
+            borderStyle="single"
+            borderColor={theme.amber}
+            backgroundColor={theme.surface}
+            zIndex={70}
+            flexDirection="column"
+            title=" New worktree task "
+            titleColor={theme.amber}
+            titleAlignment="left"
+          >
+            <box paddingX={1} paddingTop={1}>
+              <text fg={theme.dim} wrapMode="none">
+                {fitText('Name the task — it gets its own branch + checkout.', overlayWidth - 4)}
+              </text>
+            </box>
+            <box paddingX={1} marginTop={1} backgroundColor={theme.surface3}>
+              <input
+                focused
+                value={worktreeDraft}
+                maxLength={60}
+                onInput={(value: string) => setWorktreeDraft(value)}
+                onSubmit={() => { void submitWorktreeTask() }}
+              />
+            </box>
+            <box paddingX={1} marginTop={1}>
+              <text fg={worktreeBusy ? theme.amber : theme.dim} wrapMode="none">
+                {fitText(worktreeBusy ? 'Creating worktree…' : '⏎ create · Esc cancel', overlayWidth - 4)}
+              </text>
+            </box>
+          </box>
+        )
+      })() : null}
+
+      {worktreeConfirm && selectedWorktreeTask ? (() => {
+        const overlayWidth = Math.min(Math.max(width - 6, 40), 66)
+        const overlayHeight = 8
+        const isMerge = worktreeConfirm === 'merge'
+        const body = isMerge
+          ? `Squash-merge ${selectedWorktreeTask.branch} into the main checkout (staged, not committed)?`
+          : `Delete the worktree and branch ${selectedWorktreeTask.branch}? Uncommitted work is lost.`
+        return (
+          <box
+            position="absolute"
+            top={Math.max(1, Math.floor((height - overlayHeight) / 2))}
+            left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
+            width={overlayWidth}
+            height={overlayHeight}
+            border
+            borderStyle="single"
+            borderColor={isMerge ? theme.green : theme.red}
+            backgroundColor={theme.surface}
+            zIndex={70}
+            flexDirection="column"
+          >
+            <box paddingX={1} paddingTop={1}>
+              <text fg={theme.text}>{isMerge ? 'MERGE WORKTREE TASK?' : 'DISCARD WORKTREE TASK?'}</text>
+            </box>
+            <box paddingX={1} marginTop={1}>
+              <text fg={theme.dim} wrapMode="word" width={overlayWidth - 4}>{body}</text>
+            </box>
+            <box paddingX={1} marginTop={1}>
+              <text fg={isMerge ? theme.green : theme.red} wrapMode="none">
+                {fitText('Enter/Y confirm  ·  Esc/N cancel', overlayWidth - 4)}
+              </text>
+            </box>
+          </box>
+        )
+      })() : null}
 
       {exitConfirmOpen ? (
         <box

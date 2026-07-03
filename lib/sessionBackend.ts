@@ -71,7 +71,7 @@ import {
   type SessionEvent as CopilotSessionEvent,
   type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
-import { backgroundRunningSession, clearRunningSession, getRunningSession, getRunningSessionInfo, interruptRunningSession, setRunningSession, steerRunningSession } from './sessionRuntime'
+import { backgroundRunningSession, clearRunningSession, getRunningSession, getRunningSessionInfo, interruptRunningSession, listRunningSessionRefs, setRunningSession, steerRunningSession } from './sessionRuntime'
 import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
 import type {
@@ -5336,6 +5336,21 @@ export function readViewSessionRunning(
   sessionId: string,
 ): ReturnType<typeof getRunningSessionInfo> & { pendingPrompts: Record<string, unknown>[] } {
   return { ...getRunningSessionInfo(sessionId), pendingPrompts: listPendingClaudePrompts(sessionId) }
+}
+
+/**
+ * Every session with a turn running in this process, each with any Claude
+ * prompts the turn is blocked on (see readViewSessionRunning). Process-local.
+ */
+export function listViewRunningSessions(): Array<{
+  sessionId: string
+  provider: AgentProvider
+  pendingPrompts: Record<string, unknown>[]
+}> {
+  return listRunningSessionRefs().map((ref) => ({
+    ...ref,
+    pendingPrompts: listPendingClaudePrompts(ref.sessionId),
+  }))
 }
 
 export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; currentContextTier?: CopilotContextTier | null; contextUsage: ContextUsage | null }> {

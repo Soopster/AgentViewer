@@ -96,6 +96,14 @@ export function getRunningSessionInfo(sessionId: string): {
   }
 }
 
+/**
+ * Every session with a turn currently running in this process, for surfaces
+ * that track liveness across sessions (reattach, attention inbox, fleet view).
+ */
+export function listRunningSessionRefs(): Array<{ sessionId: string; provider: AgentProvider }> {
+  return Array.from(runningSessions, ([sessionId, running]) => ({ sessionId, provider: running.provider }))
+}
+
 export async function backgroundRunningSession(sessionId: string): Promise<boolean> {
   const running = runningSessions.get(sessionId)
   if (!running) throw new Error('No running session for this session')

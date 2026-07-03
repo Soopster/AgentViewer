@@ -39,6 +39,7 @@ import {
   type TuiTranscriptWidth,
 } from '../tuiState'
 import {
+  listViewRunningSessions,
   listViewSessionMessages,
   listViewSessions,
   patchViewSession,
@@ -66,6 +67,14 @@ import {
   type PromptSummary,
   type SavePromptInput,
 } from '../promptLibrary'
+import {
+  createWorktreeTask,
+  findWorktreeTaskForCwd,
+  listWorktreeTasks,
+  mergeWorktreeTask,
+  removeWorktreeTask,
+  type WorktreeTask,
+} from '../worktreeTasks'
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 
@@ -300,6 +309,41 @@ export async function streamTuiSessionTurn(
 export async function interruptTuiSessionTurn(session: { sessionId: string }): Promise<void> {
   await interruptViewSession(session.sessionId)
 }
+
+/**
+ * Snapshot of every session with a turn running in this process, each carrying
+ * any Claude prompts (tool permissions / AskUserQuestion / plan approval) the
+ * turn is blocked on. The TUI and its backend share one process, so this
+ * registry read is synchronous and authoritative — it powers live-turn
+ * reattach and the cross-session attention surfaces.
+ */
+export function listTuiRunningSessions(): ReturnType<typeof listViewRunningSessions> {
+  return listViewRunningSessions()
+}
+
+// Worktree-per-task orchestration: isolate an agent task in its own git
+// worktree + branch, then squash-merge the result back or discard it.
+export async function createTuiWorktreeTask(cwd: string, name: string): Promise<WorktreeTask> {
+  return createWorktreeTask(cwd, name)
+}
+
+export async function findTuiWorktreeTask(cwd: string): Promise<WorktreeTask | null> {
+  return findWorktreeTaskForCwd(cwd)
+}
+
+export async function listTuiWorktreeTasks(cwd: string): Promise<WorktreeTask[]> {
+  return listWorktreeTasks(cwd)
+}
+
+export async function mergeTuiWorktreeTask(task: WorktreeTask): Promise<{ staged: boolean }> {
+  return mergeWorktreeTask(task)
+}
+
+export async function removeTuiWorktreeTask(task: WorktreeTask, opts?: { force?: boolean }): Promise<void> {
+  return removeWorktreeTask(task, opts)
+}
+
+export type { WorktreeTask }
 
 /** Warm the send path (Claude pool spawn, Codex thread resume) while the user types. */
 export async function prewarmTuiSession(
