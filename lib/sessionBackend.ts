@@ -1536,10 +1536,11 @@ function createClaudePermissionBridge(
   }
 
   return (toolName, input, options) => {
-    const requestId = options.toolUseID || `claude-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const requestId = options.requestId || options.toolUseID || `claude-${Date.now()}-${Math.random().toString(36).slice(2)}`
     activeIds.add(requestId)
     const requestData: Record<string, unknown> = {
       requestId,
+      toolUseID: options.toolUseID,
       sessionId,
       toolName,
       input,
