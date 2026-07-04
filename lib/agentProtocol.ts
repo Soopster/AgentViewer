@@ -404,6 +404,43 @@ export function buildTeammateTurnPreamble(params: {
   ].join('\n')
 }
 
+/**
+ * Mid-run lead turn: the lead was woken because teammates need help (blocked,
+ * stalled, or messaged it while idle). It coordinates — it never implements.
+ */
+export function buildLeadInterventionPreamble(params: {
+  runId: string
+  agent: Pick<ProtocolAgent, 'id' | 'name'>
+  roster: ProtocolAgent[]
+  tasks: ProtocolTask[]
+  inbox: ProtocolMessage[]
+  agentsById: Map<string, ProtocolAgent>
+  interventionsLeft: number
+}): string {
+  return [
+    `You are the TEAM LEAD (protocol ${AGENT_PROTOCOL_VERSION}). Teammates need your help mid-run.`,
+    `Run ID: ${params.runId} · Your agent ID: ${params.agent.id}`,
+    '',
+    'Your inbox:',
+    formatInbox(params.inbox, params.agentsById),
+    '',
+    'Team roster:',
+    formatRoster(params.roster),
+    '',
+    'Task board:',
+    formatTaskBoard(params.tasks),
+    '',
+    'Resolve the situation THIS TURN — coordinate, do not implement:',
+    '- `message` a blocked teammate (by name) with concrete unblocking guidance. Your message wakes them.',
+    '- If a task is genuinely unachievable or duplicated, emit `task.failed` (taskId, summary) so the run can finish without it.',
+    '- If the work needs reshaping, emit `task.created` replacements (title, detail, paths, dependsOn).',
+    `- You have ${params.interventionsLeft} intervention turn${params.interventionsLeft === 1 ? '' : 's'} left this run — after that, stuck tasks are auto-failed. Prefer decisive resolution over back-and-forth.`,
+    '- End the turn with `agent.stop_work`.',
+    '',
+    protocolGrammar(params.runId, params.agent.id),
+  ].join('\n')
+}
+
 /** Final lead turn: synthesize the team's findings into one deliverable summary. */
 export function buildLeadSynthesisPreamble(params: {
   runId: string

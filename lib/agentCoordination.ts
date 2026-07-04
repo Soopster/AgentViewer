@@ -17,6 +17,7 @@ import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import {
   AGENT_PROTOCOL_VERSION,
+  buildLeadInterventionPreamble,
   buildLeadPlanPreamble,
   buildLeadSynthesisPreamble,
   buildTeammateTurnPreamble,
@@ -53,6 +54,10 @@ const EVENT_WINDOW = 300
 // the teammate is marked blocked and the lead is notified (doc: teammates may
 // stop on errors; the lead/user nudges or replaces them).
 const MAX_TURN_NUDGES = 1
+// Mid-run lead intervention turns (woken by teammate messages / stuck tasks).
+// Bounded so a stuck teammate ↔ lead exchange can't ping-pong tokens forever;
+// once exhausted, stuck tasks are auto-failed so the run reaches synthesis.
+const MAX_LEAD_INTERVENTIONS = 3
 const TEAMMATE_NAMES = ['nova', 'orion', 'lyra', 'vega', 'atlas', 'rhea', 'iris', 'flint'] as const
 
 let database: SqliteDatabase | null = null
@@ -71,6 +76,7 @@ type RunController = {
   effort?: string
   stopped: boolean
   synthesisStarted: boolean
+  interventionsUsed: number
   turnInFlight: Set<string>
   /** agentId → latest (realized) session id for steering/interrupting. */
   sessionIds: Map<string, string>
@@ -734,6 +740,7 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
   const agents = listAgentsSync(db, runId)
   const agentsById = new Map(agents.map((agent) => [agent.id, agent]))
   const controller = controllers.get(runId)
+  const wake = new Set<string>()
   for (const id of messageIds) {
     const row = db.prepare('SELECT * FROM protocol_messages WHERE id = ?').get(id) as Row | undefined
     if (!row) continue
@@ -748,8 +755,59 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
       await enqueueWrite((tx) => {
         tx.prepare('UPDATE protocol_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL').run(nowIso(), id)
       })
+    } else {
+      wake.add(recipient.id)
     }
   }
+  // A message WAKES an idle recipient (doc: a message from the lead or another
+  // teammate wakes a teammate) — dispatch a turn that carries the inbox.
+  // Without this, mail to an agent between turns is a dead letter until the
+  // work loop happens to re-dispatch it, and a blocked teammate never hears
+  // the advice that would unblock it.
+  if (!controller || controller.stopped) return
+  for (const agentId of wake) {
+    if (controller.turnInFlight.has(agentId)) continue
+    const recipient = agentsById.get(agentId)
+    if (!recipient || recipient.status === 'stopped' || recipient.status === 'failed') continue
+    if (recipient.role === 'lead') {
+      void dispatchLeadIntervention(controller)
+    } else {
+      // Fresh advice deserves fresh patience: reset the stall counter so the
+      // woken teammate gets its continuation nudge again.
+      for (const key of [...controller.nudges.keys()]) {
+        if (key.startsWith(`${agentId}:`)) controller.nudges.delete(key)
+      }
+      void dispatchTeammateWork(controller, agentId)
+    }
+  }
+}
+
+/**
+ * Wake the lead mid-run to unstick the team. Budgeted (MAX_LEAD_INTERVENTIONS)
+ * so lead↔teammate loops terminate; past the budget, stuck tasks are
+ * auto-failed by the work loop instead.
+ */
+async function dispatchLeadIntervention(controller: RunController): Promise<void> {
+  if (controller.stopped || controller.synthesisStarted) return
+  if (controller.interventionsUsed >= MAX_LEAD_INTERVENTIONS) return
+  const db = await getDatabase()
+  const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
+  if (!runRow || rowToRun(runRow).status !== 'running') return
+  const agents = listAgentsSync(db, controller.runId)
+  const lead = agents.find((agent) => agent.role === 'lead')
+  if (!lead || controller.turnInFlight.has(lead.id)) return
+  controller.interventionsUsed += 1
+  const inbox = await enqueueWrite((tx) => takeInboxSync(tx, controller.runId, lead.id))
+  const message = buildLeadInterventionPreamble({
+    runId: controller.runId,
+    agent: lead,
+    roster: agents,
+    tasks: listTasksSync(db, controller.runId),
+    inbox,
+    agentsById: new Map(agents.map((agent) => [agent.id, agent])),
+    interventionsLeft: MAX_LEAD_INTERVENTIONS - controller.interventionsUsed,
+  })
+  void dispatchAgentTurn(controller, lead.id, message)
 }
 
 function takeInboxSync(db: SqliteDatabase, runId: string, agentId: string): ProtocolMessage[] {
@@ -948,7 +1006,11 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
   const agent = agentsById.get(agentId)
   if (!agent) return
   const tasks = listTasksSync(db, controller.runId)
-  const task = tasks.find((entry) => entry.id === agent.taskId && (entry.status === 'claimed' || entry.status === 'in_progress')) ?? null
+  // Blocked tasks stay dispatchable: a woken teammate resumes the task its
+  // inbox advice is about, rather than being told to claim something else.
+  const task = tasks.find((entry) =>
+    entry.id === agent.taskId
+    && (entry.status === 'claimed' || entry.status === 'in_progress' || entry.status === 'blocked')) ?? null
   const note = controller.dispatchNotes.get(agentId)
   controller.dispatchNotes.delete(agentId)
   const message = buildTeammateTurnPreamble({
@@ -982,7 +1044,9 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
   }
 
   const tasks = listTasksSync(db, controller.runId)
-  const owned = tasks.find((task) => task.ownerAgentId === agentId && (task.status === 'claimed' || task.status === 'in_progress'))
+  const owned = tasks.find((task) =>
+    task.ownerAgentId === agentId
+    && (task.status === 'claimed' || task.status === 'in_progress' || task.status === 'blocked'))
 
   if (owned) {
     const nudgeKey = `${agentId}:${owned.id}`
@@ -995,7 +1059,22 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
       await dispatchTeammateWork(controller, agentId)
       return
     }
-    // Out of nudges: surface it (doc: idle teammates notify the lead).
+    if (controller.interventionsUsed >= MAX_LEAD_INTERVENTIONS) {
+      // Intervention budget spent — fail the task so the run can still reach
+      // synthesis instead of stalling forever on one stuck teammate.
+      await appendProtocolEvent({
+        version: AGENT_PROTOCOL_VERSION,
+        runId: controller.runId,
+        agentId,
+        type: 'task.failed',
+        taskId: owned.id,
+        summary: `${owned.id} auto-failed: ${agent.name} stalled and the lead intervention budget is exhausted`,
+      })
+      await maybeStartSynthesis(controller)
+      return
+    }
+    // Out of nudges: surface it (doc: idle teammates notify the lead). The
+    // message wakes the lead for an intervention turn.
     await appendProtocolEvent({
       version: AGENT_PROTOCOL_VERSION,
       runId: controller.runId,
@@ -1084,6 +1163,16 @@ async function handleLeadTurnEnd(controller: RunController): Promise<void> {
     return
   }
 
+  if (run.status === 'running') {
+    // An intervention turn ended: the lead goes back to standby, and its
+    // decisions (task.failed / task.created) may have finished the board.
+    await enqueueWrite((tx) => {
+      setAgentStatusSync(tx, controller.runId, run.leadAgentId ?? 'lead', 'idle', nowIso())
+    })
+    await maybeStartSynthesis(controller)
+    return
+  }
+
   if (run.status === 'synthesizing') {
     // The lead's final `finding` is the run summary.
     const findingRow = db.prepare(
@@ -1162,6 +1251,10 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
   await enqueueWrite((tx) => {
     tx.prepare('UPDATE protocol_runs SET status = ?, updated_at = ? WHERE id = ?').run('running', nowIso(), controller.runId)
   })
+  // Planning is over — the lead stands by for interventions and synthesis.
+  await enqueueWrite((tx) => {
+    setAgentStatusSync(tx, controller.runId, 'lead', 'idle', nowIso())
+  })
   const spawned = listAgentsSync(db, controller.runId).filter((agent) => agent.role === 'teammate')
   for (const agent of spawned) {
     await dispatchTeammateWork(controller, agent.id)
@@ -1198,6 +1291,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     effort: params.effort,
     stopped: false,
     synthesisStarted: false,
+    interventionsUsed: 0,
     turnInFlight: new Set(),
     sessionIds: new Map([['lead', leadSession.sessionId]]),
     pendingSessions: new Set(leadSession.isPending ? ['lead'] : []),

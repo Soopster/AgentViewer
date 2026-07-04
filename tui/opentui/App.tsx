@@ -87,7 +87,6 @@ import {
   readTuiSlashCommands,
   readTuiComposerOptions,
   listTuiProtocolRuns,
-  readTuiProtocolRun,
   startTuiProtocolRun,
   stopTuiProtocolRun,
   cleanupTuiProtocolRunWorktrees,
@@ -118,7 +117,6 @@ import {
   type TuiTranscriptWidth,
 } from '../../lib/tui/service'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
-import type { ProtocolRunSnapshot } from '../../lib/agentProtocol'
 import {
   extractClaudeStreamToolInputDelta,
   extractClaudeStreamToolUse,
@@ -136,6 +134,7 @@ import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, ToolResultBlock } from '../../lib/types'
 import { AttentionInboxPopover, type AttentionItem } from './AttentionInboxPopover'
 import { CheckpointPopover } from './CheckpointPopover'
+import { CoordinationPopover } from './CoordinationPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
@@ -3541,7 +3540,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
   { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
   { id: 'coord-start', label: 'Start coordinated run', key: '', category: 'Coordination' },
-  { id: 'coord-board', label: 'Open coordination board', key: '', category: 'Coordination' },
+  { id: 'coord-board', label: 'Open agent team board', key: '⇧O', category: 'Coordination' },
   { id: 'coord-cleanup', label: 'Clean completed worktrees', key: 'c', category: 'Coordination' },
   { id: 'coord-stop', label: 'Stop coordinated run', key: '', category: 'Coordination' },
   { id: 'fleet',      label: 'Toggle fleet strip',      key: '⇧A', category: 'View'       },
@@ -4584,10 +4583,14 @@ export default function OpenTuiApp() {
   const [coordModalOpen, setCoordModalOpen] = useState(false)
   const [coordBoardOpen, setCoordBoardOpen] = useState(false)
   const [coordDraft, setCoordDraft] = useState('')
+  // Teammate budget for the next run (⇥ cycles 2-6 in the start modal).
+  const [coordMaxAgents, setCoordMaxAgents] = useState(3)
   const [coordBusy, setCoordBusy] = useState(false)
-  const [coordSnapshot, setCoordSnapshot] = useState<ProtocolRunSnapshot | null>(null)
+  // Run the board opens on (a just-started run); null = latest.
+  const [coordBoardRunId, setCoordBoardRunId] = useState<string | null>(null)
   const [coordError, setCoordError] = useState<string | null>(null)
   const coordStartInFlightRef = useRef(false)
+  const coordBoardKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   // Fleet strip visibility preference (the strip only renders when it has
   // cells: running sessions or fresh background completions).
   const [fleetStripEnabled, setFleetStripEnabled] = useState(true)
@@ -8372,20 +8375,24 @@ export default function OpenTuiApp() {
     }
   })
 
-  const openCoordinationBoard = useEffectEvent(async () => {
+  const openCoordinationBoard = useEffectEvent(() => {
+    // The popover loads and polls its own data; null run id = latest.
+    setCoordBoardRunId(null)
     setCoordBoardOpen(true)
-    setCoordError(null)
-    try {
-      const runs = await listTuiProtocolRuns(1)
-      const latest = runs[0]
-      if (!latest) {
-        setCoordSnapshot(null)
-        return
-      }
-      setCoordSnapshot(await readTuiProtocolRun(latest.id))
-    } catch (err) {
-      setCoordError(err instanceof Error ? err.message : 'Failed to load coordination board')
+  })
+
+  // Jump from a team-board agent row straight into that agent's transcript.
+  const openCoordinationAgentSession = useEffectEvent((agent: import('../../lib/agentProtocol').ProtocolAgent) => {
+    const draft: Session = {
+      sessionId: agent.sessionId,
+      provider: agent.provider,
+      cwd: agent.worktreePath || undefined,
+      createdAt: Date.now(),
+      lastModified: Date.now(),
+      summary: `${agent.name} · ${agent.role}`,
     }
+    selectTabSession(sessionsByKeyRef.current.get(sessionKey(draft)) ?? draft)
+    setFocusedPane('messages')
   })
 
   const submitCoordinatedRun = useEffectEvent(async () => {
@@ -8401,7 +8408,7 @@ export default function OpenTuiApp() {
         prompt,
         baseCwd,
         provider: targetProvider,
-        maxAgents: 3,
+        maxAgents: coordMaxAgents,
         title: prompt.slice(0, 40),
         model: tuiModelOverride[selectedSessionKey ?? ''] || undefined,
         effort: tuiEffort === 'auto' ? undefined : tuiEffort,
@@ -8425,12 +8432,12 @@ export default function OpenTuiApp() {
       })
       const first = drafts[0]
       if (first) setSelectedSessionKey(sessionKey(first))
-      setCoordSnapshot(result.snapshot)
       setCoordModalOpen(false)
+      setCoordBoardRunId(result.snapshot.run.id)
       setCoordBoardOpen(true)
       setCoordDraft('')
       await refreshSessions(provider, true, false)
-      showNotice('info', `Started coordinated run with ${drafts.length} agents`, 5000)
+      showNotice('info', 'Coordinated run started — lead is planning the task board', 5000)
     } catch (err) {
       setCoordError(err instanceof Error ? err.message : 'Failed to start coordinated run')
       showNotice('error', err instanceof Error ? err.message : 'Failed to start coordinated run')
@@ -8440,55 +8447,48 @@ export default function OpenTuiApp() {
     }
   })
 
+  // Palette actions resolve the latest run on demand — the interactive board
+  // (CoordinationPopover) has its own run-scoped stop/cleanup keys.
   const stopActiveCoordinatedRun = useEffectEvent(async () => {
-    const runId = coordSnapshot?.run.id
-    if (!runId || coordBusy) return
+    if (coordBusy) return
     setCoordBusy(true)
-    setCoordError(null)
     try {
-      const snapshot = await stopTuiProtocolRun(runId)
-      setCoordSnapshot(snapshot)
+      const runs = await listTuiProtocolRuns(1)
+      const runId = runs[0]?.id
+      if (!runId) {
+        showNotice('info', 'No coordinated run to stop', 3000)
+        return
+      }
+      await stopTuiProtocolRun(runId)
       showNotice('info', 'Stopped coordinated run', 4000)
     } catch (err) {
-      setCoordError(err instanceof Error ? err.message : 'Failed to stop coordinated run')
+      showNotice('error', err instanceof Error ? err.message : 'Failed to stop coordinated run')
     } finally {
       setCoordBusy(false)
     }
   })
 
   const cleanupCompletedCoordinatedRunWorktrees = useEffectEvent(async () => {
-    const runId = coordSnapshot?.run.id
-    if (!runId || coordBusy) return
+    if (coordBusy) return
     setCoordBusy(true)
-    setCoordError(null)
     try {
+      const runs = await listTuiProtocolRuns(1)
+      const runId = runs[0]?.id
+      if (!runId) {
+        showNotice('info', 'No coordinated run to clean up', 3000)
+        return
+      }
       const result = await cleanupTuiProtocolRunWorktrees(runId)
-      setCoordSnapshot(result.snapshot)
       const removed = result.results.filter((entry) => entry.status === 'removed').length
       const skipped = result.results.filter((entry) => entry.status === 'skipped').length
       const failed = result.results.filter((entry) => entry.status === 'failed').length
       showNotice('info', `Cleaned ${removed} worktree${removed === 1 ? '' : 's'}${skipped || failed ? ` · skipped ${skipped} · failed ${failed}` : ''}`, 5000)
     } catch (err) {
-      setCoordError(err instanceof Error ? err.message : 'Failed to clean up worktrees')
+      showNotice('error', err instanceof Error ? err.message : 'Failed to clean up worktrees')
     } finally {
       setCoordBusy(false)
     }
   })
-
-  useEffect(() => {
-    if (!coordBoardOpen || !coordSnapshot?.run.id) return undefined
-    let cancelled = false
-    const poll = () => {
-      void readTuiProtocolRun(coordSnapshot.run.id)
-        .then((snapshot) => { if (!cancelled) setCoordSnapshot(snapshot) })
-        .catch((err) => { if (!cancelled) setCoordError(err instanceof Error ? err.message : 'Failed to refresh coordination board') })
-    }
-    const timer = setInterval(poll, 2500)
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
-  }, [coordBoardOpen, coordSnapshot?.run.id])
 
   // Reset picker state whenever the active question prompt changes.
   useEffect(() => {
@@ -11387,24 +11387,15 @@ export default function OpenTuiApp() {
         })
       } else if (key.name === 'return') {
         handled(() => { void submitCoordinatedRun() })
+      } else if (key.name === 'tab') {
+        // ⇥ cycles the teammate budget without stealing typing from the input.
+        handled(() => setCoordMaxAgents((current) => (current >= 6 ? 2 : current + 1)))
       }
       return
     }
 
     if (coordBoardOpen) {
-      if (key.name === 'escape' || key.name === 'q') {
-        handled(() => setCoordBoardOpen(false))
-        return
-      }
-      if (key.name === 's') {
-        handled(() => { void stopActiveCoordinatedRun() })
-        return
-      }
-      if (key.name === 'c') {
-        handled(() => { void cleanupCompletedCoordinatedRunWorktrees() })
-        return
-      }
-      handled(() => {})
+      handled(() => { coordBoardKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -12109,6 +12100,12 @@ export default function OpenTuiApp() {
         setWorktreeDraft('')
         setWorktreeModalOpen(true)
       })
+      return
+    }
+
+    // Agent team board: interactive mission control for coordinated runs
+    if (isShifted('O')) {
+      handled(openCoordinationBoard)
       return
     }
 
@@ -14836,7 +14833,7 @@ export default function OpenTuiApp() {
           >
             <box paddingX={1} paddingTop={1}>
               <text fg={theme.dim} wrapMode="none">
-                {fitText('Prompt for three coordinated worktree agents.', overlayWidth - 4)}
+                {fitText('Prompt for the team — a lead plans the task board, teammates work it in worktrees.', overlayWidth - 4)}
               </text>
             </box>
             <box paddingX={1} marginTop={1} backgroundColor={theme.surface3}>
@@ -14853,100 +14850,33 @@ export default function OpenTuiApp() {
                 <text fg={theme.red} wrapMode="none">{fitText(coordError, overlayWidth - 4)}</text>
               </box>
             ) : null}
-            <box paddingX={1} marginTop={1}>
+            <box paddingX={1} marginTop={1} flexDirection="row">
+              <text fg={theme.cyan} wrapMode="none">{`teammates: ${coordMaxAgents}`}</text>
               <text fg={coordBusy ? theme.amber : theme.dim} wrapMode="none">
-                {fitText(coordBusy ? 'Starting agents...' : 'Enter start · Esc cancel', overlayWidth - 4)}
+                {fitText(coordBusy ? '  Starting lead…' : '  ⇥ change · ⏎ start · Esc cancel', overlayWidth - 18)}
               </text>
             </box>
           </box>
         )
       })() : null}
 
-      {coordBoardOpen ? (() => {
-        const overlayWidth = Math.min(Math.max(width - 6, 72), 104)
-        const overlayHeight = Math.min(Math.max(height - 6, 18), 34)
-        const snapshot = coordSnapshot
-        const tasks = snapshot?.tasks ?? []
-        const agents = snapshot?.agents ?? []
-        const locks = snapshot?.locks.filter((lock) => lock.status === 'active') ?? []
-        const events = snapshot?.events.slice(-8).reverse() ?? []
-        const colWidth = Math.max(Math.floor((overlayWidth - 6) / 2), 28)
-        return (
-          <box
-            position="absolute"
-            top={Math.max(1, Math.floor((height - overlayHeight) / 2))}
-            left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
-            width={overlayWidth}
-            height={overlayHeight}
-            border
-            borderStyle="single"
-            borderColor={theme.cyan}
-            backgroundColor={theme.surface}
-            zIndex={70}
-            flexDirection="column"
-            title=" Coordination board "
-            titleColor={theme.cyan}
-            titleAlignment="left"
-          >
-            <box paddingX={1} paddingTop={1} flexDirection="row">
-              <box flexGrow={1} overflow="hidden">
-                <text fg={theme.text} wrapMode="none">
-                  {fitText(snapshot ? `${snapshot.run.status.toUpperCase()} · ${snapshot.run.id.slice(0, 8)} · ${snapshot.run.provider}` : 'No coordinated run found', overlayWidth - 24)}
-                </text>
-              </box>
-              <text fg={coordBusy ? theme.amber : theme.dim} wrapMode="none">{coordBusy ? 'busy' : 'c cleanup · s stop · Esc close'}</text>
-            </box>
-            {coordError ? (
-              <box paddingX={1}>
-                <text fg={theme.red} wrapMode="none">{fitText(coordError, overlayWidth - 4)}</text>
-              </box>
-            ) : null}
-            <box flexGrow={1} paddingX={1} paddingBottom={1} marginTop={1} flexDirection="row" overflow="hidden">
-              <box width={colWidth} flexDirection="column" overflow="hidden">
-                <text fg={theme.cyan} wrapMode="none">{fitText(`TASKS ${tasks.length}`, colWidth)}</text>
-                {tasks.slice(0, 8).map((task) => (
-                  <box key={task.id} height={1}>
-                    <text fg={task.status === 'completed' ? theme.green : task.status === 'blocked' ? theme.red : theme.text} wrapMode="none">
-                      {fitText(`${task.id} ${task.status} ${task.title}`, colWidth)}
-                    </text>
-                  </box>
-                ))}
-                <box marginTop={1}><text fg={theme.cyan} wrapMode="none">{fitText(`LOCKS ${locks.length}`, colWidth)}</text></box>
-                {locks.slice(0, 6).map((lock) => (
-                  <box key={lock.id} height={1}>
-                    <text fg={theme.amber} wrapMode="none">{fitText(`${lock.agentId} ${lock.mode} ${lock.path}`, colWidth)}</text>
-                  </box>
-                ))}
-              </box>
-              <box width={colWidth} marginLeft={2} flexDirection="column" overflow="hidden">
-                <text fg={theme.cyan} wrapMode="none">{fitText(`TEAM ${agents.length} · MSGS ${snapshot?.messages.length ?? 0}`, colWidth)}</text>
-                {agents.slice(0, 8).map((agent) => (
-                  <box key={agent.id} height={1}>
-                    <text fg={agent.status === 'done' ? theme.green : agent.status === 'blocked' ? theme.red : agent.status === 'working' ? theme.amber : theme.text} wrapMode="none">
-                      {fitText(`${agent.role === 'lead' ? '★' : '·'} ${agent.name} ${agent.status} ${agent.taskId ?? ''}`, colWidth)}
-                    </text>
-                  </box>
-                ))}
-                <box marginTop={1}><text fg={theme.cyan} wrapMode="none">{fitText('RECENT', colWidth)}</text></box>
-                {events.map((event, idx) => (
-                  <box key={`${event.timestamp ?? idx}:${event.type}`} height={1}>
-                    <text fg={event.type === 'finding' || event.type === 'learning' ? theme.green : event.type === 'message' ? theme.violet : theme.dim} wrapMode="none">
-                      {fitText(`${event.agentId} ${event.type}${event.to ? `→${event.to}` : ''} ${event.summary ?? ''}`, colWidth)}
-                    </text>
-                  </box>
-                ))}
-              </box>
-            </box>
-            {snapshot?.run.summary ? (
-              <box paddingX={1} paddingBottom={1} overflow="hidden">
-                <text fg={theme.green} wrapMode="none">
-                  {fitText(`SYNTHESIS: ${snapshot.run.summary.split('\n')[0]}`, overlayWidth - 4)}
-                </text>
-              </box>
-            ) : null}
-          </box>
-        )
-      })() : null}
+      {coordBoardOpen ? (
+        <CoordinationPopover
+          theme={theme}
+          width={width}
+          height={height}
+          initialRunId={coordBoardRunId}
+          onOpenSession={openCoordinationAgentSession}
+          onNewRun={() => {
+            setCoordDraft('')
+            setCoordError(null)
+            setCoordModalOpen(true)
+          }}
+          onClose={() => setCoordBoardOpen(false)}
+          onNotice={showNotice}
+          onKeyHandlerReady={(handler) => { coordBoardKeyHandlerRef.current = handler }}
+        />
+      ) : null}
 
       {exitConfirmOpen ? (
         <box
