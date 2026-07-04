@@ -4710,12 +4710,178 @@ function toolStringParam(input: Record<string, unknown>, keys: string[]): string
   return null
 }
 
+function toolNumberParam(input: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = input[key]
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value)
+      if (Number.isFinite(parsed)) return parsed
+    }
+  }
+  return null
+}
+
+function agentsCompactOneLine(value: string, max = 120): string {
+  const compact = value.replace(/\s+/g, ' ').trim()
+  if (compact.length <= max) return compact
+  return `${compact.slice(0, Math.max(0, max - 1)).trimEnd()}…`
+}
+
+function agentsFormatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`
+  const minutes = Math.floor(ms / 60_000)
+  const seconds = Math.floor((ms % 60_000) / 1000)
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`
+}
+
+type AgentsFileChange = {
+  path?: string
+  kind?: unknown
+  diff?: string
+}
+
+function agentsFileChanges(input: Record<string, unknown>): AgentsFileChange[] {
+  const changes = input.changes
+  if (!Array.isArray(changes)) return []
+  return changes.flatMap((change): AgentsFileChange[] => {
+    if (!change || typeof change !== 'object' || Array.isArray(change)) return []
+    const record = change as Record<string, unknown>
+    return [{
+      path: typeof record.path === 'string' && record.path.trim() ? record.path.trim() : undefined,
+      kind: record.kind,
+      diff: typeof record.diff === 'string' ? record.diff : undefined,
+    }]
+  })
+}
+
+function agentsCompactPathTail(value: string | null | undefined, segmentCount: number): string {
+  const cleaned = value?.trim().replace(/\\/g, '/') ?? ''
+  if (!cleaned) return ''
+  const parts = cleaned.split('/').filter(Boolean)
+  if (parts.length <= segmentCount) return parts.join('/') || cleaned
+  return parts.slice(-segmentCount).join('/')
+}
+
+function summarizeAgentsFileChangeKind(kind: unknown): string {
+  if (typeof kind === 'string' && kind.trim()) return kind.trim()
+  if (kind && typeof kind === 'object' && !Array.isArray(kind)) {
+    const record = kind as Record<string, unknown>
+    if (typeof record.type === 'string' && record.type.trim()) return record.type.trim()
+    if (typeof record.kind === 'string' && record.kind.trim()) return record.kind.trim()
+  }
+  return ''
+}
+
+function agentsFirstDiffHunkLabel(diffText: string | null | undefined): string {
+  if (!diffText) return ''
+  const hunk = diffText.split('\n').find((line) => line.startsWith('@@ '))
+  const match = hunk?.match(/\+(\d+)/)
+  return match?.[1] ? `@${match[1]}` : ''
+}
+
+function agentsDiffStats(diffText: string | null | undefined): { additions: number; deletions: number } {
+  let additions = 0
+  let deletions = 0
+  if (!diffText) return { additions, deletions }
+  for (const line of diffText.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) continue
+    if (line.startsWith('+')) additions += 1
+    else if (line.startsWith('-')) deletions += 1
+  }
+  return { additions, deletions }
+}
+
+function agentsFileChangeStatsLabel(changes: AgentsFileChange[]): string {
+  let additions = 0
+  let deletions = 0
+  for (const change of changes) {
+    const stats = agentsDiffStats(change.diff)
+    additions += stats.additions
+    deletions += stats.deletions
+  }
+  return additions > 0 || deletions > 0 ? `+${additions} -${deletions}` : ''
+}
+
+function summarizeAgentsFileChange(input: Record<string, unknown>): string {
+  const changes = agentsFileChanges(input)
+  if (changes.length === 0) return toolStringParam(input, ['status']) ?? 'file change'
+
+  const first = changes[0]
+  const pathLabel = agentsCompactPathTail(first.path, 2) || basename(first.path ?? '') || 'file change'
+  const kind = summarizeAgentsFileChangeKind(first.kind)
+  const hunk = agentsFirstDiffHunkLabel(first.diff)
+  const parts = [pathLabel]
+  if (changes.length > 1) parts.push(`+${changes.length - 1} more`)
+  if (kind) parts.push(kind)
+  if (hunk) parts.push(hunk)
+  return parts.join(' · ')
+}
+
+function agentsOutputText(thread: ToolThread): string {
+  return thread.result ? resultToString(thread.result.content).trim() : ''
+}
+
+function agentsResultLineCount(raw: string): number {
+  if (!raw) return 0
+  return raw.split('\n').filter((line) => line.trim().length > 0).length
+}
+
+function agentsBashResultMeta(raw: string): { outputLineCount: number; exitCode: number | null; durationMs: number | null } {
+  let exitCode: number | null = null
+  let durationMs: number | null = null
+  let outputLineCount = 0
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const exitMatch = trimmed.match(/^exit_code:\s*(-?\d+)$/i)
+    if (exitMatch?.[1]) {
+      exitCode = Number(exitMatch[1])
+      continue
+    }
+    const durationMatch = trimmed.match(/^duration_ms:\s*([0-9.]+)$/i)
+    if (durationMatch?.[1]) {
+      durationMs = Number(durationMatch[1])
+      continue
+    }
+    outputLineCount += 1
+  }
+  return { outputLineCount, exitCode, durationMs }
+}
+
+function agentsTodoCounts(input: Record<string, unknown>): { completed: number; active: number; pending: number; total: number } {
+  const todos = Array.isArray(input.todos) ? input.todos : []
+  const counts = { completed: 0, active: 0, pending: 0, total: 0 }
+  for (const todo of todos) {
+    if (!todo || typeof todo !== 'object' || Array.isArray(todo)) continue
+    counts.total += 1
+    const status = (todo as Record<string, unknown>).status
+    if (status === 'completed') counts.completed += 1
+    else if (status === 'in_progress') counts.active += 1
+    else counts.pending += 1
+  }
+  return counts
+}
+
 function summarizeAgentsTool(thread: ToolThread): string {
   const name = thread.toolUse.name
   const input = toolInputRecord(thread)
-  if (name === 'Bash') return toolStringParam(input, ['command', 'cmd']) ?? 'shell command'
-  if (name === 'Read') return toolStringParam(input, ['file_path', 'path']) ?? 'read file'
-  if (name === 'Edit' || name === 'MultiEdit' || name === 'Write' || name === 'FileChange') {
+  if (name === 'Bash') {
+    const command = toolStringParam(input, ['command', 'cmd'])
+    return command ? `$ ${agentsCompactOneLine(command, 150)}` : 'shell command'
+  }
+  if (name === 'Read') {
+    const filePath = toolStringParam(input, ['file_path', 'path'])
+    const range = [
+      toolNumberParam(input, ['offset']) != null ? `@${toolNumberParam(input, ['offset'])}` : null,
+      toolNumberParam(input, ['limit']) != null ? `+${toolNumberParam(input, ['limit'])}` : null,
+      toolStringParam(input, ['pages']) ? `pages ${toolStringParam(input, ['pages'])}` : null,
+    ].filter(Boolean).join(' ')
+    return [filePath ?? 'read file', range].filter(Boolean).join(' · ')
+  }
+  if (name === 'FileChange') return summarizeAgentsFileChange(input)
+  if (name === 'Edit' || name === 'MultiEdit' || name === 'Write') {
     const path = toolStringParam(input, ['file_path', 'path'])
     const oldText = toolStringParam(input, ['old_string'])
     const newText = toolStringParam(input, ['new_string'])
@@ -4724,10 +4890,28 @@ function summarizeAgentsTool(thread: ToolThread): string {
   }
   if (name === 'Grep') {
     const pattern = toolStringParam(input, ['pattern', 'query'])
-    const path = toolStringParam(input, ['path', 'include'])
-    return [pattern, path].filter(Boolean).join(' in ') || 'search'
+    const path = toolStringParam(input, ['path', 'include', 'glob'])
+    const mode = toolStringParam(input, ['output_mode'])
+    const label = pattern ? `/${agentsCompactOneLine(pattern, 80)}/` : 'search'
+    return [label, path ? `in ${path}` : null, mode].filter(Boolean).join(' · ')
   }
-  if (name === 'Glob') return toolStringParam(input, ['pattern']) ?? 'glob'
+  if (name === 'Glob') {
+    const pattern = toolStringParam(input, ['pattern']) ?? 'glob'
+    const path = toolStringParam(input, ['path'])
+    return [pattern, path ? `in ${path}` : null].filter(Boolean).join(' · ')
+  }
+  if (name === 'TodoWrite') {
+    const counts = agentsTodoCounts(input)
+    return counts.total > 0 ? `${counts.total} todos` : 'todo update'
+  }
+  if (name === 'WebSearch') return toolStringParam(input, ['query']) ?? 'web search'
+  if (name === 'WebFetch') return toolStringParam(input, ['url', 'uri']) ?? 'web fetch'
+  if (name === 'ToolSearch') return toolStringParam(input, ['query']) ?? 'tool search'
+  if (isMcpToolName(name)) {
+    const server = toolStringParam(input, ['server'])
+    const summary = Object.keys(input).slice(0, 2).join(', ')
+    return [server, summary].filter(Boolean).join(' · ') || 'mcp tool'
+  }
   if (name === 'Agent' || name === 'task' || name.startsWith('Task')) {
     return toolStringParam(input, ['description', 'prompt', 'task', 'subject']) ?? 'agent task'
   }
@@ -4752,6 +4936,31 @@ function agentsToolMetaBadges(thread: ToolThread): string[] {
   const name = thread.toolUse.name
   const input = toolInputRecord(thread)
   const badges: string[] = []
+  const status = toolStringParam(input, ['status'])
+  if (name === 'FileChange') {
+    const changes = agentsFileChanges(input)
+    if (changes.length > 0) {
+      badges.push(`${changes.length} file${changes.length === 1 ? '' : 's'}`)
+      const stats = agentsFileChangeStatsLabel(changes)
+      if (stats) badges.push(stats)
+    }
+    if (!thread.result) badges.push('running')
+    else if (thread.result.is_error) badges.push('error')
+    else if (badges.length === 0) badges.push(status ?? 'ok')
+    return badges.slice(0, 3)
+  }
+
+  if (name === 'TodoWrite') {
+    const counts = agentsTodoCounts(input)
+    if (counts.active > 0) badges.push(`${counts.active} active`)
+    if (counts.pending > 0) badges.push(`${counts.pending} pending`)
+    if (counts.completed > 0) badges.push(`${counts.completed} done`)
+    if (!thread.result) badges.push('running')
+    else if (thread.result.is_error) badges.push('error')
+    else if (badges.length === 0) badges.push('ok')
+    return badges.slice(0, 3)
+  }
+
   const oldText = toolStringParam(input, ['old_string'])
   const newText = toolStringParam(input, ['new_string'])
   const content = toolStringParam(input, ['content'])
@@ -4768,12 +4977,59 @@ function agentsToolMetaBadges(thread: ToolThread): string[] {
     badges.push('running')
     return badges
   }
+
+  const output = agentsOutputText(thread)
+
+  if (name === 'Bash') {
+    const meta = agentsBashResultMeta(output)
+    if (thread.result.is_error) badges.push('error')
+    if (status && !/^(completed|success|succeeded)$/i.test(status)) badges.push(status)
+    if (meta.exitCode != null && (meta.exitCode !== 0 || thread.result.is_error)) badges.push(`exit ${meta.exitCode}`)
+    if (meta.durationMs != null) badges.push(agentsFormatDuration(meta.durationMs))
+    if (meta.outputLineCount > 0) badges.push(formatAgentsCount(meta.outputLineCount, 'lines'))
+    if (badges.length === 0) badges.push('ok')
+    return badges.slice(0, 3)
+  }
+
   if (thread.result.is_error) {
     badges.push('error')
     return badges
   }
 
-  const output = resultToString(thread.result.content).trim()
+  if (name === 'Read') {
+    const filePath = toolStringParam(input, ['file_path', 'path']) ?? ''
+    const summary = extractClaudeReadFileSummary(thread.result, filePath)
+    const range = summary ? formatClaudeReadRange(summary) : null
+    const kind = summary ? formatClaudeReadKind(summary) : null
+    if (range) badges.push(range)
+    if (kind) badges.push(kind)
+    if (summary?.truncatedByTokenCap) badges.push('partial')
+    if (badges.length === 0) badges.push('ok')
+    return badges.slice(0, 3)
+  }
+
+  if (name === 'Grep') {
+    const count = agentsResultLineCount(output)
+    const mode = toolStringParam(input, ['output_mode'])
+    badges.push(mode === 'content' || mode === 'count' ? `${count} lines` : `${count} file${count === 1 ? '' : 's'}`)
+    return badges.slice(0, 2)
+  }
+
+  if (name === 'Glob') {
+    const count = agentsResultLineCount(output)
+    badges.push(`${count} file${count === 1 ? '' : 's'}`)
+    return badges.slice(0, 2)
+  }
+
+  if (name === 'WebSearch' || name === 'WebFetch' || name === 'ToolSearch' || isMcpToolName(name)) {
+    if (status && !/^(completed|success|succeeded)$/i.test(status)) badges.push(status)
+    const lines = agentsResultLineCount(output)
+    if (lines > 1) badges.push(formatAgentsCount(lines, 'lines'))
+    else if (output) badges.push(`${output.length.toLocaleString()} chars`)
+    if (badges.length === 0) badges.push('ok')
+    return badges.slice(0, 2)
+  }
+
   if (!output) {
     badges.push('ok')
     return badges
@@ -4785,14 +5041,47 @@ function agentsToolMetaBadges(thread: ToolThread): string[] {
   return badges.slice(0, 2)
 }
 
+function agentsDensitySpacing(dc: DensityConfig) {
+  const isDense = dc.msgGap <= 12
+  const isComfortable = dc.msgGap >= 52
+  return {
+    cardMargin: Math.max(8, Math.round(dc.msgGap * 0.35)),
+    cardPaddingY: Math.max(7, Math.round(dc.labelGap + dc.blockGap * 0.25)),
+    cardPaddingX: Math.max(12, dc.dotGap),
+    toolCardPaddingY: Math.max(5, dc.blockGap),
+    toolCardPaddingX: Math.max(8, Math.round(dc.dotGap * 0.65)),
+    headerGap: Math.max(6, Math.round(dc.labelGap * 0.8)),
+    headerMargin: dc.labelGap,
+    headerLabelFontSize: isDense ? 11 : isComfortable ? 13 : 12,
+    headerMetaFontSize: isDense ? 11 : 12,
+    bodyGap: dc.blockGap,
+    bodyFontSize: isDense ? 13 : isComfortable ? 15 : 14,
+    bodyLineHeight: isDense ? 1.5 : isComfortable ? 1.75 : 1.62,
+    toolGap: Math.max(1, Math.round(dc.blockGap / 3)),
+    toolMarginTop: Math.max(6, Math.round(dc.msgGap * 0.33)),
+    toolRowGap: Math.max(4, Math.round(dc.labelGap * 0.6)),
+    toolRowPaddingY: Math.max(4, Math.round(dc.blockGap * 0.75)),
+    toolRowPaddingX: Math.max(8, Math.round(dc.dotGap * 0.55)),
+    toolDetailPaddingY: Math.max(4, Math.round(dc.blockGap * 0.75)),
+    toolDetailPaddingX: Math.max(7, Math.round(dc.dotGap * 0.45)),
+    toolNameFontSize: isDense ? 10 : isComfortable ? 12 : 11,
+    toolSummaryFontSize: isDense ? 11 : isComfortable ? 13 : 12,
+    toolBadgeFontSize: isDense ? 9 : 10,
+    badgePadding: isDense ? '1px 5px' : isComfortable ? '2px 8px' : '2px 7px',
+  }
+}
+
 function AgentsToolRow({ thread }: { thread: ToolThread }) {
   const [open, setOpen] = useState(false)
+  const dc = use(MessageDensityContext)
+  const spacing = agentsDensitySpacing(dc)
   const name = thread.toolUse.name
+  const color = toolColor(name)
   const metaBadges = agentsToolMetaBadges(thread)
   return (
     <div style={{
-      borderLeft: '2px solid var(--amber)',
-      background: 'color-mix(in srgb, var(--amber) 8%, transparent)',
+      borderLeft: `2px solid ${color}`,
+      background: `color-mix(in srgb, ${color} 8%, transparent)`,
       borderRadius: '0 4px 4px 0',
       margin: 0,
     }}>
@@ -4803,9 +5092,9 @@ function AgentsToolRow({ thread }: { thread: ToolThread }) {
           width: '100%',
           display: 'flex',
           alignItems: 'center',
-          gap: 6,
+          gap: spacing.toolRowGap,
           minWidth: 0,
-          padding: '6px 10px',
+          padding: `${spacing.toolRowPaddingY}px ${spacing.toolRowPaddingX}px`,
           border: 0,
           borderRadius: 0,
           background: 'transparent',
@@ -4824,19 +5113,19 @@ function AgentsToolRow({ thread }: { thread: ToolThread }) {
           transition: 'transform 150ms ease',
           flexShrink: 0,
         }}>›</span>
-        <span style={{ color: 'var(--amber)', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>{name}</span>
-        <span style={{ color: 'var(--text-3)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+        <span style={{ color, fontSize: spacing.toolNameFontSize, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>{name}</span>
+        <span style={{ color: 'var(--text-3)', fontSize: spacing.toolSummaryFontSize, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
           {summarizeAgentsTool(thread)}
         </span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           {metaBadges.map((badge) => (
           <span style={{
-            color: badge === 'error' ? 'var(--red)' : 'var(--text-3)',
+            color: badge === 'error' || /^exit\s+(?!0$)/.test(badge) ? 'var(--red)' : 'var(--text-3)',
             background: 'color-mix(in srgb, var(--text) 5%, transparent)',
             border: '1px solid color-mix(in srgb, var(--text) 7%, transparent)',
             borderRadius: 4,
-            padding: '2px 7px',
-            fontSize: 10,
+            padding: spacing.badgePadding,
+            fontSize: spacing.toolBadgeFontSize,
             whiteSpace: 'nowrap',
             flexShrink: 0,
           }} key={badge}>
@@ -4849,7 +5138,7 @@ function AgentsToolRow({ thread }: { thread: ToolThread }) {
         <div style={{
           borderTop: '1px solid var(--border)',
           background: 'color-mix(in srgb, var(--bg) 78%, transparent)',
-          padding: '6px 8px 8px',
+          padding: `${spacing.toolDetailPaddingY}px ${spacing.toolDetailPaddingX}px ${spacing.toolDetailPaddingY + 2}px`,
         }}>
           <ToolThreadCard thread={thread} />
         </div>
@@ -4864,6 +5153,8 @@ function AgentsViewMessageItem({ message, showSession, hydrated, roleLabel }: {
   hydrated: boolean
   roleLabel: string
 }) {
+  const dc = use(MessageDensityContext)
+  const spacing = agentsDensitySpacing(dc)
   const toolThreads = message.blocks.filter((block): block is ToolThread => block.type === 'tool_thread')
   const nonToolBlocks = message.blocks.filter((block) => block.type !== 'tool_thread')
   const toolOnly = toolThreads.length > 0 && nonToolBlocks.length === 0
@@ -4886,26 +5177,26 @@ function AgentsViewMessageItem({ message, showSession, hydrated, roleLabel }: {
           borderLeft: '3px solid var(--amber)',
           borderRadius: '0 7px 7px 0',
           background: 'color-mix(in srgb, var(--amber) 8%, transparent)',
-          padding: '8px 12px',
-          marginBottom: 10,
+          padding: `${spacing.toolCardPaddingY}px ${spacing.toolCardPaddingX}px`,
+          marginBottom: spacing.cardMargin,
         }}>
           <header style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 8,
+            gap: spacing.headerGap,
             color: 'var(--amber)',
-            marginBottom: 6,
+            marginBottom: Math.max(4, spacing.headerMargin - 2),
           }}>
             <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>⚙</span>
-            <span style={{ fontSize: 12, fontWeight: 600 }}>{toolThreads.length} tool {toolThreads.length === 1 ? 'call' : 'calls'}</span>
-            <span aria-hidden="true" style={{ color: 'var(--text-3)', fontSize: 13 }}>⧉</span>
+            <span style={{ fontSize: spacing.headerLabelFontSize, fontWeight: 600 }}>{toolThreads.length} tool {toolThreads.length === 1 ? 'call' : 'calls'}</span>
+            <span aria-hidden="true" style={{ color: 'var(--text-3)', fontSize: spacing.headerLabelFontSize }}>⧉</span>
             {message.timestamp && (
-              <span style={{ marginLeft: 'auto', color: 'var(--text-3)', fontSize: 12, fontWeight: 400 }}>
+              <span style={{ marginLeft: 'auto', color: 'var(--text-3)', fontSize: spacing.headerMetaFontSize, fontWeight: 400 }}>
                 {hydrated ? formatLocalMessageTime(message.timestamp) : formatStableMessageTime(message.timestamp)}
               </span>
             )}
           </header>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.toolGap }}>
             {toolThreads.map((thread, index) => <AgentsToolRow key={thread.toolUse.id ?? index} thread={thread} />)}
           </div>
         </section>
@@ -4919,18 +5210,18 @@ function AgentsViewMessageItem({ message, showSession, hydrated, roleLabel }: {
         borderLeft: `4px solid ${roleColor}`,
         borderRadius: '0 7px 7px 0',
         background: roleBackground,
-        padding: '14px 20px',
-        marginBottom: 10,
+        padding: `${spacing.cardPaddingY}px ${spacing.cardPaddingX}px`,
+        marginBottom: spacing.cardMargin,
       }}>
-        <header style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, minWidth: 0 }}>
+        <header style={{ display: 'flex', alignItems: 'center', gap: spacing.headerGap, marginBottom: spacing.headerMargin, minWidth: 0 }}>
           <span style={{
-            width: 22,
-            height: 22,
+            width: dc.msgGap <= 12 ? 18 : 22,
+            height: dc.msgGap <= 12 ? 18 : 22,
             borderRadius: 999,
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            fontSize: 11,
+            fontSize: dc.msgGap <= 12 ? 10 : 11,
             fontWeight: 800,
             flexShrink: 0,
             color: 'var(--bg)',
@@ -4939,16 +5230,16 @@ function AgentsViewMessageItem({ message, showSession, hydrated, roleLabel }: {
           }}>
             {roleInitial}
           </span>
-          <span style={{ color: roleColor, fontSize: 13, fontWeight: 600, letterSpacing: '0.01em' }}>{roleLabel}</span>
+          <span style={{ color: roleColor, fontSize: spacing.headerLabelFontSize, fontWeight: 600, letterSpacing: '0.01em' }}>{roleLabel}</span>
           <div style={{
             marginLeft: 'auto',
             display: 'flex',
             alignItems: 'center',
-            gap: 8,
+            gap: spacing.headerGap,
             minWidth: 0,
             color: 'var(--text-3)',
             fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 11,
+            fontSize: spacing.headerMetaFontSize,
           }}>
             {message.usage && (
               <span>{fmtTokens(message.usage.input_tokens)} ctx / {fmtTokens(message.usage.output_tokens)} out</span>
@@ -4959,7 +5250,7 @@ function AgentsViewMessageItem({ message, showSession, hydrated, roleLabel }: {
                 background: 'color-mix(in srgb, var(--text) 5%, transparent)',
                 border: '1px solid color-mix(in srgb, var(--text) 7%, transparent)',
                 borderRadius: 4,
-                padding: '2px 8px',
+                padding: spacing.badgePadding,
                 whiteSpace: 'nowrap',
               }}>
                 turn · {toolThreads.length} {toolThreads.length === 1 ? 'call' : 'calls'}
@@ -4970,12 +5261,12 @@ function AgentsViewMessageItem({ message, showSession, hydrated, roleLabel }: {
           </div>
         </header>
         {nonToolBlocks.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 14, lineHeight: 1.7 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.bodyGap, fontSize: spacing.bodyFontSize, lineHeight: spacing.bodyLineHeight }}>
             {nonToolBlocks.map((block, index) => renderBlock(block, index))}
           </div>
         )}
         {toolThreads.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: nonToolBlocks.length > 0 ? 12 : 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.toolGap, marginTop: nonToolBlocks.length > 0 ? spacing.toolMarginTop : 0 }}>
             {toolThreads.map((thread, index) => <AgentsToolRow key={thread.toolUse.id ?? index} thread={thread} />)}
           </div>
         )}
