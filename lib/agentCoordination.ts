@@ -142,10 +142,18 @@ function initializeSchema(db: SqliteDatabase): void {
 }
 
 async function openDatabase(): Promise<SqliteDatabase> {
-  const sqliteMod = await (0, eval)('import("node:sqlite")') as typeof import('node:sqlite')
-  const { DatabaseSync } = sqliteMod
+  let DatabaseCtor: new (file: string) => SqliteDatabase
+  try {
+    const sqliteMod = await (0, eval)('import("node:sqlite")') as typeof import('node:sqlite')
+    DatabaseCtor = sqliteMod.DatabaseSync as new (file: string) => SqliteDatabase
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (!/node:sqlite|No such built-in module|Cannot find/i.test(message)) throw err
+    const bunSqlite = await (0, eval)('import("bun:sqlite")') as { Database: new (file: string) => SqliteDatabase }
+    DatabaseCtor = bunSqlite.Database
+  }
   await ensureDirs()
-  const db = new DatabaseSync(DB_FILE)
+  const db = new DatabaseCtor(DB_FILE)
   try {
     configureDatabase(db)
     initializeSchema(db)
