@@ -171,6 +171,7 @@ type MentionResult =
 type TimelineRow = {
   key: string
   message: ThreadedMessage
+  groupedMessageIds?: string[]
   showSession: boolean
   dimmed?: boolean
   previewBadge?: string
@@ -1673,6 +1674,56 @@ function timelineRowSearchText(row: TimelineRow): string {
   ].filter(Boolean).join(' ').toLowerCase()
 }
 
+function isAgentsToolOnlyRow(row: TimelineRow): boolean {
+  const blocks = row.message.blocks
+  return blocks.length > 0 && blocks.every((block) => block.type === 'tool_thread')
+}
+
+function rowContainsMessage(row: TimelineRow, messageId: string | null | undefined): boolean {
+  if (!messageId) return false
+  return row.message.uuid === messageId || row.groupedMessageIds?.includes(messageId) === true
+}
+
+function groupAgentsToolRows(rows: TimelineRow[]): TimelineRow[] {
+  const grouped: TimelineRow[] = []
+  let pending: TimelineRow[] = []
+
+  const flush = () => {
+    if (pending.length === 0) return
+    if (pending.length === 1) {
+      grouped.push(pending[0])
+      pending = []
+      return
+    }
+    const first = pending[0]
+    const last = pending[pending.length - 1]
+    const blocks = pending.flatMap((row) => row.message.blocks)
+    grouped.push({
+      key: `agents-tools:${first.key}:${last.key}:${pending.length}`,
+      message: {
+        ...first.message,
+        uuid: first.message.uuid,
+        blocks,
+      },
+      groupedMessageIds: pending.map((row) => row.message.uuid),
+      showSession: pending.some((row) => row.showSession),
+      dimmed: pending.every((row) => row.dimmed),
+    })
+    pending = []
+  }
+
+  for (const row of rows) {
+    if (isAgentsToolOnlyRow(row)) {
+      pending.push(row)
+    } else {
+      flush()
+      grouped.push(row)
+    }
+  }
+  flush()
+  return grouped
+}
+
 function timelineRowMatchesTranscriptFilter(row: TimelineRow, filter: ActiveTranscriptFilter): boolean {
   switch (filter) {
     case 'user':
@@ -2334,7 +2385,13 @@ function AskUserQuestionPicker({
     })
   }
 
-  const allAnswered = questions.every((_, qi) => (selections[qi]?.length ?? 0) > 0)
+  let allAnswered = questions.length > 0
+  for (let qi = 0; qi < questions.length; qi += 1) {
+    if ((selections[qi]?.length ?? 0) === 0) {
+      allAnswered = false
+      break
+    }
+  }
 
   const submit = () => {
     if (!allAnswered || busy) return
@@ -2621,7 +2678,7 @@ export default function MessageView({
   const [viewMode, setViewMode] = useState<WebViewMode>(() => {
     if (typeof window === 'undefined') return 'conversation'
     const stored = window.localStorage.getItem('agentViewer:viewMode')
-    if (stored === 'full' || stored === 'continue' || stored === 'stream') return stored
+    if (stored === 'full' || stored === 'continue' || stored === 'stream' || stored === 'agents') return stored
     // Migrate legacy showTools=false → continue
     if (window.localStorage.getItem('agentViewer:showTools') === 'false') return 'continue'
     return 'conversation'
@@ -2636,7 +2693,7 @@ export default function MessageView({
     setRowMeasurementVersion((version) => version + 1)
     setPersistedMeasurementVersion((version) => version + 1)
   }, [viewMode])
-  const showTools = viewMode === 'conversation' || viewMode === 'full'
+  const showTools = viewMode === 'conversation' || viewMode === 'full' || viewMode === 'agents'
   const [density, setDensity] = useState<MessageDensity>(() => {
     if (typeof window === 'undefined') return 'balanced'
     const stored = window.localStorage.getItem('agentViewer:density')
@@ -2849,9 +2906,9 @@ export default function MessageView({
   // token re-rendering every mounted AgentCard via LiveSubagentTextContext.
   const liveSubagentTextRef = useRef<Record<string, string>>({})
   const liveSubagentFlushFrameRef = useRef<number | null>(null)
-  const liveToolIndexesRef = useRef<Map<number, string>>(new Map())
-  const liveToolInputJsonRef = useRef<Map<number, string>>(new Map())
-  const rowHeightsRef = useRef<Map<string, number>>(new Map())
+  const liveToolIndexesRef = useLazyRef(() => new Map<number, string>())
+  const liveToolInputJsonRef = useLazyRef(() => new Map<number, string>())
+  const rowHeightsRef = useLazyRef(() => new Map<string, number>())
   const timelineEstimateCalibrationRef = useLazyRef(
     () => new Map<TimelineEstimateBucket | 'all', TimelineEstimateCalibration>(),
   )
@@ -2859,13 +2916,15 @@ export default function MessageView({
   // Recalibrate during initial settling, then keep estimates stable once the
   // user starts manipulating the scrollbar.
   const timelineEstimateCalibrationFrozenRef = useRef(false)
-  const rowLayoutRef = useRef<TimelineRowLayout>(buildTimelineRowLayout([], new Map(), estimateTimelineRowHeight))
-  const threadedCacheRef = useRef<Map<string, ThreadedMessage>>(new Map())
+  const rowLayoutRef = useLazyRef<TimelineRowLayout>(() => (
+    buildTimelineRowLayout([], new Map(), estimateTimelineRowHeight)
+  ))
+  const threadedCacheRef = useLazyRef(() => new Map<string, ThreadedMessage>())
   const prevThreadingRef = useRef<IncrementalThreadingCache | null>(null)
   // Last taskActiveForms Map, reused when contents are unchanged so the context
   // value identity stays stable across idle polls.
-  const taskActiveFormsRef = useRef<Map<string, string>>(new Map())
-  const pendingRowMeasurementsRef = useRef<Map<string, number>>(new Map())
+  const taskActiveFormsRef = useLazyRef(() => new Map<string, string>())
+  const pendingRowMeasurementsRef = useLazyRef(() => new Map<string, number>())
   const measurementFrameRef = useRef<number | null>(null)
   const scheduleTimelineMeasurementFlushRef = useRef<() => void>(() => {})
   const pendingTimelineScrollCompensationRef = useRef(0)
@@ -3377,7 +3436,7 @@ export default function MessageView({
     })
   }, [composerDraftKey, resizeComposer])
 
-  const autoFocusedSessionsRef = useRef<Set<string>>(new Set())
+  const autoFocusedSessionsRef = useLazyRef(() => new Set<string>())
 
   // Draft saves are debounced: a synchronous localStorage write (plus
   // JSON.stringify) on every keystroke is measurable main-thread jank, and the
@@ -5941,6 +6000,9 @@ export default function MessageView({
       return timelineRowSearchText(row).includes(normalizedTranscriptSearch)
     })
   }, [normalizedTranscriptSearch, timelineRows, transcriptFilters, bookmarksOnly, bookmarkIds])
+  const renderedTimelineRows = useMemo<TimelineRow[]>(() => {
+    return viewMode === 'agents' ? groupAgentsToolRows(transcriptTimelineRows) : transcriptTimelineRows
+  }, [transcriptTimelineRows, viewMode])
   const hasTranscriptFocus = transcriptFilters.length > 0 || transcriptSearch.trim().length > 0 || bookmarksOnly
   const visualizerRows = useMemo<MessageVisualizerRow[]>(
     () => showVisualizer
@@ -5959,8 +6021,8 @@ export default function MessageView({
     [messages, targetMessageId, timelineRows],
   )
   const hasLiveTimeline = timelineRows.length > 0
-  const hasTranscriptTimeline = transcriptTimelineRows.length > 0
-  timelineRowsRef.current = transcriptTimelineRows
+  const hasTranscriptTimeline = renderedTimelineRows.length > 0
+  timelineRowsRef.current = renderedTimelineRows
 
   // On the first completed load for a session, wait for rows to exist and then force the
   // viewport to the live edge so initial virtualization and measurement do not leave us at the top.
@@ -6015,7 +6077,7 @@ export default function MessageView({
   }, [alignLastTimelineRowToViewportBottom, commitTimelineScrollTop, hasLiveTimeline, loading, markProgrammaticTimelineScroll, messages.length, scrollTimelineToBottom, session?.sessionId, targetMessageId])
 
   useEffect(() => {
-    const activeKeys = new Set(transcriptTimelineRows.map((row) => row.key))
+    const activeKeys = new Set(renderedTimelineRows.map((row) => row.key))
     let changed = false
     let persistedChanged = false
     for (const key of rowHeightsRef.current.keys()) {
@@ -6026,7 +6088,7 @@ export default function MessageView({
     }
     if (changed) setRowMeasurementVersion((version) => version + 1)
     if (persistedChanged) setPersistedMeasurementVersion((version) => version + 1)
-  }, [transcriptTimelineRows])
+  }, [renderedTimelineRows])
 
   const setLastTimelineRow = useCallback((node: HTMLDivElement | null) => {
     lastTimelineRowRef.current = node
@@ -6145,7 +6207,7 @@ export default function MessageView({
     if (!autoFollow || !hasTranscriptTimeline || loading) return
     scrollTimelineToBottom()
     alignLastTimelineRowToViewportBottom()
-  }, [alignLastTimelineRowToViewportBottom, autoFollow, hasTranscriptTimeline, loading, rowMeasurementVersion, scrollTimelineToBottom, transcriptTimelineRows.length])
+  }, [alignLastTimelineRowToViewportBottom, autoFollow, hasTranscriptTimeline, loading, renderedTimelineRows.length, rowMeasurementVersion, scrollTimelineToBottom])
 
   const estimateTimelineRowHeightForLayout = useCallback((row: TimelineRow) => {
     const rawEstimate = estimateTimelineRowHeight(row, density, viewMode)
@@ -6180,15 +6242,15 @@ export default function MessageView({
     // useDeferredValue lag (e.g. clearing the box) and would pair filtered rows
     // with a full-list layout. When they differ, a filter is genuinely active
     // and the base prefix can't be reused — rebuild the full layout.
-    if (transcriptTimelineRows !== timelineRows) {
+    if (renderedTimelineRows !== timelineRows) {
       return measureSync('timeline.fullLayout', () =>
-        buildTimelineRowLayout(transcriptTimelineRows, rowHeightsRef.current, estimateTimelineRowHeightForLayout))
+        buildTimelineRowLayout(renderedTimelineRows, rowHeightsRef.current, estimateTimelineRowHeightForLayout))
     }
     // Otherwise reuse baseLayout for the persisted prefix and append only the
     // live suffix.
     return measureSync('timeline.appendLayout', () =>
       appendTimelineRowLayout(baseLayout, liveTimelineRows, rowHeightsRef.current, estimateTimelineRowHeightForLayout))
-  }, [baseLayout, estimateTimelineRowHeightForLayout, liveTimelineRows, rowMeasurementVersion, timelineRows, transcriptTimelineRows])
+  }, [baseLayout, estimateTimelineRowHeightForLayout, liveTimelineRows, renderedTimelineRows, rowMeasurementVersion, timelineRows])
   rowLayoutRef.current = rowLayout
 
   useLayoutEffect(() => {
@@ -6229,7 +6291,7 @@ export default function MessageView({
       const layout = rowLayoutRef.current
       if (!node) return
 
-      const rowIndex = rows.findIndex((row) => row.message.uuid === messageId)
+      const rowIndex = rows.findIndex((row) => rowContainsMessage(row, messageId))
       if (rowIndex < 0) return
 
       const targetTop = Math.max(layout.tops[rowIndex] - TIMELINE_TARGET_TOP_GUTTER_PX, 0)
@@ -6295,7 +6357,7 @@ export default function MessageView({
     const node = timelineRef.current
     if (!node) return
 
-    const rowIndex = transcriptTimelineRows.findIndex((row) => row.message.uuid === timelineTargetMessageId)
+    const rowIndex = renderedTimelineRows.findIndex((row) => rowContainsMessage(row, timelineTargetMessageId))
     if (rowIndex < 0) return
 
     handledTargetMessageRequestRef.current = targetMessageRequestId
@@ -6307,7 +6369,7 @@ export default function MessageView({
     markProgrammaticTimelineScroll()
     node.scrollTop = targetTop
     setHighlightedMessageId(timelineTargetMessageId)
-  }, [commitTimelineScrollTop, loading, markProgrammaticTimelineScroll, rowLayout, targetMessageRequestId, transcriptTimelineRows, timelineTargetMessageId])
+  }, [commitTimelineScrollTop, loading, markProgrammaticTimelineScroll, renderedTimelineRows, rowLayout, targetMessageRequestId, timelineTargetMessageId])
 
   useEffect(() => {
     if (!highlightedMessageId) return
@@ -6319,7 +6381,7 @@ export default function MessageView({
 
   const virtualTimeline = useMemo(() => {
     const { tops, heights } = rowLayout
-    const n = transcriptTimelineRows.length
+    const n = renderedTimelineRows.length
     const window = getVirtualTimelineWindow({
       layout: rowLayout,
       rowCount: n,
@@ -6330,11 +6392,11 @@ export default function MessageView({
 
     const visibleRows: Array<{ row: TimelineRow; top: number; height: number }> = []
     for (let i = window.startIndex; i < window.endIndex; i++) {
-      visibleRows.push({ row: transcriptTimelineRows[i], top: tops[i], height: heights[i] })
+      visibleRows.push({ row: renderedTimelineRows[i], top: tops[i], height: heights[i] })
     }
 
     return { totalHeight: window.totalHeight, visibleRows }
-  }, [rowLayout, transcriptTimelineRows, timelineScrollTop, timelineViewportHeight])
+  }, [renderedTimelineRows, rowLayout, timelineScrollTop, timelineViewportHeight])
 
   useLayoutEffect(() => {
     if (!pendingMountedAnchorCaptureRef.current) return
@@ -6360,10 +6422,10 @@ export default function MessageView({
   // when an unrelated part of this large component re-renders, most notably
   // every composer keystroke. Every handler below is a stable useCallback;
   // none depends on composer state.
-  const fullRenderedRowKeysRef = useRef<Set<string>>(new Set())
+  const fullRenderedRowKeysRef = useLazyRef(() => new Set<string>())
   const timelineRowElements = useMemo(() => {
-    const lastRowKey = transcriptTimelineRows.at(-1)?.key
-    const streamMode = viewMode === 'stream'
+    const lastRowKey = renderedTimelineRows.at(-1)?.key
+    const streamMode = viewMode === 'stream' || viewMode === 'agents'
     // During fast scrolls, rows that were already rendered full keep their
     // cards (their subtrees are reused by key), but rows ENTERING the window
     // mount as cheap placeholders so the window always paints within a frame.
@@ -6380,10 +6442,10 @@ export default function MessageView({
           row={row}
           top={top}
           isLast={row.key === lastRowKey}
-          highlighted={highlightedMessageId === row.message.uuid}
+          highlighted={rowContainsMessage(row, highlightedMessageId)}
           forking={forkingMessageId === row.message.uuid}
           resumeTarget={resumeFromMessageId === row.message.uuid}
-          bookmarked={bookmarkIds.has(row.message.uuid)}
+          bookmarked={bookmarkIds.has(row.message.uuid) || row.groupedMessageIds?.some((id) => bookmarkIds.has(id)) === true}
           streamMode={streamMode}
           placeholder={placeholder}
           placeholderHeight={placeholder ? height : 0}
@@ -6414,7 +6476,7 @@ export default function MessageView({
     setLastTimelineRow,
     toggleBookmark,
     toggleResumeFromMessage,
-    transcriptTimelineRows,
+    renderedTimelineRows,
     viewMode,
     virtualTimeline.visibleRows,
   ])
@@ -6916,13 +6978,13 @@ export default function MessageView({
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* View mode */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>MESSAGES</div>
-              {(['conversation', 'continue', 'stream'] as const).map((mode) => (
+              {(['conversation', 'continue', 'stream', 'agents'] as const).map((mode) => (
                 <button key={mode} type="button"
                   onClick={() => { setViewMode(mode); setViewDropdownOpen(false) }}
                   style={{ padding: '6px 14px', background: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'rgba(139,92,246,0.1)' : 'transparent', border: 0, cursor: 'pointer', color: viewMode === mode || (mode === 'conversation' && viewMode === 'full') ? 'var(--violet)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left' }}>
-                  {mode === 'conversation' ? 'FULL' : mode === 'continue' ? 'CONT' : 'STREAM'}
+                  {mode === 'conversation' ? 'FULL' : mode === 'continue' ? 'CONT' : mode === 'stream' ? 'STREAM' : 'AGENTS'}
                   <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
-                    {mode === 'conversation' ? 'all cards' : mode === 'continue' ? 'no tools' : 'plain text'}
+                    {mode === 'conversation' ? 'all cards' : mode === 'continue' ? 'no tools' : mode === 'stream' ? 'plain text' : 'AgentsView cards'}
                   </span>
                 </button>
               ))}
@@ -7242,12 +7304,12 @@ export default function MessageView({
                   </button>
                 </div>
                 <div className="av-session-viz-result-count">
-                  {transcriptTimelineRows.length} shown
+                  {renderedTimelineRows.length} shown
                 </div>
                 {hasTranscriptFocus && (
                   <div className="av-session-viz-focusbar">
                     <span className="av-session-viz-focus-count">
-                      {transcriptTimelineRows.length} of {timelineRows.length} turns
+                      {renderedTimelineRows.length} of {timelineRows.length} turns
                     </span>
                     {transcriptFilters.map((filter) => (
                       <button
@@ -7545,7 +7607,7 @@ export default function MessageView({
         )}
         {!loading && hasTranscriptTimeline && (
           <div style={{ position: 'relative' }}>
-            {viewMode !== 'stream' && (
+            {viewMode !== 'stream' && viewMode !== 'agents' && (
             <div
               className="timeline-line"
               style={{

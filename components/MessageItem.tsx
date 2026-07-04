@@ -4696,6 +4696,256 @@ function fmtTokens(n: number): string {
   return String(n)
 }
 
+function toolInputRecord(thread: ToolThread): Record<string, unknown> {
+  return thread.toolUse.input && typeof thread.toolUse.input === 'object' && !Array.isArray(thread.toolUse.input)
+    ? thread.toolUse.input
+    : {}
+}
+
+function toolStringParam(input: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = input[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return null
+}
+
+function summarizeAgentsTool(thread: ToolThread): string {
+  const name = thread.toolUse.name
+  const input = toolInputRecord(thread)
+  if (name === 'Bash') return toolStringParam(input, ['command', 'cmd']) ?? 'shell command'
+  if (name === 'Read') return toolStringParam(input, ['file_path', 'path']) ?? 'read file'
+  if (name === 'Edit' || name === 'MultiEdit' || name === 'Write' || name === 'FileChange') {
+    const path = toolStringParam(input, ['file_path', 'path'])
+    const oldText = toolStringParam(input, ['old_string'])
+    const newText = toolStringParam(input, ['new_string'])
+    const editSize = oldText || newText ? ` (${oldText ? `-${oldText.split('\n').length}` : ''}${oldText && newText ? ' ' : ''}${newText ? `+${newText.split('\n').length}` : ''})` : ''
+    return `${path ?? 'file change'}${editSize}`
+  }
+  if (name === 'Grep') {
+    const pattern = toolStringParam(input, ['pattern', 'query'])
+    const path = toolStringParam(input, ['path', 'include'])
+    return [pattern, path].filter(Boolean).join(' in ') || 'search'
+  }
+  if (name === 'Glob') return toolStringParam(input, ['pattern']) ?? 'glob'
+  if (name === 'Agent' || name === 'task' || name.startsWith('Task')) {
+    return toolStringParam(input, ['description', 'prompt', 'task', 'subject']) ?? 'agent task'
+  }
+  try {
+    return JSON.stringify(input)
+  } catch {
+    return name
+  }
+}
+
+function AgentsToolRow({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(false)
+  const name = thread.toolUse.name
+  const result = thread.result ? resultToString(thread.result.content) : ''
+  const hasResult = result.trim().length > 0
+  return (
+    <div style={{
+      borderLeft: '2px solid var(--amber)',
+      background: 'color-mix(in srgb, var(--amber) 8%, transparent)',
+      borderRadius: '0 4px 4px 0',
+      margin: 0,
+    }}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          minWidth: 0,
+          padding: '6px 10px',
+          border: 0,
+          borderRadius: 0,
+          background: 'transparent',
+          color: 'var(--text-2)',
+          cursor: 'pointer',
+          textAlign: 'left',
+          fontFamily: "'IBM Plex Mono', monospace",
+          userSelect: 'text',
+        }}
+      >
+        <span style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          color: 'var(--text-3)',
+          transform: open ? 'rotate(90deg)' : undefined,
+          transition: 'transform 150ms ease',
+          flexShrink: 0,
+        }}>›</span>
+        <span style={{ color: 'var(--amber)', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>{name}</span>
+        <span style={{ color: 'var(--text-3)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+          {summarizeAgentsTool(thread)}
+        </span>
+        {(thread.result?.is_error || !thread.result) && (
+          <span style={{
+            marginLeft: 'auto',
+            color: thread.result?.is_error ? 'var(--red)' : 'var(--text-3)',
+            background: 'color-mix(in srgb, var(--text) 5%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--text) 7%, transparent)',
+            borderRadius: 4,
+            padding: '2px 7px',
+            fontSize: 10,
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
+          }}>
+            {thread.result?.is_error ? 'error' : 'running'}
+          </span>
+        )}
+      </button>
+      {open && hasResult && (
+        <pre style={{
+          margin: 0,
+          maxHeight: 260,
+          overflow: 'auto',
+          borderTop: '1px solid var(--border)',
+          background: 'color-mix(in srgb, var(--bg) 78%, transparent)',
+          color: 'var(--text-2)',
+          padding: '8px 14px 10px',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 12,
+          lineHeight: 1.45,
+        }}>
+          {result}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+function AgentsViewMessageItem({ message, showSession, hydrated, roleLabel }: {
+  message: ThreadedMessage
+  showSession?: boolean
+  hydrated: boolean
+  roleLabel: string
+}) {
+  const toolThreads = message.blocks.filter((block): block is ToolThread => block.type === 'tool_thread')
+  const nonToolBlocks = message.blocks.filter((block) => block.type !== 'tool_thread')
+  const toolOnly = toolThreads.length > 0 && nonToolBlocks.length === 0
+  const roleColor = message.role === 'assistant'
+    ? 'var(--violet)'
+    : message.role === 'user'
+      ? 'var(--cyan)'
+      : 'var(--yellow)'
+  const roleBackground = message.role === 'assistant'
+    ? 'color-mix(in srgb, var(--violet) 8%, var(--surface))'
+    : message.role === 'user'
+      ? 'color-mix(in srgb, var(--cyan) 8%, var(--surface))'
+      : 'color-mix(in srgb, var(--yellow) 8%, var(--surface))'
+  const roleInitial = message.role === 'assistant' ? 'A' : message.role === 'user' ? 'U' : 'S'
+
+  if (toolOnly) {
+    return (
+      <SessionContext.Provider value={message.sessionId}>
+        <section style={{
+          borderLeft: '3px solid var(--amber)',
+          borderRadius: '0 7px 7px 0',
+          background: 'color-mix(in srgb, var(--amber) 8%, transparent)',
+          padding: '8px 12px',
+          marginBottom: 10,
+        }}>
+          <header style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            color: 'var(--amber)',
+            marginBottom: 6,
+          }}>
+            <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>⚙</span>
+            <span style={{ fontSize: 12, fontWeight: 600 }}>{toolThreads.length} tool {toolThreads.length === 1 ? 'call' : 'calls'}</span>
+            <span aria-hidden="true" style={{ color: 'var(--text-3)', fontSize: 13 }}>⧉</span>
+            {message.timestamp && (
+              <span style={{ marginLeft: 'auto', color: 'var(--text-3)', fontSize: 12, fontWeight: 400 }}>
+                {hydrated ? formatLocalMessageTime(message.timestamp) : formatStableMessageTime(message.timestamp)}
+              </span>
+            )}
+          </header>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {toolThreads.map((thread, index) => <AgentsToolRow key={thread.toolUse.id ?? index} thread={thread} />)}
+          </div>
+        </section>
+      </SessionContext.Provider>
+    )
+  }
+
+  return (
+    <SessionContext.Provider value={message.sessionId}>
+      <article style={{
+        borderLeft: `4px solid ${roleColor}`,
+        borderRadius: '0 7px 7px 0',
+        background: roleBackground,
+        padding: '14px 20px',
+        marginBottom: 10,
+      }}>
+        <header style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, minWidth: 0 }}>
+          <span style={{
+            width: 22,
+            height: 22,
+            borderRadius: 999,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 11,
+            fontWeight: 800,
+            flexShrink: 0,
+            color: 'var(--bg)',
+            background: roleColor,
+            lineHeight: 1,
+          }}>
+            {roleInitial}
+          </span>
+          <span style={{ color: roleColor, fontSize: 13, fontWeight: 600, letterSpacing: '0.01em' }}>{roleLabel}</span>
+          <div style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            minWidth: 0,
+            color: 'var(--text-3)',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 11,
+          }}>
+            {message.usage && (
+              <span>{fmtTokens(message.usage.input_tokens)} ctx / {fmtTokens(message.usage.output_tokens)} out</span>
+            )}
+            {toolThreads.length > 0 && (
+              <span style={{
+                color: 'var(--text-3)',
+                background: 'color-mix(in srgb, var(--text) 5%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--text) 7%, transparent)',
+                borderRadius: 4,
+                padding: '2px 8px',
+                whiteSpace: 'nowrap',
+              }}>
+                turn · {toolThreads.length} {toolThreads.length === 1 ? 'call' : 'calls'}
+              </span>
+            )}
+            {showSession && message.provider && <span>{message.provider.toUpperCase()}</span>}
+            {message.timestamp && <span>{hydrated ? formatLocalMessageTime(message.timestamp) : formatStableMessageTime(message.timestamp)}</span>}
+          </div>
+        </header>
+        {nonToolBlocks.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 14, lineHeight: 1.7 }}>
+            {nonToolBlocks.map((block, index) => renderBlock(block, index))}
+          </div>
+        )}
+        {toolThreads.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: nonToolBlocks.length > 0 ? 12 : 0 }}>
+            {toolThreads.map((thread, index) => <AgentsToolRow key={thread.toolUse.id ?? index} thread={thread} />)}
+          </div>
+        )}
+      </article>
+    </SessionContext.Provider>
+  )
+}
+
 // ── Timeline message item ─────────────────────────────────────────────────────
 
 const ROLE_STYLE = {
@@ -4705,7 +4955,7 @@ const ROLE_STYLE = {
 } as const
 
 export type MessageDensity = 'comfortable' | 'balanced' | 'dense'
-export type WebViewMode = 'conversation' | 'full' | 'continue' | 'stream'
+export type WebViewMode = 'conversation' | 'full' | 'continue' | 'stream' | 'agents'
 
 type DensityConfig = { msgGap: number; blockGap: number; labelGap: number; dotGap: number }
 
@@ -4802,6 +5052,17 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   useEffect(() => {
     setHydrated(true)
   }, [])
+
+  if (viewMode === 'agents' && !isBridgeMessage) {
+    return (
+      <AgentsViewMessageItem
+        message={message}
+        showSession={showSession}
+        hydrated={hydrated}
+        roleLabel={roleLabel}
+      />
+    )
+  }
 
   // Bridge messages (CLI bridge ephemeral responses) rendered distinctly
   if (isBridgeMessage) {

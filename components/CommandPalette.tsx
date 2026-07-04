@@ -336,7 +336,8 @@ export default function CommandPalette({
   const [activeId, setActiveId] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const itemRefs = useRef(new Map<string, HTMLButtonElement>())
+  const itemRefs = useRef<Map<string, HTMLButtonElement> | null>(null)
+  if (itemRefs.current === null) itemRefs.current = new Map<string, HTMLButtonElement>()
   const activeIdRef = useRef<string | null>(null)
   const lastKeyboardMoveAtRef = useRef(0)
   const theme = useSyncExternalStore(subscribeTheme, getCurrentTheme, () => 'dark')
@@ -842,7 +843,7 @@ export default function CommandPalette({
 
   function scrollItemIntoView(id: string) {
     const list = listRef.current
-    const item = itemRefs.current.get(id)
+    const item = itemRefs.current?.get(id)
     if (!list || !item) return
 
     const buffer = 12
@@ -889,8 +890,8 @@ export default function CommandPalette({
 
   function captureItemRef(id: string) {
     return (node: HTMLButtonElement | null) => {
-      if (node) itemRefs.current.set(id, node)
-      else itemRefs.current.delete(id)
+      if (node) itemRefs.current?.set(id, node)
+      else itemRefs.current?.delete(id)
     }
   }
 
