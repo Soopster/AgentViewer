@@ -147,7 +147,7 @@ import { compactStableFingerprint } from '../../lib/compactFingerprint'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { readFile, rm, stat } from 'node:fs/promises'
 import { release, tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // Stable-reference event handler — reads the latest closure on every call
@@ -583,6 +583,7 @@ const TASK_PANEL_RESIZE_STEP = 4
 // THREADING_CACHE_LIMIT (10) in threadingWorkerClient.ts, which already holds
 // threaded messages + cards for the same neighbourhood.
 const SESSION_CACHE_LIMIT = 8
+const WORKTREE_TASK_CWD_SEGMENT = `${sep}.agent-viewer-worktrees${sep}`
 // After a settle, warm the detail cache for the sessions adjacent to the
 // current one in sidebar order so the *first* visit to a neighbour opens from
 // cache instead of paying the full worker read (150ms–1s on big sessions).
@@ -4578,6 +4579,7 @@ export default function OpenTuiApp() {
   // The selected session's worktree task (cwd inside .agent-viewer-worktrees),
   // or null. Drives the composer badge and gates merge/discard.
   const [selectedWorktreeTask, setSelectedWorktreeTask] = useState<WorktreeTask | null>(null)
+  const selectedWorktreeTaskCacheRef = useRef(new Map<string, WorktreeTask | null>())
   const [worktreeConfirm, setWorktreeConfirm] = useState<'merge' | 'discard' | null>(null)
   const worktreeSubmitInFlightRef = useRef(false)
   const [coordModalOpen, setCoordModalOpen] = useState(false)
@@ -8287,14 +8289,24 @@ export default function OpenTuiApp() {
   // the composer badge and the merge/discard affordances.
   const selectedSessionCwdForWorktree = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? null
   useEffect(() => {
-    if (!selectedSessionCwdForWorktree) {
+    if (!selectedSessionCwdForWorktree || !selectedSessionCwdForWorktree.includes(WORKTREE_TASK_CWD_SEGMENT)) {
       setSelectedWorktreeTask(null)
+      return
+    }
+    if (selectedWorktreeTaskCacheRef.current.has(selectedSessionCwdForWorktree)) {
+      setSelectedWorktreeTask(selectedWorktreeTaskCacheRef.current.get(selectedSessionCwdForWorktree) ?? null)
       return
     }
     let cancelled = false
     void findTuiWorktreeTask(selectedSessionCwdForWorktree)
-      .then((task) => { if (!cancelled) setSelectedWorktreeTask(task) })
-      .catch(() => { if (!cancelled) setSelectedWorktreeTask(null) })
+      .then((task) => {
+        selectedWorktreeTaskCacheRef.current.set(selectedSessionCwdForWorktree, task)
+        if (!cancelled) setSelectedWorktreeTask(task)
+      })
+      .catch(() => {
+        selectedWorktreeTaskCacheRef.current.set(selectedSessionCwdForWorktree, null)
+        if (!cancelled) setSelectedWorktreeTask(null)
+      })
     return () => { cancelled = true }
   }, [selectedSessionCwdForWorktree])
 
@@ -8352,7 +8364,9 @@ export default function OpenTuiApp() {
           : `${task.branch} has no changes to merge`,
         5000,
       )
-      setSelectedWorktreeTask(await findTuiWorktreeTask(task.path).catch(() => null))
+      const refreshedTask = await findTuiWorktreeTask(task.path).catch(() => null)
+      selectedWorktreeTaskCacheRef.current.set(task.path, refreshedTask)
+      setSelectedWorktreeTask(refreshedTask)
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Merge failed — resolve in the main checkout')
     } finally {
@@ -8366,6 +8380,7 @@ export default function OpenTuiApp() {
     setWorktreeBusy(true)
     try {
       await removeTuiWorktreeTask(task, { force: true })
+      selectedWorktreeTaskCacheRef.current.set(task.path, null)
       setSelectedWorktreeTask(null)
       showNotice('info', `Discarded worktree and branch ${task.branch}`, 5000)
     } catch (err) {
@@ -9576,7 +9591,43 @@ export default function OpenTuiApp() {
   // when its turn runs unowned, and re-surface any pending Claude prompts the
   // turn is blocked on (the stream that delivered them is gone after a stream
   // death; answering still resolves them server-side by id).
+  type RunningRegistryEntry = Awaited<ReturnType<typeof listTuiRunningSessions>>[number]
   const registryPollInFlightRef = useRef(false)
+  const runningRegistryByKeyRef = useRef(new Map<string, RunningRegistryEntry>())
+  const reconcileSelectedRunningRegistry = useCallback((
+    runningByKey: Map<string, RunningRegistryEntry>,
+    ownedKey: string | null,
+  ) => {
+    const selectedKey = selectedSessionKeyRef.current
+    const selectedEntry = selectedKey ? runningByKey.get(selectedKey) : undefined
+    const reattached = Boolean(selectedEntry) && selectedKey !== ownedKey && !awaitingPersistedTurnRef.current
+    reattachedRunningKeyRef.current = reattached && selectedKey ? selectedKey : null
+    setReattachedRunning((prev) => (prev === reattached ? prev : reattached))
+
+    if (!selectedKey || selectedKey === ownedKey) return
+    if (selectedEntry?.provider === 'claude') {
+      // While idle for this session, the registry is the authoritative set
+      // of its pending Claude prompts — reconcile (add new, drop answered).
+      const prompts = selectedEntry.pendingPrompts
+        .map((data) => extractPendingPermission({ type: 'claude_permission', event: { type: 'permission.requested', data } }))
+        .filter((p): p is PendingPermission => p !== null)
+      setPendingPermissions((prev) => {
+        const others = prev.filter((p) => !(p.provider === 'claude' && p.sessionId === selectedEntry.sessionId))
+        const next = [...others, ...prompts]
+        return next.map((p) => p.id).join('|') === prev.map((p) => p.id).join('|') ? prev : next
+      })
+    } else if (!selectedEntry) {
+      // No turn running for the selected session — drop any reattached
+      // Claude prompts left behind by a turn that ended unanswered.
+      const selectedSessionForKey = sessionsByKeyRef.current.get(selectedKey)
+      if (selectedSessionForKey) {
+        setPendingPermissions((prev) => {
+          const next = prev.filter((p) => !(p.provider === 'claude' && p.sessionId === selectedSessionForKey.sessionId))
+          return next.length === prev.length ? prev : next
+        })
+      }
+    }
+  }, [])
   useEffect(() => {
     const poll = async () => {
       if (registryPollInFlightRef.current) return
@@ -9593,6 +9644,7 @@ export default function OpenTuiApp() {
         sessionKey({ sessionId: entry.sessionId, provider: entry.provider }),
         entry,
       ]))
+      runningRegistryByKeyRef.current = runningByKey
       const ownedKey = composerAbortRef.current ? ownedTurnKeyRef.current : null
 
       // Sidebar liveness for turns nobody owns (started before a session
@@ -9613,10 +9665,6 @@ export default function OpenTuiApp() {
       }
 
       const selectedKey = selectedSessionKeyRef.current
-      const selectedEntry = selectedKey ? runningByKey.get(selectedKey) : undefined
-      const reattached = Boolean(selectedEntry) && selectedKey !== ownedKey && !awaitingPersistedTurnRef.current
-      reattachedRunningKeyRef.current = reattached ? selectedKey : null
-      setReattachedRunning((prev) => (prev === reattached ? prev : reattached))
 
       // Prompts blocking running turns on OTHER sessions feed the attention
       // inbox (the selected session's prompts reconcile into
@@ -9644,34 +9692,19 @@ export default function OpenTuiApp() {
         notifyAttention(prompt.title, prompt.sessionId ?? '', prompt.provider ?? 'claude')
       }
 
-      if (!selectedKey || selectedKey === ownedKey) return
-      if (selectedEntry?.provider === 'claude') {
-        // While idle for this session, the registry is the authoritative set
-        // of its pending Claude prompts — reconcile (add new, drop answered).
-        const prompts = selectedEntry.pendingPrompts
-          .map((data) => extractPendingPermission({ type: 'claude_permission', event: { type: 'permission.requested', data } }))
-          .filter((p): p is PendingPermission => p !== null)
-        setPendingPermissions((prev) => {
-          const others = prev.filter((p) => !(p.provider === 'claude' && p.sessionId === selectedEntry.sessionId))
-          const next = [...others, ...prompts]
-          return next.map((p) => p.id).join('|') === prev.map((p) => p.id).join('|') ? prev : next
-        })
-      } else if (!selectedEntry) {
-        // No turn running for the selected session — drop any reattached
-        // Claude prompts left behind by a turn that ended unanswered.
-        const selectedSessionForKey = sessionsByKeyRef.current.get(selectedKey)
-        if (selectedSessionForKey) {
-          setPendingPermissions((prev) => {
-            const next = prev.filter((p) => !(p.provider === 'claude' && p.sessionId === selectedSessionForKey.sessionId))
-            return next.length === prev.length ? prev : next
-          })
-        }
-      }
+      reconcileSelectedRunningRegistry(runningByKey, ownedKey)
     }
     void poll()
     const timer = setInterval(() => { void poll() }, REATTACH_POLL_MS)
     return () => clearInterval(timer)
-  }, [selectedSessionKey, markSessionRunning, clearSessionRunning])
+  }, [markSessionRunning, clearSessionRunning, reconcileSelectedRunningRegistry])
+
+  useEffect(() => {
+    reconcileSelectedRunningRegistry(
+      runningRegistryByKeyRef.current,
+      composerAbortRef.current ? ownedTurnKeyRef.current : null,
+    )
+  }, [reconcileSelectedRunningRegistry, selectedSessionKey])
 
   // Pull the most-recently queued message back into the composer to edit it
   // (cancels that one send). Any current draft is preserved by prepending it,
