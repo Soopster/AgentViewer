@@ -4738,11 +4738,57 @@ function summarizeAgentsTool(thread: ToolThread): string {
   }
 }
 
+function formatAgentsCount(value: number, unit: string): string {
+  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k ${unit}`
+  return `${value} ${unit}`
+}
+
+function lineCount(value: string): number {
+  if (!value) return 0
+  return value.split('\n').length
+}
+
+function agentsToolMetaBadges(thread: ToolThread): string[] {
+  const name = thread.toolUse.name
+  const input = toolInputRecord(thread)
+  const badges: string[] = []
+  const oldText = toolStringParam(input, ['old_string'])
+  const newText = toolStringParam(input, ['new_string'])
+  const content = toolStringParam(input, ['content'])
+
+  if (oldText || newText) {
+    const del = oldText ? lineCount(oldText) : 0
+    const add = newText ? lineCount(newText) : 0
+    badges.push(`+${add} -${del}`)
+  } else if (content && (name === 'Write' || name === 'FileChange')) {
+    badges.push(formatAgentsCount(lineCount(content), 'lines'))
+  }
+
+  if (!thread.result) {
+    badges.push('running')
+    return badges
+  }
+  if (thread.result.is_error) {
+    badges.push('error')
+    return badges
+  }
+
+  const output = resultToString(thread.result.content).trim()
+  if (!output) {
+    badges.push('ok')
+    return badges
+  }
+
+  const lines = lineCount(output)
+  if (lines > 1) badges.push(formatAgentsCount(lines, 'lines'))
+  else badges.push(`${output.length.toLocaleString()} chars`)
+  return badges.slice(0, 2)
+}
+
 function AgentsToolRow({ thread }: { thread: ToolThread }) {
   const [open, setOpen] = useState(false)
   const name = thread.toolUse.name
-  const result = thread.result ? resultToString(thread.result.content) : ''
-  const hasResult = result.trim().length > 0
+  const metaBadges = agentsToolMetaBadges(thread)
   return (
     <div style={{
       borderLeft: '2px solid var(--amber)',
@@ -4782,10 +4828,10 @@ function AgentsToolRow({ thread }: { thread: ToolThread }) {
         <span style={{ color: 'var(--text-3)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
           {summarizeAgentsTool(thread)}
         </span>
-        {(thread.result?.is_error || !thread.result) && (
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          {metaBadges.map((badge) => (
           <span style={{
-            marginLeft: 'auto',
-            color: thread.result?.is_error ? 'var(--red)' : 'var(--text-3)',
+            color: badge === 'error' ? 'var(--red)' : 'var(--text-3)',
             background: 'color-mix(in srgb, var(--text) 5%, transparent)',
             border: '1px solid color-mix(in srgb, var(--text) 7%, transparent)',
             borderRadius: 4,
@@ -4793,28 +4839,20 @@ function AgentsToolRow({ thread }: { thread: ToolThread }) {
             fontSize: 10,
             whiteSpace: 'nowrap',
             flexShrink: 0,
-          }}>
-            {thread.result?.is_error ? 'error' : 'running'}
+          }} key={badge}>
+            {badge}
           </span>
-        )}
+          ))}
+        </span>
       </button>
-      {open && hasResult && (
-        <pre style={{
-          margin: 0,
-          maxHeight: 260,
-          overflow: 'auto',
+      {open && (
+        <div style={{
           borderTop: '1px solid var(--border)',
           background: 'color-mix(in srgb, var(--bg) 78%, transparent)',
-          color: 'var(--text-2)',
-          padding: '8px 14px 10px',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 12,
-          lineHeight: 1.45,
+          padding: '6px 8px 8px',
         }}>
-          {result}
-        </pre>
+          <ToolThreadCard thread={thread} />
+        </div>
       )}
     </div>
   )
