@@ -72,6 +72,7 @@ import {
   type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
 import { backgroundRunningSession, clearRunningSession, getRunningSession, getRunningSessionInfo, interruptRunningSession, listRunningSessionRefs, setRunningSession, steerRunningSession } from './sessionRuntime'
+import { createTurnCheckpoint } from './checkpoints'
 import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
 import type {
@@ -1536,7 +1537,11 @@ function createClaudePermissionBridge(
   }
 
   return (toolName, input, options) => {
-    const requestId = options.requestId || options.toolUseID || `claude-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    // SDK 0.3.199+ dropped requestId from the CanUseTool options type but the
+    // CLI still sends it — read it loosely so ids stay stable across versions.
+    const requestId = (options as { requestId?: string }).requestId
+      || options.toolUseID
+      || `claude-${Date.now()}-${Math.random().toString(36).slice(2)}`
     activeIds.add(requestId)
     const requestData: Record<string, unknown> = {
       requestId,
@@ -3165,6 +3170,18 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           if (!emittedSessionEvent && messageSessionId) {
             emittedSessionEvent = true
             realizedSessionId = messageSessionId
+            // Mirror the registry entry under the realized id — a pending
+            // session registers under its draft id, but reattach polls and
+            // interrupts address the turn by the real id once it's known.
+            if (messageSessionId !== sessionId) {
+              setRunningSession(messageSessionId, {
+                provider: 'claude',
+                requestId: turnRequestId,
+                interrupt: () => q.interrupt(),
+                background: () => q.backgroundTasks(),
+                steer: async (text) => pushUserMessage(await buildClaudeUserMessage(text, [])),
+              })
+            }
             safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId: messageSessionId })}\n\n`)
           }
           const eventSessionId = noteClaudeBroadcastSession(messageSessionId ?? fallbackBroadcastSessionId)
@@ -3211,6 +3228,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         // box isn't left pointing at a dead stream controller.
         bridgeBox.fn = null
         clearRunningSession(sessionId)
+        if (realizedSessionId && realizedSessionId !== sessionId) clearRunningSession(realizedSessionId)
         resolvePendingClaudePermissions(sessionId, bridgedPermissionIds, 'Permission request ended before a response was received')
         if (!adopted) {
           signal.removeEventListener('abort', propagateAbort)
@@ -5185,6 +5203,21 @@ export async function streamViewSessionTurn(params: SendMessageParams): Promise<
   }
 
   const provider = await resolveProvider(params.provider)
+
+  // Turn checkpoint: snapshot the working tree BEFORE the agent can touch it
+  // (hidden git commit behind refs/agent-viewer-checkpoints/). Best-effort and
+  // internally time-capped — a missing checkpoint never blocks the turn.
+  const checkpointCwd = typeof params.body.cwd === 'string' && params.body.cwd.trim()
+    ? params.body.cwd.trim()
+    : null
+  if (checkpointCwd) {
+    await createTurnCheckpoint(checkpointCwd, {
+      sessionId: params.sessionId,
+      provider,
+      message: userMessage,
+    }).catch(() => null)
+  }
+
   if (provider === 'codex') {
     return createCodexStream(params.sessionId, params.signal, params.body)
   }

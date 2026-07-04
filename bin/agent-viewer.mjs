@@ -12,6 +12,7 @@ function parseArgs(rawArgs) {
   const forwarded = []
   let port
   let legacy = false
+  let attach
 
   for (let i = 0; i < rawArgs.length; i += 1) {
     const arg = rawArgs[i]
@@ -40,10 +41,32 @@ function parseArgs(rawArgs) {
       continue
     }
 
+    if (arg === '--attach' || arg === '-a') {
+      const next = rawArgs[i + 1]
+      if (next && !next.startsWith('-')) {
+        attach = next
+        i += 1
+        continue
+      }
+    }
+
+    if (arg.startsWith('--attach=')) {
+      attach = arg.slice('--attach='.length)
+      continue
+    }
+
     forwarded.push(arg)
   }
 
-  return { forwarded, port, legacy }
+  return { forwarded, port, legacy, attach }
+}
+
+function normalizeAttachUrl(attach) {
+  if (!attach) return undefined
+  // Bare host:port or port-only shorthands are common; default the scheme.
+  if (/^\d+$/.test(attach)) return `http://127.0.0.1:${attach}`
+  if (!/^https?:\/\//.test(attach)) return `http://${attach}`
+  return attach
 }
 
 function printUsage() {
@@ -55,7 +78,10 @@ Modes:
 
 Options:
   -l, --legacy         Launch the legacy Ink terminal app
-  -p, --port <port>  Use a custom port in web mode
+  -p, --port <port>    Use a custom port in web mode
+  -a, --attach <url>   Attach the TUI to a running \`agent-viewer web\` daemon
+                       (e.g. --attach 3000 or --attach http://127.0.0.1:3000).
+                       Turns run in the daemon and survive TUI restarts.
 `)
 }
 
@@ -236,14 +262,16 @@ if (command === '-h' || command === '--help' || command === 'help') {
   forwardSignals(child)
   trackExit(child)
 } else {
-  const { forwarded } = parseArgs(args)
+  const { forwarded, attach } = parseArgs(args)
   const entrypoint = fileURLToPath(new URL('../tui/opentui/main.tsx', import.meta.url))
   const bunLauncher = resolveBunLauncher()
   if (!bunLauncher.command) {
     failMissingBun()
   } else {
+    const attachUrl = normalizeAttachUrl(attach)
     const child = spawn(bunLauncher.command, [...bunLauncher.args, 'run', entrypoint, ...forwarded], {
       stdio: 'inherit',
+      env: attachUrl ? { ...process.env, AGENT_VIEWER_ATTACH: attachUrl } : process.env,
     })
 
     child.on('error', (error) => {

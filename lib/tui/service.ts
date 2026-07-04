@@ -39,18 +39,28 @@ import {
   type TuiTranscriptWidth,
 } from '../tuiState'
 import {
+  createNewViewSession,
   listViewRunningSessions,
   listViewSessionMessages,
   listViewSessions,
   patchViewSession,
   interruptViewSession,
   prewarmViewSession,
+  readViewSessionComposerOptions,
   readViewSessionDiagnostics,
   readViewSessionInfo,
   readViewSessionModels,
+  readViewSessionSlashCommands,
   runViewSessionAction,
   streamViewSessionTurn,
 } from '../sessionBackend'
+import {
+  encodeSessionPath,
+  isRemoteAttached,
+  providerQuery,
+  remoteJson,
+  remoteStream,
+} from './remote'
 import {
   getSessionBookmarkIds,
   listAllBookmarks,
@@ -76,7 +86,22 @@ import {
   type WorktreeTask,
 } from '../worktreeTasks'
 import {
+  changesSinceCheckpoint,
+  commitAllChanges,
+  createReviewPullRequest,
+  deleteUntrackedFile,
+  diffSinceCheckpoint,
+  listTurnCheckpoints,
+  listWorkingDiffHunks,
+  rejectWorkingHunk,
+  restoreCheckpoint,
+  type CheckpointFileChange,
+  type TurnCheckpoint,
+  type WorkingDiffHunk,
+} from '../checkpoints'
+import {
   appendProtocolEvent,
+  cleanupProtocolRunWorktrees,
   listProtocolRuns,
   readProtocolRun,
   startProtocolRun,
@@ -105,10 +130,18 @@ export type TuiSessionMetadata = {
 }
 
 export async function readTuiProvider(): Promise<ProviderSelection> {
+  if (isRemoteAttached()) {
+    const { provider } = await remoteJson<{ provider: ProviderSelection }>('/api/provider')
+    return provider
+  }
   return getConfiguredProvider()
 }
 
 export async function writeTuiProvider(provider: ProviderSelection): Promise<void> {
+  if (isRemoteAttached()) {
+    await remoteJson('/api/provider', { method: 'PATCH', body: JSON.stringify({ provider }) })
+    return
+  }
   await setConfiguredProvider(provider)
 }
 
@@ -226,6 +259,12 @@ export async function writeTuiSessionReaderState(
 }
 
 export async function readTuiSessions(provider: ProviderSelection): Promise<Session[]> {
+  if (isRemoteAttached()) {
+    const { sessions } = await remoteJson<{ sessions: Session[] }>(
+      `/api/sessions?limit=${DEFAULT_SESSION_LIMIT}&offset=0&includeWorktrees=true&provider=${encodeURIComponent(provider)}`,
+    )
+    return sessions
+  }
   return listViewSessions({
     limit: DEFAULT_SESSION_LIMIT,
     offset: 0,
@@ -268,6 +307,20 @@ export async function readTuiSessionDetailSource(session: Session): Promise<{
   const messageLimit = session.provider === 'claude'
     ? CLAUDE_MESSAGE_LIMIT
     : TOOL_HEAVY_PROVIDER_MESSAGE_LIMIT
+  if (isRemoteAttached()) {
+    const query = providerQuery(session.provider)
+    const [infoResult, windowResult] = await Promise.all([
+      remoteJson<{ info: SessionInfo | null }>(encodeSessionPath(session.sessionId, query))
+        .catch(() => ({ info: null })),
+      remoteJson<{ messages: SessionMessage[] }>(
+        encodeSessionPath(
+          session.sessionId,
+          `/messages?limit=${messageLimit}&offset=0&tail=1${session.provider ? `&provider=${encodeURIComponent(session.provider)}` : ''}`,
+        ),
+      ),
+    ])
+    return { info: infoResult.info, rawMessages: windowResult.messages }
+  }
   const [info, messages] = await Promise.all([
     readViewSessionInfo(session.sessionId, session.provider),
     listViewSessionMessages(
@@ -295,10 +348,22 @@ export async function readTuiSessionDetail(session: Session): Promise<TuiSession
 }
 
 export async function readTuiSessionMetadata(session: Session): Promise<TuiSessionMetadata> {
+  if (isRemoteAttached()) {
+    return remoteJson<TuiSessionMetadata>(
+      encodeSessionPath(session.sessionId, `/models${providerQuery(session.provider)}`),
+    )
+  }
   return readViewSessionModels(session.sessionId, session.provider)
 }
 
 export async function patchTuiSession(session: Session, body: Record<string, unknown>): Promise<void> {
+  if (isRemoteAttached()) {
+    await remoteJson(encodeSessionPath(session.sessionId), {
+      method: 'PATCH',
+      body: JSON.stringify({ ...body, provider: session.provider }),
+    })
+    return
+  }
   return patchViewSession(session.sessionId, body, session.provider)
 }
 
@@ -307,6 +372,14 @@ export async function streamTuiSessionTurn(
   body: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<Response> {
+  if (isRemoteAttached()) {
+    // The daemon runs the turn; this Response is just the SSE view of it. The
+    // turn survives this TUI aborting/dying — the reattach poll picks it up.
+    return remoteStream(encodeSessionPath(session.sessionId, '/messages'), {
+      ...body,
+      provider: session.provider,
+    }, signal)
+  }
   return streamViewSessionTurn({
     sessionId: session.sessionId,
     signal: signal ?? new AbortController().signal,
@@ -316,6 +389,13 @@ export async function streamTuiSessionTurn(
 }
 
 export async function interruptTuiSessionTurn(session: { sessionId: string }): Promise<void> {
+  if (isRemoteAttached()) {
+    await remoteJson(encodeSessionPath(session.sessionId, '/interrupt'), {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    return
+  }
   await interruptViewSession(session.sessionId)
 }
 
@@ -326,7 +406,11 @@ export async function interruptTuiSessionTurn(session: { sessionId: string }): P
  * registry read is synchronous and authoritative — it powers live-turn
  * reattach and the cross-session attention surfaces.
  */
-export function listTuiRunningSessions(): ReturnType<typeof listViewRunningSessions> {
+export async function listTuiRunningSessions(): Promise<ReturnType<typeof listViewRunningSessions>> {
+  if (isRemoteAttached()) {
+    const { running } = await remoteJson<{ running: ReturnType<typeof listViewRunningSessions> }>('/api/sessions/running')
+    return running
+  }
   return listViewRunningSessions()
 }
 
@@ -356,6 +440,51 @@ export async function removeTuiWorktreeTask(task: WorktreeTask, opts?: { force?:
 
 export type { WorktreeTask }
 
+// Turn checkpoints + change review (lib/checkpoints.ts): every turn snapshots
+// the working tree first; these expose list/diff/restore and the per-hunk
+// review → commit → PR flow to the TUI.
+export async function listTuiCheckpoints(cwd: string): Promise<TurnCheckpoint[]> {
+  return listTurnCheckpoints(cwd)
+}
+
+export async function readTuiCheckpointChanges(cwd: string, sha: string): Promise<CheckpointFileChange[]> {
+  return changesSinceCheckpoint(cwd, sha)
+}
+
+export async function readTuiCheckpointDiff(cwd: string, sha: string, filePath?: string): Promise<string> {
+  return diffSinceCheckpoint(cwd, sha, filePath)
+}
+
+export async function restoreTuiCheckpoint(
+  cwd: string,
+  sha: string,
+  paths?: string[],
+): Promise<{ restored: number; deleted: number }> {
+  return restoreCheckpoint(cwd, sha, paths)
+}
+
+export async function listTuiWorkingDiff(cwd: string): Promise<{ hunks: WorkingDiffHunk[]; untracked: string[] }> {
+  return listWorkingDiffHunks(cwd)
+}
+
+export async function rejectTuiWorkingHunk(cwd: string, patchText: string): Promise<void> {
+  return rejectWorkingHunk(cwd, patchText)
+}
+
+export async function deleteTuiUntrackedFile(cwd: string, relPath: string): Promise<void> {
+  return deleteUntrackedFile(cwd, relPath)
+}
+
+export async function commitTuiAllChanges(cwd: string, message: string): Promise<string> {
+  return commitAllChanges(cwd, message)
+}
+
+export async function createTuiReviewPullRequest(cwd: string, title: string): Promise<string> {
+  return createReviewPullRequest(cwd, title)
+}
+
+export type { TurnCheckpoint, CheckpointFileChange, WorkingDiffHunk }
+
 export async function startTuiProtocolRun(params: StartProtocolRunParams): Promise<StartProtocolRunResult> {
   return startProtocolRun(params)
 }
@@ -372,8 +501,47 @@ export async function stopTuiProtocolRun(runId: string): Promise<ProtocolRunSnap
   return stopProtocolRun(runId)
 }
 
+export async function cleanupTuiProtocolRunWorktrees(runId: string, opts?: { force?: boolean }): Promise<Awaited<ReturnType<typeof cleanupProtocolRunWorktrees>>> {
+  return cleanupProtocolRunWorktrees(runId, opts)
+}
+
 export async function appendTuiProtocolEvent(event: AgentProtocolEvent): Promise<ProtocolRunSnapshot | null> {
   return appendProtocolEvent(event)
+}
+
+/** Create a session (or a pending draft) locally or on the attached daemon. */
+export async function createTuiSession(params: {
+  provider?: AgentProvider
+  cwd?: string
+  title?: string
+}): Promise<{ sessionId: string; provider: AgentProvider; cwd: string; isPending: boolean }> {
+  if (isRemoteAttached()) {
+    return remoteJson('/api/sessions/new', { method: 'POST', body: JSON.stringify(params) })
+  }
+  return createNewViewSession(params)
+}
+
+export async function readTuiSlashCommands(
+  sessionId: string,
+  provider?: AgentProvider,
+): Promise<Awaited<ReturnType<typeof readViewSessionSlashCommands>>> {
+  if (isRemoteAttached()) {
+    const { commands } = await remoteJson<{ commands: Awaited<ReturnType<typeof readViewSessionSlashCommands>> }>(
+      encodeSessionPath(sessionId, `/commands${providerQuery(provider)}`),
+    )
+    return commands
+  }
+  return readViewSessionSlashCommands(sessionId, provider)
+}
+
+export async function readTuiComposerOptions(
+  sessionId: string,
+  provider?: AgentProvider,
+): Promise<Awaited<ReturnType<typeof readViewSessionComposerOptions>>> {
+  if (isRemoteAttached()) {
+    return remoteJson(encodeSessionPath(sessionId, `/composer${providerQuery(provider)}`))
+  }
+  return readViewSessionComposerOptions(sessionId, provider)
 }
 
 /** Warm the send path (Claude pool spawn, Codex thread resume) while the user types. */
@@ -381,6 +549,9 @@ export async function prewarmTuiSession(
   session: Session,
   opts?: { model?: string; effort?: import('../types').ReasoningEffortLevel; isPending?: boolean },
 ): Promise<void> {
+  // No prewarm over the wire: the daemon warms its own pool on send, and a
+  // remote prewarm per keystroke-focus would be pure request noise.
+  if (isRemoteAttached()) return
   await prewarmViewSession({
     sessionId: session.sessionId,
     provider: session.provider as AgentProvider | undefined,
@@ -394,6 +565,9 @@ export async function prewarmTuiSession(
 export async function readTuiSessionDiagnostics(
   session: Session,
 ): Promise<{ sections: SessionDiagnosticSection[]; currentModel: string | null }> {
+  if (isRemoteAttached()) {
+    return remoteJson(encodeSessionPath(session.sessionId, `/diagnostics${providerQuery(session.provider)}`))
+  }
   return readViewSessionDiagnostics(session.sessionId, session.provider as AgentProvider | undefined)
 }
 
@@ -401,6 +575,13 @@ export async function runTuiSessionAction(
   session: Session,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  if (isRemoteAttached()) {
+    const { result } = await remoteJson<{ result: Record<string, unknown> }>(
+      encodeSessionPath(session.sessionId, '/actions'),
+      { method: 'POST', body: JSON.stringify({ ...body, provider: session.provider }) },
+    )
+    return result ?? {}
+  }
   return runViewSessionAction({
     sessionId: session.sessionId,
     body,

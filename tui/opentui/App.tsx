@@ -83,10 +83,14 @@ import {
   streamTuiSessionTurn,
   interruptTuiSessionTurn,
   listTuiRunningSessions,
+  createTuiSession,
+  readTuiSlashCommands,
+  readTuiComposerOptions,
   listTuiProtocolRuns,
   readTuiProtocolRun,
   startTuiProtocolRun,
   stopTuiProtocolRun,
+  cleanupTuiProtocolRunWorktrees,
   createTuiWorktreeTask,
   findTuiWorktreeTask,
   mergeTuiWorktreeTask,
@@ -131,6 +135,7 @@ import {
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, ToolResultBlock } from '../../lib/types'
 import { AttentionInboxPopover, type AttentionItem } from './AttentionInboxPopover'
+import { CheckpointPopover } from './CheckpointPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
@@ -138,7 +143,7 @@ import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
 import { extractPendingPermission, extractPermissionReply, type PendingPermission, type PermissionResponse } from '../../lib/permissions'
-import { readViewSessionSlashCommands, readViewSessionComposerOptions, createNewViewSession } from '../../lib/sessionBackend'
+import type { readViewSessionComposerOptions } from '../../lib/sessionBackend'
 import { compactStableFingerprint } from '../../lib/compactFingerprint'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { readFile, rm, stat } from 'node:fs/promises'
@@ -489,6 +494,17 @@ const DETAIL_REFRESH_MS = 2000
 // Cadence for reconciling against the in-process running-turn registry (a
 // cheap synchronous read — the TUI and its backend share one process).
 const REATTACH_POLL_MS = 1500
+// Remote attach (agent-viewer --attach <url>): backend calls route through a
+// running web daemon; shown in the footer so the mode is always visible.
+const ATTACHED_DAEMON_HOST = (() => {
+  const raw = process.env.AGENT_VIEWER_ATTACH?.trim()
+  if (!raw) return null
+  try {
+    return new URL(raw).host
+  } catch {
+    return raw
+  }
+})()
 // Most recent background turn completions kept in the attention inbox.
 const ATTENTION_DONE_LIMIT = 20
 // Debounce before opening a selected session's transcript. Scrubbing quickly
@@ -3526,8 +3542,10 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
   { id: 'coord-start', label: 'Start coordinated run', key: '', category: 'Coordination' },
   { id: 'coord-board', label: 'Open coordination board', key: '', category: 'Coordination' },
+  { id: 'coord-cleanup', label: 'Clean completed worktrees', key: 'c', category: 'Coordination' },
   { id: 'coord-stop', label: 'Stop coordinated run', key: '', category: 'Coordination' },
   { id: 'fleet',      label: 'Toggle fleet strip',      key: '⇧A', category: 'View'       },
+  { id: 'checkpoints', label: 'Checkpoints & review',   key: '⇧U', category: 'Session'    },
   { id: 'handoff-brief', label: 'Handoff brief',       key: 'H',  category: 'Session'    },
   { id: 'prompt-library', label: 'Prompt library',     key: '⇧P', category: 'Session'    },
   { id: 'diagnostics', label: 'Session diagnostics',   key: 'D',  category: 'Session'    },
@@ -4573,6 +4591,9 @@ export default function OpenTuiApp() {
   // Fleet strip visibility preference (the strip only renders when it has
   // cells: running sessions or fresh background completions).
   const [fleetStripEnabled, setFleetStripEnabled] = useState(true)
+  // Checkpoints & review popover (⇧U): turn snapshots + per-hunk review.
+  const [checkpointOpen, setCheckpointOpen] = useState(false)
+  const checkpointKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [taskPanelOpen, setTaskPanelOpen] = useState(false)
   const [taskPanelTab, setTaskPanelTab] = useState<'tasks' | 'agents'>('tasks')
   const [taskPopoverOpen, setTaskPopoverOpen] = useState(false)
@@ -6060,8 +6081,8 @@ export default function OpenTuiApp() {
     composerAffordancesInFlightRef.current.add(key)
     try {
       const [live, composerOptions] = await Promise.all([
-        readViewSessionSlashCommands(target.sessionId, target.provider),
-        readViewSessionComposerOptions(target.sessionId, target.provider),
+        readTuiSlashCommands(target.sessionId, target.provider),
+        readTuiComposerOptions(target.sessionId, target.provider),
       ])
       const commands = live.map((entry) => ({
         command: entry.command,
@@ -8288,7 +8309,7 @@ export default function OpenTuiApp() {
     try {
       const task = await createTuiWorktreeTask(baseCwd, name)
       const targetProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
-      const result = await createNewViewSession({ provider: targetProvider, cwd: task.path, title: name })
+      const result = await createTuiSession({ provider: targetProvider, cwd: task.path, title: name })
       const draft: Session = {
         sessionId: result.sessionId,
         provider: result.provider,
@@ -8430,6 +8451,25 @@ export default function OpenTuiApp() {
       showNotice('info', 'Stopped coordinated run', 4000)
     } catch (err) {
       setCoordError(err instanceof Error ? err.message : 'Failed to stop coordinated run')
+    } finally {
+      setCoordBusy(false)
+    }
+  })
+
+  const cleanupCompletedCoordinatedRunWorktrees = useEffectEvent(async () => {
+    const runId = coordSnapshot?.run.id
+    if (!runId || coordBusy) return
+    setCoordBusy(true)
+    setCoordError(null)
+    try {
+      const result = await cleanupTuiProtocolRunWorktrees(runId)
+      setCoordSnapshot(result.snapshot)
+      const removed = result.results.filter((entry) => entry.status === 'removed').length
+      const skipped = result.results.filter((entry) => entry.status === 'skipped').length
+      const failed = result.results.filter((entry) => entry.status === 'failed').length
+      showNotice('info', `Cleaned ${removed} worktree${removed === 1 ? '' : 's'}${skipped || failed ? ` · skipped ${skipped} · failed ${failed}` : ''}`, 5000)
+    } catch (err) {
+      setCoordError(err instanceof Error ? err.message : 'Failed to clean up worktrees')
     } finally {
       setCoordBusy(false)
     }
@@ -9422,7 +9462,7 @@ export default function OpenTuiApp() {
       let turnStillRunning = false
       if (!targetSession.isPending) {
         try {
-          turnStillRunning = listTuiRunningSessions().some((entry) =>
+          turnStillRunning = (await listTuiRunningSessions()).some((entry) =>
             entry.sessionId === targetSession.sessionId
             && entry.provider === (targetSession.provider ?? 'claude'))
         } catch { /* registry probe is best-effort */ }
@@ -9529,20 +9569,25 @@ export default function OpenTuiApp() {
     void sendComposerMessage(next.text, next.attachments)
   }, [composerSendState, queuedComposerSends, reattachedRunning, sendComposerMessage])
 
-  // Reattach to turns this composer doesn't own a stream for. The running
-  // registry is in-process (the TUI and its backend share one process), so
-  // this is a cheap synchronous read: reconcile sidebar running marks for
-  // every live session, flag the selected session as reattached when its turn
-  // runs unowned, and re-surface any pending Claude prompts the turn is
-  // blocked on (the stream that delivered them is gone after a stream death;
-  // answering still resolves them server-side by id).
+  // Reattach to turns this composer doesn't own a stream for. In-process the
+  // running registry is a cheap synchronous read; remotely attached it's the
+  // daemon's /api/sessions/running (same shape). Reconcile sidebar running
+  // marks for every live session, flag the selected session as reattached
+  // when its turn runs unowned, and re-surface any pending Claude prompts the
+  // turn is blocked on (the stream that delivered them is gone after a stream
+  // death; answering still resolves them server-side by id).
+  const registryPollInFlightRef = useRef(false)
   useEffect(() => {
-    const poll = () => {
-      let entries: ReturnType<typeof listTuiRunningSessions>
+    const poll = async () => {
+      if (registryPollInFlightRef.current) return
+      registryPollInFlightRef.current = true
+      let entries: Awaited<ReturnType<typeof listTuiRunningSessions>>
       try {
-        entries = listTuiRunningSessions()
+        entries = await listTuiRunningSessions()
       } catch {
         return // registry probe is best-effort
+      } finally {
+        registryPollInFlightRef.current = false
       }
       const runningByKey = new Map(entries.map((entry) => [
         sessionKey({ sessionId: entry.sessionId, provider: entry.provider }),
@@ -9623,8 +9668,8 @@ export default function OpenTuiApp() {
         }
       }
     }
-    poll()
-    const timer = setInterval(poll, REATTACH_POLL_MS)
+    void poll()
+    const timer = setInterval(() => { void poll() }, REATTACH_POLL_MS)
     return () => clearInterval(timer)
   }, [selectedSessionKey, markSessionRunning, clearSessionRunning])
 
@@ -10407,6 +10452,10 @@ export default function OpenTuiApp() {
         segs.push({ text: ` ${binding[1]}`, fg: theme.muted })
       })
     })
+    if (ATTACHED_DAEMON_HOST) {
+      segs.push({ text: ' │ ', fg: theme.dim })
+      segs.push({ text: `⇌ ${ATTACHED_DAEMON_HOST}`, fg: theme.cyan })
+    }
     return segs
   }, [attentionNeedsInputCount, composerActive, composerSendState, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, effectiveFocus, theme])
 
@@ -11009,11 +11058,18 @@ export default function OpenTuiApp() {
       case 'coord-board':
         void openCoordinationBoard()
         break
+      case 'coord-cleanup':
+        void cleanupCompletedCoordinatedRunWorktrees()
+        break
       case 'coord-stop':
         void stopActiveCoordinatedRun()
         break
       case 'fleet':
         setFleetStripEnabled((prev) => !prev)
+        break
+      case 'checkpoints':
+        if (gitRepoCwd) setCheckpointOpen(true)
+        else showNotice('info', 'Selected session has no working directory', 3000)
         break
       case 'theme': {
         openThemeMenu()
@@ -11344,6 +11400,10 @@ export default function OpenTuiApp() {
         handled(() => { void stopActiveCoordinatedRun() })
         return
       }
+      if (key.name === 'c') {
+        handled(() => { void cleanupCompletedCoordinatedRunWorktrees() })
+        return
+      }
       handled(() => {})
       return
     }
@@ -11427,6 +11487,11 @@ export default function OpenTuiApp() {
 
     if (attentionOpen) {
       handled(() => { attentionKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (checkpointOpen) {
+      handled(() => { checkpointKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -12047,6 +12112,15 @@ export default function OpenTuiApp() {
       return
     }
 
+    // Checkpoints & review: turn snapshots, per-hunk review, commit, PR
+    if (isShifted('U')) {
+      handled(() => {
+        if (gitRepoCwd) setCheckpointOpen(true)
+        else showNotice('info', 'Selected session has no working directory', 3000)
+      })
+      return
+    }
+
     // Global prompt library — saved prompts usable across providers
     if (isShifted('P')) {
       handled(openPromptLibrary)
@@ -12555,7 +12629,7 @@ export default function OpenTuiApp() {
         const cwd = selectedSession?.cwd ?? process.cwd()
         void (async () => {
           try {
-            const result = await createNewViewSession({ provider: targetProvider, cwd })
+            const result = await createTuiSession({ provider: targetProvider, cwd })
             const draft: Session = {
               sessionId: result.sessionId,
               provider: result.provider,
@@ -14297,6 +14371,31 @@ export default function OpenTuiApp() {
         />
       ) : null}
 
+      {checkpointOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {checkpointOpen && gitRepoCwd ? (
+        <CheckpointPopover
+          cwd={gitRepoCwd}
+          theme={theme}
+          accentColor={composerAccentColor}
+          width={width}
+          height={height}
+          onClose={() => setCheckpointOpen(false)}
+          onNotice={showNotice}
+          onKeyHandlerReady={(handler) => { checkpointKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
       {handoffBriefOpen ? (
         <box
           position="absolute"
@@ -14795,7 +14894,7 @@ export default function OpenTuiApp() {
                   {fitText(snapshot ? `${snapshot.run.status.toUpperCase()} · ${snapshot.run.id.slice(0, 8)} · ${snapshot.run.provider}` : 'No coordinated run found', overlayWidth - 24)}
                 </text>
               </box>
-              <text fg={coordBusy ? theme.amber : theme.dim} wrapMode="none">{coordBusy ? 'busy' : 's stop · Esc close'}</text>
+              <text fg={coordBusy ? theme.amber : theme.dim} wrapMode="none">{coordBusy ? 'busy' : 'c cleanup · s stop · Esc close'}</text>
             </box>
             {coordError ? (
               <box paddingX={1}>
@@ -14820,24 +14919,31 @@ export default function OpenTuiApp() {
                 ))}
               </box>
               <box width={colWidth} marginLeft={2} flexDirection="column" overflow="hidden">
-                <text fg={theme.cyan} wrapMode="none">{fitText(`AGENTS ${agents.length}`, colWidth)}</text>
+                <text fg={theme.cyan} wrapMode="none">{fitText(`TEAM ${agents.length} · MSGS ${snapshot?.messages.length ?? 0}`, colWidth)}</text>
                 {agents.slice(0, 8).map((agent) => (
                   <box key={agent.id} height={1}>
                     <text fg={agent.status === 'done' ? theme.green : agent.status === 'blocked' ? theme.red : agent.status === 'working' ? theme.amber : theme.text} wrapMode="none">
-                      {fitText(`${agent.id} ${agent.status} ${agent.taskId ?? ''} ${agent.sessionId.slice(-6)}`, colWidth)}
+                      {fitText(`${agent.role === 'lead' ? '★' : '·'} ${agent.name} ${agent.status} ${agent.taskId ?? ''}`, colWidth)}
                     </text>
                   </box>
                 ))}
                 <box marginTop={1}><text fg={theme.cyan} wrapMode="none">{fitText('RECENT', colWidth)}</text></box>
                 {events.map((event, idx) => (
                   <box key={`${event.timestamp ?? idx}:${event.type}`} height={1}>
-                    <text fg={event.type === 'finding' || event.type === 'learning' ? theme.green : theme.dim} wrapMode="none">
-                      {fitText(`${event.agentId} ${event.type} ${event.summary ?? ''}`, colWidth)}
+                    <text fg={event.type === 'finding' || event.type === 'learning' ? theme.green : event.type === 'message' ? theme.violet : theme.dim} wrapMode="none">
+                      {fitText(`${event.agentId} ${event.type}${event.to ? `→${event.to}` : ''} ${event.summary ?? ''}`, colWidth)}
                     </text>
                   </box>
                 ))}
               </box>
             </box>
+            {snapshot?.run.summary ? (
+              <box paddingX={1} paddingBottom={1} overflow="hidden">
+                <text fg={theme.green} wrapMode="none">
+                  {fitText(`SYNTHESIS: ${snapshot.run.summary.split('\n')[0]}`, overlayWidth - 4)}
+                </text>
+              </box>
+            ) : null}
           </box>
         )
       })() : null}
