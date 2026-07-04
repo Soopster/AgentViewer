@@ -75,6 +75,15 @@ import {
   removeWorktreeTask,
   type WorktreeTask,
 } from '../worktreeTasks'
+import {
+  appendProtocolEvent,
+  listProtocolRuns,
+  readProtocolRun,
+  startProtocolRun,
+  stopProtocolRun,
+  validateWorktreeTaskLocks,
+} from '../agentCoordination'
+import type { AgentProtocolEvent, ProtocolRun, ProtocolRunSnapshot, StartProtocolRunParams, StartProtocolRunResult } from '../agentProtocol'
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 
@@ -336,6 +345,8 @@ export async function listTuiWorktreeTasks(cwd: string): Promise<WorktreeTask[]>
 }
 
 export async function mergeTuiWorktreeTask(task: WorktreeTask): Promise<{ staged: boolean }> {
+  const validation = await validateWorktreeTaskLocks(task)
+  if (!validation.ok) throw new Error(validation.message)
   return mergeWorktreeTask(task)
 }
 
@@ -344,6 +355,26 @@ export async function removeTuiWorktreeTask(task: WorktreeTask, opts?: { force?:
 }
 
 export type { WorktreeTask }
+
+export async function startTuiProtocolRun(params: StartProtocolRunParams): Promise<StartProtocolRunResult> {
+  return startProtocolRun(params)
+}
+
+export async function readTuiProtocolRun(runId: string): Promise<ProtocolRunSnapshot | null> {
+  return readProtocolRun(runId)
+}
+
+export async function listTuiProtocolRuns(limit?: number): Promise<ProtocolRun[]> {
+  return listProtocolRuns(limit)
+}
+
+export async function stopTuiProtocolRun(runId: string): Promise<ProtocolRunSnapshot | null> {
+  return stopProtocolRun(runId)
+}
+
+export async function appendTuiProtocolEvent(event: AgentProtocolEvent): Promise<ProtocolRunSnapshot | null> {
+  return appendProtocolEvent(event)
+}
 
 /** Warm the send path (Claude pool spawn, Codex thread resume) while the user types. */
 export async function prewarmTuiSession(

@@ -83,6 +83,10 @@ import {
   streamTuiSessionTurn,
   interruptTuiSessionTurn,
   listTuiRunningSessions,
+  listTuiProtocolRuns,
+  readTuiProtocolRun,
+  startTuiProtocolRun,
+  stopTuiProtocolRun,
   createTuiWorktreeTask,
   findTuiWorktreeTask,
   mergeTuiWorktreeTask,
@@ -110,6 +114,7 @@ import {
   type TuiTranscriptWidth,
 } from '../../lib/tui/service'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
+import type { ProtocolRunSnapshot } from '../../lib/agentProtocol'
 import {
   extractClaudeStreamToolInputDelta,
   extractClaudeStreamToolUse,
@@ -3519,6 +3524,9 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
   { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
   { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
+  { id: 'coord-start', label: 'Start coordinated run', key: '', category: 'Coordination' },
+  { id: 'coord-board', label: 'Open coordination board', key: '', category: 'Coordination' },
+  { id: 'coord-stop', label: 'Stop coordinated run', key: '', category: 'Coordination' },
   { id: 'fleet',      label: 'Toggle fleet strip',      key: '⇧A', category: 'View'       },
   { id: 'handoff-brief', label: 'Handoff brief',       key: 'H',  category: 'Session'    },
   { id: 'prompt-library', label: 'Prompt library',     key: '⇧P', category: 'Session'    },
@@ -4555,6 +4563,13 @@ export default function OpenTuiApp() {
   const [selectedWorktreeTask, setSelectedWorktreeTask] = useState<WorktreeTask | null>(null)
   const [worktreeConfirm, setWorktreeConfirm] = useState<'merge' | 'discard' | null>(null)
   const worktreeSubmitInFlightRef = useRef(false)
+  const [coordModalOpen, setCoordModalOpen] = useState(false)
+  const [coordBoardOpen, setCoordBoardOpen] = useState(false)
+  const [coordDraft, setCoordDraft] = useState('')
+  const [coordBusy, setCoordBusy] = useState(false)
+  const [coordSnapshot, setCoordSnapshot] = useState<ProtocolRunSnapshot | null>(null)
+  const [coordError, setCoordError] = useState<string | null>(null)
+  const coordStartInFlightRef = useRef(false)
   // Fleet strip visibility preference (the strip only renders when it has
   // cells: running sessions or fresh background completions).
   const [fleetStripEnabled, setFleetStripEnabled] = useState(true)
@@ -4838,6 +4853,8 @@ export default function OpenTuiApp() {
     || bookmarksOverlayOpen
     || taskPopoverOpen
     || diagnosticsOpen
+    || coordModalOpen
+    || coordBoardOpen
     || renameSessionKey
     || providerMenuOpen
     || modelPickerOpen
@@ -8334,6 +8351,105 @@ export default function OpenTuiApp() {
     }
   })
 
+  const openCoordinationBoard = useEffectEvent(async () => {
+    setCoordBoardOpen(true)
+    setCoordError(null)
+    try {
+      const runs = await listTuiProtocolRuns(1)
+      const latest = runs[0]
+      if (!latest) {
+        setCoordSnapshot(null)
+        return
+      }
+      setCoordSnapshot(await readTuiProtocolRun(latest.id))
+    } catch (err) {
+      setCoordError(err instanceof Error ? err.message : 'Failed to load coordination board')
+    }
+  })
+
+  const submitCoordinatedRun = useEffectEvent(async () => {
+    const prompt = coordDraft.trim()
+    if (!prompt || coordStartInFlightRef.current) return
+    coordStartInFlightRef.current = true
+    setCoordBusy(true)
+    setCoordError(null)
+    try {
+      const targetProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
+      const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
+      const result = await startTuiProtocolRun({
+        prompt,
+        baseCwd,
+        provider: targetProvider,
+        maxAgents: 3,
+        title: prompt.slice(0, 40),
+        model: tuiModelOverride[selectedSessionKey ?? ''] || undefined,
+        effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+      })
+      const drafts: Session[] = result.sessions.map((session) => ({
+        sessionId: session.sessionId,
+        provider: session.provider,
+        cwd: session.cwd,
+        createdAt: Date.now(),
+        lastModified: Date.now(),
+        summary: session.summary,
+        isPending: session.isPending,
+      }))
+      setOpenTabSessions((prev) => {
+        const seen = new Set(prev.map((tab) => sessionKey(tab)))
+        const next = [...prev]
+        for (const draft of drafts) {
+          if (!seen.has(sessionKey(draft))) next.push(draft)
+        }
+        return next
+      })
+      const first = drafts[0]
+      if (first) setSelectedSessionKey(sessionKey(first))
+      setCoordSnapshot(result.snapshot)
+      setCoordModalOpen(false)
+      setCoordBoardOpen(true)
+      setCoordDraft('')
+      await refreshSessions(provider, true, false)
+      showNotice('info', `Started coordinated run with ${drafts.length} agents`, 5000)
+    } catch (err) {
+      setCoordError(err instanceof Error ? err.message : 'Failed to start coordinated run')
+      showNotice('error', err instanceof Error ? err.message : 'Failed to start coordinated run')
+    } finally {
+      coordStartInFlightRef.current = false
+      setCoordBusy(false)
+    }
+  })
+
+  const stopActiveCoordinatedRun = useEffectEvent(async () => {
+    const runId = coordSnapshot?.run.id
+    if (!runId || coordBusy) return
+    setCoordBusy(true)
+    setCoordError(null)
+    try {
+      const snapshot = await stopTuiProtocolRun(runId)
+      setCoordSnapshot(snapshot)
+      showNotice('info', 'Stopped coordinated run', 4000)
+    } catch (err) {
+      setCoordError(err instanceof Error ? err.message : 'Failed to stop coordinated run')
+    } finally {
+      setCoordBusy(false)
+    }
+  })
+
+  useEffect(() => {
+    if (!coordBoardOpen || !coordSnapshot?.run.id) return undefined
+    let cancelled = false
+    const poll = () => {
+      void readTuiProtocolRun(coordSnapshot.run.id)
+        .then((snapshot) => { if (!cancelled) setCoordSnapshot(snapshot) })
+        .catch((err) => { if (!cancelled) setCoordError(err instanceof Error ? err.message : 'Failed to refresh coordination board') })
+    }
+    const timer = setInterval(poll, 2500)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [coordBoardOpen, coordSnapshot?.run.id])
+
   // Reset picker state whenever the active question prompt changes.
   useEffect(() => {
     const active = pendingPermissions[0]
@@ -10885,6 +11001,17 @@ export default function OpenTuiApp() {
         if (selectedWorktreeTask) setWorktreeConfirm('discard')
         else showNotice('info', 'Selected session is not a worktree task', 3500)
         break
+      case 'coord-start':
+        setCoordDraft(composerDraft.trim() || selectedSession?.firstPrompt || '')
+        setCoordError(null)
+        setCoordModalOpen(true)
+        break
+      case 'coord-board':
+        void openCoordinationBoard()
+        break
+      case 'coord-stop':
+        void stopActiveCoordinatedRun()
+        break
       case 'fleet':
         setFleetStripEnabled((prev) => !prev)
         break
@@ -11192,6 +11319,32 @@ export default function OpenTuiApp() {
         handled(() => { void submitWorktreeTask() })
       }
       // Other keys fall through to the focused name input.
+      return
+    }
+
+    if (coordModalOpen) {
+      if (key.name === 'escape') {
+        handled(() => {
+          setCoordModalOpen(false)
+          setCoordDraft('')
+          setCoordError(null)
+        })
+      } else if (key.name === 'return') {
+        handled(() => { void submitCoordinatedRun() })
+      }
+      return
+    }
+
+    if (coordBoardOpen) {
+      if (key.name === 'escape' || key.name === 'q') {
+        handled(() => setCoordBoardOpen(false))
+        return
+      }
+      if (key.name === 's') {
+        handled(() => { void stopActiveCoordinatedRun() })
+        return
+      }
+      handled(() => {})
       return
     }
 
@@ -14471,7 +14624,7 @@ export default function OpenTuiApp() {
 
       <ToastOverlay toasts={toasts} theme={theme} width={width} height={height} />
 
-      {worktreeModalOpen || worktreeConfirm ? (
+      {worktreeModalOpen || worktreeConfirm || coordModalOpen || coordBoardOpen ? (
         <box
           position="absolute"
           top={0}
@@ -14557,6 +14710,133 @@ export default function OpenTuiApp() {
               <text fg={isMerge ? theme.green : theme.red} wrapMode="none">
                 {fitText('Enter/Y confirm  ·  Esc/N cancel', overlayWidth - 4)}
               </text>
+            </box>
+          </box>
+        )
+      })() : null}
+
+      {coordModalOpen ? (() => {
+        const overlayWidth = Math.min(Math.max(width - 6, 46), 78)
+        const overlayHeight = 10
+        return (
+          <box
+            position="absolute"
+            top={Math.max(1, Math.floor((height - overlayHeight) / 2))}
+            left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
+            width={overlayWidth}
+            height={overlayHeight}
+            border
+            borderStyle="single"
+            borderColor={theme.cyan}
+            backgroundColor={theme.surface}
+            zIndex={70}
+            flexDirection="column"
+            title=" Start coordinated run "
+            titleColor={theme.cyan}
+            titleAlignment="left"
+          >
+            <box paddingX={1} paddingTop={1}>
+              <text fg={theme.dim} wrapMode="none">
+                {fitText('Prompt for three coordinated worktree agents.', overlayWidth - 4)}
+              </text>
+            </box>
+            <box paddingX={1} marginTop={1} backgroundColor={theme.surface3}>
+              <input
+                focused
+                value={coordDraft}
+                maxLength={500}
+                onInput={(value: string) => setCoordDraft(value)}
+                onSubmit={() => { void submitCoordinatedRun() }}
+              />
+            </box>
+            {coordError ? (
+              <box paddingX={1} marginTop={1}>
+                <text fg={theme.red} wrapMode="none">{fitText(coordError, overlayWidth - 4)}</text>
+              </box>
+            ) : null}
+            <box paddingX={1} marginTop={1}>
+              <text fg={coordBusy ? theme.amber : theme.dim} wrapMode="none">
+                {fitText(coordBusy ? 'Starting agents...' : 'Enter start · Esc cancel', overlayWidth - 4)}
+              </text>
+            </box>
+          </box>
+        )
+      })() : null}
+
+      {coordBoardOpen ? (() => {
+        const overlayWidth = Math.min(Math.max(width - 6, 72), 104)
+        const overlayHeight = Math.min(Math.max(height - 6, 18), 34)
+        const snapshot = coordSnapshot
+        const tasks = snapshot?.tasks ?? []
+        const agents = snapshot?.agents ?? []
+        const locks = snapshot?.locks.filter((lock) => lock.status === 'active') ?? []
+        const events = snapshot?.events.slice(-8).reverse() ?? []
+        const colWidth = Math.max(Math.floor((overlayWidth - 6) / 2), 28)
+        return (
+          <box
+            position="absolute"
+            top={Math.max(1, Math.floor((height - overlayHeight) / 2))}
+            left={Math.max(1, Math.floor((width - overlayWidth) / 2))}
+            width={overlayWidth}
+            height={overlayHeight}
+            border
+            borderStyle="single"
+            borderColor={theme.cyan}
+            backgroundColor={theme.surface}
+            zIndex={70}
+            flexDirection="column"
+            title=" Coordination board "
+            titleColor={theme.cyan}
+            titleAlignment="left"
+          >
+            <box paddingX={1} paddingTop={1} flexDirection="row">
+              <box flexGrow={1} overflow="hidden">
+                <text fg={theme.text} wrapMode="none">
+                  {fitText(snapshot ? `${snapshot.run.status.toUpperCase()} · ${snapshot.run.id.slice(0, 8)} · ${snapshot.run.provider}` : 'No coordinated run found', overlayWidth - 24)}
+                </text>
+              </box>
+              <text fg={coordBusy ? theme.amber : theme.dim} wrapMode="none">{coordBusy ? 'busy' : 's stop · Esc close'}</text>
+            </box>
+            {coordError ? (
+              <box paddingX={1}>
+                <text fg={theme.red} wrapMode="none">{fitText(coordError, overlayWidth - 4)}</text>
+              </box>
+            ) : null}
+            <box flexGrow={1} paddingX={1} paddingBottom={1} marginTop={1} flexDirection="row" overflow="hidden">
+              <box width={colWidth} flexDirection="column" overflow="hidden">
+                <text fg={theme.cyan} wrapMode="none">{fitText(`TASKS ${tasks.length}`, colWidth)}</text>
+                {tasks.slice(0, 8).map((task) => (
+                  <box key={task.id} height={1}>
+                    <text fg={task.status === 'completed' ? theme.green : task.status === 'blocked' ? theme.red : theme.text} wrapMode="none">
+                      {fitText(`${task.id} ${task.status} ${task.title}`, colWidth)}
+                    </text>
+                  </box>
+                ))}
+                <box marginTop={1}><text fg={theme.cyan} wrapMode="none">{fitText(`LOCKS ${locks.length}`, colWidth)}</text></box>
+                {locks.slice(0, 6).map((lock) => (
+                  <box key={lock.id} height={1}>
+                    <text fg={theme.amber} wrapMode="none">{fitText(`${lock.agentId} ${lock.mode} ${lock.path}`, colWidth)}</text>
+                  </box>
+                ))}
+              </box>
+              <box width={colWidth} marginLeft={2} flexDirection="column" overflow="hidden">
+                <text fg={theme.cyan} wrapMode="none">{fitText(`AGENTS ${agents.length}`, colWidth)}</text>
+                {agents.slice(0, 8).map((agent) => (
+                  <box key={agent.id} height={1}>
+                    <text fg={agent.status === 'done' ? theme.green : agent.status === 'blocked' ? theme.red : agent.status === 'working' ? theme.amber : theme.text} wrapMode="none">
+                      {fitText(`${agent.id} ${agent.status} ${agent.taskId ?? ''} ${agent.sessionId.slice(-6)}`, colWidth)}
+                    </text>
+                  </box>
+                ))}
+                <box marginTop={1}><text fg={theme.cyan} wrapMode="none">{fitText('RECENT', colWidth)}</text></box>
+                {events.map((event, idx) => (
+                  <box key={`${event.timestamp ?? idx}:${event.type}`} height={1}>
+                    <text fg={event.type === 'finding' || event.type === 'learning' ? theme.green : theme.dim} wrapMode="none">
+                      {fitText(`${event.agentId} ${event.type} ${event.summary ?? ''}`, colWidth)}
+                    </text>
+                  </box>
+                ))}
+              </box>
             </box>
           </box>
         )
