@@ -557,6 +557,7 @@ const READER_FIXUP_MAX_TRIES = 12
 const SYNC_FORMAT_CARD_LIMIT = 400
 // Stable empty set for browse-mode preview rendering (all cards collapsed).
 const EMPTY_EXPANDED_KEYS: ReadonlySet<string> = new Set<string>()
+const NOOP_SELECT_AGENT_TOOL = (_groupKey: string, _toolKey: string) => {}
 // Composer affordances (slash commands / agent options) cache. Refreshing
 // these for a Claude session spawns a CLI subprocess, so cache generously —
 // command lists change rarely (new files in .claude/commands etc.).
@@ -629,6 +630,10 @@ type CardDisplayData = {
   categoryEmoji: string
   isInsight: boolean
   markdownFallbackLines: string[] | null
+}
+
+type AgentToolGroupCard = TuiTranscriptCard & {
+  agentToolCards?: TuiTranscriptCard[]
 }
 
 type NoticeTone = 'info' | 'error'
@@ -2866,7 +2871,12 @@ function renderedBodyLines(
   isExpanded: boolean,
   previewLimit: number,
   thinkingFull: boolean = false,
+  agentsMode: boolean = false,
 ): TuiTranscriptCardLine[] {
+  if (agentsMode && (card.key.startsWith('agents-tools:') || isAgentsToolOnlyCard(card))) {
+    return agentsToolCollapsedLines(card)
+  }
+
   const pretendExpanded = isExpanded || thinkingFull
   const source = pretendExpanded ? card.expandedLines : card.lines
   let base: TuiTranscriptCardLine[]
@@ -2887,6 +2897,211 @@ function renderedBodyLines(
   // the renderer call this, so the row count stays in lockstep.
   const isThinkingCard = card.lines.some((line) => line.tone === 'thinking')
   return isThinkingCard ? [] : [{ text: 'No visible content', tone: 'dim' }]
+}
+
+function isAgentsToolOnlyCard(card: TuiTranscriptCard): boolean {
+  if (card.category === 'conversation' || card.category === 'insight' || card.category === 'system') return false
+  return card.expandedLines.some((line) => line.tone === 'tool')
+}
+
+function agentsToolCollapsedLines(card: TuiTranscriptCard): TuiTranscriptCardLine[] {
+  const summary = agentsToolSummaryLine(card)
+  if (card.lines.length === 0) return [summary]
+  const toolIndex = card.lines.findIndex((line) => line.tone === 'tool')
+  if (toolIndex === -1) return [summary, ...card.lines]
+  if (card.lines[toolIndex]?.text === summary.text) return card.lines
+  const lines = card.lines.slice()
+  lines[toolIndex] = summary
+  return lines
+}
+
+function agentsToolSummaryLine(card: TuiTranscriptCard): TuiTranscriptCardLine {
+  const toolLine = card.lines.find((line) => line.tone === 'tool')
+    ?? card.expandedLines.find((line) => line.tone === 'tool')
+    ?? card.expandedLines[0]
+    ?? card.lines[0]
+  const fallback = toolLine ?? { text: 'tool call', tone: 'tool' as const }
+  return enrichAgentsFileChangeSummary(card, fallback)
+}
+
+function enrichAgentsFileChangeSummary(card: TuiTranscriptCard, line: TuiTranscriptCardLine): TuiTranscriptCardLine {
+  if (line.tone !== 'tool' || !/^tool\s+FileChange:/i.test(line.text.trim())) return line
+  const metadata = fileChangeSummaryMetadata(card)
+  if (!metadata) return line
+
+  const label = line.text.replace(/^tool\s+FileChange:\s*/i, '').trim()
+  const genericLabel = /^\d+\s+file\s+changes?$/i.test(label) || label.toLowerCase() === 'file change'
+  const detail = genericLabel
+    ? metadata
+    : mergeFileChangeSummaryLabel(label, metadata)
+  return { ...line, text: `tool FileChange: ${detail}` }
+}
+
+function mergeFileChangeSummaryLabel(label: string, metadata: string): string {
+  if (!label) return metadata
+  if (metadata === label || metadata.startsWith(`${label} `) || metadata.startsWith(`${label} ·`)) return metadata
+  return `${label} · ${metadata}`
+}
+
+function fileChangeSummaryMetadata(card: TuiTranscriptCard): string | null {
+  const diffText = cardDiffText(card, true)
+  const metaPath = filePathFromDiffText(diffText, diffMetaFilePath(card) ?? '')
+  const pathLabel = metaPath ? compactPathTail(metaPath, 2) : ''
+  const hunkLabel = firstDiffHunkLabel(diffText)
+  const statsLabel = diffStatsLabel(diffText, card.expandedLines)
+  const parts = [pathLabel, hunkLabel, statsLabel].filter((part) => part.length > 0)
+  return parts.length > 0 ? parts.join(' ') : null
+}
+
+function diffMetaFilePath(card: TuiTranscriptCard): string | null {
+  for (const line of card.expandedLines) {
+    if (line.tone !== 'diff_meta') continue
+    const match = line.text.match(/^(?:FILE CHANGE|CREATE|UPDATE|DELETE|MODIFY|RENAME|MOVE)\s+(.+)$/i)
+    if (match?.[1]) return match[1].trim()
+  }
+  return null
+}
+
+function compactPathTail(value: string, segmentCount: number): string {
+  const cleaned = value.trim().replace(/\\/g, '/')
+  if (!cleaned) return ''
+  const parts = cleaned.split('/').filter(Boolean)
+  if (parts.length <= segmentCount) return parts.join('/') || cleaned
+  return parts.slice(-segmentCount).join('/')
+}
+
+function firstDiffHunkLabel(diffText: string | null): string {
+  if (!diffText) return ''
+  const hunk = diffText.split('\n').find((line) => line.startsWith('@@ '))
+  const match = hunk?.match(/\+(\d+)/)
+  return match?.[1] ? `@${match[1]}` : ''
+}
+
+function diffStatsLabel(diffText: string | null, fallbackLines: TuiTranscriptCardLine[]): string {
+  let additions = 0
+  let deletions = 0
+  if (diffText) {
+    for (const line of diffText.split('\n')) {
+      if (line.startsWith('+++') || line.startsWith('---')) continue
+      if (line.startsWith('+')) additions += 1
+      else if (line.startsWith('-')) deletions += 1
+    }
+  } else {
+    additions = fallbackLines.filter((line) => line.tone === 'diff_add').length
+    deletions = fallbackLines.filter((line) => line.tone === 'diff_remove').length
+  }
+  return additions > 0 || deletions > 0 ? `+${additions} -${deletions}` : ''
+}
+
+function groupAgentsToolCards(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
+  const grouped: TuiTranscriptCard[] = []
+  let pending: TuiTranscriptCard[] = []
+
+  const flush = () => {
+    if (pending.length === 0) return
+    if (pending.length === 1) {
+      grouped.push(pending[0])
+      pending = []
+      return
+    }
+
+    const first = pending[0]
+    const last = pending[pending.length - 1]
+    const lines = pending.map(agentsToolSummaryLine)
+    const searchText = pending.map((card) => card.searchText).join('\n')
+    const groupCard: AgentToolGroupCard = {
+      ...first,
+      key: `agents-tools:${first.key}:${last.key}:${pending.length}`,
+      agentToolCards: pending,
+      label: `${pending.length} tool ${pending.length === 1 ? 'call' : 'calls'}`,
+      category: 'technical',
+      autoFold: true,
+      compactSummary: lines.map((line) => line.text).join(' · '),
+      lines,
+      expandedLines: lines,
+      searchText,
+      searchHaystackLower: `${pending.map((card) => card.label).join('\n')}\n${searchText}`.toLowerCase(),
+      codeBlocks: undefined,
+      editDiff: undefined,
+      markdownContent: undefined,
+      hasMermaidDiagrams: false,
+    }
+    grouped.push(groupCard)
+    pending = []
+  }
+
+  for (const card of cards) {
+    if (isAgentsToolOnlyCard(card)) {
+      pending.push(card)
+    } else {
+      flush()
+      grouped.push(card)
+    }
+  }
+  flush()
+  return grouped
+}
+
+function agentToolCardsFor(card: TuiTranscriptCard): TuiTranscriptCard[] {
+  const grouped = (card as AgentToolGroupCard).agentToolCards
+  if (grouped && grouped.length > 0) return grouped
+  return isAgentsToolOnlyCard(card) ? [card] : []
+}
+
+function agentToolCardIsExpanded(
+  card: TuiTranscriptCard,
+  expandedKeys: ReadonlySet<string>,
+  collapsedKeys: ReadonlySet<string>,
+): boolean {
+  return card.autoFold ? expandedKeys.has(card.key) : !collapsedKeys.has(card.key)
+}
+
+function agentsToolLineSegments(text: string, theme: TuiThemePalette): InlineTextSegment[] {
+  const cleaned = text.replace(/^tool\s+/i, '').trim()
+  const colon = cleaned.indexOf(':')
+  const name = colon >= 0
+    ? cleaned.slice(0, colon).trim()
+    : cleaned.split(/\s+/, 1)[0] || cleaned
+  const detail = colon >= 0
+    ? cleaned.slice(colon + 1).trim()
+    : cleaned.slice(name.length).trim()
+  return [
+    { text: '› ', fg: theme.dim },
+    { text: name || 'tool', fg: theme.amber },
+    ...(detail ? [{ text: ` ${detail}`, fg: theme.dim }] : []),
+  ]
+}
+
+function nestedAgentToolDisplay(
+  card: TuiTranscriptCard,
+  provider: ProviderSelection | undefined,
+  isExpanded: boolean,
+  bodyLineLimit: number,
+  syntaxEnabled: boolean,
+  thinkingMode: boolean,
+): CardDisplayData {
+  const providerKey = card.provider ?? provider
+  const isThinkingCard = card.lines.some((line) => line.tone === 'thinking')
+  const isInsight = card.category === 'insight'
+  const isTechnical = card.category === 'technical'
+  const isDiff = card.category === 'diff'
+  const isSystem = card.category === 'system'
+  return {
+    landmarks: EMPTY_LANDMARKS,
+    bodyLines: renderedBodyLines(card, isExpanded, bodyLineLimit, thinkingMode && isThinkingCard, false),
+    diffView: cardDiffView(card, isExpanded),
+    codeBlockLineCounts: isExpanded && card.codeBlocks
+      ? card.codeBlocks.map((cb) => countCodeBlockLines(cb.content))
+      : [],
+    headerMeta: joinMeta([card.timestamp ?? null]),
+    accent: transcriptAccent(card.role, providerKey),
+    isThinkingCard,
+    categoryEmoji: isInsight ? '✦ ' : isTechnical ? '⚒ ' : isDiff ? '✎ ' : isSystem ? '⚙ ' : '',
+    isInsight,
+    markdownFallbackLines: isExpanded && card.markdownContent && !card.hasMermaidDiagrams && !syntaxEnabled
+      ? card.markdownContent.split('\n')
+      : null,
+  }
 }
 
 function cardDiffText(card: TuiTranscriptCard, isExpanded: boolean): string | null {
@@ -3236,7 +3451,7 @@ function cycleDensityValue(current: TuiDensity): TuiDensity {
 }
 
 function cycleTranscriptViewValue(current: TuiTranscriptView): TuiTranscriptView {
-  return current === 'conversation' ? 'full' : current === 'full' ? 'continue' : current === 'continue' ? 'stream' : 'conversation'
+  return current === 'conversation' ? 'full' : current === 'full' ? 'continue' : current === 'continue' ? 'stream' : current === 'stream' ? 'agents' : 'conversation'
 }
 
 const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
@@ -3651,6 +3866,11 @@ type TranscriptCardProps = {
   imessageStyle: boolean
   transcriptWidth: TuiTranscriptWidth
   streamMode: boolean
+  agentsMode: boolean
+  agentToolCursorKey: string | null
+  agentToolExpandedKeys: ReadonlySet<string>
+  agentToolCollapsedKeys: ReadonlySet<string>
+  onSelectAgentTool: (groupKey: string, toolKey: string) => void
   noteNamespace: string
   diffNotes: Map<string, TranscriptDiffNote>
   diffDraft: TranscriptDiffNoteDraft | null
@@ -3663,6 +3883,11 @@ type TranscriptCardProps = {
   diffShowHunkHeaders: boolean
   diffRowCursor: number
   diffSelectionAnchor: number | null
+  diffPlainCardKeys: ReadonlySet<string>
+  diffHiddenLineNumberCardKeys: ReadonlySet<string>
+  diffHiddenHunkHeaderCardKeys: ReadonlySet<string>
+  diffRowCursorByCardKey: Readonly<Record<string, number>>
+  diffSelectionAnchorByCardKey: Readonly<Record<string, number>>
   setDiffRowCursor: (cardKey: string, rowIndex: number, preserveSelection?: boolean) => void
   setDiffSelectionAnchor: (cardKey: string, rowIndex: number) => void
 }
@@ -3722,6 +3947,11 @@ function TranscriptCardInner({
   imessageStyle,
   transcriptWidth,
   streamMode,
+  agentsMode,
+  agentToolCursorKey,
+  agentToolExpandedKeys,
+  agentToolCollapsedKeys,
+  onSelectAgentTool,
   noteNamespace,
   diffNotes,
   diffDraft,
@@ -3734,6 +3964,11 @@ function TranscriptCardInner({
   diffShowHunkHeaders,
   diffRowCursor,
   diffSelectionAnchor,
+  diffPlainCardKeys,
+  diffHiddenLineNumberCardKeys,
+  diffHiddenHunkHeaderCardKeys,
+  diffRowCursorByCardKey,
+  diffSelectionAnchorByCardKey,
   setDiffRowCursor,
   setDiffSelectionAnchor,
 }: TranscriptCardProps) {
@@ -3944,6 +4179,181 @@ function TranscriptCardInner({
   }
   const landmarkWidth = readableCardWidth - 4
   const selectionColors = terminalSelectionColors(theme)
+
+  if (agentsMode) {
+    const agentWidth = Math.max(readableCardWidth, 24)
+    const toolCards = agentToolCardsFor(card)
+    const roleInitial = card.role === 'assistant' ? 'A' : card.role === 'user' ? 'U' : 'S'
+    const operationalCard = toolCards.length > 0
+    const agentAccent = operationalCard ? theme.amber : accent
+    const agentBg = hasCursor
+      ? theme.surface3
+      : isSelected
+        ? theme.surface2
+        : operationalCard
+          ? mixHexColor(theme.amber, theme.surface, 0.08) ?? theme.surface
+          : cardBg
+    const metaParts = [
+      card.timestamp ?? null,
+      isSearchHit ? 'match' : null,
+      bookmarked ? 'bookmarked' : null,
+      card.usageSummary ?? null,
+    ].filter((part): part is string => Boolean(part))
+    const meta = metaParts.join('  ')
+    const railWidth = 2
+    const contentWidth = Math.max(agentWidth - railWidth - 2, 16)
+    const metaWidth = meta ? Math.min(Math.max(Math.floor(contentWidth * 0.34), 10), meta.length + 2) : 0
+    const titleWidth = Math.max(contentWidth - metaWidth - 2, 10)
+    const agentBodyWidth = Math.max(contentWidth - 2, 12)
+    const toolCount = toolCards.length || bodyLines.filter((line) => line.tone === 'tool' && /^tool\s+/i.test(line.text.trim())).length || 1
+    const headerLabel = operationalCard
+      ? `${toolCount} tool ${toolCount === 1 ? 'call' : 'calls'}`
+      : card.label
+    const showOuterBorder = hasCursor || isSearchHit
+    const headerPrefix = `${hasCursor ? '>' : ' '} ${operationalCard ? '⚙' : roleInitial}  `
+    const expandedToolDisplays = isExpanded && toolCards.length > 0
+      ? toolCards.map((toolCard) => {
+          const toolExpanded = agentToolCardIsExpanded(toolCard, agentToolExpandedKeys, agentToolCollapsedKeys)
+          return {
+            card: toolCard,
+            display: nestedAgentToolDisplay(
+              toolCard,
+              toolCard.provider,
+              toolExpanded,
+              densityState.bodyLines,
+              Boolean(syntaxStyle),
+              thinkingMode,
+            ),
+            isExpanded: toolExpanded,
+            hasCursor: hasCursor && agentToolCursorKey === toolCard.key,
+          }
+        })
+      : []
+    return (
+      <box flexDirection="column" marginBottom={densityState.cardGap} width={agentWidth}>
+        {landmarks.map((landmark, landmarkIndex) => {
+          const color = landmark.kind === 'resume'
+            ? theme.cyan
+            : landmark.kind === 'unread'
+              ? theme.amber
+              : landmark.kind === 'day'
+                ? theme.violet
+                : theme.dim
+          return (
+            <box key={`${card.key}:agent-landmark:${landmarkIndex}`} paddingX={1}>
+              <text fg={color} selectable {...selectionColors}>{fitText(landmark.text, landmarkWidth)}</text>
+            </box>
+          )
+        })}
+        <box
+          id={`card:${card.key}`}
+          flexDirection="row"
+          width={agentWidth}
+          border={showOuterBorder}
+          borderStyle={hasCursor ? 'heavy' : 'single'}
+          borderColor={hasCursor || isSearchHit ? agentAccent : borderColor}
+          backgroundColor={agentBg}
+          onMouseDown={(event) => {
+            if (event.button !== 0) return
+            onSelectCard(card.key)
+          }}
+        >
+          <box width={railWidth} flexDirection="column" alignItems="center">
+            <text fg={agentAccent} wrapMode="none">▎</text>
+            {bodyLines.slice(0, Math.max(bodyLines.length, 1)).map((_, lineIndex) => (
+              <text key={`${card.key}:agent-rail:${lineIndex}`} fg={agentAccent} wrapMode="none">▎</text>
+            ))}
+          </box>
+          <box flexDirection="column" width={contentWidth} paddingX={1} paddingBottom={densityState.bodyPad}>
+            <box flexDirection="row">
+              <text fg={agentAccent} wrapMode="none" selectable {...selectionColors}>
+                {fitText(headerPrefix, 5)}
+              </text>
+              <text fg={agentAccent} wrapMode="none" selectable {...selectionColors}>
+                {fitText(headerLabel, titleWidth)}
+              </text>
+              {meta && metaWidth > 0 ? (
+                <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+                  {fitText(meta, metaWidth)}
+                </text>
+              ) : null}
+            </box>
+            {expandedToolDisplays.length > 0 ? (
+              <box flexDirection="column" marginTop={1}>
+                {expandedToolDisplays.map((toolEntry, toolIndex) => {
+                  const toolCard = toolEntry.card
+                  return (
+                    <TranscriptCard
+                      key={`${card.key}:agent-tool-card:${toolCard.key}:${toolIndex}`}
+                      card={toolCard}
+                      display={toolEntry.display}
+                      theme={theme}
+                      densityState={densityState}
+                      syntaxStyle={syntaxStyle}
+                      rightPaneWidth={agentBodyWidth + 4}
+                      isExpanded={toolEntry.isExpanded}
+                      hasCursor={toolEntry.hasCursor}
+                      isSelected={toolEntry.hasCursor}
+                      isSearchHit={false}
+                      isActiveMatch={false}
+                      bookmarked={false}
+                      onSelectCard={() => {
+                        onSelectCard(card.key)
+                        onSelectAgentTool(card.key, toolCard.key)
+                      }}
+                      thinkingMode={thinkingMode}
+                      diffLayout={diffLayout}
+                      imessageStyle={imessageStyle}
+                      transcriptWidth="full"
+                      streamMode={false}
+                      agentsMode={false}
+                      agentToolCursorKey={null}
+                      agentToolExpandedKeys={EMPTY_EXPANDED_KEYS}
+                      agentToolCollapsedKeys={EMPTY_EXPANDED_KEYS}
+                      onSelectAgentTool={NOOP_SELECT_AGENT_TOOL}
+                      noteNamespace={noteNamespace}
+                      diffNotes={diffNotes}
+                      diffDraft={diffDraft}
+                      hoveredDiffAnchor={hoveredDiffAnchor}
+                      activateDiffHover={activateDiffHover}
+                      openDiffNote={openDiffNote}
+                      sendDiffNoteToComposer={sendDiffNoteToComposer}
+                      diffPlain={diffPlainCardKeys.has(toolCard.key)}
+                      diffShowLineNumbers={!diffHiddenLineNumberCardKeys.has(toolCard.key)}
+                      diffShowHunkHeaders={!diffHiddenHunkHeaderCardKeys.has(toolCard.key)}
+                      diffRowCursor={diffRowCursorByCardKey[toolCard.key] ?? 0}
+                      diffSelectionAnchor={diffSelectionAnchorByCardKey[toolCard.key] ?? null}
+                      diffPlainCardKeys={diffPlainCardKeys}
+                      diffHiddenLineNumberCardKeys={diffHiddenLineNumberCardKeys}
+                      diffHiddenHunkHeaderCardKeys={diffHiddenHunkHeaderCardKeys}
+                      diffRowCursorByCardKey={diffRowCursorByCardKey}
+                      diffSelectionAnchorByCardKey={diffSelectionAnchorByCardKey}
+                      setDiffRowCursor={setDiffRowCursor}
+                      setDiffSelectionAnchor={setDiffSelectionAnchor}
+                    />
+                  )
+                })}
+              </box>
+            ) : bodyLines.map((line, lineIndex) => {
+              const toolLine = operationalCard && line.tone === 'tool'
+              return (
+                <box
+                  key={`${card.key}:agent-line:${lineIndex}`}
+                  backgroundColor={toolLine ? theme.surface2 : undefined}
+                >
+                  <text fg={transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
+                    {toolLine
+                      ? renderInlineTextSegments(agentsToolLineSegments(line.text, theme), agentBodyWidth, theme.dim)
+                      : fitText(line.text, agentBodyWidth)}
+                  </text>
+                </box>
+              )
+            })}
+          </box>
+        </box>
+      </box>
+    )
+  }
 
   if (streamMode) {
     const streamWidth = Math.max(rightPaneWidth - 2, 16)
@@ -4488,6 +4898,7 @@ export default function OpenTuiApp() {
   const [transcriptDiffHiddenHunkHeaderCardKeys, setTranscriptDiffHiddenHunkHeaderCardKeys] = useState<Set<string>>(() => new Set())
   const [transcriptDiffRowCursorByCardKey, setTranscriptDiffRowCursorByCardKey] = useState<Record<string, number>>({})
   const [transcriptDiffSelectionAnchorByCardKey, setTranscriptDiffSelectionAnchorByCardKey] = useState<Record<string, number>>({})
+  const [agentToolCursorByGroupKey, setAgentToolCursorByGroupKey] = useState<Record<string, string>>({})
   const [transcriptView, setTranscriptView] = useState<TuiTranscriptView>('conversation')
   const [transcriptWidth, setTranscriptWidth] = useState<TuiTranscriptWidth>('centered')
   const [focusMode, setFocusMode] = useState(false)
@@ -5614,9 +6025,13 @@ export default function OpenTuiApp() {
   // In 'continue' and 'stream' modes, hide technical/diff/system cards entirely
   // so only the conversation layer (user + assistant text) is visible.
   const visibleTranscriptCards = useMemo(
-    () => (transcriptView === 'continue' || transcriptView === 'stream')
-      ? transcriptCards.filter((card) => !card.autoFold)
-      : transcriptCards,
+    () => {
+      if (transcriptView === 'continue' || transcriptView === 'stream') {
+        return transcriptCards.filter((card) => !card.autoFold)
+      }
+      if (transcriptView === 'agents') return groupAgentsToolCards(transcriptCards)
+      return transcriptCards
+    },
     [transcriptCards, transcriptView],
   )
 
@@ -5770,7 +6185,7 @@ export default function OpenTuiApp() {
   const resolvedExpandedKeys = useMemo(() => {
     const next = new Set<string>()
     for (const card of visibleTranscriptCards) {
-      const shouldAutoFold = transcriptView === 'conversation' && card.autoFold
+      const shouldAutoFold = (transcriptView === 'conversation' || transcriptView === 'agents') && card.autoFold
       const isExpanded = shouldAutoFold
         ? expandedCardKeys.has(card.key)
         : !collapsedCardKeys.has(card.key)
@@ -6779,7 +7194,9 @@ export default function OpenTuiApp() {
   // regexes). Collapsed bodies are truncated to densityState.bodyLines lines,
   // so a preview mount is bounded no matter what the cards contain. Expansion
   // state applies only once the reader pane is focused.
-  const expandedKeysForRender = effectiveFocus === 'messages' ? resolvedExpandedKeys : EMPTY_EXPANDED_KEYS
+  const expandedKeysForRender = effectiveFocus === 'messages' || transcriptView === 'agents'
+    ? resolvedExpandedKeys
+    : EMPTY_EXPANDED_KEYS
   // Stable per-card data: body lines, diffs, code blocks. Cached by card reference so
   // when only one card's expansion toggles (transcriptCards ref unchanged), the other
   // cards reuse their prior StableCardData object — TranscriptCard memo then bails out.
@@ -6787,6 +7204,7 @@ export default function OpenTuiApp() {
     isExpanded: boolean
     bodyLineLimit: number
     thinkingFull: boolean
+    agentsMode: boolean
     value: StableCardData
   }>())
   const stableCardData = useMemo((): StableCardData[] => {
@@ -6796,23 +7214,25 @@ export default function OpenTuiApp() {
     const result = renderedTranscriptCards.map((card) => {
       const isExpanded = expandedKeysForRender.has(card.key)
       const thinkingFull = thinkingFullKeys.has(card.key)
+      const agentsModeForCard = transcriptView === 'agents'
       const prev = cache.get(card)
       if (
         prev
         && prev.isExpanded === isExpanded
         && prev.bodyLineLimit === densityState.bodyLines
         && prev.thinkingFull === thinkingFull
+        && prev.agentsMode === agentsModeForCard
       ) {
         return prev.value
       }
       recomputed += 1
-      const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, thinkingFull)
+      const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, thinkingFull, agentsModeForCard)
       const diffView = cardDiffView(card, isExpanded)
       const codeBlockLineCounts = (isExpanded && card.codeBlocks)
         ? card.codeBlocks.map((cb) => countCodeBlockLines(cb.content))
         : []
       const value: StableCardData = { bodyLines, diffView, codeBlockLineCounts }
-      cache.set(card, { isExpanded, bodyLineLimit: densityState.bodyLines, thinkingFull, value })
+      cache.set(card, { isExpanded, bodyLineLimit: densityState.bodyLines, thinkingFull, agentsMode: agentsModeForCard, value })
       return value
     })
     if (CARD_PROFILE) {
@@ -6825,7 +7245,7 @@ export default function OpenTuiApp() {
       })
     }
     return result
-  }, [renderedTranscriptCards, expandedKeysForRender, densityState.bodyLines, thinkingFullKeys])
+  }, [renderedTranscriptCards, expandedKeysForRender, densityState.bodyLines, thinkingFullKeys, transcriptView])
 
   const allLandmarksRef = useRef<CardLandmark[][] | null>(null)
   const allLandmarks = useMemo(() => {
@@ -6864,7 +7284,7 @@ export default function OpenTuiApp() {
       // Latest = last card of the FULL transcript; a detached reader window
       // may end before it.
       const isLatest = transcriptRenderStart + index === totalTranscriptCards - 1
-      const isAutoFoldedTechnical = transcriptView === 'conversation' && card.autoFold && !isExpanded
+      const isAutoFoldedTechnical = (transcriptView === 'conversation' || transcriptView === 'agents') && card.autoFold && !isExpanded
       const landmarks = allLandmarks[index] ?? EMPTY_LANDMARKS
       const stable = stableCardData[index] ?? {
         bodyLines: [],
@@ -6978,6 +7398,9 @@ export default function OpenTuiApp() {
   // scrub → the whole transcript subtree keeps element identity and React skips
   // reconciling it.
   const transcriptNoteNamespace = committedSessionKey ?? 'no-session'
+  const selectAgentTool = useCallback((groupKey: string, toolKey: string) => {
+    setAgentToolCursorByGroupKey((current) => current[groupKey] === toolKey ? current : { ...current, [groupKey]: toolKey })
+  }, [])
   const transcriptChildren = useMemo(() => {
     const cards: React.ReactNode[] = renderedTranscriptCards.map((card, i) => {
       // cardDisplayData/stableCardData are window-relative (index i); search
@@ -7011,6 +7434,11 @@ export default function OpenTuiApp() {
           imessageStyle={imessageStyle}
           transcriptWidth={transcriptWidth}
           streamMode={transcriptView === 'stream'}
+          agentsMode={transcriptView === 'agents'}
+          agentToolCursorKey={transcriptView === 'agents' ? agentToolCursorByGroupKey[card.key] ?? null : null}
+          agentToolExpandedKeys={transcriptView === 'agents' ? expandedCardKeys : EMPTY_EXPANDED_KEYS}
+          agentToolCollapsedKeys={transcriptView === 'agents' ? collapsedCardKeys : EMPTY_EXPANDED_KEYS}
+          onSelectAgentTool={selectAgentTool}
           noteNamespace={transcriptNoteNamespace}
           diffNotes={transcriptDiffNotes}
           diffDraft={transcriptDiffDraft}
@@ -7023,6 +7451,11 @@ export default function OpenTuiApp() {
           diffShowHunkHeaders={!transcriptDiffHiddenHunkHeaderCardKeys.has(card.key)}
           diffRowCursor={transcriptDiffRowCursorByCardKey[card.key] ?? 0}
           diffSelectionAnchor={transcriptDiffSelectionAnchorByCardKey[card.key] ?? null}
+          diffPlainCardKeys={transcriptDiffPlainCardKeys}
+          diffHiddenLineNumberCardKeys={transcriptDiffHiddenLineNumberCardKeys}
+          diffHiddenHunkHeaderCardKeys={transcriptDiffHiddenHunkHeaderCardKeys}
+          diffRowCursorByCardKey={transcriptDiffRowCursorByCardKey}
+          diffSelectionAnchorByCardKey={transcriptDiffSelectionAnchorByCardKey}
           setDiffRowCursor={setTranscriptDiffRowCursorForCard}
           setDiffSelectionAnchor={setTranscriptDiffSelectionAnchorForCard}
         />
@@ -7075,6 +7508,10 @@ export default function OpenTuiApp() {
     imessageStyle,
     transcriptWidth,
     transcriptView,
+    agentToolCursorByGroupKey,
+    expandedCardKeys,
+    collapsedCardKeys,
+    selectAgentTool,
     transcriptNoteNamespace,
     transcriptDiffNotes,
     transcriptDiffDraft,
@@ -7086,6 +7523,7 @@ export default function OpenTuiApp() {
     transcriptDiffHiddenLineNumberCardKeys,
     transcriptDiffHiddenHunkHeaderCardKeys,
     transcriptDiffRowCursorByCardKey,
+    transcriptDiffSelectionAnchorByCardKey,
     setTranscriptDiffSelectionAnchorForCard,
     setTranscriptDiffRowCursorForCard,
   ])
@@ -7572,6 +8010,31 @@ export default function OpenTuiApp() {
     }
   })
 
+  const moveAgentToolCursor = useEffectEvent((delta: -1 | 1): boolean => {
+    if (transcriptView !== 'agents') return false
+    const groupCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
+    if (!groupCard || !resolvedExpandedKeys.has(groupCard.key)) return false
+    const toolCards = agentToolCardsFor(groupCard)
+    if (toolCards.length === 0) return false
+    const currentKey = agentToolCursorByGroupKey[groupCard.key] ?? null
+    const currentIndex = currentKey
+      ? toolCards.findIndex((toolCard) => toolCard.key === currentKey)
+      : -1
+    if (currentIndex === -1) {
+      if (delta < 0) return false
+      const first = toolCards[0]
+      if (!first) return false
+      setAgentToolCursorByGroupKey((current) => current[groupCard.key] === first.key ? current : { ...current, [groupCard.key]: first.key })
+      return true
+    }
+    const nextIndex = currentIndex + delta
+    if (nextIndex < 0 || nextIndex >= toolCards.length) return false
+    const next = toolCards[nextIndex]
+    if (!next) return false
+    setAgentToolCursorByGroupKey((current) => current[groupCard.key] === next.key ? current : { ...current, [groupCard.key]: next.key })
+    return true
+  })
+
   // Returns the number of cards to move for one j/k/↑/↓ tick. With velocity
   // scroll off (or on a fresh tap) this is just 1; while the same direction
   // keeps repeating, the step eases from 1 up to VELOCITY_SCROLL_MAX_STEP over
@@ -7615,38 +8078,52 @@ export default function OpenTuiApp() {
     jumpToTranscriptIndex(searchMatches[nextMatchIndex] ?? 0)
   })
 
-  const toggleExpansion = useEffectEvent(() => {
+  const toggleExpansion = useEffectEvent((scope: 'selected' | 'parent' = 'selected') => {
     const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     if (!card) return
-    const shouldAutoFold = transcriptView === 'conversation' && card.autoFold
-    const isExpanded = resolvedExpandedKeys.has(card.key)
+    const agentToolCards = transcriptView === 'agents' && resolvedExpandedKeys.has(card.key)
+      ? agentToolCardsFor(card)
+      : []
+    const agentToolKey = agentToolCursorByGroupKey[card.key] ?? null
+    const selectedAgentTool = scope === 'selected' && agentToolKey
+      ? agentToolCards.find((toolCard) => toolCard.key === agentToolKey) ?? null
+      : null
+    const targetCard = selectedAgentTool ?? card
+    const isAgentToolTarget = selectedAgentTool !== null
+    const shouldAutoFold = (
+      (transcriptView === 'conversation' || transcriptView === 'agents')
+      && targetCard.autoFold
+    )
+    const isExpanded = isAgentToolTarget
+      ? agentToolCardIsExpanded(targetCard, expandedCardKeys, collapsedCardKeys)
+      : resolvedExpandedKeys.has(targetCard.key)
 
     if (shouldAutoFold) {
       setCollapsedCardKeys((current) => {
-        if (!current.has(card.key)) return current
+        if (!current.has(targetCard.key)) return current
         const next = new Set(current)
-        next.delete(card.key)
+        next.delete(targetCard.key)
         return next
       })
       setExpandedCardKeys((current) => {
         const next = new Set(current)
-        if (isExpanded) next.delete(card.key)
-        else next.add(card.key)
+        if (isExpanded) next.delete(targetCard.key)
+        else next.add(targetCard.key)
         return next
       })
       return
     }
 
     setExpandedCardKeys((current) => {
-      if (!current.has(card.key)) return current
+      if (!current.has(targetCard.key)) return current
       const next = new Set(current)
-      next.delete(card.key)
+      next.delete(targetCard.key)
       return next
     })
     setCollapsedCardKeys((current) => {
       const next = new Set(current)
-      if (isExpanded) next.add(card.key)
-      else next.delete(card.key)
+      if (isExpanded) next.add(targetCard.key)
+      else next.delete(targetCard.key)
       return next
     })
   })
@@ -10433,10 +10910,10 @@ export default function OpenTuiApp() {
     }
   }, [composerLiveText, composerSendState, followTail])
 
-  // When switching to 'continue' or 'stream' mode the cursor may be on a hidden
-  // technical card. Snap it to the last visible card so navigation stays coherent.
+  // When switching to a filtered/grouped transcript mode the cursor may be on a
+  // hidden technical card. Snap it to the last visible card so navigation stays coherent.
   useEffect(() => {
-    if (transcriptView !== 'continue' && transcriptView !== 'stream') return
+    if (transcriptView !== 'continue' && transcriptView !== 'stream' && transcriptView !== 'agents') return
     if (visibleTranscriptCards.length === 0) return
     const isVisible = transcriptCursorKey
       ? visibleTranscriptCards.some((c) => c.key === transcriptCursorKey)
@@ -11366,6 +11843,31 @@ export default function OpenTuiApp() {
     const selectedTranscriptCardDisplay = cursorIndex >= transcriptRenderStart && cursorIndex < transcriptRenderEnd
       ? cardDisplayData[cursorIndex - transcriptRenderStart] ?? null
       : null
+    const selectedAgentToolCards = transcriptView === 'agents'
+      && selectedTranscriptCard
+      && resolvedExpandedKeys.has(selectedTranscriptCard.key)
+      ? agentToolCardsFor(selectedTranscriptCard)
+      : []
+    const selectedAgentToolKey = selectedTranscriptCard
+      ? agentToolCursorByGroupKey[selectedTranscriptCard.key] ?? null
+      : null
+    const selectedAgentToolCard = selectedAgentToolKey
+      ? selectedAgentToolCards.find((toolCard) => toolCard.key === selectedAgentToolKey) ?? null
+      : null
+    const selectedAgentToolExpanded = selectedAgentToolCard
+      ? agentToolCardIsExpanded(selectedAgentToolCard, expandedCardKeys, collapsedCardKeys)
+      : false
+    const selectedInteractiveTranscriptCard = selectedAgentToolCard ?? selectedTranscriptCard
+    const selectedInteractiveTranscriptCardDisplay = selectedAgentToolCard
+      ? nestedAgentToolDisplay(
+          selectedAgentToolCard,
+          selectedAgentToolCard.provider,
+          selectedAgentToolExpanded,
+          densityState.bodyLines,
+          Boolean(syntaxStyle),
+          thinkingMode,
+        )
+      : selectedTranscriptCardDisplay
 
     if (exitConfirmOpen) {
       if (key.name === 'return' || key.name === 'y') {
@@ -12330,14 +12832,14 @@ export default function OpenTuiApp() {
     // trap as the resume-marker `m`).
     if (effectiveFocus === 'messages' && (key.name === 'j' || key.name === 'down') && !key.shift) {
       handled(() => {
-        moveCursor(velocityScrollStep(1))
+        if (!moveAgentToolCursor(1)) moveCursor(velocityScrollStep(1))
       })
       return
     }
 
     if (effectiveFocus === 'messages' && (key.name === 'k' || key.name === 'up') && !key.shift) {
       handled(() => {
-        moveCursor(-velocityScrollStep(-1))
+        if (!moveAgentToolCursor(-1)) moveCursor(-velocityScrollStep(-1))
       })
       return
     }
@@ -12384,9 +12886,23 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'messages' && (key.name === 'return' || key.name === 'e')) {
+    if (effectiveFocus === 'messages' && key.name === 'return') {
       handled(() => {
-        toggleExpansion()
+        toggleExpansion('parent')
+      })
+      return
+    }
+
+    if (effectiveFocus === 'messages' && key.name === 'e') {
+      handled(() => {
+        toggleExpansion('selected')
+      })
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && transcriptView === 'agents' && key.name === 'e') {
+      handled(() => {
+        toggleExpansion('parent')
       })
       return
     }
@@ -12413,7 +12929,7 @@ export default function OpenTuiApp() {
     if (
       effectiveFocus === 'messages'
       && key.name === 'm'
-      && !(selectedTranscriptCard?.category === 'diff' && selectedTranscriptCardDisplay?.diffView)
+      && !(selectedInteractiveTranscriptCard?.category === 'diff' && selectedInteractiveTranscriptCardDisplay?.diffView)
     ) {
       handled(() => {
         jumpToResumeMarker()
@@ -12437,15 +12953,15 @@ export default function OpenTuiApp() {
 
     if (
       effectiveFocus === 'messages'
-      && selectedTranscriptCard?.category === 'diff'
-      && selectedTranscriptCardDisplay?.diffView
+      && selectedInteractiveTranscriptCard?.category === 'diff'
+      && selectedInteractiveTranscriptCardDisplay?.diffView
       && key.shift
       && (key.name === 'j' || key.name === 'down' || key.name === 'k' || key.name === 'up')
     ) {
-      const selectedDiffView = selectedTranscriptCardDisplay.diffView
+      const selectedDiffView = selectedInteractiveTranscriptCardDisplay.diffView
       if (!selectedDiffView) return
       handled(() => {
-        const cardKey = selectedTranscriptCard.key
+        const cardKey = selectedInteractiveTranscriptCard.key
         const currentRows = diffLayout === 'split'
           ? selectedDiffView.splitRows
           : selectedDiffView.rows
@@ -12463,10 +12979,10 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'messages' && selectedTranscriptCard?.category === 'diff' && selectedTranscriptCardDisplay?.diffView) {
-      const selectedDiffView = selectedTranscriptCardDisplay.diffView
+    if (effectiveFocus === 'messages' && selectedInteractiveTranscriptCard?.category === 'diff' && selectedInteractiveTranscriptCardDisplay?.diffView) {
+      const selectedDiffView = selectedInteractiveTranscriptCardDisplay.diffView
       if (!selectedDiffView) return
-      const cardKey = selectedTranscriptCard.key
+      const cardKey = selectedInteractiveTranscriptCard.key
       const currentRows = diffLayout === 'split'
         ? selectedDiffView.splitRows
         : selectedDiffView.rows
@@ -12556,10 +13072,13 @@ export default function OpenTuiApp() {
             return
           }
           sendTranscriptDiffNoteToComposer(
-            selectedTranscriptCard,
+            selectedInteractiveTranscriptCard,
             note,
             currentSelectionSpan?.label ?? transcriptDiffSelectionLineLabel(note.range),
-            cardDiffText(selectedTranscriptCard, resolvedExpandedKeys.has(selectedTranscriptCard.key)),
+            cardDiffText(
+              selectedInteractiveTranscriptCard,
+              selectedAgentToolCard ? selectedAgentToolExpanded : resolvedExpandedKeys.has(selectedInteractiveTranscriptCard.key),
+            ),
           )
           showNotice('info', 'Diff comment added to composer')
         })
@@ -12589,7 +13108,7 @@ export default function OpenTuiApp() {
     }
 
     if (effectiveFocus === 'messages' && sequence === 's') {
-      const selectedCard = visibleTranscriptCards[cursorIndex]
+      const selectedCard = selectedInteractiveTranscriptCard
       if (selectedCard?.category === 'diff') {
         handled(() => {
           const next: TuiDiffLayout = diffLayout === 'stack' ? 'split' : 'stack'
