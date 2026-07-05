@@ -162,6 +162,8 @@ export function CoordinationPopover({
     () => (snapshot?.messages ?? []).filter((message) => !message.deliveredAt).length,
     [snapshot?.messages],
   )
+  const liveCount = agents.filter((agent) => agent.turnActive).length
+  const blockedCount = agents.filter((agent) => agent.status === 'blocked' || agent.status === 'failed').length
 
   const clampedTeam = agents.length === 0 ? 0 : Math.min(teamIndex, agents.length - 1)
   const clampedTask = tasks.length === 0 ? 0 : Math.min(taskIndex, tasks.length - 1)
@@ -459,6 +461,8 @@ export function CoordinationPopover({
             <box flexGrow={1} overflow="hidden">
               <text fg={theme.muted} wrapMode="none">{run.prompt.split('\n')[0]?.slice(0, Math.max(innerW - 52, 10))}</text>
             </box>
+            {liveCount > 0 ? <text fg={theme.amber} wrapMode="none">{` ● ${liveCount} live`}</text> : null}
+            {blockedCount > 0 ? <text fg={theme.red} wrapMode="none">{` ⚠ ${blockedCount}`}</text> : null}
             {busy ? <text fg={theme.amber} wrapMode="none"> busy</text> : null}
             {undeliveredMail > 0 ? <text fg={theme.violet} wrapMode="none">{` ✉ ${undeliveredMail}`}</text> : null}
           </>
@@ -482,6 +486,11 @@ export function CoordinationPopover({
                 </text>
                 <text fg={selected ? theme.text : theme.muted} wrapMode="none">{` ${agent.name}`}</text>
                 <text fg={statusColor(agent.status, theme)} wrapMode="none">{` ${agent.status}`}</text>
+                {agent.turnActive ? (
+                  <text fg={theme.amber} wrapMode="none"> ●</text>
+                ) : agent.lastSeenAt ? (
+                  <text fg={theme.dim} wrapMode="none">{` ${formatAge(agent.lastSeenAt, now)}`}</text>
+                ) : null}
                 <text fg={theme.dim} wrapMode="none">{agent.taskId ? ` ${agent.taskId}` : ''}</text>
                 {(() => {
                   const stats = worktreeStats.get(agent.worktreePath)

@@ -1,7 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Activity,
   AlertTriangle,
   CircleStop,
   CheckCircle2,
@@ -128,6 +129,8 @@ export default function AgentTeamCoordinator({
   const [gateCommand, setGateCommand] = useState('')
   const [requirePlanApproval, setRequirePlanApproval] = useState(true)
 
+  const eventsListRef = useRef<HTMLDivElement | null>(null)
+
   const run = snapshot?.run ?? null
   const agents = snapshot?.agents ?? []
   const tasks = snapshot?.tasks ?? []
@@ -139,6 +142,8 @@ export default function AgentTeamCoordinator({
     ? null
     : events[selectedEventIndex < 0 ? events.length - 1 : Math.min(selectedEventIndex, events.length - 1)] ?? null
   const undeliveredMail = (snapshot?.messages ?? []).filter((message) => !message.deliveredAt).length
+  const liveAgents = agents.filter((agent) => agent.turnActive).length
+  const blockedAgents = agents.filter((agent) => agent.status === 'blocked' || agent.status === 'failed').length
   const completedTasks = tasks.filter((task) => task.status === 'completed').length
   const taskProgress = tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0
   const targetProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
@@ -210,6 +215,15 @@ export default function AgentTeamCoordinator({
     const timer = window.setInterval(refresh, WORKTREE_STATS_MS)
     return () => { cancelled = true; window.clearInterval(timer) }
   }, [open, refreshWorktrees, snapshot?.run.baseCwd])
+
+  // Keep the newest event in view while following the tail (index -1). A
+  // click on any event pauses the follow; the panel-head button resumes it.
+  const followingEvents = selectedEventIndex < 0
+  useEffect(() => {
+    if (!followingEvents) return
+    const list = eventsListRef.current
+    if (list) list.scrollTop = list.scrollHeight
+  }, [followingEvents, events.length])
 
   const appendEvent = useCallback(async (event: AgentProtocolEvent) => {
     const next = await jsonFetch<ProtocolRunSnapshot>(`/api/agent-protocol/runs/${encodeURIComponent(event.runId)}/events`, {
@@ -402,6 +416,8 @@ export default function AgentTeamCoordinator({
             </div>
           </div>
           <div className="av-coord-header-actions">
+            {liveAgents > 0 ? <span className="av-coord-live-chip"><Activity size={13} /> {liveAgents} live</span> : null}
+            {blockedAgents > 0 ? <span className="av-coord-blocked-chip"><AlertTriangle size={13} /> {blockedAgents} blocked</span> : null}
             {run?.requirePlanApproval ? <span className="av-coord-guard"><ShieldCheck size={13} /> plans</span> : null}
             {run?.gateCommand ? <span className="av-coord-guard"><Zap size={13} /> gate</span> : null}
             {undeliveredMail > 0 ? <span className="av-coord-mail"><Mail size={13} /> {undeliveredMail}</span> : null}
@@ -552,8 +568,18 @@ export default function AgentTeamCoordinator({
                           >
                             <span className="av-coord-agent-mark">{agent.role === 'lead' ? 'LEAD' : 'MATE'}</span>
                             <strong>{agent.name}</strong>
-                            <span className={cn('av-coord-status', `av-tone-${statusTone(agent.status)}`)}>{agent.status}</span>
-                            {agent.taskId ? <small>{agent.taskId}</small> : null}
+                            <span className={cn('av-coord-status', `av-tone-${agent.turnActive ? 'warn' : statusTone(agent.status)}`)}>
+                              {agent.turnActive ? <i className="av-coord-live-dot" aria-label="turn streaming" /> : null}
+                              {agent.status}
+                            </span>
+                            {agent.taskId || agent.lastSeenAt ? (
+                              <small>
+                                {[
+                                  agent.taskId,
+                                  agent.turnActive ? 'live now' : agent.lastSeenAt ? `seen ${formatAge(agent.lastSeenAt)} ago` : null,
+                                ].filter(Boolean).join(' · ')}
+                              </small>
+                            ) : null}
                             {stats && (stats.aheadCommits > 0 || stats.dirtyFiles > 0) ? (
                               <em>{stats.aheadCommits > 0 ? `+${stats.aheadCommits}` : ''}{stats.dirtyFiles > 0 ? ` ~${stats.dirtyFiles}` : ''}</em>
                             ) : null}
@@ -625,12 +651,12 @@ export default function AgentTeamCoordinator({
 
                   <div className="av-coord-panel">
                     <div className="av-coord-panel-head">
-                      <span>Events</span>
-                      <button type="button" onClick={() => setSelectedEventIndex(-1)} aria-label="Follow latest event">
-                        <Radio size={13} />
+                      <span>Events{followingEvents ? ' · live' : ' · paused'}</span>
+                      <button type="button" onClick={() => setSelectedEventIndex(-1)} aria-label="Follow latest event" title={followingEvents ? 'Following latest event' : 'Resume following latest event'}>
+                        <Radio size={13} className={followingEvents ? 'av-coord-follow-on' : undefined} />
                       </button>
                     </div>
-                    <div className="av-coord-list">
+                    <div className="av-coord-list" ref={eventsListRef}>
                       {events.map((event, index) => {
                         const selected = selectedEvent === event
                         const who = agentsById.get(event.agentId)?.name ?? event.agentId

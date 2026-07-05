@@ -40,7 +40,7 @@ import {
   type StartProtocolRunResult,
 } from './agentProtocol'
 import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
-import { interruptRunningSession, steerRunningSession } from './sessionRuntime'
+import { getRunningSessionInfo, interruptRunningSession, steerRunningSession } from './sessionRuntime'
 import { createWorktreeTask, findWorktreeTaskForCwd, removeWorktreeTask, type WorktreeTask } from './worktreeTasks'
 
 type SqliteDatabase = any
@@ -473,10 +473,25 @@ function rowToEvent(row: Row): AgentProtocolEvent {
   }
 }
 
+/**
+ * Mark agents whose turn is streaming right now. Best-effort and process-local
+ * (like the running-turn registry itself): accurate in the process that runs
+ * the work loop, which is where web routes and the in-process TUI read from.
+ */
+function annotateLiveTurns(runId: string, agents: ProtocolAgent[]): ProtocolAgent[] {
+  const controller = controllers.get(runId)
+  return agents.map((agent) => {
+    const sessionId = controller?.sessionIds.get(agent.id) ?? agent.sessionId
+    const turnActive = controller?.turnInFlight.has(agent.id) === true
+      || getRunningSessionInfo(sessionId).running
+    return turnActive ? { ...agent, turnActive } : agent
+  })
+}
+
 function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapshot | null {
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
   if (!runRow) return null
-  const agents = db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? ORDER BY created_at ASC').all(runId).map(rowToAgent)
+  const agents = annotateLiveTurns(runId, db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? ORDER BY created_at ASC').all(runId).map(rowToAgent))
   const tasks = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? ORDER BY created_at ASC').all(runId).map(rowToTask)
   const locks = db.prepare('SELECT * FROM protocol_locks WHERE run_id = ? ORDER BY created_at ASC').all(runId).map(rowToLock)
   const messages = db.prepare('SELECT * FROM protocol_messages WHERE run_id = ? ORDER BY created_at ASC LIMIT 200').all(runId).map(rowToMessage)

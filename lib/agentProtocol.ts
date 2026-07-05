@@ -105,6 +105,12 @@ export type ProtocolAgent = {
   taskId?: string
   status: ProtocolAgentStatus
   lastSeenAt?: string
+  /**
+   * A turn is streaming for this agent right now. Runtime-only (derived from
+   * the process-local running-turn registry at snapshot time, never persisted)
+   * — distinguishes "actively working" from "marked working but stalled".
+   */
+  turnActive?: boolean
   createdAt: string
   updatedAt: string
 }

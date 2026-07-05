@@ -3927,7 +3927,9 @@ button.av-session-viz-graph-node:disabled {
 }
 
 .av-coord-guard,
-.av-coord-mail {
+.av-coord-mail,
+.av-coord-live-chip,
+.av-coord-blocked-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -3947,6 +3949,41 @@ button.av-session-viz-graph-node:disabled {
 
 .av-coord-mail {
   color: var(--violet);
+}
+
+.av-coord-live-chip {
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--av-coord-line));
+  color: var(--amber);
+}
+
+.av-coord-blocked-chip {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--av-coord-line));
+  color: var(--red);
+}
+
+.av-coord-live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: av-coord-pulse 1.4s ease-in-out infinite;
+}
+
+.av-coord-follow-on {
+  color: var(--green);
+}
+
+@keyframes av-coord-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .av-coord-live-dot {
+    animation: none;
+  }
 }
 
 .av-coord-btn {
