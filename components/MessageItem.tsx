@@ -2,7 +2,7 @@
 
 import { lazy, memo, Suspense, use, useEffect, useMemo, useState, createContext } from 'react'
 import { pathBasename as basename } from '@/lib/projectPaths'
-import { LiveSubagentTextContext, TaskActiveFormsContext } from './messageItemShared'
+import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, type DiffOptions } from './messageItemShared'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
@@ -30,13 +30,10 @@ import type {
 import { getAssistantLabel } from '@/lib/provider'
 import { buildDiffCommentComposerPrompt } from '@/lib/diffCommentComposer'
 import { Separator } from '@/components/ui/separator'
+import { sanitizeProtocolEvent, type AgentProtocolEvent } from '@/lib/agentProtocol'
 import type { SelectedLineRange } from '@pierre/diffs'
-import type { PierreAnnotationMetadata, PierreChangeStyle, PierreDiffAnnotation, PierreDiffPresentation, PierreDiffStyle, PierreInlineDiffStyle } from './PierreDiffView'
+import type { PierreAnnotationMetadata, PierreDiffAnnotation, PierreDiffPresentation, PierreDiffStyle } from './PierreDiffView'
 import { useDiffComments, type DiffComment } from './diffComments'
-
-type DiffCommentComposerSend = (prompt: string) => void
-
-export const DiffCommentComposerContext = createContext<DiffCommentComposerSend | null>(null)
 
 // ── Tool color palette ────────────────────────────────────────────────────────
 
@@ -195,6 +192,221 @@ function FencedCodeBlock(props: FencedCodeBlockProps) {
   )
 }
 
+function parseAgentProtocolCode(codeString: string): AgentProtocolEvent | null {
+  try {
+    return sanitizeProtocolEvent(JSON.parse(codeString))
+  } catch {
+    return null
+  }
+}
+
+function agentProtocolTone(eventType: string): string {
+  if (eventType === 'finding' || eventType === 'learning' || eventType === 'task.completed' || eventType === 'plan.approved') return 'var(--green)'
+  if (eventType === 'message' || eventType === 'handoff' || eventType === 'review.requested') return 'var(--cyan)'
+  if (eventType === 'agent.blocked' || eventType === 'task.failed' || eventType === 'lock.denied' || eventType === 'plan.rejected') return 'var(--red)'
+  if (eventType.startsWith('lock.')) return 'var(--amber)'
+  if (eventType.startsWith('task.') || eventType.startsWith('plan.')) return 'var(--violet)'
+  return 'var(--text-3)'
+}
+
+function agentProtocolTitle(event: AgentProtocolEvent): string {
+  const title = event.title ?? event.summary ?? event.detail ?? ''
+  if (event.type === 'task.created' && title) return title
+  if (event.type === 'message' && event.to) return `to ${event.to}`
+  if (event.type.startsWith('lock.') && event.paths?.length) return event.paths.join(', ')
+  return title
+}
+
+function AgentProtocolCard({ codeString }: { codeString: string }) {
+  const [open, setOpen] = useState(false)
+  const event = useMemo(() => parseAgentProtocolCode(codeString), [codeString])
+  if (!event) return <FencedCodeBlock language="agent-protocol" codeString={codeString} />
+
+  const tone = agentProtocolTone(event.type)
+  const title = agentProtocolTitle(event)
+  const badges = [
+    event.taskId,
+    event.to ? `to:${event.to}` : null,
+    event.lockId ? `lock:${event.lockId.slice(0, 8)}` : null,
+    event.paths && event.paths.length > 0 ? `${event.paths.length} path${event.paths.length === 1 ? '' : 's'}` : null,
+    event.timestamp ? formatLocalMessageTime(event.timestamp) : null,
+  ].filter((badge): badge is string => Boolean(badge))
+
+  return (
+    <div style={{
+      margin: '10px 0',
+      border: '1px solid var(--border)',
+      borderLeft: `3px solid ${tone}`,
+      borderRadius: 7,
+      overflow: 'hidden',
+      background: 'var(--surface)',
+    }}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        style={{
+          display: 'flex',
+          width: '100%',
+          alignItems: 'center',
+          gap: 9,
+          border: 0,
+          borderBottom: open ? '1px solid var(--border)' : 0,
+          background: `linear-gradient(to right, ${tone}18, var(--surface-2))`,
+          color: 'var(--text)',
+          cursor: 'pointer',
+          padding: '8px 12px',
+          textAlign: 'left',
+        }}
+        aria-expanded={open}
+      >
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 10,
+          color: tone,
+          fontWeight: 700,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          flexShrink: 0,
+        }}>
+          AGENT PROTOCOL
+        </span>
+        <strong style={{
+          minWidth: 0,
+          color: 'var(--text)',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 12,
+          fontWeight: 600,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {event.type}
+        </strong>
+        {title ? (
+          <span style={{
+            minWidth: 0,
+            flex: 1,
+            overflow: 'hidden',
+            color: 'var(--text-2)',
+            fontSize: 13,
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>
+            {title}
+          </span>
+        ) : <span style={{ flex: 1 }} />}
+        <span style={{
+          color: 'var(--text-3)',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 10,
+          flexShrink: 0,
+        }}>
+          {open ? '▲' : '▼'}
+        </span>
+      </button>
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6,
+        borderBottom: open ? '1px solid var(--border)' : 0,
+        padding: '7px 12px',
+        background: 'var(--surface)',
+      }}>
+        <span style={{ ...AGENT_PROTOCOL_BADGE_STYLE, color: tone, borderColor: `color-mix(in srgb, ${tone} 45%, var(--border))` }}>{event.agentId}</span>
+        <span style={AGENT_PROTOCOL_BADGE_STYLE}>{event.runId.slice(0, 8)}</span>
+        {badges.map((badge) => <span key={badge} style={AGENT_PROTOCOL_BADGE_STYLE}>{badge}</span>)}
+      </div>
+      {(event.summary || event.detail || event.paths?.length || event.dependsOn?.length) && (
+        <div style={{
+          display: 'grid',
+          gap: 8,
+          padding: '9px 12px 11px',
+          color: 'var(--text-2)',
+          fontSize: 13,
+          lineHeight: 1.55,
+        }}>
+          {event.summary && <div>{event.summary}</div>}
+          {event.detail && <div style={{ color: 'var(--text-3)', whiteSpace: 'pre-wrap' }}>{event.detail}</div>}
+          {event.paths && event.paths.length > 0 && (
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+              paths: {event.paths.join(', ')}
+            </div>
+          )}
+          {event.dependsOn && event.dependsOn.length > 0 && (
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
+              depends on: {event.dependsOn.join(', ')}
+            </div>
+          )}
+        </div>
+      )}
+      {open && (
+        <pre style={{
+          margin: 0,
+          borderTop: '1px solid var(--border)',
+          background: 'var(--surface-2)',
+          color: 'var(--text-3)',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 11,
+          lineHeight: 1.55,
+          maxHeight: 260,
+          overflow: 'auto',
+          padding: '10px 12px',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}>
+          {normalizeCode(codeString)}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+const AGENT_PROTOCOL_BADGE_STYLE: React.CSSProperties = {
+  border: '1px solid var(--border)',
+  borderRadius: 999,
+  color: 'var(--text-3)',
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 10,
+  lineHeight: 1.4,
+  padding: '1px 7px',
+}
+
+function formatClockShort(ms: number): string {
+  const d = new Date(ms)
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`
+}
+
+function formatDurationShort(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  if (ms < 3_600_000) {
+    const m = Math.floor(ms / 60_000)
+    const s = Math.floor((ms % 60_000) / 1000)
+    return `${m}m ${s}s`
+  }
+  const h = Math.floor(ms / 3_600_000)
+  const m = Math.floor((ms % 3_600_000) / 60_000)
+  return `${h}h ${m}m`
+}
+
+const NOTEBOOK_EDIT_MODE_COLOR: Record<string, string> = {
+  replace: 'var(--t-edit)',
+  insert: 'var(--green)',
+  delete: 'var(--red)',
+}
+
+const GENERIC_RESULT_PRE_STYLE: React.CSSProperties = {
+  padding: '8px 14px',
+  margin: 0,
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 13,
+  color: 'var(--text-2)',
+  background: 'var(--surface)',
+  overflowX: 'auto',
+  whiteSpace: 'pre',
+  lineHeight: 1.6,
+}
+
 function MermaidDiagram({ codeString }: { codeString: string }) {
   return (
     <Suspense fallback={<PlainCodeBlock code={codeString} language="mermaid" margin="10px 0" />}>
@@ -208,6 +420,7 @@ function MarkdownCodeBlock({ className, children, ...rest }: React.ComponentProp
   const isFenced = !!className
   if (isFenced) {
     const codeString = String(children).replace(/\n$/, '')
+    if (language === 'agent-protocol') return <AgentProtocolCard codeString={codeString} />
     if (language === 'mermaid' || language === 'mmd') return <MermaidDiagram codeString={codeString} />
     return <FencedCodeBlock language={language} codeString={codeString} />
   }
@@ -1861,23 +2074,6 @@ function AgentCard({ thread }: { thread: ToolThread }) {
     return { startedAtMs, endedAtMs, lastAssistantText }
   }, [transcriptMessages])
 
-  const formatClockShort = (ms: number) => {
-    const d = new Date(ms)
-    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`
-  }
-  const formatDurationShort = (ms: number) => {
-    if (ms < 1000) return `${ms}ms`
-    if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-    if (ms < 3_600_000) {
-      const m = Math.floor(ms / 60_000)
-      const s = Math.floor((ms % 60_000) / 1000)
-      return `${m}m ${s}s`
-    }
-    const h = Math.floor(ms / 3_600_000)
-    const m = Math.floor((ms % 3_600_000) / 60_000)
-    return `${h}h ${m}m`
-  }
-
   return (
     <div style={{ border: '1px solid var(--border)', borderLeft: `2px solid ${c}`, borderRadius: 6, overflow: 'hidden', fontSize: 13, marginTop: 4 }}>
       {/* Header */}
@@ -2656,12 +2852,7 @@ function NotebookEditCard({ thread }: { thread: ToolThread }) {
   const c            = toolColor('NotebookEdit')
   const hasBody      = !!newSource
 
-  const editModeColor: Record<string, string> = {
-    replace: 'var(--t-edit)',
-    insert:  'var(--green)',
-    delete:  'var(--red)',
-  }
-  const chipColor = editModeColor[editMode] ?? 'var(--text-3)'
+  const chipColor = NOTEBOOK_EDIT_MODE_COLOR[editMode] ?? 'var(--text-3)'
 
   return (
     <CardShell color={c} result={result} toolName={toolUse.name}
@@ -3619,14 +3810,6 @@ function GenericResultSection({ raw, isError = false, note }: { raw: string; isE
 
   const hidden = Math.max(0, totalTextLines - LIMIT)
 
-  const preStyle: React.CSSProperties = {
-    padding: '8px 14px', margin: 0,
-    fontFamily: "'IBM Plex Mono', monospace",
-    fontSize: 13, color: 'var(--text-2)',
-    background: 'var(--surface)', overflowX: 'auto',
-    whiteSpace: 'pre', lineHeight: 1.6,
-  }
-
   return (
     <div style={{ borderTop: `1px solid ${isError ? 'rgba(240,96,96,0.25)' : 'var(--border)'}` }}>
       <div style={{
@@ -3642,13 +3825,13 @@ function GenericResultSection({ raw, isError = false, note }: { raw: string; isE
       </div>
 
       {!hasReminders ? (
-        <pre style={preStyle}>{processedParts[0]?.kind === 'text' ? processedParts[0].visibleLines.join('\n') : ''}</pre>
+        <pre style={GENERIC_RESULT_PRE_STYLE}>{processedParts[0]?.kind === 'text' ? processedParts[0].visibleLines.join('\n') : ''}</pre>
       ) : (
         processedParts.map((part, i) =>
           part.kind === 'system_reminder'
             ? <SystemReminderCard key={i} block={{ type: 'system_reminder', content: part.content }} />
             : part.visibleLines.length > 0
-              ? <pre key={i} style={preStyle}>{part.visibleLines.join('\n')}</pre>
+              ? <pre key={i} style={GENERIC_RESULT_PRE_STYLE}>{part.visibleLines.join('\n')}</pre>
               : null
         )
       )}
@@ -5413,24 +5596,6 @@ const MessageDensityContext = createContext<DensityConfig>(densityConfig('balanc
 const SessionContext = createContext<string | undefined>(undefined)
 const ViewModeContext = createContext<WebViewMode>('conversation')
 const DiffStyleContext = createContext<PierreDiffStyle>('stacked')
-
-export type DiffOptions = {
-  changeStyle: PierreChangeStyle
-  inlineDiffStyle: PierreInlineDiffStyle
-  showBackgrounds: boolean
-  wrap: boolean
-  showLineNumbers: boolean
-  showHunkHeaders: boolean
-}
-
-export const DEFAULT_DIFF_OPTIONS: DiffOptions = {
-  changeStyle: 'classic',
-  inlineDiffStyle: 'word-alt',
-  showBackgrounds: true,
-  wrap: true,
-  showLineNumbers: true,
-  showHunkHeaders: true,
-}
 
 const DiffOptionsContext = createContext<DiffOptions>(DEFAULT_DIFF_OPTIONS)
 

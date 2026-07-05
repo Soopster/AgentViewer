@@ -6,7 +6,7 @@ import { AlertTriangle, ArrowRight, Check, FileCode2, GitBranch, RefreshCw, Term
 import type { GitReviewData, GitReviewFile } from '@/lib/gitProvider'
 import type { Session } from '@/lib/types'
 import type { ThreadedMessage, ToolThread } from '@/lib/threading'
-import type { DiffOptions } from './MessageItem'
+import type { DiffOptions } from './messageItemShared'
 import type { PierreDiffStyle } from './PierreDiffView'
 import { cn } from '@/lib/utils'
 

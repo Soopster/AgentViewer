@@ -1,8 +1,31 @@
 import { createContext } from 'react'
 import type { ThreadedMessage } from '@/lib/threading'
+import type { PierreChangeStyle, PierreInlineDiffStyle } from './PierreDiffView'
 
 export const LiveSubagentTextContext = createContext<Record<string, string>>({})
 export const TaskActiveFormsContext = createContext<Map<string, string>>(new Map())
+
+export type DiffOptions = {
+  changeStyle: PierreChangeStyle
+  inlineDiffStyle: PierreInlineDiffStyle
+  showBackgrounds: boolean
+  wrap: boolean
+  showLineNumbers: boolean
+  showHunkHeaders: boolean
+}
+
+export const DEFAULT_DIFF_OPTIONS: DiffOptions = {
+  changeStyle: 'classic',
+  inlineDiffStyle: 'word-alt',
+  showBackgrounds: true,
+  wrap: true,
+  showLineNumbers: true,
+  showHunkHeaders: true,
+}
+
+export type DiffCommentComposerSend = (prompt: string) => void
+
+export const DiffCommentComposerContext = createContext<DiffCommentComposerSend | null>(null)
 
 /**
  * Scan threaded messages for TaskCreate/TaskUpdate calls and build a
