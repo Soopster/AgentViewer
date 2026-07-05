@@ -86,6 +86,31 @@ function buildAssistantContent(parts: Part[]) {
   const content: Exclude<ApiMessage['content'], string> = []
   const syntheticResults: SessionMessage[] = []
 
+  const pushSyntheticResult = (
+    part: Part,
+    toolUseId: string,
+    resultContent: unknown,
+    isError = false,
+  ) => {
+    syntheticResults.push({
+      type: 'user',
+      uuid: `${part.messageID}:${part.id}:result`,
+      session_id: part.sessionID,
+      parent_tool_use_id: null,
+      provider: 'opencode',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: stringify(resultContent),
+          is_error: isError || undefined,
+        }],
+      },
+      timestamp: toIsoTimestamp((part as { state?: { time?: { start?: number } } }).state?.time?.start),
+    })
+  }
+
   for (const part of parts) {
     switch (part.type) {
       case 'text':
@@ -103,35 +128,76 @@ function buildAssistantContent(parts: Part[]) {
           input: part.state.input ?? {},
         })
         if (part.state.status === 'completed' || part.state.status === 'error') {
-          syntheticResults.push({
-            type: 'user',
-            uuid: `${part.messageID}:${part.id}:result`,
-            session_id: part.sessionID,
-            parent_tool_use_id: null,
-            provider: 'opencode',
-            message: {
-              role: 'user',
-              content: [{
-                type: 'tool_result',
-                tool_use_id: toolUseId,
-                content: part.state.status === 'completed' ? part.state.output : part.state.error,
-                is_error: part.state.status === 'error' || undefined,
-              }],
-            },
-            timestamp: toIsoTimestamp(part.state.time.start),
-          })
+          pushSyntheticResult(part, toolUseId, part.state.status === 'completed' ? part.state.output : part.state.error, part.state.status === 'error')
         }
         break
       }
-      case 'patch':
-        content.push(textBlock(`Patched files: ${part.files.join(', ')}`))
+      case 'patch': {
+        const toolUseId = `${part.id}:patch`
+        content.push({
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'FileChange',
+          input: {
+            status: 'completed',
+            hash: part.hash,
+            changes: part.files.map((path) => ({ path, kind: 'patch' })),
+          },
+        })
+        pushSyntheticResult(part, toolUseId, {
+          status: 'completed',
+          files: part.files,
+          hash: part.hash,
+        })
         break
-      case 'agent':
-        content.push(textBlock(`↪ Switched to agent: ${part.name}`))
+      }
+      case 'agent': {
+        const toolUseId = `${part.id}:agent`
+        content.push({
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'AgentSwitch',
+          input: {
+            name: part.name,
+            status: 'completed',
+            source: part.source,
+          },
+        })
+        pushSyntheticResult(part, toolUseId, {
+          status: 'completed',
+          message: `Switched to agent: ${part.name}`,
+          source: part.source,
+        })
         break
-      case 'subtask':
-        content.push(textBlock(`↪ Subtask launched: ${part.description}${part.agent ? ` (@${part.agent})` : ''}`))
+      }
+      case 'subtask': {
+        const toolUseId = `${part.id}:subtask`
+        const optional = part as typeof part & {
+          model?: { providerID: string; modelID: string }
+          command?: string
+        }
+        content.push({
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'Agent',
+          input: {
+            description: part.description,
+            prompt: part.prompt,
+            subagent_type: part.agent,
+            model: optional.model ? `${optional.model.providerID}/${optional.model.modelID}` : undefined,
+            command: optional.command,
+            status: 'launched',
+          },
+        })
+        pushSyntheticResult(part, toolUseId, {
+          status: 'completed',
+          message: `Subtask launched: ${part.description}${part.agent ? ` (@${part.agent})` : ''}`,
+          agent: part.agent,
+          model: optional.model,
+          command: optional.command,
+        })
         break
+      }
       case 'file':
         content.push(textBlock(`[file] ${part.filename ?? part.url}`))
         break

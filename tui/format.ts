@@ -171,6 +171,117 @@ function line(text: string, tone: TuiTranscriptLineTone = 'default'): TuiTranscr
   return { text, tone }
 }
 
+const BASH_TOOL_ALIASES = new Set(['bash', 'shell', 'local_shell', 'powershell', 'run_in_terminal', 'command', 'command_execution'])
+const READ_TOOL_ALIASES = new Set(['read', 'read_file', 'open_file', 'view_file', 'cat', 'ls', 'list_dir', 'fs_read'])
+const GREP_TOOL_ALIASES = new Set(['grep', 'grep_search', 'search', 'semantic_search', 'find', 'find_text', 'rg'])
+const GLOB_TOOL_ALIASES = new Set(['glob', 'find_files', 'file_search'])
+const EDIT_TOOL_ALIASES = new Set(['edit', 'str_replace_editor', 'replace_string_in_file', 'insert_edit_into_file', 'update_file'])
+const MULTI_EDIT_TOOL_ALIASES = new Set(['multi_edit', 'multiedit'])
+const WRITE_TOOL_ALIASES = new Set(['write', 'write_file', 'create_file'])
+const FILE_CHANGE_TOOL_ALIASES = new Set(['filechange', 'file_change'])
+const TODO_TOOL_ALIASES = new Set(['todowrite', 'todo_write', 'todo'])
+const AGENT_TOOL_ALIASES = new Set(['agent', 'subtask', 'task_create_agent', 'taskcreateagent'])
+const TASK_CREATE_TOOL_ALIASES = new Set(['task_create', 'taskcreate'])
+const TASK_GET_TOOL_ALIASES = new Set(['task_get', 'taskget'])
+const TASK_UPDATE_TOOL_ALIASES = new Set(['task_update', 'taskupdate'])
+const TASK_LIST_TOOL_ALIASES = new Set(['task_list', 'tasklist'])
+const TASK_STOP_TOOL_ALIASES = new Set(['task_stop', 'taskstop'])
+
+function normalizedToolKey(name: string): string {
+  return name.trim().toLowerCase().replace(/[-\s]/g, '_')
+}
+
+function canonicalToolName(name: string): string {
+  const normalized = name.trim()
+  const key = normalizedToolKey(normalized)
+  if (BASH_TOOL_ALIASES.has(key)) return 'Bash'
+  if (READ_TOOL_ALIASES.has(key)) return 'Read'
+  if (GREP_TOOL_ALIASES.has(key)) return 'Grep'
+  if (GLOB_TOOL_ALIASES.has(key)) return 'Glob'
+  if (EDIT_TOOL_ALIASES.has(key)) return 'Edit'
+  if (MULTI_EDIT_TOOL_ALIASES.has(key)) return 'MultiEdit'
+  if (WRITE_TOOL_ALIASES.has(key)) return 'Write'
+  if (FILE_CHANGE_TOOL_ALIASES.has(key)) return 'FileChange'
+  if (key === 'notebook_edit' || key === 'notebookedit') return 'NotebookEdit'
+  if (TODO_TOOL_ALIASES.has(key)) return 'TodoWrite'
+  if (AGENT_TOOL_ALIASES.has(key)) return 'Agent'
+  if (key === 'task') return 'task'
+  if (key === 'task_status' || key === 'taskstatus') return 'task_status'
+  if (TASK_CREATE_TOOL_ALIASES.has(key)) return 'TaskCreate'
+  if (TASK_GET_TOOL_ALIASES.has(key)) return 'TaskGet'
+  if (TASK_UPDATE_TOOL_ALIASES.has(key)) return 'TaskUpdate'
+  if (TASK_LIST_TOOL_ALIASES.has(key)) return 'TaskList'
+  if (TASK_STOP_TOOL_ALIASES.has(key)) return 'TaskStop'
+  if (key === 'websearch' || key === 'web_search') return 'WebSearch'
+  if (key === 'webfetch' || key === 'web_fetch') return 'WebFetch'
+  if (key === 'toolsearch' || key === 'tool_search') return 'ToolSearch'
+  if (key === 'agent_switch' || key === 'agentswitch') return 'AgentSwitch'
+  return normalized
+}
+
+function toolInputRecord(thread: ToolThread): Record<string, unknown> {
+  return thread.toolUse.input && typeof thread.toolUse.input === 'object' && !Array.isArray(thread.toolUse.input)
+    ? thread.toolUse.input as Record<string, unknown>
+    : {}
+}
+
+function toolStringParam(input: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = input[key]
+    if (typeof value === 'string' && value.trim()) return value
+  }
+  return undefined
+}
+
+function normalizeToolThreadForTui(thread: ToolThread): ToolThread {
+  const originalName = thread.toolUse.name
+  const canonicalName = canonicalToolName(originalName)
+  const input = toolInputRecord(thread)
+  const withInput = (name: string, nextInput: Record<string, unknown>): ToolThread => ({
+    ...thread,
+    toolUse: {
+      ...thread.toolUse,
+      name,
+      input: nextInput,
+    },
+  })
+
+  if (canonicalName === 'Write' && typeof input.path === 'string' && typeof input.file_path !== 'string') {
+    return withInput('Write', { ...input, file_path: input.path })
+  }
+
+  if ((canonicalName === 'Edit' || canonicalName === 'MultiEdit') && typeof input.path === 'string' && Array.isArray(input.edits)) {
+    const filePath = input.path
+    const edits = input.edits.flatMap((edit): Array<{ file_path?: string; old_string?: string; new_string?: string; replace_all?: boolean }> => {
+      if (!edit || typeof edit !== 'object' || Array.isArray(edit)) return []
+      const record = edit as Record<string, unknown>
+      const oldText = typeof record.oldText === 'string' ? record.oldText : typeof record.old_string === 'string' ? record.old_string : undefined
+      const newText = typeof record.newText === 'string' ? record.newText : typeof record.new_string === 'string' ? record.new_string : undefined
+      const replaceAll = typeof record.replace_all === 'boolean' ? record.replace_all : undefined
+      return [{ file_path: filePath, old_string: oldText, new_string: newText, replace_all: replaceAll }]
+    })
+    return withInput('MultiEdit', { ...input, file_path: filePath, edits })
+  }
+
+  if (canonicalName === 'Edit' && typeof input.path === 'string' && typeof input.file_path !== 'string') {
+    const oldText = toolStringParam(input, ['oldText', 'old_string'])
+    const newText = toolStringParam(input, ['newText', 'new_string'])
+    if (oldText != null || newText != null) {
+      return withInput('Edit', { ...input, file_path: input.path, old_string: oldText ?? '', new_string: newText ?? '' })
+    }
+  }
+
+  if (canonicalName === 'Read' && typeof input.path === 'string' && typeof input.file_path !== 'string') {
+    return withInput('Read', { ...input, file_path: input.path })
+  }
+
+  if (canonicalName !== originalName) {
+    return withInput(canonicalName, input)
+  }
+
+  return thread
+}
+
 function summarizeKind(kind: unknown): string {
   if (typeof kind === 'string' && kind.trim()) return kind
   if (kind == null) return 'change'
@@ -400,6 +511,8 @@ const TASK_LIST_GROUP_LABEL: Record<TaskListGroupKey, string> = {
   other: 'OTHER',
 }
 
+const DIFF_TOOL_NAMES = new Set(['FileChange', 'Edit', 'MultiEdit', 'Write'])
+
 type TaskItem = { id?: string; subject?: string; status?: string; owner?: string; blockedBy?: string[] }
 type TaskToolInput = {
   taskId?: string
@@ -435,17 +548,18 @@ export function buildTaskActiveForms(messages: ThreadedMessage[]): TaskActiveFor
   for (const m of messages) {
     for (const b of m.blocks) {
       if (b.type !== 'tool_thread') continue
-      const name = b.toolUse.name
+      const block = normalizeToolThreadForTui(b)
+      const name = block.toolUse.name
       if (name === 'TaskCreate') {
-        const inp = b.toolUse.input as { activeForm?: string }
+        const inp = block.toolUse.input as { activeForm?: string }
         const af = typeof inp.activeForm === 'string' ? inp.activeForm.trim() : ''
-        if (!af || !b.result) continue
-        const text = resultRawTextOf(b)
+        if (!af || !block.result) continue
+        const text = resultRawTextOf(block)
         if (!text) continue
         const id = parseCreatedTaskId(text)
         if (id) map.set(id, af)
       } else if (name === 'TaskUpdate') {
-        const inp = b.toolUse.input as { taskId?: string; task_id?: string; activeForm?: string }
+        const inp = block.toolUse.input as { taskId?: string; task_id?: string; activeForm?: string }
         const af = typeof inp.activeForm === 'string' ? inp.activeForm.trim() : ''
         const id = inp.taskId ?? inp.task_id
         if (typeof id === 'string' && af) map.set(id, af)
@@ -516,7 +630,8 @@ function resultTextOf(thread: ToolThread): string | null {
 }
 
 function readInputPathOf(thread: ToolThread): string | undefined {
-  const input = thread.toolUse.input as { file_path?: unknown }
+  const normalizedThread = normalizeToolThreadForTui(thread)
+  const input = normalizedThread.toolUse.input as { file_path?: unknown }
   return typeof input.file_path === 'string' ? input.file_path : undefined
 }
 
@@ -573,11 +688,12 @@ function claudeHookAdditionalContextLines(payload: SystemMessagePayload): TuiTra
 }
 
 function resultRawTextOf(thread: ToolThread): string | null {
-  if (thread.toolUse.name === 'Read') {
-    const summary = readSummaryOf(thread)
+  const normalizedThread = normalizeToolThreadForTui(thread)
+  if (normalizedThread.toolUse.name === 'Read') {
+    const summary = readSummaryOf(normalizedThread)
     if (summary?.content) return summary.content
   }
-  const content = thread.result?.content
+  const content = normalizedThread.result?.content
   if (typeof content === 'string') return content || null
   if (Array.isArray(content)) {
     const parts: string[] = []
@@ -1028,51 +1144,165 @@ function formatOpenCodeTaskTool(thread: ToolThread, expanded: boolean): TuiTrans
   return lines
 }
 
+function compactOneLine(value: string, maxChars = MAX_PREVIEW_CHARS): string {
+  return truncateLine(value.replace(/\s+/g, ' ').trim(), maxChars)
+}
+
+function formatDurationMs(value: number): string {
+  if (value < 1000) return `${Math.round(value)}ms`
+  if (value < 10_000) return `${(value / 1000).toFixed(1)}s`
+  return `${Math.round(value / 1000)}s`
+}
+
+function parseBashResultMeta(raw: string): { outputLineCount: number; exitCode: number | null; durationMs: number | null } {
+  let outputLineCount = 0
+  let exitCode: number | null = null
+  let durationMs: number | null = null
+  for (const rawLine of raw.split('\n')) {
+    const trimmed = rawLine.trim()
+    if (!trimmed) continue
+    const exitMatch = trimmed.match(/^exit_code:\s*(-?\d+)$/i)
+    if (exitMatch?.[1]) {
+      exitCode = Number(exitMatch[1])
+      continue
+    }
+    const parenExitMatch = trimmed.match(/\(exit\s+(-?\d+)\)$/i)
+    if (parenExitMatch?.[1]) {
+      exitCode = Number(parenExitMatch[1])
+      const withoutExit = trimmed.replace(/\s*\(exit\s+-?\d+\)$/i, '').trim()
+      if (withoutExit && !withoutExit.startsWith('$ ')) outputLineCount += 1
+      continue
+    }
+    const durationMatch = trimmed.match(/^duration_ms:\s*([0-9.]+)$/i)
+    if (durationMatch?.[1]) {
+      durationMs = Number(durationMatch[1])
+      continue
+    }
+    if (trimmed.startsWith('$ ')) continue
+    outputLineCount += 1
+  }
+  return { outputLineCount, exitCode, durationMs }
+}
+
+function resultLineCount(thread: ToolThread): number {
+  const raw = resultTextOf(thread)
+  if (!raw) return 0
+  return raw.split('\n').filter((entry) => entry.trim().length > 0).length
+}
+
+function formatTodoCounts(input: Record<string, unknown>): string | null {
+  const todos = Array.isArray(input.todos) ? input.todos : []
+  if (todos.length === 0) return null
+  const counts = { completed: 0, inProgress: 0, pending: 0, other: 0 }
+  for (const todo of todos) {
+    if (!todo || typeof todo !== 'object' || Array.isArray(todo)) {
+      counts.other += 1
+      continue
+    }
+    const status = typeof (todo as Record<string, unknown>).status === 'string'
+      ? String((todo as Record<string, unknown>).status).toLowerCase()
+      : ''
+    if (status === 'completed' || status === 'done') counts.completed += 1
+    else if (status === 'in_progress' || status === 'running' || status === 'active') counts.inProgress += 1
+    else if (status === 'pending' || status === 'todo') counts.pending += 1
+    else counts.other += 1
+  }
+  const parts = [
+    counts.completed > 0 ? `${counts.completed} done` : '',
+    counts.inProgress > 0 ? `${counts.inProgress} active` : '',
+    counts.pending > 0 ? `${counts.pending} pending` : '',
+    counts.other > 0 ? `${counts.other} other` : '',
+  ].filter(Boolean)
+  return parts.join(' · ') || `${todos.length} todo${todos.length === 1 ? '' : 's'}`
+}
+
 function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegistry?: TaskRegistry): TuiTranscriptCardLine[] {
-  if (thread.toolUse.name === 'FileChange') {
-    return previewFileChange(thread)
+  const normalizedThread = normalizeToolThreadForTui(thread)
+  const toolName = normalizedThread.toolUse.name
+
+  if (toolName === 'FileChange') {
+    return previewFileChange(normalizedThread)
   }
 
-  if (TASK_TOOL_NAMES.has(thread.toolUse.name)) {
-    return formatTaskTool(thread, false, activeForms, taskRegistry)
+  if (TASK_TOOL_NAMES.has(toolName)) {
+    return formatTaskTool(normalizedThread, false, activeForms, taskRegistry)
   }
 
-  if (OPENCODE_TASK_TOOL_NAMES.has(thread.toolUse.name)) {
-    return formatOpenCodeTaskTool(thread, false)
+  if (OPENCODE_TASK_TOOL_NAMES.has(toolName)) {
+    return formatOpenCodeTaskTool(normalizedThread, false)
   }
 
-  if (thread.toolUse.name === 'AskUserQuestion') {
-    return formatAskUserQuestionTool(thread, false)
+  if (toolName === 'AskUserQuestion') {
+    return formatAskUserQuestionTool(normalizedThread, false)
   }
 
-  if (thread.toolUse.name === 'ToolSearch') {
-    return formatToolSearchTool(thread, false)
+  if (toolName === 'ToolSearch') {
+    return formatToolSearchTool(normalizedThread, false)
   }
 
-  const input = thread.toolUse.input as Record<string, unknown>
-  const toolName = thread.toolUse.name
+  const input = toolInputRecord(normalizedThread)
+
+  if (toolName === 'Bash') {
+    const command = toolStringParam(input, ['command', 'cmd', 'script']) ?? 'command'
+    const isError = normalizedThread.result?.is_error === true
+    const raw = resultTextOf(normalizedThread) ?? ''
+    const meta = parseBashResultMeta(raw)
+    const status = normalizedThread.result
+      ? isError
+        ? 'ERROR'
+        : meta.exitCode != null && meta.exitCode !== 0
+          ? `exit ${meta.exitCode}`
+          : 'OK'
+      : 'running'
+    const details = [
+      meta.outputLineCount > 0 ? `${meta.outputLineCount} line${meta.outputLineCount === 1 ? '' : 's'}` : '',
+      meta.durationMs != null ? formatDurationMs(meta.durationMs) : '',
+    ].filter(Boolean)
+    return [
+      line(`tool Bash: $ ${compactOneLine(command, 120)}`, 'tool'),
+      line(`${isError ? '✗' : normalizedThread.result ? '✓' : '…'} ${status}${details.length ? ` · ${details.join(' · ')}` : ''}`, isError ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim'),
+    ]
+  }
+
+  if (toolName === 'TodoWrite') {
+    const todos = Array.isArray(input.todos) ? input.todos : []
+    const counts = formatTodoCounts(input)
+    return [
+      line(`tool TodoWrite: ${todos.length} todo${todos.length === 1 ? '' : 's'}`, 'tool'),
+      line(counts ?? (normalizedThread.result ? '✓ updated' : 'pending'), normalizedThread.result?.is_error ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim'),
+    ]
+  }
 
   if (toolName === 'Agent') {
     const description = typeof input.description === 'string' ? input.description : 'agent'
     const subagentType = typeof input.subagent_type === 'string' ? input.subagent_type : ''
-    const isError = thread.result?.is_error === true
-    const parsed = parseAgentResultJson(thread.result?.content)
-    const resultText = extractAgentResultText(thread.result?.content)
+    const isError = normalizedThread.result?.is_error === true
+    const parsed = parseAgentResultJson(normalizedThread.result?.content)
+    const resultText = extractAgentResultText(normalizedThread.result?.content)
     const previewText = resultText
       ? truncateLine(resultText.split('\n').find((l) => l.trim()) ?? resultText)
-      : thread.result ? 'done' : 'running…'
+      : normalizedThread.result ? 'done' : 'running…'
     const stats = formatAgentStatsSummary(parsed)
     const lines: TuiTranscriptCardLine[] = [
       line(`agent ${description}${subagentType ? ` [${subagentType}]` : ''}`, 'tool'),
-      line(`${isError ? '✗' : '✓'} ${previewText}`, isError ? 'result_error' : 'result_ok'),
+      line(`${isError ? '✗' : normalizedThread.result ? '✓' : '…'} ${previewText}`, isError ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim'),
     ]
     if (stats) lines.push(line(stats, 'dim'))
     return lines
   }
 
+  if (toolName === 'AgentSwitch') {
+    const name = toolStringParam(input, ['name']) ?? 'agent'
+    const status = toolStringParam(input, ['status']) ?? (normalizedThread.result ? 'completed' : 'pending')
+    return [
+      line(`agent switch: ${name}`, 'tool'),
+      line(normalizedThread.result?.is_error ? '✗ ERROR' : `✓ ${status}`, normalizedThread.result?.is_error ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim'),
+    ]
+  }
+
   if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write') {
     const filePath = typeof input.file_path === 'string' ? pathBasename(input.file_path) : ''
-    const isError = thread.result?.is_error === true
+    const isError = normalizedThread.result?.is_error === true
 
     let removedLines = 0
     let addedLines = 0
@@ -1104,22 +1334,35 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
   if (toolName === 'Read') {
     const filePath = typeof input.file_path === 'string' ? pathBasename(input.file_path) : ''
     const pages = typeof input.pages === 'string' && input.pages.trim() ? ` pages ${input.pages.trim()}` : ''
-    const isError = thread.result?.is_error === true
-    const resultText = thread.result
-      ? isError ? 'ERROR' : readSummaryStatusText(thread)
+    const isError = normalizedThread.result?.is_error === true
+    const resultText = normalizedThread.result
+      ? isError ? 'ERROR' : readSummaryStatusText(normalizedThread)
       : 'pending'
     return [
       line(`tool Read${filePath ? `: ${filePath}` : ''}${pages}`, 'tool'),
-      line(`${isError ? '✗' : thread.result ? '✓' : '…'} ${resultText}`, isError ? 'result_error' : thread.result ? 'result_ok' : 'dim'),
+      line(`${isError ? '✗' : normalizedThread.result ? '✓' : '…'} ${resultText}`, isError ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim'),
+    ]
+  }
+
+  if (toolName === 'Grep' || toolName === 'Glob' || toolName === 'WebSearch' || toolName === 'WebFetch') {
+    const target = toolStringParam(input, ['pattern', 'query', 'url', 'uri', 'path', 'glob']) ?? toolName.toLowerCase()
+    const count = resultLineCount(normalizedThread)
+    const isError = normalizedThread.result?.is_error === true
+    return [
+      line(`tool ${toolName}: ${compactOneLine(target, 120)}`, 'tool'),
+      line(normalizedThread.result
+        ? `${isError ? '✗ ERROR' : '✓ OK'}${count > 1 ? ` · ${count} lines` : ''}`
+        : '… pending',
+      isError ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim'),
     ]
   }
 
   const mcpId = parseMcpToolName(toolName)
   if (mcpId) {
-    const isError = thread.result?.is_error === true
+    const isError = normalizedThread.result?.is_error === true
     const summary = summarizeMcpInput(input)
-    const rawResult = extractResultText(thread.result?.content)
-    const resultPreview = thread.result
+    const rawResult = extractResultText(normalizedThread.result?.content)
+    const resultPreview = normalizedThread.result
       ? rawResult
         ? truncateLine(rawResult.split('\n').find((l) => l.trim()) ?? rawResult.trim())
         : 'ok'
@@ -1130,8 +1373,8 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
     return [
       line(header, 'tool'),
       line(
-        `${isError ? '✗' : thread.result ? '✓' : '…'} ${resultPreview}`,
-        isError ? 'result_error' : thread.result ? 'result_ok' : 'dim',
+        `${isError ? '✗' : normalizedThread.result ? '✓' : '…'} ${resultPreview}`,
+        isError ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim',
       ),
     ]
   }
@@ -1144,17 +1387,17 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
     ? input.command
     : typeof input.pattern === 'string'
     ? input.pattern
-    : previewJson(thread.toolUse.input)
+    : previewJson(normalizedThread.toolUse.input)
 
-  const resultText = typeof thread.result?.content === 'string'
-    ? truncateLine(thread.result.content.trim())
-    : thread.result
-    ? truncateLine(extractResultText(thread.result.content)) || 'structured result'
+  const resultText = typeof normalizedThread.result?.content === 'string'
+    ? truncateLine(normalizedThread.result.content.trim())
+    : normalizedThread.result
+    ? truncateLine(extractResultText(normalizedThread.result.content)) || 'structured result'
     : 'pending'
 
   return [
-    line(`tool ${thread.toolUse.name}${target ? `: ${target}` : ''}`, 'tool'),
-    line(`result ${thread.result?.is_error ? 'error' : 'ok'}: ${resultText || 'empty'}`, thread.result?.is_error ? 'result_error' : 'result_ok'),
+    line(`tool ${toolName}${target ? `: ${target}` : ''}`, 'tool'),
+    line(`result ${normalizedThread.result?.is_error ? 'error' : 'ok'}: ${resultText || 'empty'}`, normalizedThread.result?.is_error ? 'result_error' : 'result_ok'),
   ]
 }
 
@@ -1414,8 +1657,7 @@ const INSIGHT_RE = /`★\s*Insight\s*─+`/
 
 function classifyCardCategory(message: ThreadedMessage): TuiTranscriptCardCategory {
   if (message.role === 'system') return 'system'
-  const DIFF_TOOLS = new Set(['FileChange', 'Edit', 'MultiEdit', 'Write'])
-  if (message.blocks.some((block) => block.type === 'tool_thread' && DIFF_TOOLS.has(block.toolUse.name))) {
+  if (message.blocks.some((block) => block.type === 'tool_thread' && DIFF_TOOL_NAMES.has(canonicalToolName(block.toolUse.name)))) {
     return 'diff'
   }
 
@@ -1452,7 +1694,8 @@ function synthesizeEditDiff(message: ThreadedMessage): string | undefined {
   const hunks: string[] = []
   for (const block of message.blocks) {
     if (block.type !== 'tool_thread') continue
-    const { name, input } = block.toolUse
+    const normalizedBlock = normalizeToolThreadForTui(block)
+    const { name, input } = normalizedBlock.toolUse
     const inp = input as Record<string, unknown>
 
     if (name === 'Edit') {
@@ -1462,8 +1705,9 @@ function synthesizeEditDiff(message: ThreadedMessage): string | undefined {
       if (oldStr || newStr) hunks.push(makeUnifiedDiffHunk(filePath, oldStr, newStr))
     } else if (name === 'MultiEdit') {
       const edits = Array.isArray(inp.edits) ? (inp.edits as Array<Record<string, unknown>>) : []
+      const defaultFilePath = typeof inp.file_path === 'string' ? inp.file_path : 'unknown'
       for (const edit of edits) {
-        const filePath = typeof edit.file_path === 'string' ? edit.file_path : 'unknown'
+        const filePath = typeof edit.file_path === 'string' ? edit.file_path : defaultFilePath
         const oldStr = typeof edit.old_string === 'string' ? edit.old_string : ''
         const newStr = typeof edit.new_string === 'string' ? edit.new_string : ''
         if (oldStr || newStr) hunks.push(makeUnifiedDiffHunk(filePath, oldStr, newStr))
@@ -1653,7 +1897,11 @@ function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[], activeForms?: Task
   const lines: TuiTranscriptCardLine[] = []
   let hasMermaidDiagrams = false
 
-  for (const block of blocks) {
+  for (const originalBlock of blocks) {
+    const block = originalBlock.type === 'tool_thread'
+      ? normalizeToolThreadForTui(originalBlock)
+      : originalBlock
+
     if (block.type === 'tool_thread' && block.toolUse.name === 'Read') {
       const readBlock = readCodeBlockFromTool(block, `read${n++}`)
       if (readBlock) all.push(readBlock)
@@ -1734,27 +1982,28 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
     }
 
     case 'tool_thread': {
-      const input = block.toolUse.input as Record<string, unknown>
-      const toolName = block.toolUse.name
+      const normalizedBlock = normalizeToolThreadForTui(block)
+      const input = toolInputRecord(normalizedBlock)
+      const toolName = normalizedBlock.toolUse.name
 
       if (TASK_TOOL_NAMES.has(toolName)) {
-        return formatTaskTool(block, true, activeForms, taskRegistry)
+        return formatTaskTool(normalizedBlock, true, activeForms, taskRegistry)
       }
 
       if (OPENCODE_TASK_TOOL_NAMES.has(toolName)) {
-        return formatOpenCodeTaskTool(block, true)
+        return formatOpenCodeTaskTool(normalizedBlock, true)
       }
 
       if (toolName === 'AskUserQuestion') {
-        return formatAskUserQuestionTool(block, true)
+        return formatAskUserQuestionTool(normalizedBlock, true)
       }
 
       if (toolName === 'ToolSearch') {
-        return formatToolSearchTool(block, true)
+        return formatToolSearchTool(normalizedBlock, true)
       }
 
       if (toolName === 'FileChange') {
-        const fcInput = block.toolUse.input as {
+        const fcInput = normalizedBlock.toolUse.input as {
           changes?: Array<{ path?: string; kind?: unknown; diff?: string }>
         }
         const changes = fcInput.changes ?? []
@@ -1774,12 +2023,12 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
       if (toolName === 'Agent') {
         const description = typeof input.description === 'string' ? input.description : 'agent'
         const subagentType = typeof input.subagent_type === 'string' ? input.subagent_type : ''
-        const isError = block.result?.is_error === true
-        const parsed = parseAgentResultJson(block.result?.content)
-        const resultText = extractAgentResultText(block.result?.content)
+        const isError = normalizedBlock.result?.is_error === true
+        const parsed = parseAgentResultJson(normalizedBlock.result?.content)
+        const resultText = extractAgentResultText(normalizedBlock.result?.content)
         const stats = formatAgentStatsSummary(parsed)
         const header = line(`agent ${description}${subagentType ? ` [${subagentType}]` : ''}`, 'tool')
-        if (!block.result) return [header, line('running…', 'dim')]
+        if (!normalizedBlock.result) return [header, line('running…', 'dim')]
         const resultLines = resultText
           ? sanitizeLine(resultText).split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0).map((l) => line(l, 'agent'))
           : [line(isError ? '✗ ERROR' : '✓ done', isError ? 'result_error' : 'result_ok')]
@@ -1790,9 +2039,45 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
         ]
       }
 
+      if (toolName === 'AgentSwitch') {
+        const name = toolStringParam(input, ['name']) ?? 'agent'
+        const status = toolStringParam(input, ['status']) ?? (normalizedBlock.result ? 'completed' : 'pending')
+        return [
+          line(`agent switch: ${name}`, 'tool'),
+          line(normalizedBlock.result?.is_error ? '✗ ERROR' : `✓ ${status}`, normalizedBlock.result?.is_error ? 'result_error' : normalizedBlock.result ? 'result_ok' : 'dim'),
+        ]
+      }
+
+      if (toolName === 'Bash') {
+        const command = toolStringParam(input, ['command', 'cmd', 'script']) ?? 'command'
+        const isError = normalizedBlock.result?.is_error === true
+        const lines: TuiTranscriptCardLine[] = [line(`tool Bash: $ ${compactOneLine(command, 160)}`, 'tool')]
+        if (!normalizedBlock.result) return [...lines, line('… running', 'dim')]
+        const content = resultRawTextOf(normalizedBlock)
+        const meta = parseBashResultMeta(content ?? '')
+        lines.push(line(isError ? '✗ ERROR' : meta.exitCode != null && meta.exitCode !== 0 ? `✗ exit ${meta.exitCode}` : '✓ OK', isError || (meta.exitCode != null && meta.exitCode !== 0) ? 'result_error' : 'result_ok'))
+        if (content) {
+          for (const l of sanitizeLine(content).split('\n')) {
+            const trimmed = l.trimEnd()
+            if (trimmed.length > 0) lines.push(line(truncateLine(trimmed), 'muted'))
+          }
+        }
+        return lines
+      }
+
+      if (toolName === 'TodoWrite') {
+        const counts = formatTodoCounts(input)
+        const todos = Array.isArray(input.todos) ? input.todos : []
+        const lines: TuiTranscriptCardLine[] = [
+          line(`tool TodoWrite: ${todos.length} todo${todos.length === 1 ? '' : 's'}`, 'tool'),
+        ]
+        if (counts) lines.push(line(counts, 'muted'))
+        return lines
+      }
+
       if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write') {
         const filePath = typeof input.file_path === 'string' ? input.file_path : ''
-        const isError = block.result?.is_error === true
+        const isError = normalizedBlock.result?.is_error === true
         // Diff content is handled via card.editDiff → <diff> component; only emit header + status here
         return [
           line(`tool ${toolName}${filePath ? `: ${filePath}` : ''}`, 'tool'),
@@ -1803,20 +2088,20 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
       if (toolName === 'Read') {
         const filePath = typeof input.file_path === 'string' ? input.file_path : ''
         const pages = typeof input.pages === 'string' && input.pages.trim() ? ` pages ${input.pages.trim()}` : ''
-        const isError = block.result?.is_error === true
-        const summary = readSummaryOf(block)
+        const isError = normalizedBlock.result?.is_error === true
+        const summary = readSummaryOf(normalizedBlock)
         const lines: TuiTranscriptCardLine[] = [
           line(`tool Read${filePath ? `: ${filePath}` : ''}${pages}`, 'tool'),
         ]
-        if (!block.result) return lines
-        lines.push(line(isError ? '✗ ERROR' : `✓ ${summary ? readSummaryStatusText(block) : 'OK'}`, isError ? 'result_error' : 'result_ok'))
+        if (!normalizedBlock.result) return lines
+        lines.push(line(isError ? '✗ ERROR' : `✓ ${summary ? readSummaryStatusText(normalizedBlock) : 'OK'}`, isError ? 'result_error' : 'result_ok'))
         if (summary) {
           for (const entry of formatClaudeReadMetadata(summary)) {
             lines.push(line(`  ${entry}`, entry === 'token cap' ? 'result_error' : 'dim'))
           }
         }
         if (isError) {
-          const content = resultRawTextOf(block)
+          const content = resultRawTextOf(normalizedBlock)
           if (content) {
             lines.push(
               ...sanitizeLine(content)
@@ -1833,7 +2118,7 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
 
       const mcpId = parseMcpToolName(toolName)
       if (mcpId) {
-        const isError = block.result?.is_error === true
+        const isError = normalizedBlock.result?.is_error === true
         const lines: TuiTranscriptCardLine[] = [line(mcpHeaderLabel(mcpId), 'tool')]
         const inputKeys = Object.keys(input)
         for (const key of inputKeys) {
@@ -1858,11 +2143,11 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
             lines.push(line(`${key}: ${previewJson(value)}`, 'dim'))
           }
         }
-        if (!block.result) {
+        if (!normalizedBlock.result) {
           lines.push(line('… pending', 'dim'))
           return lines
         }
-        const resultText = extractResultText(block.result.content)
+        const resultText = extractResultText(normalizedBlock.result.content)
         lines.push(line(isError ? '✗ ERROR' : '✓ OK', isError ? 'result_error' : 'result_ok'))
         // Result text is emitted unfiltered (no line cap, fences left in) so
         // extractCodeBlocksFromBlocks can lift fenced code into TUI code blocks.
@@ -1889,11 +2174,11 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
       const toolLines: TuiTranscriptCardLine[] = [
         line(`tool ${toolName}${target ? `: ${target}` : ''}`, 'tool'),
       ]
-      const isError = block.result?.is_error === true
-      const content = typeof block.result?.content === 'string'
-        ? sanitizeLine(block.result.content).trim()
-        : Array.isArray(block.result?.content)
-        ? sanitizeLine(extractResultText(block.result.content)).trim() || null
+      const isError = normalizedBlock.result?.is_error === true
+      const content = typeof normalizedBlock.result?.content === 'string'
+        ? sanitizeLine(normalizedBlock.result.content).trim()
+        : Array.isArray(normalizedBlock.result?.content)
+        ? sanitizeLine(extractResultText(normalizedBlock.result.content)).trim() || null
         : null
 
       if (content) {
@@ -1905,7 +2190,7 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
             .filter((l) => l.length > 0)
             .map((l) => line(truncateLine(l), 'muted')),
         )
-      } else if (block.result) {
+      } else if (normalizedBlock.result) {
         toolLines.push(line(isError ? '✗ ERROR' : '✓ OK', isError ? 'result_error' : 'result_ok'))
       }
       return toolLines

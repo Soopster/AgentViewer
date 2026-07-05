@@ -57,8 +57,29 @@ const TOOL_COLORS: Record<string, string> = {
   NotebookEdit: 'var(--t-edit)',
 }
 
+function canonicalToolName(name: string): string {
+  const normalized = name.trim()
+  const lower = normalized.toLowerCase().replace(/[-\s]/g, '_')
+  if (['bash', 'shell', 'local_shell', 'powershell', 'run_in_terminal', 'command', 'command_execution'].includes(lower)) return 'Bash'
+  if (['read', 'read_file', 'open_file', 'view_file', 'cat', 'ls', 'list_dir', 'fs_read'].includes(lower)) return 'Read'
+  if (['grep', 'grep_search', 'search', 'semantic_search', 'find', 'find_text', 'rg'].includes(lower)) return 'Grep'
+  if (['glob', 'find_files', 'file_search'].includes(lower)) return 'Glob'
+  if (['edit', 'str_replace_editor', 'replace_string_in_file', 'insert_edit_into_file', 'update_file'].includes(lower)) return 'Edit'
+  if (['multi_edit', 'multiedit'].includes(lower)) return 'MultiEdit'
+  if (['write', 'write_file', 'create_file'].includes(lower)) return 'Write'
+  if (['filechange', 'file_change'].includes(lower)) return 'FileChange'
+  if (['notebook_edit', 'notebookedit'].includes(lower)) return 'NotebookEdit'
+  if (['todowrite', 'todo_write', 'todo'].includes(lower)) return 'TodoWrite'
+  if (['agent', 'task', 'subtask', 'task_create', 'taskcreate'].includes(lower)) return 'Agent'
+  if (['task_status', 'taskstatus', 'task_get', 'taskget', 'task_update', 'taskupdate', 'task_list', 'tasklist', 'task_stop', 'taskstop'].includes(lower)) return 'task_status'
+  if (['websearch', 'web_search'].includes(lower)) return 'WebSearch'
+  if (['webfetch', 'web_fetch'].includes(lower)) return 'WebFetch'
+  if (['toolsearch', 'tool_search'].includes(lower)) return 'ToolSearch'
+  return normalized
+}
+
 function toolColor(name: string) {
-  return TOOL_COLORS[name] ?? 'var(--t-other)'
+  return TOOL_COLORS[canonicalToolName(name)] ?? 'var(--t-other)'
 }
 
 type McpToolId = { server: string; tool: string }
@@ -3350,30 +3371,31 @@ function McpCard({ thread }: { thread: ToolThread }) {
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 
 function ToolThreadCard({ thread }: { thread: ToolThread }) {
-  const name = thread.toolUse.name
-  if (name === 'Edit')                         return <EditToolCard thread={thread} />
-  if (name === 'MultiEdit')                    return <MultiEditCard thread={thread} />
-  if (name === 'FileChange')                   return <FileChangeCard thread={thread} />
-  if (name === 'Write')                        return <WriteToolCard thread={thread} />
-  if (name === 'Bash')                         return <BashCard thread={thread} />
-  if (name === 'Read')                         return <ReadCard thread={thread} />
-  if (name === 'Grep')                         return <GrepCard thread={thread} />
-  if (name === 'Glob')                         return <GlobCard thread={thread} />
-  if (name === 'TodoWrite')                    return <TodoWriteCard thread={thread} />
-  if (name === 'Agent')                        return <AgentCard thread={thread} />
-  if (name === 'task' || name === 'task_status') return <OpenCodeTaskCard thread={thread} />
-  if (name === 'EnterPlanMode' || name === 'ExitPlanMode') return <PlanModeCard thread={thread} />
-  if (name === 'Skill')                        return <SkillCard thread={thread} />
-  if (name === 'AskUserQuestion')              return <AskUserQuestionCard thread={thread} />
-  if (name === 'ToolSearch')                   return <ToolSearchCard thread={thread} />
-  if (name === 'WebSearch')                    return <WebSearchCard thread={thread} />
-  if (name === 'WebFetch')                     return <WebFetchCard thread={thread} />
-  if (name === 'NotebookEdit')                 return <NotebookEditCard thread={thread} />
-  if (name === 'EnterWorktree' || name === 'ExitWorktree') return <WorktreeCard thread={thread} />
-  if (name === 'TaskCreate' || name === 'TaskList' || name === 'TaskGet' || name === 'TaskUpdate' || name === 'TaskStop') return <TaskCard thread={thread} />
-  if (name === 'CronCreate' || name === 'CronList' || name === 'CronDelete') return <CronCard thread={thread} />
-  if (name === 'ListMcpResourcesTool' || name === 'ReadMcpResourceTool') return <McpCard thread={thread} />
-  if (isMcpToolName(name)) return <McpToolCard thread={thread} />
+  const nativeThread = normalizeToolThreadForNativeCard(thread)
+  const name = nativeThread.toolUse.name
+  if (name === 'Edit')                         return <EditToolCard thread={nativeThread} />
+  if (name === 'MultiEdit')                    return <MultiEditCard thread={nativeThread} />
+  if (name === 'FileChange')                   return <FileChangeCard thread={nativeThread} />
+  if (name === 'Write')                        return <WriteToolCard thread={nativeThread} />
+  if (name === 'Bash')                         return <BashCard thread={nativeThread} />
+  if (name === 'Read')                         return <ReadCard thread={nativeThread} />
+  if (name === 'Grep')                         return <GrepCard thread={nativeThread} />
+  if (name === 'Glob')                         return <GlobCard thread={nativeThread} />
+  if (name === 'TodoWrite')                    return <TodoWriteCard thread={nativeThread} />
+  if (name === 'Agent')                        return <AgentCard thread={nativeThread} />
+  if (name === 'task' || name === 'task_status') return <OpenCodeTaskCard thread={nativeThread} />
+  if (name === 'EnterPlanMode' || name === 'ExitPlanMode') return <PlanModeCard thread={nativeThread} />
+  if (name === 'Skill')                        return <SkillCard thread={nativeThread} />
+  if (name === 'AskUserQuestion')              return <AskUserQuestionCard thread={nativeThread} />
+  if (name === 'ToolSearch')                   return <ToolSearchCard thread={nativeThread} />
+  if (name === 'WebSearch')                    return <WebSearchCard thread={nativeThread} />
+  if (name === 'WebFetch')                     return <WebFetchCard thread={nativeThread} />
+  if (name === 'NotebookEdit')                 return <NotebookEditCard thread={nativeThread} />
+  if (name === 'EnterWorktree' || name === 'ExitWorktree') return <WorktreeCard thread={nativeThread} />
+  if (name === 'TaskCreate' || name === 'TaskList' || name === 'TaskGet' || name === 'TaskUpdate' || name === 'TaskStop') return <TaskCard thread={nativeThread} />
+  if (name === 'CronCreate' || name === 'CronList' || name === 'CronDelete') return <CronCard thread={nativeThread} />
+  if (name === 'ListMcpResourcesTool' || name === 'ReadMcpResourceTool') return <McpCard thread={nativeThread} />
+  if (isMcpToolName(name)) return <McpToolCard thread={nativeThread} />
   return <GenericToolCard thread={thread} />
 }
 
@@ -4840,11 +4862,19 @@ function agentsBashResultMeta(raw: string): { outputLineCount: number; exitCode:
       exitCode = Number(exitMatch[1])
       continue
     }
+    const parenExitMatch = trimmed.match(/\(exit\s+(-?\d+)\)$/i)
+    if (parenExitMatch?.[1]) {
+      exitCode = Number(parenExitMatch[1])
+      const withoutExit = trimmed.replace(/\s*\(exit\s+-?\d+\)$/i, '').trim()
+      if (withoutExit && !withoutExit.startsWith('$ ')) outputLineCount += 1
+      continue
+    }
     const durationMatch = trimmed.match(/^duration_ms:\s*([0-9.]+)$/i)
     if (durationMatch?.[1]) {
       durationMs = Number(durationMatch[1])
       continue
     }
+    if (trimmed.startsWith('$ ')) continue
     outputLineCount += 1
   }
   return { outputLineCount, exitCode, durationMs }
@@ -4864,8 +4894,32 @@ function agentsTodoCounts(input: Record<string, unknown>): { completed: number; 
   return counts
 }
 
+function agentsEditStats(input: Record<string, unknown>): { additions: number; deletions: number } | null {
+  if (Array.isArray(input.edits)) {
+    let additions = 0
+    let deletions = 0
+    for (const edit of input.edits) {
+      if (!edit || typeof edit !== 'object' || Array.isArray(edit)) continue
+      const record = edit as Record<string, unknown>
+      const oldText = typeof record.oldText === 'string' ? record.oldText : typeof record.old_string === 'string' ? record.old_string : ''
+      const newText = typeof record.newText === 'string' ? record.newText : typeof record.new_string === 'string' ? record.new_string : ''
+      if (oldText) deletions += lineCount(oldText)
+      if (newText) additions += lineCount(newText)
+    }
+    return additions > 0 || deletions > 0 ? { additions, deletions } : null
+  }
+  const oldText = toolStringParam(input, ['oldText', 'old_string'])
+  const newText = toolStringParam(input, ['newText', 'new_string'])
+  if (!oldText && !newText) return null
+  return {
+    additions: newText ? lineCount(newText) : 0,
+    deletions: oldText ? lineCount(oldText) : 0,
+  }
+}
+
 function summarizeAgentsTool(thread: ToolThread): string {
-  const name = thread.toolUse.name
+  const originalName = thread.toolUse.name
+  const name = canonicalToolName(originalName)
   const input = toolInputRecord(thread)
   if (name === 'Bash') {
     const command = toolStringParam(input, ['command', 'cmd'])
@@ -4883,9 +4937,10 @@ function summarizeAgentsTool(thread: ToolThread): string {
   if (name === 'FileChange') return summarizeAgentsFileChange(input)
   if (name === 'Edit' || name === 'MultiEdit' || name === 'Write') {
     const path = toolStringParam(input, ['file_path', 'path'])
-    const oldText = toolStringParam(input, ['old_string'])
-    const newText = toolStringParam(input, ['new_string'])
-    const editSize = oldText || newText ? ` (${oldText ? `-${oldText.split('\n').length}` : ''}${oldText && newText ? ' ' : ''}${newText ? `+${newText.split('\n').length}` : ''})` : ''
+    const stats = name === 'Write'
+      ? (toolStringParam(input, ['content']) ? { additions: lineCount(toolStringParam(input, ['content']) ?? ''), deletions: 0 } : null)
+      : agentsEditStats(input)
+    const editSize = stats ? ` (-${stats.deletions} +${stats.additions})` : ''
     return `${path ?? 'file change'}${editSize}`
   }
   if (name === 'Grep') {
@@ -4907,7 +4962,8 @@ function summarizeAgentsTool(thread: ToolThread): string {
   if (name === 'WebSearch') return toolStringParam(input, ['query']) ?? 'web search'
   if (name === 'WebFetch') return toolStringParam(input, ['url', 'uri']) ?? 'web fetch'
   if (name === 'ToolSearch') return toolStringParam(input, ['query']) ?? 'tool search'
-  if (isMcpToolName(name)) {
+  if (originalName === 'AgentSwitch') return toolStringParam(input, ['name']) ?? 'agent switch'
+  if (isMcpToolName(originalName)) {
     const server = toolStringParam(input, ['server'])
     const summary = Object.keys(input).slice(0, 2).join(', ')
     return [server, summary].filter(Boolean).join(' · ') || 'mcp tool'
@@ -4918,7 +4974,7 @@ function summarizeAgentsTool(thread: ToolThread): string {
   try {
     return JSON.stringify(input)
   } catch {
-    return name
+    return originalName
   }
 }
 
@@ -4933,7 +4989,8 @@ function lineCount(value: string): number {
 }
 
 function agentsToolMetaBadges(thread: ToolThread): string[] {
-  const name = thread.toolUse.name
+  const originalName = thread.toolUse.name
+  const name = canonicalToolName(originalName)
   const input = toolInputRecord(thread)
   const badges: string[] = []
   const status = toolStringParam(input, ['status'])
@@ -4964,8 +5021,11 @@ function agentsToolMetaBadges(thread: ToolThread): string[] {
   const oldText = toolStringParam(input, ['old_string'])
   const newText = toolStringParam(input, ['new_string'])
   const content = toolStringParam(input, ['content'])
+  const editStats = name === 'Edit' || name === 'MultiEdit' ? agentsEditStats(input) : null
 
-  if (oldText || newText) {
+  if (editStats) {
+    badges.push(`+${editStats.additions} -${editStats.deletions}`)
+  } else if (oldText || newText) {
     const del = oldText ? lineCount(oldText) : 0
     const add = newText ? lineCount(newText) : 0
     badges.push(`+${add} -${del}`)
@@ -5021,7 +5081,12 @@ function agentsToolMetaBadges(thread: ToolThread): string[] {
     return badges.slice(0, 2)
   }
 
-  if (name === 'WebSearch' || name === 'WebFetch' || name === 'ToolSearch' || isMcpToolName(name)) {
+  if (originalName === 'AgentSwitch') {
+    badges.push(status ?? 'done')
+    return badges.slice(0, 2)
+  }
+
+  if (name === 'WebSearch' || name === 'WebFetch' || name === 'ToolSearch' || isMcpToolName(originalName)) {
     if (status && !/^(completed|success|succeeded)$/i.test(status)) badges.push(status)
     const lines = agentsResultLineCount(output)
     if (lines > 1) badges.push(formatAgentsCount(lines, 'lines'))
@@ -5039,6 +5104,54 @@ function agentsToolMetaBadges(thread: ToolThread): string[] {
   if (lines > 1) badges.push(formatAgentsCount(lines, 'lines'))
   else badges.push(`${output.length.toLocaleString()} chars`)
   return badges.slice(0, 2)
+}
+
+function normalizeToolThreadForNativeCard(thread: ToolThread): ToolThread {
+  const originalName = thread.toolUse.name
+  const canonicalName = canonicalToolName(originalName)
+  const input = toolInputRecord(thread)
+  const withInput = (name: string, nextInput: Record<string, unknown>): ToolThread => ({
+    ...thread,
+    toolUse: {
+      ...thread.toolUse,
+      name,
+      input: nextInput,
+    },
+  })
+
+  if (canonicalName === 'Write' && typeof input.path === 'string' && typeof input.file_path !== 'string') {
+    return withInput('Write', { ...input, file_path: input.path })
+  }
+
+  if ((canonicalName === 'Edit' || canonicalName === 'MultiEdit') && typeof input.path === 'string' && Array.isArray(input.edits)) {
+    const edits = input.edits.flatMap((edit): Array<{ old_string?: string; new_string?: string; replace_all?: boolean }> => {
+      if (!edit || typeof edit !== 'object' || Array.isArray(edit)) return []
+      const record = edit as Record<string, unknown>
+      const oldText = typeof record.oldText === 'string' ? record.oldText : typeof record.old_string === 'string' ? record.old_string : undefined
+      const newText = typeof record.newText === 'string' ? record.newText : typeof record.new_string === 'string' ? record.new_string : undefined
+      const replaceAll = typeof record.replace_all === 'boolean' ? record.replace_all : undefined
+      return [{ old_string: oldText, new_string: newText, replace_all: replaceAll }]
+    })
+    return withInput('MultiEdit', { ...input, file_path: input.path, edits })
+  }
+
+  if (canonicalName === 'Edit' && typeof input.path === 'string' && typeof input.file_path !== 'string') {
+    const oldText = toolStringParam(input, ['oldText', 'old_string'])
+    const newText = toolStringParam(input, ['newText', 'new_string'])
+    if (oldText != null || newText != null) {
+      return withInput('Edit', { ...input, file_path: input.path, old_string: oldText ?? '', new_string: newText ?? '' })
+    }
+  }
+
+  if (canonicalName === 'Read' && typeof input.path === 'string' && typeof input.file_path !== 'string') {
+    return withInput('Read', { ...input, file_path: input.path })
+  }
+
+  if (canonicalName !== originalName) {
+    return withInput(canonicalName, input)
+  }
+
+  return thread
 }
 
 function agentsDensitySpacing(dc: DensityConfig) {
