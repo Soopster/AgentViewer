@@ -4183,7 +4183,6 @@ function TranscriptCardInner({
   if (agentsMode) {
     const agentWidth = Math.max(readableCardWidth, 24)
     const toolCards = agentToolCardsFor(card)
-    const roleInitial = card.role === 'assistant' ? 'A' : card.role === 'user' ? 'U' : 'S'
     const operationalCard = toolCards.length > 0
     const agentAccent = operationalCard ? theme.amber : accent
     const agentBg = hasCursor
@@ -4193,24 +4192,25 @@ function TranscriptCardInner({
         : operationalCard
           ? mixHexColor(theme.amber, theme.surface, 0.08) ?? theme.surface
           : cardBg
-    const metaParts = [
-      card.timestamp ?? null,
-      isSearchHit ? 'match' : null,
-      bookmarked ? 'bookmarked' : null,
-      card.usageSummary ?? null,
-    ].filter((part): part is string => Boolean(part))
-    const meta = metaParts.join('  ')
-    const railWidth = 2
-    const contentWidth = Math.max(agentWidth - railWidth - 2, 16)
-    const metaWidth = meta ? Math.min(Math.max(Math.floor(contentWidth * 0.34), 10), meta.length + 2) : 0
-    const titleWidth = Math.max(contentWidth - metaWidth - 2, 10)
+    const contentWidth = Math.max(agentWidth - 2, 16)
     const agentBodyWidth = Math.max(contentWidth - 2, 12)
     const toolCount = toolCards.length || bodyLines.filter((line) => line.tone === 'tool' && /^tool\s+/i.test(line.text.trim())).length || 1
     const headerLabel = operationalCard
       ? `${toolCount} tool ${toolCount === 1 ? 'call' : 'calls'}`
       : card.label
-    const showOuterBorder = hasCursor || isSearchHit
-    const headerPrefix = `${hasCursor ? '>' : ' '} ${operationalCard ? '⚙' : roleInitial}  `
+    const agentsMarker = hasCursor ? '>' : operationalCard ? '⚙' : card.role === 'user' ? '▸' : '●'
+    const agentsTitleMeta = joinMeta([
+      headerMeta,
+      isSearchHit ? 'match' : null,
+      bookmarked ? 'bookmarked' : null,
+      card.usageSummary ?? null,
+      hasCursor ? 'y copy  b bookmark  Q reply' : null,
+    ])
+    const agentsMaxTitleWidth = Math.max(agentWidth - 4, 20)
+    const agentsCardTitleFull = `${agentsMarker} ${headerLabel}${agentsTitleMeta ? `  ${agentsTitleMeta}` : ''}`
+    const agentsCardTitle = agentsCardTitleFull.length > agentsMaxTitleWidth
+      ? agentsCardTitleFull.slice(0, agentsMaxTitleWidth - 1) + '…'
+      : agentsCardTitleFull
     const expandedToolDisplays = isExpanded && toolCards.length > 0
       ? toolCards.map((toolCard) => {
           const toolExpanded = agentToolCardIsExpanded(toolCard, agentToolExpandedKeys, agentToolCollapsedKeys)
@@ -4249,35 +4249,18 @@ function TranscriptCardInner({
           id={`card:${card.key}`}
           flexDirection="row"
           width={agentWidth}
-          border={showOuterBorder}
+          border
           borderStyle={hasCursor ? 'heavy' : 'single'}
           borderColor={hasCursor || isSearchHit ? agentAccent : borderColor}
           backgroundColor={agentBg}
+          title={agentsCardTitle}
+          titleColor={agentAccent}
           onMouseDown={(event) => {
             if (event.button !== 0) return
             onSelectCard(card.key)
           }}
         >
-          <box width={railWidth} flexDirection="column" alignItems="center">
-            <text fg={agentAccent} wrapMode="none">▎</text>
-            {bodyLines.slice(0, Math.max(bodyLines.length, 1)).map((_, lineIndex) => (
-              <text key={`${card.key}:agent-rail:${lineIndex}`} fg={agentAccent} wrapMode="none">▎</text>
-            ))}
-          </box>
           <box flexDirection="column" width={contentWidth} paddingX={1} paddingBottom={densityState.bodyPad}>
-            <box flexDirection="row">
-              <text fg={agentAccent} wrapMode="none" selectable {...selectionColors}>
-                {fitText(headerPrefix, 5)}
-              </text>
-              <text fg={agentAccent} wrapMode="none" selectable {...selectionColors}>
-                {fitText(headerLabel, titleWidth)}
-              </text>
-              {meta && metaWidth > 0 ? (
-                <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
-                  {fitText(meta, metaWidth)}
-                </text>
-              ) : null}
-            </box>
             {expandedToolDisplays.length > 0 ? (
               <box flexDirection="column" marginTop={1}>
                 {expandedToolDisplays.map((toolEntry, toolIndex) => {
