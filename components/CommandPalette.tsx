@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -41,6 +41,7 @@ type CommandPaletteProps = {
   onToggleWorktrees: (include: boolean) => void
   onToggleMessagePane: () => void
   onOpenGit: () => void
+  onOpenCoordinator: () => void
   onOpenTasks: () => void
   onOpenPromptLibrary: () => void
   onOpenChannelBridge: () => void
@@ -323,6 +324,7 @@ export default function CommandPalette({
   onToggleWorktrees,
   onToggleMessagePane,
   onOpenGit,
+  onOpenCoordinator,
   onOpenTasks,
   onOpenPromptLibrary,
   onOpenChannelBridge,
@@ -496,6 +498,17 @@ export default function CommandPalette({
         run: onOpenGit,
       },
       {
+        id: 'open-agent-team',
+        label: 'Open agent team board',
+        description: 'Coordinate multi-agent runs with teammates, task board, messages, worktrees, and merge controls',
+        icon: <UsersRound size={16} />,
+        shortcut: 'Team',
+        group: 'actions',
+        keywords: ['agent', 'team', 'coordinator', 'coordination', 'teammate', 'task board', 'worktree', 'multiagent', 'multi-agent'],
+        score: 0,
+        run: onOpenCoordinator,
+      },
+      {
         id: 'open-task-panel',
         label: 'Open task panel',
         description: canOpenTasks ? 'Show the active Claude session task registry and lineage' : 'Select a Claude session with tasks first',
@@ -661,7 +674,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenCoordinator, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

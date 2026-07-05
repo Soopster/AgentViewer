@@ -18,6 +18,7 @@ const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ss
 const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
 const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
 const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
+const AgentTeamCoordinator = dynamic(() => import('@/components/AgentTeamCoordinator'), { ssr: false })
 
 type SessionScopeMode = 'all' | 'project'
 type ProjectSelection = {
@@ -316,6 +317,7 @@ export default function Home() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
+  const [coordinatorOpen, setCoordinatorOpen] = useState(false)
   const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
   const [promptLibraryOpenRequest, setPromptLibraryOpenRequest] = useState(0)
   const [channelBridgeOpenRequest, setChannelBridgeOpenRequest] = useState(0)
@@ -333,7 +335,7 @@ export default function Home() {
   // True when the active transcript was loaded in full via the deep-link
   // (all=1) path, so the head-trim below must NOT evict the anchored history.
   const fullTranscriptLoadedRef = useRef(false)
-  const projectMessageCountsRef = useRef<Map<string, number>>(new Map())
+  const projectMessageCountsRef = useRef<Map<string, number> | null>(null)
   // Guards to prevent concurrent poll ticks from overlapping when a fetch takes > interval
   const pollInFlightRef = useRef(false)
   const projectPollInFlightRef = useRef(false)
@@ -342,6 +344,12 @@ export default function Home() {
   const sessionListScrollRequestRef = useRef(0)
   // Cancels the previous session-switch fetch so a slow A response can't overwrite B's messages
   const sessionLoadAbortRef = useRef<AbortController | null>(null)
+  const getProjectMessageCounts = useCallback(() => {
+    if (projectMessageCountsRef.current) return projectMessageCountsRef.current
+    const nextCounts = new Map<string, number>()
+    projectMessageCountsRef.current = nextCounts
+    return nextCounts
+  }, [])
   // Memoize the selected session lookup so MessageView and effects that
   // depend on it don't see a new object reference on every render of this
   // page (which used to fire on every keystroke into the composer).
@@ -399,6 +407,7 @@ export default function Home() {
   }, [selectedSession])
 
   const openCommandPalette = useCallback(() => setCommandPaletteOpen(true), [])
+  const openCoordinator = useCallback(() => setCoordinatorOpen(true), [])
   const openTaskPanel = useCallback(() => setTaskPanelOpenRequest((value) => value + 1), [])
   const openPromptLibrary = useCallback(() => setPromptLibraryOpenRequest((value) => value + 1), [])
   const openChannelBridge = useCallback(() => setChannelBridgeOpenRequest((value) => value + 1), [])
@@ -647,8 +656,8 @@ export default function Home() {
 
   useEffect(() => {
     if (selectedProject) return
-    projectMessageCountsRef.current.clear()
-  }, [selectedProject])
+    getProjectMessageCounts().clear()
+  }, [getProjectMessageCounts, selectedProject])
 
   // Drop stale opencode todos when the active session changes — they're
   // session-scoped and re-emitted by the stream's snapshot replay.
@@ -788,15 +797,16 @@ export default function Home() {
       projectPollInFlightRef.current = true
       try {
         const offsets = Object.fromEntries(
-          Array.from(projectMessageCountsRef.current.entries(), ([key, count]) => [
+          Array.from(getProjectMessageCounts().entries(), ([key, count]) => [
             key,
             Math.max(0, count - MESSAGE_POLL_BACKFILL),
           ])
         )
         const { sessions: projectSessions, batches } = await fetchProjectMessageBatches(selectedProject.dir, provider, offsets)
         for (const batch of batches) {
-          const previousCount = projectMessageCountsRef.current.get(batch.key) ?? 0
-          projectMessageCountsRef.current.set(
+          const projectMessageCounts = getProjectMessageCounts()
+          const previousCount = projectMessageCounts.get(batch.key) ?? 0
+          projectMessageCounts.set(
             batch.key,
             Math.max(previousCount, batch.offset + batch.messages.length)
           )
@@ -814,7 +824,7 @@ export default function Home() {
       }
     }, 2000)
     return () => clearInterval(id)
-  }, [fetchProjectMessageBatches, provider, selectedProject, documentVisible])
+  }, [fetchProjectMessageBatches, getProjectMessageCounts, provider, selectedProject, documentVisible])
 
   const selectSession = useCallback(async (session: Session, nextTargetMessageId?: string) => {
     const nextProvider = session.provider ?? 'claude'
@@ -846,7 +856,7 @@ export default function Home() {
         : null
       )
     })
-    projectMessageCountsRef.current.clear()
+    getProjectMessageCounts().clear()
     msgCountRef.current = 0
     // Clear before the pending-session early-return below so a stale `true`
     // from a previously deep-linked session can't disable trimming here. The
@@ -877,7 +887,7 @@ export default function Home() {
       }
       if (!abortController.signal.aborted) setLoadingMessages(false)
     }
-  }, [fetchSessionMessages, provider, loadSessionsForProvider])
+  }, [fetchSessionMessages, getProjectMessageCounts, provider, loadSessionsForProvider])
 
   const scrollSessionListToSession = useCallback((session: Session) => {
     setSessionListScrollRequest({
@@ -1132,6 +1142,7 @@ export default function Home() {
             onChangeScope={setSessionScope}
             onToggleWorktrees={setIncludeWorktrees}
             onOpenCommandPalette={openCommandPalette}
+            onOpenCoordinator={openCoordinator}
             canOpenGit={!!activeProjectDir}
             onOpenGit={openGitPopover}
             onNewSession={handleNewSession}
@@ -1261,6 +1272,7 @@ export default function Home() {
                   onToggleWorktrees={setIncludeWorktrees}
                   onToggleMessagePane={toggleMessagePane}
                   onOpenGit={openGitPopover}
+                  onOpenCoordinator={openCoordinator}
                   onOpenTasks={openTaskPanel}
                   onOpenPromptLibrary={openPromptLibrary}
                   onOpenChannelBridge={openChannelBridge}
@@ -1286,6 +1298,20 @@ export default function Home() {
             onClose={() => setBookmarksPanelOpen(false)}
             onSelect={({ sessionId, provider: bookmarkProvider, uuid }) => {
               selectCommandPaletteSession({ sessionId, provider: bookmarkProvider } as Session, uuid)
+            }}
+          />
+        ) : null}
+        {coordinatorOpen ? (
+          <AgentTeamCoordinator
+            open={coordinatorOpen}
+            provider={provider}
+            selectedSession={selectedSession}
+            onClose={() => setCoordinatorOpen(false)}
+            onOpenSession={selectCommandPaletteSession}
+            onSessionsChanged={() => {
+              void loadSessionsForProvider(provider).catch((err) => {
+                setSessionsError(err instanceof Error ? err.message : 'Failed to refresh sessions')
+              })
             }}
           />
         ) : null}

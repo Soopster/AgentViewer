@@ -29,6 +29,7 @@ import {
   PanelLeftOpen,
   Search,
   SlidersHorizontal,
+  UsersRound,
 } from 'lucide-react'
 import ThemeToggle from './ThemeToggle'
 
@@ -102,6 +103,7 @@ type Props = {
   onChangeScope: (mode: 'all' | 'project') => void
   onToggleWorktrees: (include: boolean) => void
   onOpenCommandPalette: () => void
+  onOpenCoordinator: () => void
   canOpenGit: boolean
   onOpenGit: () => void
   onNewSession?: () => void
@@ -698,6 +700,7 @@ function SessionListInner({
   onChangeScope,
   onToggleWorktrees,
   onOpenCommandPalette,
+  onOpenCoordinator,
   canOpenGit,
   onOpenGit,
   onNewSession,
@@ -1029,6 +1032,19 @@ function SessionListInner({
                 style={collapsedIconButtonStyle(dashboardSelected)}
               >
                 <LayoutDashboard size={20} strokeWidth={2.2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCollapsedPanel(null)
+                  onOpenCoordinator()
+                }}
+                aria-label="Agent team board"
+                title="Agent team board"
+                className="av-hover-control"
+                style={collapsedIconButtonStyle(false)}
+              >
+                <UsersRound size={20} strokeWidth={2.2} />
               </button>
               <button
                 type="button"
@@ -1714,6 +1730,31 @@ function SessionListInner({
                     {creatingSession ? '…' : '+'} NEW
                   </Button>
                 )}
+                <Button
+                  onClick={onOpenCoordinator}
+                  variant="outline"
+                  size="sm"
+                  title="Open agent team board"
+                  className="av-hover-control"
+                  style={{
+                    height: 24,
+                    padding: '0 8px',
+                    borderRadius: 6,
+                    border: '1px solid rgba(56,217,245,0.32)',
+                    background: 'rgba(56,217,245,0.08)',
+                    color: 'var(--cyan)',
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 10,
+                    letterSpacing: '0.06em',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  <UsersRound size={12} strokeWidth={2.2} />
+                  TEAM
+                </Button>
                 <Button
                   onClick={onOpenCommandPalette}
                   variant="outline"
