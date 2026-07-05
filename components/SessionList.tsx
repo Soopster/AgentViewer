@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils'
 import {
   BookOpen,
   Bot,
+  Command,
   GitBranch,
   LayoutDashboard,
   ListTree,
@@ -61,6 +62,35 @@ const collapsedPrimaryButtonStyle: React.CSSProperties = {
   boxShadow: '0 8px 24px var(--violet-glow)',
 }
 
+const sidebarHeaderPrimaryActionStyle: React.CSSProperties = {
+  height: 30,
+  padding: '0 11px',
+  borderRadius: 8,
+  border: '1px solid color-mix(in srgb, var(--green) 40%, var(--border))',
+  background: 'color-mix(in srgb, var(--green) 11%, var(--surface-2))',
+  color: 'var(--green)',
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: 11,
+  letterSpacing: '0.05em',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  cursor: 'pointer',
+}
+
+const sidebarHeaderIconActionBaseStyle: React.CSSProperties = {
+  width: 30,
+  height: 30,
+  padding: 0,
+  borderRadius: 8,
+  border: '1px solid var(--border)',
+  background: 'color-mix(in srgb, var(--surface-2) 82%, transparent)',
+  color: 'var(--text-3)',
+  display: 'inline-grid',
+  placeItems: 'center',
+  cursor: 'pointer',
+}
+
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value)
   useEffect(() => {
@@ -77,6 +107,22 @@ function collapsedIconButtonStyle(active = false): React.CSSProperties {
     background: active ? 'color-mix(in srgb, var(--violet) 16%, var(--surface-2))' : 'var(--surface-2)',
     color: active ? 'var(--violet)' : 'var(--text-2)',
     boxShadow: active ? '0 10px 18px var(--violet-glow)' : 'none',
+  }
+}
+
+function sidebarHeaderIconActionStyle(options: { active?: boolean; accent?: 'cyan' | 'violet'; disabled?: boolean } = {}): React.CSSProperties {
+  const accent = options.accent === 'cyan' ? 'var(--cyan)' : 'var(--violet)'
+  return {
+    ...sidebarHeaderIconActionBaseStyle,
+    border: options.active
+      ? `1px solid color-mix(in srgb, ${accent} 42%, var(--border))`
+      : sidebarHeaderIconActionBaseStyle.border,
+    background: options.active
+      ? `color-mix(in srgb, ${accent} 13%, var(--surface-2))`
+      : sidebarHeaderIconActionBaseStyle.background,
+    color: options.disabled ? 'var(--text-4, var(--text-3))' : options.active ? accent : sidebarHeaderIconActionBaseStyle.color,
+    cursor: options.disabled ? 'not-allowed' : 'pointer',
+    opacity: options.disabled ? 0.45 : 1,
   }
 }
 
@@ -1670,139 +1716,91 @@ function SessionListInner({
             {!collapsed && (
               <div
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
+                  display: 'grid',
                   gap: 8,
                   width: '100%',
                   minWidth: 0,
                 }}
               >
-                <Button
-                  onClick={onOpenDashboard}
-                  variant="outline"
-                  size="sm"
-                  title="Open run dashboard"
-                  className="av-hover-control"
+                <div
                   style={{
-                    height: 24,
-                    padding: '0 8px',
-                    borderRadius: 6,
-                    border: `1px solid ${dashboardSelected ? 'rgba(56,217,245,0.36)' : 'var(--border)'}`,
-                    background: dashboardSelected ? 'rgba(56,217,245,0.12)' : 'var(--surface-2)',
-                    color: dashboardSelected ? 'var(--cyan)' : 'var(--text-3)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    letterSpacing: '0.06em',
-                    cursor: 'pointer',
-                    display: 'inline-flex',
+                    display: 'flex',
                     alignItems: 'center',
-                    gap: 5,
+                    gap: 8,
+                    width: '100%',
+                    minWidth: 0,
                   }}
                 >
-                  <LayoutDashboard size={12} strokeWidth={2.2} />
-                  DASH
-                </Button>
-                {onNewSession && (
-                  <Button
-                    onClick={onNewSession}
-                    disabled={creatingSession}
-                    variant="outline"
-                    size="sm"
-                    title="Start a new agent session in the current project"
-                    className="av-hover-control"
+                  {onNewSession && (
+                    <Button
+                      onClick={onNewSession}
+                      disabled={creatingSession}
+                      variant="outline"
+                      size="sm"
+                      aria-label="Start a new agent session"
+                      className="av-hover-control"
+                      style={{
+                        ...sidebarHeaderPrimaryActionStyle,
+                        cursor: creatingSession ? 'not-allowed' : 'pointer',
+                        opacity: creatingSession ? 0.55 : 1,
+                      }}
+                    >
+                      <span aria-hidden="true">{creatingSession ? '…' : '+'}</span>
+                      <span>New</span>
+                    </Button>
+                  )}
+                  <div
+                    aria-label="Sidebar shortcuts"
                     style={{
-                      height: 24,
-                      padding: '0 8px',
-                      borderRadius: 6,
-                      border: '1px solid rgba(45,212,160,0.32)',
-                      background: 'rgba(45,212,160,0.08)',
-                      color: 'var(--green)',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: 10,
-                      letterSpacing: '0.06em',
-                      cursor: creatingSession ? 'not-allowed' : 'pointer',
-                      opacity: creatingSession ? 0.55 : 1,
-                      display: 'inline-flex',
+                      display: 'flex',
                       alignItems: 'center',
-                      gap: 4,
+                      gap: 6,
+                      marginLeft: 'auto',
                     }}
                   >
-                    {creatingSession ? '…' : '+'} NEW
-                  </Button>
-                )}
-                <Button
-                  onClick={onOpenCoordinator}
-                  variant="outline"
-                  size="sm"
-                  title="Open agent team board"
-                  className="av-hover-control"
-                  style={{
-                    height: 24,
-                    padding: '0 8px',
-                    borderRadius: 6,
-                    border: '1px solid rgba(56,217,245,0.32)',
-                    background: 'rgba(56,217,245,0.08)',
-                    color: 'var(--cyan)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    letterSpacing: '0.06em',
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                  }}
-                >
-                  <UsersRound size={12} strokeWidth={2.2} />
-                  TEAM
-                </Button>
-                <Button
-                  onClick={onOpenCommandPalette}
-                  variant="outline"
-                  size="sm"
-                  title="Open command palette"
-                  className="av-hover-control"
-                  style={{
-                    height: 24,
-                    padding: '0 8px',
-                    borderRadius: 6,
-                    border: '1px solid var(--border)',
-                    background: 'var(--surface-2)',
-                    color: 'var(--text-3)',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    letterSpacing: '0.06em',
-                    cursor: 'pointer',
-                  }}
-                >
-                  ⌘K
-                </Button>
-                <Button
-                  onClick={onOpenGit}
-                  disabled={!canOpenGit}
-                  variant="outline"
-                  size="sm"
-                  title={canOpenGit ? 'Open git status' : 'Select a session or project to open git status'}
-                  className="av-hover-control"
-                  style={{
-                    height: 24,
-                    padding: '0 8px',
-                    borderRadius: 6,
-                    border: '1px solid var(--border)',
-                    background: 'var(--surface-2)',
-                    color: canOpenGit ? 'var(--text-3)' : 'var(--text-4, var(--text-3))',
-                    fontFamily: "'IBM Plex Mono', monospace",
-                    fontSize: 10,
-                    letterSpacing: '0.06em',
-                    cursor: canOpenGit ? 'pointer' : 'not-allowed',
-                    opacity: canOpenGit ? 1 : 0.45,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                  }}
-                >
-                  <GitBranch size={12} strokeWidth={2.2} />
-                  ^G
-                </Button>
+                    <Button
+                      onClick={onOpenDashboard}
+                      variant="outline"
+                      size="sm"
+                      aria-label="Open run dashboard"
+                      className="av-hover-control"
+                      style={sidebarHeaderIconActionStyle({ active: dashboardSelected, accent: 'cyan' })}
+                    >
+                      <LayoutDashboard size={15} strokeWidth={2.2} />
+                    </Button>
+                    <Button
+                      onClick={onOpenCoordinator}
+                      variant="outline"
+                      size="sm"
+                      aria-label="Open agent team board"
+                      className="av-hover-control"
+                      style={sidebarHeaderIconActionStyle({ accent: 'cyan' })}
+                    >
+                      <UsersRound size={16} strokeWidth={2.2} />
+                    </Button>
+                    <Button
+                      onClick={onOpenCommandPalette}
+                      variant="outline"
+                      size="sm"
+                      aria-label="Open command palette"
+                      className="av-hover-control"
+                      style={sidebarHeaderIconActionStyle()}
+                    >
+                      <Command size={15} strokeWidth={2.2} />
+                    </Button>
+                    <Button
+                      onClick={onOpenGit}
+                      disabled={!canOpenGit}
+                      variant="outline"
+                      size="sm"
+                      aria-label={canOpenGit ? 'Open git status' : 'Select a session or project to open git status'}
+                      className="av-hover-control"
+                      style={sidebarHeaderIconActionStyle({ disabled: !canOpenGit })}
+                    >
+                      <GitBranch size={15} strokeWidth={2.2} />
+                    </Button>
+                  </div>
+                </div>
                 <ThemeToggle />
               </div>
             )}

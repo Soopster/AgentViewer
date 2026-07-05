@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
+  CircleStop,
   CheckCircle2,
   GitMerge,
   Mail,
@@ -13,7 +14,6 @@ import {
   RefreshCw,
   Send,
   ShieldCheck,
-  Square,
   Trash2,
   UsersRound,
   X,
@@ -140,6 +140,7 @@ export default function AgentTeamCoordinator({
     : events[selectedEventIndex < 0 ? events.length - 1 : Math.min(selectedEventIndex, events.length - 1)] ?? null
   const undeliveredMail = (snapshot?.messages ?? []).filter((message) => !message.deliveredAt).length
   const completedTasks = tasks.filter((task) => task.status === 'completed').length
+  const taskProgress = tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0
   const targetProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
   const baseCwd = selectedSession?.cwd ?? run?.baseCwd ?? ''
 
@@ -407,7 +408,7 @@ export default function AgentTeamCoordinator({
             <Button type="button" variant="outline" size="sm" className="av-coord-btn" onClick={() => setStartOpen(true)}>
               <Plus size={14} /> New
             </Button>
-            <Button type="button" variant="ghost" size="icon" className="av-coord-icon" onClick={onClose} title="Close">
+            <Button type="button" variant="ghost" size="icon" className="av-coord-icon" onClick={onClose} aria-label="Close coordinator">
               <X size={18} />
             </Button>
           </div>
@@ -417,7 +418,7 @@ export default function AgentTeamCoordinator({
           <div className={cn('av-coord-notice', loadError ? 'av-coord-notice-error' : '')}>
             {loadError ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
             <span>{loadError ?? notice}</span>
-            <button type="button" onClick={() => { setLoadError(null); setNotice(null) }} title="Dismiss">
+            <button type="button" onClick={() => { setLoadError(null); setNotice(null) }} aria-label="Dismiss notice">
               <X size={13} />
             </button>
           </div>
@@ -427,7 +428,7 @@ export default function AgentTeamCoordinator({
           <aside className="av-coord-runs">
             <div className="av-coord-panel-head">
               <span>Runs</span>
-              <button type="button" onClick={() => void loadRuns()} title="Refresh runs">
+              <button type="button" onClick={() => void loadRuns()} aria-label="Refresh runs">
                 <RefreshCw size={13} />
               </button>
             </div>
@@ -458,19 +459,22 @@ export default function AgentTeamCoordinator({
                   <Play size={16} />
                   <h3>New Run</h3>
                 </div>
-                <Textarea
-                  value={promptDraft}
-                  onChange={(event) => setPromptDraft(event.target.value)}
-                  placeholder="Describe the work for the lead to decompose."
-                  className="av-coord-textarea"
-                  rows={7}
-                />
+                <label className="av-coord-field av-coord-prompt-field">
+                  <span>Prompt</span>
+                  <Textarea
+                    value={promptDraft}
+                    onChange={(event) => setPromptDraft(event.target.value)}
+                    placeholder="Describe the work for the lead to decompose."
+                    className="av-coord-textarea"
+                    rows={6}
+                  />
+                </label>
                 <div className="av-coord-start-grid">
-                  <label>
+                  <label className="av-coord-field">
                     <span>Provider</span>
                     <Input value={String(targetProvider).toUpperCase()} readOnly className="av-coord-input" />
                   </label>
-                  <label>
+                  <label className="av-coord-field">
                     <span>Teammates</span>
                     <Input
                       type="number"
@@ -481,7 +485,7 @@ export default function AgentTeamCoordinator({
                       className="av-coord-input"
                     />
                   </label>
-                  <label className="av-coord-wide">
+                  <label className="av-coord-field av-coord-wide">
                     <span>Gate command</span>
                     <Input
                       value={gateCommand}
@@ -492,7 +496,7 @@ export default function AgentTeamCoordinator({
                   </label>
                 </div>
                 <label className="av-coord-check">
-                  <Checkbox checked={requirePlanApproval} onCheckedChange={(checked) => setRequirePlanApproval(checked === true)} />
+                  <Checkbox className="av-coord-checkbox" checked={requirePlanApproval} onCheckedChange={(checked) => setRequirePlanApproval(checked === true)} />
                   <span>Require lead plan approval before implementation</span>
                 </label>
                 <div className="av-coord-form-actions">
@@ -505,13 +509,18 @@ export default function AgentTeamCoordinator({
             ) : (
               <>
                 <section className="av-coord-toolbar">
-                  <div>
-                    <strong>{completedTasks}/{tasks.length}</strong>
-                    <span>tasks complete</span>
+                  <div className="av-coord-progress">
+                    <div>
+                      <strong>{completedTasks}/{tasks.length}</strong>
+                      <span>tasks complete</span>
+                    </div>
+                    <div className="av-coord-progress-track" aria-label={`${taskProgress}% complete`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={taskProgress}>
+                      <span style={{ width: `${taskProgress}%` }} />
+                    </div>
                   </div>
                   <div className="av-coord-toolbar-actions">
                     <Button type="button" variant="outline" size="sm" className="av-coord-btn" onClick={() => setPendingAction({ kind: 'stop' })} disabled={!['planning', 'running', 'synthesizing'].includes(run.status)}>
-                      <Square size={13} /> Stop
+                      <CircleStop size={13} /> Stop
                     </Button>
                     <Button type="button" variant="outline" size="sm" className="av-coord-btn" onClick={() => void cleanupRun()} disabled={busyAction === 'cleanup'}>
                       <ShieldCheck size={13} /> Clean
@@ -526,7 +535,7 @@ export default function AgentTeamCoordinator({
                   <div className="av-coord-panel">
                     <div className="av-coord-panel-head">
                       <span>Team</span>
-                      <button type="button" onClick={() => { setMessageTarget('all'); setMessageDraft('') }} title="Message all">
+                      <button type="button" onClick={() => { setMessageTarget('all'); setMessageDraft('') }} aria-label="Message all teammates">
                         <Mail size={13} />
                       </button>
                     </div>
@@ -561,7 +570,7 @@ export default function AgentTeamCoordinator({
                           <MessageSquare size={13} /> Message
                         </Button>
                         <Button type="button" size="sm" variant="outline" className="av-coord-btn" onClick={() => void interruptAgent(selectedAgent)} disabled={busyAction === `interrupt:${selectedAgent.id}`}>
-                          <Square size={13} /> Interrupt
+                          <CircleStop size={13} /> Interrupt
                         </Button>
                         <Button
                           type="button"
@@ -617,7 +626,7 @@ export default function AgentTeamCoordinator({
                   <div className="av-coord-panel">
                     <div className="av-coord-panel-head">
                       <span>Events</span>
-                      <button type="button" onClick={() => setSelectedEventIndex(-1)} title="Follow latest">
+                      <button type="button" onClick={() => setSelectedEventIndex(-1)} aria-label="Follow latest event">
                         <Radio size={13} />
                       </button>
                     </div>
@@ -665,7 +674,7 @@ export default function AgentTeamCoordinator({
           <div className="av-coord-drawer">
             <div>
               <strong>Message {messageTarget}</strong>
-              <button type="button" onClick={() => { setMessageTarget(null); setMessageDraft('') }} title="Cancel">
+              <button type="button" onClick={() => { setMessageTarget(null); setMessageDraft('') }} aria-label="Cancel message">
                 <X size={14} />
               </button>
             </div>

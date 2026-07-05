@@ -3834,14 +3834,19 @@ button.av-session-viz-graph-node:disabled {
 }
 
 .av-coord-shell {
+  --av-coord-line: color-mix(in srgb, var(--border) 74%, transparent);
+  --av-coord-soft: color-mix(in srgb, var(--surface-2) 72%, var(--surface));
+  --av-coord-hover: color-mix(in srgb, var(--cyan) 7%, var(--surface-3));
+  --av-coord-selected: color-mix(in srgb, var(--cyan) 13%, var(--surface-3));
+
   position: relative;
   display: flex;
   overflow: hidden;
-  width: min(1280px, 100%);
-  height: min(820px, calc(100vh - 36px));
-  min-height: 560px;
+  width: min(1360px, 100%);
+  height: min(840px, calc(100vh - 36px));
+  min-height: 600px;
   flex-direction: column;
-  border: 1px solid var(--border);
+  border: 1px solid var(--av-coord-line);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: 0 24px 80px rgb(0 0 0 / 0.42);
@@ -3857,12 +3862,12 @@ button.av-session-viz-graph-node:disabled {
 }
 
 .av-coord-header {
-  min-height: 60px;
+  min-height: 64px;
   justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
-  padding: 10px 12px;
+  gap: 16px;
+  border-bottom: 1px solid var(--av-coord-line);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 92%, var(--cyan) 8%), var(--surface-2));
+  padding: 12px 14px;
 }
 
 .av-coord-title {
@@ -3916,6 +3921,8 @@ button.av-session-viz-graph-node:disabled {
   display: flex;
   min-width: 0;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -3924,9 +3931,9 @@ button.av-session-viz-graph-node:disabled {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--av-coord-line);
   border-radius: 999px;
-  background: var(--surface-3);
+  background: color-mix(in srgb, var(--surface-3) 72%, transparent);
   color: var(--text-2);
   font-family: "IBM Plex Mono", monospace;
   font-size: 10px;
@@ -3943,13 +3950,24 @@ button.av-session-viz-graph-node:disabled {
 }
 
 .av-coord-btn {
-  height: 30px;
-  border-color: var(--border);
+  height: 32px;
+  gap: 6px;
+  border-color: var(--av-coord-line);
   border-radius: 6px;
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--surface-2) 88%, transparent);
   color: var(--text-2);
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
+  padding-inline: 10px;
+}
+
+.av-coord-btn:hover,
+.av-coord-icon:hover,
+.av-coord-notice button:hover,
+.av-coord-panel-head button:hover {
+  border-color: color-mix(in srgb, var(--cyan) 35%, var(--av-coord-line));
+  background: var(--av-coord-hover);
+  color: var(--text);
 }
 
 .av-coord-primary {
@@ -3966,6 +3984,7 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-icon {
   width: 32px;
   height: 32px;
+  border: 1px solid transparent;
   border-radius: 6px;
   color: var(--text-3);
 }
@@ -3974,7 +3993,7 @@ button.av-session-viz-graph-node:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--av-coord-line);
   background: color-mix(in srgb, var(--green) 10%, var(--surface));
   color: var(--green);
   font-size: 11px;
@@ -4000,9 +4019,9 @@ button.av-session-viz-graph-node:disabled {
   width: 24px;
   height: 24px;
   place-items: center;
-  border: 1px solid var(--border);
+  border: 1px solid var(--av-coord-line);
   border-radius: 6px;
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--surface-2) 85%, transparent);
   color: var(--text-3);
 }
 
@@ -4017,19 +4036,19 @@ button.av-session-viz-graph-node:disabled {
   display: flex;
   min-height: 0;
   flex-direction: column;
-  border-right: 1px solid var(--border);
-  background: var(--surface-2);
+  border-right: 1px solid var(--av-coord-line);
+  background: var(--av-coord-soft);
 }
 
 .av-coord-panel-head {
-  min-height: 39px;
+  min-height: 42px;
   justify-content: space-between;
   gap: 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--av-coord-line);
   color: var(--text-3);
   font-size: 10px;
   letter-spacing: 0.08em;
-  padding: 8px 10px;
+  padding: 9px 12px;
   text-transform: uppercase;
 }
 
@@ -4043,14 +4062,14 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-empty-run {
   display: grid;
   width: 100%;
-  min-height: 72px;
+  min-height: 76px;
   gap: 5px;
   border: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--av-coord-line);
   background: transparent;
   color: var(--text);
   cursor: pointer;
-  padding: 10px;
+  padding: 11px 12px;
   text-align: left;
 }
 
@@ -4068,15 +4087,15 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-task-row:hover,
 .av-coord-event-row:hover,
 .av-coord-empty-run:hover {
-  background: var(--surface-3);
+  background: var(--av-coord-hover);
 }
 
 .av-coord-run-row.av-selected,
 .av-coord-agent-row.av-selected,
 .av-coord-task-row.av-selected,
 .av-coord-event-row.av-selected {
-  background: color-mix(in srgb, var(--cyan) 10%, var(--surface-3));
-  box-shadow: inset 2px 0 0 var(--cyan);
+  background: var(--av-coord-selected);
+  box-shadow: inset 3px 0 0 var(--cyan);
 }
 
 .av-coord-run-row strong {
@@ -4136,11 +4155,39 @@ button.av-session-viz-graph-node:disabled {
 }
 
 .av-coord-toolbar {
-  min-height: 46px;
+  min-height: 58px;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid var(--border);
-  padding: 8px 10px;
+  border-bottom: 1px solid var(--av-coord-line);
+  background: color-mix(in srgb, var(--surface) 82%, var(--surface-2));
+  padding: 10px 12px;
+}
+
+.av-coord-progress {
+  display: grid;
+  min-width: 180px;
+  gap: 7px;
+}
+
+.av-coord-progress > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.av-coord-progress-track {
+  overflow: hidden;
+  width: min(260px, 34vw);
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.av-coord-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--cyan), var(--green));
 }
 
 .av-coord-toolbar strong {
@@ -4152,7 +4199,6 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-toolbar span {
   color: var(--text-3);
   font-size: 11px;
-  margin-left: 7px;
 }
 
 .av-coord-toolbar-actions,
@@ -4177,7 +4223,7 @@ button.av-session-viz-graph-node:disabled {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--av-coord-line);
 }
 
 .av-coord-panel:last-child {
@@ -4191,27 +4237,30 @@ button.av-session-viz-graph-node:disabled {
   width: 100%;
   min-height: 38px;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   border: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--av-coord-line);
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
   font-size: 11px;
-  padding: 7px 9px;
+  padding: 8px 12px;
   text-align: left;
 }
 
 .av-coord-agent-row {
-  grid-template-columns: 38px minmax(0, 1fr) auto;
+  min-height: 58px;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
 }
 
 .av-coord-task-row {
-  grid-template-columns: auto 54px minmax(0, 1fr);
+  min-height: 46px;
+  grid-template-columns: auto 64px minmax(0, 1fr);
 }
 
 .av-coord-event-row {
-  grid-template-columns: 10px minmax(44px, auto) minmax(80px, 0.72fr);
+  min-height: 58px;
+  grid-template-columns: 10px minmax(56px, 0.36fr) minmax(88px, 0.64fr);
 }
 
 .av-coord-agent-row strong,
@@ -4250,9 +4299,9 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-action-row,
 .av-coord-detail,
 .av-coord-summary {
-  border-top: 1px solid var(--border);
-  background: var(--surface-2);
-  padding: 10px;
+  border-top: 1px solid var(--av-coord-line);
+  background: var(--av-coord-soft);
+  padding: 12px;
 }
 
 .av-coord-detail {
@@ -4260,6 +4309,7 @@ button.av-session-viz-graph-node:disabled {
   gap: 8px;
   color: var(--text-3);
   font-size: 11px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
 }
 
 .av-coord-detail div {
@@ -4293,7 +4343,7 @@ button.av-session-viz-graph-node:disabled {
   color: var(--text-2);
   font-family: "IBM Plex Sans", sans-serif;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.5;
   white-space: pre-wrap;
 }
 
@@ -4304,17 +4354,19 @@ button.av-session-viz-graph-node:disabled {
 
 .av-coord-start {
   overflow: auto;
-  max-width: 900px;
+  display: grid;
+  align-content: start;
+  max-width: 920px;
   width: 100%;
   margin: 0 auto;
-  padding: 22px;
+  gap: 16px;
+  padding: 36px clamp(22px, 7vw, 72px);
 }
 
 .av-coord-section-title {
   display: flex;
   align-items: center;
   gap: 9px;
-  margin-bottom: 14px;
 }
 
 .av-coord-section-title svg {
@@ -4323,23 +4375,41 @@ button.av-session-viz-graph-node:disabled {
 
 .av-coord-textarea,
 .av-coord-input {
-  border-color: var(--border);
-  background: var(--surface-2);
+  box-sizing: border-box;
+  border-color: var(--av-coord-line);
+  background: color-mix(in srgb, var(--surface-2) 90%, transparent);
   color: var(--text);
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
+  line-height: 1.45;
+}
+
+.av-coord-textarea {
+  min-height: 128px;
+  padding: 12px 14px;
+  resize: vertical;
+}
+
+.av-coord-input {
+  min-height: 38px;
+  padding-inline: 12px;
+}
+
+.av-coord-textarea::placeholder,
+.av-coord-input::placeholder {
+  color: var(--text-3);
+  opacity: 0.82;
 }
 
 .av-coord-start-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 12px;
+  gap: 14px 16px;
 }
 
-.av-coord-start label {
+.av-coord-field {
   display: grid;
-  gap: 6px;
+  gap: 7px;
 }
 
 .av-coord-start .av-coord-wide {
@@ -4347,17 +4417,34 @@ button.av-session-viz-graph-node:disabled {
 }
 
 .av-coord-check {
-  display: inline-flex;
+  display: flex;
+  width: fit-content;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   color: var(--text-2);
   font-size: 12px;
-  margin-top: 14px;
+  margin-top: 2px;
+}
+
+.av-coord-start label.av-coord-check {
+  display: flex;
+}
+
+.av-coord-checkbox {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-color: color-mix(in srgb, var(--violet) 55%, var(--av-coord-line));
+  border-radius: 5px;
+}
+
+.av-coord-check span {
+  line-height: 1.25;
 }
 
 .av-coord-form-actions {
   justify-content: flex-end;
-  margin-top: 16px;
+  margin-top: 2px;
 }
 
 .av-coord-drawer {
@@ -4367,7 +4454,7 @@ button.av-session-viz-graph-node:disabled {
   z-index: 3;
   width: min(520px, calc(100% - 28px));
   gap: 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--av-coord-line);
   border-radius: 8px;
   background: var(--surface-2);
   box-shadow: 0 18px 52px rgb(0 0 0 / 0.34);
@@ -4385,7 +4472,7 @@ button.av-session-viz-graph-node:disabled {
   font-size: 11px;
 }
 
-.av-coord-drawer button[title="Cancel"] {
+.av-coord-drawer button[aria-label="Cancel message"] {
   display: grid;
   border: 0;
   background: transparent;
@@ -4427,7 +4514,7 @@ button.av-session-viz-graph-node:disabled {
   .av-coord-panel {
     min-height: 320px;
     border-right: 0;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--av-coord-line);
   }
 }
 
@@ -4474,6 +4561,10 @@ button.av-session-viz-graph-node:disabled {
 
   .av-coord-start-grid {
     grid-template-columns: 1fr;
+  }
+
+  .av-coord-start {
+    padding: 22px 16px;
   }
 }
 
