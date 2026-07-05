@@ -1570,6 +1570,33 @@ function readResizeObserverHeight(entry: ResizeObserverEntry, fallbackNode: HTML
   return fallbackNode.getBoundingClientRect().height
 }
 
+// One shared ResizeObserver for every mounted timeline row instead of one
+// observer instance per row. The virtual scroll keeps dozens of rows mounted
+// (visible + overscan), and each native observer carries its own allocation
+// and per-frame delivery bookkeeping — pooling them into a single instance
+// with a per-element callback map cuts that to one. Semantics match the
+// per-row version: observe() still delivers an initial entry per element.
+const timelineRowResizeCallbacks = new Map<Element, (entry: ResizeObserverEntry) => void>()
+let timelineRowResizeObserver: ResizeObserver | null = null
+
+function observeTimelineRowResize(node: Element, onResize: (entry: ResizeObserverEntry) => void): () => void {
+  if (!timelineRowResizeObserver) {
+    timelineRowResizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) timelineRowResizeCallbacks.get(entry.target)?.(entry)
+    })
+  }
+  timelineRowResizeCallbacks.set(node, onResize)
+  timelineRowResizeObserver.observe(node)
+  return () => {
+    timelineRowResizeCallbacks.delete(node)
+    timelineRowResizeObserver?.unobserve(node)
+    if (timelineRowResizeCallbacks.size === 0) {
+      timelineRowResizeObserver?.disconnect()
+      timelineRowResizeObserver = null
+    }
+  }
+}
+
 function messageContentBlocksForTarget(message: SessionMessage): ContentBlock[] {
   if (message.type === 'system') return []
   const content = message.message.content
@@ -2175,13 +2202,9 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
 
     onMeasure(row.key, node.getBoundingClientRect().height)
 
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0]
-      if (!entry) return
+    return observeTimelineRowResize(node, (entry) => {
       onMeasure(row.key, readResizeObserverHeight(entry, node))
     })
-    observer.observe(node)
-    return () => observer.disconnect()
   }, [onMeasure, placeholder, row.key])
 
   useEffect(() => {

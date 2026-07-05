@@ -269,9 +269,12 @@ async function getCachedSessionInfo(sessionId: string, dir: string | undefined):
 // Each call computes a cheap raw signature; on match we return the cached
 // array (slice happens at the call site). On mismatch we re-map and store.
 // LRU-capped because each entry holds a fully normalized message array — a
-// large session can be MBs, so an unbounded map dominates server RSS.
+// large session can be MBs (base64 images included), so this cache is the
+// single largest deliberate server retainer. 4 keeps the active session (LRU
+// touch on every poll) plus a few recently viewed ones resident; anything
+// beyond that re-maps once on revisit instead of pinning MBs indefinitely.
 const MAPPED_MESSAGE_TTL = 60_000
-const MAPPED_MESSAGE_CACHE_MAX = 10
+const MAPPED_MESSAGE_CACHE_MAX = 4
 type MappedMessageCacheEntry = {
   signature: string
   messages: SessionMessage[]
@@ -1100,6 +1103,10 @@ type CopilotLiveTranscriptEntry = {
 }
 
 const COPILOT_LIVE_TRANSCRIPT_TTL_MS = 5 * 60 * 1000
+// Size backstop on top of the TTL cleanup: if cleanup scheduling is ever
+// missed (e.g. a turn dies mid-stream), the map still cannot grow past the
+// realistic concurrent-live-session count.
+const LIVE_TRANSCRIPT_MAX_ENTRIES = 32
 const copilotLiveTranscripts = new Map<string, CopilotLiveTranscriptEntry>()
 
 function getCopilotLiveTranscriptEntry(sessionId: string): CopilotLiveTranscriptEntry {
@@ -1111,6 +1118,13 @@ function getCopilotLiveTranscriptEntry(sessionId: string): CopilotLiveTranscript
       updatedAt: Date.now(),
     }
     copilotLiveTranscripts.set(sessionId, entry)
+    while (copilotLiveTranscripts.size > LIVE_TRANSCRIPT_MAX_ENTRIES) {
+      const oldestKey = copilotLiveTranscripts.keys().next().value
+      if (oldestKey === undefined) break
+      const oldest = copilotLiveTranscripts.get(oldestKey)
+      if (oldest?.timer) clearTimeout(oldest.timer)
+      copilotLiveTranscripts.delete(oldestKey)
+    }
   }
   if (entry.timer) {
     clearTimeout(entry.timer)
@@ -1279,6 +1293,13 @@ function getPiLiveTranscriptEntry(sessionId: string): PiLiveTranscriptEntry {
       updatedAt: Date.now(),
     }
     piLiveTranscripts.set(sessionId, entry)
+    while (piLiveTranscripts.size > LIVE_TRANSCRIPT_MAX_ENTRIES) {
+      const oldestKey = piLiveTranscripts.keys().next().value
+      if (oldestKey === undefined) break
+      const oldest = piLiveTranscripts.get(oldestKey)
+      if (oldest?.timer) clearTimeout(oldest.timer)
+      piLiveTranscripts.delete(oldestKey)
+    }
   }
   if (entry.timer) {
     clearTimeout(entry.timer)
@@ -5929,6 +5950,9 @@ export function getServerMemoryDiagnostics(): Record<string, number> {
   return {
     sessionInfoCache: sessionInfoCache.size,
     mappedMessageCache: mappedMessageCache.size,
+    // Entry count alone hides the real weight of this cache (entries are whole
+    // mapped sessions); total retained messages tracks the actual footprint.
+    mappedMessageCacheMessages: Array.from(mappedMessageCache.values()).reduce((acc, entry) => acc + entry.messages.length, 0),
     persistedMessagesSignature: persistedMessagesSignature.size,
     persistedSessionListSignatures: persistedSessionListSignatures.size,
     projectSessionsCache: projectSessionsCache.size,

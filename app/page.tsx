@@ -50,10 +50,12 @@ const MESSAGE_STREAM_LIMIT = 200 + MESSAGE_POLL_BACKFILL
 // Ceiling on the retained client transcript for a single live session. The
 // streaming merge path otherwise grows without bound (only the project feed is
 // trimmed), and every derivation off `messages` (threaded, row layout) scales
-// with it. Set far above the 2000-message initial tail window so normal
-// sessions never trim; only multi-thousand-turn live sessions hit it. Skipped
-// entirely for deep-linked full-transcript loads (see fullTranscriptLoadedRef).
-const SINGLE_SESSION_MESSAGE_MEMORY_LIMIT = 8000
+// with it. Set above the 2000-message initial tail window so normal sessions
+// never trim; only multi-thousand-turn live sessions hit it, and they keep a
+// 3000-message rolling tail (older history stays reachable via the deep-link
+// full-transcript path). Skipped entirely for deep-linked full-transcript
+// loads (see fullTranscriptLoadedRef).
+const SINGLE_SESSION_MESSAGE_MEMORY_LIMIT = 3000
 const MESSAGE_POLL_FALLBACK_MS = 2000
 const MESSAGE_STREAM_RETRY_INITIAL_MS = 2000
 const MESSAGE_STREAM_RETRY_MAX_MS = 30000
