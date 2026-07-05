@@ -48,7 +48,7 @@ type Row = Record<string, unknown>
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
 const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
 const LOCK_LEASE_MS = 20 * 60_000
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 const EVENT_WINDOW = 300
 // One automatic re-dispatch when a teammate's turn ends mid-task; after that
 // the teammate is marked blocked and the lead is notified (doc: teammates may
@@ -74,6 +74,7 @@ type RunController = {
   title?: string
   model?: string
   effort?: string
+  gateCommand?: string
   stopped: boolean
   synthesisStarted: boolean
   interventionsUsed: number
@@ -132,7 +133,7 @@ function initializeSchema(db: SqliteDatabase): void {
     );
 
     CREATE TABLE IF NOT EXISTS protocol_agents (
-      id TEXT PRIMARY KEY,
+      id TEXT NOT NULL,
       run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
       name TEXT NOT NULL DEFAULT '',
       role TEXT NOT NULL DEFAULT 'teammate',
@@ -144,14 +145,15 @@ function initializeSchema(db: SqliteDatabase): void {
       status TEXT NOT NULL,
       last_seen_at TEXT,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (run_id, id)
     );
 
     CREATE INDEX IF NOT EXISTS protocol_agents_run_idx ON protocol_agents(run_id);
     CREATE INDEX IF NOT EXISTS protocol_agents_session_idx ON protocol_agents(session_id);
 
     CREATE TABLE IF NOT EXISTS protocol_tasks (
-      id TEXT PRIMARY KEY,
+      id TEXT NOT NULL,
       run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
       title TEXT NOT NULL,
       prompt TEXT NOT NULL,
@@ -160,7 +162,8 @@ function initializeSchema(db: SqliteDatabase): void {
       paths_json TEXT NOT NULL,
       blocked_by_json TEXT NOT NULL,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (run_id, id)
     );
 
     CREATE INDEX IF NOT EXISTS protocol_tasks_run_idx ON protocol_tasks(run_id);
@@ -217,6 +220,10 @@ function initializeSchema(db: SqliteDatabase): void {
 // v1 → v2: named agents with roles, lead + summary on runs, mailbox table
 // (created above with IF NOT EXISTS). ALTERs are individually guarded so a
 // partially migrated database converges.
+// v2 → v3: task/agent ids are per-run (`task-1`, `lead`, `agent-1` repeat in
+// every run) — the original single-column PRIMARY KEYs made every run after
+// the first collide with UNIQUE constraint failures. Rebuild those tables
+// with composite (run_id, id) keys.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -233,6 +240,78 @@ function migrateSchema(db: SqliteDatabase): void {
     } catch {
       // column already exists
     }
+  }
+  rebuildForCompositeKeys(db)
+}
+
+function hasSingleColumnPk(db: SqliteDatabase, table: string): boolean {
+  const rows = db.prepare(`SELECT pk FROM pragma_table_info('${table}') WHERE pk > 0`).all() as Row[]
+  return rows.length === 1
+}
+
+function rebuildForCompositeKeys(db: SqliteDatabase): void {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    if (hasSingleColumnPk(db, 'protocol_agents')) {
+      db.exec(`
+        CREATE TABLE protocol_agents_v3 (
+          id TEXT NOT NULL,
+          run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+          name TEXT NOT NULL DEFAULT '',
+          role TEXT NOT NULL DEFAULT 'teammate',
+          provider TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          worktree_path TEXT NOT NULL,
+          worktree_branch TEXT NOT NULL,
+          task_id TEXT,
+          status TEXT NOT NULL,
+          last_seen_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (run_id, id)
+        );
+        INSERT OR IGNORE INTO protocol_agents_v3 (
+          id, run_id, name, role, provider, session_id, worktree_path, worktree_branch,
+          task_id, status, last_seen_at, created_at, updated_at
+        ) SELECT
+          id, run_id, name, role, provider, session_id, worktree_path, worktree_branch,
+          task_id, status, last_seen_at, created_at, updated_at
+        FROM protocol_agents;
+        DROP TABLE protocol_agents;
+        ALTER TABLE protocol_agents_v3 RENAME TO protocol_agents;
+        CREATE INDEX IF NOT EXISTS protocol_agents_run_idx ON protocol_agents(run_id);
+        CREATE INDEX IF NOT EXISTS protocol_agents_session_idx ON protocol_agents(session_id);
+      `)
+    }
+    if (hasSingleColumnPk(db, 'protocol_tasks')) {
+      db.exec(`
+        CREATE TABLE protocol_tasks_v3 (
+          id TEXT NOT NULL,
+          run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          prompt TEXT NOT NULL,
+          status TEXT NOT NULL,
+          owner_agent_id TEXT,
+          paths_json TEXT NOT NULL,
+          blocked_by_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (run_id, id)
+        );
+        INSERT OR IGNORE INTO protocol_tasks_v3 (
+          id, run_id, title, prompt, status, owner_agent_id, paths_json, blocked_by_json, created_at, updated_at
+        ) SELECT
+          id, run_id, title, prompt, status, owner_agent_id, paths_json, blocked_by_json, created_at, updated_at
+        FROM protocol_tasks;
+        DROP TABLE protocol_tasks;
+        ALTER TABLE protocol_tasks_v3 RENAME TO protocol_tasks;
+        CREATE INDEX IF NOT EXISTS protocol_tasks_run_idx ON protocol_tasks(run_id);
+      `)
+    }
+    db.exec('COMMIT')
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
   }
 }
 
@@ -724,6 +803,12 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
   if (result.newMessageIds.length > 0) {
     void deliverMessagesLive(event.runId, result.newMessageIds).catch(() => {})
   }
+  // Terminal task events can arrive from outside the work loop (board's
+  // manual task repair, API posts) — they may have just finished the board.
+  if (event.type === 'task.completed' || event.type === 'task.failed') {
+    const controller = controllers.get(event.runId)
+    if (controller) void maybeStartSynthesis(controller).catch(() => {})
+  }
   return result.snapshot
 }
 
@@ -950,8 +1035,47 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
       })
       return
     }
+    // Run-level quality gate (the doc's TaskCompleted hook): the configured
+    // command must pass in the teammate's worktree or the completion bounces
+    // back with the failure output.
+    if (controller.gateCommand) {
+      const failure = await runGateCommand(controller.gateCommand, agent.worktreePath)
+      if (failure) {
+        const note = `Completion of ${event.taskId} was REJECTED by the quality gate \`${controller.gateCommand}\`:\n${failure}\nFix the failures, re-run the gate yourself, then complete again.`
+        controller.dispatchNotes.set(agent.id, note)
+        await appendProtocolEvent({
+          version: AGENT_PROTOCOL_VERSION,
+          runId: controller.runId,
+          agentId: agent.id,
+          type: 'agent.blocked',
+          taskId: event.taskId,
+          summary: `task.completed rejected — quality gate failed`,
+          detail: note,
+        })
+        return
+      }
+    }
   }
   await appendProtocolEvent(event)
+}
+
+/** Run the gate in a worktree; null = pass, otherwise the failure output tail. */
+function runGateCommand(command: string, cwd: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile('/bin/sh', ['-c', command], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 5 * 60_000,
+      maxBuffer: 4 * 1024 * 1024,
+    }, (err, stdout, stderr) => {
+      if (!err) {
+        resolve(null)
+        return
+      }
+      const output = `${String(stdout ?? '')}\n${String(stderr ?? '')}`.trim()
+      resolve(output.slice(-1500) || (err instanceof Error ? err.message : 'gate command failed'))
+    })
+  })
 }
 
 async function dispatchAgentTurn(controller: RunController, agentId: string, message: string): Promise<void> {
@@ -1022,6 +1146,7 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
     inbox,
     agentsById,
     note,
+    gateCommand: controller.gateCommand,
   })
   void dispatchAgentTurn(controller, agentId, message)
 }
@@ -1289,6 +1414,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     title: params.title,
     model: params.model,
     effort: params.effort,
+    gateCommand: params.gateCommand?.trim() || undefined,
     stopped: false,
     synthesisStarted: false,
     interventionsUsed: 0,
@@ -1370,6 +1496,44 @@ export async function stopProtocolRun(runId: string): Promise<ProtocolRunSnapsho
       .run('released', ts, runId)
     return readSnapshotSync(tx, runId)
   })
+}
+
+/**
+ * Delete a run outright: halt its loop, interrupt live turns, sweep worktrees
+ * (force-removing only clean/retired ones — worktrees with uncommitted agent
+ * work are KEPT and reported, since deleting them silently would destroy the
+ * only copy; they remain manageable as ordinary worktree tasks), then
+ * cascade-delete the ledger rows (agents/tasks/locks/events/messages).
+ */
+export async function deleteProtocolRun(runId: string): Promise<{ deleted: boolean; keptWorktrees: string[] }> {
+  const controller = controllers.get(runId)
+  if (controller) controller.stopped = true
+  const db = await getDatabase()
+  const agents = listAgentsSync(db, runId)
+  await Promise.allSettled(agents.flatMap((agent) => {
+    const ids = new Set([agent.sessionId, controller?.sessionIds.get(agent.id)].filter((id): id is string => Boolean(id)))
+    return [...ids].map((id) => interruptRunningSession(id).catch(() => {}))
+  }))
+  controllers.delete(runId)
+  // Sweep worktrees regardless of agent status, but only remove pristine ones
+  // (no dirty files, no unmerged commits) — never destroy the only copy of an
+  // agent's work as a side effect of tidying the board.
+  const keptWorktrees: string[] = []
+  for (const agent of agents) {
+    if (agent.role !== 'teammate' || !agent.worktreePath) continue
+    const worktree = await findWorktreeTaskForCwd(agent.worktreePath).catch(() => null)
+    if (!worktree) continue
+    if (worktree.dirtyFiles === 0 && worktree.aheadCommits === 0) {
+      await removeWorktreeTask(worktree, { force: true }).catch(() => keptWorktrees.push(worktree.path))
+    } else {
+      keptWorktrees.push(worktree.path)
+    }
+  }
+  const deleted = await enqueueWrite((tx) => {
+    const result = tx.prepare('DELETE FROM protocol_runs WHERE id = ?').run(runId) as { changes?: number | bigint } | undefined
+    return Number(result?.changes ?? 0) > 0
+  })
+  return { deleted, keptWorktrees }
 }
 
 // ---------------------------------------------------------------------------

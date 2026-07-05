@@ -87,6 +87,7 @@ import {
   readTuiSlashCommands,
   readTuiComposerOptions,
   listTuiProtocolRuns,
+  readTuiProtocolRun,
   startTuiProtocolRun,
   stopTuiProtocolRun,
   cleanupTuiProtocolRunWorktrees,
@@ -4979,8 +4980,16 @@ export default function OpenTuiApp() {
   const [coordModalOpen, setCoordModalOpen] = useState(false)
   const [coordBoardOpen, setCoordBoardOpen] = useState(false)
   const [coordDraft, setCoordDraft] = useState('')
-  // Teammate budget for the next run (⇥ cycles 2-6 in the start modal).
+  // Teammate budget for the next run (↑/↓ in the start modal).
   const [coordMaxAgents, setCoordMaxAgents] = useState(3)
+  // Quality gate command (TaskCompleted-hook equivalent) for the next run.
+  const [coordGateDraft, setCoordGateDraft] = useState('')
+  const [coordModalFocus, setCoordModalFocus] = useState<'prompt' | 'gate'>('prompt')
+  // Multiline prompt editor (composer-window treatment: ⏎ starts, ⇧⏎ newline).
+  const coordTextareaRef = useRef<TextareaRenderable | null>(null)
+  // Runs started this session being watched for terminal/blocked transitions.
+  const [coordWatchIds, setCoordWatchIds] = useState<string[]>([])
+  const coordWatchStateRef = useRef(new Map<string, { status: string; blockedAgents: Set<string> }>())
   const [coordBusy, setCoordBusy] = useState(false)
   // Run the board opens on (a just-started run); null = latest.
   const [coordBoardRunId, setCoordBoardRunId] = useState<string | null>(null)
@@ -8870,8 +8879,14 @@ export default function OpenTuiApp() {
     setFocusedPane('messages')
   })
 
+  const handleCoordContentChange = useEffectEvent(() => {
+    setCoordDraft(coordTextareaRef.current?.plainText ?? '')
+    if (coordError) setCoordError(null)
+  })
+
   const submitCoordinatedRun = useEffectEvent(async () => {
-    const prompt = coordDraft.trim()
+    // The textarea is the source of truth — onContentChange can lag onSubmit.
+    const prompt = (coordTextareaRef.current?.plainText ?? coordDraft).trim()
     if (!prompt || coordStartInFlightRef.current) return
     coordStartInFlightRef.current = true
     setCoordBusy(true)
@@ -8887,6 +8902,7 @@ export default function OpenTuiApp() {
         title: prompt.slice(0, 40),
         model: tuiModelOverride[selectedSessionKey ?? ''] || undefined,
         effort: tuiEffort === 'auto' ? undefined : tuiEffort,
+        gateCommand: coordGateDraft.trim() || undefined,
       })
       const drafts: Session[] = result.sessions.map((session) => ({
         sessionId: session.sessionId,
@@ -8911,6 +8927,15 @@ export default function OpenTuiApp() {
       setCoordBoardRunId(result.snapshot.run.id)
       setCoordBoardOpen(true)
       setCoordDraft('')
+      setCoordGateDraft('')
+      setCoordModalFocus('prompt')
+      // Watch the run in the background: the engineer gets notified on
+      // completion or newly blocked teammates even with the board closed.
+      coordWatchStateRef.current.set(result.snapshot.run.id, {
+        status: result.snapshot.run.status,
+        blockedAgents: new Set(),
+      })
+      setCoordWatchIds((prev) => [...prev, result.snapshot.run.id])
       await refreshSessions(provider, true, false)
       showNotice('info', 'Coordinated run started — lead is planning the task board', 5000)
     } catch (err) {
@@ -8921,6 +8946,58 @@ export default function OpenTuiApp() {
       setCoordBusy(false)
     }
   })
+
+  // Desktop-notify a team event (run finished, teammate blocked) — the whole
+  // point of a team is walking away while it works.
+  const notifyTeamEvent = useEffectEvent((title: string, body: string) => {
+    if (NATIVE_OSC_ENABLED && renderer.capabilities?.notifications !== false) {
+      try {
+        renderer.triggerNotification(toBmpSafe(body), toBmpSafe(`agent-viewer · ${title}`))
+      } catch {
+        // terminal doesn't support OSC notifications — silently ignore
+      }
+    }
+  })
+
+  // Watch active runs started this session: notify on terminal status and on
+  // newly blocked teammates, then drop finished runs from the watch list.
+  useEffect(() => {
+    if (coordWatchIds.length === 0) return
+    let cancelled = false
+    const tick = async () => {
+      for (const runId of coordWatchIds) {
+        const snapshot = await readTuiProtocolRun(runId).catch(() => null)
+        if (cancelled) return
+        const watch = coordWatchStateRef.current.get(runId)
+        if (!snapshot || !watch) {
+          coordWatchStateRef.current.delete(runId)
+          setCoordWatchIds((prev) => prev.filter((id) => id !== runId))
+          continue
+        }
+        for (const agent of snapshot.agents) {
+          if (agent.status === 'blocked' && !watch.blockedAgents.has(agent.id)) {
+            watch.blockedAgents.add(agent.id)
+            showNotice('info', `Team: ${agent.name} is blocked${agent.taskId ? ` on ${agent.taskId}` : ''} — ⇧O to intervene`, 6000)
+            notifyTeamEvent('teammate blocked', `${agent.name} is blocked${agent.taskId ? ` on ${agent.taskId}` : ''}`)
+          }
+        }
+        const status = snapshot.run.status
+        if (status !== watch.status) {
+          watch.status = status
+          if (status === 'completed' || status === 'failed' || status === 'stopped') {
+            const headline = snapshot.run.summary?.split('\n')[0] ?? ''
+            showNotice(status === 'completed' ? 'info' : 'error', `Team run ${status}${headline ? `: ${headline}` : ''} — ⇧O for the board`, 8000)
+            notifyTeamEvent(`team run ${status}`, headline || snapshot.run.prompt.slice(0, 80))
+            coordWatchStateRef.current.delete(runId)
+            setCoordWatchIds((prev) => prev.filter((id) => id !== runId))
+          }
+        }
+      }
+    }
+    void tick()
+    const timer = setInterval(() => { void tick() }, 5000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [coordWatchIds])
 
   // Palette actions resolve the latest run on demand — the interactive board
   // (CoordinationPopover) has its own run-scoped stop/cleanup keys.
@@ -11546,6 +11623,7 @@ export default function OpenTuiApp() {
       case 'coord-start':
         setCoordDraft(composerDraft.trim() || selectedSession?.firstPrompt || '')
         setCoordError(null)
+        setCoordModalFocus('prompt')
         setCoordModalOpen(true)
         break
       case 'coord-board':
@@ -11901,14 +11979,22 @@ export default function OpenTuiApp() {
         handled(() => {
           setCoordModalOpen(false)
           setCoordDraft('')
+          setCoordGateDraft('')
+          setCoordModalFocus('prompt')
           setCoordError(null)
         })
-      } else if (key.name === 'return') {
-        handled(() => { void submitCoordinatedRun() })
       } else if (key.name === 'tab') {
-        // ⇥ cycles the teammate budget without stealing typing from the input.
-        handled(() => setCoordMaxAgents((current) => (current >= 6 ? 2 : current + 1)))
+        // ⇥ hops between the prompt editor and the quality-gate input.
+        handled(() => setCoordModalFocus((current) => (current === 'prompt' ? 'gate' : 'prompt')))
+      } else if (isCtrl('t')) {
+        // ⌃T cycles the teammate budget; arrows stay with the editor cursor.
+        handled(() => setCoordMaxAgents((current) => (current >= 6 ? 1 : current + 1)))
+      } else if (key.name === 'return' && coordModalFocus === 'gate') {
+        // The gate input's Enter starts the run (the prompt textarea handles
+        // its own ⏎ submit / ⇧⏎ newline bindings).
+        handled(() => { void submitCoordinatedRun() })
       }
+      // Everything else falls through to the focused editor/input.
       return
     }
 
@@ -15347,8 +15433,26 @@ export default function OpenTuiApp() {
       })() : null}
 
       {coordModalOpen ? (() => {
-        const overlayWidth = Math.min(Math.max(width - 6, 46), 78)
-        const overlayHeight = 10
+        // Composer-window treatment: border-embedded title + status, meta chip
+        // header, multiline prompt editor (⏎ starts, ⇧⏎ newline), gate row,
+        // stats/hints footer.
+        const overlayWidth = Math.max(20, Math.min(Math.max(width - 4, 20), Math.max(64, Math.min(COMPOSER_WINDOW_MAX_WIDTH, Math.floor(width * 0.78)))))
+        const overlayHeight = Math.max(14, Math.min(Math.max(height - 4, 14), 24))
+        const contentWidth = Math.max(overlayWidth - 4, 16)
+        const headerHeight = 2
+        const gateHeight = 2
+        const footerHeight = 2
+        const editorHeight = Math.max(overlayHeight - 2 - headerHeight - gateHeight - footerHeight - (coordError ? 1 : 0), 4)
+        const teamProvider = String(provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider).toUpperCase()
+        const titleLeft = `◆ AGENT TEAM · ${teamProvider}`
+        const titleStatus = coordBusy ? 'STARTING' : 'NEW RUN'
+        const titleWidth = Math.max(overlayWidth - 4, 12)
+        const titleGap = titleWidth - titleLeft.length - titleStatus.length
+        const borderTitle = titleGap > 0
+          ? `${titleLeft}${'━'.repeat(titleGap)}${titleStatus}`
+          : fitText(`${titleLeft} · ${titleStatus}`, titleWidth)
+        const baseCwdLabel = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
+        const promptLineCount = coordDraft.length === 0 ? 1 : coordDraft.split('\n').length
         return (
           <box
             position="absolute"
@@ -15357,38 +15461,106 @@ export default function OpenTuiApp() {
             width={overlayWidth}
             height={overlayHeight}
             border
-            borderStyle="single"
+            borderStyle="heavy"
             borderColor={theme.cyan}
-            backgroundColor={theme.surface}
+            backgroundColor={theme.surface2}
             zIndex={70}
             flexDirection="column"
-            title=" Start coordinated run "
+            title={borderTitle}
             titleColor={theme.cyan}
             titleAlignment="left"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return
+              coordTextareaRef.current?.focus()
+            }}
           >
-            <box paddingX={1} paddingTop={1}>
+            <box
+              height={headerHeight}
+              paddingX={1}
+              border={['bottom']}
+              borderStyle="single"
+              borderColor={theme.border}
+              backgroundColor={theme.surface2}
+              flexDirection="row"
+              alignItems="center"
+            >
               <text fg={theme.dim} wrapMode="none">
-                {fitText('Prompt for the team — a lead plans the task board, teammates work it in worktrees.', overlayWidth - 4)}
+                {renderInlineTextSegments([
+                  { text: `teammates:${coordMaxAgents}`, fg: theme.cyan },
+                  { text: ' · ', fg: theme.dim },
+                  { text: coordGateDraft.trim() ? `gate:${coordGateDraft.trim()}` : 'gate:off', fg: coordGateDraft.trim() ? theme.amber : theme.dim },
+                  { text: ' · ', fg: theme.dim },
+                  { text: `cwd ${baseCwdLabel}`, fg: theme.dim },
+                ], contentWidth, theme.dim)}
               </text>
             </box>
-            <box paddingX={1} marginTop={1} backgroundColor={theme.surface3}>
-              <input
-                focused
-                value={coordDraft}
-                maxLength={500}
-                onInput={(value: string) => setCoordDraft(value)}
+
+            <box
+              height={editorHeight}
+              paddingX={1}
+              paddingY={1}
+              flexDirection="column"
+              overflow="hidden"
+              backgroundColor={theme.surface}
+            >
+              <textarea
+                ref={coordTextareaRef}
+                focused={coordModalFocus === 'prompt'}
+                width={contentWidth}
+                height={Math.max(editorHeight - 2, 2)}
+                placeholder="Describe the work — the lead plans a task board, teammates execute it in isolated worktrees."
+                initialValue={coordDraft}
+                keyBindings={composerKeyBindings}
+                onContentChange={handleCoordContentChange}
                 onSubmit={() => { void submitCoordinatedRun() }}
+                style={composerBaseTextareaStyle}
               />
             </box>
+
+            <box
+              height={gateHeight}
+              paddingX={1}
+              backgroundColor={theme.surface2}
+              flexDirection="row"
+              alignItems="center"
+            >
+              <text fg={coordModalFocus === 'gate' ? theme.amber : theme.dim} wrapMode="none">{'gate '}</text>
+              <box flexGrow={1} backgroundColor={coordModalFocus === 'gate' ? theme.surface3 : theme.surface2}>
+                <input
+                  focused={coordModalFocus === 'gate'}
+                  value={coordGateDraft}
+                  placeholder="optional quality gate, e.g. npx tsc --noEmit — must pass before a task completes"
+                  maxLength={200}
+                  onInput={(value: string) => setCoordGateDraft(value)}
+                  onSubmit={() => { void submitCoordinatedRun() }}
+                />
+              </box>
+            </box>
+
             {coordError ? (
-              <box paddingX={1} marginTop={1}>
-                <text fg={theme.red} wrapMode="none">{fitText(coordError, overlayWidth - 4)}</text>
+              <box paddingX={1} height={1} overflow="hidden">
+                <text fg={theme.red} wrapMode="none">{fitText(coordError, contentWidth)}</text>
               </box>
             ) : null}
-            <box paddingX={1} marginTop={1} flexDirection="row">
-              <text fg={theme.cyan} wrapMode="none">{`teammates: ${coordMaxAgents}`}</text>
+
+            <box
+              height={footerHeight}
+              paddingX={1}
+              border={['top']}
+              borderStyle="single"
+              borderColor={theme.border}
+              backgroundColor={theme.surface2}
+              flexDirection="row"
+              alignItems="center"
+            >
               <text fg={coordBusy ? theme.amber : theme.dim} wrapMode="none">
-                {fitText(coordBusy ? '  Starting lead…' : '  ⇥ change · ⏎ start · Esc cancel', overlayWidth - 18)}
+                {coordBusy
+                  ? 'Starting lead…'
+                  : `${promptLineCount} line${promptLineCount === 1 ? '' : 's'} · ${coordDraft.length} chars`}
+              </text>
+              <box flexGrow={1} />
+              <text fg={theme.dim} wrapMode="none">
+                {fitText('⏎ start · ⇧⏎ newline · ⇥ gate · ⌃T teammates · Esc close', Math.max(contentWidth - 24, 20))}
               </text>
             </box>
           </box>
@@ -15405,6 +15577,7 @@ export default function OpenTuiApp() {
           onNewRun={() => {
             setCoordDraft('')
             setCoordError(null)
+            setCoordModalFocus('prompt')
             setCoordModalOpen(true)
           }}
           onClose={() => setCoordBoardOpen(false)}

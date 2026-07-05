@@ -13,9 +13,14 @@ import type { AgentProtocolEvent, ProtocolAgent, ProtocolRunSnapshot, ProtocolTa
 import {
   appendTuiProtocolEvent,
   cleanupTuiProtocolRunWorktrees,
+  deleteTuiProtocolRun,
+  interruptTuiSessionTurn,
   listTuiProtocolRuns,
+  listTuiWorktreeTasks,
+  mergeTuiWorktreeTask,
   readTuiProtocolRun,
   stopTuiProtocolRun,
+  type WorktreeTask,
 } from '../../lib/tui/service'
 
 type CoordinationKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
@@ -35,7 +40,16 @@ type Props = {
 
 type Section = 'team' | 'tasks' | 'events'
 
+type PendingAction =
+  | { kind: 'stop' }
+  | { kind: 'delete-run' }
+  | { kind: 'merge'; agent: ProtocolAgent; worktree: WorktreeTask }
+  | { kind: 'fail-task'; task: ProtocolTask }
+
 const POLL_MS = 2000
+// Worktree ahead/dirty stats cost git subprocesses per teammate — refresh on
+// a slower cadence than the snapshot poll.
+const WORKTREE_STATS_MS = 10_000
 
 function statusColor(status: string, theme: TuiThemePalette): string {
   switch (status) {
@@ -83,7 +97,9 @@ export function CoordinationPopover({
   const [eventIndex, setEventIndex] = useState(-1) // -1 = follow tail
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [confirmStop, setConfirmStop] = useState(false)
+  const [pending, setPending] = useState<PendingAction | null>(null)
+  // Worktree path → ahead/dirty stats for TEAM rows and the merge flow.
+  const [worktreeStats, setWorktreeStats] = useState<Map<string, WorktreeTask>>(new Map())
   const [messageTarget, setMessageTarget] = useState<string | null>(null)
   const [messageDraft, setMessageDraft] = useState('')
   const scrollRef = useRef<ScrollBoxRenderable>(null)
@@ -121,6 +137,22 @@ export function CoordinationPopover({
     const timer = setInterval(poll, POLL_MS)
     return () => { cancelled = true; clearInterval(timer) }
   }, [runId])
+
+  // Ahead/dirty per teammate worktree, for the TEAM rows and merge action.
+  useEffect(() => {
+    const baseCwd = snapshot?.run.baseCwd
+    if (!baseCwd) return
+    let cancelled = false
+    const refresh = () => {
+      void listTuiWorktreeTasks(baseCwd).then((tasks) => {
+        if (cancelled) return
+        setWorktreeStats(new Map(tasks.map((task) => [task.path, task])))
+      }).catch(() => {})
+    }
+    refresh()
+    const timer = setInterval(refresh, WORKTREE_STATS_MS)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [snapshot?.run.baseCwd])
 
   const agents = snapshot?.agents ?? []
   const tasks = snapshot?.tasks ?? []
@@ -161,20 +193,76 @@ export function CoordinationPopover({
     }
   }, [busy, messageDraft, messageTarget, onNotice, runId])
 
-  const stopRun = useCallback(async () => {
+  const runPendingAction = useCallback(async (action: PendingAction) => {
     if (!runId || busy) return
     setBusy(true)
     try {
-      const next = await stopTuiProtocolRun(runId)
-      setSnapshot(next)
-      onNotice('info', 'Run stopped — live turns interrupted', 4000)
+      if (action.kind === 'stop') {
+        const next = await stopTuiProtocolRun(runId)
+        setSnapshot(next)
+        onNotice('info', 'Run stopped — live turns interrupted', 4000)
+      } else if (action.kind === 'delete-run') {
+        const result = await deleteTuiProtocolRun(runId)
+        onNotice(
+          'info',
+          result.keptWorktrees.length > 0
+            ? `Run deleted · kept ${result.keptWorktrees.length} worktree${result.keptWorktrees.length === 1 ? '' : 's'} with unmerged work`
+            : 'Run deleted — clean worktrees removed',
+          6000,
+        )
+        // Hop to the next remaining run (or the empty state).
+        const remaining = runIds.filter((id) => id !== runId)
+        setRunIds(remaining)
+        setRunId(remaining[0] ?? null)
+        setSnapshot(null)
+        setEventIndex(-1)
+        setExpandedTaskId(null)
+        if (remaining.length === 0) setLoadError(null)
+      } else if (action.kind === 'merge') {
+        const result = await mergeTuiWorktreeTask(action.worktree)
+        onNotice(
+          'info',
+          result.staged
+            ? `Merged ${action.agent.name}'s worktree — changes staged in the main checkout (⇧U to review)`
+            : `${action.agent.name}'s worktree has no changes to merge`,
+          6000,
+        )
+        const baseCwd = snapshot?.run.baseCwd
+        if (baseCwd) {
+          const tasks = await listTuiWorktreeTasks(baseCwd).catch(() => [] as WorktreeTask[])
+          setWorktreeStats(new Map(tasks.map((task) => [task.path, task])))
+        }
+      } else {
+        // Manual task repair (doc: "task status can lag … update the task
+        // status manually"). Recorded as the user's own protocol event.
+        await appendTuiProtocolEvent({
+          version: AGENT_PROTOCOL_VERSION,
+          runId,
+          agentId: 'user',
+          type: 'task.failed',
+          taskId: action.task.id,
+          summary: `${action.task.id} marked failed from the board`,
+        })
+        onNotice('info', `${action.task.id} marked failed`, 4000)
+      }
     } catch (err) {
-      onNotice('error', err instanceof Error ? err.message : 'Failed to stop run')
+      onNotice('error', err instanceof Error ? err.message : 'Action failed')
     } finally {
       setBusy(false)
-      setConfirmStop(false)
+      setPending(null)
     }
-  }, [busy, onNotice, runId])
+  }, [busy, onNotice, runId, runIds, snapshot?.run.baseCwd])
+
+  // Doc's agent-panel Esc/x: interrupt the selected teammate's current turn
+  // without stopping the run — it re-engages on the next dispatch or message.
+  const interruptAgentTurn = useCallback(async (agent: ProtocolAgent) => {
+    try {
+      await interruptTuiSessionTurn({ sessionId: agent.sessionId })
+      onNotice('info', `Interrupted ${agent.name}'s turn`, 3500)
+    } catch {
+      onNotice('info', `${agent.name} has no live turn to interrupt`, 3000)
+    }
+  }, [onNotice])
 
   const cleanupRun = useCallback(async () => {
     if (!runId || busy) return
@@ -204,9 +292,9 @@ export function CoordinationPopover({
       // other keys fall through to the focused input
       return
     }
-    if (confirmStop) {
-      if (key.name === 'y' || key.name === 'return') void stopRun()
-      else if (key.name === 'n' || key.name === 'escape') setConfirmStop(false)
+    if (pending) {
+      if (key.name === 'y' || key.name === 'return') void runPendingAction(pending)
+      else if (key.name === 'n' || key.name === 'escape') setPending(null)
       return
     }
     if (key.name === 'escape' || key.name === 'q') {
@@ -259,8 +347,34 @@ export function CoordinationPopover({
     }
     if (key.name === 's') {
       const status = snapshot?.run.status
-      if (status === 'planning' || status === 'running' || status === 'synthesizing') setConfirmStop(true)
+      if (status === 'planning' || status === 'running' || status === 'synthesizing') setPending({ kind: 'stop' })
       else onNotice('info', 'Run is not active', 2500)
+      return
+    }
+    if (key.name === 'd' && key.shift) {
+      if (snapshot) setPending({ kind: 'delete-run' })
+      return
+    }
+    if (key.name === 'x' && section === 'team' && selectedAgent) {
+      void interruptAgentTurn(selectedAgent)
+      return
+    }
+    if (key.name === 'w' && section === 'team' && selectedAgent) {
+      const worktree = worktreeStats.get(selectedAgent.worktreePath)
+      if (!worktree) {
+        onNotice('info', `${selectedAgent.name} has no merge-ready worktree`, 3000)
+        return
+      }
+      setPending({ kind: 'merge', agent: selectedAgent, worktree })
+      return
+    }
+    if (key.name === 'f' && section === 'tasks' && tasks[clampedTask]) {
+      const task = tasks[clampedTask]!
+      if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+        onNotice('info', `${task.id} is already terminal`, 2500)
+        return
+      }
+      setPending({ kind: 'fail-task', task })
       return
     }
     if (key.name === 'c') {
@@ -276,7 +390,7 @@ export function CoordinationPopover({
       setEventIndex(-1)
       return
     }
-  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, confirmStop, events.length, messageTarget, onClose, onNewRun, onNotice, onOpenSession, runId, runIds, section, selectedAgent, sendTeamMessage, snapshot?.run.status, stopRun, tasks])
+  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, events.length, interruptAgentTurn, messageTarget, onClose, onNewRun, onNotice, onOpenSession, pending, runId, runIds, runPendingAction, section, selectedAgent, sendTeamMessage, snapshot?.run.status, tasks, worktreeStats])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -296,14 +410,23 @@ export function CoordinationPopover({
 
   const run = snapshot?.run ?? null
   const runIndexLabel = runId && runIds.length > 1 ? ` · run ${runIds.indexOf(runId) + 1}/${runIds.length} ([/] switch)` : ''
+  const pendingLabel = pending?.kind === 'stop'
+    ? 'Stop the run and interrupt every live turn? y/⏎ confirm · n/Esc cancel'
+    : pending?.kind === 'delete-run'
+    ? 'DELETE this run (team, tasks, events, messages)? Clean worktrees are removed; unmerged ones are kept. y/⏎ · n/Esc'
+    : pending?.kind === 'merge'
+    ? `Squash-merge ${pending.agent.name}'s worktree into the main checkout (staged)? y/⏎ · n/Esc`
+    : pending?.kind === 'fail-task'
+    ? `Mark ${pending.task.id} failed? Dependents unblock only on completion. y/⏎ · n/Esc`
+    : null
   const footerHint = messageTarget !== null
     ? `message → ${messageTarget} · ⏎ send · Esc cancel`
-    : confirmStop
-    ? 'Stop the run and interrupt every live turn? y/⏎ confirm · n/Esc cancel'
+    : pendingLabel
+    ? pendingLabel
     : section === 'team'
-    ? '⏎ open transcript · m message · ⇧M all · ⇥ section · s stop · c clean · n new · Esc'
+    ? '⏎ transcript · m msg · ⇧M all · x interrupt · w merge · ⇥ section · s stop · ⇧D delete · c clean · n new'
     : section === 'tasks'
-    ? '⏎ expand task · m msg lead · ⇥ section · s stop · c clean · n new · Esc'
+    ? '⏎ expand · f fail task · m msg lead · ⇥ section · s stop · ⇧D delete · c clean · n new'
     : 'j/k scroll · g tail · m msg lead · ⇥ section · s stop · Esc'
 
   return (
@@ -357,6 +480,17 @@ export function CoordinationPopover({
                 <text fg={selected ? theme.text : theme.muted} wrapMode="none">{` ${agent.name}`}</text>
                 <text fg={statusColor(agent.status, theme)} wrapMode="none">{` ${agent.status}`}</text>
                 <text fg={theme.dim} wrapMode="none">{agent.taskId ? ` ${agent.taskId}` : ''}</text>
+                {(() => {
+                  const stats = worktreeStats.get(agent.worktreePath)
+                  if (!stats) return null
+                  const parts = [
+                    stats.aheadCommits > 0 ? `+${stats.aheadCommits}` : null,
+                    stats.dirtyFiles > 0 ? `~${stats.dirtyFiles}` : null,
+                  ].filter(Boolean)
+                  return parts.length > 0
+                    ? <text fg={theme.amber} wrapMode="none">{` ${parts.join(' ')}`}</text>
+                    : null
+                })()}
               </box>
             )
           })}
@@ -461,7 +595,7 @@ export function CoordinationPopover({
             </box>
           </box>
         ) : (
-          <text fg={confirmStop ? theme.red : theme.dim} wrapMode="none">{footerHint}</text>
+          <text fg={pendingLabel ? theme.amber : theme.dim} wrapMode="none">{footerHint}</text>
         )}
       </box>
     </box>

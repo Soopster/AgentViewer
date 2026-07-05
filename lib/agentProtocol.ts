@@ -171,6 +171,12 @@ export type StartProtocolRunParams = {
   title?: string
   model?: string
   effort?: string
+  /**
+   * Quality gate (the doc's TaskCompleted-hook pattern): shell command run in
+   * the teammate's worktree when it emits `task.completed`. Non-zero exit
+   * rejects the completion and feeds the output back to the teammate.
+   */
+  gateCommand?: string
 }
 
 export type StartProtocolRunResult = {
@@ -363,6 +369,7 @@ export function buildTeammateTurnPreamble(params: {
   inbox: ProtocolMessage[]
   agentsById: Map<string, ProtocolAgent>
   note?: string
+  gateCommand?: string
 }): string {
   const pathList = params.task && params.task.paths.length > 0
     ? params.task.paths.map((path) => `- ${path}`).join('\n')
@@ -395,6 +402,9 @@ export function buildTeammateTurnPreamble(params: {
     '',
     'Work loop rules:',
     '- Emit `agent.start_work` (with taskId) before you begin; `task.completed` when the deliverable is done.',
+    ...(params.gateCommand
+      ? [`- Completions are gate-checked: \`${params.gateCommand}\` runs in your worktree and must exit 0, or the completion is rejected with its output. Run it yourself before completing.`]
+      : []),
     '- Share what you find: `finding` for facts others need, `learning` for reusable context — teammates and the lead see them.',
     '- If blocked, emit `agent.blocked` with the blocker and `message` the teammate (or lead) who can unblock you. Do not silently stop.',
     '- After completing, you may immediately `task.claim` the next pending unblocked task in this same turn, or end the turn — the coordinator will re-dispatch you.',

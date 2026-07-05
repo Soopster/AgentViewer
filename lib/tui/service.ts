@@ -102,6 +102,7 @@ import {
 import {
   appendProtocolEvent,
   cleanupProtocolRunWorktrees,
+  deleteProtocolRun,
   listProtocolRuns,
   readProtocolRun,
   startProtocolRun,
@@ -503,6 +504,10 @@ export async function stopTuiProtocolRun(runId: string): Promise<ProtocolRunSnap
 
 export async function cleanupTuiProtocolRunWorktrees(runId: string, opts?: { force?: boolean }): Promise<Awaited<ReturnType<typeof cleanupProtocolRunWorktrees>>> {
   return cleanupProtocolRunWorktrees(runId, opts)
+}
+
+export async function deleteTuiProtocolRun(runId: string): Promise<{ deleted: boolean; keptWorktrees: string[] }> {
+  return deleteProtocolRun(runId)
 }
 
 export async function appendTuiProtocolEvent(event: AgentProtocolEvent): Promise<ProtocolRunSnapshot | null> {
