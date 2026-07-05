@@ -56,7 +56,7 @@ function statusColor(status: string, theme: TuiThemePalette): string {
     case 'completed': case 'done': return theme.green
     case 'blocked': case 'failed': return theme.red
     case 'working': case 'in_progress': case 'running': case 'synthesizing': return theme.amber
-    case 'claimed': case 'planning': return theme.cyan
+    case 'claimed': case 'planning': case 'planned': return theme.cyan
     default: return theme.dim
   }
 }
@@ -410,6 +410,9 @@ export function CoordinationPopover({
 
   const run = snapshot?.run ?? null
   const runIndexLabel = runId && runIds.length > 1 ? ` · run ${runIds.indexOf(runId) + 1}/${runIds.length} ([/] switch)` : ''
+  const guardLabel = run
+    ? `${run.requirePlanApproval ? ' · plans:on' : ''}${run.gateCommand ? ' · gate:on' : ''}`
+    : ''
   const pendingLabel = pending?.kind === 'stop'
     ? 'Stop the run and interrupt every live turn? y/⏎ confirm · n/Esc cancel'
     : pending?.kind === 'delete-run'
@@ -451,7 +454,7 @@ export function CoordinationPopover({
           <>
             <text fg={statusColor(run.status, theme)} wrapMode="none">{run.status.toUpperCase()}</text>
             <text fg={theme.dim} wrapMode="none">
-              {fitTextLocal(` · ${String(run.provider).toUpperCase()} · ${formatAge(run.createdAt, now)} ago${runIndexLabel} · `, 48)}
+              {fitTextLocal(` · ${String(run.provider).toUpperCase()} · ${formatAge(run.createdAt, now)} ago${guardLabel}${runIndexLabel} · `, 60)}
             </text>
             <box flexGrow={1} overflow="hidden">
               <text fg={theme.muted} wrapMode="none">{run.prompt.split('\n')[0]?.slice(0, Math.max(innerW - 52, 10))}</text>

@@ -207,6 +207,14 @@ npm run doctor     # React diagnostics helper
 
 OpenTUI is the default terminal runtime. It supports provider selection, session navigation, transcript reading, tabs, search, folding, density and focus controls, theme selection, analytics, Git status, clipboard copy, refresh, and provider-backed sends where wired through the shared TUI service.
 
+### Agent Teams
+
+Press `Shift+O` in the OpenTUI app to open the agent-team board, then `n` to start a coordinated run. A team run uses a lead agent to decompose the request, named teammates in isolated git worktrees, a shared task board, direct teammate messages, path locks, optional completion gates, and an optional plan-approval guard.
+
+The start modal defaults plan approval on: teammates submit a `task.planned` approach first, Claude teammates are dispatched in plan mode for that planning turn, and the lead must emit `plan.approved` before implementation can complete. Use `Ctrl+P` to toggle plans, `Ctrl+T` to cycle teammate count, and the `gate` field for a command such as `npx tsc --noEmit` that must pass before a teammate task completes.
+
+On the board, use `Enter` to open a teammate transcript, `m` to message the selected teammate or lead, `Shift+M` to broadcast, `x` to interrupt a selected teammate turn, `w` to stage-merge a teammate worktree, `f` to mark a stuck task failed, and `c` to clean up completed clean worktrees.
+
 The legacy Ink UI remains available through:
 
 ```bash

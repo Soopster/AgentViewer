@@ -22,7 +22,7 @@ export type AgentProtocolVersion = typeof AGENT_PROTOCOL_VERSION
 export type ProtocolRunStatus = 'planning' | 'running' | 'synthesizing' | 'blocked' | 'completed' | 'failed' | 'stopped'
 export type ProtocolAgentStatus = 'ready' | 'idle' | 'working' | 'blocked' | 'done' | 'failed' | 'stopped'
 export type ProtocolAgentRole = 'lead' | 'teammate'
-export type ProtocolTaskStatus = 'pending' | 'claimed' | 'in_progress' | 'blocked' | 'completed' | 'failed' | 'cancelled'
+export type ProtocolTaskStatus = 'pending' | 'claimed' | 'planning' | 'planned' | 'in_progress' | 'blocked' | 'completed' | 'failed' | 'cancelled'
 export type ProtocolLockStatus = 'active' | 'released' | 'expired' | 'denied'
 
 export type ProtocolEventType =
@@ -41,6 +41,8 @@ export type ProtocolEventType =
   | 'task.completed'
   | 'task.failed'
   | 'plan.completed'
+  | 'plan.approved'
+  | 'plan.rejected'
   // path locks
   | 'lock.requested'
   | 'lock.granted'
@@ -84,6 +86,8 @@ export type ProtocolRun = {
   leadAgentId?: string
   /** Lead's final synthesis, filled when the run completes. */
   summary?: string
+  gateCommand?: string
+  requirePlanApproval?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -177,6 +181,14 @@ export type StartProtocolRunParams = {
    * rejects the completion and feeds the output back to the teammate.
    */
   gateCommand?: string
+  /**
+   * Claude Code's plan-approval pattern: teammates must submit a plan for
+   * their claimed task and wait for lead approval before implementation.
+   * Claude teammates are dispatched in provider plan mode for this turn; other
+   * providers receive the same protocol instruction without provider-enforced
+   * read-only mode.
+   */
+  requirePlanApproval?: boolean
 }
 
 export type StartProtocolRunResult = {
@@ -197,6 +209,7 @@ const EVENT_TYPES: ReadonlySet<string> = new Set<ProtocolEventType>([
   'agent.blocked', 'agent.unblocked',
   'task.created', 'task.planned', 'task.claim', 'task.claimed',
   'task.completed', 'task.failed', 'plan.completed',
+  'plan.approved', 'plan.rejected',
   'lock.requested', 'lock.granted', 'lock.denied', 'lock.released',
   'finding', 'learning', 'message', 'handoff', 'review.requested',
   'shutdown.requested',
@@ -319,6 +332,8 @@ function protocolGrammar(runId: string, agentId: string): string {
     '- `agent.blocked` — you cannot proceed; summary = the blocker. `agent.unblocked` when cleared.',
     '- `task.claim` (taskId) — request the next pending task. The coordinator grants or denies it.',
     '- `task.created` (title, detail, paths, dependsOn) — add newly discovered work to the board.',
+    '- `task.planned` (taskId, summary, detail) — submit an implementation plan for your claimed task before editing when plan approval is required.',
+    '- `plan.approved` / `plan.rejected` (taskId, summary/detail) — lead-only approval decision for a teammate plan.',
     '- `task.completed` / `task.failed` (taskId, summary) — end your task. Completion is gated: changes outside your locked paths are rejected with feedback.',
     '- `lock.requested` (paths) — ask for write access before touching paths you do not hold.',
     '- `finding` — a fact other agents need (summary + detail). `learning` — reusable implementation context.',
@@ -359,6 +374,56 @@ export function buildLeadPlanPreamble(params: {
   ].join('\n')
 }
 
+/** A teammate planning turn: read-only plan mode before implementation. */
+export function buildTeammatePlanPreamble(params: {
+  runId: string
+  agent: Pick<ProtocolAgent, 'id' | 'name'>
+  roster: ProtocolAgent[]
+  task: ProtocolTask
+  allTasks: ProtocolTask[]
+  inbox: ProtocolMessage[]
+  agentsById: Map<string, ProtocolAgent>
+  note?: string
+}): string {
+  const pathList = params.task.paths.length > 0
+    ? params.task.paths.map((path) => `- ${path}`).join('\n')
+    : '- (no write paths yet — your plan may request paths, but do not edit)'
+  return [
+    `You are teammate "${params.agent.name}" in a coordinated multi-agent run (protocol ${AGENT_PROTOCOL_VERSION}).`,
+    `Run ID: ${params.runId} · Your agent ID: ${params.agent.id}`,
+    '',
+    'THIS TURN IS PLAN-ONLY. Do not edit files, run destructive commands, or mark the task complete.',
+    'Study the repo read-only and propose the approach. The team lead must approve before you implement.',
+    '',
+    ...(params.note ? [`Coordinator note: ${params.note}`, ''] : []),
+    'Team roster (message anyone by name):',
+    formatRoster(params.roster),
+    '',
+    'Your inbox:',
+    formatInbox(params.inbox, params.agentsById),
+    '',
+    `Task to plan: ${params.task.id} — ${params.task.title}`,
+    '',
+    params.task.prompt,
+    '',
+    'Expected write paths for this task:',
+    pathList,
+    '',
+    'Task board:',
+    formatTaskBoard(params.allTasks),
+    '',
+    'Plan approval rules:',
+    '- Emit exactly one `task.planned` block for this task with:',
+    '  - `taskId`: this task id',
+    '  - `summary`: one-line approach',
+    '  - `detail`: files to touch, implementation steps, verification, risks/conflicts',
+    '- If the task is impossible as scoped, emit `agent.blocked` and `message` the lead instead.',
+    '- End with `agent.stop_work`. Do not emit `task.completed` until the lead emits `plan.approved`.',
+    '',
+    protocolGrammar(params.runId, params.agent.id),
+  ].join('\n')
+}
+
 /** A teammate turn: first assignment or a follow-up dispatch in the work loop. */
 export function buildTeammateTurnPreamble(params: {
   runId: string
@@ -370,6 +435,7 @@ export function buildTeammateTurnPreamble(params: {
   agentsById: Map<string, ProtocolAgent>
   note?: string
   gateCommand?: string
+  requirePlanApproval?: boolean
 }): string {
   const pathList = params.task && params.task.paths.length > 0
     ? params.task.paths.map((path) => `- ${path}`).join('\n')
@@ -402,6 +468,9 @@ export function buildTeammateTurnPreamble(params: {
     '',
     'Work loop rules:',
     '- Emit `agent.start_work` (with taskId) before you begin; `task.completed` when the deliverable is done.',
+    ...(params.requirePlanApproval
+      ? ['- This task has lead-approved planning. Stay inside the approved plan or emit `message`/`task.planned` again if the approach needs material changes.']
+      : []),
     ...(params.gateCommand
       ? [`- Completions are gate-checked: \`${params.gateCommand}\` runs in your worktree and must exit 0, or the completion is rejected with its output. Run it yourself before completing.`]
       : []),
@@ -426,6 +495,8 @@ export function buildLeadInterventionPreamble(params: {
   inbox: ProtocolMessage[]
   agentsById: Map<string, ProtocolAgent>
   interventionsLeft: number
+  requirePlanApproval?: boolean
+  reviewingPlans?: boolean
 }): string {
   return [
     `You are the TEAM LEAD (protocol ${AGENT_PROTOCOL_VERSION}). Teammates need your help mid-run.`,
@@ -441,10 +512,18 @@ export function buildLeadInterventionPreamble(params: {
     formatTaskBoard(params.tasks),
     '',
     'Resolve the situation THIS TURN — coordinate, do not implement:',
+    ...(params.requirePlanApproval
+      ? [
+          '- For any `planned` task, approve the plan with `plan.approved` (taskId, summary) only if it has clear files, steps, verification, and avoids path conflicts.',
+          '- Reject weak or risky plans with `plan.rejected` (taskId, summary/detail) and concrete feedback. The teammate will revise in plan mode.',
+        ]
+      : []),
     '- `message` a blocked teammate (by name) with concrete unblocking guidance. Your message wakes them.',
     '- If a task is genuinely unachievable or duplicated, emit `task.failed` (taskId, summary) so the run can finish without it.',
     '- If the work needs reshaping, emit `task.created` replacements (title, detail, paths, dependsOn).',
-    `- You have ${params.interventionsLeft} intervention turn${params.interventionsLeft === 1 ? '' : 's'} left this run — after that, stuck tasks are auto-failed. Prefer decisive resolution over back-and-forth.`,
+    params.reviewingPlans
+      ? '- This turn is reviewing teammate plans; it does not consume the stuck-task intervention budget.'
+      : `- You have ${params.interventionsLeft} intervention turn${params.interventionsLeft === 1 ? '' : 's'} left this run — after that, stuck tasks are auto-failed. Prefer decisive resolution over back-and-forth.`,
     '- End the turn with `agent.stop_work`.',
     '',
     protocolGrammar(params.runId, params.agent.id),

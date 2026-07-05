@@ -4984,6 +4984,8 @@ export default function OpenTuiApp() {
   const [coordMaxAgents, setCoordMaxAgents] = useState(3)
   // Quality gate command (TaskCompleted-hook equivalent) for the next run.
   const [coordGateDraft, setCoordGateDraft] = useState('')
+  // Plan-approval guard: teammates must plan first and wait for lead approval.
+  const [coordRequirePlanApproval, setCoordRequirePlanApproval] = useState(true)
   const [coordModalFocus, setCoordModalFocus] = useState<'prompt' | 'gate'>('prompt')
   // Multiline prompt editor (composer-window treatment: ⏎ starts, ⇧⏎ newline).
   const coordTextareaRef = useRef<TextareaRenderable | null>(null)
@@ -8903,6 +8905,7 @@ export default function OpenTuiApp() {
         model: tuiModelOverride[selectedSessionKey ?? ''] || undefined,
         effort: tuiEffort === 'auto' ? undefined : tuiEffort,
         gateCommand: coordGateDraft.trim() || undefined,
+        requirePlanApproval: coordRequirePlanApproval,
       })
       const drafts: Session[] = result.sessions.map((session) => ({
         sessionId: session.sessionId,
@@ -11989,6 +11992,8 @@ export default function OpenTuiApp() {
       } else if (isCtrl('t')) {
         // ⌃T cycles the teammate budget; arrows stay with the editor cursor.
         handled(() => setCoordMaxAgents((current) => (current >= 6 ? 1 : current + 1)))
+      } else if (isCtrl('p')) {
+        handled(() => setCoordRequirePlanApproval((current) => !current))
       } else if (key.name === 'return' && coordModalFocus === 'gate') {
         // The gate input's Enter starts the run (the prompt textarea handles
         // its own ⏎ submit / ⇧⏎ newline bindings).
@@ -15488,6 +15493,8 @@ export default function OpenTuiApp() {
                 {renderInlineTextSegments([
                   { text: `teammates:${coordMaxAgents}`, fg: theme.cyan },
                   { text: ' · ', fg: theme.dim },
+                  { text: coordRequirePlanApproval ? 'plans:on' : 'plans:off', fg: coordRequirePlanApproval ? theme.green : theme.dim },
+                  { text: ' · ', fg: theme.dim },
                   { text: coordGateDraft.trim() ? `gate:${coordGateDraft.trim()}` : 'gate:off', fg: coordGateDraft.trim() ? theme.amber : theme.dim },
                   { text: ' · ', fg: theme.dim },
                   { text: `cwd ${baseCwdLabel}`, fg: theme.dim },
@@ -15560,7 +15567,7 @@ export default function OpenTuiApp() {
               </text>
               <box flexGrow={1} />
               <text fg={theme.dim} wrapMode="none">
-                {fitText('⏎ start · ⇧⏎ newline · ⇥ gate · ⌃T teammates · Esc close', Math.max(contentWidth - 24, 20))}
+                {fitText('⏎ start · ⇧⏎ newline · ⇥ gate · ⌃T teammates · ⌃P plans · Esc close', Math.max(contentWidth - 24, 20))}
               </text>
             </box>
           </box>

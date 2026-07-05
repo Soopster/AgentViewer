@@ -20,6 +20,7 @@ import {
   buildLeadInterventionPreamble,
   buildLeadPlanPreamble,
   buildLeadSynthesisPreamble,
+  buildTeammatePlanPreamble,
   buildTeammateTurnPreamble,
   fallbackTaskTemplates,
   parseAgentProtocolEvents,
@@ -48,7 +49,7 @@ type Row = Record<string, unknown>
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
 const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
 const LOCK_LEASE_MS = 20 * 60_000
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 const EVENT_WINDOW = 300
 // One automatic re-dispatch when a teammate's turn ends mid-task; after that
 // the teammate is marked blocked and the lead is notified (doc: teammates may
@@ -75,6 +76,7 @@ type RunController = {
   model?: string
   effort?: string
   gateCommand?: string
+  requirePlanApproval: boolean
   stopped: boolean
   synthesisStarted: boolean
   interventionsUsed: number
@@ -128,6 +130,8 @@ function initializeSchema(db: SqliteDatabase): void {
       max_agents INTEGER NOT NULL,
       lead_agent_id TEXT,
       summary TEXT,
+      gate_command TEXT,
+      require_plan_approval INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -224,6 +228,8 @@ function initializeSchema(db: SqliteDatabase): void {
 // every run) — the original single-column PRIMARY KEYs made every run after
 // the first collide with UNIQUE constraint failures. Rebuild those tables
 // with composite (run_id, id) keys.
+// v3 → v4: persist run-level day-to-day guardrails (completion gate and plan
+// approval) so snapshots and resumed UI panels show the actual run settings.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -233,6 +239,8 @@ function migrateSchema(db: SqliteDatabase): void {
     "ALTER TABLE protocol_agents ADD COLUMN role TEXT NOT NULL DEFAULT 'teammate'",
     'ALTER TABLE protocol_runs ADD COLUMN lead_agent_id TEXT',
     'ALTER TABLE protocol_runs ADD COLUMN summary TEXT',
+    'ALTER TABLE protocol_runs ADD COLUMN gate_command TEXT',
+    'ALTER TABLE protocol_runs ADD COLUMN require_plan_approval INTEGER NOT NULL DEFAULT 0',
   ]
   for (const statement of alters) {
     try {
@@ -379,6 +387,8 @@ function rowToRun(row: Row): ProtocolRun {
     maxAgents: Number(row.max_agents) || 1,
     leadAgentId: typeof row.lead_agent_id === 'string' ? row.lead_agent_id : undefined,
     summary: typeof row.summary === 'string' ? row.summary : undefined,
+    gateCommand: typeof row.gate_command === 'string' && row.gate_command ? row.gate_command : undefined,
+    requirePlanApproval: Boolean(Number(row.require_plan_approval ?? 0)),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
@@ -618,6 +628,31 @@ function taskDepsCompleted(task: ProtocolTask, tasksById: Map<string, ProtocolTa
   return task.blockedBy.every((dep) => tasksById.get(dep)?.status === 'completed')
 }
 
+type TaskPlanState = 'none' | 'awaiting' | 'approved' | 'rejected'
+
+function taskPlanStateSync(db: SqliteDatabase, runId: string, taskId: string): TaskPlanState {
+  const row = db.prepare(`
+    SELECT type FROM protocol_events
+    WHERE run_id = ?
+      AND task_id = ?
+      AND type IN ('task.planned', 'plan.approved', 'plan.rejected')
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get(runId, taskId) as Row | undefined
+  if (!row) return 'none'
+  if (row.type === 'plan.approved') return 'approved'
+  if (row.type === 'plan.rejected') return 'rejected'
+  return 'awaiting'
+}
+
+function taskPlanApprovedSync(db: SqliteDatabase, runId: string, taskId: string): boolean {
+  return taskPlanStateSync(db, runId, taskId) === 'approved'
+}
+
+function shouldPlanTaskSync(db: SqliteDatabase, run: RunController, task: ProtocolTask): boolean {
+  return run.requirePlanApproval && !taskPlanApprovedSync(db, run.runId, task.id)
+}
+
 /** Atomic claim: only a pending task with completed deps and no owner can be taken. */
 function claimTaskSync(db: SqliteDatabase, runId: string, agentId: string, taskId?: string): ProtocolTask | null {
   const tasks = listTasksSync(db, runId)
@@ -691,6 +726,21 @@ function resolveRecipientsSync(db: SqliteDatabase, runId: string, fromAgentId: s
   return match && match.id !== fromAgentId ? [match.id] : []
 }
 
+function insertMessageSync(db: SqliteDatabase, params: {
+  runId: string
+  fromAgentId: string
+  toAgentId: string
+  body: string
+  ts: string
+}): string {
+  const id = randomUUID()
+  db.prepare(`
+    INSERT INTO protocol_messages (id, run_id, from_agent_id, to_agent_id, body, created_at, delivered_at)
+    VALUES (?, ?, ?, ?, ?, ?, NULL)
+  `).run(id, params.runId, params.fromAgentId, params.toAgentId, params.body, params.ts)
+  return id
+}
+
 /**
  * Apply one protocol event to the ledger. All state effects (agent status,
  * task lifecycle, claims, locks, mailbox rows) happen in one transaction;
@@ -729,13 +779,47 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
           db.prepare("UPDATE protocol_tasks SET status = 'in_progress', updated_at = ? WHERE id = ? AND run_id = ?")
             .run(ts, event.taskId, event.runId)
         }
-      } else if (event.type === 'task.created' || event.type === 'task.planned') {
+      } else if (event.type === 'task.created') {
         insertTaskSync(db, event.runId, {
           title: event.title ?? event.summary ?? 'Untitled task',
           prompt: event.detail ?? event.summary ?? 'No prompt provided.',
           paths: event.paths ?? [],
           blockedBy: event.dependsOn ?? [],
         })
+      } else if (event.type === 'task.planned') {
+        const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(event.runId) as Row | undefined
+        const run = runRow ? rowToRun(runRow) : null
+        const taskRow = event.taskId
+          ? db.prepare('SELECT * FROM protocol_tasks WHERE id = ? AND run_id = ?').get(event.taskId, event.runId) as Row | undefined
+          : undefined
+        if (taskRow && run?.requirePlanApproval) {
+          const task = rowToTask(taskRow)
+          db.prepare("UPDATE protocol_tasks SET status = 'planned', updated_at = ? WHERE id = ? AND run_id = ?")
+            .run(ts, task.id, event.runId)
+          setAgentStatusSync(db, event.runId, event.agentId, 'idle', ts)
+          const body = [
+            `${task.id} plan is ready for approval.`,
+            event.summary,
+            event.detail,
+            'Lead: approve with `plan.approved` or reject with `plan.rejected`.',
+          ].filter(Boolean).join('\n\n')
+          for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, 'lead')) {
+            newMessageIds.push(insertMessageSync(db, {
+              runId: event.runId,
+              fromAgentId: event.agentId,
+              toAgentId: recipient,
+              body,
+              ts,
+            }))
+          }
+        } else if (!event.taskId) {
+          insertTaskSync(db, event.runId, {
+            title: event.title ?? event.summary ?? 'Untitled task',
+            prompt: event.detail ?? event.summary ?? 'No prompt provided.',
+            paths: event.paths ?? [],
+            blockedBy: event.dependsOn ?? [],
+          })
+        }
       } else if (event.type === 'task.claim') {
         const claimed = claimTaskSync(db, event.runId, event.agentId, event.taskId)
         if (!claimed) {
@@ -781,12 +865,33 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
       } else if (event.type === 'message') {
         const body = [event.summary, event.detail].filter(Boolean).join(' — ') || '(empty message)'
         for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, event.to)) {
-          const id = randomUUID()
-          db.prepare(`
-            INSERT INTO protocol_messages (id, run_id, from_agent_id, to_agent_id, body, created_at, delivered_at)
-            VALUES (?, ?, ?, ?, ?, ?, NULL)
-          `).run(id, event.runId, event.agentId, recipient, body, ts)
-          newMessageIds.push(id)
+          newMessageIds.push(insertMessageSync(db, {
+            runId: event.runId,
+            fromAgentId: event.agentId,
+            toAgentId: recipient,
+            body,
+            ts,
+          }))
+        }
+      } else if (event.type === 'plan.approved' || event.type === 'plan.rejected') {
+        const taskRow = event.taskId
+          ? db.prepare('SELECT * FROM protocol_tasks WHERE id = ? AND run_id = ?').get(event.taskId, event.runId) as Row | undefined
+          : undefined
+        const task = taskRow ? rowToTask(taskRow) : null
+        if (task?.ownerAgentId) {
+          db.prepare('UPDATE protocol_tasks SET status = ?, updated_at = ? WHERE id = ? AND run_id = ?')
+            .run('claimed', ts, task.id, event.runId)
+          setAgentStatusSync(db, event.runId, task.ownerAgentId, 'idle', ts)
+          const body = event.type === 'plan.approved'
+            ? [`${task.id} plan approved. Begin implementation now.`, event.summary, event.detail].filter(Boolean).join('\n\n')
+            : [`${task.id} plan rejected. Revise the plan before editing.`, event.summary, event.detail].filter(Boolean).join('\n\n')
+          newMessageIds.push(insertMessageSync(db, {
+            runId: event.runId,
+            fromAgentId: event.agentId,
+            toAgentId: task.ownerAgentId,
+            body,
+            ts,
+          }))
         }
       } else if (event.type === 'shutdown.requested') {
         setAgentStatusSync(db, event.runId, event.agentId, 'done', ts)
@@ -874,23 +979,27 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
  */
 async function dispatchLeadIntervention(controller: RunController): Promise<void> {
   if (controller.stopped || controller.synthesisStarted) return
-  if (controller.interventionsUsed >= MAX_LEAD_INTERVENTIONS) return
   const db = await getDatabase()
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
   if (!runRow || rowToRun(runRow).status !== 'running') return
   const agents = listAgentsSync(db, controller.runId)
   const lead = agents.find((agent) => agent.role === 'lead')
   if (!lead || controller.turnInFlight.has(lead.id)) return
-  controller.interventionsUsed += 1
+  const tasks = listTasksSync(db, controller.runId)
+  const reviewingPlans = controller.requirePlanApproval && tasks.some((task) => task.status === 'planned')
+  if (!reviewingPlans && controller.interventionsUsed >= MAX_LEAD_INTERVENTIONS) return
+  if (!reviewingPlans) controller.interventionsUsed += 1
   const inbox = await enqueueWrite((tx) => takeInboxSync(tx, controller.runId, lead.id))
   const message = buildLeadInterventionPreamble({
     runId: controller.runId,
     agent: lead,
     roster: agents,
-    tasks: listTasksSync(db, controller.runId),
+    tasks,
     inbox,
     agentsById: new Map(agents.map((agent) => [agent.id, agent])),
     interventionsLeft: MAX_LEAD_INTERVENTIONS - controller.interventionsUsed,
+    requirePlanApproval: controller.requirePlanApproval,
+    reviewingPlans,
   })
   void dispatchAgentTurn(controller, lead.id, message)
 }
@@ -1019,6 +1128,23 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
 /** Event application with coordinator-side gating (doc: TaskCompleted hook semantics). */
 async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, event: AgentProtocolEvent): Promise<void> {
   if (event.type === 'task.completed' && agent.role === 'teammate' && event.taskId) {
+    if (controller.requirePlanApproval) {
+      const db = await getDatabase()
+      if (!taskPlanApprovedSync(db, controller.runId, event.taskId)) {
+        const note = `Completion of ${event.taskId} was REJECTED: this run requires lead plan approval before implementation. Emit \`task.planned\` with your approach and wait for \`plan.approved\` before completing.`
+        controller.dispatchNotes.set(agent.id, note)
+        await appendProtocolEvent({
+          version: AGENT_PROTOCOL_VERSION,
+          runId: controller.runId,
+          agentId: agent.id,
+          type: 'agent.blocked',
+          taskId: event.taskId,
+          summary: `task.completed rejected — plan approval required`,
+          detail: note,
+        })
+        return
+      }
+    }
     const uncovered = await completionGateFailure(controller.runId, agent.id, agent.worktreePath)
     if (uncovered) {
       const note = `Completion of ${event.taskId} was REJECTED: your worktree has changes outside your locked paths (${uncovered.slice(0, 6).join(', ')}). Request the locks with \`lock.requested\` or revert those files, then complete again.`
@@ -1078,7 +1204,12 @@ function runGateCommand(command: string, cwd: string): Promise<string | null> {
   })
 }
 
-async function dispatchAgentTurn(controller: RunController, agentId: string, message: string): Promise<void> {
+async function dispatchAgentTurn(
+  controller: RunController,
+  agentId: string,
+  message: string,
+  opts: { permissionMode?: 'plan' } = {},
+): Promise<void> {
   if (controller.stopped || controller.turnInFlight.has(agentId)) return
   controller.turnInFlight.add(agentId)
   try {
@@ -1101,6 +1232,7 @@ async function dispatchAgentTurn(controller: RunController, agentId: string, mes
         model: controller.model,
         effort: controller.effort,
         detachOnClientAbort: true,
+        ...(opts.permissionMode && agent.provider === 'claude' ? { permissionMode: opts.permissionMode } : {}),
       },
     })
     if (!response.ok) {
@@ -1124,7 +1256,6 @@ async function dispatchAgentTurn(controller: RunController, agentId: string, mes
 /** Compose and dispatch a teammate turn from current ledger state. */
 async function dispatchTeammateWork(controller: RunController, agentId: string): Promise<void> {
   const db = await getDatabase()
-  const inbox = await enqueueWrite((tx) => takeInboxSync(tx, controller.runId, agentId))
   const agents = listAgentsSync(db, controller.runId)
   const agentsById = new Map(agents.map((entry) => [entry.id, entry]))
   const agent = agentsById.get(agentId)
@@ -1134,8 +1265,35 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
   // inbox advice is about, rather than being told to claim something else.
   const task = tasks.find((entry) =>
     entry.id === agent.taskId
-    && (entry.status === 'claimed' || entry.status === 'in_progress' || entry.status === 'blocked')) ?? null
+    && (entry.status === 'claimed' || entry.status === 'planning' || entry.status === 'planned' || entry.status === 'in_progress' || entry.status === 'blocked')) ?? null
   const note = controller.dispatchNotes.get(agentId)
+
+  if (task && shouldPlanTaskSync(db, controller, task)) {
+    const planState = taskPlanStateSync(db, controller.runId, task.id)
+    if (planState === 'awaiting' || task.status === 'planned') return
+    const inbox = await enqueueWrite((tx) => takeInboxSync(tx, controller.runId, agentId))
+    controller.dispatchNotes.delete(agentId)
+    await enqueueWrite((tx) => {
+      const ts = nowIso()
+      tx.prepare("UPDATE protocol_tasks SET status = 'planning', updated_at = ? WHERE id = ? AND run_id = ?")
+        .run(ts, task.id, controller.runId)
+      setAgentStatusSync(tx, controller.runId, agent.id, 'working', ts)
+    })
+    const message = buildTeammatePlanPreamble({
+      runId: controller.runId,
+      agent,
+      roster: agents,
+      task,
+      allTasks: tasks,
+      inbox,
+      agentsById,
+      note,
+    })
+    void dispatchAgentTurn(controller, agentId, message, { permissionMode: 'plan' })
+    return
+  }
+
+  const inbox = await enqueueWrite((tx) => takeInboxSync(tx, controller.runId, agentId))
   controller.dispatchNotes.delete(agentId)
   const message = buildTeammateTurnPreamble({
     runId: controller.runId,
@@ -1147,6 +1305,7 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
     agentsById,
     note,
     gateCommand: controller.gateCommand,
+    requirePlanApproval: controller.requirePlanApproval,
   })
   void dispatchAgentTurn(controller, agentId, message)
 }
@@ -1171,7 +1330,7 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
   const tasks = listTasksSync(db, controller.runId)
   const owned = tasks.find((task) =>
     task.ownerAgentId === agentId
-    && (task.status === 'claimed' || task.status === 'in_progress' || task.status === 'blocked'))
+    && (task.status === 'claimed' || task.status === 'planning' || task.status === 'in_progress' || task.status === 'blocked'))
 
   if (owned) {
     const nudgeKey = `${agentId}:${owned.id}`
@@ -1216,6 +1375,15 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
       to: 'lead',
       summary: `${agent.name} is stuck on ${owned.id} and needs help or reassignment.`,
     })
+    return
+  }
+
+  const awaitingPlanApproval = tasks.find((task) =>
+    task.ownerAgentId === agentId
+    && task.status === 'planned'
+    && controller.requirePlanApproval)
+  if (awaitingPlanApproval) {
+    await dispatchLeadIntervention(controller)
     return
   }
 
@@ -1415,6 +1583,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     model: params.model,
     effort: params.effort,
     gateCommand: params.gateCommand?.trim() || undefined,
+    requirePlanApproval: params.requirePlanApproval === true,
     stopped: false,
     synthesisStarted: false,
     interventionsUsed: 0,
@@ -1430,9 +1599,22 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     db.exec('BEGIN IMMEDIATE')
     try {
       db.prepare(`
-        INSERT INTO protocol_runs (id, prompt, status, provider, base_cwd, max_agents, lead_agent_id, summary, created_at, updated_at)
-        VALUES (?, ?, 'planning', ?, ?, ?, 'lead', NULL, ?, ?)
-      `).run(runId, prompt, params.provider, params.baseCwd, maxAgents, ts, ts)
+        INSERT INTO protocol_runs (
+          id, prompt, status, provider, base_cwd, max_agents, lead_agent_id, summary,
+          gate_command, require_plan_approval, created_at, updated_at
+        )
+        VALUES (?, ?, 'planning', ?, ?, ?, 'lead', NULL, ?, ?, ?, ?)
+      `).run(
+        runId,
+        prompt,
+        params.provider,
+        params.baseCwd,
+        maxAgents,
+        controller.gateCommand ?? null,
+        controller.requirePlanApproval ? 1 : 0,
+        ts,
+        ts,
+      )
       db.prepare(`
         INSERT INTO protocol_agents (
           id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at
