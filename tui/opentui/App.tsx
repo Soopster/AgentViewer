@@ -137,6 +137,7 @@ import { AttentionInboxPopover, type AttentionItem } from './AttentionInboxPopov
 import { CheckpointPopover } from './CheckpointPopover'
 import { CoordinationPopover } from './CoordinationPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
+import { isNativeComposerCommandText } from '../../lib/composerCommands'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
@@ -5128,6 +5129,7 @@ export default function OpenTuiApp() {
   const [queuedComposerSends, setQueuedComposerSends] = useState<Array<{ text: string; attachments: SendAttachment[] }>>([])
   const queuedComposerSendsRef = useRef<Array<{ text: string; attachments: SendAttachment[] }>>([])
   useEffect(() => { queuedComposerSendsRef.current = queuedComposerSends }, [queuedComposerSends])
+  const activeComposerTurnRequestIdRef = useRef<string | null>(null)
   // Last message delivered INTO the running turn via native steering — shown
   // in the composer status line while the turn is still streaming.
   const [steeredSendNotice, setSteeredSendNotice] = useState<string | null>(null)
@@ -5593,6 +5595,8 @@ export default function OpenTuiApp() {
 
     return selectedSession
   }, [providerRunningSessions, selectedSession, sessions])
+  const composerTargetSessionRef = useRef<Session | null>(null)
+  useEffect(() => { composerTargetSessionRef.current = composerTargetSession }, [composerTargetSession])
   const canUseChannelBridge = Boolean(
     selectedSessionTarget
     && (selectedSessionTarget.provider ?? 'claude') === 'claude'
@@ -8168,11 +8172,20 @@ export default function OpenTuiApp() {
 
     const cleanupPromise = activeComposerSendCleanupRef.current
     const controller = composerAbortRef.current
+    const activeTurnRequestId = activeComposerTurnRequestIdRef.current
+    const activeTurnTarget = composerTargetSessionRef.current
     const runningRefs = [...runningSessionsRef.current]
     if (controller && !controller.signal.aborted) controller.abort()
 
     void (async () => {
       const cleanupTasks: Promise<unknown>[] = []
+      if (activeTurnTarget && activeTurnRequestId) {
+        cleanupTasks.push(interruptTuiSessionTurn({
+          sessionId: activeTurnTarget.sessionId,
+          provider: activeTurnTarget.provider,
+          turnRequestId: activeTurnRequestId,
+        }).catch(() => undefined))
+      }
       if (runningRefs.length > 0) {
         cleanupTasks.push(Promise.allSettled(runningRefs.map((running) => interruptTuiSessionTurn(running))))
       }
@@ -8457,7 +8470,11 @@ export default function OpenTuiApp() {
     // it would finish in the background and reappear on the next poll. Interrupt
     // the server-side turn too, matching the native CLI's Esc/Ctrl+C behavior.
     if (target && !target.isPending) {
-      void interruptTuiSessionTurn({ sessionId: target.sessionId }).catch(() => { /* best effort */ })
+      void interruptTuiSessionTurn({
+        sessionId: target.sessionId,
+        provider: target.provider,
+        turnRequestId: activeComposerTurnRequestIdRef.current ?? undefined,
+      }).catch(() => { /* best effort */ })
     }
     // Cancel any pending transient auto-retry so it can't fire after an explicit stop.
     if (composerRetryTimerRef.current) {
@@ -9321,8 +9338,12 @@ export default function OpenTuiApp() {
       // the turn ends while the request is in flight the backend reports
       // delivered:false — both fall back to the client-side queue, which
       // sends as a fresh turn on idle.
+      // Slash commands and `!` shell input never steer: steering would inject
+      // them as literal prompt text mid-turn, whereas the native CLIs queue
+      // them and execute them natively once the turn ends — the queue below
+      // flushes into the send path, which does exactly that.
       const steerTarget = composerTargetSession
-      if (trimmed && sendAttachments.length === 0 && steerTarget) {
+      if (trimmed && sendAttachments.length === 0 && steerTarget && !isNativeComposerCommandText(trimmed)) {
         try {
           const result = await runTuiSessionAction(steerTarget, { action: 'steer', message: trimmed })
           if (result.delivered === true) {
@@ -9352,12 +9373,15 @@ export default function OpenTuiApp() {
     const targetSession = composerTargetSession
     const controller = new AbortController()
     const sendStartedAt = Date.now()
+    const turnRequestId = globalThis.crypto?.randomUUID?.()
+      ?? `${sendStartedAt}-${Math.random().toString(36).slice(2)}`
     let resolveTurnCleanup: () => void = () => {}
     const turnCleanupPromise = new Promise<void>((resolve) => {
       resolveTurnCleanup = resolve
     })
     activeComposerSendCleanupRef.current = turnCleanupPromise
     composerAbortRef.current = controller
+    activeComposerTurnRequestIdRef.current = turnRequestId
     setComposerSendState('sending')
     setSteeredSendNotice(null)
     setComposerSendStartedAt(sendStartedAt)
@@ -9413,6 +9437,7 @@ export default function OpenTuiApp() {
     let replyAccumulator = ''
     let codexLiveMessageAccumulator = ''
     let copilotFinalMessageSeen = false
+    let commandResultWithoutTranscript = false
 
     try {
       const overrideModel = tuiModelOverride[sessionKey(targetSession)]
@@ -9442,6 +9467,9 @@ export default function OpenTuiApp() {
           manualPermissions: targetSession.provider === 'copilot'
             || (targetSession.provider === 'claude' && composerPermissionMode !== 'bypassPermissions' && composerPermissionMode !== 'plan')
             ? true : undefined,
+          nativeCommands: targetSession.provider === 'copilot' ? true : undefined,
+          detachOnClientAbort: true,
+          turnRequestId,
         },
         controller.signal,
       )
@@ -9533,7 +9561,8 @@ export default function OpenTuiApp() {
           return
         }
         if (frame.event === 'command-result' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          const result = parsed as { message?: unknown; mode?: unknown }
+          const result = parsed as { message?: unknown; mode?: unknown; transcriptExpected?: unknown }
+          if (result.transcriptExpected === false) commandResultWithoutTranscript = true
           if (
             result.mode === 'interactive'
             || result.mode === 'plan'
@@ -9917,7 +9946,15 @@ export default function OpenTuiApp() {
         interruptPressTimeoutRef.current = null
       }
       setComposerError(null)
-      setAwaitingPersistedTurn(true)
+      if (commandResultWithoutTranscript) {
+        liveTranscriptBaselineRef.current.delete(targetKey)
+        setLiveTranscriptMessages((prev) => prev.filter((message) => liveMessageSessionKey(message) !== targetKey))
+        liveToolIndexesRef.current.clear()
+        liveToolInputJsonRef.current.clear()
+        setAwaitingPersistedTurn(false)
+      } else {
+        setAwaitingPersistedTurn(true)
+      }
       setFollowTail(true)
       setPendingNewCount(0)
       setUnreadBoundaryKey(null)
@@ -10057,6 +10094,9 @@ export default function OpenTuiApp() {
     } finally {
       void reader?.cancel()
       composerAbortRef.current = null
+      if (activeComposerTurnRequestIdRef.current === turnRequestId) {
+        activeComposerTurnRequestIdRef.current = null
+      }
       if (liveTextFlushTimerRef.current != null) {
         clearTimeout(liveTextFlushTimerRef.current)
         liveTextFlushTimerRef.current = null

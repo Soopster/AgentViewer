@@ -389,15 +389,18 @@ export async function streamTuiSessionTurn(
   })
 }
 
-export async function interruptTuiSessionTurn(session: { sessionId: string }): Promise<void> {
+export async function interruptTuiSessionTurn(session: { sessionId: string; provider?: AgentProvider; turnRequestId?: string }): Promise<void> {
   if (isRemoteAttached()) {
     await remoteJson(encodeSessionPath(session.sessionId, '/interrupt'), {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        provider: session.provider,
+        turnRequestId: session.turnRequestId,
+      }),
     })
     return
   }
-  await interruptViewSession(session.sessionId)
+  await interruptViewSession(session.sessionId, session.turnRequestId)
 }
 
 /**

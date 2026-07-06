@@ -74,6 +74,7 @@ import {
 } from '@github/copilot-sdk'
 import { backgroundRunningSession, clearRunningSession, getRunningSession, getRunningSessionInfo, interruptRunningSession, listRunningSessionRefs, setRunningSession, steerRunningSession } from './sessionRuntime'
 import { createTurnCheckpoint } from './checkpoints'
+import { isNativeComposerCommandText } from './composerCommands'
 import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
 import type {
@@ -811,6 +812,31 @@ function parsePiDirectShell(message: string): { command: string; excludeFromCont
   return { command, excludeFromContext }
 }
 
+function findPiModelByReference(
+  modelReference: string,
+  models: Array<{ provider: string; id: string }>,
+): { provider: string; id: string } | undefined {
+  const trimmed = modelReference.trim()
+  if (!trimmed) return undefined
+  const normalized = trimmed.toLowerCase()
+  const canonicalMatches = models.filter((model) => `${model.provider}/${model.id}`.toLowerCase() === normalized)
+  if (canonicalMatches.length === 1) return canonicalMatches[0]
+  if (canonicalMatches.length > 1) return undefined
+  const slashIndex = trimmed.indexOf('/')
+  if (slashIndex !== -1) {
+    const provider = trimmed.slice(0, slashIndex).trim().toLowerCase()
+    const modelId = trimmed.slice(slashIndex + 1).trim().toLowerCase()
+    if (provider && modelId) {
+      const providerMatches = models.filter((model) =>
+        model.provider.toLowerCase() === provider && model.id.toLowerCase() === modelId)
+      if (providerMatches.length === 1) return providerMatches[0]
+      if (providerMatches.length > 1) return undefined
+    }
+  }
+  const idMatches = models.filter((model) => model.id.toLowerCase() === normalized)
+  return idMatches.length === 1 ? idMatches[0] : undefined
+}
+
 // ── Claude input-box bash mode (`!command`) ─────────────────────────────────
 // Mirrors the Claude Code CLI: the command runs locally in the session cwd,
 // then two user messages are appended to the session in the CLI's native
@@ -1046,7 +1072,7 @@ function parseOpenCodeSlashCommand(message: string): { command: string; argument
 }
 
 function copilotCommandResultEvent(data: Record<string, unknown>): string {
-  return `event: command-result\ndata: ${JSON.stringify({ provider: 'copilot', ...data })}\n\n`
+  return `event: command-result\ndata: ${JSON.stringify({ provider: 'copilot', transcriptExpected: false, ...data })}\n\n`
 }
 
 // Generic command-result frame for any provider that executes a slash command
@@ -2404,6 +2430,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
   if (action === 'steer') {
     const message = typeof body.message === 'string' ? body.message.trim() : ''
     if (!message) throw new Error('message is required')
+    if (isNativeComposerCommandText(message)) return { delivered: false }
     try {
       return { delivered: await steerRunningSession(sessionId, message) }
     } catch {
@@ -3994,7 +4021,6 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
     ? userMessage.slice(1).trim()
     : null
   const codexSlash = attachments.length === 0 ? parseOpenCodeSlashCommand(userMessage) : null
-  const isCompactCommand = codexSlash?.command.toLowerCase() === 'compact'
   const detachOnClientAbort = body.detachOnClientAbort === true
   const client = getCodexClient()
   const encoder = new TextEncoder()
@@ -4315,12 +4341,99 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         }
 
         // Execute native Codex slash commands instead of leaking the literal
-        // "/command" into the model prompt. The thread goes idle after the
-        // command, which closes the stream via the existing idle handler.
-        if (isCompactCommand) {
+        // "/command" into the model prompt. Commands that start a turn bind to
+        // that turn; metadata/settings commands emit a command-result and close.
+        if (codexSlash?.command.toLowerCase() === 'compact') {
           directOperationStarted = true
           await client.request('thread/compact/start', { threadId: sessionId })
           safeEnqueue(commandResultEvent('codex', { message: 'Compacting the conversation…' }))
+          return
+        }
+        if (codexSlash) {
+          const commandName = codexSlash.command.toLowerCase()
+          const commandArgs = codexSlash.arguments.trim()
+          const finishCommand = (message: string) => {
+            safeEnqueue(commandResultEvent('codex', { message, transcriptExpected: false }))
+            scheduleCompletionClose(unsubscribe)
+          }
+
+          if (commandName === 'model') {
+            if (!commandArgs) {
+              finishCommand(currentModel ? `Codex model is ${currentModel}.` : 'No Codex model is selected.')
+              return
+            }
+            const [nextModel, maybeEffort] = commandArgs.split(/\s+/, 2)
+            const nextEffort = maybeEffort === 'low' || maybeEffort === 'medium' || maybeEffort === 'high'
+              ? maybeEffort
+              : undefined
+            await client.request('thread/settings/update', {
+              threadId: sessionId,
+              model: nextModel,
+              ...(nextEffort ? { effort: nextEffort } : {}),
+            })
+            currentModel = nextModel ?? currentModel
+            if (nextModel) codexResumedThreads.set(sessionId, nextModel)
+            finishCommand(nextEffort
+              ? `Codex model set to ${nextModel} (${nextEffort}).`
+              : `Codex model set to ${nextModel}.`)
+            return
+          }
+
+          if (commandName === 'permissions' || commandName === 'approvals') {
+            const nextPolicy = (CODEX_APPROVAL_POLICIES as readonly string[]).includes(commandArgs)
+              ? commandArgs as CodexApprovalPolicy
+              : undefined
+            if (!nextPolicy) {
+              finishCommand('Use /permissions untrusted, /permissions on-request, /permissions on-failure, or /permissions never.')
+              return
+            }
+            await client.request('thread/settings/update', {
+              threadId: sessionId,
+              approvalPolicy: nextPolicy,
+            })
+            finishCommand(`Codex approval policy set to ${nextPolicy}.`)
+            return
+          }
+
+          if (commandName === 'rename') {
+            if (!commandArgs) {
+              finishCommand('Use /rename <title> to rename this Codex thread.')
+              return
+            }
+            await client.request('thread/name/set', { threadId: sessionId, name: commandArgs })
+            finishCommand(`Renamed Codex thread to "${commandArgs}".`)
+            return
+          }
+
+          if (commandName === 'goal') {
+            if (!commandArgs) {
+              finishCommand('Use /goal <objective> to set a goal, or /goal clear to clear it.')
+              return
+            }
+            if (commandArgs.toLowerCase() === 'clear') {
+              await client.request('thread/goal/clear', { threadId: sessionId })
+              finishCommand('Cleared the Codex goal.')
+              return
+            }
+            await client.request('thread/goal/set', { threadId: sessionId, objective: commandArgs })
+            finishCommand('Updated the Codex goal.')
+            return
+          }
+
+          if (commandName === 'review') {
+            const target = commandArgs
+              ? { type: 'custom' as const, instructions: commandArgs }
+              : { type: 'uncommittedChanges' as const }
+            const review = await client.request<{ turn: { id: string } }>('review/start', {
+              threadId: sessionId,
+              target,
+              delivery: 'inline',
+            })
+            activateTargetTurn(review.turn.id)
+            return
+          }
+
+          finishCommand(`/${codexSlash.command} is an interactive Codex command that agent-viewer cannot run yet.`)
           return
         }
 
@@ -5148,6 +5261,57 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
 
         // Execute native Pi slash commands instead of sending them as prompt text.
         const piSlash = !directShell && attachments.length === 0 ? parseOpenCodeSlashCommand(userMessage) : null
+        const finishPiCommand = (message: string) => {
+          safeEnqueue(commandResultEvent('pi', { message, transcriptExpected: false }))
+          clearRunningSession(sessionId)
+          broadcastLiveSessionTurnEnd('pi', targetSessionId)
+          schedulePiLiveTranscriptCleanup(targetSessionId)
+          close()
+        }
+        if (piSlash && piSlash.command.toLowerCase() === 'help') {
+          finishPiCommand('Pi commands: /model [provider/model], /thinking [off|minimal|low|medium|high|xhigh], /compact [instructions].')
+          return
+        }
+        if (piSlash && piSlash.command.toLowerCase() === 'model') {
+          const requestedModel = piSlash.arguments.trim()
+          if (!requestedModel) {
+            finishPiCommand(agentSession.model
+              ? `Pi model is ${agentSession.model.provider}/${agentSession.model.id}.`
+              : 'No Pi model is selected.')
+            return
+          }
+          const scopedModels = agentSession.scopedModels.map((entry) => entry.model)
+          const availableModels = scopedModels.length > 0
+            ? scopedModels
+            : agentSession.modelRegistry.getAvailable()
+          const modelRef = findPiModelByReference(requestedModel, availableModels)
+          if (!modelRef) {
+            finishPiCommand(`Pi model not found or ambiguous: ${requestedModel}.`)
+            return
+          }
+          const model = agentSession.modelRegistry.find(modelRef.provider, modelRef.id)
+          if (!model) {
+            finishPiCommand(`Pi model not found: ${modelRef.provider}/${modelRef.id}.`)
+            return
+          }
+          await agentSession.setModel(model)
+          finishPiCommand(`Pi model set to ${model.provider}/${model.id}.`)
+          return
+        }
+        if (piSlash && piSlash.command.toLowerCase() === 'thinking') {
+          const level = piSlash.arguments.trim()
+          if (!level) {
+            finishPiCommand(`Pi thinking level is ${agentSession.thinkingLevel}.`)
+            return
+          }
+          if (!PI_THINKING_LEVELS.includes(level as typeof PI_THINKING_LEVELS[number])) {
+            finishPiCommand('Use /thinking off, /thinking minimal, /thinking low, /thinking medium, /thinking high, or /thinking xhigh.')
+            return
+          }
+          agentSession.setThinkingLevel(level as typeof PI_THINKING_LEVELS[number])
+          finishPiCommand(`Pi thinking level set to ${level}.`)
+          return
+        }
         if (piSlash && piSlash.command.toLowerCase() === 'compact') {
           setRunningSession(sessionId, {
             provider: 'pi',

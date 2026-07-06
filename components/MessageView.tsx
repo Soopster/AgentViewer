@@ -53,6 +53,7 @@ import { TaskRail } from './TaskRail'
 import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos, type CodexPlanStep } from '@/lib/taskRegistry'
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
+import { isNativeComposerCommandText } from '@/lib/composerCommands'
 import CodeThemeToggle from './CodeThemeToggle'
 import TabBar from './TabBar'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
@@ -4060,7 +4061,11 @@ export default function MessageView({
       // Pi steer(), opencode queues server-side). Attachments can't ride a
       // steer, and a turn in post-stream reconcile has nothing to steer —
       // those (and delivered:false / errors) fall back to the client queue.
-      if ((sendInFlightRef.current || reattachedRunningRef.current) && queueAttachments.length === 0) {
+      // Slash commands and `!` shell input never steer: steering would inject
+      // them as literal prompt text mid-turn, whereas the native CLIs queue
+      // them and execute them natively once the turn ends — the queue below
+      // flushes into the send path, which does exactly that.
+      if ((sendInFlightRef.current || reattachedRunningRef.current) && queueAttachments.length === 0 && !isNativeComposerCommandText(queueText)) {
         try {
           const res = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
             method: 'POST',
