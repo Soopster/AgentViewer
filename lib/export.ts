@@ -13,6 +13,8 @@ import type {
   SystemReminderBlock,
   SlashCommandBlock,
   LocalCommandStdoutBlock,
+  BashInputBlock,
+  BashOutputBlock,
   ClaudeSystemBlock,
 } from './threading'
 import type { TextBlock, ThinkingBlock, SystemMessagePayload } from './types'
@@ -475,6 +477,33 @@ function renderLocalCommandStdout(block: LocalCommandStdoutBlock): string {
   )
 }
 
+function renderBashInput(block: BashInputBlock): string {
+  return (
+    `<div class="bash-input">` +
+    `<div style="display:flex;align-items:center;gap:10px;padding:7px 14px;background:#0c1028">` +
+    `<span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#2dd4a0;font-weight:700;flex-shrink:0">!</span>` +
+    `<span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#dde3f5;white-space:pre-wrap;word-break:break-word">${escapeHtml(block.command)}</span>` +
+    `</div>` +
+    `</div>`
+  )
+}
+
+function renderBashOutput(block: BashOutputBlock): string {
+  const stdout = block.stdout
+    ? `<pre style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.6;color:#7b8db0;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto">${escapeHtml(block.stdout)}</pre>`
+    : ''
+  const stderr = block.stderr
+    ? `<pre style="margin:${block.stdout ? '6px' : '0'} 0 0;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.6;color:#f87171;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto">${escapeHtml(block.stderr)}</pre>`
+    : ''
+  return (
+    `<div class="bash-output">` +
+    `<div style="padding:6px 12px;background:#0c1028">` +
+    (stdout || stderr || `<span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#3a4c6a;font-style:italic">(no output)</span>`) +
+    `</div>` +
+    `</div>`
+  )
+}
+
 function safeJson(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2)
@@ -545,6 +574,8 @@ function renderBlock(block: ThreadedBlock): string {
     case 'claude_system':         return renderClaudeSystem(block as ClaudeSystemBlock)
     case 'slash_command':         return renderSlashCommand(block as SlashCommandBlock)
     case 'local_command_stdout':  return renderLocalCommandStdout(block as LocalCommandStdoutBlock)
+    case 'bash_input':            return renderBashInput(block as BashInputBlock)
+    case 'bash_output':           return renderBashOutput(block as BashOutputBlock)
     default:                      return ''
   }
 }

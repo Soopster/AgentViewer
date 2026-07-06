@@ -30,6 +30,7 @@ import {
   type PermissionResult,
   type PermissionUpdate,
   type Query,
+  type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import {
@@ -808,6 +809,117 @@ function parsePiDirectShell(message: string): { command: string; excludeFromCont
   const excludeFromContext = trimmed.startsWith('!!')
   const command = trimmed.slice(excludeFromContext ? 2 : 1).trim()
   return { command, excludeFromContext }
+}
+
+// ── Claude input-box bash mode (`!command`) ─────────────────────────────────
+// Mirrors the Claude Code CLI: the command runs locally in the session cwd,
+// then two user messages are appended to the session in the CLI's native
+// transcript shape — `<bash-input>cmd</bash-input>` (persisted silently via
+// shouldQuery:false) and `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>`
+// (which starts a turn so Claude responds to the output, matching the CLI's
+// respondToBashCommands default).
+
+const CLAUDE_BANG_SHELL_TIMEOUT_MS = 5 * 60 * 1000
+const CLAUDE_BANG_SHELL_OUTPUT_CAP = 100_000
+
+// The CLI XML-escapes text before wrapping it in bash-* transcript tags
+// (observed in native session files: `bun &lt;command&gt;`).
+function escapeBashTagContent(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function buildClaudeBashInputMessage(command: string): SDKUserMessage {
+  return {
+    type: 'user',
+    message: { role: 'user', content: `<bash-input>${escapeBashTagContent(command)}</bash-input>` },
+    parent_tool_use_id: null,
+    // Append to the transcript without starting an assistant turn — the output
+    // message that follows is what queries.
+    shouldQuery: false,
+  }
+}
+
+function buildClaudeBashOutputMessage(result: { stdout: string; stderr: string }): SDKUserMessage {
+  return {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: `<bash-stdout>${escapeBashTagContent(result.stdout)}</bash-stdout><bash-stderr>${escapeBashTagContent(result.stderr)}</bash-stderr>`,
+    },
+    parent_tool_use_id: null,
+  }
+}
+
+async function runClaudeBangShellCommand(
+  command: string,
+  cwd: string | undefined,
+  opts: { registerKill?: (kill: () => void) => void } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  const { spawn } = await import('node:child_process')
+  return new Promise((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    let truncated = false
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn('bash', ['-c', command], {
+        cwd: cwd || process.cwd(),
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // Own process group so interrupt/timeout kills the whole tree —
+        // signalling just the `bash -c` parent orphans its children.
+        detached: process.platform !== 'win32',
+      })
+    } catch (err) {
+      resolve({ stdout: '', stderr: err instanceof Error ? err.message : 'Failed to run command' })
+      return
+    }
+    const killTree = (signal: NodeJS.Signals) => {
+      const pid = child.pid
+      try {
+        if (pid != null && process.platform !== 'win32') {
+          process.kill(-pid, signal)
+          return
+        }
+      } catch { /* group already gone — fall through to direct kill */ }
+      try { child.kill(signal) } catch { /* already gone */ }
+    }
+    const append = (current: string, chunk: Buffer): string => {
+      if (current.length >= CLAUDE_BANG_SHELL_OUTPUT_CAP) {
+        truncated = true
+        return current
+      }
+      const next = current + chunk.toString('utf8')
+      if (next.length > CLAUDE_BANG_SHELL_OUTPUT_CAP) {
+        truncated = true
+        return next.slice(0, CLAUDE_BANG_SHELL_OUTPUT_CAP)
+      }
+      return next
+    }
+    child.stdout?.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk) })
+    child.stderr?.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk) })
+
+    let settled = false
+    const settle = (extraStderr?: string) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      const parts = [stderr, truncated ? '… [output truncated]' : '', extraStderr ?? '']
+      resolve({ stdout, stderr: parts.filter(Boolean).join('\n') })
+    }
+    const timer = setTimeout(() => {
+      killTree('SIGKILL')
+      settle(`Command timed out after ${Math.round(CLAUDE_BANG_SHELL_TIMEOUT_MS / 1000)}s`)
+    }, CLAUDE_BANG_SHELL_TIMEOUT_MS)
+    opts.registerKill?.(() => {
+      killTree('SIGTERM')
+      settle('Command interrupted')
+    })
+    child.on('error', (err) => settle(err.message))
+    child.on('close', (code) => {
+      settle(code != null && code !== 0 ? `Exit code ${code}` : undefined)
+    })
+  })
 }
 
 function codexContextUsageToEventData(contextUsage: ContextUsage): string {
@@ -2940,6 +3052,14 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   const fallbackModel = claudeFallbackModelChain()
   const effort = parseEffort(body)
   const attachments = parseAttachments(body)
+  // Input-box bash mode (`!command`) — runs locally then persists in the CLI's
+  // native transcript shape. With attachments it falls back to a normal send.
+  const bangShell = userMessage.startsWith('!') && attachments.length === 0
+    ? userMessage.slice(1).trim()
+    : null
+  if (bangShell !== null && !bangShell) {
+    return NextResponse.json({ error: 'Enter a shell command after !' }, { status: 400 })
+  }
   const resumeSessionAt = typeof body.resumeSessionAt === 'string' ? body.resumeSessionAt : undefined
   const forkSessionOnSend = Boolean(body.forkSession)
   const cwdOverride = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined
@@ -2961,6 +3081,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
       signal,
       userMessage,
       attachments,
+      bangShell,
       isPendingSession,
       permissionMode,
       manualPermissions,
@@ -2981,6 +3102,7 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     signal,
     userMessage,
     attachments,
+    bangShell,
     permissionMode,
     manualPermissions,
     model,
@@ -2997,6 +3119,8 @@ type ClaudeStreamColdArgs = {
   signal: AbortSignal
   userMessage: string
   attachments: SendAttachment[]
+  /** Non-null when the message is an input-box `!command` (bash mode). */
+  bangShell: string | null
   isPendingSession: boolean
   permissionMode: ClaudePermissionMode | undefined
   manualPermissions: boolean
@@ -3017,6 +3141,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
     signal,
     userMessage,
     attachments,
+    bangShell,
     isPendingSession,
     permissionMode,
     manualPermissions,
@@ -3036,9 +3161,12 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
   //   1) The stream stays open after turn 1 ends, so the SDK's Query
   //      iterator stays open and we can hand the Query off to the pool.
   //   2) The pool can keep pushing future turns onto the same stream.
-  const pushMessage = await buildClaudeUserMessage(userMessage, attachments)
+  // Bash mode (`!command`) defers its pushes until the command has run — see
+  // the bang branch inside start() below.
   const { pushUserMessage, endInput, iterable } = createInputStream()
-  pushUserMessage(pushMessage)
+  if (bangShell == null) {
+    pushUserMessage(await buildClaudeUserMessage(userMessage, attachments))
+  }
 
   const encoder = new TextEncoder()
   const abortController = new AbortController()
@@ -3146,10 +3274,21 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       // in any mode, so always install the handler.
       bridgeBox.elicit = createClaudeElicitationBridge(sessionId, controller, encoder)
 
+      // While a bash-mode command runs locally, interrupt kills the child
+      // process instead of poking the (idle) query.
+      let killBangShell: (() => void) | null = null
+      const interruptTurn = async () => {
+        if (killBangShell) {
+          killBangShell()
+          return
+        }
+        await q.interrupt()
+      }
+
       setRunningSession(sessionId, {
         provider: 'claude',
         requestId: turnRequestId,
-        interrupt: () => q.interrupt(),
+        interrupt: interruptTurn,
         background: () => q.backgroundTasks(),
         steer: async (text) => pushUserMessage(await buildClaudeUserMessage(text, [])),
       })
@@ -3180,7 +3319,24 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         return broadcastSessionId
       }
 
+      // The bash-input push (shouldQuery:false) is acknowledged by the CLI with
+      // an immediate empty result — swallow it so the client only sees the real
+      // turn's result.
+      let bangResultsToSkip = 0
+
       try {
+        if (bangShell != null) {
+          // Native order: the input entry is recorded at submit time, then the
+          // command runs, then its output entry starts the responding turn.
+          pushUserMessage(buildClaudeBashInputMessage(bangShell))
+          bangResultsToSkip = 1
+          const bangResult = await runClaudeBangShellCommand(bangShell, cwdOverride, {
+            registerKill: (kill) => { killBangShell = kill },
+          })
+          killBangShell = null
+          pushUserMessage(buildClaudeBashOutputMessage(bangResult))
+        }
+
         try {
           const usage = await q.getContextUsage()
           safeEnqueue(codexContextUsageToEventData(usage))
@@ -3198,12 +3354,16 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
               setRunningSession(messageSessionId, {
                 provider: 'claude',
                 requestId: turnRequestId,
-                interrupt: () => q.interrupt(),
+                interrupt: interruptTurn,
                 background: () => q.backgroundTasks(),
                 steer: async (text) => pushUserMessage(await buildClaudeUserMessage(text, [])),
               })
             }
             safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId: messageSessionId })}\n\n`)
+          }
+          if (msg.type === 'result' && bangResultsToSkip > 0) {
+            bangResultsToSkip -= 1
+            continue
           }
           const eventSessionId = noteClaudeBroadcastSession(messageSessionId ?? fallbackBroadcastSessionId)
           if (eventSessionId) {
@@ -3282,6 +3442,8 @@ type ClaudeStreamPooledArgs = {
   signal: AbortSignal
   userMessage: string
   attachments: SendAttachment[]
+  /** Non-null when the message is an input-box `!command` (bash mode). */
+  bangShell: string | null
   permissionMode: ClaudePermissionMode | undefined
   manualPermissions: boolean
   model: string | undefined
@@ -3298,6 +3460,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
     signal,
     userMessage,
     attachments,
+    bangShell,
     permissionMode,
     manualPermissions,
     model,
@@ -3308,14 +3471,17 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
     fallbackModel,
   } = args
 
-  let pushMessage: SDKUserMessage
-  try {
-    pushMessage = await buildClaudeUserMessage(userMessage, attachments)
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err instanceof Error ? err.message : 'Failed to build prompt' }),
-      { status: 400, headers: { 'Content-Type': 'application/json' } },
-    )
+  // Bash mode builds its own transcript-shaped messages after the command runs.
+  let pushMessage: SDKUserMessage | null = null
+  if (bangShell == null) {
+    try {
+      pushMessage = await buildClaudeUserMessage(userMessage, attachments)
+    } catch (err) {
+      return new Response(
+        JSON.stringify({ error: err instanceof Error ? err.message : 'Failed to build prompt' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      )
+    }
   }
 
   const encoder = new TextEncoder()
@@ -3344,6 +3510,10 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
       // separate, deliberate action that flows through the /interrupt route
       // (→ getRunningSession().interrupt()), not a side effect of disconnecting.
       const turnAbort = new AbortController()
+
+      // While a bash-mode (`!command`) child process runs, this kills it —
+      // consulted by the running-session interrupt closure below.
+      let killBangShell: (() => void) | null = null
 
       // We already know the session id — emit immediately so the client doesn't
       // have to wait for the SDK's init message.
@@ -3416,7 +3586,15 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
           setRunningSession(sessionId, {
             provider: 'claude',
             requestId: turnRequestId,
-            interrupt: () => activeEntry.query.interrupt(),
+            // While a bash-mode command runs locally, interrupt kills the child
+            // process instead of poking the (idle) query.
+            interrupt: async () => {
+              if (killBangShell) {
+                killBangShell()
+                return
+              }
+              await activeEntry.query.interrupt()
+            },
             background: () => activeEntry.query.backgroundTasks(),
             // Mid-turn user input rides the warm query's persistent input stream —
             // the CLI queues it as steering, exactly like typing in Claude Code.
@@ -3445,42 +3623,72 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
             void activeEntry.query.getContextUsage().then(emitUsage).catch(() => {})
           }
 
+          const onTurnMessage = (msg: SDKMessage) => {
+            // Any frame proves the subprocess is alive — cancels a pending
+            // dead verdict so a slow-but-healthy turn is never respawned.
+            sawActivity = true
+            try {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
+              const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
+              if (resultError) {
+                controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: resultError })}\n\n`))
+              }
+            } catch {
+              /* downstream closed; ignore — the turn keeps running in the pool */
+            }
+          }
+          const onTurnError = (err: Error) => {
+            // A respawn we triggered ourselves: stay silent and let the
+            // retry below reconnect on a fresh subprocess.
+            if (respawnRequested) return
+            // If the pool entry died mid-turn, drop it so the next acquire
+            // gets a fresh subprocess.
+            recycleClaudeSession(sessionId)
+            if (signal.aborted) return
+            try {
+              controller.enqueue(encoder.encode(
+                `event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`,
+              ))
+            } catch {
+              /* ignore */
+            }
+          }
+
           try {
-            await activeEntry.run(pushMessage, {
-              signal: turnAbort.signal,
-              bridge,
-              elicit,
-              onMessage: (msg) => {
-                // Any frame proves the subprocess is alive — cancels a pending
-                // dead verdict so a slow-but-healthy turn is never respawned.
-                sawActivity = true
-                try {
-                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
-                  const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
-                  if (resultError) {
-                    controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: resultError })}\n\n`))
-                  }
-                } catch {
-                  /* downstream closed; ignore — the turn keeps running in the pool */
-                }
-              },
-              onError: (err) => {
-                // A respawn we triggered ourselves: stay silent and let the
-                // retry below reconnect on a fresh subprocess.
-                if (respawnRequested) return
-                // If the pool entry died mid-turn, drop it so the next acquire
-                // gets a fresh subprocess.
-                recycleClaudeSession(sessionId)
-                if (signal.aborted) return
-                try {
-                  controller.enqueue(encoder.encode(
-                    `event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`,
-                  ))
-                } catch {
-                  /* ignore */
-                }
-              },
-            })
+            if (bangShell != null) {
+              // Input-box bash mode, in the CLI's native order: persist the
+              // input entry silently (its empty ack result is not forwarded),
+              // run the command locally, then persist the output entry — which
+              // starts the turn where Claude responds to the output.
+              await activeEntry.run(buildClaudeBashInputMessage(bangShell), {
+                signal: turnAbort.signal,
+                onMessage: (msg) => {
+                  sawActivity = true
+                  if ((msg as { type?: string }).type === 'result') return
+                  onTurnMessage(msg)
+                },
+                onError: onTurnError,
+              })
+              const bangResult = await runClaudeBangShellCommand(bangShell, cwdOverride, {
+                registerKill: (kill) => { killBangShell = kill },
+              })
+              killBangShell = null
+              await activeEntry.run(buildClaudeBashOutputMessage(bangResult), {
+                signal: turnAbort.signal,
+                bridge,
+                elicit,
+                onMessage: onTurnMessage,
+                onError: onTurnError,
+              })
+            } else {
+              await activeEntry.run(pushMessage!, {
+                signal: turnAbort.signal,
+                bridge,
+                elicit,
+                onMessage: onTurnMessage,
+                onError: onTurnError,
+              })
+            }
             break
           } catch (err) {
             // Transparent recovery: a reused warm subprocess that answered no

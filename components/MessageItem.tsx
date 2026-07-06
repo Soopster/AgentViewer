@@ -7,7 +7,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
 import { CircleHelp, PencilLine } from 'lucide-react'
-import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, ClaudeSystemBlock } from '@/lib/threading'
+import type { ThreadedMessage, ThreadedBlock, ToolThread, TaskNotificationBlock, SystemReminderBlock, SlashCommandBlock, LocalCommandStdoutBlock, BashInputBlock, BashOutputBlock, ClaudeSystemBlock } from '@/lib/threading'
 import type { TextBlock, ThinkingBlock, ToolResultBlock, ImageBlock } from '@/lib/types'
 import {
   extractClaudeReadFileSummary,
@@ -4373,6 +4373,100 @@ function LocalCommandStdoutCard({ block }: { block: LocalCommandStdoutBlock }) {
   )
 }
 
+// ── Bash-mode cards (input-box `!command` + its output) ──────────────────────
+
+function BashInputCard({ block }: { block: BashInputBlock }) {
+  const c = 'var(--t-bash, var(--green))'
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderLeft: `2px solid ${c}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 13,
+      marginTop: 4,
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '7px 14px',
+        background: 'var(--surface)',
+      }}>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 13,
+          color: c,
+          fontWeight: 700,
+          flexShrink: 0,
+        }}>
+          !
+        </span>
+        <span style={{
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: 13,
+          color: 'var(--text-1)',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}>
+          {block.command}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function BashOutputCard({ block }: { block: BashOutputBlock }) {
+  const c = 'var(--text-3)'
+  const hasStdout = block.stdout.length > 0
+  const hasStderr = block.stderr.length > 0
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderLeft: `2px solid ${c}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 12.5,
+      marginTop: 4,
+      opacity: 0.9,
+    }}>
+      <div style={{ padding: '6px 12px', background: 'var(--surface)' }}>
+        {!hasStdout && !hasStderr && (
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--text-3)', fontStyle: 'italic' }}>
+            (no output)
+          </span>
+        )}
+        {hasStdout && (
+          <pre style={{
+            margin: 0,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 12.5,
+            color: 'var(--text-2)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            maxHeight: 320,
+            overflowY: 'auto',
+          }}>
+            {block.stdout}
+          </pre>
+        )}
+        {hasStderr && (
+          <pre style={{
+            margin: hasStdout ? '6px 0 0' : 0,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 12.5,
+            color: 'var(--red, #f87171)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            maxHeight: 320,
+            overflowY: 'auto',
+          }}>
+            {block.stderr}
+          </pre>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function safeJson(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2)
@@ -4890,6 +4984,8 @@ function renderBlock(block: ThreadedBlock, i: number): React.ReactNode {
   if (block.type === 'claude_system')         return <ClaudeSystemCard        key={i} block={block as ClaudeSystemBlock} />
   if (block.type === 'slash_command')         return <SlashCommandCard        key={i} block={block as SlashCommandBlock} />
   if (block.type === 'local_command_stdout')  return <LocalCommandStdoutCard  key={i} block={block as LocalCommandStdoutBlock} />
+  if (block.type === 'bash_input')            return <BashInputCard           key={i} block={block as BashInputBlock} />
+  if (block.type === 'bash_output')           return <BashOutputCard          key={i} block={block as BashOutputBlock} />
   return null
 }
 

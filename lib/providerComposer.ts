@@ -41,7 +41,7 @@ const CLAUDE: ProviderComposerConfig = {
   placeholderIdle: 'Try "fix the failing test" — Claude can read, edit, run, and explain code.',
   placeholderStreaming: 'Draft your next message for Claude…',
   placeholderNoSession: 'Pick a Claude session to send a message',
-  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · @ files · ↑↓ history',
+  footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · @ files · ! bash · ↑↓ history',
   footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ queue next message',
   sendVerb: 'Send',
   examples: [

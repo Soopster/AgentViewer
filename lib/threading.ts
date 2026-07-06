@@ -54,7 +54,20 @@ export type LocalCommandStdoutBlock = {
   stdout: string
 }
 
-export type ThreadedBlock = TextBlock | ThinkingBlock | ImageBlock | ToolThread | TaskNotificationBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | ClaudeSystemBlock
+/** A `!command` the user ran from the input box (Claude Code bash mode). */
+export type BashInputBlock = {
+  type: 'bash_input'
+  command: string
+}
+
+/** Output of an input-box `!command` — persisted as <bash-stdout>/<bash-stderr>. */
+export type BashOutputBlock = {
+  type: 'bash_output'
+  stdout: string
+  stderr: string
+}
+
+export type ThreadedBlock = TextBlock | ThinkingBlock | ImageBlock | ToolThread | TaskNotificationBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock | ClaudeSystemBlock
 
 export type ThreadedMessage = {
   role: 'user' | 'assistant' | 'system'
@@ -101,6 +114,14 @@ function xmlTag(xml: string, tag: string): string {
 const SYSTEM_REMINDER_RE = /<system-reminder>([\s\S]*?)<\/system-reminder>/g
 const LOCAL_COMMAND_STDOUT_RE = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/g
 const COMMAND_NAME_RE = /<command-name>([\s\S]*?)<\/command-name>/g
+const BASH_INPUT_RE = /<bash-input>([\s\S]*?)<\/bash-input>/g
+const BASH_STDOUT_RE = /<bash-stdout>([\s\S]*?)<\/bash-stdout>/g
+
+// The CLI XML-escapes command/output text before wrapping it in bash-* tags
+// (observed in native transcripts: `bun &lt;command&gt;`). Reverse it for display.
+function unescapeBashTagContent(text: string): string {
+  return text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+}
 
 function parseTaskNotification(content: string): TaskNotificationBlock | null {
   if (!content.trimStart().startsWith('<task-notification>')) return null
@@ -137,6 +158,8 @@ type SpecialRegion =
   | { kind: 'system_reminder'; start: number; end: number; content: string }
   | { kind: 'local_command_stdout'; start: number; end: number; stdout: string }
   | { kind: 'slash_command'; start: number; end: number; block: SlashCommandBlock }
+  | { kind: 'bash_input'; start: number; end: number; command: string }
+  | { kind: 'bash_output'; start: number; end: number; stdout: string; stderr: string }
 
 /** Finds all special XML regions in text and returns them sorted by position. */
 function findSpecialRegions(text: string): SpecialRegion[] {
@@ -150,6 +173,33 @@ function findSpecialRegions(text: string): SpecialRegion[] {
   // local-command-stdout
   for (const m of text.matchAll(LOCAL_COMMAND_STDOUT_RE)) {
     regions.push({ kind: 'local_command_stdout', start: m.index!, end: m.index! + m[0].length, stdout: m[1].trim() })
+  }
+
+  // bash-input (input-box `!command`)
+  for (const m of text.matchAll(BASH_INPUT_RE)) {
+    regions.push({ kind: 'bash_input', start: m.index!, end: m.index! + m[0].length, command: unescapeBashTagContent(m[1].trim()) })
+  }
+
+  // bash-stdout, optionally followed by a sibling bash-stderr — one output region
+  for (const m of text.matchAll(BASH_STDOUT_RE)) {
+    const start = m.index!
+    let end = start + m[0].length
+    let stderr = ''
+    const rest = text.slice(end)
+    const stderrMatch = /^\s*<bash-stderr>([\s\S]*?)<\/bash-stderr>/.exec(rest)
+    if (stderrMatch) {
+      end += stderrMatch[0].length
+      stderr = unescapeBashTagContent(stderrMatch[1].trim())
+    }
+    regions.push({ kind: 'bash_output', start, end, stdout: unescapeBashTagContent(m[1].trim()), stderr })
+  }
+
+  // stderr-only output (no stdout tag preceding it)
+  for (const m of text.matchAll(/<bash-stderr>([\s\S]*?)<\/bash-stderr>/g)) {
+    const covered = regions.some((r) => r.kind === 'bash_output' && m.index! >= r.start && m.index! < r.end)
+    if (!covered) {
+      regions.push({ kind: 'bash_output', start: m.index!, end: m.index! + m[0].length, stdout: '', stderr: unescapeBashTagContent(m[1].trim()) })
+    }
   }
 
   // slash-command cluster: starts at <command-name>, ends at </command-args> (or </command-message> or </command-name>)
@@ -174,11 +224,11 @@ function findSpecialRegions(text: string): SpecialRegion[] {
  * Splits a text string into typed blocks: TextBlock, SystemReminderBlock,
  * SlashCommandBlock, and LocalCommandStdoutBlock.
  */
-function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock> {
+function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock> {
   const regions = findSpecialRegions(text)
   if (regions.length === 0) return [{ type: 'text', text }]
 
-  const out: Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock> = []
+  const out: Array<TextBlock | SystemReminderBlock | SlashCommandBlock | LocalCommandStdoutBlock | BashInputBlock | BashOutputBlock> = []
   let cursor = 0
 
   for (const region of regions) {
@@ -189,6 +239,8 @@ function splitSystemReminders(text: string): Array<TextBlock | SystemReminderBlo
     if (region.kind === 'system_reminder')     out.push({ type: 'system_reminder',      content: region.content })
     if (region.kind === 'local_command_stdout') out.push({ type: 'local_command_stdout', stdout:  region.stdout  })
     if (region.kind === 'slash_command')        out.push(region.block)
+    if (region.kind === 'bash_input')           out.push({ type: 'bash_input',  command: region.command })
+    if (region.kind === 'bash_output')          out.push({ type: 'bash_output', stdout: region.stdout, stderr: region.stderr })
 
     cursor = region.end
   }

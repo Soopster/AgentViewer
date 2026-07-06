@@ -1162,6 +1162,12 @@ function threadedBlockEqual(a: ThreadedMessage['blocks'][number], b: ThreadedMes
         && a.args === (b.type === 'slash_command' ? b.args : '')
     case 'local_command_stdout':
       return a.stdout === (b.type === 'local_command_stdout' ? b.stdout : '')
+    case 'bash_input':
+      return a.command === (b.type === 'bash_input' ? b.command : '')
+    case 'bash_output':
+      return b.type === 'bash_output'
+        && a.stdout === b.stdout
+        && a.stderr === b.stderr
     case 'task_notification':
       return b.type === 'task_notification'
         && a.taskId === b.taskId

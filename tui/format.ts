@@ -1506,6 +1506,12 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
       return block.stdout.trim()
         ? [line(`❯ ${truncateLine(block.stdout.trim().split('\n')[0])}`, 'dim')]
         : [line('❯', 'dim')]
+    case 'bash_input':
+      return [line(`! ${truncateLine(block.command)}`, 'tool')]
+    case 'bash_output': {
+      const firstLine = (block.stdout || block.stderr).trim().split('\n')[0] ?? ''
+      return firstLine ? [line(truncateLine(firstLine), 'dim')] : [line('(no output)', 'dim')]
+    }
     case 'claude_system': {
       const subagentType = typeof block.payload.subagent_type === 'string' ? block.payload.subagent_type : ''
       const subagentPrefix = subagentType ? `[${subagentType}] ` : ''
@@ -1755,6 +1761,8 @@ function classifyCardCategory(message: ThreadedMessage): TuiTranscriptCardCatego
     || block.type === 'system_reminder'
     || block.type === 'slash_command'
     || block.type === 'local_command_stdout'
+    || block.type === 'bash_input'
+    || block.type === 'bash_output'
     || block.type === 'claude_system'
   ))
 
@@ -2297,6 +2305,18 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
       return block.stdout.trim()
         ? sanitizeLine(block.stdout).trim().split('\n').map((l) => line(l.trimEnd(), 'dim'))
         : []
+    case 'bash_input':
+      return [line(`! ${sanitizeLine(block.command).trim()}`, 'tool')]
+    case 'bash_output': {
+      const lines: TuiTranscriptCardLine[] = []
+      if (block.stdout.trim()) {
+        lines.push(...sanitizeLine(block.stdout).trim().split('\n').map((l) => line(l.trimEnd(), 'dim')))
+      }
+      if (block.stderr.trim()) {
+        lines.push(...sanitizeLine(block.stderr).trim().split('\n').map((l) => line(l.trimEnd(), 'result_error')))
+      }
+      return lines.length > 0 ? lines : [line('(no output)', 'dim')]
+    }
     case 'claude_system': {
       const errorCode = typeof block.payload.error === 'string' ? block.payload.error : ''
       if (errorCode) {
