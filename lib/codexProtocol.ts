@@ -10,23 +10,35 @@
 // declare a small loosening here rather than editing the generated files.
 
 import type {
+  AppsListResponse,
+  ExperimentalFeature,
+  ExperimentalFeatureListResponse,
   ListMcpServerStatusResponse,
   Model,
   ModelListResponse,
+  ReviewStartResponse,
+  SkillsListResponse,
   Thread,
+  ThreadCompactStartResponse,
   ThreadForkResponse,
+  ThreadGoalClearResponse,
+  ThreadGoalSetResponse,
   ThreadListResponse,
   ThreadReadResponse,
   ThreadResumeResponse,
   ThreadRollbackResponse,
+  ThreadSetNameResponse,
+  ThreadSettingsUpdateResponse,
+  ThreadShellCommandResponse,
   ThreadStartResponse,
   ThreadTokenUsage,
   ThreadTurnsListResponse,
+  TurnInterruptResponse,
+  TurnStartResponse,
+  TurnSteerResponse,
 } from './codex-schema/v2'
 
 import type {
-  ExperimentalFeature,
-  ExperimentalFeatureListResponse,
   FileUpdateChange,
   McpServerStatus,
   PatchApplyStatus,
@@ -38,14 +50,47 @@ import type {
 
 // ServerNotification lives at the schema root (not under v2/) because it
 // imports notifications from both layers.
-import type { ServerNotification } from './codex-schema'
+import type { ClientRequest, InitializeResponse, ServerNotification } from './codex-schema'
 
 // JSON-RPC envelope is shared infrastructure, not part of the protocol schema.
-export type CodexJsonRpcRequest = {
+export type CodexClientMethod = ClientRequest['method']
+export type CodexRequestParams<M extends CodexClientMethod> = Extract<ClientRequest, { method: M }>['params']
+export type CodexRequestArgs<M extends CodexClientMethod> =
+  [CodexRequestParams<M>] extends [undefined]
+    ? [params?: undefined, skipInitialize?: boolean]
+    : [params: CodexRequestParams<M>, skipInitialize?: boolean]
+
+export type CodexResponseFor<M extends CodexClientMethod> =
+  M extends 'initialize' ? InitializeResponse
+  : M extends 'mcpServerStatus/list' ? ListMcpServerStatusResponse
+  : M extends 'experimentalFeature/list' ? ExperimentalFeatureListResponse
+  : M extends 'skills/list' ? SkillsListResponse
+  : M extends 'app/list' ? AppsListResponse
+  : M extends 'thread/list' ? ThreadListResponse
+  : M extends 'thread/read' ? ThreadReadResponse
+  : M extends 'thread/turns/list' ? ThreadTurnsListResponse
+  : M extends 'thread/resume' ? ThreadResumeResponse
+  : M extends 'thread/start' ? ThreadStartResponse
+  : M extends 'thread/fork' ? ThreadForkResponse
+  : M extends 'thread/rollback' ? ThreadRollbackResponse
+  : M extends 'thread/name/set' ? ThreadSetNameResponse
+  : M extends 'thread/settings/update' ? ThreadSettingsUpdateResponse
+  : M extends 'thread/shellCommand' ? ThreadShellCommandResponse
+  : M extends 'thread/compact/start' ? ThreadCompactStartResponse
+  : M extends 'thread/goal/set' ? ThreadGoalSetResponse
+  : M extends 'thread/goal/clear' ? ThreadGoalClearResponse
+  : M extends 'turn/start' ? TurnStartResponse
+  : M extends 'turn/steer' ? TurnSteerResponse
+  : M extends 'turn/interrupt' ? TurnInterruptResponse
+  : M extends 'review/start' ? ReviewStartResponse
+  : M extends 'model/list' ? ModelListResponse
+  : unknown
+
+export type CodexJsonRpcRequest<M extends CodexClientMethod = CodexClientMethod> = {
   jsonrpc: '2.0'
   id: string
-  method: string
-  params?: unknown
+  method: M
+  params?: CodexRequestParams<M>
 }
 
 export type CodexJsonRpcResponse = {
@@ -80,7 +125,7 @@ export type CodexThreadReadResponse = ThreadReadResponse
 export type CodexThreadResumeResponse = ThreadResumeResponse
 export type CodexThreadForkResponse = ThreadForkResponse
 export type CodexThreadRollbackResponse = ThreadRollbackResponse
-export type CodexTurnStartResponse = { turn: Turn }
+export type CodexTurnStartResponse = TurnStartResponse
 export type CodexThreadTurnsListResponse = ThreadTurnsListResponse
 
 // ThreadListResponse adds `backwardsCursor` to the historical shape we used.
@@ -96,26 +141,10 @@ export type CodexMcpServerListResponse = ListMcpServerStatusResponse
 export type CodexExperimentalFeature = ExperimentalFeature
 export type CodexExperimentalFeatureListResponse = ExperimentalFeatureListResponse
 
-// The schema's SkillsListResponse / AppsListResponse names differ slightly
-// from what we shipped; define the precise shapes we consume.
-export type CodexSkillsListResponse = {
-  data: Array<{ cwd: string; skills: Array<{ name?: string; description?: string }>; errors?: string[] }>
-}
+export type CodexSkillsListResponse = SkillsListResponse
+export type CodexAppsListResponse = AppsListResponse
 
-export type CodexAppsListResponse = {
-  data: Array<{ name: string; id?: string }>
-  nextCursor: string | null
-}
-
-// ThreadTokenUsage in the schema requires `total` and `last`; our consumer
-// has historically tolerated either being absent (e.g. on a freshly started
-// thread). Keep the optional shape so the mapper's `?? {}` fallback still
-// makes sense.
-export type CodexThreadTokenUsage = {
-  total?: ThreadTokenUsage['total'] | null
-  last?: ThreadTokenUsage['last'] | null
-  modelContextWindow?: ThreadTokenUsage['modelContextWindow']
-}
+export type CodexThreadTokenUsage = ThreadTokenUsage
 
 // ServerNotification is a strict, closed discriminated union. We need to
 // pass through arbitrary methods (e.g. `mcpServer/startupStatus/updated`

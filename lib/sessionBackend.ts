@@ -115,21 +115,13 @@ import {
 import { getCodexClient } from './codexClient'
 import { compactStableFingerprint } from './compactFingerprint'
 import type {
-  CodexAppsListResponse,
-  CodexExperimentalFeatureListResponse,
-  CodexModelListResponse,
-  CodexMcpServerListResponse,
   CodexNotification,
+  CodexRequestParams,
+  CodexResponseFor,
   CodexServerRequest,
   CodexThread,
-  CodexThreadForkResponse,
-  CodexThreadListResponse,
-  CodexThreadReadResponse,
   CodexThreadResumeResponse,
-  CodexThreadRollbackResponse,
   CodexThreadTokenUsage,
-  CodexThreadTurnsListResponse,
-  CodexTurnStartResponse,
   CodexUserInput,
 } from './codexProtocol'
 import type {
@@ -1916,7 +1908,7 @@ async function listCopilotSessions({ limit, offset, dir, includeWorktrees }: Lis
 
 async function listCodexSessions({ limit, offset, dir }: ListParams): Promise<Session[]> {
   const client = getCodexClient()
-  const response = await client.request<CodexThreadListResponse>('thread/list', {
+  const response = await client.request('thread/list', {
     limit: limit + offset,
     cwd: dir || undefined,
   })
@@ -2069,7 +2061,7 @@ async function removePersistedSessionBestEffort(provider: AgentProvider, session
 
 async function readCodexThread(sessionId: string, includeTurns: boolean) {
   const client = getCodexClient()
-  const response = await client.request<CodexThreadReadResponse>('thread/read', {
+  const response = await client.request('thread/read', {
     threadId: sessionId,
     includeTurns,
   })
@@ -2082,7 +2074,7 @@ async function listCodexTurnsFull(sessionId: string): Promise<CodexThread['turns
   let cursor: string | null = null
 
   do {
-    const response: CodexThreadTurnsListResponse = await client.request('thread/turns/list', {
+    const response: CodexResponseFor<'thread/turns/list'> = await client.request('thread/turns/list', {
       threadId: sessionId,
       cursor,
       limit: 200,
@@ -2132,7 +2124,7 @@ function pendingCodexSessionInfo(sessionId: string, tag: string | null): Session
 
 async function resumeCodexThread(sessionId: string): Promise<CodexThreadResumeResponse> {
   const client = getCodexClient()
-  return client.request<CodexThreadResumeResponse>('thread/resume', {
+  return client.request('thread/resume', {
     threadId: sessionId,
   })
 }
@@ -2327,7 +2319,7 @@ export async function patchViewSession(sessionId: string, body: Record<string, u
     if ('title' in body) {
       await client.request('thread/name/set', {
         threadId: sessionId,
-        name: body.title ?? null,
+        name: typeof body.title === 'string' ? body.title : '',
       })
       return
     }
@@ -4009,7 +4001,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
   const turnRequestId = parseTurnRequestId(body)
   const model = typeof body.model === 'string' ? body.model : null
   const effort = parseEffort(body)
-  // Codex's app-server accepts `low`/`medium`/`high` for reasoningEffort
+  // Codex's app-server accepts `low`/`medium`/`high` for `effort`
   // (mirrors the CLI's `/reasoning` setting). `off`/`minimal`/`xhigh`/`max`
   // are not valid there, so drop them and let Codex use its thread default.
   const codexEffort = effort === 'low' || effort === 'medium' || effort === 'high'
@@ -4159,10 +4151,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           lastActivityAt: () => lastActivityAt,
           probe: async () => {
             try {
-              const response = await client.request<{ data: Array<{ id: string; status: string }> }>(
-                'thread/turns/list',
-                { threadId: sessionId, limit: 5 },
-              )
+              const response = await client.request('thread/turns/list', { threadId: sessionId, limit: 5 })
               const turn = response.data.find((candidate) => candidate.id === turnId)
               if (!turn) return 'unknown'
               return turn.status === 'inProgress' ? 'running' : 'idle'
@@ -4424,7 +4413,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
             const target = commandArgs
               ? { type: 'custom' as const, instructions: commandArgs }
               : { type: 'uncommittedChanges' as const }
-            const review = await client.request<{ turn: { id: string } }>('review/start', {
+            const review = await client.request('review/start', {
               threadId: sessionId,
               target,
               delivery: 'inline',
@@ -4440,23 +4429,23 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         const turnStartParams = {
           threadId: sessionId,
           model: model ?? undefined,
-          reasoningEffort: codexEffort,
+          effort: codexEffort,
           // Override the app-server's approval policy only when the user picks one
           // in the composer (otherwise the configured default is used). This is
           // what makes the exec/patch approval prompts appear interactively.
           ...(approvalPolicy ? { approvalPolicy } : {}),
           input: buildCodexInput(userMessage, attachments),
-        }
-        let started: CodexTurnStartResponse
+        } satisfies CodexRequestParams<'turn/start'>
+        let started: CodexResponseFor<'turn/start'>
         try {
-          started = await client.request<CodexTurnStartResponse>('turn/start', turnStartParams)
+          started = await client.request('turn/start', turnStartParams)
         } catch (err) {
           // The resume cache said this thread was live but the server lost it
           // (e.g. a restart raced the disconnect listener). Re-resume once.
           if (!isCodexMissingRolloutError(err)) throw err
           codexResumedThreads.delete(sessionId)
           await ensureCodexThreadResumed(sessionId)
-          started = await client.request<CodexTurnStartResponse>('turn/start', turnStartParams)
+          started = await client.request('turn/start', turnStartParams)
         }
 
         activateTargetTurn(started.turn.id)
@@ -5707,9 +5696,8 @@ export async function forkViewSession({ sessionId, body, provider }: ForkParams)
   const resolvedProvider = await resolveProvider(provider)
   if (resolvedProvider === 'codex') {
     const client = getCodexClient()
-    const response = await client.request<CodexThreadForkResponse>('thread/fork', {
+    const response = await client.request('thread/fork', {
       threadId: sessionId,
-      persistExtendedHistory: true,
     })
     if (typeof body.title === 'string' && body.title.trim()) {
       await client.request('thread/name/set', {
@@ -5784,7 +5772,7 @@ export async function createNewViewSession({
 
   if (provider === 'codex') {
     const client = getCodexClient()
-    const response = await client.request<{ thread: { id: string; cwd: string } }>('thread/start', {
+    const response = await client.request('thread/start', {
       cwd: resolvedCwd,
     })
     const newId = response.thread.id
@@ -5860,7 +5848,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
     const client = getCodexClient()
-    const modelsResponse = await client.request<CodexModelListResponse>('model/list', {})
+    const modelsResponse = await client.request('model/list', {})
     const resume = await resumeCodexThread(sessionId).catch(() => null)
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
@@ -6312,7 +6300,7 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
     }
 
     const client = getCodexClient()
-    const result = await client.request<CodexThreadRollbackResponse>('thread/rollback', {
+    const result = await client.request('thread/rollback', {
       threadId: sessionId,
       numTurns,
     })

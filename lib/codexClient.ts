@@ -1,6 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { once } from 'node:events'
-import { CodexJsonRpcResponse, type CodexJsonRpcRequest, type CodexNotification, type CodexServerRequest } from './codexProtocol'
+import {
+  CodexJsonRpcResponse,
+  type CodexClientMethod,
+  type CodexJsonRpcRequest,
+  type CodexNotification,
+  type CodexRequestArgs,
+  type CodexResponseFor,
+  type CodexServerRequest,
+} from './codexProtocol'
 
 type PendingRequest = {
   resolve: (value: unknown) => void
@@ -118,15 +126,22 @@ class CodexAppServerClient {
       await this.request('initialize', {
         clientInfo: {
           name: 'agent-viewer',
+          title: 'Agent Viewer',
           version: '0.1.0',
         },
+        capabilities: null,
       }, true)
     })()
 
     return this.initializePromise
   }
 
-  async request<T>(method: string, params?: unknown, skipInitialize = false): Promise<T> {
+  async request<M extends CodexClientMethod>(
+    method: M,
+    ...args: CodexRequestArgs<M>
+  ): Promise<CodexResponseFor<M>> {
+    const params = args[0]
+    const skipInitialize = args[1] ?? false
     this.ensureProcess()
     if (!skipInitialize) {
       await this.initialize()
@@ -134,14 +149,14 @@ class CodexAppServerClient {
 
     const child = this.ensureProcess()
     const id = String(this.nextId++)
-    const payload: CodexJsonRpcRequest = {
+    const payload: CodexJsonRpcRequest<M> = {
       jsonrpc: '2.0',
       id,
       method,
       params,
     }
 
-    return new Promise<T>((resolve, reject) => {
+    return new Promise<CodexResponseFor<M>>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject })
       child.stdin.write(`${JSON.stringify(payload)}\n`, 'utf8', (error) => {
         if (!error) return

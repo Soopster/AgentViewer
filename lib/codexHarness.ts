@@ -180,10 +180,10 @@ class CodexHarness {
     const client = getCodexClient()
     this.diagnosticsInflight = (async () => {
       const [mcpServers, features, skills, apps] = await Promise.all([
-        client.request<CodexMcpServerListResponse>('mcpServerStatus/list', {}),
-        client.request<CodexExperimentalFeatureListResponse>('experimentalFeature/list', {}),
-        client.request<CodexSkillsListResponse>('skills/list', {}),
-        client.request<CodexAppsListResponse>('app/list', {}),
+        client.request('mcpServerStatus/list', {}),
+        client.request('experimentalFeature/list', {}),
+        client.request('skills/list', {}),
+        client.request('app/list', {}),
       ])
       const next: CodexProjectDiagnostics = {
         mcpServers: mcpServers.data ?? [],
