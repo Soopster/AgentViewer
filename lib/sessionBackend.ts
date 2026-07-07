@@ -4511,10 +4511,12 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
       let cancelWatchdog: (() => void) | null = null
       const outputTokensByMessageId = new Map<string, number>()
       let turnOutputTokens = 0
-      // Subscribe to the shared event harness — one upstream connection
-      // per process, multiplexed by session. Filter on the original session
-      // id first; if we end up forking we'll resubscribe to the new id.
-      let subscription = subscribeToOpenCodeEvents({ sessionId })
+      // Subscribe to the shared event harness — one upstream connection per
+      // directory (opencode ≥1.17 only delivers session/message events on the
+      // directory-scoped bus; the unscoped stream is server heartbeats only),
+      // multiplexed by session. The directory is resolved from the session
+      // record inside the try below, before the subscription opens.
+      let subscription: ReturnType<typeof subscribeToOpenCodeEvents> | null = null
 
       const safeEnqueue = (chunk: string) => {
         if (cleanedUp || downstreamClosed) return
@@ -4529,7 +4531,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
       const close = () => {
         if (cleanedUp) return
         cleanedUp = true
-        subscription.close()
+        subscription?.close()
         if (!downstreamClosed) {
           downstreamClosed = true
           try {
@@ -4558,6 +4560,17 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
       }, { once: true })
 
       try {
+        // The event bus scopes on the session's directory exactly as the
+        // server stores it — resolve it from the session record rather than
+        // trusting the client-provided cwd (which can be a symlink variant).
+        const sessionDirectory = await client.session.get({
+          ...OPENCODE_OPTIONS,
+          path: { id: sessionId },
+        }).then((response) => {
+          const record = openCodeData<OpenCodeSession & { directory?: string }>(response)
+          return typeof record.directory === 'string' && record.directory ? record.directory : undefined
+        }).catch(() => (typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined))
+
         if (resumeSessionAt) {
           const forkedResponse = await client.session.fork({
             ...OPENCODE_OPTIONS,
@@ -4565,18 +4578,19 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
             body: { messageID: resumeSessionAt },
           })
           targetSessionId = openCodeData<OpenCodeSession>(forkedResponse).id
-          // Switch the harness subscription onto the fork so we receive
-          // its events without echoing the dead parent.
-          subscription.close()
-          subscription = subscribeToOpenCodeEvents({ sessionId: targetSessionId })
         }
+
+        // Opened after the fork decision so it filters on the id whose
+        // events we actually want — no dead-parent echo to unsubscribe.
+        const activeSubscription = subscribeToOpenCodeEvents({ sessionId: targetSessionId, directory: sessionDirectory })
+        subscription = activeSubscription
 
         safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId: targetSessionId })}\n\n`)
 
         // Replay cached state so the client doesn't have to wait for the
         // next live event tick to render a stale permission prompt or busy
         // indicator — this is what opencode-web does on every subscribe.
-        const cached = subscription.snapshot
+        const cached = activeSubscription.snapshot
         if (cached?.status) {
           safeEnqueue(`event: opencode-status\ndata: ${JSON.stringify(cached.status)}\n\n`)
         }
@@ -4622,7 +4636,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
         }
 
         consumeEvents = (async () => {
-          for await (const harnessEvent of subscription.events) {
+          for await (const harnessEvent of activeSubscription.events) {
             if (harnessEvent.type !== 'event') continue
 
             const event = harnessEvent.event
@@ -4675,16 +4689,75 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
             },
           })
         } else if (slashCommand) {
-          await client.session.command({
-            ...OPENCODE_OPTIONS,
-            path: { id: targetSessionId },
-            body: {
-              agent: requestedAgent,
-              model: selectedModel?.modelID,
-              command: slashCommand.command,
-              arguments: slashCommand.arguments,
-            },
-          })
+          const commandName = slashCommand.command.toLowerCase()
+          // TUI built-ins are not server-side custom commands — session.command
+          // would 500 on them. Map them to their native RPCs instead, exactly
+          // like the opencode TUI does.
+          if (commandName === 'summarize' || commandName === 'compact') {
+            // The summarize RPC requires an explicit model. Like the opencode
+            // TUI, fall back to the model the session last ran with.
+            const summarizeModel = selectedModel ?? await client.session.messages({
+              ...OPENCODE_OPTIONS,
+              path: { id: targetSessionId },
+            }).then((response) => {
+              const records = openCodeData<Array<{ info?: { role?: string; providerID?: string; modelID?: string } }>>(response)
+              for (let i = records.length - 1; i >= 0; i -= 1) {
+                const info = records[i]?.info
+                if (info?.role === 'assistant' && info.providerID && info.modelID) {
+                  return { providerID: info.providerID, modelID: info.modelID }
+                }
+              }
+              return null
+            }).catch(() => null)
+            if (!summarizeModel) {
+              throw new Error('Pick a model before running /summarize — this session has no prior model to reuse.')
+            }
+            safeEnqueue(commandResultEvent('opencode', { message: 'Summarizing the conversation…', transcriptExpected: true }))
+            await client.session.summarize({
+              ...OPENCODE_OPTIONS,
+              path: { id: targetSessionId },
+              body: summarizeModel,
+            })
+            // Summarize runs a busy→idle turn; the event loop closes on idle.
+          } else if (commandName === 'share') {
+            const shared = await client.session.share({ ...OPENCODE_OPTIONS, path: { id: targetSessionId } })
+            const record = openCodeData<OpenCodeSession & { share?: { url?: string } }>(shared)
+            safeEnqueue(commandResultEvent('opencode', {
+              message: record.share?.url ? `Session shared: ${record.share.url}` : 'Session shared.',
+              transcriptExpected: false,
+            }))
+            activeSubscription.close()
+          } else if (commandName === 'unshare') {
+            await client.session.unshare({ ...OPENCODE_OPTIONS, path: { id: targetSessionId } })
+            safeEnqueue(commandResultEvent('opencode', { message: 'Session sharing disabled.', transcriptExpected: false }))
+            activeSubscription.close()
+          } else {
+            // Validate against the server's command list first — an unknown
+            // name would otherwise surface as an opaque 500 from the server.
+            const knownCommands = await client.command.list({
+              ...OPENCODE_OPTIONS,
+              ...(sessionDirectory ? { query: { directory: sessionDirectory } } : {}),
+            }).then((response) => openCodeData<Array<{ name?: string }>>(response)).catch(() => null)
+            const isKnown = knownCommands?.some((command) => command?.name?.toLowerCase() === commandName)
+            if (knownCommands && !isKnown) {
+              safeEnqueue(commandResultEvent('opencode', {
+                message: `/${slashCommand.command} is not available on this opencode server.`,
+                transcriptExpected: false,
+              }))
+              activeSubscription.close()
+            } else {
+              await client.session.command({
+                ...OPENCODE_OPTIONS,
+                path: { id: targetSessionId },
+                body: {
+                  agent: requestedAgent,
+                  model: selectedModel?.modelID,
+                  command: slashCommand.command,
+                  arguments: slashCommand.arguments,
+                },
+              })
+            }
+          }
         } else {
           await client.session.promptAsync({
             ...OPENCODE_OPTIONS,
@@ -4718,8 +4791,8 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
           },
           onResolved: () => {
             safeEnqueue(`data: ${formatOpenCodeEvent({ type: 'session.idle', properties: { sessionID: targetSessionId } } as OpenCodeEvent)}\n\n`)
-            // Ends the for-await over subscription.events, resolving consumeEvents.
-            subscription.close()
+            // Ends the for-await over the subscription's events, resolving consumeEvents.
+            activeSubscription.close()
           },
         })
 
@@ -4730,7 +4803,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
         }
       } finally {
         cancelWatchdog?.()
-        subscription.close()
+        subscription?.close()
         await consumeEvents?.catch(() => {})
         clearRunningSession(sessionId)
         if (targetSessionId !== sessionId) {
@@ -4770,7 +4843,10 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
   const contextTier = parseCopilotContextTier(body.contextTier)
   let turnAgentMode = parseCopilotMode(body.mode)
   const manualPermissions = body.manualPermissions === true
-  const nativeCommands = body.nativeCommands === true
+  // Native slash execution is the default — matching the Copilot CLI (and the
+  // other providers, which never leak "/command" into the prompt). Clients can
+  // opt out explicitly with nativeCommands:false.
+  const nativeCommands = body.nativeCommands !== false
   const parsedAttachments = parseAttachments(body)
   const attachments = buildCopilotAttachments(parsedAttachments)
   const detachOnClientAbort = body.detachOnClientAbort === true

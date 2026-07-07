@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
 import { isAgentProvider } from '@/lib/provider'
-import { listViewSessionMessageWindow } from '@/lib/sessionBackend'
+import { listViewSessionMessageWindow, readViewSessionInfo } from '@/lib/sessionBackend'
 import { subscribeToOpenCodeEvents } from '@/lib/opencodeHarness'
 import { subscribeToCodexEvents } from '@/lib/codexHarness'
 import { subscribeToClaudeEvents } from '@/lib/claudeHarness'
@@ -439,7 +439,12 @@ async function pumpOpenCode({ sessionId, provider, limit, backfill, offset, enqu
     }, HEARTBEAT_MS)
   }
 
-  const subscription = subscribeToOpenCodeEvents({ sessionId })
+  // opencode ≥1.17 delivers session events only on the directory-scoped bus,
+  // so the subscription needs the session's working directory.
+  const sessionDirectory = await readViewSessionInfo(sessionId, provider)
+    .then((info) => info?.cwd ?? undefined)
+    .catch(() => undefined)
+  const subscription = subscribeToOpenCodeEvents({ sessionId, directory: sessionDirectory })
   const cached = subscription.snapshot
   if (cached?.todos) {
     enqueue('todos', { sessionId, todos: cached.todos })

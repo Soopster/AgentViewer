@@ -30,6 +30,21 @@ const STREAM_YIELD_MS = 8
 const RECONNECT_DELAY_MS = 250
 const HEARTBEAT_TIMEOUT_MS = 15_000
 
+// opencode ≥1.17 scopes session events to a per-directory bus: GET /event
+// without `?directory=` only carries server-level events (heartbeats,
+// server.connected), so a global subscription never sees message/session
+// events. The harness therefore owns one upstream SSE connection per
+// directory, all feeding the shared coalesce/broadcast pipeline.
+type HarnessConnection = {
+  directoryKey: string
+  directory: string | undefined
+  started: boolean
+  connected: boolean
+  attemptController?: AbortController
+  heartbeatTimer?: ReturnType<typeof setTimeout>
+  streamErrorLogged: boolean
+}
+
 export type HarnessEvent =
   | { type: 'event'; event: OpenCodeEvent; sessionId?: string }
   | { type: 'snapshot'; sessionId: string; snapshot: SessionSnapshot }
@@ -64,6 +79,7 @@ const DIAGNOSTICS_TTL_MS = 30_000
 
 type Subscriber = {
   sessionId?: string
+  directoryKey: string
   push(event: HarnessEvent): void
   done(): void
 }
@@ -142,22 +158,16 @@ class OpenCodeHarness {
   private coalesced = new Map<string, number>()
   private flushTimer: ReturnType<typeof setTimeout> | undefined
   private lastFlushAt = 0
-  private streamErrorLogged = false
-  private lastEventAt = Date.now()
-  private heartbeatTimer: ReturnType<typeof setTimeout> | undefined
-  private attemptController: AbortController | undefined
-  private runPromise: Promise<void> | undefined
-  private started = false
-  private connected = false
+  private connections = new Map<string, HarnessConnection>()
   private diagnosticsCache = new Map<string, DiagnosticsCacheEntry>()
   private diagnosticsInflight = new Map<string, Promise<ProjectDiagnostics>>()
 
-  subscribe(options: { sessionId?: string } = {}): {
+  subscribe(options: { sessionId?: string; directory?: string } = {}): {
     snapshot: SessionSnapshot | undefined
     events: AsyncGenerator<HarnessEvent>
     close: () => void
   } {
-    this.start()
+    const connection = this.start(options.directory)
 
     const queue: HarnessEvent[] = []
     const waiters: Array<(value: IteratorResult<HarnessEvent>) => void> = []
@@ -165,6 +175,7 @@ class OpenCodeHarness {
 
     const subscriber: Subscriber = {
       sessionId: options.sessionId,
+      directoryKey: connection.directoryKey,
       push: (event) => {
         if (closed) return
         const waiter = waiters.shift()
@@ -185,7 +196,7 @@ class OpenCodeHarness {
     // Replay current connection state so the new consumer knows whether
     // upstream is healthy — matches opencode-web's behavior of immediately
     // reflecting connection state.
-    if (this.connected) {
+    if (connection.connected) {
       subscriber.push({ type: 'connected' })
     }
 
@@ -237,48 +248,62 @@ class OpenCodeHarness {
     return this.snapshots.get(sessionId)
   }
 
-  ensureStarted(): void {
-    this.start()
+  ensureStarted(directory?: string): void {
+    this.start(directory)
   }
 
-  private start(): void {
-    if (this.started) return
-    this.started = true
-    this.runPromise = this.run().finally(() => {
-      this.runPromise = undefined
-    })
+  private start(directory?: string): HarnessConnection {
+    const directoryKey = directory ?? ''
+    let connection = this.connections.get(directoryKey)
+    if (!connection) {
+      connection = {
+        directoryKey,
+        directory,
+        started: false,
+        connected: false,
+        streamErrorLogged: false,
+      }
+      this.connections.set(directoryKey, connection)
+    }
+    if (!connection.started) {
+      connection.started = true
+      void this.run(connection)
+    }
+    return connection
   }
 
-  private async run(): Promise<void> {
+  private async run(connection: HarnessConnection): Promise<void> {
     // Reconnect with backoff that grows on consecutive failures — the
     // opencode server may be slow to start or temporarily unreachable.
     let failures = 0
 
-    while (this.started) {
-      this.attemptController = new AbortController()
-      this.lastEventAt = Date.now()
+    while (connection.started) {
+      connection.attemptController = new AbortController()
       let receivedAny = false
       try {
         const client = await getOpenCodeClient()
         const events = await client.event.subscribe({
           responseStyle: 'data',
           throwOnError: true,
-          signal: this.attemptController.signal,
+          signal: connection.attemptController.signal,
+          // Session/message events only flow on the directory-scoped bus;
+          // the unscoped stream carries just server-level events.
+          ...(connection.directory ? { query: { directory: connection.directory } } : {}),
           onSseError: (error) => {
             if (this.isAbortError(error)) return
-            if (this.streamErrorLogged) return
-            this.streamErrorLogged = true
+            if (connection.streamErrorLogged) return
+            connection.streamErrorLogged = true
             console.error('[opencode-harness] event stream error', error)
           },
         })
 
-        this.markConnected()
-        this.resetHeartbeat()
+        this.markConnected(connection)
+        this.resetHeartbeat(connection)
         let yielded = Date.now()
         for await (const event of events.stream) {
           receivedAny = true
-          this.resetHeartbeat()
-          this.streamErrorLogged = false
+          this.resetHeartbeat(connection)
+          connection.streamErrorLogged = false
           this.enqueueEvent(event as OpenCodeEvent)
 
           if (Date.now() - yielded < STREAM_YIELD_MS) continue
@@ -286,17 +311,17 @@ class OpenCodeHarness {
           await this.wait(0)
         }
       } catch (error) {
-        if (!this.isAbortError(error) && !this.streamErrorLogged) {
-          this.streamErrorLogged = true
+        if (!this.isAbortError(error) && !connection.streamErrorLogged) {
+          connection.streamErrorLogged = true
           console.error('[opencode-harness] event stream failed', error)
         }
       } finally {
-        this.clearHeartbeat()
-        this.attemptController = undefined
-        this.markDisconnected()
+        this.clearHeartbeat(connection)
+        connection.attemptController = undefined
+        this.markDisconnected(connection)
       }
 
-      if (!this.started) return
+      if (!connection.started) return
 
       // Reset failure backoff once we've successfully received any event —
       // long-lived sessions shouldn't be punished for a transient drop.
@@ -310,19 +335,18 @@ class OpenCodeHarness {
     }
   }
 
-  private resetHeartbeat(): void {
-    this.lastEventAt = Date.now()
-    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer)
-    this.heartbeatTimer = setTimeout(() => {
+  private resetHeartbeat(connection: HarnessConnection): void {
+    if (connection.heartbeatTimer) clearTimeout(connection.heartbeatTimer)
+    connection.heartbeatTimer = setTimeout(() => {
       // Pull the rug on the current attempt — the outer loop reconnects.
-      this.attemptController?.abort()
+      connection.attemptController?.abort()
     }, HEARTBEAT_TIMEOUT_MS)
   }
 
-  private clearHeartbeat(): void {
-    if (!this.heartbeatTimer) return
-    clearTimeout(this.heartbeatTimer)
-    this.heartbeatTimer = undefined
+  private clearHeartbeat(connection: HarnessConnection): void {
+    if (!connection.heartbeatTimer) return
+    clearTimeout(connection.heartbeatTimer)
+    connection.heartbeatTimer = undefined
   }
 
   private wait(ms: number): Promise<void> {
@@ -498,18 +522,20 @@ class OpenCodeHarness {
     }
   }
 
-  private markConnected(): void {
-    if (this.connected) return
-    this.connected = true
+  private markConnected(connection: HarnessConnection): void {
+    if (connection.connected) return
+    connection.connected = true
     for (const subscriber of this.subscribers) {
+      if (subscriber.directoryKey !== connection.directoryKey) continue
       subscriber.push({ type: 'connected' })
     }
   }
 
-  private markDisconnected(): void {
-    if (!this.connected) return
-    this.connected = false
+  private markDisconnected(connection: HarnessConnection): void {
+    if (!connection.connected) return
+    connection.connected = false
     for (const subscriber of this.subscribers) {
+      if (subscriber.directoryKey !== connection.directoryKey) continue
       subscriber.push({ type: 'disconnected' })
     }
   }
@@ -528,7 +554,7 @@ function getHarness(): OpenCodeHarness {
   return globalThis.__openCodeHarness
 }
 
-export function subscribeToOpenCodeEvents(options: { sessionId?: string } = {}) {
+export function subscribeToOpenCodeEvents(options: { sessionId?: string; directory?: string } = {}) {
   return getHarness().subscribe(options)
 }
 
@@ -541,6 +567,6 @@ export function getOpenCodeProjectDiagnostics(directory: string | undefined): Pr
   // flow in as servers/agents/lsp/mcp change. Without this, stale entries
   // only refresh after the TTL backstop elapses.
   const harness = getHarness()
-  harness.ensureStarted()
+  harness.ensureStarted(directory)
   return harness.getProjectDiagnostics(directory)
 }

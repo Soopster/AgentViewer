@@ -56,7 +56,14 @@ export async function listPiSessions(cwd?: string): Promise<PiSessionListEntry[]
 }
 
 export async function openPiSessionManager(sessionId: string): Promise<SessionManager> {
-  const sessionPath = sessionPathCache.get(sessionId)
+  let sessionPath = sessionPathCache.get(sessionId)
+  if (!sessionPath) {
+    // The path cache is process-local and empties on every server restart.
+    // Resolve from disk before giving up — sending to a session by id must
+    // work without a prior session-list fetch, like `pi --resume` does.
+    await listPiSessions().catch(() => [])
+    sessionPath = sessionPathCache.get(sessionId)
+  }
   if (!sessionPath) {
     throw new Error(`Pi session not found: ${sessionId}. Try refreshing the session list.`)
   }
@@ -85,44 +92,59 @@ export async function getPiSessionEntries(sessionId: string): Promise<SessionEnt
   return sm.getBranch()
 }
 
+// Cold AgentSession construction is slow (resourceLoader.reload + package
+// resolution — tens of seconds on a cold dev server). Concurrent calls for the
+// same id must share one construction: without dedup, a retry racing the first
+// send builds a second AgentSession for the same session and orphans one (the
+// pool keeps only the last), leaking its subscriptions and drifting ids.
+const piSessionInflight = new Map<string, Promise<AgentSession>>()
+
 export async function createPiAgentSession(cwd: string, options: { id?: string } = {}): Promise<AgentSession> {
-  try {
-    // Idempotent for a requested id: a prewarm (composer focus) and the first
-    // real send both call this for the same pending session. Reuse the pooled
-    // session instead of paying createAgentSession (resourceLoader.reload +
-    // package resolution) twice and orphaning the first AgentSession.
-    if (options.id) {
-      const cached = piSessionPool.get(options.id)
-      if (cached) {
-        cached.lastUsed = Date.now()
-        schedulePiEviction(options.id)
-        return cached.session
-      }
+  // Idempotent for a requested id: a prewarm (composer focus) and the first
+  // real send both call this for the same pending session. Reuse the pooled
+  // session instead of paying createAgentSession twice.
+  if (options.id) {
+    const cached = piSessionPool.get(options.id)
+    if (cached) {
+      cached.lastUsed = Date.now()
+      schedulePiEviction(options.id)
+      return cached.session
     }
-    const { SessionManager, createAgentSession } = await loadPiSdk()
-    const sessionManager = options.id
-      ? SessionManager.create(cwd, process.env.PI_SESSION_DIR, { id: options.id })
-      : undefined
-    const result = await createAgentSession(sessionManager ? { sessionManager } : { cwd })
-    const id = result.session.sessionId
-    const file = result.session.sessionFile
-    if (file) {
-      sessionPathCache.set(id, file)
-    }
-    // Seed the pool so openPiAgentSession hits the cache on the 2nd message instead of
-    // calling createAgentSession again (which would re-run resourceLoader.reload() and
-    // package resolution, causing spurious npm install output on every new session).
-    const entry: PiPoolEntry = {
-      session: result.session,
-      lastUsed: Date.now(),
-      timer: setTimeout(() => {}, 0),
-    }
-    piSessionPool.set(id, entry)
-    schedulePiEviction(id)
-    return result.session
-  } catch (error) {
-    throw wrapPiError(error)
+    const inflight = piSessionInflight.get(options.id)
+    if (inflight) return inflight
   }
+  const build = (async () => {
+    try {
+      const { SessionManager, createAgentSession } = await loadPiSdk()
+      const sessionManager = options.id
+        ? SessionManager.create(cwd, process.env.PI_SESSION_DIR, { id: options.id })
+        : undefined
+      const result = await createAgentSession(sessionManager ? { sessionManager } : { cwd })
+      const id = result.session.sessionId
+      const file = result.session.sessionFile
+      if (file) {
+        sessionPathCache.set(id, file)
+      }
+      // Seed the pool so openPiAgentSession hits the cache on the 2nd message instead of
+      // calling createAgentSession again (which would re-run resourceLoader.reload() and
+      // package resolution, causing spurious npm install output on every new session).
+      const entry: PiPoolEntry = {
+        session: result.session,
+        lastUsed: Date.now(),
+        timer: setTimeout(() => {}, 0),
+      }
+      piSessionPool.set(id, entry)
+      schedulePiEviction(id)
+      return result.session
+    } catch (error) {
+      throw wrapPiError(error)
+    }
+  })()
+  if (options.id) {
+    piSessionInflight.set(options.id, build)
+    build.finally(() => piSessionInflight.delete(options.id!)).catch(() => {})
+  }
+  return build
 }
 
 // Pool of warm Pi AgentSessions so back-to-back sends don't pay the full
@@ -179,21 +201,30 @@ export async function openPiAgentSession(sessionId: string): Promise<AgentSessio
     schedulePiEviction(sessionId)
     return cached.session
   }
-  const sm = await openPiSessionManager(sessionId)
-  try {
-    const { createAgentSession } = await loadPiSdk()
-    const result = await createAgentSession({ sessionManager: sm })
-    const entry: PiPoolEntry = {
-      session: result.session,
-      lastUsed: Date.now(),
-      timer: setTimeout(() => {}, 0),
+  // Same single-flight rule as createPiAgentSession: concurrent opens of one
+  // session must not each construct (and orphan) an AgentSession.
+  const inflight = piSessionInflight.get(sessionId)
+  if (inflight) return inflight
+  const build = (async () => {
+    const sm = await openPiSessionManager(sessionId)
+    try {
+      const { createAgentSession } = await loadPiSdk()
+      const result = await createAgentSession({ sessionManager: sm })
+      const entry: PiPoolEntry = {
+        session: result.session,
+        lastUsed: Date.now(),
+        timer: setTimeout(() => {}, 0),
+      }
+      piSessionPool.set(sessionId, entry)
+      schedulePiEviction(sessionId)
+      return result.session
+    } catch (error) {
+      throw wrapPiError(error)
     }
-    piSessionPool.set(sessionId, entry)
-    schedulePiEviction(sessionId)
-    return result.session
-  } catch (error) {
-    throw wrapPiError(error)
-  }
+  })()
+  piSessionInflight.set(sessionId, build)
+  build.finally(() => piSessionInflight.delete(sessionId)).catch(() => {})
+  return build
 }
 
 export function evictPiAgentSession(sessionId: string): void {
