@@ -1,6 +1,9 @@
 export type RenderFontId =
   | 'plex-sans'
   | 'atkinson'
+  | 'lexend'
+  | 'inter'
+  | 'open-sans'
   | 'source-sans'
   | 'system'
   | 'verdana'
@@ -18,6 +21,9 @@ export type RenderFont = {
 export const RENDER_FONTS: readonly RenderFont[] = [
   { id: 'plex-sans', label: 'IBM Plex Sans', family: "'IBM Plex Sans', system-ui, sans-serif" },
   { id: 'atkinson', label: 'Atkinson Hyperlegible', family: "var(--font-atkinson), Verdana, sans-serif" },
+  { id: 'lexend', label: 'Lexend', family: "var(--font-lexend), system-ui, sans-serif" },
+  { id: 'inter', label: 'Inter', family: "var(--font-inter), system-ui, sans-serif" },
+  { id: 'open-sans', label: 'Open Sans', family: "var(--font-open-sans), system-ui, sans-serif" },
   { id: 'source-sans', label: 'Source Sans 3', family: "var(--font-source-sans), system-ui, sans-serif" },
   { id: 'system', label: 'System Sans', family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" },
   { id: 'verdana', label: 'Verdana', family: "Verdana, Geneva, sans-serif" },

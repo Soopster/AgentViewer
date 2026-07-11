@@ -10,6 +10,9 @@
 
 [data-render-font="system"] { --render-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 [data-render-font="atkinson"] { --render-font: var(--font-atkinson), Verdana, sans-serif; }
+[data-render-font="lexend"] { --render-font: var(--font-lexend), system-ui, sans-serif; }
+[data-render-font="inter"] { --render-font: var(--font-inter), system-ui, sans-serif; }
+[data-render-font="open-sans"] { --render-font: var(--font-open-sans), system-ui, sans-serif; }
 [data-render-font="source-sans"] { --render-font: var(--font-source-sans), system-ui, sans-serif; }
 [data-render-font="verdana"] { --render-font: Verdana, Geneva, sans-serif; }
 [data-render-font="humanist"] { --render-font: Avenir, 'Avenir Next', 'Trebuchet MS', sans-serif; }

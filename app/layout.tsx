@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { Atkinson_Hyperlegible, Merriweather, Source_Sans_3 } from 'next/font/google'
+import { Atkinson_Hyperlegible, Inter, Lexend, Merriweather, Open_Sans, Source_Sans_3 } from 'next/font/google'
 import './globals.css'
 import { THEMES } from '@/lib/themes'
 import { RouteTransition } from '@/components/RouteTransition'
@@ -21,6 +21,21 @@ const merriweather = Merriweather({
   variable: '--font-merriweather',
   display: 'swap',
 })
+const lexend = Lexend({
+  subsets: ['latin'],
+  variable: '--font-lexend',
+  display: 'swap',
+})
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
+  display: 'swap',
+})
+const openSans = Open_Sans({
+  subsets: ['latin'],
+  variable: '--font-open-sans',
+  display: 'swap',
+})
 
 export const metadata: Metadata = {
   title: 'Agent Viewer',
@@ -33,7 +48,7 @@ const themeScript = `(function(){try{var v=${JSON.stringify(THEMES)};var t=local
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${atkinson.variable} ${sourceSans.variable} ${merriweather.variable}`} suppressHydrationWarning>
+    <html lang="en" className={`${atkinson.variable} ${sourceSans.variable} ${merriweather.variable} ${lexend.variable} ${inter.variable} ${openSans.variable}`} suppressHydrationWarning>
       <head>
         {/* Intentional blocking inline script: must run synchronously before first paint to prevent theme FOUC. Content is a static literal, not user input. */}
         {/* eslint-disable-next-line react-doctor/no-danger, react-doctor/nextjs-no-native-script */}
