@@ -2832,6 +2832,15 @@ function streamToolGroupMarker(cards: TuiTranscriptCard[]): string {
   return hasWarning ? '▲' : hasSuccess ? '✓' : '•'
 }
 
+function streamToolCardMarker(card: TuiTranscriptCard): string {
+  return streamToolGroupMarker([card])
+}
+
+function streamToolMarkerRank(card: TuiTranscriptCard): number {
+  const marker = streamToolCardMarker(card)
+  return marker === '×' ? 3 : marker === '▲' ? 2 : marker === '✓' ? 1 : 0
+}
+
 function streamStatusColor(marker: string, theme: TuiThemePalette): string {
   if (marker === '✓') return theme.green
   if (marker === '×') return theme.red
@@ -3299,6 +3308,7 @@ function transcriptToolLineSegments(
   text: string,
   theme: TuiThemePalette,
   marker = 'tool ',
+  markerColor = theme.dim,
 ): InlineTextSegment[] {
   const cleaned = text.replace(/^tool\s+/i, '').trim()
   const colon = cleaned.indexOf(':')
@@ -3310,17 +3320,48 @@ function transcriptToolLineSegments(
     : cleaned.slice(name.length).trim()
   if (name.toLowerCase() === 'bash' && detail) {
     return [
-      { text: marker, fg: theme.dim },
+      { text: marker, fg: markerColor },
       { text: name, fg: transcriptToolColor(name, theme) },
       { text: ' ', fg: theme.dim },
       ...bashCommandSegments(detail, theme),
     ]
   }
   return [
-    { text: marker, fg: theme.dim },
+    { text: marker, fg: markerColor },
     { text: name || 'tool', fg: transcriptToolColor(name, theme) },
     ...(detail ? [{ text: ` ${detail}`, fg: theme.dim }] : []),
   ]
+}
+
+function streamToolSummarySegments(card: TuiTranscriptCard, theme: TuiThemePalette): InlineTextSegment[] {
+  const summary = agentsToolSummaryLine(card)
+  const marker = streamToolCardMarker(card)
+  const markerColor = streamStatusColor(marker, theme)
+  if (summary.tone === 'tool') {
+    return transcriptToolLineSegments(summary.text, theme, `${marker} `, markerColor)
+  }
+  return [
+    { text: `${marker} `, fg: markerColor },
+    { text: summary.text, fg: transcriptColor(summary, theme) },
+  ]
+}
+
+function dedupeStreamToolSummaryCards(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
+  const unique: TuiTranscriptCard[] = []
+  const indexBySummary = new Map<string, number>()
+
+  for (const card of cards) {
+    const summaryKey = agentsToolSummaryLine(card).text.replace(/\s+/g, ' ').trim().toLowerCase()
+    const existingIndex = indexBySummary.get(summaryKey)
+    if (existingIndex == null) {
+      indexBySummary.set(summaryKey, unique.length)
+      unique.push(card)
+      continue
+    }
+    const existing = unique[existingIndex]
+    if (existing && streamToolMarkerRank(card) > streamToolMarkerRank(existing)) unique[existingIndex] = card
+  }
+  return unique
 }
 
 function bashCommandSegments(detail: string, theme: TuiThemePalette): InlineTextSegment[] {
@@ -4517,6 +4558,11 @@ function TranscriptCardInner({
         : operationalCard
           ? mixHexColor(theme.amber, theme.surface, 0.08) ?? theme.surface
           : cardBg
+    const streamAgentBg = hasCursor
+      ? isExpanded && agentToolCursorKey
+        ? theme.surface2
+        : theme.surface3
+      : theme.surface
     const contentWidth = Math.max(agentWidth - 2, 16)
     const agentBodyWidth = Math.max(contentWidth - 2, 12)
     const agentMarkdownBody = renderCardMarkdownBody({
@@ -4566,6 +4612,10 @@ function TranscriptCardInner({
           }
         })
       : []
+    const rendersCollapsedStreamTools = streamMode && operationalCard && !isExpanded
+    const collapsedStreamToolCards = rendersCollapsedStreamTools
+      ? dedupeStreamToolSummaryCards(toolCards)
+      : toolCards
     return (
       <box flexDirection="column" marginBottom={streamMode ? 0 : densityState.cardGap} width={agentWidth}>
         {landmarks.map((landmark, landmarkIndex) => {
@@ -4595,7 +4645,7 @@ function TranscriptCardInner({
           border={streamMode ? undefined : true}
           borderStyle={hasCursor ? 'heavy' : 'single'}
           borderColor={streamMode ? theme.surface : hasCursor || isSearchHit ? agentAccent : borderColor}
-          backgroundColor={streamMode ? theme.surface : agentBg}
+          backgroundColor={streamMode ? streamAgentBg : agentBg}
           title={streamMode ? undefined : agentsCardTitle}
           titleColor={agentAccent}
           onMouseDown={(event) => {
@@ -4609,11 +4659,31 @@ function TranscriptCardInner({
             paddingX={1}
             paddingBottom={streamMode ? 0 : densityState.bodyPad}
           >
-            {streamMode ? (
+            {rendersCollapsedStreamTools ? (
+              <box flexDirection="column">
+                {collapsedStreamToolCards.map((toolCard, toolIndex) => {
+                  const segments = streamToolSummarySegments(toolCard, theme)
+                  if (hasCursor && toolIndex === collapsedStreamToolCards.length - 1) {
+                    segments.push({ text: '  ·  e details', fg: theme.dim })
+                  }
+                  return (
+                    <text
+                      key={`${card.key}:stream-tool-summary:${toolCard.key}`}
+                      fg={theme.dim}
+                      wrapMode="none"
+                      selectable
+                      {...selectionColors}
+                    >
+                      {renderInlineTextSegments(segments, agentBodyWidth, theme.dim)}
+                    </text>
+                  )
+                })}
+              </box>
+            ) : streamMode ? (
               <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
                 {renderInlineTextSegments([
                   { text: `${streamGroupMarker} `, fg: hasCursor ? agentAccent : streamStatusColor(streamGroupMarker, theme) },
-                  { text: `${headerLabel}  ·  e ${isExpanded ? 'collapse' : 'expand'}${isExpanded ? '  ·  j/k select' : ''}`, fg: theme.dim },
+                  { text: `${headerLabel}  ·  e collapse  ·  j/k select`, fg: theme.dim },
                 ], agentBodyWidth, theme.dim)}
               </text>
             ) : null}
@@ -4673,7 +4743,7 @@ function TranscriptCardInner({
                   )
                 })}
               </box>
-            ) : agentMarkdownBody ? (
+            ) : rendersCollapsedStreamTools ? null : agentMarkdownBody ? (
               agentMarkdownBody
             ) : bodyLines.map((line, lineIndex) => {
               const toolLine = operationalCard && line.tone === 'tool'
