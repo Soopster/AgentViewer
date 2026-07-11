@@ -3,10 +3,13 @@ export type RenderFontId =
   | 'atkinson'
   | 'lexend'
   | 'inter'
+  | 'noto-sans'
+  | 'roboto'
   | 'open-sans'
   | 'source-sans'
   | 'system'
   | 'verdana'
+  | 'tahoma'
   | 'humanist'
   | 'serif'
   | 'merriweather'
@@ -23,10 +26,13 @@ export const RENDER_FONTS: readonly RenderFont[] = [
   { id: 'atkinson', label: 'Atkinson Hyperlegible', family: "var(--font-atkinson), Verdana, sans-serif" },
   { id: 'lexend', label: 'Lexend', family: "var(--font-lexend), system-ui, sans-serif" },
   { id: 'inter', label: 'Inter', family: "var(--font-inter), system-ui, sans-serif" },
+  { id: 'noto-sans', label: 'Noto Sans', family: "var(--font-noto-sans), system-ui, sans-serif" },
+  { id: 'roboto', label: 'Roboto', family: "var(--font-roboto), Arial, sans-serif" },
   { id: 'open-sans', label: 'Open Sans', family: "var(--font-open-sans), system-ui, sans-serif" },
   { id: 'source-sans', label: 'Source Sans 3', family: "var(--font-source-sans), system-ui, sans-serif" },
   { id: 'system', label: 'System Sans', family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" },
   { id: 'verdana', label: 'Verdana', family: "Verdana, Geneva, sans-serif" },
+  { id: 'tahoma', label: 'Tahoma', family: "Tahoma, Verdana, sans-serif" },
   { id: 'humanist', label: 'Humanist', family: "Avenir, 'Avenir Next', 'Trebuchet MS', sans-serif" },
   { id: 'serif', label: 'Reader Serif', family: "Georgia, 'Times New Roman', serif" },
   { id: 'merriweather', label: 'Merriweather', family: "var(--font-merriweather), Georgia, serif" },
