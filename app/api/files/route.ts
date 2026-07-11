@@ -1,34 +1,117 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { open, readdir, stat } from 'node:fs/promises'
+import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
+import type { NextRequest } from 'next/server'
 import { runGitCommand } from '@/lib/gitNodeProvider'
 import { listProjectFiles, type ProjectFileEntry } from '@/lib/projectFiles'
 
-export const maxDuration = 10
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
-const MAX_RESULTS = 30
+const MAX_DIRECTORY_ENTRIES = 2_000
+const MAX_PREVIEW_BYTES = 512 * 1024
+const MAX_SEARCH_RESULTS = 30
+const TEXT_EXTENSIONS = new Set([
+  '.c', '.cc', '.cpp', '.css', '.csv', '.env', '.go', '.h', '.hpp', '.html', '.ini', '.java', '.js', '.json',
+  '.jsx', '.log', '.lua', '.md', '.mjs', '.py', '.rb', '.rs', '.scss', '.sh', '.sql', '.svg', '.toml', '.ts',
+  '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml', '.zsh',
+])
 
-export async function GET(req: NextRequest) {
-  const params = req.nextUrl.searchParams
-  const cwd = params.get('cwd')
-  const query = (params.get('q') ?? '').toLowerCase()
+type FileEntry = {
+  name: string
+  path: string
+  kind: 'directory' | 'file' | 'symlink' | 'other'
+  size: number
+  modified: number
+}
 
-  if (!cwd) {
-    return NextResponse.json({ error: 'cwd is required' }, { status: 400 })
+async function readDirectory(path: string, showHidden: boolean): Promise<{ entries: FileEntry[]; truncated: boolean }> {
+  const dirents = await readdir(path, { withFileTypes: true })
+  const visible = showHidden ? dirents : dirents.filter((entry) => !entry.name.startsWith('.'))
+  const sliced = visible.slice(0, MAX_DIRECTORY_ENTRIES)
+  const entries = await Promise.all(sliced.map(async (entry): Promise<FileEntry> => {
+    const entryPath = join(path, entry.name)
+    const info = await stat(entryPath).catch(() => null)
+    return {
+      name: entry.name,
+      path: entryPath,
+      kind: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : entry.isSymbolicLink() ? 'symlink' : 'other',
+      size: info?.size ?? 0,
+      modified: info?.mtimeMs ?? 0,
+    }
+  }))
+  return { entries, truncated: visible.length > sliced.length }
+}
+
+function requestedPath(request: NextRequest): string {
+  const raw = request.nextUrl.searchParams.get('path')?.trim()
+  if (!raw || raw.includes('\0')) throw new Error('A valid path is required')
+  return isAbsolute(raw)
+    ? resolve(/* turbopackIgnore: true */ raw)
+    : resolve(/* turbopackIgnore: true */ process.cwd(), raw)
+}
+
+export async function GET(request: NextRequest) {
+  const cwd = request.nextUrl.searchParams.get('cwd')
+  if (cwd) {
+    try {
+      const query = (request.nextUrl.searchParams.get('q') ?? '').toLowerCase()
+      const files = await listProjectFiles(cwd, runGitCommand)
+      return Response.json({ files: scoreAndFilter(files, query, MAX_SEARCH_RESULTS), total: files.length })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      return Response.json({ error: message }, { status: 500 })
+    }
   }
 
   try {
-    const files = await listProjectFiles(cwd, runGitCommand)
-    const filtered = scoreAndFilter(files, query, MAX_RESULTS)
-    return NextResponse.json({ files: filtered, total: files.length })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    const path = requestedPath(request)
+    const showHidden = request.nextUrl.searchParams.get('hidden') === '1'
+    const info = await stat(path)
+
+    if (info.isDirectory()) {
+      const [{ entries, truncated }, parentResult] = await Promise.all([
+        readDirectory(path, showHidden),
+        dirname(path) === path ? Promise.resolve({ entries: [] as FileEntry[] }) : readDirectory(dirname(path), showHidden),
+      ])
+      return Response.json({
+        kind: 'directory',
+        path,
+        parent: dirname(path),
+        entries,
+        parentEntries: parentResult.entries,
+        truncated,
+      })
+    }
+
+    if (!info.isFile()) {
+      return Response.json({ kind: 'binary', path, size: info.size, extension: 'special file' })
+    }
+
+    const handle = await open(path, 'r')
+    const buffer = Buffer.alloc(Math.min(info.size, MAX_PREVIEW_BYTES))
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0).finally(() => handle.close())
+    const content = buffer.subarray(0, bytesRead)
+    const extension = extname(path).toLowerCase()
+    const looksBinary = !TEXT_EXTENSIONS.has(extension) && content.subarray(0, 8_192).includes(0)
+    if (looksBinary) {
+      return Response.json({ kind: 'binary', path, size: info.size, extension: extension.slice(1) || 'binary' })
+    }
+
+    return Response.json({
+      kind: 'text',
+      path,
+      size: info.size,
+      content: content.toString('utf8'),
+      truncated: info.size > MAX_PREVIEW_BYTES,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to read path'
+    return Response.json({ error: message }, { status: 400 })
   }
 }
 
 function scoreAndFilter(entries: ProjectFileEntry[], query: string, limit: number): ProjectFileEntry[] {
-  if (!query) {
-    return entries.slice(0, limit)
-  }
+  if (!query) return entries.slice(0, limit)
   const scored: Array<{ entry: ProjectFileEntry; score: number }> = []
   for (const entry of entries) {
     const path = entry.path.toLowerCase()
@@ -46,10 +129,9 @@ function scoreMatch(path: string, basename: string, query: string): number {
   if (path.endsWith(query)) return 700
   if (basename.includes(query)) return 500
   if (path.includes(query)) return 300
-
-  let qi = 0
-  for (let i = 0; i < path.length && qi < query.length; i += 1) {
-    if (path[i] === query[qi]) qi += 1
+  let queryIndex = 0
+  for (let index = 0; index < path.length && queryIndex < query.length; index += 1) {
+    if (path[index] === query[queryIndex]) queryIndex += 1
   }
-  return qi === query.length ? 100 + Math.max(0, 60 - path.length) : 0
+  return queryIndex === query.length ? 100 + Math.max(0, 60 - path.length) : 0
 }

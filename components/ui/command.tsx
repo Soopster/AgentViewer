@@ -9,10 +9,12 @@ type CommandDialogProps = React.PropsWithChildren<{
   open: boolean
   onOpenChange: (open: boolean) => void
   className?: string
+  centered?: boolean
+  style?: React.CSSProperties
   ref?: React.Ref<HTMLDivElement>
 }>
 
-function CommandDialog({ ref, open, onOpenChange, className, children }: CommandDialogProps) {
+function CommandDialog({ ref, open, onOpenChange, className, centered = false, style, children }: CommandDialogProps) {
   const isOpenRef = React.useRef(open)
 
   React.useEffect(() => {
@@ -41,7 +43,7 @@ function CommandDialog({ ref, open, onOpenChange, className, children }: Command
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center"
+      className={cn('fixed inset-0 z-50 flex justify-center', centered ? 'items-center' : 'items-start')}
       style={{
         padding: '28px 32px 32px',
         background: 'rgba(0, 0, 0, 0.4)',
@@ -58,7 +60,7 @@ function CommandDialog({ ref, open, onOpenChange, className, children }: Command
           'flex w-full max-w-[760px] overflow-hidden rounded-[18px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[0_24px_80px_var(--shadow,rgba(0,0,0,0.24))]',
           className,
         )}
-        style={{ maxHeight: 'calc(100vh - 60px)' }}
+        style={{ maxHeight: 'calc(100vh - 60px)', ...style }}
         onMouseDown={(event) => event.stopPropagation()}
       >
         {children}

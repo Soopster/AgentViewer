@@ -16,6 +16,7 @@ import type { CodexPlanStep } from '@/lib/taskRegistry'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
+const FileViewer = dynamic(() => import('@/components/FileViewer'), { ssr: false })
 const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
 const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover'), { ssr: false })
 const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
@@ -36,6 +37,11 @@ type MessageTarget = {
 type SessionListScrollRequest = {
   sessionKey: string
   requestId: number
+}
+
+type ComposerInsertRequest = {
+  requestId: number
+  text: string
 }
 
 type ProjectMessageBatch = {
@@ -319,6 +325,9 @@ export default function Home() {
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
+  const [fileViewerOpen, setFileViewerOpen] = useState(false)
+  const [composerInsertRequest, setComposerInsertRequest] = useState<ComposerInsertRequest | null>(null)
+  const composerInsertRequestRef = useRef(0)
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
   const [provenanceOpen, setProvenanceOpen] = useState(false)
   const [coordinatorOpen, setCoordinatorOpen] = useState(false)
@@ -402,6 +411,23 @@ export default function Home() {
     if (!activeProjectDir) return
     setGitPopoverOpen(true)
   }, [activeProjectDir])
+
+  const openFileViewer = useCallback(() => {
+    if (!activeProjectDir) return
+    setFileViewerOpen(true)
+  }, [activeProjectDir])
+
+  const consumeComposerInsertRequest = useCallback((requestId: number) => {
+    setComposerInsertRequest((current) => current?.requestId === requestId ? null : current)
+  }, [])
+
+  const insertFilePathToComposer = useCallback((path: string) => {
+    composerInsertRequestRef.current += 1
+    setComposerInsertRequest({
+      requestId: composerInsertRequestRef.current,
+      text: `@${path} `,
+    })
+  }, [])
 
   const openRunDashboard = useCallback(() => {
     setDashboardContextSession(selectedSession)
@@ -597,6 +623,18 @@ export default function Home() {
       if (!activeProjectDir) return
       event.preventDefault()
       setGitPopoverOpen(true)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeProjectDir])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+      if (event.key.toLowerCase() !== 'f') return
+      if (!activeProjectDir) return
+      event.preventDefault()
+      setFileViewerOpen(true)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -1245,6 +1283,8 @@ export default function Home() {
                     ideBridgeOpenRequest={ideBridgeOpenRequest}
                     ideBridgeRouteToggleRequest={ideBridgeRouteToggleRequest}
                     onIdeBridgeRoutingChange={setIdeBridgeRouting}
+                    composerInsertRequest={composerInsertRequest}
+                    onComposerInsertConsumed={consumeComposerInsertRequest}
                     openCodeTodos={openCodeTodosForView}
                     codexPlan={codexPlanForView}
                   />
@@ -1263,6 +1303,7 @@ export default function Home() {
                   includeWorktrees={includeWorktrees}
                   messagePaneCollapsed={messagePaneCollapsed}
                   canOpenGit={!!activeProjectDir}
+                  canOpenFiles={!!activeProjectDir}
                   canOpenTasks={!selectedProject && (selectedSession?.provider ?? provider) === 'claude'}
                   canOpenPromptLibrary={!selectedProject && !!selectedSession}
                   canOpenChannelBridge={canUseChannelBridge}
@@ -1276,6 +1317,7 @@ export default function Home() {
                   onToggleWorktrees={setIncludeWorktrees}
                   onToggleMessagePane={toggleMessagePane}
                   onOpenGit={openGitPopover}
+                  onOpenFiles={openFileViewer}
                   onOpenCoordinator={openCoordinator}
                   onOpenTasks={openTaskPanel}
                   onOpenPromptLibrary={openPromptLibrary}
@@ -1295,6 +1337,15 @@ export default function Home() {
             open={gitPopoverOpen}
             onClose={() => setGitPopoverOpen(false)}
             cwd={activeProjectDir}
+          />
+        ) : null}
+        {activeProjectDir && fileViewerOpen ? (
+          <FileViewer
+            open={fileViewerOpen}
+            cwd={activeProjectDir}
+            canInsert={!selectedProject && !!selectedSession}
+            onOpenChange={setFileViewerOpen}
+            onInsertPath={insertFilePathToComposer}
           />
         ) : null}
         {provenanceOpen ? (

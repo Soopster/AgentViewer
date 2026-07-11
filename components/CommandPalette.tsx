@@ -28,6 +28,7 @@ type CommandPaletteProps = {
   includeWorktrees: boolean
   messagePaneCollapsed: boolean
   canOpenGit: boolean
+  canOpenFiles: boolean
   canOpenTasks: boolean
   canOpenPromptLibrary: boolean
   canOpenChannelBridge: boolean
@@ -41,6 +42,7 @@ type CommandPaletteProps = {
   onToggleWorktrees: (include: boolean) => void
   onToggleMessagePane: () => void
   onOpenGit: () => void
+  onOpenFiles: () => void
   onOpenCoordinator: () => void
   onOpenTasks: () => void
   onOpenPromptLibrary: () => void
@@ -312,6 +314,7 @@ export default function CommandPalette({
   includeWorktrees,
   messagePaneCollapsed,
   canOpenGit,
+  canOpenFiles,
   canOpenTasks,
   canOpenPromptLibrary,
   canOpenChannelBridge,
@@ -325,6 +328,7 @@ export default function CommandPalette({
   onToggleWorktrees,
   onToggleMessagePane,
   onOpenGit,
+  onOpenFiles,
   onOpenCoordinator,
   onOpenTasks,
   onOpenPromptLibrary,
@@ -498,6 +502,17 @@ export default function CommandPalette({
         keywords: ['git', 'status', 'diff', 'branch', 'commit', 'working tree'],
         score: 0,
         run: onOpenGit,
+      },
+      {
+        id: 'open-files',
+        label: 'Browse project files',
+        description: canOpenFiles ? 'Open the three-pane project file viewer with syntax previews' : 'Select a session or project first',
+        icon: <FolderOpen size={16} />,
+        shortcut: 'Ctrl F',
+        group: 'actions',
+        keywords: ['file', 'files', 'folder', 'browse', 'viewer', 'preview', 'project', 'yazi'],
+        score: 0,
+        run: onOpenFiles,
       },
       {
         id: 'open-agent-team',
@@ -687,7 +702,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenCoordinator, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenFiles, onOpenGit, onOpenCoordinator, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

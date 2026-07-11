@@ -109,6 +109,8 @@ type Props = {
   ideBridgeOpenRequest?: number
   ideBridgeRouteToggleRequest?: number
   onIdeBridgeRoutingChange?: (routing: boolean) => void
+  composerInsertRequest?: { requestId: number; text: string } | null
+  onComposerInsertConsumed?: (requestId: number) => void
   openCodeTodos?: OpenCodeTodo[]
   codexPlan?: { plan: CodexPlanStep[]; explanation: string | null }
 }
@@ -2629,6 +2631,8 @@ export default function MessageView({
   ideBridgeOpenRequest = 0,
   ideBridgeRouteToggleRequest = 0,
   onIdeBridgeRoutingChange,
+  composerInsertRequest,
+  onComposerInsertConsumed,
   openCodeTodos,
   codexPlan,
 }: Props) {
@@ -4874,6 +4878,14 @@ export default function MessageView({
       resizeComposer()
     })
   }, [resizeComposer])
+
+  const handledComposerInsertRequestRef = useRef(0)
+  useEffect(() => {
+    if (!composerInsertRequest || composerInsertRequest.requestId <= handledComposerInsertRequestRef.current) return
+    handledComposerInsertRequestRef.current = composerInsertRequest.requestId
+    insertPromptText(composerInsertRequest.text)
+    onComposerInsertConsumed?.(composerInsertRequest.requestId)
+  }, [composerInsertRequest, insertPromptText, onComposerInsertConsumed])
 
   const insertSlashCommand = useCallback((command: string) => {
     const remainder = inputText.split('\n').slice(1).join('\n')
