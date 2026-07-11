@@ -1491,9 +1491,12 @@ function formatBlock(block: ThreadedBlock, activeForms?: TaskActiveForms, taskRe
         : []
     }
     case 'thinking':
+      // An empty thinking block carries no information — emitting a bare
+      // "thinking" placeholder just painted noise rows (Stream view especially).
+      // The expanded formatter already returns [] for this case.
       return block.thinking.trim()
         ? [line(`thinking: ${truncateLine(block.thinking.trim().split('\n')[0])}`, 'thinking')]
-        : [line('thinking', 'thinking')]
+        : []
     case 'tool_thread':
       return previewTool(block, activeForms, taskRegistry)
     case 'task_notification':
