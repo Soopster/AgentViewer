@@ -441,6 +441,7 @@ const LIGHT_MODES: TuiThemeMode[] = [
 const DARK_MODES: TuiThemeMode[] = [
   'ayu-dark',
   'catppuccin-mocha',
+  'claude-code',
   'cobalt',
   'cyber',
   'dark',
@@ -3915,6 +3916,7 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   iceberg: 'Iceberg cool blue-grey',
   zenburn: 'Zenburn earthy classic',
   'material-darker': 'Material Theme darker',
+  'claude-code': 'Claude Code charcoal + olive',
   'oceanic-next': 'Oceanic blue-grey',
   'papercolor-dark': 'PaperColor neutral dark',
   snazzy: 'Snazzy neon contrast',
@@ -4008,6 +4010,7 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   iceberg: 'ICEBERG',
   zenburn: 'ZENBURN',
   'material-darker': 'MATERIAL DARKER',
+  'claude-code': 'CLAUDE CODE',
   'oceanic-next': 'OCEANIC NEXT',
   'papercolor-dark': 'PAPERCOLOR DARK',
   snazzy: 'SNAZZY',

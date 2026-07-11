@@ -74,6 +74,7 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'iceberg',
   'zenburn',
   'material-darker',
+  'claude-code',
   'oceanic-next',
   'papercolor-dark',
   'snazzy',

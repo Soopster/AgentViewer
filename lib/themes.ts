@@ -44,6 +44,7 @@ export type Theme =
   | 'iceberg'
   | 'zenburn'
   | 'material-darker'
+  | 'claude-code'
   | 'stripe'
   | 'claude-cream'
   | 'supabase'
@@ -140,6 +141,7 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   iceberg:            { category: 'dark',  icon: '☾', label: 'Iceberg' },
   zenburn:            { category: 'dark',  icon: '☾', label: 'Zenburn' },
   'material-darker':  { category: 'dark',  icon: '☾', label: 'Material Darker' },
+  'claude-code':      { category: 'dark',  icon: '⌘', label: 'Claude Code' },
   linear:             { category: 'dark',  icon: '☾', label: 'Linear' },
   sentry:             { category: 'dark',  icon: '☾', label: 'Sentry' },
   raycast:            { category: 'dark',  icon: '☾', label: 'Raycast' },

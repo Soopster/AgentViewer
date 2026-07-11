@@ -49,6 +49,7 @@ export type TuiThemeMode =
   | 'iceberg'
   | 'zenburn'
   | 'material-darker'
+  | 'claude-code'
   | 'oceanic-next'
   | 'papercolor-dark'
   | 'snazzy'
@@ -1348,6 +1349,28 @@ export const LUMON_THEME: TuiThemePalette = {
   userBg: '#2d4860',
 } as const
 
+export const CLAUDE_CODE_THEME: TuiThemePalette = {
+  bg: '#0d0e0e',
+  surface: '#141515',
+  surface2: '#202222',
+  surface3: '#2a3438',
+  diffAddBg: '#18251a',
+  diffRemoveBg: '#2b1917',
+  diffMetaBg: '#112a32',
+  border: '#303333',
+  border2: '#4f8998',
+  text: '#d6d3cc',
+  muted: '#aaa69d',
+  dim: '#71736e',
+  violet: '#b7a36a',
+  cyan: '#69aebe',
+  green: '#8ea65a',
+  red: '#d06d5f',
+  amber: '#c69a52',
+  pink: '#b98275',
+  userBg: '#202222',
+} as const
+
 export const MATTE_BLACK_THEME: TuiThemePalette = {
   bg: '#121212',
   surface: '#1a1a1a',
@@ -2142,6 +2165,7 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
     case 'iceberg-light': return ICEBERG_LIGHT_THEME
     case 'zenburn': return ZENBURN_THEME
     case 'material-darker': return MATERIAL_DARKER_THEME
+    case 'claude-code': return CLAUDE_CODE_THEME
     case 'material-lighter': return MATERIAL_LIGHTER_THEME
     case 'min-light': return MIN_LIGHT_THEME
     case 'alabaster': return ALABASTER_THEME

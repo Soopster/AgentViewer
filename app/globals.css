@@ -725,6 +725,18 @@
   --t-grep: #ff5370; --t-glob: #c792ea; --t-agent: #f07178; --t-other: #b2ccd6;
 }
 
+/* ── Design tokens ── claude-code (dark, charcoal + olive) ─────────────── */
+[data-theme="claude-code"] {
+  --bg: #0d0e0e; --surface: #141515; --surface-2: #202222; --surface-3: #2a3438;
+  --border: #303333; --border-2: #4f8998;
+  --text: #d6d3cc; --text-2: #aaa69d; --text-3: #71736e;
+  --violet: #b7a36a; --violet-glow: color-mix(in srgb, #b7a36a 14%, transparent);
+  --cyan: #69aebe; --cyan-glow: color-mix(in srgb, #69aebe 13%, transparent);
+  --green: #8ea65a; --red: #d06d5f; --amber: #c69a52;
+  --t-bash: #8ea65a; --t-edit: #9aaa5f; --t-write: #69aebe; --t-read: #aaa69d;
+  --t-grep: #d06d5f; --t-glob: #b7a36a; --t-agent: #b98275; --t-other: #71736e;
+}
+
 /* ── Design tokens ── stripe (light, indigo) ─────────────────────────────── */
 [data-theme="stripe"] {
   --bg: #ffffff; --surface: #f6f9fc; --surface-2: #eef2f7; --surface-3: #dde6f0;
@@ -1059,7 +1071,7 @@
 [data-theme="rose-pine"], [data-theme="synthwave"], [data-theme="palenight"],
 [data-theme="night-owl"], [data-theme="flexoki-dark"], [data-theme="cobalt"],
 [data-theme="vitesse-dark"], [data-theme="iceberg"], [data-theme="zenburn"],
-[data-theme="material-darker"], [data-theme="linear"], [data-theme="sentry"],
+[data-theme="material-darker"], [data-theme="claude-code"], [data-theme="linear"], [data-theme="sentry"],
 [data-theme="raycast"], [data-theme="framer"], [data-theme="ferrari"],
 [data-theme="resend"], [data-theme="cyber"] {
   color-scheme: dark;
