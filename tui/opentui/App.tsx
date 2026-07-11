@@ -3152,11 +3152,43 @@ function transcriptToolLineSegments(
   const detail = colon >= 0
     ? cleaned.slice(colon + 1).trim()
     : cleaned.slice(name.length).trim()
+  if (name.toLowerCase() === 'bash' && detail) {
+    return [
+      { text: marker, fg: theme.dim },
+      { text: name, fg: transcriptToolColor(name, theme) },
+      { text: ' ', fg: theme.dim },
+      ...bashCommandSegments(detail, theme),
+    ]
+  }
   return [
     { text: marker, fg: theme.dim },
     { text: name || 'tool', fg: transcriptToolColor(name, theme) },
     ...(detail ? [{ text: ` ${detail}`, fg: theme.dim }] : []),
   ]
+}
+
+function bashCommandSegments(detail: string, theme: TuiThemePalette): InlineTextSegment[] {
+  let command = detail.replace(/^\$\s*/, '').trim()
+  const launcher = command.match(/^(?:\/[^\s]+\/)?(?:zsh|bash|sh)\s+-lc\s+(['"])([\s\S]*)\1$/)
+  if (launcher?.[2]) command = launcher[2]
+
+  const parts = command.split(/(\s+|&&|\|\||[|;])/).filter(Boolean)
+  let expectsCommand = true
+  return parts.map((part): InlineTextSegment => {
+    if (/^\s+$/.test(part)) return { text: part, fg: theme.dim }
+    if (part === '&&' || part === '||' || part === '|' || part === ';') {
+      expectsCommand = true
+      return { text: part, fg: theme.pink }
+    }
+    if (expectsCommand) {
+      expectsCommand = false
+      return { text: part, fg: theme.green }
+    }
+    if (/^-{1,2}[A-Za-z0-9]/.test(part)) return { text: part, fg: theme.amber }
+    if (/^(?:\.?\.?\/|~\/|\/)/.test(part)) return { text: part, fg: theme.cyan }
+    if (/^(['"`]).*\1$/.test(part)) return { text: part, fg: theme.text }
+    return { text: part, fg: theme.muted }
+  })
 }
 
 function nestedAgentToolDisplay(
