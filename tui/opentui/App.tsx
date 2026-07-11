@@ -4681,13 +4681,15 @@ function TranscriptCardInner({
       || remainingLines.length > 0
       || (isExpanded && (card.codeBlocks?.length ?? 0) > 0)
     const streamRendersSomething = streamHasBody || landmarks.length > 0
-    const streamBg = hasCursor
-      ? theme.surface3
-      : isSelected
-        ? theme.surface2
-        : card.role === 'user'
-          ? theme.userBg
-          : undefined
+    // Match native agent CLIs: user prompts are the only persistent transcript
+    // band. Assistant prose stays on the terminal background; keyboard focus is
+    // already communicated by the accent marker and should not turn an entire
+    // multi-line answer into a second prompt-shaped block.
+    const streamBg = card.role === 'user'
+      ? theme.userBg
+      : hasCursor
+        ? theme.surface3
+        : undefined
     return (
       <box
         id={`card:${card.key}`}
@@ -4726,7 +4728,22 @@ function TranscriptCardInner({
           paddingBottom={densityState.bodyPad + (card.role === 'user' ? 1 : 0)}
           backgroundColor={streamBg}
         >
-        {streamMarkdownBody ? streamMarkdownBody : (
+        {streamMarkdownBody ? (
+          <box flexDirection="row">
+            <text
+              fg={hasCursor ? accent : isSearchHit ? theme.cyan : theme.dim}
+              width={2}
+              wrapMode="none"
+              selectable
+              {...selectionColors}
+            >
+              {`${streamMarker} `}
+            </text>
+            <box flexDirection="column" width={streamTextWidth}>
+              {streamMarkdownBody}
+            </box>
+          </box>
+        ) : (
         <>
         {firstLine ? (
           <text
