@@ -161,9 +161,12 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
 
 export const THEMES: Theme[] = Object.keys(THEME_META) as Theme[]
 const VALID_THEMES: Set<string> = new Set(THEMES)
+const themesByLabel = (category: ThemeCategory): Theme[] => THEMES
+  .filter((theme) => THEME_META[theme].category === category)
+  .sort((a, b) => THEME_META[a].label.localeCompare(THEME_META[b].label))
 export const THEME_GROUPS: Array<{ category: ThemeCategory; label: string; themes: Theme[] }> = [
-  { category: 'light', label: 'Light', themes: THEMES.filter((theme) => THEME_META[theme].category === 'light') },
-  { category: 'dark', label: 'Dark', themes: THEMES.filter((theme) => THEME_META[theme].category === 'dark') },
+  { category: 'light', label: 'Light', themes: themesByLabel('light') },
+  { category: 'dark', label: 'Dark', themes: themesByLabel('dark') },
 ]
 
 type ThemeListener = () => void
