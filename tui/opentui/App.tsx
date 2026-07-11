@@ -608,7 +608,7 @@ const TERMINAL_SELECTION_COPY_WINDOW_MS = 15_000
 type PaneFocus = 'sessions' | 'messages'
 
 type CardLandmark = {
-  kind: 'resume' | 'unread' | 'day' | 'gap'
+  kind: 'resume' | 'unread' | 'day' | 'gap' | 'turn'
   text: string
 }
 
@@ -2840,12 +2840,29 @@ function computeAllLandmarks(
   unreadBoundaryIndex: number,
   pendingNewCount: number,
   previous: CardLandmark[][] | null,
+  streamMode: boolean,
 ): CardLandmark[][] {
   const result: CardLandmark[][] = new Array(cards.length)
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i]
     const prev = i > 0 ? cards[i - 1] : null
     let landmarks: CardLandmark[] | null = null
+
+    if (
+      streamMode
+      && prev
+      && (
+        card.role === 'user'
+        || (
+          card.role === 'assistant'
+          && (card.category === 'conversation' || card.category === 'insight')
+          && (prev.category === 'technical' || prev.category === 'diff')
+        )
+      )
+    ) {
+      landmarks = landmarks ?? []
+      landmarks.push({ kind: 'turn', text: '' })
+    }
 
     if (i === resumeMarkerIndex) {
       landmarks = landmarks ?? []
@@ -4296,7 +4313,11 @@ function TranscriptCardInner({
                 : theme.dim
           return (
             <box key={`${card.key}:agent-landmark:${landmarkIndex}`} paddingX={1}>
-              <text fg={color} selectable {...selectionColors}>{fitText(landmark.text, landmarkWidth)}</text>
+              <text fg={color} width={landmarkWidth} wrapMode="none" selectable {...selectionColors}>
+                {landmark.kind === 'turn' && streamMode
+                  ? '─'.repeat(Math.max(landmarkWidth, 1))
+                  : fitText(landmark.text, landmarkWidth)}
+              </text>
             </box>
           )
         })}
@@ -4315,7 +4336,12 @@ function TranscriptCardInner({
             onSelectCard(card.key)
           }}
         >
-          <box flexDirection="column" width={contentWidth} paddingX={1} paddingBottom={densityState.bodyPad}>
+          <box
+            flexDirection="column"
+            width={contentWidth}
+            paddingX={1}
+            paddingBottom={densityState.bodyPad}
+          >
             {streamMode ? (
               <text fg={hasCursor ? agentAccent : theme.dim} wrapMode="none" selectable {...selectionColors}>
                 {fitText(
@@ -4422,8 +4448,9 @@ function TranscriptCardInner({
       <box
         id={`card:${card.key}`}
         flexDirection="column"
-        marginBottom={card.role === 'user' ? 1 : 0}
-        paddingX={1}
+        marginBottom={densityState.cardGap}
+        paddingLeft={densityState.bodyIndent}
+        paddingBottom={densityState.bodyPad}
         backgroundColor={streamBg}
       >
         {landmarks.map((landmark, landmarkIndex) => {
@@ -4435,8 +4462,17 @@ function TranscriptCardInner({
                 ? theme.violet
                 : theme.dim
           return (
-            <text {...selectionColors} key={`${card.key}:lm:${landmarkIndex}`} fg={lmColor} selectable>
-              {fitText(`─ ${landmark.text} `, streamWidth).padEnd(streamWidth, '─')}
+            <text
+              {...selectionColors}
+              key={`${card.key}:lm:${landmarkIndex}`}
+              fg={lmColor}
+              width={streamWidth}
+              wrapMode="none"
+              selectable
+            >
+              {landmark.kind === 'turn'
+                ? '─'.repeat(Math.max(streamWidth, 1))
+                : fitText(`─ ${landmark.text} `, streamWidth).padEnd(streamWidth, '─')}
             </text>
           )
         })}
@@ -7394,10 +7430,11 @@ export default function OpenTuiApp() {
       unreadBoundaryIndex - transcriptRenderStart,
       pendingNewCount,
       allLandmarksRef.current,
+      transcriptView === 'stream',
     )
     allLandmarksRef.current = next
     return next
-  }, [renderedTranscriptCards, transcriptRenderStart, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount])
+  }, [renderedTranscriptCards, transcriptRenderStart, resumeMarkerIndex, unreadBoundaryIndex, pendingNewCount, transcriptView])
 
   const cardDisplayCacheRef = useRef(new WeakMap<TuiTranscriptCard, {
     inputs: {

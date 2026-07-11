@@ -2044,7 +2044,7 @@ export default function App() {
               <Box
                 flexGrow={1}
                 flexDirection="column"
-                paddingX={1}
+                paddingX={densityState.innerPadX}
                 paddingTop={TRANSCRIPT_BODY_PADDING_TOP}
                 paddingBottom={TRANSCRIPT_BODY_PADDING_BOTTOM}
                 overflow="hidden"
@@ -2140,7 +2140,7 @@ export default function App() {
                             ? theme.violet
                             : theme.dim
                           return (
-                            <Box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
+                            <Box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={densityState.innerPadX}>
                               <Text color={color}>{landmark.text}</Text>
                             </Box>
                           )
@@ -2167,14 +2167,14 @@ export default function App() {
                                   const tn = formatToolLabel(tm?.[1] ?? 'TOOL')
                                   const tt = tm?.[2] ?? ''
                                   return (
-                                    <Box key={`${card.key}:exp:${lnIndex}`} flexDirection="column" backgroundColor={theme.surface3} paddingX={1}>
+                                    <Box key={`${card.key}:exp:${lnIndex}`} flexDirection="column" backgroundColor={theme.surface3} paddingX={densityState.innerPadX}>
                                       <Text bold color={theme.cyan}>{fitText(tn, bodyLineWidth - 2)}</Text>
                                       {tt ? <Text color={theme.muted}>{fitText(tt, bodyLineWidth - 2)}</Text> : null}
                                     </Box>
                                   )
                                 }
                                 return (
-                                  <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={1}>
+                                  <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={densityState.innerPadX}>
                                     <Text color={transcriptColor(ln)}>
                                       {fitText(ln.text, bodyLineWidth - 2)}
                                     </Text>
@@ -2187,7 +2187,7 @@ export default function App() {
                                   <Box
                                     key={`${card.key}:c${lnIndex}`}
                                     backgroundColor={transcriptBackground(ln, theme)}
-                                    paddingX={1}
+                                    paddingX={densityState.innerPadX}
                                   >
                                     <Text color={transcriptColor(ln)}>
                                       {fitText(ln.text, Math.max(bodyLineWidth - 2, 16))}
@@ -2251,7 +2251,7 @@ export default function App() {
               <Box
                 flexGrow={1}
                 flexDirection="column"
-                paddingX={1}
+                paddingX={densityState.innerPadX}
                 paddingTop={TRANSCRIPT_BODY_PADDING_TOP}
                 paddingBottom={TRANSCRIPT_BODY_PADDING_BOTTOM}
                 overflow="hidden"
@@ -2347,7 +2347,7 @@ export default function App() {
                           ? theme.violet
                           : theme.dim
                         return (
-                          <Box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={1}>
+                          <Box key={`${card.key}:landmark:${landmarkIndex}`} paddingX={densityState.innerPadX}>
                             <Text color={color}>{landmark.text}</Text>
                           </Box>
                         )
@@ -2377,14 +2377,14 @@ export default function App() {
                                   const tn = formatToolLabel(tm?.[1] ?? 'TOOL')
                                   const tt = tm?.[2] ?? ''
                                   return (
-                                    <Box key={`${card.key}:exp:${lnIndex}`} flexDirection="column" backgroundColor={theme.surface3} paddingX={1}>
+                                    <Box key={`${card.key}:exp:${lnIndex}`} flexDirection="column" backgroundColor={theme.surface3} paddingX={densityState.innerPadX}>
                                       <Text bold color={theme.cyan}>{fitText(tn, bodyLineWidth - 2)}</Text>
                                       {tt ? <Text color={theme.muted}>{fitText(tt, bodyLineWidth - 2)}</Text> : null}
                                     </Box>
                                   )
                                 }
                                 return (
-                                  <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={1}>
+                                  <Box key={`${card.key}:exp:${lnIndex}`} backgroundColor={transcriptBackground(ln, theme)} paddingX={densityState.innerPadX}>
                                     <Text color={transcriptColor(ln)}>
                                       {fitText(ln.text, bodyLineWidth - 2)}
                                     </Text>
@@ -2397,7 +2397,7 @@ export default function App() {
                                 <Box
                                   key={`${card.key}:c${lnIndex}`}
                                   backgroundColor={transcriptBackground(ln, theme)}
-                                  paddingX={1}
+                                  paddingX={densityState.innerPadX}
                                 >
                                   <Text color={transcriptColor(ln)}>
                                     {fitText(ln.text, Math.max(bodyLineWidth - 2, 16))}
