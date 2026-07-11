@@ -2,6 +2,7 @@
 import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState } from 'react'
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
+import { FileViewerPopover } from './FileViewerPopover'
 import { AnalyticsPopover } from './AnalyticsPopover'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { PromptLibraryPopover } from './PromptLibraryPopover'
@@ -3800,6 +3801,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'ide-bridge', label: 'IDE bridge',              key: '⇧I', category: 'Session'    },
   { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: 'route', category: 'Session' },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
+  { id: 'files',      label: 'Browse project files',   key: '^F', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
   { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
   { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
@@ -4968,6 +4970,8 @@ export default function OpenTuiApp() {
   const [exitCleanupInProgress, setExitCleanupInProgress] = useState(false)
   const [gitOpen, setGitOpen] = useState(false)
   const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [fileViewerOpen, setFileViewerOpen] = useState(false)
+  const fileViewerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const analyticsKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [handoffBriefOpen, setHandoffBriefOpen] = useState(false)
@@ -11928,6 +11932,9 @@ export default function OpenTuiApp() {
       case 'git':
         setGitOpen(true)
         break
+      case 'files':
+        setFileViewerOpen(true)
+        break
       case 'analytics':
         setAnalyticsOpen(true)
         break
@@ -12121,6 +12128,11 @@ export default function OpenTuiApp() {
 
     if (gitOpen) {
       handled(() => { gitKeyHandlerRef.current?.(key) })
+      return
+    }
+
+    if (fileViewerOpen) {
+      handled(() => { fileViewerKeyHandlerRef.current?.(key) })
       return
     }
 
@@ -12757,6 +12769,12 @@ export default function OpenTuiApp() {
     // Global git status popover
     if (isCtrl('g')) {
       handled(() => setGitOpen(true))
+      return
+    }
+
+    // Yazi-inspired project file browser
+    if (isCtrl('f')) {
+      handled(() => setFileViewerOpen(true))
       return
     }
 
@@ -15032,6 +15050,43 @@ export default function OpenTuiApp() {
           onSendDiffNoteToComposer={(prompt) => {
             appendDiffCommentPromptToComposer(prompt)
             showNotice('info', 'Diff comment added to composer')
+          }}
+        />
+      ) : null}
+
+      {fileViewerOpen ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={49}
+        />
+      ) : null}
+
+      {fileViewerOpen ? (
+        <FileViewerPopover
+          cwd={gitRepoCwd}
+          theme={theme}
+          width={width}
+          height={height}
+          syntaxStyle={handoffBriefSyntaxStyle}
+          velocityScrollEnabled={velocityScrollEnabled}
+          onClose={() => setFileViewerOpen(false)}
+          onKeyHandlerReady={(handler) => { fileViewerKeyHandlerRef.current = handler }}
+          onToggleVelocityScroll={() => {
+            setVelocityScrollEnabled((current) => {
+              const next = !current
+              void writeTuiVelocityScroll(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store velocity scroll'))
+              return next
+            })
+          }}
+          onInsertPath={(path) => {
+            insertComposerTextAtCursor(`@${path} `)
+            setComposerActive(true)
+            showNotice('info', 'File added to composer')
           }}
         />
       ) : null}
