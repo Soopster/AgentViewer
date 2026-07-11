@@ -1528,10 +1528,14 @@ function estimateTimelineRowHeight(
     const textHeight = message.blocks.reduce((total: number, block: ThreadedBlock) => (
       block.type === 'text' ? total + estimateRenderedTextHeight(block.text) : total
     ), 0)
+    const toolRowHeight = density === 'dense' ? 26 : density === 'comfortable' ? 36 : 30
     const toolHeight = message.blocks.reduce((total: number, block: ThreadedBlock) => (
-      block.type === 'tool_thread' ? total + 30 : total
+      block.type === 'tool_thread' ? total + toolRowHeight : total
     ), 0)
-    return Math.max(36, 20 + textHeight + toolHeight + (message.role === 'user' ? 14 : 2))
+    const marginBottom = message.role === 'user'
+      ? (density === 'dense' ? 8 : density === 'comfortable' ? 24 : 14)
+      : (density === 'dense' ? 1 : density === 'comfortable' ? 6 : 2)
+    return Math.max(36, 20 + textHeight + toolHeight + marginBottom)
   }
 
   const headerHeight = 82

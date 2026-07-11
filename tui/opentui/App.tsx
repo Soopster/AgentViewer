@@ -2536,17 +2536,22 @@ function densityConfig(density: TuiDensity): {
   bodyLines: number
   headerRows: number
   bodyPad: number
+  streamGap: number
+  streamUserGap: number
 } {
   switch (density) {
     // bodyPad is the trailing blank row inside each card. Comfortable keeps it
     // for breathing room; balanced/dense drop it so the bottom border hugs the
     // last line and the transcript packs tighter.
+    // streamGap/streamUserGap are the Stream-view equivalents of cardGap: the
+    // flat view packs assistant prose tight by default (gap only after user
+    // prompts), comfortable opens a row after every card, dense drops them all.
     case 'comfortable':
-      return { cardGap: 1, bodyIndent: 3, bodyLines: 6, headerRows: 2, bodyPad: 1 }
+      return { cardGap: 1, bodyIndent: 3, bodyLines: 6, headerRows: 2, bodyPad: 1, streamGap: 1, streamUserGap: 1 }
     case 'dense':
-      return { cardGap: 0, bodyIndent: 1, bodyLines: 12, headerRows: 1, bodyPad: 0 }
+      return { cardGap: 0, bodyIndent: 1, bodyLines: 12, headerRows: 1, bodyPad: 0, streamGap: 0, streamUserGap: 0 }
     default:
-      return { cardGap: 1, bodyIndent: 2, bodyLines: 8, headerRows: 2, bodyPad: 0 }
+      return { cardGap: 1, bodyIndent: 2, bodyLines: 8, headerRows: 2, bodyPad: 0, streamGap: 0, streamUserGap: 1 }
   }
 }
 
@@ -4171,7 +4176,7 @@ function pruneSessionCaches(
   }
 }
 
-type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number; bodyPad: number }
+type DensityState = { bodyLines: number; bodyIndent: number; cardGap: number; bodyPad: number; streamGap: number; streamUserGap: number }
 
 // Conversation prose becomes difficult to scan when cards stretch across an
 // ultrawide terminal. Keep normal cards at a readable measure while allowing
@@ -4632,7 +4637,7 @@ function TranscriptCardInner({
       ? dedupeStreamToolSummaryCards(toolCards)
       : toolCards
     return (
-      <box flexDirection="column" marginBottom={streamMode ? 0 : densityState.cardGap} width={agentWidth}>
+      <box flexDirection="column" marginBottom={streamMode ? densityState.streamGap : densityState.cardGap} width={agentWidth}>
         {landmarks.map((landmark, landmarkIndex) => {
           const color = landmark.kind === 'resume'
             ? theme.cyan
@@ -4829,7 +4834,9 @@ function TranscriptCardInner({
       <box
         id={`card:${card.key}`}
         flexDirection="column"
-        marginBottom={streamRendersSomething && card.role === 'user' ? 1 : 0}
+        marginBottom={streamRendersSomething
+          ? (card.role === 'user' ? densityState.streamUserGap : densityState.streamGap)
+          : 0}
       >
         {landmarks.map((landmark, landmarkIndex) => {
           const lmColor = landmark.kind === 'resume'

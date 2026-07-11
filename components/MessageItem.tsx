@@ -5539,6 +5539,21 @@ function AgentsToolRow({ thread }: { thread: ToolThread }) {
   )
 }
 
+function streamDensitySpacing(dc: DensityConfig) {
+  const isDense = dc.msgGap <= 12
+  const isComfortable = dc.msgGap >= 52
+  return {
+    userMarginBottom: isDense ? 8 : isComfortable ? 24 : 14,
+    otherMarginBottom: isDense ? 1 : isComfortable ? 6 : 2,
+    userPaddingY: isDense ? 4 : isComfortable ? 10 : 6,
+    otherPaddingY: isDense ? 1 : isComfortable ? 5 : 2,
+    paddingX: isComfortable ? 10 : 8,
+    blockGap: isDense ? 1 : isComfortable ? 5 : 2,
+    toolRowPaddingY: isDense ? 2 : isComfortable ? 6 : 3,
+    toolDetailPadding: isDense ? '2px 8px 6px 22px' : isComfortable ? '6px 10px 10px 24px' : '4px 8px 8px 22px',
+  }
+}
+
 function streamToolStatus(thread: ToolThread): { marker: '•' | '✓' | '×' | '▲'; color: string; rank: number } {
   if (thread.result?.is_error) return { marker: '×', color: 'var(--red)', rank: 3 }
   const status = typeof thread.toolUse.input.status === 'string' ? thread.toolUse.input.status.toLowerCase() : ''
@@ -5567,6 +5582,7 @@ function dedupeStreamToolThreads(threads: ToolThread[]): ToolThread[] {
 function StreamToolRow({ thread }: { thread: ToolThread }) {
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const spacing = streamDensitySpacing(use(MessageDensityContext))
   const name = canonicalToolName(thread.toolUse.name)
   const status = streamToolStatus(thread)
   const color = toolColor(name)
@@ -5584,7 +5600,7 @@ function StreamToolRow({ thread }: { thread: ToolThread }) {
           alignItems: 'baseline',
           gap: 7,
           minWidth: 0,
-          padding: '3px 8px',
+          padding: `${spacing.toolRowPaddingY}px ${spacing.paddingX}px`,
           border: 0,
           borderRadius: 0,
           background: open ? 'var(--surface-3)' : hovered ? 'var(--surface-2)' : 'transparent',
@@ -5604,7 +5620,7 @@ function StreamToolRow({ thread }: { thread: ToolThread }) {
         </span>
       </button>
       {open && (
-        <div style={{ padding: '4px 8px 8px 22px', background: 'var(--surface-2)' }}>
+        <div style={{ padding: spacing.toolDetailPadding, background: 'var(--surface-2)' }}>
           <ToolThreadCard thread={thread} />
         </div>
       )}
@@ -5613,6 +5629,7 @@ function StreamToolRow({ thread }: { thread: ToolThread }) {
 }
 
 function StreamMessageItem({ message }: { message: ThreadedMessage }) {
+  const spacing = streamDensitySpacing(use(MessageDensityContext))
   const textBlocks = message.blocks.filter((block) => block.type === 'text')
   const toolThreads = dedupeStreamToolThreads(
     message.blocks.filter((block): block is ToolThread => block.type === 'tool_thread'),
@@ -5630,15 +5647,17 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
       <div style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 2,
-        marginBottom: message.role === 'user' ? 14 : 2,
-        padding: message.role === 'user' ? '6px 8px' : '2px 8px',
+        gap: spacing.blockGap,
+        marginBottom: message.role === 'user' ? spacing.userMarginBottom : spacing.otherMarginBottom,
+        padding: message.role === 'user'
+          ? `${spacing.userPaddingY}px ${spacing.paddingX}px`
+          : `${spacing.otherPaddingY}px ${spacing.paddingX}px`,
         background: message.role === 'user' ? 'color-mix(in srgb, var(--cyan) 10%, var(--surface))' : 'transparent',
       }}>
         {textBlocks.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minWidth: 0 }}>
             <span aria-hidden="true" style={{ color: markerColor, flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}>{marker}</span>
-            <div style={{ display: 'flex', flex: 1, minWidth: 0, flexDirection: 'column', gap: 2 }}>
+            <div style={{ display: 'flex', flex: 1, minWidth: 0, flexDirection: 'column', gap: spacing.blockGap }}>
               {textBlocks.map((block, index) => renderBlock(block, index))}
             </div>
           </div>
@@ -5888,7 +5907,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
     const textBlocks = message.blocks.filter((b) => b.type === 'text')
     const bridgeLabel = message.role === 'user' ? '↳ sent' : '↲ reply'
     return (
-      <div style={{ marginBottom: 8, marginLeft: 8, paddingLeft: 8, borderLeft: `2px solid var(--accent-dim, rgba(255,165,0,0.3))` }}>
+      <div style={{ marginBottom: dc.blockGap, marginLeft: 8, paddingLeft: 8, borderLeft: `2px solid var(--accent-dim, rgba(255,165,0,0.3))` }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: 'var(--text-3)', letterSpacing: '0.05em' }}>
             🔌 {bridgeLabel}
