@@ -54,6 +54,75 @@ const TEXT_EXTENSIONS = new Set([
   '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml', '.zsh',
 ])
 
+type IconTone = 'folder' | 'code' | 'config' | 'document' | 'media' | 'archive' | 'git' | 'lock' | 'default'
+type FileIcon = { glyph: string; tone: IconTone }
+
+// Nerd Font icons are all BMP private-use glyphs, keeping them safe for the
+// OpenTUI/Windows renderer while matching the icon-rich Yazi presentation.
+const FOLDER_ICON: FileIcon = { glyph: '\uf07b', tone: 'folder' }
+const SYMLINK_ICON: FileIcon = { glyph: '\uf0c1', tone: 'folder' }
+const DEFAULT_FILE_ICON: FileIcon = { glyph: '\uf15b', tone: 'default' }
+const FILE_ICONS_BY_NAME: Readonly<Record<string, FileIcon>> = {
+  '.dockerignore': { glyph: '\uf308', tone: 'config' },
+  '.editorconfig': { glyph: '\ue615', tone: 'config' },
+  '.env': { glyph: '\uf462', tone: 'config' },
+  '.gitignore': { glyph: '\ue702', tone: 'git' },
+  'bun.lock': { glyph: '\uf023', tone: 'lock' },
+  'cargo.lock': { glyph: '\ue7a8', tone: 'lock' },
+  'cargo.toml': { glyph: '\ue7a8', tone: 'config' },
+  'dockerfile': { glyph: '\uf308', tone: 'config' },
+  'go.mod': { glyph: '\ue626', tone: 'config' },
+  'go.sum': { glyph: '\ue626', tone: 'lock' },
+  'license': { glyph: '\uf084', tone: 'document' },
+  'makefile': { glyph: '\ue673', tone: 'config' },
+  'package-lock.json': { glyph: '\ue71e', tone: 'lock' },
+  'package.json': { glyph: '\ue71e', tone: 'config' },
+  'pnpm-lock.yaml': { glyph: '\uf023', tone: 'lock' },
+  'readme': { glyph: '\uf48a', tone: 'document' },
+  'readme.md': { glyph: '\uf48a', tone: 'document' },
+  'tsconfig.json': { glyph: '\ue628', tone: 'config' },
+}
+const FILE_ICONS_BY_EXTENSION: Readonly<Record<string, FileIcon>> = {
+  c: { glyph: '\ue61e', tone: 'code' },
+  cc: { glyph: '\ue61d', tone: 'code' },
+  cpp: { glyph: '\ue61d', tone: 'code' },
+  css: { glyph: '\ue749', tone: 'code' },
+  csv: { glyph: '\uf1c3', tone: 'document' },
+  gif: { glyph: '\uf1c5', tone: 'media' },
+  go: { glyph: '\ue626', tone: 'code' },
+  h: { glyph: '\ue61e', tone: 'code' },
+  html: { glyph: '\ue736', tone: 'code' },
+  jpeg: { glyph: '\uf1c5', tone: 'media' },
+  jpg: { glyph: '\uf1c5', tone: 'media' },
+  js: { glyph: '\ue74e', tone: 'code' },
+  json: { glyph: '\ue60b', tone: 'config' },
+  jsx: { glyph: '\ue7ba', tone: 'code' },
+  lock: { glyph: '\uf023', tone: 'lock' },
+  lua: { glyph: '\ue620', tone: 'code' },
+  md: { glyph: '\uf48a', tone: 'document' },
+  mjs: { glyph: '\ue74e', tone: 'code' },
+  mp3: { glyph: '\uf1c7', tone: 'media' },
+  mp4: { glyph: '\uf1c8', tone: 'media' },
+  pdf: { glyph: '\uf1c1', tone: 'document' },
+  png: { glyph: '\uf1c5', tone: 'media' },
+  py: { glyph: '\ue73c', tone: 'code' },
+  rb: { glyph: '\ue739', tone: 'code' },
+  rs: { glyph: '\ue7a8', tone: 'code' },
+  sh: { glyph: '\uf489', tone: 'code' },
+  sql: { glyph: '\uf1c0', tone: 'code' },
+  svg: { glyph: '\uf1c5', tone: 'media' },
+  tar: { glyph: '\uf1c6', tone: 'archive' },
+  toml: { glyph: '\ue615', tone: 'config' },
+  ts: { glyph: '\ue628', tone: 'code' },
+  tsx: { glyph: '\ue7ba', tone: 'code' },
+  txt: { glyph: '\uf15c', tone: 'document' },
+  vue: { glyph: '\ue6a0', tone: 'code' },
+  yaml: { glyph: '\ue615', tone: 'config' },
+  yml: { glyph: '\ue615', tone: 'config' },
+  zip: { glyph: '\uf1c6', tone: 'archive' },
+  zsh: { glyph: '\uf489', tone: 'code' },
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`
   if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(bytes < 10_240 ? 1 : 0)} KB`
@@ -68,10 +137,28 @@ function fitText(value: string, width: number): string {
   return `${value.slice(0, width - 1)}…`
 }
 
-function entryGlyph(entry: FileEntry): string {
-  if (entry.kind === 'directory') return '▸'
-  if (entry.kind === 'symlink') return '↗'
-  return '·'
+function entryIcon(entry: FileEntry): FileIcon {
+  if (entry.kind === 'directory') return FOLDER_ICON
+  if (entry.kind === 'symlink') return SYMLINK_ICON
+  const lowerName = entry.name.toLowerCase()
+  const named = FILE_ICONS_BY_NAME[lowerName]
+  if (named) return named
+  const extension = extname(lowerName).slice(1)
+  return FILE_ICONS_BY_EXTENSION[extension] ?? DEFAULT_FILE_ICON
+}
+
+function iconColor(icon: FileIcon, theme: TuiThemePalette): string {
+  switch (icon.tone) {
+    case 'folder': return theme.cyan
+    case 'code': return theme.violet
+    case 'config': return theme.amber
+    case 'document': return theme.muted
+    case 'media': return theme.pink
+    case 'archive': return theme.red
+    case 'git': return theme.green
+    case 'lock': return theme.amber
+    default: return theme.dim
+  }
 }
 
 async function readDirectory(path: string, showHidden: boolean, sortMode: SortMode): Promise<FileEntry[]> {
@@ -331,9 +418,12 @@ export function FileViewerPopover({
           <scrollbox style={{ height: contentH - 3 }}>
             {parentEntries.map((entry) => {
               const selected = entry.path === directory
+              const icon = entryIcon(entry)
               return (
-                <text key={entry.path} fg={selected ? theme.cyan : entry.kind === 'directory' ? theme.violet : theme.dim}>
-                  {fitText(`${selected ? '›' : ' '} ${entryGlyph(entry)} ${entry.name}`, leftW - 2)}
+                <text key={entry.path} wrapMode="none">
+                  <span fg={selected ? theme.cyan : theme.dim}>{`${selected ? '›' : ' '} `}</span>
+                  <span fg={iconColor(icon, theme)}>{`${icon.glyph} `}</span>
+                  <span fg={selected ? theme.text : entry.kind === 'directory' ? theme.cyan : theme.muted}>{fitText(entry.name, leftW - 6)}</span>
                 </text>
               )
             })}
@@ -346,10 +436,13 @@ export function FileViewerPopover({
                 const selected = index === cursor
                 const meta = entry.kind === 'directory' ? '' : formatSize(entry.size)
                 const nameWidth = Math.max(4, middleW - meta.length - 7)
+                const icon = entryIcon(entry)
                 return (
                   <box key={entry.path} height={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : undefined}>
-                    <text fg={selected ? theme.cyan : entry.kind === 'directory' ? theme.violet : theme.text}>
-                      {`${selected ? '›' : ' '} ${entryGlyph(entry)} ${fitText(entry.name, nameWidth)}`}
+                    <text wrapMode="none">
+                      <span fg={selected ? theme.cyan : theme.dim}>{`${selected ? '›' : ' '} `}</span>
+                      <span fg={iconColor(icon, theme)}>{`${icon.glyph} `}</span>
+                      <span fg={selected ? theme.text : entry.kind === 'directory' ? theme.cyan : theme.text}>{fitText(entry.name, nameWidth)}</span>
                     </text>
                     <box flexGrow={1} />
                     <text fg={theme.dim}>{meta}</text>
@@ -362,11 +455,15 @@ export function FileViewerPopover({
         <box width={previewW} border borderStyle="single" borderColor={previewFocused ? theme.cyan : theme.border} title={` ${fitText(selectedEntry?.name ?? 'Preview', previewW - 6)} `}>
           {previewLoading ? <text fg={theme.dim}>Loading preview…</text> : preview.kind === 'directory' ? (
             <scrollbox ref={previewScrollRef} style={{ height: contentH - 2 }}>
-              {preview.entries.map((entry) => (
-                <text key={entry.path} fg={entry.kind === 'directory' ? theme.violet : theme.muted}>
-                  {fitText(`${entryGlyph(entry)} ${entry.name}`, previewW - 3)}
-                </text>
-              ))}
+              {preview.entries.map((entry) => {
+                const icon = entryIcon(entry)
+                return (
+                  <text key={entry.path} wrapMode="none">
+                    <span fg={iconColor(icon, theme)}>{`${icon.glyph} `}</span>
+                    <span fg={entry.kind === 'directory' ? theme.cyan : theme.muted}>{fitText(entry.name, previewW - 5)}</span>
+                  </text>
+                )
+              })}
             </scrollbox>
           ) : preview.kind === 'text' ? (
             <scrollbox ref={previewScrollRef} style={{ height: contentH - 2 }}>
