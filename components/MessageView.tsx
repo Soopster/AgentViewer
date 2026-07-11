@@ -55,6 +55,7 @@ import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSe
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import { isNativeComposerCommandText } from '@/lib/composerCommands'
 import CodeThemeToggle from './CodeThemeToggle'
+import RenderFontToggle from './RenderFontToggle'
 import TabBar from './TabBar'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
 import {
@@ -7108,6 +7109,7 @@ export default function MessageView({
         </div>
 
         {/* Code theme — standalone so its sub-popover isn't clipped by the VIEW dropdown */}
+        <RenderFontToggle />
         <CodeThemeToggle />
 
         {/* ··· actions dropdown — session actions */}

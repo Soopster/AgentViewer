@@ -4,6 +4,19 @@
 
 @custom-variant dark (&:is([data-theme="dark"] *));
 
+:root {
+  --render-font: 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+[data-render-font="system"] { --render-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+[data-render-font="atkinson"] { --render-font: var(--font-atkinson), Verdana, sans-serif; }
+[data-render-font="source-sans"] { --render-font: var(--font-source-sans), system-ui, sans-serif; }
+[data-render-font="verdana"] { --render-font: Verdana, Geneva, sans-serif; }
+[data-render-font="humanist"] { --render-font: Avenir, 'Avenir Next', 'Trebuchet MS', sans-serif; }
+[data-render-font="serif"] { --render-font: Georgia, 'Times New Roman', serif; }
+[data-render-font="merriweather"] { --render-font: var(--font-merriweather), Georgia, serif; }
+[data-render-font="mono"] { --render-font: 'IBM Plex Mono', ui-monospace, monospace; }
+
 @theme inline {
   --color-background: var(--bg);
   --color-foreground: var(--text);
@@ -1161,6 +1174,10 @@
 /* ── Reset ───────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; overflow: hidden; }
+
+.timeline-row {
+  font-family: var(--render-font);
+}
 
 /* ── Base ────────────────────────────────────────────────────────────────── */
 body {

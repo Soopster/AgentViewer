@@ -717,7 +717,7 @@ function DiffCommentButton({
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+        fontFamily: "var(--render-font)",
         fontSize: 11,
         fontWeight: 600,
         flexShrink: 0,
@@ -1523,7 +1523,7 @@ function AUQQuestionBlock({ q, resultStr }: { q: AUQQuestion; resultStr: string 
     <div>
       {/* Question text */}
       <div style={{
-        fontFamily: "'IBM Plex Sans', sans-serif",
+        fontFamily: "var(--render-font)",
         fontSize: 13, fontWeight: 500,
         color: 'var(--text)',
         marginBottom: 8,
@@ -1586,7 +1586,7 @@ function AUQQuestionBlock({ q, resultStr }: { q: AUQQuestion; resultStr: string 
 
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{
-                    fontFamily: "'IBM Plex Sans', sans-serif",
+                    fontFamily: "var(--render-font)",
                     fontSize: 13, fontWeight: selected ? 600 : 400,
                     color: selected ? 'var(--text)' : 'var(--text-2)',
                     display: 'flex', alignItems: 'center', gap: 6,
@@ -1606,7 +1606,7 @@ function AUQQuestionBlock({ q, resultStr }: { q: AUQQuestion; resultStr: string 
                   </div>
                   {opt.description && (
                     <div style={{
-                      fontFamily: "'IBM Plex Sans', sans-serif",
+                      fontFamily: "var(--render-font)",
                       fontSize: 11, color: 'var(--text-3)',
                       marginTop: 2, lineHeight: 1.5,
                     }}>
@@ -2114,7 +2114,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
             padding: '8px 14px',
             borderTop: '1px solid var(--border)',
             background: 'var(--bg)',
-            fontFamily: "'IBM Plex Sans', sans-serif",
+            fontFamily: "var(--render-font)",
             fontSize: 12,
             color: 'var(--text-2)',
             lineHeight: 1.55,
@@ -2200,7 +2200,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
               title={lifecycle.lastAssistantText}
               style={{
                 padding: '0 12px 6px 24px',
-                fontFamily: "'IBM Plex Sans', sans-serif",
+                fontFamily: "var(--render-font)",
                 fontSize: 11,
                 color: 'var(--text-3)',
                 whiteSpace: 'nowrap',
@@ -2234,7 +2234,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
                           )}
                         </div>
                         {text && (
-                          <div style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 12, color: 'var(--text-2)', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto' }}>
+                          <div style={{ fontFamily: "var(--render-font)", fontSize: 12, color: 'var(--text-2)', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto' }}>
                             {text.length > 500 ? text.slice(0, 500) + '…' : text}
                           </div>
                         )}
@@ -2249,7 +2249,7 @@ function AgentCard({ thread }: { thread: ToolThread }) {
 
       {/* Result text (collapsible) */}
       {open && resultText && (
-        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, color: 'var(--text-2)', lineHeight: 1.65, maxHeight: 320, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "var(--render-font)", fontSize: 13, color: 'var(--text-2)', lineHeight: 1.65, maxHeight: 320, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
           {resultText}
         </div>
       )}
@@ -2441,7 +2441,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
                           )}
                         </div>
                         {text && (
-                          <div style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 12, color: 'var(--text-2)', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto' }}>
+                          <div style={{ fontFamily: "var(--render-font)", fontSize: 12, color: 'var(--text-2)', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto' }}>
                             {text.length > 500 ? text.slice(0, 500) + '…' : text}
                           </div>
                         )}
@@ -2455,7 +2455,7 @@ function OpenCodeTaskCard({ thread }: { thread: ToolThread }) {
       )}
 
       {open && parsed.bodyText && (
-        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, color: parsed.isErrorBody ? 'var(--red)' : 'var(--text-2)', lineHeight: 1.65, maxHeight: 320, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', background: 'var(--surface)', fontFamily: "var(--render-font)", fontSize: 13, color: parsed.isErrorBody ? 'var(--red)' : 'var(--text-2)', lineHeight: 1.65, maxHeight: 320, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
           {parsed.bodyText}
         </div>
       )}
@@ -2762,7 +2762,7 @@ function WebSearchCard({ thread }: { thread: ToolThread }) {
                   background: i % 2 === 0 ? 'var(--surface)' : 'transparent',
                 }}>
                   {r.title && (
-                    <div style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.4 }}>
+                    <div style={{ fontFamily: "var(--render-font)", fontSize: 13, fontWeight: 600, color: 'var(--text)', lineHeight: 1.4 }}>
                       {r.title}
                     </div>
                   )}
@@ -3439,7 +3439,7 @@ function CronCard({ thread }: { thread: ToolThread }) {
                 <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, flexShrink: 0, minWidth: 110 }}>
                   {job.cron_expression ?? '—'}
                 </span>
-                <span style={{ fontFamily: "'IBM Plex Sans', sans-serif", fontSize: 13, color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{ fontFamily: "var(--render-font)", fontSize: 13, color: 'var(--text-2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {job.prompt ?? ''}
                 </span>
               </div>
@@ -4108,7 +4108,7 @@ function RenderThinking({ block }: { block: ThinkingBlock }) {
         </span>
         {!open && (
           <span style={{
-            fontFamily: "'IBM Plex Sans', sans-serif",
+            fontFamily: "var(--render-font)",
             color: 'var(--text-2)',
             fontSize: 13,
             fontStyle: 'italic',
@@ -4139,7 +4139,7 @@ function RenderThinking({ block }: { block: ThinkingBlock }) {
           overflowY: 'auto',
         }}>
           <p style={{
-            fontFamily: "'IBM Plex Sans', sans-serif",
+            fontFamily: "var(--render-font)",
             fontSize: 14,
             color: 'rgba(180,170,255,0.75)',
             lineHeight: 1.75,
@@ -4243,7 +4243,7 @@ function TaskNotificationCard({ block }: { block: TaskNotificationBlock }) {
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: c, fontWeight: 500, letterSpacing: '0.06em', flexShrink: 0 }}>
           TASK
         </span>
-        <span style={{ fontFamily: "'IBM Plex Sans', sans-serif", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontFamily: "var(--render-font)", color: 'var(--text)', fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {summary}
         </span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--green)', flexShrink: 0 }}>
@@ -4314,7 +4314,7 @@ function SlashCommandCard({ block }: { block: SlashCommandBlock }) {
         </span>
         {block.args && (
           <span style={{
-            fontFamily: "'IBM Plex Sans', sans-serif",
+            fontFamily: "var(--render-font)",
             fontSize: 13,
             color: 'var(--text-2)',
             overflow: 'hidden',
@@ -4899,7 +4899,7 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
           {headerLabel}
         </span>
         <span style={{
-          fontFamily: "'IBM Plex Sans', sans-serif",
+          fontFamily: "var(--render-font)",
           fontSize: 13,
           color: 'var(--text)',
           flex: 1,
