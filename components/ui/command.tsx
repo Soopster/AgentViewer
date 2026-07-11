@@ -10,11 +10,12 @@ type CommandDialogProps = React.PropsWithChildren<{
   onOpenChange: (open: boolean) => void
   className?: string
   centered?: boolean
+  insetPadding?: string | number
   style?: React.CSSProperties
   ref?: React.Ref<HTMLDivElement>
 }>
 
-function CommandDialog({ ref, open, onOpenChange, className, centered = false, style, children }: CommandDialogProps) {
+function CommandDialog({ ref, open, onOpenChange, className, centered = false, insetPadding = '28px 32px 32px', style, children }: CommandDialogProps) {
   const isOpenRef = React.useRef(open)
 
   React.useEffect(() => {
@@ -45,7 +46,7 @@ function CommandDialog({ ref, open, onOpenChange, className, centered = false, s
     <div
       className={cn('fixed inset-0 z-50 flex justify-center', centered ? 'items-center' : 'items-start')}
       style={{
-        padding: '28px 32px 32px',
+        padding: insetPadding,
         background: 'rgba(0, 0, 0, 0.4)',
         backdropFilter: 'none'
       }}

@@ -235,6 +235,7 @@ export function FileViewerPopover({
   const [filterMode, setFilterMode] = useState(false)
   const [filter, setFilter] = useState('')
   const [previewFocused, setPreviewFocused] = useState(false)
+  const [previewExpanded, setPreviewExpanded] = useState(false)
   const listScrollRef = useRef<ScrollBoxRenderable>(null)
   const previewScrollRef = useRef<ScrollBoxRenderable>(null)
   const requestRef = useRef(0)
@@ -344,8 +345,16 @@ export function FileViewerPopover({
       }
       return
     }
-    if (key.name === 'escape' || key.sequence === 'q') { onClose(); return }
-    if (key.name === 'tab') { setPreviewFocused((value) => !value); return }
+    if (key.name === 'escape') {
+      if (previewExpanded) { setPreviewExpanded(false); return }
+      onClose()
+      return
+    }
+    if (key.sequence === 'q') { onClose(); return }
+    if (key.name === 'tab') {
+      if (!previewExpanded) setPreviewFocused((value) => !value)
+      return
+    }
     if (key.sequence === '/') { setFilterMode(true); setFilter(''); return }
     if (key.sequence === '.') { setShowHidden((value) => !value); return }
     if (key.sequence === 's') {
@@ -357,8 +366,17 @@ export function FileViewerPopover({
       onToggleVelocityScroll()
       return
     }
+    if (key.sequence === 'e' && preview.kind !== 'directory' && preview.kind !== 'empty' && preview.kind !== 'error') {
+      setPreviewExpanded((value) => !value)
+      setPreviewFocused(true)
+      return
+    }
     if (key.sequence === 'r') { setRefreshVersion((value) => value + 1); return }
-    if (key.name === 'left' || key.sequence === 'h' || key.name === 'backspace') { goParent(); return }
+    if (key.name === 'left' || key.sequence === 'h' || key.name === 'backspace') {
+      if (previewExpanded) setPreviewExpanded(false)
+      else goParent()
+      return
+    }
     if (key.name === 'right' || key.sequence === 'l' || key.name === 'return') { enterSelected(); return }
     const direction = key.name === 'up' || key.sequence === 'k' ? -1 : key.name === 'down' || key.sequence === 'j' ? 1 : 0
     if (direction !== 0) {
@@ -372,7 +390,7 @@ export function FileViewerPopover({
     if (key.sequence === 'G') previewFocused
       ? previewScrollRef.current?.scrollTo(Number.MAX_SAFE_INTEGER)
       : setCursor(Math.max(0, filteredEntries.length - 1))
-  }, [enterSelected, filterMode, filteredEntries.length, goParent, onClose, onToggleVelocityScroll, previewFocused, velocityScrollStep])
+  }, [enterSelected, filterMode, filteredEntries.length, goParent, onClose, onToggleVelocityScroll, preview, previewExpanded, previewFocused, velocityScrollStep])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -380,7 +398,7 @@ export function FileViewerPopover({
   const popH = Math.max(18, height - 4)
   const leftW = Math.max(20, Math.floor((popW - 2) * 0.22))
   const middleW = Math.max(26, Math.floor((popW - 2) * 0.34))
-  const previewW = Math.max(24, popW - leftW - middleW - 4)
+  const previewW = previewExpanded ? popW - 2 : Math.max(24, popW - leftW - middleW - 4)
   const contentH = popH - 5
   const parentPath = dirname(directory)
   const parentSegments = directory === parse(directory).root ? [directory] : directory.split('/').filter(Boolean)
@@ -413,7 +431,7 @@ export function FileViewerPopover({
         </text>
       </box>
       <box flexDirection="row" height={contentH}>
-        <box width={leftW} border borderStyle="single" borderColor={theme.border} title=" Parent " flexDirection="column">
+        {!previewExpanded ? <box width={leftW} border borderStyle="single" borderColor={theme.border} title=" Parent " flexDirection="column">
           <text fg={theme.dim}>{fitText(parentPath, leftW - 2)}</text>
           <scrollbox style={{ height: contentH - 3 }}>
             {parentEntries.map((entry) => {
@@ -428,8 +446,8 @@ export function FileViewerPopover({
               )
             })}
           </scrollbox>
-        </box>
-        <box width={middleW} border borderStyle="single" borderColor={!previewFocused ? theme.cyan : theme.border} title={` ${filteredEntries.length} items `}>
+        </box> : null}
+        {!previewExpanded ? <box width={middleW} border borderStyle="single" borderColor={!previewFocused ? theme.cyan : theme.border} title={` ${filteredEntries.length} items `}>
           {loading ? <text fg={theme.dim}>Loading…</text> : (
             <scrollbox ref={listScrollRef} style={{ height: contentH - 2 }}>
               {filteredEntries.map((entry, index) => {
@@ -451,7 +469,7 @@ export function FileViewerPopover({
               })}
             </scrollbox>
           )}
-        </box>
+        </box> : null}
         <box width={previewW} border borderStyle="single" borderColor={previewFocused ? theme.cyan : theme.border} title={` ${fitText(selectedEntry?.name ?? 'Preview', previewW - 6)} `}>
           {previewLoading ? <text fg={theme.dim}>Loading preview…</text> : preview.kind === 'directory' ? (
             <scrollbox ref={previewScrollRef} style={{ height: contentH - 2 }}>
@@ -509,7 +527,7 @@ export function FileViewerPopover({
       <box height={1} paddingX={1} backgroundColor={theme.surface2}>
         <text wrapMode="none">
           <span fg={filterMode ? theme.amber : theme.cyan}>{filterMode ? `/${filter}` : 'j/k'}</span>
-          <span fg={theme.muted}>{filterMode ? '  type to filter · enter accept · esc clear' : ' move  h/l open  / filter  . hidden  s sort  tab preview  V velocity  q close'}</span>
+          <span fg={theme.muted}>{filterMode ? '  type to filter · enter accept · esc clear' : ` move  h/l open  / filter  . hidden  s sort  tab preview  e ${previewExpanded ? 'restore' : 'expand'}  V velocity  q close`}</span>
           {!filterMode ? <span fg={velocityScrollEnabled ? theme.green : theme.dim}>{`  [${sortMode} · vel ${velocityScrollEnabled ? 'on' : 'off'}]`}</span> : null}
         </text>
       </box>

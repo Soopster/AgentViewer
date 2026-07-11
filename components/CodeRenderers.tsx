@@ -295,6 +295,7 @@ export function CodeViewer({
   maxHeight,
   showLineNumbers = false,
   startingLineNumber,
+  expandToContentWidth = false,
 }: {
   code: string
   filePath?: string
@@ -302,6 +303,7 @@ export function CodeViewer({
   maxHeight?: number
   showLineNumbers?: boolean
   startingLineNumber?: number
+  expandToContentWidth?: boolean
 }) {
   const codeStyle = useCodeHighlighterStyle()
   const resolvedLanguage = language ?? detectLanguageFromPath(filePath)
@@ -318,7 +320,9 @@ export function CodeViewer({
         padding: '10px 14px',
         fontSize: 13,
         lineHeight: 1.6,
-        overflowX: 'auto',
+        width: expandToContentWidth ? 'max-content' : undefined,
+        minWidth: expandToContentWidth ? '100%' : undefined,
+        overflowX: expandToContentWidth ? 'visible' : 'auto',
         overflowY: maxHeight ? 'auto' : undefined,
         maxHeight,
       }}

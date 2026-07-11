@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Archive,
+  ArrowDownAZ,
   ChevronRight,
   File,
   FileCode2,
@@ -13,8 +14,11 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  Eye,
   Image,
   Link2,
+  Maximize2,
+  Minimize2,
   Music,
   RefreshCw,
   Search,
@@ -182,6 +186,7 @@ function FileRow({ entry, selected, onClick, onDoubleClick }: {
         'flex h-9 w-full min-w-0 items-center gap-2.5 rounded-md px-3 text-left font-mono text-[13px] hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--cyan)]',
         selected && 'bg-[var(--surface-3)] text-[var(--text)] shadow-[inset_2px_0_0_var(--cyan)]',
       )}
+      style={{ paddingLeft: 10, paddingRight: 10 }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
@@ -204,6 +209,7 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
   const [sortMode, setSortMode] = useState<SortMode>('name')
   const [loading, setLoading] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewExpanded, setPreviewExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const filterRef = useRef<HTMLInputElement>(null)
@@ -218,6 +224,7 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
     setCursor(0)
     setPreviewCursor(0)
     setFocusedPane('current')
+    setPreviewExpanded(false)
   }, [cwd, open])
 
   useEffect(() => {
@@ -329,7 +336,8 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
       const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA'
       if (event.key === 'Escape') {
         event.preventDefault()
-        if (typing && filter) setFilter('')
+        if (previewExpanded) setPreviewExpanded(false)
+        else if (typing && filter) setFilter('')
         else onOpenChange(false)
         return
       }
@@ -357,6 +365,12 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
       if (event.key === 'r') {
         event.preventDefault()
         setRefreshVersion((value) => value + 1)
+        return
+      }
+      if (event.key === 'e' && preview?.kind !== 'directory' && preview != null) {
+        event.preventDefault()
+        setPreviewExpanded((value) => !value)
+        setFocusedPane('preview')
         return
       }
       if (event.key === 'ArrowUp' || event.key === 'k') {
@@ -398,7 +412,7 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activateEntry, entries.length, filter, focusedPane, goParent, onOpenChange, open, preview, previewEntries.length, selectedEntry, selectedPreviewEntry])
+  }, [activateEntry, entries.length, filter, focusedPane, goParent, onOpenChange, open, preview, previewEntries.length, previewExpanded, selectedEntry, selectedPreviewEntry])
 
   const breadcrumbs = useMemo(() => buildBreadcrumbs(directoryData?.path ?? directory), [directory, directoryData?.path])
   const currentName = breadcrumbs.at(-1)?.label ?? directory
@@ -408,21 +422,42 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
       open={open}
       onOpenChange={onOpenChange}
       centered
+      insetPadding={8}
       className="flex-col rounded-2xl"
       style={{
-        width: 'min(calc(100vw - 64px), 1800px)',
-        height: 'min(calc(100vh - 64px), 1000px)',
-        maxWidth: 1800,
+        width: 'min(calc(100vw - 16px), 2000px)',
+        height: 'calc(100vh - 16px)',
+        maxWidth: 2000,
+        maxHeight: 'calc(100vh - 16px)',
+        borderColor: 'var(--border-2)',
+        boxShadow: '0 24px 60px rgba(0,0,0,0.45)',
       }}
     >
       <div
         className="flex h-16 shrink-0 items-center border-b border-[var(--border)]"
-        style={{ gap: 18, padding: '0 20px' }}
+        style={{ gap: 12, padding: '0 16px', background: 'var(--surface-2)' }}
       >
-        <FolderOpen className="size-6 text-[var(--cyan)]" aria-hidden />
+        <div
+          className="grid shrink-0 place-items-center"
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 9,
+            color: 'var(--cyan)',
+            background: 'color-mix(in srgb, var(--cyan) 16%, var(--surface-3))',
+            border: '1px solid color-mix(in srgb, var(--cyan) 34%, var(--border))',
+          }}
+        >
+          <FolderOpen className="size-5" aria-hidden />
+        </div>
         <div className="min-w-0 flex-1">
-          <h2 className="truncate font-display text-base font-semibold tracking-[0.08em] text-[var(--text)]">FILE VIEWER</h2>
-          <nav aria-label="File path" className="mt-1 flex min-w-0 items-center gap-1 overflow-hidden font-mono text-[11px] text-[var(--text-3)]">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <h2 className="truncate text-[15px] font-bold text-[var(--text)]">File viewer</h2>
+            <span className="shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 font-mono text-[10px] text-[var(--cyan)]">
+              {entries.length} items
+            </span>
+          </div>
+          <nav aria-label="File path" className="mt-0.5 flex min-w-0 items-center gap-1 overflow-hidden font-mono text-[11px] text-[var(--text-3)]">
             {breadcrumbs.map((breadcrumb, index) => (
               <span key={breadcrumb.path} className="flex min-w-0 items-center gap-1">
                 {index > 0 ? <ChevronRight className="size-3 shrink-0" aria-hidden /> : null}
@@ -442,7 +477,21 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
             ))}
           </nav>
         </div>
-        <div className="relative shrink-0" style={{ width: 'clamp(240px, 22vw, 320px)' }}>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button type="button" variant="outline" size="icon" onClick={() => setRefreshVersion((value) => value + 1)} aria-label="Refresh files">
+            <RefreshCw aria-hidden />
+          </Button>
+          <Button type="button" variant="outline" size="icon" onClick={() => onOpenChange(false)} aria-label="Close file viewer">
+            <X aria-hidden />
+          </Button>
+        </div>
+      </div>
+
+      <div
+        className="flex shrink-0 items-center border-b border-[var(--border)]"
+        style={{ gap: 10, minHeight: 54, padding: '8px 16px', background: 'var(--surface)' }}
+      >
+        <div className="relative shrink-0" style={{ width: 'clamp(260px, 26vw, 380px)' }}>
           <Search
             className="pointer-events-none absolute top-1/2 size-4 -translate-y-1/2 text-[var(--text-3)]"
             style={{ left: 14 }}
@@ -464,37 +513,71 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
             /
           </kbd>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button type="button" variant="ghost" size="icon" onClick={() => setRefreshVersion((value) => value + 1)} aria-label="Refresh files">
-            <RefreshCw aria-hidden />
-          </Button>
-          <Button type="button" variant="ghost" size="icon" onClick={() => onOpenChange(false)} aria-label="Close file viewer">
-            <X aria-hidden />
-          </Button>
-        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setShowHidden((value) => !value)}
+          style={{
+            height: 34,
+            padding: '0 12px',
+            gap: 7,
+            borderRadius: 8,
+            borderColor: showHidden ? 'color-mix(in srgb, var(--cyan) 42%, var(--border))' : 'var(--border)',
+            background: showHidden ? 'color-mix(in srgb, var(--cyan) 13%, var(--surface-2))' : 'var(--surface)',
+            color: showHidden ? 'var(--cyan)' : 'var(--text-2)',
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          <Eye data-icon="inline-start" aria-hidden />
+          Hidden {showHidden ? 'on' : 'off'}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setSortMode((value) => value === 'name' ? 'modified' : value === 'modified' ? 'size' : 'name')}
+          style={{
+            height: 34,
+            padding: '0 12px',
+            gap: 7,
+            borderRadius: 8,
+            borderColor: 'var(--border)',
+            background: 'var(--surface)',
+            color: 'var(--text-2)',
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          <ArrowDownAZ data-icon="inline-start" aria-hidden />
+          Sort: {sortMode}
+        </Button>
+        <span className="flex-1" />
+        <span className="font-mono text-[11px] text-[var(--text-3)]">Ctrl-F opens · Esc closes</span>
       </div>
 
       <div
         className="grid min-h-0 flex-1 bg-[var(--surface)]"
-        style={{ gridTemplateColumns: 'minmax(190px, 24%) minmax(300px, 34%) minmax(360px, 1fr)' }}
+        style={{ gridTemplateColumns: previewExpanded ? 'minmax(0, 1fr)' : 'minmax(190px, 24%) minmax(300px, 34%) minmax(360px, 1fr)' }}
       >
-        <section className="flex min-h-0 flex-col border-r border-[var(--border)]" aria-label="Parent directory">
-          <div className="flex h-11 shrink-0 items-center px-4 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--text-3)]">Parent</div>
+        {!previewExpanded ? <section className="flex min-h-0 flex-col border-r border-[var(--border)]" aria-label="Parent directory">
+          <div className="flex h-11 shrink-0 items-center text-xs font-bold text-[var(--text)]" style={{ padding: '0 14px', background: 'var(--surface-2)' }}>Parent</div>
           <Separator />
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          <div className="min-h-0 flex-1 overflow-y-auto" style={{ padding: '12px 14px' }}>
             {parentEntries.map((entry) => (
               <FileRow key={entry.path} entry={entry} selected={entry.path === directoryData?.path} onDoubleClick={() => activateEntry(entry)} />
             ))}
           </div>
-        </section>
+        </section> : null}
 
-        <section className={cn('flex min-h-0 flex-col border-r border-[var(--border)]', focusedPane === 'current' && 'shadow-[inset_0_0_0_1px_var(--cyan)]')} aria-label="Current directory">
-          <div className="flex h-11 shrink-0 items-center justify-between px-4 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-            <span className="truncate text-[var(--cyan)]">{currentName}</span>
-            <span>{entries.length} items</span>
+        {!previewExpanded ? <section className={cn('flex min-h-0 flex-col border-r border-[var(--border)]', focusedPane === 'current' && 'shadow-[inset_0_0_0_1px_var(--cyan)]')} aria-label="Current directory">
+          <div className="flex h-11 shrink-0 items-center justify-between text-xs font-bold text-[var(--text)]" style={{ padding: '0 14px', background: 'var(--surface-2)' }}>
+            <span className="truncate">{currentName}</span>
+            <span className="font-mono text-[10px] font-normal text-[var(--text-3)]">{entries.length} items</span>
           </div>
           <Separator />
-          <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-3">
+          <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto" style={{ padding: '12px 14px' }}>
             {loading ? <div className="p-3 font-mono text-xs text-[var(--text-3)]">Loading…</div> : null}
             {!loading && entries.length === 0 ? <div className="p-3 font-mono text-xs text-[var(--text-3)]">No files found</div> : null}
             {entries.map((entry, index) => (
@@ -504,18 +587,33 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
             ))}
             {directoryData?.truncated ? <div className="px-2 py-1 font-mono text-[10px] text-[var(--amber)]">Directory listing truncated</div> : null}
           </div>
-        </section>
+        </section> : null}
 
         <section className={cn('flex min-h-0 flex-col', focusedPane === 'preview' && 'shadow-[inset_0_0_0_1px_var(--cyan)]')} aria-label="File preview">
-          <div className="flex h-11 shrink-0 items-center justify-between gap-3 px-4 font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--text-3)]">
-            <span className="truncate text-[var(--text-2)]">{selectedEntry?.name ?? 'Preview'}</span>
-            {selectedEntry?.kind === 'file' ? <span className="shrink-0">{formatSize(selectedEntry.size)}</span> : null}
+          <div className="flex h-11 shrink-0 items-center justify-between gap-3 text-xs font-bold text-[var(--text)]" style={{ padding: '0 14px', background: 'var(--surface-2)' }}>
+            <span className="truncate">{selectedEntry?.name ?? 'Preview'}</span>
+            <div className="flex shrink-0 items-center gap-2">
+              {selectedEntry?.kind === 'file' ? <span className="font-mono text-[10px] font-normal text-[var(--text-3)]">{formatSize(selectedEntry.size)}</span> : null}
+              {preview && preview.kind !== 'directory' ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => { setPreviewExpanded((value) => !value); setFocusedPane('preview') }}
+                  aria-label={previewExpanded ? 'Restore file browser panes' : 'Expand file preview'}
+                  title={previewExpanded ? 'Restore panes (E)' : 'Expand preview (E)'}
+                  className="size-8 text-[var(--text-2)] hover:bg-[var(--surface-3)] hover:text-[var(--cyan)]"
+                >
+                  {previewExpanded ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
+                </Button>
+              ) : null}
+            </div>
           </div>
           <Separator />
           <div className="min-h-0 flex-1 overflow-auto bg-[var(--surface-2)]">
             {previewLoading ? <div className="p-4 font-mono text-xs text-[var(--text-3)]">Loading preview…</div> : null}
             {!previewLoading && preview?.kind === 'directory' ? (
-              <div ref={previewListRef} className="p-3">
+              <div ref={previewListRef} style={{ padding: '12px 14px' }}>
                 {previewEntries.map((entry, index) => (
                   <div key={entry.path} data-preview-index={index}>
                     <FileRow
@@ -529,10 +627,10 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
               </div>
             ) : null}
             {!previewLoading && preview?.kind === 'text' ? (
-              <>
-                <CodeViewer code={preview.content} filePath={preview.path} showLineNumbers />
+              <div style={{ boxSizing: 'border-box', minWidth: '100%', padding: 12, width: 'max-content' }}>
+                <CodeViewer code={preview.content} filePath={preview.path} showLineNumbers expandToContentWidth />
                 {preview.truncated ? <div className="border-t border-[var(--border)] p-2 font-mono text-[10px] text-[var(--amber)]">Preview truncated at 512 KB</div> : null}
-              </>
+              </div>
             ) : null}
             {!previewLoading && preview?.kind === 'binary' ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
@@ -546,13 +644,17 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
         </section>
       </div>
 
-      <div className="flex h-12 shrink-0 items-center gap-5 border-t border-[var(--border)] px-5 font-mono text-[11px] text-[var(--text-3)]">
+      <div
+        className="flex h-12 shrink-0 items-center border-t border-[var(--border)] font-mono text-[11px] text-[var(--text-3)]"
+        style={{ gap: 18, padding: '0 16px', background: 'var(--surface-2)' }}
+      >
         <span><kbd className="text-[var(--cyan)]">j/k</kbd> move</span>
         <span><kbd className="text-[var(--cyan)]">h/l</kbd> open</span>
         <span><kbd className="text-[var(--cyan)]">/</kbd> filter</span>
         <span><kbd className="text-[var(--cyan)]">tab</kbd> pane</span>
         <span><kbd className="text-[var(--cyan)]">.</kbd> hidden</span>
         <span><kbd className="text-[var(--cyan)]">s</kbd> sort</span>
+        {preview?.kind !== 'directory' && preview != null ? <span><kbd className="text-[var(--cyan)]">e</kbd> {previewExpanded ? 'restore' : 'expand'}</span> : null}
         <span className="ml-auto">{sortMode} · hidden {showHidden ? 'on' : 'off'}</span>
         {error ? <span className="text-[var(--red)]">{error}</span> : null}
         <span className={canInsert ? 'text-[var(--text-2)]' : 'text-[var(--text-3)]'}>{canInsert ? 'Enter file · add to composer' : 'Select a session to insert files'}</span>
