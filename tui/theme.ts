@@ -27,9 +27,11 @@ export type TuiThemeMode =
   | 'imessage'
   | 'dark'
   | 'solarized-dark'
+  | 'solar-flare'
   | 'nord'
   | 'gruvbox-dark'
   | 'dracula'
+  | 'fancy-dracula'
   | 'tokyo-night'
   | 'catppuccin-mocha'
   | 'one-dark'
@@ -92,6 +94,8 @@ export type TuiThemeMode =
   | 'ferrari'
   | 'resend'
   | 'cyber'
+  | 'cyber-wave'
+  | 'willow-dream'
 export type TuiDensity = 'comfortable' | 'balanced' | 'dense'
 export type TuiTranscriptView = 'conversation' | 'full' | 'continue' | 'stream' | 'agents'
 
@@ -227,6 +231,28 @@ export const SOLARIZED_DARK_THEME: TuiThemePalette = {
   userBg: '#0b4a58',
 } as const
 
+export const SOLAR_FLARE_THEME: TuiThemePalette = {
+  bg: '#20231f',
+  surface: '#292b27',
+  surface2: '#333630',
+  surface3: '#41604c',
+  diffAddBg: '#345943',
+  diffRemoveBg: '#56413e',
+  diffMetaBg: '#344840',
+  border: '#454941',
+  border2: '#4fa878',
+  text: '#d8d4cc',
+  muted: '#b6b2aa',
+  dim: '#777c73',
+  violet: '#a68ad4',
+  cyan: '#6daea5',
+  green: '#43a66f',
+  red: '#e26d61',
+  amber: '#d6a84b',
+  pink: '#c87991',
+  userBg: '#353b34',
+} as const
+
 export const NORD_THEME: TuiThemePalette = {
   bg: '#2e3440',
   surface: '#3b4252',
@@ -294,25 +320,25 @@ export const GRUVBOX_LIGHT_THEME: TuiThemePalette = {
 } as const
 
 export const GRUVBOX_DARK_THEME: TuiThemePalette = {
-  bg: '#282828',
-  surface: '#32302f',
-  surface2: '#3c3836',
-  surface3: '#504945',
-  diffAddBg: '#3a4a1e',
-  diffRemoveBg: '#5a2626',
-  diffMetaBg: '#2f3f57',
-  border: '#504945',
-  border2: '#a89984',
-  text: '#ebdbb2',
-  muted: '#d5c4a1',
-  dim: '#928374',
-  violet: '#d3869b',
-  cyan: '#8ec07c',
-  green: '#b8bb26',
-  red: '#fb4934',
-  amber: '#fabd2f',
-  pink: '#d3869b',
-  userBg: '#3c4758',
+  bg: '#2b2b28',
+  surface: '#302f2b',
+  surface2: '#383630',
+  surface3: '#5b4a37',
+  diffAddBg: '#3b4a2e',
+  diffRemoveBg: '#4b3330',
+  diffMetaBg: '#3a4039',
+  border: '#45433c',
+  border2: '#d79921',
+  text: '#d5c4a1',
+  muted: '#bdae93',
+  dim: '#7c7467',
+  violet: '#b16286',
+  cyan: '#689d6a',
+  green: '#98971a',
+  red: '#cc241d',
+  amber: '#d79921',
+  pink: '#b16286',
+  userBg: '#3c3833',
 } as const
 
 export const DRACULA_THEME: TuiThemePalette = {
@@ -337,6 +363,28 @@ export const DRACULA_THEME: TuiThemePalette = {
   userBg: '#44475a',
 } as const
 
+export const FANCY_DRACULA_THEME: TuiThemePalette = {
+  bg: '#30313d',
+  surface: '#343541',
+  surface2: '#3d3f4d',
+  surface3: '#566176',
+  diffAddBg: '#304c3d',
+  diffRemoveBg: '#554249',
+  diffMetaBg: '#46536b',
+  border: '#454755',
+  border2: '#8be9fd',
+  text: '#f0eef4',
+  muted: '#c9c4d3',
+  dim: '#848696',
+  violet: '#bd93f9',
+  cyan: '#8be9fd',
+  green: '#50fa7b',
+  red: '#ff6e6e',
+  amber: '#f1fa8c',
+  pink: '#ff79c6',
+  userBg: '#3d3f4d',
+} as const
+
 export const CYBER_THEME: TuiThemePalette = {
   bg: '#191532',
   surface: '#211c43',
@@ -357,6 +405,50 @@ export const CYBER_THEME: TuiThemePalette = {
   amber: '#ffb454',
   pink: '#ff8ad6',
   userBg: '#1a2f60',
+} as const
+
+export const CYBER_WAVE_THEME: TuiThemePalette = {
+  bg: '#062932',
+  surface: '#0b3039',
+  surface2: '#173a43',
+  surface3: '#17475c',
+  diffAddBg: '#133b2c',
+  diffRemoveBg: '#3b292b',
+  diffMetaBg: '#17384f',
+  border: '#21444d',
+  border2: '#22d3ee',
+  text: '#d9e1df',
+  muted: '#a6b8b9',
+  dim: '#607b80',
+  violet: '#8b5cf6',
+  cyan: '#22d3ee',
+  green: '#7ee787',
+  red: '#ff6b5f',
+  amber: '#e8e85c',
+  pink: '#d946ef',
+  userBg: '#173a43',
+} as const
+
+export const WILLOW_DREAM_THEME: TuiThemePalette = {
+  bg: '#285f60',
+  surface: '#2e6566',
+  surface2: '#386c67',
+  surface3: '#49746b',
+  diffAddBg: '#356f62',
+  diffRemoveBg: '#4b6761',
+  diffMetaBg: '#346b70',
+  border: '#477778',
+  border2: '#ef8c80',
+  text: '#d9d8d2',
+  muted: '#c3c3d9',
+  dim: '#82a3a1',
+  violet: '#c4b5fd',
+  cyan: '#63d4d1',
+  green: '#a6e22e',
+  red: '#ff806f',
+  amber: '#e6c86e',
+  pink: '#e68fb3',
+  userBg: '#357071',
 } as const
 
 export const CATPPUCCIN_LATTE_THEME: TuiThemePalette = {
@@ -2125,14 +2217,18 @@ export function getThemePalette(mode: TuiThemeMode): TuiThemePalette {
   switch (mode) {
     case 'dark': return DARK_THEME
     case 'cyber': return CYBER_THEME
+    case 'cyber-wave': return CYBER_WAVE_THEME
+    case 'willow-dream': return WILLOW_DREAM_THEME
     case 'paper': return PAPER_THEME
     case 'solarized-light': return SOLARIZED_LIGHT_THEME
     case 'solarized-dark': return SOLARIZED_DARK_THEME
+    case 'solar-flare': return SOLAR_FLARE_THEME
     case 'nord': return NORD_THEME
     case 'github-light': return GITHUB_LIGHT_THEME
     case 'gruvbox-light': return GRUVBOX_LIGHT_THEME
     case 'gruvbox-dark': return GRUVBOX_DARK_THEME
     case 'dracula': return DRACULA_THEME
+    case 'fancy-dracula': return FANCY_DRACULA_THEME
     case 'catppuccin-latte': return CATPPUCCIN_LATTE_THEME
     case 'rose-pine-dawn': return ROSE_PINE_DAWN_THEME
     case 'ayu-light': return AYU_LIGHT_THEME

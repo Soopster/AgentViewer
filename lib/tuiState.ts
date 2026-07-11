@@ -52,9 +52,11 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'imessage',
   'dark',
   'solarized-dark',
+  'solar-flare',
   'nord',
   'gruvbox-dark',
   'dracula',
+  'fancy-dracula',
   'tokyo-night',
   'catppuccin-mocha',
   'one-dark',
@@ -96,6 +98,8 @@ const VALID_TUI_THEMES: readonly TuiThemeMode[] = [
   'ferrari',
   'resend',
   'cyber',
+  'cyber-wave',
+  'willow-dream',
 ]
 
 type TuiState = {

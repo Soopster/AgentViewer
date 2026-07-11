@@ -444,8 +444,11 @@ const DARK_MODES: TuiThemeMode[] = [
   'claude-code',
   'cobalt',
   'cyber',
+  'cyber-wave',
+  'willow-dream',
   'dark',
   'dracula',
+  'fancy-dracula',
   'ethereal',
   'everforest-dark',
   'ferrari',
@@ -479,6 +482,7 @@ const DARK_MODES: TuiThemeMode[] = [
   'slack-dark',
   'snazzy',
   'solarized-dark',
+  'solar-flare',
   'synthwave',
   'tokyo-night',
   'tomorrow-night',
@@ -3894,9 +3898,11 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   imessage: 'iOS Messages bubbles',
   dark: 'Deep navy background',
   'solarized-dark': 'Solarized teal',
+  'solar-flare': 'Smoky charcoal with forest green',
   nord: 'Cool arctic greys',
   'gruvbox-dark': 'Gruvbox retro dark',
   dracula: 'Purple-heavy dracula',
+  'fancy-dracula': 'Dracula on a cool slate canvas',
   'tokyo-night': 'Tokyo Night indigo',
   'catppuccin-mocha': 'Catppuccin pastel mocha',
   'one-dark': 'Atom One dark',
@@ -3938,6 +3944,8 @@ const THEME_DESCRIPTIONS: Record<TuiThemeMode, string> = {
   ferrari: 'Ferrari racing red',
   resend: 'Resend neon glow',
   cyber: 'Neon accents',
+  'cyber-wave': 'Deep teal with electric accents',
+  'willow-dream': 'Soft willow teal with lavender',
 }
 
 const THEME_LABELS: Record<TuiThemeMode, string> = {
@@ -3988,9 +3996,11 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   imessage: 'iMESSAGE',
   dark: 'DARK',
   'solarized-dark': 'SOLARIZED DARK',
+  'solar-flare': 'SOLAR FLARE',
   nord: 'NORD',
   'gruvbox-dark': 'GRUVBOX DARK',
   dracula: 'DRACULA',
+  'fancy-dracula': 'FANCY DRACULA',
   'tokyo-night': 'TOKYO NIGHT',
   'catppuccin-mocha': 'CATPPUCCIN MOCHA',
   'one-dark': 'ONE DARK',
@@ -4032,6 +4042,8 @@ const THEME_LABELS: Record<TuiThemeMode, string> = {
   ferrari: 'FERRARI',
   resend: 'RESEND',
   cyber: 'CYBER',
+  'cyber-wave': 'CYBER WAVE',
+  'willow-dream': 'WILLOW DREAM',
 }
 
 type PaletteCommand = { id: string; label: string; key: string; category: string }

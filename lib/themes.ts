@@ -22,9 +22,11 @@ export type Theme =
   | 'dark'
   | 'terminal'
   | 'solarized-dark'
+  | 'solar-flare'
   | 'nord'
   | 'gruvbox-dark'
   | 'dracula'
+  | 'fancy-dracula'
   | 'tokyo-night'
   | 'catppuccin-mocha'
   | 'one-dark'
@@ -72,6 +74,8 @@ export type Theme =
   | 'ferrari'
   | 'resend'
   | 'cyber'
+  | 'cyber-wave'
+  | 'willow-dream'
 
 export type ThemeCategory = 'dark' | 'light'
 
@@ -119,9 +123,11 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   dark:               { category: 'dark',  icon: '☾', label: 'Dark' },
   terminal:           { category: 'dark',  icon: '⌨', label: 'Terminal' },
   'solarized-dark':   { category: 'dark',  icon: '☾', label: 'Solarized Dark' },
+  'solar-flare':      { category: 'dark',  icon: '✺', label: 'Solar Flare' },
   nord:               { category: 'dark',  icon: '☾', label: 'Nord' },
   'gruvbox-dark':     { category: 'dark',  icon: '☾', label: 'Gruvbox Dark' },
   dracula:            { category: 'dark',  icon: '☾', label: 'Dracula' },
+  'fancy-dracula':    { category: 'dark',  icon: '✦', label: 'Fancy Dracula' },
   'tokyo-night':      { category: 'dark',  icon: '☾', label: 'Tokyo Night' },
   'catppuccin-mocha': { category: 'dark',  icon: '☾', label: 'Catppuccin Mocha' },
   'one-dark':         { category: 'dark',  icon: '☾', label: 'One Dark' },
@@ -149,6 +155,8 @@ export const THEME_META: Record<Theme, { category: ThemeCategory; icon: string; 
   ferrari:            { category: 'dark',  icon: '☾', label: 'Ferrari' },
   resend:             { category: 'dark',  icon: '☾', label: 'Resend' },
   cyber:              { category: 'dark',  icon: '✦', label: 'Cyber' },
+  'cyber-wave':       { category: 'dark',  icon: '≋', label: 'Cyber Wave' },
+  'willow-dream':     { category: 'dark',  icon: '⌁', label: 'Willow Dream' },
 }
 
 export const THEMES: Theme[] = Object.keys(THEME_META) as Theme[]

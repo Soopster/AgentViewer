@@ -461,6 +461,18 @@
   --t-grep: #dc322f; --t-glob: #d33682; --t-agent: #d33682; --t-other: #93a1a1;
 }
 
+/* ── Design tokens ── solar-flare (dark, smoky forest) ─────────────────── */
+[data-theme="solar-flare"] {
+  --bg: #20231f; --surface: #292b27; --surface-2: #333630; --surface-3: #41604c;
+  --border: #454941; --border-2: #4fa878;
+  --text: #d8d4cc; --text-2: #b6b2aa; --text-3: #777c73;
+  --violet: #a68ad4; --violet-glow: color-mix(in srgb, #a68ad4 15%, transparent);
+  --cyan: #6daea5; --cyan-glow: color-mix(in srgb, #6daea5 14%, transparent);
+  --green: #43a66f; --red: #e26d61; --amber: #d6a84b;
+  --t-bash: #43a66f; --t-edit: #d6a84b; --t-write: #6daea5; --t-read: #a68ad4;
+  --t-grep: #e26d61; --t-glob: #a68ad4; --t-agent: #c87991; --t-other: #b6b2aa;
+}
+
 /* ── Design tokens ── nord ───────────────────────────────────────────────── */
 [data-theme="nord"] {
   --bg: #2e3440; --surface: #3b4252; --surface-2: #434c5e; --surface-3: #4c566a;
@@ -475,14 +487,14 @@
 
 /* ── Design tokens ── gruvbox-dark ───────────────────────────────────────── */
 [data-theme="gruvbox-dark"] {
-  --bg: #282828; --surface: #32302f; --surface-2: #3c3836; --surface-3: #504945;
-  --border: #504945; --border-2: #a89984;
-  --text: #ebdbb2; --text-2: #d5c4a1; --text-3: #928374;
-  --violet: #d3869b; --violet-glow: color-mix(in srgb, #d3869b 15%, transparent);
-  --cyan: #8ec07c; --cyan-glow: color-mix(in srgb, #8ec07c 12%, transparent);
-  --green: #b8bb26; --red: #fb4934; --amber: #fabd2f;
-  --t-bash: #fabd2f; --t-edit: #b8bb26; --t-write: #8ec07c; --t-read: #d3869b;
-  --t-grep: #fb4934; --t-glob: #d3869b; --t-agent: #fb4934; --t-other: #d5c4a1;
+  --bg: #2b2b28; --surface: #302f2b; --surface-2: #383630; --surface-3: #5b4a37;
+  --border: #45433c; --border-2: #d79921;
+  --text: #d5c4a1; --text-2: #bdae93; --text-3: #7c7467;
+  --violet: #b16286; --violet-glow: color-mix(in srgb, #b16286 15%, transparent);
+  --cyan: #689d6a; --cyan-glow: color-mix(in srgb, #689d6a 12%, transparent);
+  --green: #98971a; --red: #cc241d; --amber: #d79921;
+  --t-bash: #98971a; --t-edit: #d79921; --t-write: #689d6a; --t-read: #b16286;
+  --t-grep: #cc241d; --t-glob: #b16286; --t-agent: #b16286; --t-other: #bdae93;
 }
 
 /* ── Design tokens ── dracula ────────────────────────────────────────────── */
@@ -495,6 +507,18 @@
   --green: #50fa7b; --red: #ff5555; --amber: #ffb86c;
   --t-bash: #ffb86c; --t-edit: #50fa7b; --t-write: #8be9fd; --t-read: #bd93f9;
   --t-grep: #ff5555; --t-glob: #ff79c6; --t-agent: #ff79c6; --t-other: #c4c6d6;
+}
+
+/* ── Design tokens ── fancy-dracula (dark, cool slate) ─────────────────── */
+[data-theme="fancy-dracula"] {
+  --bg: #30313d; --surface: #343541; --surface-2: #3d3f4d; --surface-3: #566176;
+  --border: #454755; --border-2: #8be9fd;
+  --text: #f0eef4; --text-2: #c9c4d3; --text-3: #848696;
+  --violet: #bd93f9; --violet-glow: color-mix(in srgb, #bd93f9 17%, transparent);
+  --cyan: #8be9fd; --cyan-glow: color-mix(in srgb, #8be9fd 14%, transparent);
+  --green: #50fa7b; --red: #ff6e6e; --amber: #f1fa8c;
+  --t-bash: #50fa7b; --t-edit: #f1fa8c; --t-write: #8be9fd; --t-read: #bd93f9;
+  --t-grep: #ff6e6e; --t-glob: #ff79c6; --t-agent: #ff79c6; --t-other: #c9c4d3;
 }
 
 /* ── Design tokens ── tokyo-night ────────────────────────────────────────── */
@@ -1061,10 +1085,34 @@
   --t-grep: #ff6b81; --t-glob: #ff8ad6; --t-agent: #ff8ad6; --t-other: #d0c3a8;
 }
 
+/* ── Design tokens ── cyber-wave (dark, electric teal) ─────────────────── */
+[data-theme="cyber-wave"] {
+  --bg: #062932; --surface: #0b3039; --surface-2: #173a43; --surface-3: #17475c;
+  --border: #21444d; --border-2: #22d3ee;
+  --text: #d9e1df; --text-2: #a6b8b9; --text-3: #607b80;
+  --violet: #8b5cf6; --violet-glow: color-mix(in srgb, #8b5cf6 18%, transparent);
+  --cyan: #22d3ee; --cyan-glow: color-mix(in srgb, #22d3ee 16%, transparent);
+  --green: #7ee787; --red: #ff6b5f; --amber: #e8e85c;
+  --t-bash: #7ee787; --t-edit: #e8e85c; --t-write: #22d3ee; --t-read: #8b5cf6;
+  --t-grep: #ff6b5f; --t-glob: #d946ef; --t-agent: #d946ef; --t-other: #a6b8b9;
+}
+
+/* ── Design tokens ── willow-dream (dark, sea-glass teal) ──────────────── */
+[data-theme="willow-dream"] {
+  --bg: #285f60; --surface: #2e6566; --surface-2: #386c67; --surface-3: #49746b;
+  --border: #477778; --border-2: #ef8c80;
+  --text: #d9d8d2; --text-2: #c3c3d9; --text-3: #82a3a1;
+  --violet: #c4b5fd; --violet-glow: color-mix(in srgb, #c4b5fd 17%, transparent);
+  --cyan: #63d4d1; --cyan-glow: color-mix(in srgb, #63d4d1 15%, transparent);
+  --green: #a6e22e; --red: #ff806f; --amber: #e6c86e;
+  --t-bash: #a6e22e; --t-edit: #e6c86e; --t-write: #63d4d1; --t-read: #c4b5fd;
+  --t-grep: #ff806f; --t-glob: #e68fb3; --t-agent: #e68fb3; --t-other: #c3c3d9;
+}
+
 /* ── Color scheme for native browser widgets (select, scrollbars, etc.) ─── */
 :root,
-[data-theme="dark"], [data-theme="terminal"], [data-theme="solarized-dark"],
-[data-theme="nord"], [data-theme="gruvbox-dark"], [data-theme="dracula"],
+[data-theme="dark"], [data-theme="terminal"], [data-theme="solarized-dark"], [data-theme="solar-flare"],
+[data-theme="nord"], [data-theme="gruvbox-dark"], [data-theme="dracula"], [data-theme="fancy-dracula"],
 [data-theme="tokyo-night"], [data-theme="catppuccin-mocha"], [data-theme="one-dark"],
 [data-theme="monokai"], [data-theme="kanagawa"], [data-theme="everforest-dark"],
 [data-theme="obsidian"], [data-theme="github-dark"], [data-theme="ayu-dark"],
@@ -1073,7 +1121,7 @@
 [data-theme="vitesse-dark"], [data-theme="iceberg"], [data-theme="zenburn"],
 [data-theme="material-darker"], [data-theme="claude-code"], [data-theme="linear"], [data-theme="sentry"],
 [data-theme="raycast"], [data-theme="framer"], [data-theme="ferrari"],
-[data-theme="resend"], [data-theme="cyber"] {
+[data-theme="resend"], [data-theme="cyber"], [data-theme="cyber-wave"], [data-theme="willow-dream"] {
   color-scheme: dark;
   --native-color-scheme: dark;
 }
