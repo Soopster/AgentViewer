@@ -2861,7 +2861,19 @@ function computeAllLandmarks(
       )
     ) {
       landmarks = landmarks ?? []
-      landmarks.push({ kind: 'turn', text: '' })
+      let text = ''
+      if (card.role === 'user' && prev.timestampMs != null) {
+        for (let turnIndex = i - 1; turnIndex >= 0; turnIndex -= 1) {
+          const turnCard = cards[turnIndex]
+          if (turnCard.role !== 'user') continue
+          if (turnCard.timestampMs != null && prev.timestampMs >= turnCard.timestampMs) {
+            const elapsedMs = prev.timestampMs - turnCard.timestampMs
+            if (elapsedMs >= 1000) text = `Worked for ${formatElapsedClock(elapsedMs)}`
+          }
+          break
+        }
+      }
+      landmarks.push({ kind: 'turn', text })
     }
 
     if (i === resumeMarkerIndex) {
@@ -4319,7 +4331,9 @@ function TranscriptCardInner({
             <box key={`${card.key}:agent-landmark:${landmarkIndex}`} paddingX={1}>
               <text fg={color} width={landmarkWidth} wrapMode="none" selectable {...selectionColors}>
                 {landmark.kind === 'turn' && streamMode
-                  ? '─'.repeat(Math.max(landmarkWidth, 1))
+                  ? landmark.text
+                    ? fitText(`─ ${landmark.text} `, landmarkWidth).padEnd(landmarkWidth, '─')
+                    : '─'.repeat(Math.max(landmarkWidth, 1))
                   : fitText(landmark.text, landmarkWidth)}
               </text>
             </box>
@@ -4453,9 +4467,6 @@ function TranscriptCardInner({
         id={`card:${card.key}`}
         flexDirection="column"
         marginBottom={densityState.cardGap}
-        paddingLeft={densityState.bodyIndent}
-        paddingBottom={densityState.bodyPad + (card.role === 'user' ? 1 : 0)}
-        backgroundColor={streamBg}
       >
         {landmarks.map((landmark, landmarkIndex) => {
           const lmColor = landmark.kind === 'resume'
@@ -4475,11 +4486,19 @@ function TranscriptCardInner({
               selectable
             >
               {landmark.kind === 'turn'
-                ? '─'.repeat(Math.max(streamWidth, 1))
+                ? landmark.text
+                  ? fitText(`─ ${landmark.text} `, streamWidth).padEnd(streamWidth, '─')
+                  : '─'.repeat(Math.max(streamWidth, 1))
                 : fitText(`─ ${landmark.text} `, streamWidth).padEnd(streamWidth, '─')}
             </text>
           )
         })}
+        <box
+          flexDirection="column"
+          paddingLeft={densityState.bodyIndent}
+          paddingBottom={densityState.bodyPad + (card.role === 'user' ? 1 : 0)}
+          backgroundColor={streamBg}
+        >
         {firstLine ? (
           <text
             fg={hasCursor ? accent : isSearchHit ? theme.cyan : transcriptColor(firstLine, theme)}
@@ -4537,6 +4556,7 @@ function TranscriptCardInner({
             </box>
           )
         })}
+        </box>
       </box>
     )
   }
