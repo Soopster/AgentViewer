@@ -27,7 +27,7 @@ import {
   type TuiSplitRowSide,
 } from './pierreDiffView'
 import type { SelectedLineRange } from '@pierre/diffs'
-import { RGBA, SyntaxStyle, MacOSScrollAccel } from '@opentui/core'
+import { RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes } from '@opentui/core'
 import type { BaseRenderable, BoxRenderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
@@ -1211,6 +1211,98 @@ function renderInlineTextSegments(segments: InlineTextSegment[], width: number, 
   }
   if (remaining > 0) {
     out.push(<span key="pad" fg={padFg}>{' '.repeat(remaining)}</span>)
+  }
+  return out
+}
+
+// `code` and **bold** are the only spans the native CLIs surface in prose, and
+// the only two low-risk enough to detect without mangling identifiers (`__init__`,
+// `file_name`, `a*b`). Both require a matching close on the same line; stray
+// markers fall through as literal text.
+const INLINE_MARKDOWN_PATTERN = /(`[^`]+`)|(\*\*[^*]+?\*\*)/
+const INLINE_MARKDOWN_PATTERN_G = /(`[^`]+`)|(\*\*[^*]+?\*\*)/g
+
+function hasInlineMarkdown(text: string): boolean {
+  return INLINE_MARKDOWN_PATTERN.test(text)
+}
+
+type InlineMarkdownToken = { text: string; kind: 'plain' | 'code' | 'bold' }
+
+// Split one line of prose into plain / `code` / **bold** runs. Markers are
+// stripped; anything unmatched stays plain. Shared by the wrapping and
+// width-clamped renderers below so every view parses markdown identically.
+function parseInlineMarkdownTokens(text: string): InlineMarkdownToken[] {
+  const tokens: InlineMarkdownToken[] = []
+  let last = 0
+  INLINE_MARKDOWN_PATTERN_G.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = INLINE_MARKDOWN_PATTERN_G.exec(text)) !== null) {
+    if (match.index > last) tokens.push({ text: text.slice(last, match.index), kind: 'plain' })
+    if (match[1]) tokens.push({ text: match[1].slice(1, -1), kind: 'code' })
+    else if (match[2]) tokens.push({ text: match[2].slice(2, -2), kind: 'bold' })
+    last = INLINE_MARKDOWN_PATTERN_G.lastIndex
+  }
+  if (last < text.length) tokens.push({ text: text.slice(last), kind: 'plain' })
+  return tokens
+}
+
+function inlineMarkdownTokenFg(token: InlineMarkdownToken, theme: TuiThemePalette, baseFg: string): string {
+  return token.kind === 'code' ? theme.cyan : baseFg
+}
+
+function inlineMarkdownTokenAttrs(token: InlineMarkdownToken): number | undefined {
+  return token.kind === 'bold' ? TextAttributes.BOLD : undefined
+}
+
+// Wrapping context (Stream view, wrapMode="word"): emit sibling <span>s so
+// **bold**/`code` render like the native CLIs while the parent <text> keeps
+// flowing/wrapping the assembled StyledText — width stays the caller's job.
+function renderInlineMarkdownSpans(
+  text: string,
+  theme: TuiThemePalette,
+  baseFg: string,
+  keyPrefix: string,
+): React.ReactNode[] {
+  return parseInlineMarkdownTokens(text).map((token, index) => (
+    <span
+      key={`${keyPrefix}:${index}`}
+      fg={inlineMarkdownTokenFg(token, theme, baseFg)}
+      attributes={inlineMarkdownTokenAttrs(token)}
+    >
+      {token.text}
+    </span>
+  ))
+}
+
+// Width-clamped context (reader/agent cards, wrapMode="none" on pre-wrapped
+// lines): same styling, but clip to `width` the way fitText would so the
+// single-line layout is preserved. No trailing pad — matches the plain path.
+function renderInlineMarkdownClipped(
+  text: string,
+  theme: TuiThemePalette,
+  baseFg: string,
+  width: number,
+  keyPrefix: string,
+): React.ReactNode[] {
+  if (width <= 0) return []
+  const out: React.ReactNode[] = []
+  let remaining = width
+  const tokens = parseInlineMarkdownTokens(text)
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (remaining <= 0) break
+    const token = tokens[i]
+    const clipped = clipText(token.text, remaining)
+    if (!clipped) continue
+    out.push(
+      <span
+        key={`${keyPrefix}:${i}`}
+        fg={inlineMarkdownTokenFg(token, theme, baseFg)}
+        attributes={inlineMarkdownTokenAttrs(token)}
+      >
+        {clipped}
+      </span>,
+    )
+    remaining -= clipped.length
   }
   return out
 }
@@ -2593,6 +2685,21 @@ function buildSyntaxStyle(theme: TuiThemePalette): SyntaxStyle {
     'punctuation.delimiter': { fg: RGBA.fromHex(theme.muted) },
     'punctuation.special': { fg: RGBA.fromHex(builtinColor) },
     'extmark.paste': { fg: RGBA.fromHex(theme.bg), bg: RGBA.fromHex(theme.amber), bold: true },
+    // Markdown prose captures — OpenTUI's <markdown> renderer styles inline
+    // elements via these `markup.*` keys. Without them, inline code, bold, and
+    // headings fall back to the flat default fg (the SelectableMarkdown "plain"
+    // look). Match the per-line inline renderer: code → cyan, strong → bold.
+    'markup.raw': { fg: RGBA.fromHex(theme.cyan) },
+    'markup.raw.block': { fg: RGBA.fromHex(theme.cyan) },
+    'markup.strong': { fg: RGBA.fromHex(theme.text), bold: true },
+    'markup.italic': { fg: RGBA.fromHex(theme.text), italic: true },
+    'markup.strikethrough': { fg: RGBA.fromHex(theme.muted) },
+    'markup.heading': { fg: RGBA.fromHex(keywordColor), bold: true },
+    'markup.link': { fg: RGBA.fromHex(theme.cyan) },
+    'markup.link.label': { fg: RGBA.fromHex(theme.cyan) },
+    'markup.link.url': { fg: RGBA.fromHex(theme.dim) },
+    'markup.list': { fg: RGBA.fromHex(builtinColor) },
+    'markup.quote': { fg: RGBA.fromHex(theme.dim), italic: true },
     default: { fg: RGBA.fromHex(theme.text) },
   })
 }
@@ -4048,6 +4155,55 @@ function SelectableMarkdown({
   )
 }
 
+// Shared block-markdown body for the Stream and Agents views. Mirrors the
+// reader card's three-way decision: full <markdown> (tables/headings/lists/
+// fenced code) when syntax is on, the raw-source fallback with inline styling
+// when it isn't, or null so the caller keeps its own bodyLines rendering.
+// Both gated on the same `shouldRenderSyntaxMarkdown`/`markdownFallbackLines`
+// the reader computes, so all views agree on when a card is "markdown".
+function renderCardMarkdownBody(opts: {
+  markdownContent: string | null | undefined
+  markdownFallbackLines: string[] | null
+  shouldRenderSyntaxMarkdown: boolean
+  syntaxStyle: SyntaxStyle | null
+  theme: TuiThemePalette
+  fg: string
+  width: number
+  selectionColors: SelectionColors
+  keyPrefix: string
+}): React.ReactNode | null {
+  const {
+    markdownContent, markdownFallbackLines, shouldRenderSyntaxMarkdown,
+    syntaxStyle, theme, fg, width, selectionColors, keyPrefix,
+  } = opts
+  if (shouldRenderSyntaxMarkdown && markdownContent && syntaxStyle) {
+    return (
+      <SelectableMarkdown
+        content={markdownContent}
+        syntaxStyle={syntaxStyle}
+        fg={fg}
+        width={width}
+        selectionColors={selectionColors}
+        borderColor={theme.border}
+      />
+    )
+  }
+  if (markdownFallbackLines) {
+    return (
+      <box flexDirection="column">
+        {markdownFallbackLines.map((line, index) => (
+          <text key={`${keyPrefix}:mdf:${index}`} fg={fg} wrapMode="none" selectable {...selectionColors}>
+            {hasInlineMarkdown(line)
+              ? renderInlineMarkdownClipped(line, theme, fg, width, `${keyPrefix}:mdf:${index}`)
+              : fitText(line, width)}
+          </text>
+        ))}
+      </box>
+    )
+  }
+  return null
+}
+
 function TranscriptCardInner({
   card,
   display,
@@ -4314,6 +4470,17 @@ function TranscriptCardInner({
           : cardBg
     const contentWidth = Math.max(agentWidth - 2, 16)
     const agentBodyWidth = Math.max(contentWidth - 2, 12)
+    const agentMarkdownBody = renderCardMarkdownBody({
+      markdownContent: card.markdownContent,
+      markdownFallbackLines,
+      shouldRenderSyntaxMarkdown,
+      syntaxStyle,
+      theme,
+      fg: theme.text,
+      width: agentBodyWidth,
+      selectionColors,
+      keyPrefix: `${card.key}:agent`,
+    })
     const toolCount = toolCards.length || bodyLines.filter((line) => line.tone === 'tool' && /^tool\s+/i.test(line.text.trim())).length || 1
     const headerLabel = operationalCard
       ? `${toolCount} tool ${toolCount === 1 ? 'call' : 'calls'}`
@@ -4456,6 +4623,8 @@ function TranscriptCardInner({
                   )
                 })}
               </box>
+            ) : agentMarkdownBody ? (
+              agentMarkdownBody
             ) : bodyLines.map((line, lineIndex) => {
               const toolLine = operationalCard && line.tone === 'tool'
               return (
@@ -4466,7 +4635,9 @@ function TranscriptCardInner({
                   <text fg={transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
                     {toolLine
                       ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '› '), agentBodyWidth, theme.dim)
-                      : fitText(line.text, agentBodyWidth)}
+                      : hasInlineMarkdown(line.text)
+                        ? renderInlineMarkdownClipped(line.text, theme, transcriptColor(line, theme), agentBodyWidth, `${card.key}:agent-md:${lineIndex}`)
+                        : fitText(line.text, agentBodyWidth)}
                   </text>
                 </box>
               )
@@ -4487,6 +4658,29 @@ function TranscriptCardInner({
     const streamMarker = hasCursor ? '›' : card.role === 'user' ? '›' : '•'
     const firstLine = bodyLines[0]
     const remainingLines = bodyLines.slice(1)
+    // Full block markdown (tables/headings/lists/fenced code) for expanded
+    // text cards, same as the reader view — null for everything else, so the
+    // per-line stream rendering below still owns tool cards and previews.
+    const streamMarkdownBody = renderCardMarkdownBody({
+      markdownContent: card.markdownContent,
+      markdownFallbackLines,
+      shouldRenderSyntaxMarkdown,
+      syntaxStyle,
+      theme,
+      fg: theme.text,
+      width: streamTextWidth,
+      selectionColors,
+      keyPrefix: `${card.key}:stream`,
+    })
+    // Turn boundaries and tool-only assistant messages carry no text body. They
+    // would otherwise render a "(no output)" row of pure noise in Stream view —
+    // drop the body entirely, even when focused. A card with no body and no
+    // landmarks collapses to zero height (id anchor preserved for scroll-to).
+    const streamHasBody = Boolean(streamMarkdownBody)
+      || Boolean(firstLine)
+      || remainingLines.length > 0
+      || (isExpanded && (card.codeBlocks?.length ?? 0) > 0)
+    const streamRendersSomething = streamHasBody || landmarks.length > 0
     const streamBg = hasCursor
       ? theme.surface3
       : isSelected
@@ -4498,7 +4692,7 @@ function TranscriptCardInner({
       <box
         id={`card:${card.key}`}
         flexDirection="column"
-        marginBottom={densityState.cardGap}
+        marginBottom={streamRendersSomething ? densityState.cardGap : 0}
       >
         {landmarks.map((landmark, landmarkIndex) => {
           const lmColor = landmark.kind === 'resume'
@@ -4525,12 +4719,15 @@ function TranscriptCardInner({
             </text>
           )
         })}
+        {streamHasBody && (
         <box
           flexDirection="column"
           paddingLeft={densityState.bodyIndent}
           paddingBottom={densityState.bodyPad + (card.role === 'user' ? 1 : 0)}
           backgroundColor={streamBg}
         >
+        {streamMarkdownBody ? streamMarkdownBody : (
+        <>
         {firstLine ? (
           <text
             fg={hasCursor ? accent : isSearchHit ? theme.cyan : transcriptColor(firstLine, theme)}
@@ -4541,7 +4738,12 @@ function TranscriptCardInner({
           >
             {firstLine.tone === 'tool'
               ? renderInlineTextSegments(transcriptToolLineSegments(firstLine.text, theme, `${streamMarker} `), streamWidth, theme.dim)
-              : `${streamMarker} ${firstLine.text}`}
+              : (!hasCursor && !isSearchHit && hasInlineMarkdown(firstLine.text))
+                ? [
+                    <span key={`${card.key}:f:pfx`} fg={transcriptColor(firstLine, theme)}>{`${streamMarker} `}</span>,
+                    ...renderInlineMarkdownSpans(firstLine.text, theme, transcriptColor(firstLine, theme), `${card.key}:f`),
+                  ]
+                : `${streamMarker} ${firstLine.text}`}
           </text>
         ) : (
           <text fg={theme.dim} selectable {...selectionColors}>{`${streamMarker} (no output)`}</text>
@@ -4557,7 +4759,12 @@ function TranscriptCardInner({
           >
             {line.tone === 'tool'
               ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '  └ '), streamWidth, theme.dim)
-              : `  ${line.text}`}
+              : hasInlineMarkdown(line.text)
+                ? [
+                    <span key={`${card.key}:s:${lineIndex}:pfx`} fg={transcriptColor(line, theme)}>{'  '}</span>,
+                    ...renderInlineMarkdownSpans(line.text, theme, transcriptColor(line, theme), `${card.key}:s:${lineIndex}`),
+                  ]
+                : `  ${line.text}`}
           </text>
         ))}
         {isExpanded && card.codeBlocks?.map((codeBlock, codeBlockIndex) => {
@@ -4588,7 +4795,10 @@ function TranscriptCardInner({
             </box>
           )
         })}
+        </>
+        )}
         </box>
+        )}
       </box>
     )
   }
@@ -4707,7 +4917,9 @@ function TranscriptCardInner({
             <box paddingX={1}>
               {markdownFallbackLines.map((line, lineIndex) => (
                 <text key={`${card.key}:markdown-fallback:${lineIndex}`} fg={bubbleTextColor} selectable {...selectionColors}>
-                  {fitText(line, markdownWidth)}
+                  {hasInlineMarkdown(line)
+                    ? renderInlineMarkdownClipped(line, theme, bubbleTextColor, markdownWidth, `${card.key}:md-fallback:${lineIndex}`)
+                    : fitText(line, markdownWidth)}
                 </text>
               ))}
             </box>
@@ -4722,7 +4934,9 @@ function TranscriptCardInner({
                   <text fg={imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
                     {line.tone === 'tool' && !imessageUserBubble
                       ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme), bodyInnerWidth, theme.dim)
-                      : fitText(line.text, bodyInnerWidth)}
+                      : hasInlineMarkdown(line.text)
+                        ? renderInlineMarkdownClipped(line.text, theme, imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme), bodyInnerWidth, `${card.key}:body-md:${lineIndex}`)
+                        : fitText(line.text, bodyInnerWidth)}
                   </text>
                 </box>
               ))}
