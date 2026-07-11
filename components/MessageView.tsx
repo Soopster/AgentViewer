@@ -1527,7 +1527,10 @@ function estimateTimelineRowHeight(
     const textHeight = message.blocks.reduce((total: number, block: ThreadedBlock) => (
       block.type === 'text' ? total + estimateRenderedTextHeight(block.text) : total
     ), 0)
-    return Math.max(56, 45 + textHeight)
+    const toolHeight = message.blocks.reduce((total: number, block: ThreadedBlock) => (
+      block.type === 'tool_thread' ? total + 30 : total
+    ), 0)
+    return Math.max(36, 20 + textHeight + toolHeight + (message.role === 'user' ? 14 : 2))
   }
 
   const headerHeight = 82
@@ -2727,7 +2730,7 @@ export default function MessageView({
     setRowMeasurementVersion((version) => version + 1)
     setPersistedMeasurementVersion((version) => version + 1)
   }, [viewMode])
-  const showTools = viewMode === 'conversation' || viewMode === 'full' || viewMode === 'agents'
+  const showTools = viewMode === 'conversation' || viewMode === 'full' || viewMode === 'stream' || viewMode === 'agents'
   const [density, setDensity] = useState<MessageDensity>(() => {
     if (typeof window === 'undefined') return 'balanced'
     const stored = window.localStorage.getItem('agentViewer:density')
@@ -6047,7 +6050,9 @@ export default function MessageView({
     })
   }, [normalizedTranscriptSearch, timelineRows, transcriptFilters, bookmarksOnly, bookmarkIds])
   const renderedTimelineRows = useMemo<TimelineRow[]>(() => {
-    return viewMode === 'agents' ? groupAgentsToolRows(transcriptTimelineRows) : transcriptTimelineRows
+    return viewMode === 'agents' || viewMode === 'stream'
+      ? groupAgentsToolRows(transcriptTimelineRows)
+      : transcriptTimelineRows
   }, [transcriptTimelineRows, viewMode])
   const hasTranscriptFocus = transcriptFilters.length > 0 || transcriptSearch.trim().length > 0 || bookmarksOnly
   const visualizerRows = useMemo<MessageVisualizerRow[]>(

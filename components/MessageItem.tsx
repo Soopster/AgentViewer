@@ -5539,6 +5539,122 @@ function AgentsToolRow({ thread }: { thread: ToolThread }) {
   )
 }
 
+function streamToolStatus(thread: ToolThread): { marker: '•' | '✓' | '×' | '▲'; color: string; rank: number } {
+  if (thread.result?.is_error) return { marker: '×', color: 'var(--red)', rank: 3 }
+  const status = typeof thread.toolUse.input.status === 'string' ? thread.toolUse.input.status.toLowerCase() : ''
+  if (/denied|blocked|warning|approval/.test(status)) return { marker: '▲', color: 'var(--amber)', rank: 2 }
+  if (thread.result) return { marker: '✓', color: 'var(--green)', rank: 1 }
+  return { marker: '•', color: 'var(--text-3)', rank: 0 }
+}
+
+function dedupeStreamToolThreads(threads: ToolThread[]): ToolThread[] {
+  const unique: ToolThread[] = []
+  const indexBySummary = new Map<string, number>()
+  for (const thread of threads) {
+    const key = `${canonicalToolName(thread.toolUse.name)} ${summarizeAgentsTool(thread)}`.replace(/\s+/g, ' ').trim().toLowerCase()
+    const existingIndex = indexBySummary.get(key)
+    if (existingIndex == null) {
+      indexBySummary.set(key, unique.length)
+      unique.push(thread)
+      continue
+    }
+    const existing = unique[existingIndex]
+    if (existing && streamToolStatus(thread).rank > streamToolStatus(existing).rank) unique[existingIndex] = thread
+  }
+  return unique
+}
+
+function StreamToolRow({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const name = canonicalToolName(thread.toolUse.name)
+  const status = streamToolStatus(thread)
+  const color = toolColor(name)
+  return (
+    <div style={{ background: open ? 'var(--surface-2)' : 'transparent' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        aria-expanded={open}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 7,
+          minWidth: 0,
+          padding: '3px 8px',
+          border: 0,
+          borderRadius: 0,
+          background: open ? 'var(--surface-3)' : hovered ? 'var(--surface-2)' : 'transparent',
+          color: 'var(--text-2)',
+          cursor: 'pointer',
+          textAlign: 'left',
+          fontFamily: "'IBM Plex Mono', monospace",
+        }}
+      >
+        <span style={{ color: status.color, flexShrink: 0 }}>{status.marker}</span>
+        <span style={{ color, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>{name}</span>
+        <span style={{ color: 'var(--text-3)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+          {summarizeAgentsTool(thread)}
+        </span>
+        <span style={{ marginLeft: 'auto', color: 'var(--text-3)', fontSize: 10, whiteSpace: 'nowrap', flexShrink: 0 }}>
+          {open ? 'collapse' : 'details'}
+        </span>
+      </button>
+      {open && (
+        <div style={{ padding: '4px 8px 8px 22px', background: 'var(--surface-2)' }}>
+          <ToolThreadCard thread={thread} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StreamMessageItem({ message }: { message: ThreadedMessage }) {
+  const textBlocks = message.blocks.filter((block) => block.type === 'text')
+  const toolThreads = dedupeStreamToolThreads(
+    message.blocks.filter((block): block is ToolThread => block.type === 'tool_thread'),
+  )
+  if (textBlocks.length === 0 && toolThreads.length === 0) return null
+
+  const marker = message.role === 'user' ? '›' : message.role === 'system' ? '▲' : '•'
+  const markerColor = message.role === 'user'
+    ? 'var(--cyan)'
+    : message.role === 'system'
+      ? 'var(--amber)'
+      : 'var(--text-3)'
+  return (
+    <SessionContext.Provider value={message.sessionId}>
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        marginBottom: message.role === 'user' ? 14 : 2,
+        padding: message.role === 'user' ? '6px 8px' : '2px 8px',
+        background: message.role === 'user' ? 'color-mix(in srgb, var(--cyan) 10%, var(--surface))' : 'transparent',
+      }}>
+        {textBlocks.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minWidth: 0 }}>
+            <span aria-hidden="true" style={{ color: markerColor, flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}>{marker}</span>
+            <div style={{ display: 'flex', flex: 1, minWidth: 0, flexDirection: 'column', gap: 2 }}>
+              {textBlocks.map((block, index) => renderBlock(block, index))}
+            </div>
+          </div>
+        )}
+        {toolThreads.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+            {toolThreads.map((thread, index) => (
+              <StreamToolRow key={thread.toolUse.id ?? `${thread.toolUse.name}:${index}`} thread={thread} />
+            ))}
+          </div>
+        )}
+      </div>
+    </SessionContext.Provider>
+  )
+}
+
 function AgentsViewMessageItem({ message, showSession, hydrated, roleLabel }: {
   message: ThreadedMessage
   showSession?: boolean
@@ -5791,27 +5907,7 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
   }
 
   if (viewMode === 'stream') {
-    const textBlocks = message.blocks.filter((b) => b.type === 'text')
-    if (textBlocks.length === 0) return null
-    return (
-      <SessionContext.Provider value={message.sessionId}>
-        <div style={{ marginBottom: 8, paddingLeft: 2 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
-            <span style={{ fontFamily: "'Oxanium', monospace", fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: style.labelColor }}>
-              {roleLabel}
-            </span>
-            {message.timestamp && (
-              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
-                {hydrated ? formatLocalMessageTime(message.timestamp) : formatStableMessageTime(message.timestamp)}
-              </span>
-            )}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {textBlocks.map((block, i) => renderBlock(block, i))}
-          </div>
-        </div>
-      </SessionContext.Provider>
-    )
+    return <StreamMessageItem message={message} />
   }
 
   return (
