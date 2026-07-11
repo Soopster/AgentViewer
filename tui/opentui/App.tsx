@@ -2919,6 +2919,7 @@ function renderedBodyLines(
   previewLimit: number,
   thinkingFull: boolean = false,
   agentsMode: boolean = false,
+  preserveExpandedDiffLines: boolean = false,
 ): TuiTranscriptCardLine[] {
   if (agentsMode && (card.key.startsWith('agents-tools:') || isAgentsToolOnlyCard(card))) {
     return agentsToolCollapsedLines(card)
@@ -2928,7 +2929,9 @@ function renderedBodyLines(
   const source = pretendExpanded ? card.expandedLines : card.lines
   let base: TuiTranscriptCardLine[]
   if (pretendExpanded) {
-    base = source.filter((line) => !['diff_add', 'diff_remove', 'diff_meta'].includes(line.tone))
+    base = preserveExpandedDiffLines
+      ? source
+      : source.filter((line) => !['diff_add', 'diff_remove', 'diff_meta'].includes(line.tone))
   } else if (card.category === 'diff') {
     // Keep diff_meta (file path header) but strip raw diff lines — Pierre renders those
     base = source.filter((line) => line.tone !== 'diff_add' && line.tone !== 'diff_remove')
@@ -4301,11 +4304,11 @@ function TranscriptCardInner({
           id={`card:${card.key}`}
           flexDirection="row"
           width={agentWidth}
-          border
+          border={streamMode ? undefined : true}
           borderStyle={hasCursor ? 'heavy' : 'single'}
-          borderColor={hasCursor || isSearchHit ? agentAccent : borderColor}
-          backgroundColor={agentBg}
-          title={agentsCardTitle}
+          borderColor={streamMode ? theme.surface : hasCursor || isSearchHit ? agentAccent : borderColor}
+          backgroundColor={streamMode ? theme.surface : agentBg}
+          title={streamMode ? undefined : agentsCardTitle}
           titleColor={agentAccent}
           onMouseDown={(event) => {
             if (event.button !== 0) return
@@ -4313,8 +4316,16 @@ function TranscriptCardInner({
           }}
         >
           <box flexDirection="column" width={contentWidth} paddingX={1} paddingBottom={densityState.bodyPad}>
+            {streamMode ? (
+              <text fg={hasCursor ? agentAccent : theme.dim} wrapMode="none" selectable {...selectionColors}>
+                {fitText(
+                  `• ${headerLabel}  ·  e ${isExpanded ? 'collapse' : 'expand'}${isExpanded ? '  ·  j/k select' : ''}`,
+                  agentBodyWidth,
+                )}
+              </text>
+            ) : null}
             {expandedToolDisplays.length > 0 ? (
-              <box flexDirection="column" marginTop={1}>
+              <box flexDirection="column" marginTop={streamMode ? 0 : 1}>
                 {expandedToolDisplays.map((toolEntry, toolIndex) => {
                   const toolCard = toolEntry.card
                   return (
@@ -4340,7 +4351,7 @@ function TranscriptCardInner({
                       diffLayout={diffLayout}
                       imessageStyle={imessageStyle}
                       transcriptWidth="full"
-                      streamMode={false}
+                      streamMode={streamMode}
                       agentsMode={false}
                       agentToolCursorKey={null}
                       agentToolExpandedKeys={EMPTY_EXPANDED_KEYS}
@@ -4374,7 +4385,7 @@ function TranscriptCardInner({
               return (
                 <box
                   key={`${card.key}:agent-line:${lineIndex}`}
-                  backgroundColor={toolLine ? theme.surface2 : undefined}
+                  backgroundColor={!streamMode && toolLine ? theme.surface2 : undefined}
                 >
                   <text fg={transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
                     {toolLine
@@ -4390,16 +4401,31 @@ function TranscriptCardInner({
     )
   }
 
-  if (streamMode) {
+  // Keep collapsed diffs compact in Stream mode, but route expanded diffs
+  // through the full card renderer below. That renderer owns the existing
+  // split/stack/plain views, hunk navigation, range selection, notes, and
+  // composer actions; duplicating it here would make the two views drift.
+  if (streamMode && !(card.category === 'diff' && isExpanded)) {
     const streamWidth = Math.max(rightPaneWidth - 2, 16)
-    const streamTextWidth = Math.max(rightPaneWidth - 4, 12)
-    const roleLine = fitText(
-      `${marker} ${card.label}${card.timestamp ? `  ${card.timestamp}` : ''}`,
-      streamWidth,
-    )
-    const streamBg = hasCursor ? theme.surface3 : isSelected ? theme.surface2 : undefined
+    const streamTextWidth = Math.max(streamWidth - 2, 12)
+    const streamMarker = hasCursor ? '›' : card.role === 'user' ? '›' : '•'
+    const firstLine = bodyLines[0]
+    const remainingLines = bodyLines.slice(1)
+    const streamBg = hasCursor
+      ? theme.surface3
+      : isSelected
+        ? theme.surface2
+        : card.role === 'user'
+          ? theme.userBg
+          : undefined
     return (
-      <box id={`card:${card.key}`} flexDirection="column" marginBottom={1} backgroundColor={streamBg}>
+      <box
+        id={`card:${card.key}`}
+        flexDirection="column"
+        marginBottom={card.role === 'user' ? 1 : 0}
+        paddingX={1}
+        backgroundColor={streamBg}
+      >
         {landmarks.map((landmark, landmarkIndex) => {
           const lmColor = landmark.kind === 'resume'
             ? theme.cyan
@@ -4409,27 +4435,68 @@ function TranscriptCardInner({
                 ? theme.violet
                 : theme.dim
           return (
-            <text key={`${card.key}:lm:${landmarkIndex}`} fg={lmColor} selectable {...selectionColors}>
-              {fitText(landmark.text, streamWidth)}
+            <text {...selectionColors} key={`${card.key}:lm:${landmarkIndex}`} fg={lmColor} selectable>
+              {fitText(`─ ${landmark.text} `, streamWidth).padEnd(streamWidth, '─')}
             </text>
           )
         })}
-        <text fg={hasCursor ? accent : isSearchHit ? theme.cyan : theme.dim} selectable {...selectionColors}>
-          {roleLine}
-        </text>
-        {bodyLines.map((line, lineIndex) => (
+        {firstLine ? (
           <text
-            key={`${card.key}:s:${lineIndex}`}
-            fg={transcriptColor(line, theme)}
-            wrapMode="none"
+            fg={hasCursor ? accent : isSearchHit ? theme.cyan : transcriptColor(firstLine, theme)}
+            width={streamWidth}
+            wrapMode={firstLine.tone === 'tool' ? 'none' : 'word'}
             selectable
             {...selectionColors}
           >
+            {firstLine.tone === 'tool'
+              ? renderInlineTextSegments(transcriptToolLineSegments(firstLine.text, theme, `${streamMarker} `), streamWidth, theme.dim)
+              : `${streamMarker} ${firstLine.text}`}
+          </text>
+        ) : (
+          <text fg={theme.dim} selectable {...selectionColors}>{`${streamMarker} (no output)`}</text>
+        )}
+        {remainingLines.map((line, lineIndex) => (
+          <text
+            {...selectionColors}
+            key={`${card.key}:s:${lineIndex}`}
+            fg={transcriptColor(line, theme)}
+            width={streamWidth}
+            wrapMode={line.tone === 'tool' ? 'none' : 'word'}
+            selectable
+          >
             {line.tone === 'tool'
-              ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme), streamTextWidth, theme.dim)
-              : fitText(line.text, streamTextWidth)}
+              ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '  └ '), streamWidth, theme.dim)
+              : `  ${line.text}`}
           </text>
         ))}
+        {isExpanded && card.codeBlocks?.map((codeBlock, codeBlockIndex) => {
+          const lineCount = codeBlockLineCounts[codeBlockIndex] ?? countCodeBlockLines(codeBlock.content)
+          const renderHeight = codeBlockHeight(codeBlock, lineCount)
+          const visibleCode = sliceCodeBlockLines(codeBlock.content, renderHeight)
+          return (
+            <box key={codeBlock.key} flexDirection="column" paddingLeft={2} marginTop={1}>
+              <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+                {fitText(codeBlockLabel(codeBlock), streamTextWidth)}
+              </text>
+              {syntaxStyle ? (
+                <code
+                  content={visibleCode}
+                  filetype={codeBlock.filetype}
+                  syntaxStyle={syntaxStyle}
+                  drawUnstyledText={true}
+                  selectable
+                  {...selectionColors}
+                  style={{ height: renderHeight }}
+                  width={streamTextWidth}
+                />
+              ) : visibleCode.split('\n').map((codeLine, lineIndex) => (
+                <text {...selectionColors} key={`${codeBlock.key}:stream:${lineIndex}`} fg={theme.text} wrapMode="none" selectable>
+                  {fitText(codeLine, streamTextWidth)}
+                </text>
+              ))}
+            </box>
+          )
+        })}
       </box>
     )
   }
@@ -6076,12 +6143,16 @@ export default function OpenTuiApp() {
     return sortedCards
   }, [baseTranscriptCards, baseTaskContext, bridgeTranscriptEntries, density, liveTranscriptMessagesForSession, liveTurnStartedAt, showToolCalls])
 
-  // In 'continue' and 'stream' modes, hide technical/diff/system cards entirely
-  // so only the conversation layer (user + assistant text) is visible.
+  // Continue is prose-only. Stream mirrors native agent CLIs: conversation plus
+  // compact operational rows, while low-level system bookkeeping stays hidden.
+  const groupedToolView = transcriptView === 'agents' || transcriptView === 'stream'
   const visibleTranscriptCards = useMemo(
     () => {
-      if (transcriptView === 'continue' || transcriptView === 'stream') {
+      if (transcriptView === 'continue') {
         return transcriptCards.filter((card) => !card.autoFold)
+      }
+      if (transcriptView === 'stream') {
+        return groupAgentsToolCards(transcriptCards.filter((card) => card.category !== 'system'))
       }
       if (transcriptView === 'agents') return groupAgentsToolCards(transcriptCards)
       return transcriptCards
@@ -6239,7 +6310,11 @@ export default function OpenTuiApp() {
   const resolvedExpandedKeys = useMemo(() => {
     const next = new Set<string>()
     for (const card of visibleTranscriptCards) {
-      const shouldAutoFold = (transcriptView === 'conversation' || transcriptView === 'agents') && card.autoFold
+      const shouldAutoFold = (
+        transcriptView === 'conversation'
+        || transcriptView === 'stream'
+        || transcriptView === 'agents'
+      ) && card.autoFold
       const isExpanded = shouldAutoFold
         ? expandedCardKeys.has(card.key)
         : !collapsedCardKeys.has(card.key)
@@ -7269,6 +7344,7 @@ export default function OpenTuiApp() {
       const isExpanded = expandedKeysForRender.has(card.key)
       const thinkingFull = thinkingFullKeys.has(card.key)
       const agentsModeForCard = transcriptView === 'agents'
+        || (transcriptView === 'stream' && card.key.startsWith('agents-tools:'))
       const prev = cache.get(card)
       if (
         prev
@@ -7280,7 +7356,14 @@ export default function OpenTuiApp() {
         return prev.value
       }
       recomputed += 1
-      const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, thinkingFull, agentsModeForCard)
+      const bodyLines = renderedBodyLines(
+        card,
+        isExpanded,
+        densityState.bodyLines,
+        thinkingFull,
+        agentsModeForCard,
+        transcriptView === 'stream',
+      )
       const diffView = cardDiffView(card, isExpanded)
       const codeBlockLineCounts = (isExpanded && card.codeBlocks)
         ? card.codeBlocks.map((cb) => countCodeBlockLines(cb.content))
@@ -7488,10 +7571,10 @@ export default function OpenTuiApp() {
           imessageStyle={imessageStyle}
           transcriptWidth={transcriptWidth}
           streamMode={transcriptView === 'stream'}
-          agentsMode={transcriptView === 'agents'}
-          agentToolCursorKey={transcriptView === 'agents' ? agentToolCursorByGroupKey[card.key] ?? null : null}
-          agentToolExpandedKeys={transcriptView === 'agents' ? expandedCardKeys : EMPTY_EXPANDED_KEYS}
-          agentToolCollapsedKeys={transcriptView === 'agents' ? collapsedCardKeys : EMPTY_EXPANDED_KEYS}
+          agentsMode={transcriptView === 'agents' || (transcriptView === 'stream' && card.key.startsWith('agents-tools:'))}
+          agentToolCursorKey={groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null}
+          agentToolExpandedKeys={groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS}
+          agentToolCollapsedKeys={groupedToolView ? collapsedCardKeys : EMPTY_EXPANDED_KEYS}
           onSelectAgentTool={selectAgentTool}
           noteNamespace={transcriptNoteNamespace}
           diffNotes={transcriptDiffNotes}
@@ -8065,7 +8148,7 @@ export default function OpenTuiApp() {
   })
 
   const moveAgentToolCursor = useEffectEvent((delta: -1 | 1): boolean => {
-    if (transcriptView !== 'agents') return false
+    if (!groupedToolView) return false
     const groupCard = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     if (!groupCard || !resolvedExpandedKeys.has(groupCard.key)) return false
     const toolCards = agentToolCardsFor(groupCard)
@@ -8135,7 +8218,7 @@ export default function OpenTuiApp() {
   const toggleExpansion = useEffectEvent((scope: 'selected' | 'parent' = 'selected') => {
     const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
     if (!card) return
-    const agentToolCards = transcriptView === 'agents' && resolvedExpandedKeys.has(card.key)
+    const agentToolCards = groupedToolView && resolvedExpandedKeys.has(card.key)
       ? agentToolCardsFor(card)
       : []
     const agentToolKey = agentToolCursorByGroupKey[card.key] ?? null
@@ -8145,12 +8228,24 @@ export default function OpenTuiApp() {
     const targetCard = selectedAgentTool ?? card
     const isAgentToolTarget = selectedAgentTool !== null
     const shouldAutoFold = (
-      (transcriptView === 'conversation' || transcriptView === 'agents')
-      && targetCard.autoFold
-    )
+      transcriptView === 'conversation'
+      || transcriptView === 'stream'
+      || transcriptView === 'agents'
+    ) && targetCard.autoFold
     const isExpanded = isAgentToolTarget
       ? agentToolCardIsExpanded(targetCard, expandedCardKeys, collapsedCardKeys)
       : resolvedExpandedKeys.has(targetCard.key)
+
+    if (!isAgentToolTarget && !isExpanded && card.key.startsWith('agents-tools:')) {
+      const firstTool = agentToolCardsFor(card)[0]
+      if (firstTool) {
+        setAgentToolCursorByGroupKey((current) => (
+          current[card.key] === firstTool.key
+            ? current
+            : { ...current, [card.key]: firstTool.key }
+        ))
+      }
+    }
 
     if (shouldAutoFold) {
       setCollapsedCardKeys((current) => {
@@ -12006,7 +12101,7 @@ export default function OpenTuiApp() {
     const selectedTranscriptCardDisplay = cursorIndex >= transcriptRenderStart && cursorIndex < transcriptRenderEnd
       ? cardDisplayData[cursorIndex - transcriptRenderStart] ?? null
       : null
-    const selectedAgentToolCards = transcriptView === 'agents'
+    const selectedAgentToolCards = groupedToolView
       && selectedTranscriptCard
       && resolvedExpandedKeys.has(selectedTranscriptCard.key)
       ? agentToolCardsFor(selectedTranscriptCard)
@@ -14052,13 +14147,17 @@ export default function OpenTuiApp() {
             // Focused pane lights its frame in its own title color (transcript →
             // provider accent, like the sidebar → cyan) so it's obvious which
             // side has focus instead of the frame staying uniformly dim.
-            borderColor={effectiveFocus === 'messages' ? providerAccent : theme.border}
+            borderColor={transcriptView === 'stream'
+              ? theme.surface
+              : effectiveFocus === 'messages'
+                ? providerAccent
+                : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
-            title={headerStatusRight}
+            title={transcriptView === 'stream' ? undefined : headerStatusRight}
             titleColor={providerAccent}
           >
-          {!focusMode ? (
+          {!focusMode && transcriptView !== 'stream' ? (
             <box paddingX={2} paddingTop={1} flexDirection="row" alignItems="center">
               <text fg={providerAccent} wrapMode="none">{'● '}</text>
               <box flexGrow={1} overflow="hidden">
@@ -14072,7 +14171,7 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
-          {!focusMode && contextUsage ? (
+          {!focusMode && transcriptView !== 'stream' && contextUsage ? (
             <box paddingX={1}>
               <text wrapMode="none">
                 {renderInlineTextSegments(
@@ -14082,17 +14181,17 @@ export default function OpenTuiApp() {
                 )}
               </text>
             </box>
-          ) : !focusMode && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
+          ) : !focusMode && transcriptView !== 'stream' && selectedSession?.provider === 'claude' && contextUsageStatus === 'loading' ? (
             <box paddingX={1}>
               <text fg={theme.dim}>{fitText('Loading context usage…', rightPaneWidth - 4)}</text>
             </box>
-          ) : !focusMode && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
+          ) : !focusMode && transcriptView !== 'stream' && selectedSession?.provider === 'claude' && contextUsageStatus === 'unavailable' ? (
             <box paddingX={1}>
               <text fg={theme.dim}>{fitText('Context usage unavailable', rightPaneWidth - 4)}</text>
             </box>
           ) : null}
 
-          {fleetStripVisible ? (
+          {fleetStripVisible && transcriptView !== 'stream' ? (
             <box paddingX={1} flexDirection="row" overflow="hidden">
               <text wrapMode="none">
                 {renderInlineTextSegments(fleetStripSegments, rightPaneWidth - 4, theme.dim)}
@@ -14982,11 +15081,15 @@ export default function OpenTuiApp() {
       {!composerWindowOpen ? (
         <box
           paddingX={1}
-          backgroundColor={theme.surface2}
+          backgroundColor={transcriptView === 'stream' ? theme.surface : theme.surface2}
           border
-          borderStyle={composerDockRouted ? 'heavy' : 'rounded'}
-          borderColor={composerDockEmphasized ? composerAccentColor : theme.border}
-          title={composerDockBorderTitle}
+          borderStyle={composerDockRouted ? 'heavy' : transcriptView === 'stream' ? 'single' : 'rounded'}
+          borderColor={composerDockEmphasized
+            ? composerAccentColor
+            : transcriptView === 'stream'
+              ? theme.border2
+              : theme.border}
+          title={transcriptView === 'stream' ? undefined : composerDockBorderTitle}
           titleColor={composerDockEmphasized ? composerAccentColor : theme.dim}
           titleAlignment="left"
           height={composerDockHeight}
