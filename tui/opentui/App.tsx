@@ -3251,6 +3251,24 @@ function diffStatsLabel(diffText: string | null, fallbackLines: TuiTranscriptCar
   return additions > 0 || deletions > 0 ? `+${additions} -${deletions}` : ''
 }
 
+// A stream "ghost" card renders nothing (or only the "No visible content"
+// placeholder) in Stream view: no real body lines, no markdown, no code, no
+// diff. TranscriptCard already collapses these to zero height via
+// streamHasBody; filtering them out of the visible list as well keeps them
+// from remaining as invisible j/k cursor stops.
+function isStreamGhostCard(card: TuiTranscriptCard): boolean {
+  if (card.key.startsWith('agents-tools:')) return false
+  if (card.codeBlocks?.length) return false
+  if (card.editDiff) return false
+  if (card.markdownContent && card.markdownContent.trim().length > 0) return false
+  const hasRealLine = (lines: TuiTranscriptCardLine[]) =>
+    lines.some((line) => {
+      const text = line.text.trim()
+      return text.length > 0 && text !== 'No visible content'
+    })
+  return !hasRealLine(card.lines) && !hasRealLine(card.expandedLines)
+}
+
 function groupAgentsToolCards(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
   const grouped: TuiTranscriptCard[] = []
   let pending: TuiTranscriptCard[] = []
@@ -6617,7 +6635,11 @@ export default function OpenTuiApp() {
         return transcriptCards.filter((card) => !card.autoFold)
       }
       if (transcriptView === 'stream') {
+        // Cards with no renderable content (turn boundaries, empty tool-only
+        // messages) collapse to zero height in Stream view but would still be
+        // selectable ghost stops for j/k — drop them from the list entirely.
         return groupAgentsToolCards(transcriptCards.filter((card) => card.category !== 'system'))
+          .filter((card) => !isStreamGhostCard(card))
       }
       if (transcriptView === 'agents') return groupAgentsToolCards(transcriptCards)
       return transcriptCards

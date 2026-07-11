@@ -5628,9 +5628,20 @@ function StreamToolRow({ thread }: { thread: ToolThread }) {
   )
 }
 
+// Mirrors StreamMessageItem's render guard: a message with no non-empty text
+// and no tool calls renders nothing in Stream view. MessageView uses this to
+// drop such rows from the stream timeline entirely — otherwise the row wrapper
+// (padding, hover ring, virtual min-height) paints a selectable ghost row.
+export function streamMessageHasContent(message: ThreadedMessage): boolean {
+  return message.blocks.some((block) => (
+    block.type === 'tool_thread'
+    || (block.type === 'text' && block.text.trim().length > 0)
+  ))
+}
+
 function StreamMessageItem({ message }: { message: ThreadedMessage }) {
   const spacing = streamDensitySpacing(use(MessageDensityContext))
-  const textBlocks = message.blocks.filter((block) => block.type === 'text')
+  const textBlocks = message.blocks.filter((block) => block.type === 'text' && block.text.trim().length > 0)
   const toolThreads = dedupeStreamToolThreads(
     message.blocks.filter((block): block is ToolThread => block.type === 'tool_thread'),
   )

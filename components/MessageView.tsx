@@ -44,7 +44,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 import { BookOpen, ChartNetwork, FileCode2, Filter, Minimize2, Plug, Radio, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
-import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
+import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, streamMessageHasContent, type MessageDensity, type WebViewMode } from './MessageItem'
 import { useChannelBridge } from './useChannelBridge'
 import { useIdeBridge } from './useIdeBridge'
 import type { PierreDiffStyle } from './PierreDiffView'
@@ -6055,9 +6055,15 @@ export default function MessageView({
     })
   }, [normalizedTranscriptSearch, timelineRows, transcriptFilters, bookmarksOnly, bookmarkIds])
   const renderedTimelineRows = useMemo<TimelineRow[]>(() => {
-    return viewMode === 'agents' || viewMode === 'stream'
-      ? groupAgentsToolRows(transcriptTimelineRows)
-      : transcriptTimelineRows
+    if (viewMode === 'agents') return groupAgentsToolRows(transcriptTimelineRows)
+    if (viewMode === 'stream') {
+      // Rows whose message renders nothing in Stream view (no prose, no tool
+      // calls) must be dropped, not just render null: the row wrapper's stream
+      // padding and the virtual row's minimum height would otherwise paint
+      // empty selectable ghost rows.
+      return groupAgentsToolRows(transcriptTimelineRows).filter((row) => streamMessageHasContent(row.message))
+    }
+    return transcriptTimelineRows
   }, [transcriptTimelineRows, viewMode])
   const hasTranscriptFocus = transcriptFilters.length > 0 || transcriptSearch.trim().length > 0 || bookmarksOnly
   const visualizerRows = useMemo<MessageVisualizerRow[]>(
