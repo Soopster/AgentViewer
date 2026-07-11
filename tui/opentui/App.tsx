@@ -4642,9 +4642,9 @@ function TranscriptCardInner({
           id={`card:${card.key}`}
           flexDirection="row"
           width={agentWidth}
-          border={streamMode ? undefined : true}
-          borderStyle={hasCursor ? 'heavy' : 'single'}
-          borderColor={streamMode ? theme.surface : hasCursor || isSearchHit ? agentAccent : borderColor}
+          border={!streamMode}
+          borderStyle={streamMode ? undefined : hasCursor ? 'heavy' : 'single'}
+          borderColor={streamMode ? undefined : hasCursor || isSearchHit ? agentAccent : borderColor}
           backgroundColor={streamMode ? streamAgentBg : agentBg}
           title={streamMode ? undefined : agentsCardTitle}
           titleColor={agentAccent}
