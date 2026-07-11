@@ -17,6 +17,7 @@ import type { CodexPlanStep } from '@/lib/taskRegistry'
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
 const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
+const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover'), { ssr: false })
 const RunDashboard = dynamic(() => import('@/components/RunDashboard'), { ssr: false })
 const AgentTeamCoordinator = dynamic(() => import('@/components/AgentTeamCoordinator'), { ssr: false })
 
@@ -319,6 +320,7 @@ export default function Home() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
+  const [provenanceOpen, setProvenanceOpen] = useState(false)
   const [coordinatorOpen, setCoordinatorOpen] = useState(false)
   const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
   const [promptLibraryOpenRequest, setPromptLibraryOpenRequest] = useState(0)
@@ -1282,6 +1284,7 @@ export default function Home() {
                   onOpenIdeBridge={openIdeBridge}
                   onToggleIdeBridgeRoute={toggleIdeBridgeRoute}
                   onOpenBookmarks={() => setBookmarksPanelOpen(true)}
+                  onOpenProvenance={() => setProvenanceOpen(true)}
                 />
               ) : null}
             </div>
@@ -1292,6 +1295,17 @@ export default function Home() {
             open={gitPopoverOpen}
             onClose={() => setGitPopoverOpen(false)}
             cwd={activeProjectDir}
+          />
+        ) : null}
+        {provenanceOpen ? (
+          <ProvenancePopover
+            open={provenanceOpen}
+            onClose={() => setProvenanceOpen(false)}
+            session={selectedSession && !selectedSession.isPending ? { sessionId: selectedSession.sessionId, provider: selectedSession.provider } : null}
+            cwd={activeProjectDir}
+            onOpenSession={({ sessionId, provider: editProvider, uuid }) => {
+              selectCommandPaletteSession({ sessionId, provider: editProvider } as Session, uuid)
+            }}
           />
         ) : null}
         {bookmarksPanelOpen ? (

@@ -3,6 +3,7 @@ import path from 'node:path'
 import { priceForModel } from './analytics'
 import { timeAsync } from './perfLog'
 import { runReadRows } from './sqliteWorkerClient'
+import { extractFileEditsFromMessage, plainUserPromptText, type FileEditKind } from './provenanceExtract'
 import { isAgentProvider } from './provider'
 import { normalizeProjectPath, pathBasename, sameProjectPath } from './projectPaths'
 import type { AgentProvider, ApiMessage, ContentBlock, Session, SessionMessage, SystemMessagePayload } from './types'
@@ -13,9 +14,10 @@ const MESSAGE_DIR = path.join(INDEX_DIR, 'messages')
 const SESSIONS_FILE = path.join(INDEX_DIR, 'sessions.json')
 const DB_FILE = path.join(INDEX_DIR, 'index.sqlite')
 const STORE_VERSION = 1
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 const MAX_INDEX_TEXT_CHARS = 32_000
 const MAX_FIELD_TEXT_CHARS = 2_000
+const MAX_EDIT_PROMPT_CHARS = 300
 const MAX_SNIPPET_CHARS = 260
 const SHORT_QUERY_TERM_WINDOW = 180
 const LONG_QUERY_TERM_WINDOW = 500
@@ -97,6 +99,36 @@ export type PersistedMessageRecord = {
   cacheReadTokens: number
   cacheWriteTokens: number
   model?: string | null
+  fileEdits: PersistedFileEdit[]
+}
+
+// One file-modifying tool call, as stored on the message that issued it.
+// `prompt` is the user prompt that started the turn — captured at index time
+// because reconstructing it later can't distinguish prompts from tool results.
+export type PersistedFileEdit = {
+  tool: string
+  kind: FileEditKind
+  filePath: string
+  addedLines: string[]
+  prompt: string | null
+}
+
+// A file_edits row joined with its owning session, ready for attribution.
+export type PersistedFileEditRecord = {
+  id: number
+  sessionKey: string
+  provider: AgentProvider
+  sessionId: string
+  messageUuid: string
+  timestampMs: number | null
+  tool: string
+  kind: FileEditKind
+  filePath: string
+  addedLines: string[]
+  prompt: string | null
+  model: string | null
+  sessionTitle: string | null
+  sessionCwd: string | null
 }
 
 export type PersistedSearchMatch = {
@@ -307,6 +339,25 @@ function initializeSchema(db: SqliteDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS message_tools_session_name_idx ON message_tools(session_key, name);
+
+    CREATE TABLE IF NOT EXISTS file_edits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_key TEXT NOT NULL REFERENCES messages(key) ON DELETE CASCADE,
+      session_key TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      message_uuid TEXT NOT NULL,
+      timestamp_ms REAL,
+      tool TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      added_lines_json TEXT NOT NULL,
+      prompt TEXT,
+      model TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS file_edits_session_idx ON file_edits(session_key);
+    CREATE INDEX IF NOT EXISTS file_edits_path_idx ON file_edits(file_path);
   `)
   applySchemaMigrations(db)
   setMeta(db, 'schema_version', String(SCHEMA_VERSION))
@@ -336,6 +387,38 @@ function applySchemaMigrations(db: SqliteDatabase): void {
   } else if (current < 3) {
     // First time at version 3 with the column already present — still force a re-sync
     // so existing rows backfill is_error from the message payloads.
+    messageSignatureCache.clear()
+    db.prepare("UPDATE sessions SET message_signature = NULL").run()
+  }
+  // file_edits provenance table — version-4 migration. Table-presence-checked for
+  // the same hot-reload self-healing reason as is_error above.
+  const hasFileEdits = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'file_edits'")
+    .get() as Row | undefined
+  if (!hasFileEdits) {
+    db.exec(`
+      CREATE TABLE file_edits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_key TEXT NOT NULL REFERENCES messages(key) ON DELETE CASCADE,
+        session_key TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        message_uuid TEXT NOT NULL,
+        timestamp_ms REAL,
+        tool TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        added_lines_json TEXT NOT NULL,
+        prompt TEXT,
+        model TEXT
+      );
+      CREATE INDEX IF NOT EXISTS file_edits_session_idx ON file_edits(session_key);
+      CREATE INDEX IF NOT EXISTS file_edits_path_idx ON file_edits(file_path);
+    `)
+    messageSignatureCache.clear()
+    db.prepare("UPDATE sessions SET message_signature = NULL").run()
+  } else if (current < 4) {
+    // Table already present but version lagging — force the provenance backfill.
     messageSignatureCache.clear()
     db.prepare("UPDATE sessions SET message_signature = NULL").run()
   }
@@ -768,6 +851,8 @@ function normalizeStoredMessage(value: unknown, fallback: { sessionKey: string; 
     outputTokens: toFiniteNumber(record.outputTokens),
     cacheReadTokens: toFiniteNumber(record.cacheReadTokens),
     cacheWriteTokens: toFiniteNumber(record.cacheWriteTokens),
+    // Legacy JSON stores predate provenance; the forced re-sync backfills them.
+    fileEdits: [],
   }
 }
 
@@ -1050,6 +1135,10 @@ function mapPersistedMessages(provider: AgentProvider, sessionId: string, messag
     }
   }
 
+  // The prompt that started the current turn, threaded onto every file edit
+  // recorded for it ("what was the agent asked when it wrote this line").
+  let lastPrompt: string | null = null
+
   return messages.map((message, i) => {
     const d = details[i]
     const usage = usageFromMessage(message)
@@ -1063,6 +1152,21 @@ function mapPersistedMessages(provider: AgentProvider, sessionId: string, messag
     for (const [id, name] of d.toolUseIds) {
       if (errorById.get(id) === true) errorTools.add(name)
     }
+
+    const promptText = plainUserPromptText(message)
+    if (promptText) lastPrompt = truncateText(promptText, MAX_EDIT_PROMPT_CHARS)
+
+    // Edits whose tool_result reported an error never landed on disk — skip
+    // them so failed patches don't claim lines they didn't write.
+    const fileEdits: PersistedFileEdit[] = extractFileEditsFromMessage(message)
+      .filter((edit) => !(edit.toolUseId && errorById.get(edit.toolUseId) === true))
+      .map((edit) => ({
+        tool: edit.tool,
+        kind: edit.kind,
+        filePath: edit.filePath,
+        addedLines: edit.addedLines,
+        prompt: lastPrompt,
+      }))
 
     return {
       key,
@@ -1079,6 +1183,7 @@ function mapPersistedMessages(provider: AgentProvider, sessionId: string, messag
       toolNames: d.toolNames,
       errorTools: [...errorTools].sort((a, b) => a.localeCompare(b)),
       model: modelFromMessage(message),
+      fileEdits,
       ...usage,
     }
   })
@@ -1150,6 +1255,23 @@ function insertMessages(db: SqliteDatabase, messages: PersistedMessageRecord[]):
     INSERT OR IGNORE INTO message_tools(message_key, session_key, name, is_error)
     VALUES (?, ?, ?, ?)
   `)
+  const insertFileEdit = db.prepare(`
+    INSERT INTO file_edits(
+      message_key,
+      session_key,
+      provider,
+      session_id,
+      message_uuid,
+      timestamp_ms,
+      tool,
+      kind,
+      file_path,
+      added_lines_json,
+      prompt,
+      model
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
   for (const message of messages) {
     insertMessage.run(
       message.key,
@@ -1173,6 +1295,22 @@ function insertMessages(db: SqliteDatabase, messages: PersistedMessageRecord[]):
     const errorSet = new Set(message.errorTools ?? [])
     for (const toolName of message.toolNames) {
       insertTool.run(message.key, message.sessionKey, toolName, errorSet.has(toolName) ? 1 : 0)
+    }
+    for (const edit of message.fileEdits) {
+      insertFileEdit.run(
+        message.key,
+        message.sessionKey,
+        message.provider,
+        message.sessionId,
+        message.uuid,
+        message.timestampMs,
+        edit.tool,
+        edit.kind,
+        edit.filePath,
+        JSON.stringify(edit.addedLines),
+        edit.prompt,
+        message.model ?? null,
+      )
     }
   }
 }
@@ -1425,6 +1563,9 @@ function rowToMessageRecord(row: Row): PersistedMessageRecord | null {
     cacheReadTokens: toFiniteNumber(row.cache_read_tokens),
     cacheWriteTokens: toFiniteNumber(row.cache_write_tokens),
     model: optionalString(row.model) ?? null,
+    // Read-side rows never round-trip back into insertMessages; edits live in
+    // their own table and are queried via readFileEditsFor*.
+    fileEdits: [],
   }
 }
 
@@ -2327,4 +2468,115 @@ async function readCrossSessionAnalyticsImpl(
     streak,
     topSessions,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Provenance reads: file_edits rows joined with their owning sessions, feeding
+// the line-attribution engine in lib/provenance.ts.
+
+function rowToFileEditRecord(row: Row): PersistedFileEditRecord | null {
+  const filePath = typeof row.file_path === 'string' ? row.file_path : null
+  const provider = typeof row.provider === 'string' && isAgentProvider(row.provider) ? row.provider : null
+  if (!filePath || !provider) return null
+  let addedLines: string[] = []
+  try {
+    const parsed = JSON.parse(typeof row.added_lines_json === 'string' ? row.added_lines_json : '[]')
+    if (Array.isArray(parsed)) addedLines = parsed.filter((line): line is string => typeof line === 'string')
+  } catch {
+    addedLines = []
+  }
+  const kindRaw = typeof row.kind === 'string' ? row.kind : 'touch'
+  const kind: FileEditKind = kindRaw === 'edit' || kindRaw === 'write' || kindRaw === 'patch' ? kindRaw : 'touch'
+  return {
+    id: typeof row.id === 'number' ? row.id : Number(row.id ?? 0),
+    sessionKey: typeof row.session_key === 'string' ? row.session_key : '',
+    provider,
+    sessionId: typeof row.session_id === 'string' ? row.session_id : '',
+    messageUuid: typeof row.message_uuid === 'string' ? row.message_uuid : '',
+    timestampMs: typeof row.timestamp_ms === 'number' ? row.timestamp_ms : null,
+    tool: typeof row.tool === 'string' ? row.tool : 'unknown',
+    kind,
+    filePath,
+    addedLines,
+    prompt: typeof row.prompt === 'string' ? row.prompt : null,
+    model: typeof row.model === 'string' ? row.model : null,
+    sessionTitle:
+      typeof row.session_custom_title === 'string' && row.session_custom_title
+        ? row.session_custom_title
+        : typeof row.session_title === 'string'
+          ? row.session_title
+          : null,
+    sessionCwd: typeof row.session_cwd === 'string' ? row.session_cwd : null,
+  }
+}
+
+const FILE_EDIT_SELECT = `
+  SELECT
+    fe.*,
+    s.title AS session_title,
+    s.custom_title AS session_custom_title,
+    s.cwd AS session_cwd
+  FROM file_edits fe
+  LEFT JOIN sessions s ON s.key = fe.session_key
+`
+
+/**
+ * All recorded edits that plausibly target the given file, oldest first.
+ * Matches on the exact absolute path, the exact repo-relative path, or a
+ * '/'-anchored suffix (edits recorded from other checkouts/worktrees of the
+ * same repo still resolve). SQL pre-narrows; the suffix check is re-verified
+ * in JS because LIKE treats '_' as a wildcard.
+ */
+export async function readFileEditsForFile(
+  absolutePath: string,
+  relativePath?: string | null,
+): Promise<PersistedFileEditRecord[]> {
+  if (persistenceDisabled()) return []
+  const db = await getDatabase()
+  const where: string[] = ['fe.file_path = ?']
+  const params: unknown[] = [absolutePath]
+  if (relativePath) {
+    where.push('fe.file_path = ?', 'fe.file_path LIKE ?')
+    params.push(relativePath, `%/${relativePath}`)
+  }
+  const sql = `${FILE_EDIT_SELECT} WHERE ${where.join(' OR ')} ORDER BY COALESCE(fe.timestamp_ms, 0) ASC, fe.id ASC`
+  const rows = await runReadRows(DB_FILE, sql, params, () => db.prepare(sql).all(...params) as Row[]) as Row[]
+  const records: PersistedFileEditRecord[] = []
+  for (const row of rows) {
+    const record = rowToFileEditRecord(row)
+    if (!record) continue
+    const matches =
+      record.filePath === absolutePath ||
+      (relativePath != null && (record.filePath === relativePath || record.filePath.endsWith(`/${relativePath}`)))
+    if (matches) records.push(record)
+  }
+  return records
+}
+
+/** Every recorded edit made by one session, oldest first. */
+export async function readFileEditsForSession(
+  provider: AgentProvider,
+  sessionId: string,
+): Promise<PersistedFileEditRecord[]> {
+  if (persistenceDisabled()) return []
+  const db = await getDatabase()
+  const sql = `${FILE_EDIT_SELECT} WHERE fe.session_key = ? ORDER BY COALESCE(fe.timestamp_ms, 0) ASC, fe.id ASC`
+  const params = [persistedSessionKey(provider, sessionId)]
+  const rows = await runReadRows(DB_FILE, sql, params, () => db.prepare(sql).all(...params) as Row[]) as Row[]
+  const records: PersistedFileEditRecord[] = []
+  for (const row of rows) {
+    const record = rowToFileEditRecord(row)
+    if (record) records.push(record)
+  }
+  return records
+}
+
+/** Indexed session metadata (cwd, title) without touching the provider backend. */
+export async function readPersistedSessionRecord(
+  provider: AgentProvider,
+  sessionId: string,
+): Promise<PersistedSessionRecord | null> {
+  if (persistenceDisabled()) return null
+  const db = await getDatabase()
+  return selectSessionByKey(db, persistedSessionKey(provider, sessionId)) ?? null
 }

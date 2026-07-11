@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, UsersRound } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -49,6 +49,7 @@ type CommandPaletteProps = {
   onOpenIdeBridge: () => void
   onToggleIdeBridgeRoute: () => void
   onOpenBookmarks: () => void
+  onOpenProvenance: () => void
 }
 
 type PaletteItem = {
@@ -332,6 +333,7 @@ export default function CommandPalette({
   onOpenIdeBridge,
   onToggleIdeBridgeRoute,
   onOpenBookmarks,
+  onOpenProvenance,
 }: CommandPaletteProps) {
   const { state: sidebarState, toggleSidebar } = useSidebar()
   const [query, setQuery] = useState('')
@@ -606,6 +608,17 @@ export default function CommandPalette({
         run: onOpenBookmarks,
       },
       {
+        id: 'open-provenance',
+        label: 'Code provenance — agent blame',
+        description: 'See which sessions wrote a file, or what code traces back to the current session',
+        icon: <FileSearch size={16} />,
+        shortcut: 'Blame',
+        group: 'actions',
+        keywords: ['provenance', 'blame', 'who wrote', 'origin', 'trace', 'code', 'file', 'history', 'agent blame'],
+        score: 0,
+        run: onOpenProvenance,
+      },
+      {
         id: 'scope-all',
         label: 'Show all projects',
         description: 'Clear the project scope filter',
@@ -674,7 +687,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenCoordinator, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenGit, onOpenCoordinator, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {
