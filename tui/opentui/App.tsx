@@ -2790,6 +2790,55 @@ function transcriptColor(line: TuiTranscriptCardLine, theme: TuiThemePalette): s
   }
 }
 
+function streamLineMarker(line: TuiTranscriptCardLine, role: TuiTranscriptCard['role']): string {
+  if (role === 'user') return '›'
+  switch (line.tone) {
+    case 'result_ok':
+      return '✓'
+    case 'result_error':
+      return '×'
+    case 'system':
+      return '▲'
+    default:
+      return '•'
+  }
+}
+
+function streamContinuationMarker(line: TuiTranscriptCardLine): string {
+  switch (line.tone) {
+    case 'result_ok':
+      return '  ✓ '
+    case 'result_error':
+      return '  × '
+    case 'system':
+      return '  ▲ '
+    case 'tool':
+      return '  └ '
+    default:
+      return '  '
+  }
+}
+
+function streamToolGroupMarker(cards: TuiTranscriptCard[]): string {
+  let hasSuccess = false
+  let hasWarning = false
+  for (const card of cards) {
+    for (const line of [...card.lines, ...card.expandedLines]) {
+      if (line.tone === 'result_error') return '×'
+      if (line.tone === 'system') hasWarning = true
+      if (line.tone === 'result_ok') hasSuccess = true
+    }
+  }
+  return hasWarning ? '▲' : hasSuccess ? '✓' : '•'
+}
+
+function streamStatusColor(marker: string, theme: TuiThemePalette): string {
+  if (marker === '✓') return theme.green
+  if (marker === '×') return theme.red
+  if (marker === '▲') return theme.amber
+  return theme.dim
+}
+
 function transcriptBackground(line: TuiTranscriptCardLine, theme: TuiThemePalette): string | undefined {
   switch (line.tone) {
     // Tool result summaries (✓ OK, ✓ -2 +10 lines, command output) previously
@@ -4485,6 +4534,7 @@ function TranscriptCardInner({
     const headerLabel = operationalCard
       ? `${toolCount} tool ${toolCount === 1 ? 'call' : 'calls'}`
       : card.label
+    const streamGroupMarker = operationalCard ? streamToolGroupMarker(toolCards) : '•'
     const agentsMarker = hasCursor ? '>' : operationalCard ? '⚙' : card.role === 'user' ? '▸' : '●'
     const agentsTitleMeta = joinMeta([
       headerMeta,
@@ -4517,7 +4567,7 @@ function TranscriptCardInner({
         })
       : []
     return (
-      <box flexDirection="column" marginBottom={densityState.cardGap} width={agentWidth}>
+      <box flexDirection="column" marginBottom={streamMode ? 0 : densityState.cardGap} width={agentWidth}>
         {landmarks.map((landmark, landmarkIndex) => {
           const color = landmark.kind === 'resume'
             ? theme.cyan
@@ -4557,14 +4607,14 @@ function TranscriptCardInner({
             flexDirection="column"
             width={contentWidth}
             paddingX={1}
-            paddingBottom={densityState.bodyPad}
+            paddingBottom={streamMode ? 0 : densityState.bodyPad}
           >
             {streamMode ? (
-              <text fg={hasCursor ? agentAccent : theme.dim} wrapMode="none" selectable {...selectionColors}>
-                {fitText(
-                  `• ${headerLabel}  ·  e ${isExpanded ? 'collapse' : 'expand'}${isExpanded ? '  ·  j/k select' : ''}`,
-                  agentBodyWidth,
-                )}
+              <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+                {renderInlineTextSegments([
+                  { text: `${streamGroupMarker} `, fg: hasCursor ? agentAccent : streamStatusColor(streamGroupMarker, theme) },
+                  { text: `${headerLabel}  ·  e ${isExpanded ? 'collapse' : 'expand'}${isExpanded ? '  ·  j/k select' : ''}`, fg: theme.dim },
+                ], agentBodyWidth, theme.dim)}
               </text>
             ) : null}
             {expandedToolDisplays.length > 0 ? (
@@ -4655,8 +4705,8 @@ function TranscriptCardInner({
   if (streamMode && !(card.category === 'diff' && isExpanded)) {
     const streamWidth = Math.max(rightPaneWidth - 2, 16)
     const streamTextWidth = Math.max(streamWidth - 2, 12)
-    const streamMarker = hasCursor ? '›' : card.role === 'user' ? '›' : '•'
     const firstLine = bodyLines[0]
+    const streamMarker = firstLine ? streamLineMarker(firstLine, card.role) : card.role === 'user' ? '›' : '•'
     const remainingLines = bodyLines.slice(1)
     // Full block markdown (tables/headings/lists/fenced code) for expanded
     // text cards, same as the reader view — null for everything else, so the
@@ -4694,7 +4744,7 @@ function TranscriptCardInner({
       <box
         id={`card:${card.key}`}
         flexDirection="column"
-        marginBottom={streamRendersSomething ? densityState.cardGap : 0}
+        marginBottom={streamRendersSomething && card.role === 'user' ? 1 : 0}
       >
         {landmarks.map((landmark, landmarkIndex) => {
           const lmColor = landmark.kind === 'resume'
@@ -4725,7 +4775,7 @@ function TranscriptCardInner({
         <box
           flexDirection="column"
           paddingLeft={densityState.bodyIndent}
-          paddingBottom={densityState.bodyPad + (card.role === 'user' ? 1 : 0)}
+          paddingBottom={0}
           backgroundColor={streamBg}
         >
         {streamMarkdownBody ? (
@@ -4775,13 +4825,13 @@ function TranscriptCardInner({
             selectable
           >
             {line.tone === 'tool'
-              ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '  └ '), streamWidth, theme.dim)
+              ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, streamContinuationMarker(line)), streamWidth, theme.dim)
               : hasInlineMarkdown(line.text)
                 ? [
-                    <span key={`${card.key}:s:${lineIndex}:pfx`} fg={transcriptColor(line, theme)}>{'  '}</span>,
+                    <span key={`${card.key}:s:${lineIndex}:pfx`} fg={transcriptColor(line, theme)}>{streamContinuationMarker(line)}</span>,
                     ...renderInlineMarkdownSpans(line.text, theme, transcriptColor(line, theme), `${card.key}:s:${lineIndex}`),
                   ]
-                : `  ${line.text}`}
+                : `${streamContinuationMarker(line)}${line.text}`}
           </text>
         ))}
         {isExpanded && card.codeBlocks?.map((codeBlock, codeBlockIndex) => {
