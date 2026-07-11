@@ -2609,10 +2609,54 @@ function transcriptAccent(cardRole: 'user' | 'assistant' | 'system', provider: P
   return getProviderAccent(provider ?? 'claude')
 }
 
+function toolNameFromTranscriptLine(text: string): string {
+  const cleaned = text.replace(/^tool\s+/i, '').trim()
+  const colon = cleaned.indexOf(':')
+  return (colon >= 0 ? cleaned.slice(0, colon) : cleaned.split(/\s+/, 1)[0] ?? '').trim()
+}
+
+function transcriptToolColor(name: string, theme: TuiThemePalette): string {
+  switch (name.toLowerCase()) {
+    case 'bash':
+      return theme.amber
+    case 'edit':
+    case 'multiedit':
+    case 'filechange':
+    case 'notebookedit':
+      return theme.green
+    case 'write':
+      return theme.cyan
+    case 'read':
+    case 'webfetch':
+      return theme.violet
+    case 'grep':
+      return theme.red
+    case 'glob':
+      return theme.pink
+    case 'agent':
+    case 'task':
+    case 'taskcreate':
+    case 'taskget':
+    case 'taskupdate':
+    case 'tasklist':
+    case 'taskstop':
+    case 'task_status':
+    case 'agentswitch':
+      return theme.pink
+    case 'websearch':
+    case 'toolsearch':
+      return theme.cyan
+    case 'todowrite':
+      return theme.green
+    default:
+      return theme.muted
+  }
+}
+
 function transcriptColor(line: TuiTranscriptCardLine, theme: TuiThemePalette): string {
   switch (line.tone) {
     case 'tool':
-      return theme.cyan
+      return transcriptToolColor(toolNameFromTranscriptLine(line.text), theme)
     case 'agent':
       return theme.violet
     case 'result_ok':
@@ -3058,7 +3102,11 @@ function agentToolCardIsExpanded(
   return card.autoFold ? expandedKeys.has(card.key) : !collapsedKeys.has(card.key)
 }
 
-function agentsToolLineSegments(text: string, theme: TuiThemePalette): InlineTextSegment[] {
+function transcriptToolLineSegments(
+  text: string,
+  theme: TuiThemePalette,
+  marker = 'tool ',
+): InlineTextSegment[] {
   const cleaned = text.replace(/^tool\s+/i, '').trim()
   const colon = cleaned.indexOf(':')
   const name = colon >= 0
@@ -3068,8 +3116,8 @@ function agentsToolLineSegments(text: string, theme: TuiThemePalette): InlineTex
     ? cleaned.slice(colon + 1).trim()
     : cleaned.slice(name.length).trim()
   return [
-    { text: '› ', fg: theme.dim },
-    { text: name || 'tool', fg: theme.amber },
+    { text: marker, fg: theme.dim },
+    { text: name || 'tool', fg: transcriptToolColor(name, theme) },
     ...(detail ? [{ text: ` ${detail}`, fg: theme.dim }] : []),
   ]
 }
@@ -4328,7 +4376,7 @@ function TranscriptCardInner({
                 >
                   <text fg={transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
                     {toolLine
-                      ? renderInlineTextSegments(agentsToolLineSegments(line.text, theme), agentBodyWidth, theme.dim)
+                      ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '› '), agentBodyWidth, theme.dim)
                       : fitText(line.text, agentBodyWidth)}
                   </text>
                 </box>
@@ -4375,7 +4423,9 @@ function TranscriptCardInner({
             selectable
             {...selectionColors}
           >
-            {fitText(line.text, streamTextWidth)}
+            {line.tone === 'tool'
+              ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme), streamTextWidth, theme.dim)
+              : fitText(line.text, streamTextWidth)}
           </text>
         ))}
       </box>
@@ -4509,7 +4559,9 @@ function TranscriptCardInner({
                   backgroundColor={transcriptBackground(line, theme) ?? cardBg}
                 >
                   <text fg={imessageUserBubble ? bubbleTextColor : transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
-                    {fitText(line.text, bodyInnerWidth)}
+                    {line.tone === 'tool' && !imessageUserBubble
+                      ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme), bodyInnerWidth, theme.dim)
+                      : fitText(line.text, bodyInnerWidth)}
                   </text>
                 </box>
               ))}
