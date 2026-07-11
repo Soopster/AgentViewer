@@ -2967,8 +2967,12 @@ function renderedBodyLines(
 }
 
 function isAgentsToolOnlyCard(card: TuiTranscriptCard): boolean {
-  if (card.category === 'conversation' || card.category === 'insight' || card.category === 'system') return false
-  return card.expandedLines.some((line) => line.tone === 'tool')
+  // Provider mappers do not all express operations with a `tool`-tone header:
+  // command output, task notifications, agent results, and some MCP events can
+  // arrive as result/agent/dim lines. Category classification is the canonical
+  // cross-provider signal, so group every operational or diff card and keep
+  // prose/insight/system cards as natural group boundaries.
+  return card.category === 'technical' || card.category === 'diff'
 }
 
 function agentsToolCollapsedLines(card: TuiTranscriptCard): TuiTranscriptCardLine[] {
@@ -4450,7 +4454,7 @@ function TranscriptCardInner({
         flexDirection="column"
         marginBottom={densityState.cardGap}
         paddingLeft={densityState.bodyIndent}
-        paddingBottom={densityState.bodyPad}
+        paddingBottom={densityState.bodyPad + (card.role === 'user' ? 1 : 0)}
         backgroundColor={streamBg}
       >
         {landmarks.map((landmark, landmarkIndex) => {
@@ -7175,12 +7179,14 @@ export default function OpenTuiApp() {
     if (composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default') rows += 2
     if (hasComposerStatusMessage) {
       const streamingResponse = composerSendState === 'sending' && composerLiveText && !composerError
-      rows += streamingResponse ? LIVE_PREVIEW_HEIGHT : 2
+      rows += streamingResponse
+        ? transcriptView === 'stream' ? 0 : LIVE_PREVIEW_HEIGHT
+        : 2
     }
     if (awaitingPersistedTurn) rows += 2
     if (composerAutoTargetingRunning && composerTargetSession) rows += 1
     if ((liveStatus === 'retrying' || liveStatus === 'compacting') && composerSendState === 'sending') rows += 2
-    if (composerSendState === 'sending' && composerLiveReasoning.trim()) rows += LIVE_PREVIEW_HEIGHT
+    if (composerSendState === 'sending' && composerLiveReasoning.trim() && transcriptView !== 'stream') rows += LIVE_PREVIEW_HEIGHT
     // Reattached-turn banner (rendered when a turn runs without an owned stream).
     if (composerSendState !== 'sending' && reattachedRunning && !awaitingPersistedTurn) rows += 2
     if (pendingPermissions.length > 0) {
@@ -14332,30 +14338,34 @@ export default function OpenTuiApp() {
                 </TuiErrorBoundary>
 
                 {composerSendState === 'sending' && composerLiveText && !codexLiveAssistantTextVisible ? (
-                  <box
-                    key="live-stream-text"
-                    flexDirection="column"
-                    marginBottom={densityState.cardGap}
-                  >
+                  transcriptView === 'stream' ? (
                     <box
-                      borderStyle="single"
-                      borderColor={providerAccent}
-                      backgroundColor={theme.surface}
+                      key="live-stream-text"
+                      marginBottom={densityState.cardGap}
+                      paddingLeft={densityState.bodyIndent}
                     >
-                      <box flexDirection="column" width={rightPaneWidth - 4}>
-                        <box paddingX={1} paddingTop={1}>
-                          <text fg={providerAccent}>
-                            {fitText(`● assistant  streaming`, rightPaneWidth - 6)}
-                          </text>
-                        </box>
-                        <box paddingX={1} paddingY={1}>
-                          <text fg={theme.text} wrapMode="word">
-                            {composerLiveText}
-                          </text>
+                      <text fg={theme.text} width={Math.max(rightPaneWidth - densityState.bodyIndent - 4, 16)} wrapMode="word">
+                        {`• ${composerLiveText}`}
+                      </text>
+                    </box>
+                  ) : (
+                    <box key="live-stream-text" flexDirection="column" marginBottom={densityState.cardGap}>
+                      <box border borderStyle="single" borderColor={providerAccent} backgroundColor={theme.surface}>
+                        <box flexDirection="column" width={rightPaneWidth - 4}>
+                          <box paddingX={1} paddingTop={1}>
+                            <text fg={providerAccent}>
+                              {fitText('● assistant  streaming', rightPaneWidth - 6)}
+                            </text>
+                          </box>
+                          <box paddingX={1} paddingY={1}>
+                            <text fg={theme.text} wrapMode="word">
+                              {composerLiveText}
+                            </text>
+                          </box>
                         </box>
                       </box>
                     </box>
-                  </box>
+                  )
                 ) : null}
 
               </scrollbox>
@@ -14991,7 +15001,7 @@ export default function OpenTuiApp() {
         </box>
       ) : null}
 
-      {composerSendState === 'sending' && composerLiveReasoning.trim() ? (
+      {composerSendState === 'sending' && composerLiveReasoning.trim() && transcriptView !== 'stream' ? (
         <LivePreviewCard
           title={`✻ THINKING · ${String(composerProvider ?? 'agent').toUpperCase()} · ${tuiEffort.toUpperCase()}${composerThinkingTokens > 0 ? ` · ~${composerThinkingTokens >= 1000 ? `${(composerThinkingTokens / 1000).toFixed(1)}k` : composerThinkingTokens} tok` : ''}`}
           lines={liveReasoningPreviewLines}
@@ -15002,8 +15012,13 @@ export default function OpenTuiApp() {
       ) : null}
 
       {composerSendState === 'sending' && !composerLiveText && !composerLiveReasoning.trim() && activeRunningToolCount === 0 ? (
-        <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
-          <text fg={theme.cyan} wrapMode="none">{'▌ '}</text>
+        <box
+          backgroundColor={transcriptView === 'stream' ? theme.surface : theme.surface2}
+          paddingLeft={transcriptView === 'stream' ? densityState.bodyIndent : 1}
+          paddingTop={transcriptView === 'stream' ? 0 : 1}
+          flexDirection="row"
+        >
+          <text fg={theme.cyan} wrapMode="none">{transcriptView === 'stream' ? '• ' : '▌ '}</text>
           <box flexGrow={1}>
             <ComposerWaitingStatus
               startedAt={composerSendStartedAt}
@@ -15026,8 +15041,13 @@ export default function OpenTuiApp() {
       ) : null}
 
       {liveToolActivities.length > 0 && activeRunningToolCount > 0 ? (
-        <box backgroundColor={theme.surface2} paddingX={1} paddingTop={1} flexDirection="row">
-          <text fg={theme.green} wrapMode="none">{'▌ '}</text>
+        <box
+          backgroundColor={transcriptView === 'stream' ? theme.surface : theme.surface2}
+          paddingLeft={transcriptView === 'stream' ? densityState.bodyIndent : 1}
+          paddingTop={transcriptView === 'stream' ? 0 : 1}
+          flexDirection="row"
+        >
+          <text fg={theme.green} wrapMode="none">{transcriptView === 'stream' ? '• ' : '▌ '}</text>
           <text wrapMode="none">
             {renderInlineTextSegments([
               { text: 'tools  ', fg: theme.dim },
@@ -15080,13 +15100,15 @@ export default function OpenTuiApp() {
 
       {composerStatusMessage ? (
         composerSendState === 'sending' && composerLiveText && !composerError ? (
-          <LivePreviewCard
-            title={`● ASSISTANT · ${String(composerProvider ?? 'agent').toUpperCase()} · STREAMING`}
-            lines={liveAssistantPreviewLines}
-            accentColor={composerAccentColor}
-            bodyColor={theme.text}
-            theme={theme}
-          />
+          transcriptView === 'stream' ? null : (
+            <LivePreviewCard
+              title={`● ASSISTANT · ${String(composerProvider ?? 'agent').toUpperCase()} · STREAMING`}
+              lines={liveAssistantPreviewLines}
+              accentColor={composerAccentColor}
+              bodyColor={theme.text}
+              theme={theme}
+            />
+          )
         ) : (
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
             <text fg={composerError ? theme.red : theme.dim} wrapMode="none">
