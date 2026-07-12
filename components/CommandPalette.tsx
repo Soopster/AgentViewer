@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, GitBranch, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, UsersRound } from 'lucide-react'
+import { BarChart3, Bookmark, BookOpen, Bot, Database, FileSearch, FolderOpen, GitBranch, GitPullRequest, Layers3, ListTodo, PanelLeftOpen, PanelRightOpen, Plug, Radio, RefreshCw, Search, SlidersHorizontal, UsersRound } from 'lucide-react'
 
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { SidebarGlyph, useSidebar } from '@/components/ui/sidebar'
@@ -42,6 +42,7 @@ type CommandPaletteProps = {
   onToggleWorktrees: (include: boolean) => void
   onToggleMessagePane: () => void
   onOpenGit: () => void
+  onOpenPullRequests: () => void
   onOpenFiles: () => void
   onOpenCoordinator: () => void
   onOpenTasks: () => void
@@ -328,6 +329,7 @@ export default function CommandPalette({
   onToggleWorktrees,
   onToggleMessagePane,
   onOpenGit,
+  onOpenPullRequests,
   onOpenFiles,
   onOpenCoordinator,
   onOpenTasks,
@@ -502,6 +504,17 @@ export default function CommandPalette({
         keywords: ['git', 'status', 'diff', 'branch', 'commit', 'working tree'],
         score: 0,
         run: onOpenGit,
+      },
+      {
+        id: 'open-pull-requests',
+        label: 'Review pull requests',
+        description: canOpenGit ? 'Review GitHub PRs, ask the agent, and publish comments with gh' : 'Select a session or project first',
+        icon: <GitPullRequest size={16} />,
+        shortcut: 'Ctrl Shift G',
+        group: 'actions',
+        keywords: ['github', 'pull request', 'pr', 'review', 'comment', 'approve', 'gh'],
+        score: 0,
+        run: onOpenPullRequests,
       },
       {
         id: 'open-files',
@@ -702,7 +715,7 @@ export default function CommandPalette({
       }
 
     return items
-  }, [canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenFiles, onOpenGit, onOpenCoordinator, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
+  }, [canOpenFiles, canOpenGit, canOpenTasks, canOpenPromptLibrary, canOpenChannelBridge, channelBridgeRouting, canOpenIdeBridge, ideBridgeRouting, includeWorktrees, indexRebuild.message, indexRebuild.status, messagePaneCollapsed, onChangeProvider, onChangeScope, onOpenFiles, onOpenGit, onOpenPullRequests, onOpenCoordinator, onOpenTasks, onOpenPromptLibrary, onOpenChannelBridge, onToggleChannelBridgeRoute, onOpenIdeBridge, onToggleIdeBridgeRoute, onOpenBookmarks, onOpenProvenance, onToggleMessagePane, onToggleWorktrees, provider, rebuildSearchIndex, scopeMode, scopeProjectName, sidebarAction, toggleSidebar])
 
   const projectItems = useMemo(() => {
     const groups = new Map<string, {

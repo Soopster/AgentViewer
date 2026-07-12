@@ -2,6 +2,7 @@
 import React, { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, startTransition, useState } from 'react'
 import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
+import { PullRequestPopover } from './PullRequestPopover'
 import { FileViewerPopover } from './FileViewerPopover'
 import { AnalyticsPopover } from './AnalyticsPopover'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
@@ -5534,6 +5535,8 @@ export default function OpenTuiApp() {
   const [exitCleanupInProgress, setExitCleanupInProgress] = useState(false)
   const [gitOpen, setGitOpen] = useState(false)
   const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const [pullRequestOpen, setPullRequestOpen] = useState(false)
+  const pullRequestKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [fileViewerOpen, setFileViewerOpen] = useState(false)
   const fileViewerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
@@ -12730,6 +12733,11 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (pullRequestOpen) {
+      handled(() => { pullRequestKeyHandlerRef.current?.(key) })
+      return
+    }
+
     if (fileViewerOpen) {
       handled(() => { fileViewerKeyHandlerRef.current?.(key) })
       return
@@ -13362,6 +13370,11 @@ export default function OpenTuiApp() {
         if (next === 'messages') promotePreviewToTab()
         setFocusedPane(next)
       })
+      return
+    }
+
+    if (isShifted('G') && key.ctrl) {
+      handled(() => setPullRequestOpen(true))
       return
     }
 
@@ -15659,6 +15672,26 @@ export default function OpenTuiApp() {
           height={height}
           backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
           zIndex={49}
+        />
+      ) : null}
+
+      {pullRequestOpen ? (
+        <box position="absolute" top={0} left={0} width={width} height={height} backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} zIndex={49} />
+      ) : null}
+
+      {pullRequestOpen ? (
+        <PullRequestPopover
+          cwd={gitRepoCwd}
+          theme={theme}
+          width={width}
+          height={height}
+          onClose={() => setPullRequestOpen(false)}
+          onKeyHandlerReady={(handler) => { pullRequestKeyHandlerRef.current = handler }}
+          onAskAgent={(prompt) => {
+            insertComposerTextAtCursor(prompt)
+            setComposerActive(true)
+            showNotice('info', 'PR question added to composer')
+          }}
         />
       ) : null}
 

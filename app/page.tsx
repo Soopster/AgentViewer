@@ -16,6 +16,7 @@ import type { CodexPlanStep } from '@/lib/taskRegistry'
 
 const CommandPalette = dynamic(() => import('@/components/CommandPalette'), { ssr: false })
 const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
+const PullRequestView = dynamic(() => import('@/components/PullRequestView'), { ssr: false })
 const FileViewer = dynamic(() => import('@/components/FileViewer'), { ssr: false })
 const BookmarksPanel = dynamic(() => import('@/components/BookmarksPanel'), { ssr: false })
 const ProvenancePopover = dynamic(() => import('@/components/ProvenancePopover'), { ssr: false })
@@ -325,6 +326,7 @@ export default function Home() {
   const [includeWorktrees, setIncludeWorktrees] = useState(true)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [gitPopoverOpen, setGitPopoverOpen] = useState(false)
+  const [pullRequestViewOpen, setPullRequestViewOpen] = useState(false)
   const [fileViewerOpen, setFileViewerOpen] = useState(false)
   const [composerInsertRequest, setComposerInsertRequest] = useState<ComposerInsertRequest | null>(null)
   const composerInsertRequestRef = useRef(0)
@@ -410,6 +412,11 @@ export default function Home() {
   const openGitPopover = useCallback(() => {
     if (!activeProjectDir) return
     setGitPopoverOpen(true)
+  }, [activeProjectDir])
+
+  const openPullRequestView = useCallback(() => {
+    if (!activeProjectDir) return
+    setPullRequestViewOpen(true)
   }, [activeProjectDir])
 
   const openFileViewer = useCallback(() => {
@@ -623,6 +630,17 @@ export default function Home() {
       if (!activeProjectDir) return
       event.preventDefault()
       setGitPopoverOpen(true)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeProjectDir])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.metaKey || event.altKey || !event.shiftKey) return
+      if (event.key.toLowerCase() !== 'g' || !activeProjectDir) return
+      event.preventDefault()
+      setPullRequestViewOpen(true)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -1317,6 +1335,7 @@ export default function Home() {
                   onToggleWorktrees={setIncludeWorktrees}
                   onToggleMessagePane={toggleMessagePane}
                   onOpenGit={openGitPopover}
+                  onOpenPullRequests={openPullRequestView}
                   onOpenFiles={openFileViewer}
                   onOpenCoordinator={openCoordinator}
                   onOpenTasks={openTaskPanel}
@@ -1337,6 +1356,17 @@ export default function Home() {
             open={gitPopoverOpen}
             onClose={() => setGitPopoverOpen(false)}
             cwd={activeProjectDir}
+          />
+        ) : null}
+        {activeProjectDir && pullRequestViewOpen ? (
+          <PullRequestView
+            open={pullRequestViewOpen}
+            cwd={activeProjectDir}
+            onClose={() => setPullRequestViewOpen(false)}
+            onAskAgent={(prompt) => {
+              composerInsertRequestRef.current += 1
+              setComposerInsertRequest({ requestId: composerInsertRequestRef.current, text: prompt })
+            }}
           />
         ) : null}
         {activeProjectDir && fileViewerOpen ? (
