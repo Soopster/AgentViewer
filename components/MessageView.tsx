@@ -52,6 +52,7 @@ import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextConte
 import { TaskRail } from './TaskRail'
 import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos, type CodexPlanStep } from '@/lib/taskRegistry'
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
+import StreamHistoryRail, { type StreamHistoryItem } from './StreamHistoryRail'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import { isNativeComposerCommandText } from '@/lib/composerCommands'
 import CodeThemeToggle from './CodeThemeToggle'
@@ -6350,6 +6351,42 @@ export default function MessageView({
   }, [baseLayout, estimateTimelineRowHeightForLayout, liveTimelineRows, renderedTimelineRows, rowMeasurementVersion, timelineRows])
   rowLayoutRef.current = rowLayout
 
+  const streamHistoryMetadata = useMemo<Array<Omit<StreamHistoryItem, 'position'>>>(() => {
+    return renderedTimelineRows.map((row, index) => {
+      const normalized = messageToCopyText(row.message).replace(/\s+/g, ' ').trim()
+      const title = normalized.slice(0, 92) || row.previewBadge || `${row.message.role} message`
+      const detail = normalized.length > 92 ? normalized.slice(92, 280).trim() : ''
+      const firstTool = row.message.blocks.find((block) => block.type === 'tool_thread')
+      return {
+        key: row.key,
+        messageId: row.message.uuid,
+        index,
+        role: row.message.role,
+        title,
+        detail,
+        meta: firstTool?.type === 'tool_thread' ? firstTool.toolUse.name : `Turn ${index + 1} · ${row.message.role}`,
+      }
+    })
+  }, [renderedTimelineRows])
+
+  const streamHistoryItems = useMemo<StreamHistoryItem[]>(() => {
+    const denominator = Math.max(rowLayout.totalHeight, 1)
+    return streamHistoryMetadata.map((item, index) => ({
+      ...item,
+      position: Math.max(0, Math.min((rowLayout.tops[index] + rowLayout.heights[index] / 2) / denominator, 1)),
+    }))
+  }, [rowLayout, streamHistoryMetadata])
+
+  const streamHistoryActiveIndex = useMemo(() => {
+    if (renderedTimelineRows.length === 0) return -1
+    const anchor = findTimelineScrollAnchor(
+      renderedTimelineRows,
+      rowLayout,
+      timelineScrollTop + timelineViewportHeight * 0.32,
+    )
+    return anchor?.index ?? 0
+  }, [renderedTimelineRows, rowLayout, timelineScrollTop, timelineViewportHeight])
+
   useLayoutEffect(() => {
     const scrollDelta = pendingTimelineScrollCompensationRef.current
     pendingTimelineScrollCompensationRef.current = 0
@@ -7471,17 +7508,26 @@ export default function MessageView({
                 )}
               </div>
             )}
-            <div
-              ref={timelineRef}
-              onScroll={handleTimelineScroll}
-              style={{
-                flex: 1,
-                minHeight: 0,
-                overflow: 'auto',
-                overflowAnchor: 'none',
-                padding: '28px 32px 72px',
-              }}
-            >
+            <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              {viewMode === 'stream' && streamHistoryItems.length > 1 ? (
+                <StreamHistoryRail
+                  items={streamHistoryItems}
+                  activeIndex={streamHistoryActiveIndex}
+                  onSelect={handleJumpToMessage}
+                />
+              ) : null}
+              <div
+                ref={timelineRef}
+                onScroll={handleTimelineScroll}
+                className={cn(viewMode === 'stream' && 'av-stream-timeline-scroll')}
+                style={{
+                  height: '100%',
+                  minHeight: 0,
+                  overflow: 'auto',
+                  overflowAnchor: 'none',
+                  padding: viewMode === 'stream' ? '28px 32px 72px 94px' : '28px 32px 72px',
+                }}
+              >
         {showDiagnostics && !isProject && (
           <div
             style={{
@@ -7518,7 +7564,7 @@ export default function MessageView({
                   {claudeMcpBusy === 'reload-plugins' ? 'RELOADING…' : 'RELOAD PLUGINS'}
                 </button>
               )}
-            </div>
+              </div>
             {diagnosticsLoading ? (
               <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)' }}>
                 Loading diagnostics…
@@ -7810,6 +7856,7 @@ export default function MessageView({
             )}
           </div>
         )}
+            </div>
             </div>
           </>
         )}

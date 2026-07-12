@@ -1293,6 +1293,115 @@ body {
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 
+/* ── Stream conversation history rail ─────────────────────────────────── */
+.av-stream-history {
+  position: absolute;
+  inset: 18px auto 22px 10px;
+  width: 74px;
+  z-index: 12;
+  overflow: visible;
+}
+
+.av-stream-history-track {
+  position: absolute;
+  inset: 0 auto 0 17px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--text-3) 24%, transparent) 5%, color-mix(in srgb, var(--text-3) 24%, transparent) 95%, transparent);
+}
+
+.av-stream-history-tick {
+  position: absolute;
+  left: 13px;
+  width: 10px;
+  height: 3px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-3) 34%, transparent);
+  cursor: pointer;
+  transform: translateY(-50%);
+  transform-origin: left center;
+  transition: width 120ms ease, height 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.av-stream-history-tick--user {
+  width: 20px;
+  background: color-mix(in srgb, var(--text-2) 48%, transparent);
+}
+
+.av-stream-history-tick:hover,
+.av-stream-history-tick:focus-visible {
+  width: 32px;
+  height: 4px;
+  background: var(--text-2);
+  outline: none;
+}
+
+.av-stream-history-tick.av-active {
+  width: 52px;
+  height: 4px;
+  background: var(--text);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface) 80%, transparent);
+}
+
+.av-stream-history-preview {
+  position: absolute;
+  left: 78px;
+  width: min(340px, calc(100vw - 180px));
+  padding: 14px 16px 12px;
+  border: 1px solid color-mix(in srgb, var(--border-2) 75%, var(--text-3));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 18px 42px color-mix(in srgb, var(--text) 13%, transparent);
+  backdrop-filter: blur(16px) saturate(1.08);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.av-stream-history-preview-title {
+  overflow: hidden;
+  color: var(--text);
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.av-stream-history-preview-detail {
+  display: -webkit-box;
+  margin-top: 8px;
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.av-stream-history-preview-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  color: var(--text-3);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+}
+
+.av-stream-history-preview-meta svg {
+  width: 14px;
+  height: 14px;
+}
+
+@media (max-width: 820px) {
+  .av-stream-history { display: none; }
+  .av-stream-timeline-scroll { padding-left: 32px !important; }
+}
+
 .timeline-row-action:hover:not(:disabled) {
   background: color-mix(in srgb, var(--surface-2) 80%, transparent);
   color: var(--text);
