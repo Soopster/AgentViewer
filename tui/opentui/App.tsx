@@ -5546,7 +5546,7 @@ export default function OpenTuiApp() {
   const [gitOpen, setGitOpen] = useState(false)
   const gitKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [pullRequestOpen, setPullRequestOpen] = useState(false)
-  const pullRequestKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  const pullRequestKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const [fileViewerOpen, setFileViewerOpen] = useState(false)
   const fileViewerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
@@ -12744,7 +12744,8 @@ export default function OpenTuiApp() {
     }
 
     if (pullRequestOpen) {
-      handled(() => { pullRequestKeyHandlerRef.current?.(key) })
+      const consumed = pullRequestKeyHandlerRef.current?.(key) ?? true
+      if (consumed) handled(() => {})
       return
     }
 

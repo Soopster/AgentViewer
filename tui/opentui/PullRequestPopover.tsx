@@ -11,8 +11,9 @@ import {
   type PullRequestWorkspace,
 } from '../../lib/githubPr'
 import { flattenHastLine, loadDiffHighlights, type TuiFileHighlights, type TuiRenderSpan } from './pierreDiffView'
+import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 
-type Key = { name: string; ctrl: boolean; shift: boolean; sequence: string }
+type Key = { name: string; ctrl: boolean; shift: boolean; sequence: string; eventType?: string; repeated?: boolean }
 
 type Props = {
   cwd?: string | null
@@ -20,7 +21,7 @@ type Props = {
   width: number
   height: number
   onClose: () => void
-  onKeyHandlerReady: (handler: (key: Key) => void) => void
+  onKeyHandlerReady: (handler: (key: Key) => boolean) => void
   onAskAgent: (prompt: string) => void
 }
 
@@ -301,6 +302,7 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
   const discussionRef = useRef<ScrollBoxRenderable>(null)
   const prListRef = useRef<ScrollBoxRenderable>(null)
   const pendingCommentJumpRef = useRef<string | null>(null)
+  const scrollVelocityRef = useRef(createScrollVelocityState())
 
   const load = useCallback(async (number?: number) => {
     setLoading(true); setError(null)
@@ -577,17 +579,19 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
     if ((key.name === 'k' || key.name === 'up') && key.shift) { jumpToFile(currentFileIndex - 1); return }
 
     if (key.name === 'j' || key.name === 'down') {
-      if (focusSide === 'left' && pane === 2) setTreeCursor((cursor) => Math.min(cursor + 1, Math.max(treeRows.length - 1, 0)))
-      else if (focusSide === 'left' && pane === 3) setDiscussionCursor((cursor) => Math.min(cursor + 1, Math.max(discussionEntries.length - 1, 0)))
-      else if (focusSide === 'left' && pane === 4) setPrCursor((cursor) => Math.min(cursor + 1, Math.max(pullRequests.length - 1, 0)))
-      else moveCursorTo(clampedCursor + 1)
+      const step = velocityScrollStep(scrollVelocityRef.current, 1, key, Math.max(1, Math.floor(diffRows / 3)))
+      if (focusSide === 'left' && pane === 2) setTreeCursor((cursor) => Math.min(cursor + step, Math.max(treeRows.length - 1, 0)))
+      else if (focusSide === 'left' && pane === 3) setDiscussionCursor((cursor) => Math.min(cursor + step, Math.max(discussionEntries.length - 1, 0)))
+      else if (focusSide === 'left' && pane === 4) setPrCursor((cursor) => Math.min(cursor + step, Math.max(pullRequests.length - 1, 0)))
+      else moveCursorTo(clampedCursor + step)
       return
     }
     if (key.name === 'k' || key.name === 'up') {
-      if (focusSide === 'left' && pane === 2) setTreeCursor((cursor) => Math.max(cursor - 1, 0))
-      else if (focusSide === 'left' && pane === 3) setDiscussionCursor((cursor) => Math.max(cursor - 1, 0))
-      else if (focusSide === 'left' && pane === 4) setPrCursor((cursor) => Math.max(cursor - 1, 0))
-      else moveCursorTo(clampedCursor - 1)
+      const step = velocityScrollStep(scrollVelocityRef.current, -1, key, Math.max(1, Math.floor(diffRows / 3)))
+      if (focusSide === 'left' && pane === 2) setTreeCursor((cursor) => Math.max(cursor - step, 0))
+      else if (focusSide === 'left' && pane === 3) setDiscussionCursor((cursor) => Math.max(cursor - step, 0))
+      else if (focusSide === 'left' && pane === 4) setPrCursor((cursor) => Math.max(cursor - step, 0))
+      else moveCursorTo(clampedCursor - step)
       return
     }
 
@@ -657,7 +661,12 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
   }, [clampedCursor, composer, currentFileIndex, defaultLeftW, diffRows, discussionCursor, discussionEntries, focusSide,
       jumpToComment, jumpToFile, jumpToHunk, leftPaneHidden, leftPaneMode, lines.length, load, maxLeftW, minLeftW,
       moveCursorTo, onClose, openInlineComposer, pane, pr?.number, prCursor, pullRequests, toggleFold, treeCursor, treeRows])
-  useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
+  const dispatchKey = useCallback((key: Key): boolean => {
+    const editorOwnsKey = composer !== null && key.name !== 'escape'
+    handleKey(key)
+    return !editorOwnsKey
+  }, [composer, handleKey])
+  useEffect(() => { onKeyHandlerReady(dispatchKey) }, [dispatchKey, onKeyHandlerReady])
 
   useEffect(() => {
     if (leftPaneHidden && focusSide === 'left') setFocusSide('right')
@@ -946,7 +955,7 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
               ]
               const groups: Array<[string, string]> = [
                 ['1-4', 'sections'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide/show'],
-                ['j/k', 'move'], ['⏎', 'jump'], ['r', 'refresh'], ['esc', 'close'],
+                ['j/k', 'move/fast'], ['⏎', 'jump'], ['r', 'refresh'], ['esc', 'close'],
               ]
               const segs: React.ReactNode[] = [
                 <span key="focus" fg={theme.cyan}>{focusLabel}</span>,

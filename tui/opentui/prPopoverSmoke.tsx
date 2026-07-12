@@ -7,7 +7,7 @@ import { DARK_THEME } from '../theme'
 import { PullRequestPopover } from './PullRequestPopover'
 
 type Key = { name: string; ctrl: boolean; shift: boolean; sequence: string }
-let handleKey: ((key: Key) => void) | null = null
+let handleKey: ((key: Key) => boolean) | null = null
 
 const setup = await testRender(
   <PullRequestPopover
@@ -30,8 +30,12 @@ async function flush(ms = 200) {
   await setup.flush()
 }
 
-function press(name: string, mods: Partial<Key> = {}) {
-  return act(async () => { handleKey?.({ name, ctrl: false, shift: false, sequence: name, ...mods }) })
+async function press(name: string, mods: Partial<Key> = {}): Promise<boolean> {
+  let consumed = true
+  await act(async () => {
+    consumed = handleKey?.({ name, ctrl: false, shift: false, sequence: name, ...mods }) ?? true
+  })
+  return consumed
 }
 
 try {
@@ -99,6 +103,15 @@ try {
   await flush()
   frame = setup.captureCharFrame()
   if (frame.includes('Enter submit')) throw new Error(`Esc did not close the composer:\n${frame}`)
+
+  // The root keyboard dispatcher must let printable keys reach the focused
+  // Ask Agent textarea instead of preventing them at the popover boundary.
+  await press('?', { sequence: '?' })
+  await flush()
+  frame = setup.captureCharFrame()
+  if (!frame.includes('Ask the active agent')) throw new Error(`Ask Agent composer did not open:\n${frame}`)
+  if (await press('x', { sequence: 'x' })) throw new Error('Ask Agent text input was consumed by the popover key handler')
+  if (!(await press('escape'))) throw new Error('Ask Agent Escape should remain owned by the popover')
 
   console.log('PR popover GitPopover-style smoke passed')
 } finally {

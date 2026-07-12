@@ -17,6 +17,7 @@ import {
   type TuiRenderSpan,
   type TuiSplitRowSide,
 } from './pierreDiffView'
+import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 
 // ---------------------------------------------------------------------------
 // Git data types
@@ -505,7 +506,7 @@ function renderNoteCard(
 // GitPopover component
 // ---------------------------------------------------------------------------
 
-type GitKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string }
+type GitKeyEvent = { name: string; ctrl: boolean; shift: boolean; sequence: string; eventType?: string; repeated?: boolean }
 type FocusSide = 'left' | 'right'
 type FileDiffMode = 'text' | 'viewer'
 type LeftPaneMode = 'normal' | 'expanded' | 'hidden'
@@ -562,6 +563,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
   // Mouse hover state for the diff badge ([+] affordance)
   const [hoveredDiffRowKey, setHoveredDiffRowKey] = useState<string | null>(null)
   const hoverIdleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scrollVelocityRef = useRef(createScrollVelocityState())
   const renderer = useRenderer()
 
   // Refresh on mount
@@ -829,9 +831,10 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     }
 
     if (key.name === 'j' || key.name === 'down') {
-      if (focusSide === 'left' && pane === 2) setTreeCursor((i) => Math.min(i + 1, visibleNodes.length - 1))
-      else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.min(i + 1, data.branches.length - 1))
-      else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.min(i + 1, data.commits.length - 1))
+      const step = velocityScrollStep(scrollVelocityRef.current, 1, key, Math.max(1, Math.min(8, Math.floor((height - 6) / 3))))
+      if (focusSide === 'left' && pane === 2) setTreeCursor((i) => Math.min(i + step, visibleNodes.length - 1))
+      else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.min(i + step, data.branches.length - 1))
+      else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.min(i + step, data.commits.length - 1))
       else {
         const rdv = rightDiffViewRef.current
         const totalRows = pane === 2 && fileDiffMode === 'viewer'
@@ -839,7 +842,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           : 0
         if (totalRows > 0) {
           const currentIndex = clampNumber(diffCursorRow, 0, totalRows - 1)
-          const nextIndex = clampNumber(currentIndex + 1, 0, totalRows - 1)
+          const nextIndex = clampNumber(currentIndex + step, 0, totalRows - 1)
           if (key.shift && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
             setDiffSelectionAnchorRow((anchor) => anchor ?? currentIndex)
           } else {
@@ -847,14 +850,15 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           }
           setDiffCursorRow(nextIndex)
         }
-        diffScrollRef.current?.scrollBy(1)
+        diffScrollRef.current?.scrollBy(step)
       }
       return
     }
     if (key.name === 'k' || key.name === 'up') {
-      if (focusSide === 'left' && pane === 2) setTreeCursor((i) => Math.max(i - 1, 0))
-      else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.max(i - 1, 0))
-      else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.max(i - 1, 0))
+      const step = velocityScrollStep(scrollVelocityRef.current, -1, key, Math.max(1, Math.min(8, Math.floor((height - 6) / 3))))
+      if (focusSide === 'left' && pane === 2) setTreeCursor((i) => Math.max(i - step, 0))
+      else if (focusSide === 'left' && pane === 3 && data) setBranchIndex((i) => Math.max(i - step, 0))
+      else if (focusSide === 'left' && pane === 4 && data) setCommitIndex((i) => Math.max(i - step, 0))
       else {
         const rdv = rightDiffViewRef.current
         const totalRows = pane === 2 && fileDiffMode === 'viewer'
@@ -862,7 +866,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           : 0
         if (totalRows > 0) {
           const currentIndex = clampNumber(diffCursorRow, 0, totalRows - 1)
-          const nextIndex = clampNumber(currentIndex - 1, 0, totalRows - 1)
+          const nextIndex = clampNumber(currentIndex - step, 0, totalRows - 1)
           if (key.shift && pane === 2 && fileDiffMode === 'viewer' && focusSide === 'right') {
             setDiffSelectionAnchorRow((anchor) => anchor ?? currentIndex)
           } else {
@@ -873,7 +877,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           setDiffCursorRow(0)
           setDiffSelectionAnchorRow(null)
         }
-        diffScrollRef.current?.scrollBy(-1)
+        diffScrollRef.current?.scrollBy(-step)
       }
       return
     }
@@ -1015,7 +1019,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       return
     }
   }, [data, diffCursorRow, diffLayout, diffNotes, diffSelectionAnchorRow, draftNote, expandedDirs, fileDiffMode, focusSide,
-      leftPaneMode, onClose, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes])
+      height, leftPaneMode, onClose, onSendDiffNoteToComposer, pane, repoCwd, rightContent, showHunkHeaders, treeCursor, visibleNodes])
 
   // Register key handler with parent
   useEffect(() => {
@@ -1383,7 +1387,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           {(() => {
             const groups: Array<[string, string]> = [
               ['1-4', 'sections'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide/show'],
-              ['j/k', 'move'], ['h/l', 'fold'], ['⏎', 'toggle'], ['r', 'refresh'], ['esc', 'close'],
+              ['j/k', 'move/fast'], ['h/l', 'fold'], ['⏎', 'toggle'], ['r', 'refresh'], ['esc', 'close'],
             ]
             const segs: React.ReactNode[] = [
               <span key="focus" fg={theme.cyan}>{focusLabel}</span>,
