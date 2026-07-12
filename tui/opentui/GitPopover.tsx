@@ -1210,6 +1210,13 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
     }))
   }
 
+  function activateMousePane(event: MouseEvent, nextPane: PaneId) {
+    if (event.button !== 0) return
+    event.stopPropagation()
+    setPane(nextPane)
+    setFocusSide('left')
+  }
+
 
   return (
     <box
@@ -1239,6 +1246,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           border={['bottom']} borderStyle="single"
           borderColor={pane === 1 ? theme.border2 : theme.border}
           backgroundColor={pane === 1 ? theme.surface2 : theme.surface}
+          onMouseUp={(event) => activateMousePane(event, 1)}
         >
           <box paddingX={1} width={leftW - 2} backgroundColor={pane === 1 ? theme.cyan : 'transparent'}>
             <text fg={pane === 1 ? theme.surface : theme.muted}>[1] Status</text>
@@ -1258,7 +1266,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           borderColor={pane === 2 ? theme.border2 : theme.border}
           backgroundColor={pane === 2 ? theme.surface2 : theme.surface}
         >
-          <box paddingX={1} width={leftW - 2} flexDirection="row" backgroundColor={pane === 2 ? theme.cyan : 'transparent'}>
+          <box paddingX={1} width={leftW - 2} flexDirection="row" backgroundColor={pane === 2 ? theme.cyan : 'transparent'} onMouseUp={(event) => activateMousePane(event, 2)}>
             <text fg={pane === 2 ? theme.surface : theme.muted}>[2] Files</text>
             {pane === 2 && fileCount > 0 ? (
               <box flexGrow={1}>
@@ -1292,6 +1300,21 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
                   paddingX={1}
                   flexDirection="row"
                   backgroundColor={isCursor ? theme.surface3 : 'transparent'}
+                  onMouseUp={(event) => {
+                    if (event.button !== 0) return
+                    event.stopPropagation(); setPane(2); setFocusSide('left'); setTreeCursor(i)
+                    if (node.kind === 'dir') {
+                      setExpandedDirs((prev) => {
+                        const next = new Set(prev)
+                        const expanded = node.chainPaths.some((path) => next.has(path))
+                        for (const path of node.chainPaths) {
+                          if (expanded) next.delete(path)
+                          else next.add(path)
+                        }
+                        return next
+                      })
+                    }
+                  }}
                 >
                   <text fg={theme.cyan} wrapMode="none">{isCursor ? '▎' : ' '}</text>
                   <text fg={labelColor} wrapMode="none">{label}</text>
@@ -1312,7 +1335,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           borderColor={pane === 3 ? theme.border2 : theme.border}
           backgroundColor={pane === 3 ? theme.surface2 : theme.surface}
         >
-          <box paddingX={1} width={leftW - 2} backgroundColor={pane === 3 ? theme.cyan : 'transparent'}>
+          <box paddingX={1} width={leftW - 2} backgroundColor={pane === 3 ? theme.cyan : 'transparent'} onMouseUp={(event) => activateMousePane(event, 3)}>
             <text fg={pane === 3 ? theme.surface : theme.muted}>[3] Branches</text>
           </box>
           <scrollbox
@@ -1325,7 +1348,10 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
               const isCurrent = b === data?.branch
               const isSel = i === branchIndex && pane === 3
               return (
-                <box key={b} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'}>
+                <box key={b} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'} onMouseUp={(event) => {
+                  if (event.button !== 0) return
+                  event.stopPropagation(); setPane(3); setFocusSide('left'); setBranchIndex(i)
+                }}>
                   <text fg={theme.cyan} wrapMode="none">{isSel ? '▎' : ' '}</text>
                   <text fg={isCurrent ? theme.green : isSel ? theme.text : theme.muted} wrapMode="none">
                     {isCurrent ? `* ${b}` : `  ${b}`}
@@ -1338,7 +1364,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
 
         {/* [4] Commits */}
         <box height={commitsH} flexDirection="column" backgroundColor={pane === 4 ? theme.surface2 : theme.surface}>
-          <box paddingX={1} width={leftW - 2} backgroundColor={pane === 4 ? theme.cyan : 'transparent'}>
+          <box paddingX={1} width={leftW - 2} backgroundColor={pane === 4 ? theme.cyan : 'transparent'} onMouseUp={(event) => activateMousePane(event, 4)}>
             <text fg={pane === 4 ? theme.surface : theme.muted}>[4] Commits</text>
           </box>
           <scrollbox
@@ -1353,7 +1379,10 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
               const hash = spaceIdx > 0 ? c.slice(0, spaceIdx) : c
               const msg = spaceIdx > 0 ? c.slice(spaceIdx + 1) : ''
               return (
-                <box key={c} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'}>
+                <box key={c} paddingX={1} flexDirection="row" backgroundColor={isSel ? theme.surface3 : 'transparent'} onMouseUp={(event) => {
+                  if (event.button !== 0) return
+                  event.stopPropagation(); setPane(4); setFocusSide('left'); setCommitIndex(i)
+                }}>
                   <text fg={theme.cyan} wrapMode="none">{isSel ? '▎' : ' '}</text>
                   <text fg={theme.amber} wrapMode="none">{hash} </text>
                   <text fg={isSel ? theme.text : theme.dim} wrapMode="none">
@@ -1409,6 +1438,18 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           backgroundColor={theme.surface}
           scrollY
           scrollbarOptions={{ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }}
+          onMouseScroll={(event) => {
+            const direction = event.scroll?.direction === 'up' ? -1 : event.scroll?.direction === 'down' ? 1 : 0
+            if (direction === 0) return
+            event.preventDefault(); event.stopPropagation(); setFocusSide('right')
+            const amount = Math.max(2, Math.min(Math.round(Math.abs(event.scroll?.delta ?? 1)), Math.max(2, Math.floor(rightH / 2))))
+            const rdv = rightDiffViewRef.current
+            const totalRows = pane === 2 && fileDiffMode === 'viewer'
+              ? (diffLayout === 'split' ? (rdv?.splitRows.length ?? 0) : (rdv?.rows.length ?? 0))
+              : 0
+            if (totalRows > 0) setDiffCursorRow((current) => clampNumber(current + direction * amount, 0, totalRows - 1))
+            diffScrollRef.current?.scrollBy(direction * amount)
+          }}
         >
           {contentLoading && diffLines.length === 1 && diffLines[0] === 'Loading…' ? (
             <box width={rightW}>

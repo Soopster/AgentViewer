@@ -53,6 +53,20 @@ try {
       throw new Error(`Expected one modified file row on initial render:\n${frame}`)
     }
 
+    // Clicking the flattened directory row toggles it just like h/l.
+    await act(async () => { await setup.mockMouse.click(8, 8) })
+    await flushEffects(setup)
+    frame = setup.captureCharFrame()
+    if (modifiedFileRows(frame).length !== 0) {
+      throw new Error(`Expected mouse click to collapse the file tree:\n${frame}`)
+    }
+    await act(async () => { await setup.mockMouse.click(8, 8) })
+    await flushEffects(setup)
+    frame = setup.captureCharFrame()
+    if (modifiedFileRows(frame).length !== 1) {
+      throw new Error(`Expected mouse click to re-expand the file tree:\n${frame}`)
+    }
+
     await act(async () => {
       handleKey?.({ name: 'h', ctrl: false, shift: false, sequence: 'h' })
     })

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TextAttributes } from '@opentui/core'
-import type { ScrollBoxRenderable, TextareaRenderable } from '@opentui/core'
+import type { MouseEvent, ScrollBoxRenderable, TextareaRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 import {
   fetchPullRequestWorkspace,
@@ -706,10 +706,16 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
 
   const renderDiffLine = (line: DiffLine, index: number, sticky = false) => {
     const isCursor = !sticky && focusSide === 'right' && index === clampedCursor
+    const selectLine = (event: MouseEvent) => {
+      if (sticky || event.button !== 0) return
+      event.stopPropagation()
+      setFocusSide('right')
+      moveCursorTo(index)
+    }
     if (line.kind === 'file') {
       const file = pr?.files[line.fileIndex]
       return (
-        <box key={sticky ? 'sticky' : index} width={rightW} flexDirection="row" backgroundColor={sticky ? theme.surface3 : theme.diffMetaBg}>
+        <box key={sticky ? 'sticky' : index} width={rightW} flexDirection="row" backgroundColor={sticky ? theme.surface3 : theme.diffMetaBg} onMouseUp={selectLine}>
           <text fg={isCursor ? theme.cyan : theme.dim} wrapMode="none">{isCursor ? '▶' : '>'}</text>
           <text fg={file ? statusColor(theme, file.status) : theme.cyan} attributes={TextAttributes.BOLD} wrapMode="none">
             {` ${fitText(line.text, rightW - 3)}`}
@@ -719,7 +725,7 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
     }
     if (line.kind === 'hunk' || line.kind === 'meta') {
       return (
-        <box key={index} width={rightW} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : lineBg(line)}>
+        <box key={index} width={rightW} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : lineBg(line)} onMouseUp={selectLine}>
           <text fg={isCursor ? theme.cyan : lineFg(line)} wrapMode="none">
             {fitText(`${isCursor ? '▶' : ' '}${line.kind === 'hunk' ? '@' : ' '} ${line.text}`, rightW - 1)}
           </text>
@@ -729,7 +735,7 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
     if (line.kind === 'comment') {
       const pad = ' '.repeat(Math.min(gutterCols + 1, 10))
       return (
-        <box key={index} width={rightW} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : theme.surface2}>
+        <box key={index} width={rightW} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : theme.surface2} onMouseUp={selectLine}>
           <text fg={theme.violet} wrapMode="none">{fitText(`${isCursor ? '▶' : ' '}${pad}${line.text}`, rightW - 1)}</text>
         </box>
       )
@@ -738,7 +744,7 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
     const fg = lineFg(line)
     const spans = lineSpans(line)
     return (
-      <box key={index} width={rightW} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : lineBg(line)}>
+      <box key={index} width={rightW} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : lineBg(line)} onMouseUp={selectLine}>
         {showLineNumbers ? (
           <text fg={theme.dim} wrapMode="none">
             {`${line.oldNo != null ? String(line.oldNo).padStart(lineNoWidth) : ' '.repeat(lineNoWidth)} ${line.newNo != null ? String(line.newNo).padStart(lineNoWidth) : ' '.repeat(lineNoWidth)}`}
@@ -769,7 +775,18 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
   const syntaxReady = highlights?.fileIndex === currentFileIndex
 
   const sectionHeader = (id: PaneId, title: string, counter?: string) => (
-    <box paddingX={1} width={leftW - 2} flexDirection="row" backgroundColor={pane === id ? theme.cyan : 'transparent'}>
+    <box
+      paddingX={1}
+      width={leftW - 2}
+      flexDirection="row"
+      backgroundColor={pane === id ? theme.cyan : 'transparent'}
+      onMouseUp={(event) => {
+        if (event.button !== 0) return
+        event.stopPropagation()
+        setPane(id)
+        setFocusSide('left')
+      }}
+    >
       <text fg={pane === id ? theme.surface : theme.muted} wrapMode="none">{`[${id}] ${title}`}</text>
       {counter && pane === id ? (
         <box flexGrow={1}><text fg={theme.surface2} wrapMode="none">{`  ${counter}`}</text></box>
@@ -843,7 +860,17 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
                   const indent = '  '.repeat(row.depth)
                   if (row.kind === 'dir') {
                     return (
-                      <box key={`d:${row.path}`} width={Math.max(0, leftW - 3)} paddingX={1} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : 'transparent'}>
+                      <box key={`d:${row.path}`} width={Math.max(0, leftW - 3)} paddingX={1} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : 'transparent'} onMouseUp={(event) => {
+                        if (event.button !== 0) return
+                        event.stopPropagation()
+                        setPane(2); setFocusSide('left'); setTreeCursor(index)
+                        setCollapsedDirs((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(row.path)) next.delete(row.path)
+                          else next.add(row.path)
+                          return next
+                        })
+                      }}>
                         <text fg={theme.cyan} wrapMode="none">{isCursor ? '▎' : ' '}</text>
                         <text fg={isCursor ? theme.text : theme.muted} wrapMode="none">
                           {fitText(`${indent}${row.expanded ? '▼' : '▶'} ${row.label}`, leftW - 5)}
@@ -854,7 +881,11 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
                   const isActive = row.fileIndex === currentFileIndex
                   const letter = STATUS_LETTER[row.file.status] ?? 'M'
                   return (
-                    <box key={`f:${row.file.filename}`} width={Math.max(0, leftW - 3)} paddingX={1} flexDirection="row" backgroundColor={isCursor || isActive ? theme.surface3 : 'transparent'}>
+                    <box key={`f:${row.file.filename}`} width={Math.max(0, leftW - 3)} paddingX={1} flexDirection="row" backgroundColor={isCursor || isActive ? theme.surface3 : 'transparent'} onMouseUp={(event) => {
+                      if (event.button !== 0) return
+                      event.stopPropagation()
+                      setPane(2); setFocusSide('left'); setTreeCursor(index); jumpToFile(row.fileIndex)
+                    }}>
                       <text fg={theme.cyan} wrapMode="none">{isCursor ? '▎' : ' '}</text>
                       <text fg={statusColor(theme, row.file.status)} wrapMode="none">{`${indent}${letter} `}</text>
                       <text fg={isCursor || isActive ? theme.text : theme.muted} wrapMode="none">
@@ -887,7 +918,12 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
                 {discussionEntries.map((entry, index) => {
                   const isCursor = index === discussionCursor && pane === 3
                   return (
-                    <box key={entry.id} width={Math.max(0, leftW - 3)} paddingX={1} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : 'transparent'}>
+                    <box key={entry.id} width={Math.max(0, leftW - 3)} paddingX={1} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : 'transparent'} onMouseUp={(event) => {
+                      if (event.button !== 0) return
+                      event.stopPropagation()
+                      setPane(3); setFocusSide('left'); setDiscussionCursor(index)
+                      if (entry.comment) jumpToComment(entry.comment)
+                    }}>
                       <text fg={theme.cyan} wrapMode="none">{isCursor ? '▎' : ' '}</text>
                       <text fg={entry.comment?.path ? theme.violet : isCursor ? theme.text : theme.muted} wrapMode="none">
                         {fitText(entry.label, leftW - 5)}
@@ -914,7 +950,12 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
                   const isCursor = index === prCursor && pane === 4
                   const isCurrent = item.number === pr?.number
                   return (
-                    <box key={item.number} width={Math.max(0, leftW - 3)} paddingX={1} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : 'transparent'}>
+                    <box key={item.number} width={Math.max(0, leftW - 3)} paddingX={1} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : 'transparent'} onMouseUp={(event) => {
+                      if (event.button !== 0) return
+                      event.stopPropagation()
+                      setPane(4); setFocusSide('left'); setPrCursor(index)
+                      if (item.number !== pr?.number) void load(item.number)
+                    }}>
                       <text fg={theme.cyan} wrapMode="none">{isCursor ? '▎' : ' '}</text>
                       <text fg={theme.amber} wrapMode="none">{isCurrent ? `*#${item.number} ` : ` #${item.number} `}</text>
                       <text fg={isCurrent ? theme.green : isCursor ? theme.text : theme.muted} wrapMode="none">
@@ -943,7 +984,13 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
         ) : null}
 
         {/* ── Right column ────────────────────────────────── */}
-        <box flexGrow={1} flexDirection="column">
+        <box flexGrow={1} flexDirection="column" onMouseScroll={(event) => {
+          const direction = event.scroll?.direction === 'up' ? -1 : event.scroll?.direction === 'down' ? 1 : 0
+          if (direction === 0) return
+          event.preventDefault(); event.stopPropagation(); setFocusSide('right')
+          const amount = Math.max(2, Math.min(Math.round(Math.abs(event.scroll?.delta ?? 1)), Math.max(2, Math.floor(diffRows / 2))))
+          moveCursorTo(clampedCursor + direction * amount)
+        }}>
           <box paddingX={1} flexDirection="row" backgroundColor={theme.surface2}>
             {(() => {
               const controls: Array<[string, string]> = [
