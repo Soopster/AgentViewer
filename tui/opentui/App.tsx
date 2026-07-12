@@ -4655,7 +4655,12 @@ function TranscriptCardInner({
       ? dedupeStreamToolSummaryCards(toolCards)
       : toolCards
     return (
-      <box flexDirection="column" marginBottom={streamMode ? densityState.streamGap : densityState.cardGap} width={agentWidth}>
+      <box
+        flexDirection="column"
+        marginBottom={streamMode ? densityState.streamGap : densityState.cardGap}
+        width={agentWidth}
+        alignSelf={centeredCard ? 'center' : undefined}
+      >
         {landmarks.map((landmark, landmarkIndex) => {
           const color = landmark.kind === 'resume'
             ? theme.cyan
@@ -4811,7 +4816,14 @@ function TranscriptCardInner({
   // split/stack/plain views, hunk navigation, range selection, notes, and
   // composer actions; duplicating it here would make the two views drift.
   if (streamMode && !(card.category === 'diff' && isExpanded)) {
-    const streamWidth = Math.max(rightPaneWidth - 2, 16)
+    // Collapsed diff rows stay inside the centered column too (unlike the
+    // reader path's diff exemption) — only expanded diffs, routed to the full
+    // renderer above, keep the whole pane width.
+    const streamCentered = transcriptWidth === 'centered'
+    const streamAvailableWidth = Math.max(rightPaneWidth - 2, 16)
+    const streamWidth = streamCentered
+      ? Math.max(Math.min(streamAvailableWidth - densityState.bodyIndent, MAX_TRANSCRIPT_CARD_WIDTH), 16)
+      : streamAvailableWidth
     const streamTextWidth = Math.max(streamWidth - 2, 12)
     const firstLine = bodyLines[0]
     const streamMarker = firstLine ? streamLineMarker(firstLine, card.role) : card.role === 'user' ? '›' : '•'
@@ -4855,6 +4867,8 @@ function TranscriptCardInner({
         marginBottom={streamRendersSomething
           ? (card.role === 'user' ? densityState.streamUserGap : densityState.streamGap)
           : 0}
+        alignSelf={streamCentered ? 'center' : undefined}
+        width={streamCentered ? streamWidth + densityState.bodyIndent : undefined}
       >
         {landmarks.map((landmark, landmarkIndex) => {
           const lmColor = landmark.kind === 'resume'

@@ -2751,6 +2751,21 @@ export default function MessageView({
     setRowMeasurementVersion((version) => version + 1)
     setPersistedMeasurementVersion((version) => version + 1)
   }, [density])
+  const [timelineWidth, setTimelineWidth] = useState<'centered' | 'full'>(() => {
+    if (typeof window === 'undefined') return 'centered'
+    return window.localStorage.getItem('agentViewer:timelineWidth') === 'full' ? 'full' : 'centered'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('agentViewer:timelineWidth', timelineWidth)
+    // Width changes rewrap every row: measured heights are stale.
+    rowHeightsRef.current.clear()
+    timelineEstimateCalibrationRef.current.clear()
+    timelineEstimateSamplesRef.current.clear()
+    timelineEstimateCalibrationFrozenRef.current = false
+    setRowMeasurementVersion((version) => version + 1)
+    setPersistedMeasurementVersion((version) => version + 1)
+  }, [timelineWidth])
   const [diffStyle, setDiffStyle] = useState<PierreDiffStyle>(() => {
     if (typeof window === 'undefined') return 'stacked'
     const stored = window.localStorage.getItem('agentViewer:diffStyle')
@@ -7061,6 +7076,19 @@ export default function MessageView({
                 </button>
               ))}
               <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+              {/* Timeline width */}
+              <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>WIDTH</div>
+              {(['centered', 'full'] as const).map((w) => (
+                <button key={w} type="button"
+                  onClick={() => { setTimelineWidth(w); setViewDropdownOpen(false) }}
+                  style={{ padding: '6px 14px', background: timelineWidth === w ? 'rgba(56,217,245,0.08)' : 'transparent', border: 0, cursor: 'pointer', color: timelineWidth === w ? 'var(--cyan)' : 'var(--text-2)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: '0.07em', textAlign: 'left', whiteSpace: 'nowrap' }}>
+                  {w.toUpperCase()}
+                  <span style={{ color: 'var(--text-3)', marginLeft: 8, fontSize: 10 }}>
+                    {w === 'centered' ? 'readable column' : 'whole window'}
+                  </span>
+                </button>
+              ))}
+              <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
               {/* Diff style */}
               <div style={{ padding: '4px 14px 2px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', letterSpacing: '0.08em' }}>DIFF STYLE</div>
               {(['stacked', 'split'] as const).map((style) => (
@@ -7688,7 +7716,17 @@ export default function MessageView({
             )}
             <div
               ref={timelineContentRef}
-              style={{ position: 'relative', minHeight: timelineRenderedHeight, height: timelineRenderedHeight }}
+              style={{
+                position: 'relative',
+                minHeight: timelineRenderedHeight,
+                height: timelineRenderedHeight,
+                // Centered width caps the measure so lines stay readable on
+                // wide monitors instead of spanning the viewport. Stream is
+                // prose-first and reads best narrower; card views keep more
+                // room for tool cards and diffs.
+                maxWidth: timelineWidth === 'centered' ? (viewMode === 'stream' ? 900 : 1040) : undefined,
+                marginInline: timelineWidth === 'centered' ? 'auto' : undefined,
+              }}
             >
               <MessageDensityProvider density={density}>
               <ViewModeProvider mode={viewMode}>

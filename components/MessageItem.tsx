@@ -5549,6 +5549,7 @@ function streamDensitySpacing(dc: DensityConfig) {
     otherPaddingY: isDense ? 1 : isComfortable ? 5 : 2,
     paddingX: isComfortable ? 10 : 8,
     blockGap: isDense ? 1 : isComfortable ? 5 : 2,
+    toolListMarginTop: isDense ? 2 : isComfortable ? 8 : 4,
     toolRowPaddingY: isDense ? 2 : isComfortable ? 6 : 3,
     toolDetailPadding: isDense ? '2px 8px 6px 22px' : isComfortable ? '6px 10px 10px 24px' : '4px 8px 8px 22px',
   }
@@ -5674,7 +5675,12 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
           </div>
         )}
         {toolThreads.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 0,
+            marginTop: textBlocks.length > 0 ? spacing.toolListMarginTop : 0,
+          }}>
             {toolThreads.map((thread, index) => (
               <StreamToolRow key={thread.toolUse.id ?? `${thread.toolUse.name}:${index}`} thread={thread} />
             ))}
