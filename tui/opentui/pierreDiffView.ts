@@ -1,5 +1,6 @@
 import {
   cleanLastNewline,
+  getFiletypeFromFileName,
   getHighlighterOptions,
   getSharedHighlighter,
   parsePatchFiles,
@@ -190,7 +191,10 @@ export async function loadDiffHighlights(
 
       for (const file of files) {
         try {
-          const hlOpts = getHighlighterOptions(file.lang ?? 'text', { theme: options.theme })
+          // parsePatchFiles leaves `lang` unset; renderDiffWithHighlighter falls
+          // back to the filename-derived language, so load that same language.
+          const lang = file.lang ?? getFiletypeFromFileName(diffDisplayPath(file)) ?? 'text'
+          const hlOpts = getHighlighterOptions(lang, { theme: options.theme })
           const highlighter = await getSharedHighlighter({
             ...hlOpts,
             preferredHighlighter: 'shiki-wasm',
