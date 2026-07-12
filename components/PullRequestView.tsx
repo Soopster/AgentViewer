@@ -15,7 +15,7 @@ import {
   type SelectedLineRange,
 } from '@pierre/diffs'
 import {
-  Check, CheckCircle2, ChevronDown, ChevronRight, CircleDot, ExternalLink, FileDiff,
+  Bot, Check, CheckCircle2, ChevronDown, ChevronRight, CircleDot, ExternalLink, FileDiff,
   GitCommitHorizontal, GitPullRequest, ListChecks, Maximize2, MessageSquare, MinusCircle,
   PanelLeftClose, PanelLeftOpen, RefreshCw, Send, SlidersHorizontal, X, XCircle,
 } from 'lucide-react'
@@ -1062,7 +1062,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
                       {pending.length} pending comment{pending.length === 1 ? '' : 's'} will be submitted with this review.
                     </div>
                   ) : null}
-                  <Textarea value={reviewBody} onChange={(event) => setReviewBody(event.target.value)} placeholder="Leave a review summary… (optional for approvals)" rows={4} />
+                  <Textarea className="px-3! py-2!" value={reviewBody} onChange={(event) => setReviewBody(event.target.value)} placeholder="Leave a review summary… (optional for approvals)" rows={4} />
                   <div role="radiogroup" aria-label="Review verdict" style={{ display: 'grid', gap: 6 }}>
                     {([
                       { value: 'approve' as const, label: 'Approve', detail: 'Submit feedback and approve merging these changes.', color: 'var(--green)' },
@@ -1086,6 +1086,7 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
                     ) : <span />}
                     <Button
                       size="sm"
+                      className="min-w-32 px-4!"
                       disabled={!!busyAction || (reviewVerdict !== 'approve' && !reviewBody.trim() && pending.length === 0)}
                       onClick={() => void submitReview()}
                     >
@@ -1224,6 +1225,21 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
 
 // ─── Conversation tab ─────────────────────────────────────────────────────────
 
+function authorInitials(author: string): string {
+  const normalized = author.replace(/\[bot\]$/i, '').replace(/[^a-z0-9]+/gi, ' ').trim()
+  if (!normalized) return '?'
+  const parts = normalized.split(/\s+/)
+  return (parts.length > 1 ? `${parts[0][0]}${parts.at(-1)?.[0] ?? ''}` : parts[0].slice(0, 2)).toUpperCase()
+}
+
+function ConversationMarker({ author, children }: { author?: string; children?: ReactNode }) {
+  return (
+    <div className="av-pr-timeline-marker" title={author} aria-hidden="true">
+      {children ?? authorInitials(author ?? '')}
+    </div>
+  )
+}
+
 function ConversationTab({
   pr, loading, conversation, inlineThreads, reviewers, checkSummary,
   comment, question, busyAction,
@@ -1250,96 +1266,118 @@ function ConversationTab({
     return <div style={{ margin: 'auto', color: 'var(--text-3)' }}>{loading ? 'Loading pull requests…' : 'Select an open pull request.'}</div>
   }
   return (
-    <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'auto', justifyContent: 'center', gap: 20, padding: '18px 20px' }}>
-      <div style={{ width: 'min(880px, 100%)', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <article style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface-2)', overflow: 'hidden' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-3)', fontSize: 11, color: 'var(--text-3)' }}>
-            <strong style={{ color: 'var(--text)', fontSize: 12 }}>{pr.author.login}</strong>
-            <span>opened this pull request · {timeAgo(pr.updatedAt)}</span>
-            {pr.labels.length > 0 ? (
-              <span style={{ display: 'inline-flex', gap: 5, marginLeft: 'auto', flexWrap: 'wrap' }}>
-                {pr.labels.map((label) => (
-                  <span key={label.name} style={{ padding: '1px 8px', borderRadius: 999, fontSize: 10, fontWeight: 650, background: `color-mix(in srgb, #${label.color || '888888'} 22%, var(--surface))`, color: `color-mix(in srgb, #${label.color || '888888'} 80%, var(--text))`, border: `1px solid color-mix(in srgb, #${label.color || '888888'} 45%, var(--border))` }}>
-                    {label.name}
-                  </span>
-                ))}
-              </span>
-            ) : null}
-          </div>
-          <div style={{ padding: 12, fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
-            {pr.body || <span style={{ color: 'var(--text-3)' }}>No description provided.</span>}
-          </div>
-        </article>
+    <div className="av-pr-conversation-layout">
+      <div className="av-pr-conversation-main">
+        <div className="av-pr-timeline-item">
+          <ConversationMarker author={pr.author.login} />
+          <article className="av-pr-timeline-card">
+            <div className="av-pr-timeline-card-header">
+              <strong>{pr.author.login}</strong>
+              <span>opened this pull request · {timeAgo(pr.updatedAt)}</span>
+            </div>
+            <div className="av-pr-timeline-card-body">
+              {pr.body || <span style={{ color: 'var(--text-3)' }}>No description provided.</span>}
+            </div>
+          </article>
+        </div>
 
         {conversation.map((item) => {
           const meta = item.state ? reviewStateMeta(item.state) : null
           return (
-            <article key={item.id} style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface-2)', overflow: 'hidden' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-3)', fontSize: 11, color: 'var(--text-3)' }}>
-                <strong style={{ color: 'var(--text)', fontSize: 12 }}>{item.author}</strong>
-                {meta ? (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: meta.color, fontWeight: 650 }}>
-                    {meta.icon}
-                    {meta.label}
-                  </span>
-                ) : <span>commented</span>}
-                <span style={{ marginLeft: 'auto' }}>{timeAgo(item.createdAt)}</span>
-              </div>
-              <div style={{ padding: 12, fontSize: 12.5, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
-                {item.body || <span style={{ color: 'var(--text-3)' }}>(no review message)</span>}
-              </div>
-            </article>
+            <div key={item.id} className="av-pr-timeline-item">
+              <ConversationMarker author={item.author} />
+              <article className="av-pr-timeline-card">
+                <div className="av-pr-timeline-card-header">
+                  <strong>{item.author}</strong>
+                  {meta ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: meta.color, fontWeight: 650 }}>
+                      {meta.icon}
+                      {meta.label}
+                    </span>
+                  ) : <span>commented</span>}
+                  <span style={{ marginLeft: 'auto' }}>{timeAgo(item.createdAt)}</span>
+                </div>
+                <div className="av-pr-timeline-card-body av-pr-timeline-card-body--compact">
+                  {item.body || <span style={{ color: 'var(--text-3)' }}>(no review message)</span>}
+                </div>
+              </article>
+            </div>
           )
         })}
 
         {inlineThreads.map((thread) => (
-          <section key={thread.path} style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
-            <button
-              type="button"
-              onClick={() => onJumpToFile(thread.path)}
-              title="Open in Files changed"
-              style={{ display: 'flex', alignItems: 'center', gap: 7, width: '100%', padding: '7px 12px', border: 0, borderBottom: '1px solid var(--border)', background: 'var(--surface-3)', color: 'var(--text-2)', fontFamily: MONO, fontSize: 11, cursor: 'pointer', textAlign: 'left' }}
-            >
-              <PierreFileTypeIcon filePath={thread.path} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{thread.path}</span>
-              <span style={{ marginLeft: 'auto', color: 'var(--text-3)', flexShrink: 0 }}>{thread.comments.length} comment{thread.comments.length === 1 ? '' : 's'}</span>
-            </button>
-            {thread.comments.map((item) => (
+          <div key={thread.path} className="av-pr-timeline-item">
+            <ConversationMarker><FileDiff size={15} /></ConversationMarker>
+            <section className="av-pr-timeline-card">
               <button
-                key={item.id}
                 type="button"
-                onClick={() => onJumpToComment(thread.path, item)}
-                title={item.line != null ? 'Jump to line in Files changed' : 'Comment on an outdated diff'}
-                style={{ display: 'block', width: '100%', padding: '9px 12px', border: 0, borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', color: 'var(--text)', textAlign: 'left', cursor: item.line != null ? 'pointer' : 'default' }}
+                onClick={() => onJumpToFile(thread.path)}
+                title="Open in Files changed"
+                className="av-pr-inline-thread-header"
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, color: 'var(--text-3)', fontSize: 10 }}>
-                  <strong style={{ color: 'var(--text-2)', fontSize: 11 }}>{item.author}</strong>
-                  <span style={{ fontFamily: MONO }}>{item.line != null ? `L${item.line}` : 'outdated'} · {timeAgo(item.createdAt)}</span>
-                </div>
-                <div style={{ marginTop: 4, fontSize: 12, lineHeight: 1.45, whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{item.body}</div>
+                <PierreFileTypeIcon filePath={thread.path} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{thread.path}</span>
+                <span style={{ marginLeft: 'auto', color: 'var(--text-3)', flexShrink: 0 }}>{thread.comments.length} comment{thread.comments.length === 1 ? '' : 's'}</span>
               </button>
-            ))}
-          </section>
+              {thread.comments.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onJumpToComment(thread.path, item)}
+                  title={item.line != null ? 'Jump to line in Files changed' : 'Comment on an outdated diff'}
+                  className="av-pr-inline-thread-comment"
+                  style={{ cursor: item.line != null ? 'pointer' : 'default' }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, color: 'var(--text-3)', fontSize: 10 }}>
+                    <strong style={{ color: 'var(--text-2)', fontSize: 11 }}>{item.author}</strong>
+                    <span style={{ fontFamily: MONO }}>{item.line != null ? `L${item.line}` : 'outdated'} · {timeAgo(item.createdAt)}</span>
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 12, lineHeight: 1.45, whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{item.body}</div>
+                </button>
+              ))}
+            </section>
+          </div>
         ))}
 
-        <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface-2)', padding: 12, display: 'grid', gap: 8 }}>
-          <div style={{ fontSize: 12, fontWeight: 700 }}>Add a comment</div>
-          <Textarea value={comment} onChange={(event) => onCommentChange(event.target.value)} placeholder="Leave a comment on the conversation…" rows={3} />
+        <div className="av-pr-timeline-item">
+          <ConversationMarker><MessageSquare size={15} /></ConversationMarker>
+          <section className="av-pr-conversation-composer">
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>Continue the conversation</div>
+            <div style={{ marginTop: 2, color: 'var(--text-3)', fontSize: 11 }}>Post to GitHub or bring the active agent into the review.</div>
+          </div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <label htmlFor="pr-conversation-comment" style={{ fontSize: 12, fontWeight: 650 }}>Add a comment</label>
+            <Textarea id="pr-conversation-comment" className="px-3! py-2!" value={comment} onChange={(event) => onCommentChange(event.target.value)} placeholder="Leave a comment on the conversation…" rows={3} />
+          </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button size="sm" disabled={!comment.trim() || !!busyAction} onClick={onSubmitComment}>
+            <Button className="min-w-28 px-4!" size="sm" disabled={!comment.trim() || !!busyAction} onClick={onSubmitComment}>
               <Send data-icon="inline-start" />{busyAction === 'comment' ? 'Posting…' : 'Comment'}
             </Button>
           </div>
-          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, display: 'grid', gap: 8 }}>
-            <Textarea value={question} onChange={(event) => onQuestionChange(event.target.value)} placeholder="Ask the active agent about this PR…" rows={2} />
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Button size="sm" variant="secondary" disabled={!question.trim()} onClick={onAskAgent}>Ask agent</Button>
+          <div className="av-pr-agent-assist">
+            <div className="av-pr-agent-assist-header">
+              <span className="av-pr-agent-assist-icon"><Bot aria-hidden="true" /></span>
+              <div>
+                <label htmlFor="pr-agent-question">Ask the active agent</label>
+                <div>Add the PR and changed files to your next agent prompt.</div>
+              </div>
+              <span className="av-pr-agent-assist-badge">AI assist</span>
+            </div>
+            <Textarea id="pr-agent-question" className="av-pr-agent-assist-input px-3! py-2!" value={question} onChange={(event) => onQuestionChange(event.target.value)} placeholder="What should the agent investigate?" rows={3} />
+            <div className="av-pr-agent-assist-footer">
+              <span>Private to this Agent Viewer session</span>
+              <Button className="av-pr-agent-assist-button min-w-32 px-4!" size="sm" disabled={!question.trim()} onClick={onAskAgent}>
+                <Bot data-icon="inline-start" />
+                Ask agent
+              </Button>
             </div>
           </div>
+          </section>
         </div>
       </div>
 
-      <aside style={{ width: 250, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 14, fontSize: 12 }}>
+      <aside className="av-pr-conversation-sidebar">
         <div>
           <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.06em', marginBottom: 6 }}>Reviewers</div>
           {reviewers.length === 0 ? <div style={{ color: 'var(--text-3)' }}>No reviews yet.</div> : reviewers.map((reviewer) => {
@@ -1354,6 +1392,18 @@ function ConversationTab({
               </div>
             )
           })}
+        </div>
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.06em', marginBottom: 7 }}>Labels</div>
+          {pr.labels.length === 0 ? <div style={{ color: 'var(--text-3)' }}>No labels.</div> : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              {pr.labels.map((label) => (
+                <span key={label.name} style={{ padding: '1px 8px', borderRadius: 999, fontSize: 10, fontWeight: 650, background: `color-mix(in srgb, #${label.color || '888888'} 22%, var(--surface))`, color: `color-mix(in srgb, #${label.color || '888888'} 80%, var(--text))`, border: `1px solid color-mix(in srgb, #${label.color || '888888'} 45%, var(--border))` }}>
+                  {label.name}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
           <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.06em', marginBottom: 6 }}>Checks</div>

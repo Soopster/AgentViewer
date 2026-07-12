@@ -1417,6 +1417,333 @@ body {
   .av-stream-message--user { max-width: 92% !important; }
 }
 
+/* ── Pull request conversation ──────────────────────────────────────────── */
+.av-pr-conversation-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 880px) minmax(210px, 250px);
+  justify-content: center;
+  align-content: start;
+  gap: 24px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px 28px;
+}
+
+.av-pr-conversation-main {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.av-pr-conversation-main::before {
+  content: '';
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  left: 17px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.av-pr-timeline-item {
+  position: relative;
+  min-width: 0;
+  padding-left: 52px;
+}
+
+.av-pr-timeline-marker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-2);
+  border-radius: 9px;
+  background: var(--surface-3);
+  box-shadow: 0 0 0 4px var(--bg);
+  color: var(--text-2);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.av-pr-timeline-card,
+.av-pr-conversation-composer {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.av-pr-timeline-card::before,
+.av-pr-conversation-composer::before {
+  content: '';
+  position: absolute;
+  top: 12px;
+  left: -6px;
+  width: 10px;
+  height: 10px;
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  background: var(--surface-3);
+  transform: rotate(45deg);
+}
+
+.av-pr-timeline-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 9px 9px 0 0;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.av-pr-timeline-card-header strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.av-pr-timeline-card-body {
+  padding: 14px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.av-pr-timeline-card-body--compact {
+  font-size: 12.5px;
+}
+
+.av-pr-inline-thread-header,
+.av-pr-inline-thread-comment {
+  display: block;
+  width: 100%;
+  border: 0;
+  color: var(--text);
+  text-align: left;
+}
+
+.av-pr-inline-thread-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 9px 9px 0 0;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.av-pr-inline-thread-comment {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.av-pr-inline-thread-comment:last-child {
+  border-bottom: 0;
+  border-radius: 0 0 9px 9px;
+}
+
+.av-pr-inline-thread-header:hover,
+.av-pr-inline-thread-comment:hover {
+  background: var(--surface-3);
+}
+
+.av-pr-conversation-composer {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.av-pr-conversation-composer::before {
+  background: var(--surface-2);
+}
+
+.av-pr-agent-assist {
+  position: relative;
+  display: grid;
+  gap: 11px;
+  overflow: hidden;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--violet) 48%, var(--border));
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--cyan) 10%, transparent), transparent 42%),
+    linear-gradient(135deg, color-mix(in srgb, var(--violet) 9%, var(--surface)), color-mix(in srgb, var(--cyan) 4%, var(--surface-2)));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--violet) 72%, var(--cyan));
+}
+
+.av-pr-agent-assist-header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.av-pr-agent-assist-header label {
+  display: block;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: text;
+}
+
+.av-pr-agent-assist-header > div > div {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.av-pr-agent-assist-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid color-mix(in srgb, var(--violet) 55%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--violet) 14%, var(--surface-3));
+  color: var(--violet);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--violet) 14%, transparent);
+}
+
+.av-pr-agent-assist-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.av-pr-agent-assist-badge {
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 40%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cyan) 8%, var(--surface-3));
+  color: var(--cyan);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.av-pr-agent-assist-input {
+  border-color: color-mix(in srgb, var(--violet) 34%, var(--border)) !important;
+  background: color-mix(in srgb, var(--bg) 70%, var(--surface)) !important;
+}
+
+.av-pr-agent-assist-input:focus-visible {
+  border-color: color-mix(in srgb, var(--violet) 78%, var(--cyan)) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--violet) 18%, transparent) !important;
+}
+
+.av-pr-agent-assist-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.av-pr-agent-assist-footer > span {
+  color: var(--text-3);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+}
+
+.av-pr-agent-assist-button {
+  border: 1px solid color-mix(in srgb, var(--cyan) 34%, var(--violet)) !important;
+  background: linear-gradient(115deg, var(--violet), color-mix(in srgb, var(--violet) 55%, var(--cyan))) !important;
+  color: var(--bg) !important;
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--violet) 22%, transparent) !important;
+}
+
+.av-pr-agent-assist-button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+@media (max-width: 560px) {
+  .av-pr-agent-assist-header {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .av-pr-agent-assist-badge {
+    display: none;
+  }
+
+  .av-pr-agent-assist-footer {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+}
+
+.av-pr-conversation-sidebar {
+  position: sticky;
+  top: 18px;
+  align-self: start;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 12px;
+}
+
+@media (max-width: 1100px) {
+  .av-pr-conversation-layout {
+    grid-template-columns: minmax(0, 880px);
+  }
+
+  .av-pr-conversation-sidebar {
+    position: static;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 18px;
+    padding-top: 2px;
+  }
+
+  .av-pr-conversation-sidebar > div {
+    border-top: 1px solid var(--border) !important;
+    padding-top: 12px !important;
+  }
+}
+
+@media (max-width: 700px) {
+  .av-pr-conversation-layout {
+    padding-inline: 12px;
+  }
+
+  .av-pr-conversation-sidebar {
+    grid-template-columns: 1fr;
+  }
+
+  .av-pr-timeline-item {
+    padding-left: 44px;
+  }
+
+  .av-pr-timeline-marker {
+    width: 32px;
+    height: 32px;
+  }
+
+  .av-pr-conversation-main::before {
+    left: 15px;
+  }
+}
+
 .timeline-row-action:hover:not(:disabled) {
   background: color-mix(in srgb, var(--surface-2) 80%, transparent);
   color: var(--text);
