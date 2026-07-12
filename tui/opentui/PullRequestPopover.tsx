@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TextAttributes } from '@opentui/core'
-import type { MouseEvent, ScrollBoxRenderable, TextareaRenderable } from '@opentui/core'
+import type { MouseEvent, ScrollBoxRenderable, TextareaAction, TextareaRenderable } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 import {
   fetchPullRequestWorkspace,
@@ -14,6 +14,16 @@ import { flattenHastLine, loadDiffHighlights, type TuiFileHighlights, type TuiRe
 import { createScrollVelocityState, velocityScrollStep } from './scrollVelocity'
 
 type Key = { name: string; ctrl: boolean; shift: boolean; sequence: string; eventType?: string; repeated?: boolean }
+type ComposerKeyBinding = { name: string; action: TextareaAction; shift?: boolean; meta?: boolean; ctrl?: boolean }
+
+const PR_COMPOSER_KEY_BINDINGS: ComposerKeyBinding[] = [
+  { name: 'return', action: 'submit' },
+  { name: 'kpenter', action: 'submit' },
+  { name: 'return', shift: true, action: 'newline' },
+  { name: 'return', meta: true, action: 'newline' },
+  { name: 'j', ctrl: true, action: 'newline' },
+  { name: 'linefeed', action: 'newline' },
+]
 
 type Props = {
   cwd?: string | null
@@ -30,6 +40,7 @@ type Props = {
 // ---------------------------------------------------------------------------
 
 type DiffLineKind = 'file' | 'hunk' | 'add' | 'del' | 'ctx' | 'meta' | 'comment'
+type CommentCardPart = 'header' | 'body' | 'footer'
 
 type DiffLine = {
   kind: DiffLineKind
@@ -41,6 +52,7 @@ type DiffLine = {
   addIdx?: number
   delIdx?: number
   commentId?: string
+  commentPart?: CommentCardPart
 }
 
 const STATUS_LETTER: Record<string, string> = {
@@ -111,8 +123,10 @@ function filePatchText(file: PullRequestFile): string {
 function commentAnchors(comments: PullRequestComment[], path: string): Map<string, PullRequestComment[]> {
   const anchors = new Map<string, PullRequestComment[]>()
   for (const comment of comments) {
-    if (comment.path !== path || comment.line == null) continue
-    const key = `${comment.side === 'LEFT' ? 'L' : 'R'}:${comment.line}`
+    const line = comment.line ?? comment.originalLine
+    const side = comment.side ?? comment.originalSide
+    if (comment.path !== path || line == null) continue
+    const key = `${side === 'LEFT' ? 'L' : 'R'}:${line}`
     const list = anchors.get(key) ?? []
     list.push(comment)
     anchors.set(key, list)
@@ -130,12 +144,24 @@ function buildDiffLines(
   const fileStarts: number[] = []
   let maxLineNo = 1
 
-  const pushComments = (anchored: PullRequestComment[] | undefined, fileIndex: number) => {
+  const emittedCommentIds = new Set<string>()
+  const pushComments = (anchored: PullRequestComment[] | undefined, fileIndex: number, fallback = false) => {
     for (const comment of anchored ?? []) {
-      const wrapped = wrapText(`${comment.author}: ${comment.body.trim()}`, Math.max(commentWidth, 20))
-      for (let index = 0; index < wrapped.length; index++) {
-        lines.push({ kind: 'comment', text: `${index === 0 ? '● ' : '  '}${wrapped[index]}`, fileIndex, commentId: comment.id })
-      }
+      if (emittedCommentIds.has(comment.id)) continue
+      emittedCommentIds.add(comment.id)
+      const anchorLine = comment.line ?? comment.originalLine
+      const side = (comment.side ?? comment.originalSide) === 'LEFT' ? 'old' : 'new'
+      const location = anchorLine != null
+        ? `${fallback && comment.line == null ? 'outdated · ' : ''}${side} L${anchorLine}`
+        : fallback ? 'outside patch' : side
+      lines.push({
+        kind: 'comment', commentPart: 'header',
+        text: `Review comment — ${comment.author} · ${location}`,
+        fileIndex, commentId: comment.id,
+      })
+      const wrapped = wrapText(comment.body.trim() || '(empty comment)', Math.max(commentWidth - 4, 20))
+      for (const text of wrapped) lines.push({ kind: 'comment', commentPart: 'body', text, fileIndex })
+      lines.push({ kind: 'comment', commentPart: 'footer', text: '', fileIndex })
     }
   }
 
@@ -150,8 +176,10 @@ function buildDiffLines(
       text: `${chevron} ${letter} ${file.filename}${file.previousFilename ? ` (was ${file.previousFilename})` : ''}  +${file.additions} -${file.deletions}${commentCount ? `  ● ${commentCount}` : ''}`,
     })
     if (isCollapsed) return
+    const fileComments = comments.filter((comment) => comment.path === file.filename)
     if (!file.patch) {
       lines.push({ kind: 'meta', text: '  (no textual diff — binary or too large)', fileIndex })
+      pushComments(fileComments, fileIndex, true)
       return
     }
     const anchors = commentAnchors(comments, file.filename)
@@ -187,6 +215,11 @@ function buildDiffLines(
       }
       if (oldNo > maxLineNo) maxLineNo = oldNo
       if (newNo > maxLineNo) maxLineNo = newNo
+    }
+    const unmatched = fileComments.filter((comment) => !emittedCommentIds.has(comment.id))
+    if (unmatched.length > 0) {
+      lines.push({ kind: 'meta', text: '  Review comments outside the visible patch', fileIndex })
+      pushComments(unmatched, fileIndex, true)
     }
   })
   return { lines, fileStarts, maxLineNo }
@@ -293,7 +326,7 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
   const [prCursor, setPrCursor] = useState(0)
   const [composer, setComposer] = useState<
     | { mode: Exclude<ComposerMode, 'inline'> }
-    | { mode: 'inline'; path: string; line: number; side: 'LEFT' | 'RIGHT' }
+    | { mode: 'inline'; path: string; line: number; side: 'LEFT' | 'RIGHT'; rowIndex: number }
     | null
   >(null)
   const [highlights, setHighlights] = useState<{ fileIndex: number; data: TuiFileHighlights } | null>(null)
@@ -344,7 +377,9 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
 
   const treeRows = useMemo(() => buildTreeRows(pr?.files ?? [], collapsedDirs), [collapsedDirs, pr])
 
-  const maxScroll = Math.max(lines.length - diffRows, 0)
+  const inlineComposerRows = composer?.mode === 'inline' ? 7 : 0
+  const visibleDiffRows = Math.max(diffRows - inlineComposerRows, 1)
+  const maxScroll = Math.max(lines.length - visibleDiffRows, 0)
   const clampedTop = Math.min(scrollTop, maxScroll)
   const clampedCursor = lines.length > 0 ? clampNumber(diffCursor, 0, lines.length - 1) : 0
 
@@ -398,7 +433,7 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
       id: `comment-${item.id}`,
       comment: item,
       label: item.path
-        ? `● ${item.author} ${item.path.split('/').at(-1)}:${item.line ?? ''} ${firstLine(item.body)}`
+        ? `● ${item.author} ${item.path}:${item.line ?? item.originalLine ?? ''} ${firstLine(item.body)}`
         : `${item.author}: ${firstLine(item.body)}`,
     })),
   ] : [], [pr])
@@ -445,15 +480,19 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
   }, [fileStarts, maxScroll, moveCursorTo])
 
   const jumpToComment = useCallback((comment: PullRequestComment) => {
-    if (!comment.path || comment.line == null) return
+    if (!comment.path || (comment.line ?? comment.originalLine) == null) return
     const fileIndex = (pr?.files ?? []).findIndex((file) => file.filename === comment.path)
     if (fileIndex < 0) return
+    setPane(2)
+    setFocusSide('right')
+    const treeRow = treeRows.findIndex((row) => row.kind === 'file' && row.fileIndex === fileIndex)
+    if (treeRow >= 0) setTreeCursor(treeRow)
     const target = lines.findIndex((line) => line.commentId === comment.id)
     if (target >= 0) { moveCursorTo(target, true); return }
     // Anchor lives in a collapsed file — expand it and finish once lines rebuild.
     pendingCommentJumpRef.current = comment.id
     setCollapsed((prev) => { const next = new Set(prev); next.delete(fileIndex); return next })
-  }, [lines, moveCursorTo, pr])
+  }, [lines, moveCursorTo, pr, treeRows])
 
   useEffect(() => {
     const id = pendingCommentJumpRef.current
@@ -522,12 +561,21 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
     const line = lines[clampedCursor]
     const file = pr?.files[line?.fileIndex ?? -1]
     if (!line || !file) return
+    let opened = false
     if (line.kind === 'del' && line.oldNo != null) {
-      setComposer({ mode: 'inline', path: file.filename, line: line.oldNo, side: 'LEFT' })
+      setComposer({ mode: 'inline', path: file.filename, line: line.oldNo, side: 'LEFT', rowIndex: clampedCursor })
+      opened = true
     } else if ((line.kind === 'add' || line.kind === 'ctx') && line.newNo != null) {
-      setComposer({ mode: 'inline', path: file.filename, line: line.newNo, side: 'RIGHT' })
+      setComposer({ mode: 'inline', path: file.filename, line: line.newNo, side: 'RIGHT', rowIndex: clampedCursor })
+      opened = true
     }
-  }, [clampedCursor, lines, pr])
+    if (!opened) return
+    const nextVisibleRows = Math.max(diffRows - 7, 1)
+    const nextMaxScroll = Math.max(lines.length - nextVisibleRows, 0)
+    // Reserve one row for the sticky file header so the selected line and its
+    // attached draft both remain inside the reduced diff viewport.
+    setScrollTop(clampNumber(clampedCursor - Math.max(nextVisibleRows - 2, 0), 0, nextMaxScroll))
+  }, [clampedCursor, diffRows, lines, pr])
 
   function clampLeftPaneWidth(nextWidth: number): number {
     return Math.max(minLeftW, Math.min(nextWidth, maxLeftW))
@@ -733,10 +781,23 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
       )
     }
     if (line.kind === 'comment') {
-      const pad = ' '.repeat(Math.min(gutterCols + 1, 10))
+      const width = Math.max(rightW, 4)
+      const innerWidth = width - 2
+      let framed: string
+      if (line.commentPart === 'header') {
+        const label = fitText(line.text, Math.max(innerWidth - 3, 1))
+        framed = `┌─ ${label} ${'─'.repeat(Math.max(innerWidth - label.length - 3, 0))}┐`
+      } else if (line.commentPart === 'footer') {
+        framed = `└${'─'.repeat(innerWidth)}┘`
+      } else {
+        const body = fitText(line.text, Math.max(innerWidth - 2, 1))
+        framed = `│ ${body.padEnd(Math.max(innerWidth - 1, 1))}│`
+      }
       return (
         <box key={index} width={rightW} flexDirection="row" backgroundColor={isCursor ? theme.surface3 : theme.surface2} onMouseUp={selectLine}>
-          <text fg={theme.violet} wrapMode="none">{fitText(`${isCursor ? '▶' : ' '}${pad}${line.text}`, rightW - 1)}</text>
+          <text fg={line.commentPart === 'body' ? theme.text : theme.violet} wrapMode="none">
+            {isCursor ? `▶${framed.slice(1)}` : framed}
+          </text>
         </box>
       )
     }
@@ -760,10 +821,44 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
     )
   }
 
-  const visible = lines.slice(clampedTop, clampedTop + diffRows)
+  const renderInlineComposer = () => {
+    if (composer?.mode !== 'inline') return null
+    return (
+      <box
+        width={rightW}
+        height={7}
+        flexDirection="column"
+        border
+        borderStyle="single"
+        borderColor={theme.cyan}
+        backgroundColor={theme.surface2}
+        title={` Inline review — ${composer.path.split('/').at(-1)} L${composer.line} `}
+        titleColor={theme.cyan}
+        paddingX={1}
+      >
+        <textarea
+          ref={editorRef}
+          focused
+          keyBindings={PR_COMPOSER_KEY_BINDINGS}
+          height={3}
+          placeholder="Write a review comment…"
+          onSubmit={() => { void submitComposer() }}
+        />
+        <box height={1} flexShrink={0} flexDirection="row">
+          <text fg={theme.dim} wrapMode="none">{composer.side === 'LEFT' ? 'old side' : 'new side'}</text>
+          <box flexGrow={1} />
+          <text fg={theme.green} wrapMode="none">Enter submit</text>
+          <text fg={theme.dim} wrapMode="none">  Shift+Enter newline  </text>
+          <text fg={theme.muted} wrapMode="none">Esc cancel</text>
+        </box>
+      </box>
+    )
+  }
+
+  const visible = lines.slice(clampedTop, clampedTop + visibleDiffRows)
   const stickyNeeded = visible.length > 0 && visible[0]?.kind !== 'file' && fileStarts.length > 0
   const stickyLine = stickyNeeded ? lines[fileStarts[topFileIndex]] : null
-  const contentLines = stickyLine ? visible.slice(0, diffRows - 1) : visible
+  const contentLines = stickyLine ? visible.slice(0, visibleDiffRows - 1) : visible
 
   // ── Left section heights ──────────────────────────────────────────────────
   const overviewH = 6
@@ -1025,7 +1120,15 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
           </box>
           <box flexGrow={1} flexDirection="column" backgroundColor={theme.surface}>
             {stickyLine ? renderDiffLine(stickyLine, -1, true) : null}
-            {contentLines.map((line, index) => renderDiffLine(line, clampedTop + index))}
+            {contentLines.map((line, index) => {
+              const rowIndex = clampedTop + index
+              return (
+                <React.Fragment key={`row:${rowIndex}`}>
+                  {renderDiffLine(line, rowIndex)}
+                  {composer?.mode === 'inline' && composer.rowIndex === rowIndex ? renderInlineComposer() : null}
+                </React.Fragment>
+              )
+            })}
             {lines.length === 0 ? (
               <box paddingX={1}>
                 <text fg={theme.dim} wrapMode="none">
@@ -1058,13 +1161,13 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
         <box flexGrow={1} />
         {lines.length > 0 ? (
           <text fg={theme.dim} wrapMode="none">
-            {`${Math.min(clampedTop + diffRows, lines.length)}/${lines.length}  file ${currentFileIndex + 1}/${pr?.files.length ?? 0}`}
+            {`${Math.min(clampedTop + visibleDiffRows, lines.length)}/${lines.length}  file ${currentFileIndex + 1}/${pr?.files.length ?? 0}`}
           </text>
         ) : null}
       </box>
 
       {/* ── Composer overlay ──────────────────────────────── */}
-      {composer !== null ? (
+      {composer !== null && composer.mode !== 'inline' ? (
         <box
           position="absolute"
           left={Math.max(Math.floor(popW * 0.18), 2)}
@@ -1079,23 +1182,18 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
             composer.mode === 'question' ? ' Ask the active agent '
               : composer.mode === 'approve' ? ' Approve pull request '
                 : composer.mode === 'request' ? ' Request changes '
-                  : composer.mode === 'inline' ? ` Note ${composer.path.split('/').at(-1)}:${composer.line} `
-                    : ' PR comment '
+                  : ' PR comment '
           }
           titleColor={theme.cyan}
           flexDirection="column"
           paddingX={1}
           zIndex={52}
         >
-          {composer.mode === 'inline' ? (
-            <box height={1} flexShrink={0}>
-              <text fg={theme.dim} wrapMode="none">{fitText(`${composer.path}:${composer.line} (${composer.side === 'LEFT' ? 'old' : 'new'} side)`, Math.max(Math.floor(popW * 0.64), 48) - 4)}</text>
-            </box>
-          ) : null}
           <textarea
             ref={editorRef}
             focused
-            height={composer.mode === 'inline' ? 5 : 6}
+            keyBindings={PR_COMPOSER_KEY_BINDINGS}
+            height={6}
             placeholder={
               composer.mode === 'question' ? 'What should the agent inspect?'
                 : composer.mode === 'approve' ? 'Optional approval message…'
@@ -1104,7 +1202,7 @@ export function PullRequestPopover({ cwd, theme, width, height, onClose, onKeyHa
             onSubmit={() => { void submitComposer() }}
           />
           <box height={1} flexShrink={0}>
-            <text fg={theme.dim} wrapMode="none">Enter submit  Esc cancel</text>
+            <text fg={theme.dim} wrapMode="none">Enter submit  Shift+Enter newline  Esc cancel</text>
           </box>
         </box>
       ) : null}

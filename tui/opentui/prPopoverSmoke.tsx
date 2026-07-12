@@ -8,6 +8,7 @@ import { PullRequestPopover } from './PullRequestPopover'
 
 type Key = { name: string; ctrl: boolean; shift: boolean; sequence: string }
 let handleKey: ((key: Key) => boolean) | null = null
+let askedPrompt = ''
 
 const setup = await testRender(
   <PullRequestPopover
@@ -17,7 +18,7 @@ const setup = await testRender(
     height={45}
     onClose={() => {}}
     onKeyHandlerReady={(handler) => { handleKey = handler }}
-    onAskAgent={() => {}}
+    onAskAgent={(prompt) => { askedPrompt = prompt }}
   />,
   { width: 170, height: 45 },
 )
@@ -94,10 +95,13 @@ try {
   // Back to the diff; a on a code line opens the inline note composer (Esc cancels).
   await press('tab')
   await flush()
-  for (let i = 0; i < 4; i++) await press('j')
-  await press('a', { sequence: 'a' })
-  await flush()
-  frame = setup.captureCharFrame()
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await press('a', { sequence: 'a' })
+    await flush()
+    frame = setup.captureCharFrame()
+    if (frame.includes('Enter submit')) break
+    await press('j')
+  }
   if (!frame.includes('Enter submit')) throw new Error(`Inline note composer did not open:\n${frame}`)
   await press('escape')
   await flush()
@@ -111,7 +115,10 @@ try {
   frame = setup.captureCharFrame()
   if (!frame.includes('Ask the active agent')) throw new Error(`Ask Agent composer did not open:\n${frame}`)
   if (await press('x', { sequence: 'x' })) throw new Error('Ask Agent text input was consumed by the popover key handler')
-  if (!(await press('escape'))) throw new Error('Ask Agent Escape should remain owned by the popover')
+  await act(async () => { await setup.mockInput.typeText('check the parser') })
+  act(() => { setup.mockInput.pressEnter() })
+  await flush()
+  if (!askedPrompt.includes('Question: check the parser')) throw new Error(`Enter did not submit Ask Agent text:\n${askedPrompt}`)
 
   console.log('PR popover GitPopover-style smoke passed')
 } finally {

@@ -31,6 +31,8 @@ export type PullRequestComment = {
   path?: string
   line?: number | null
   side?: string | null
+  originalLine?: number | null
+  originalSide?: string | null
 }
 
 export type PullRequestCommit = {
@@ -133,6 +135,8 @@ async function fetchDiscussion(cwd: string, repo: string, number: number): Promi
       createdAt: String(comment.created_at ?? ''), url: String(comment.html_url ?? ''),
       path: String(comment.path ?? ''), line: comment.line == null ? null : Number(comment.line),
       side: comment.side == null ? null : String(comment.side),
+      originalLine: comment.original_line == null ? null : Number(comment.original_line),
+      originalSide: comment.original_side == null ? null : String(comment.original_side),
     })),
   ].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 }
