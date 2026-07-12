@@ -7505,6 +7505,7 @@ export default function MessageView({
                 <StreamHistoryRail
                   items={streamHistoryItems}
                   scrollRef={timelineRef}
+                  anchorOffset={TIMELINE_TARGET_TOP_GUTTER_PX}
                   onSelect={handleJumpToMessage}
                 />
               ) : null}

@@ -1312,33 +1312,47 @@ body {
 
 .av-stream-history-tick {
   position: absolute;
-  left: 13px;
-  width: 10px;
-  height: 3px;
+  left: 5px;
+  width: 60px;
+  height: 14px;
   padding: 0;
   border: 0;
+  background: transparent;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.av-stream-history-tick::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  width: 10px;
+  height: 3px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--text-3) 34%, transparent);
-  cursor: pointer;
   transform: translateY(-50%);
   transform-origin: left center;
   transition: width 120ms ease, height 120ms ease, background 120ms ease, transform 120ms ease;
 }
 
-.av-stream-history-tick--user {
+.av-stream-history-tick--user::before {
   width: 20px;
   background: color-mix(in srgb, var(--text-2) 48%, transparent);
 }
 
-.av-stream-history-tick:hover,
-.av-stream-history-tick:focus-visible {
+.av-stream-history-tick:hover::before,
+.av-stream-history-tick:focus-visible::before {
   width: 32px;
   height: 4px;
   background: var(--text-2);
+}
+
+.av-stream-history-tick:focus-visible {
   outline: none;
 }
 
-.av-stream-history-tick.av-active {
+.av-stream-history-tick.av-active::before {
   width: 52px;
   height: 4px;
   background: var(--text);
