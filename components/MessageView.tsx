@@ -1801,6 +1801,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   onToggleBookmark,
   onReusePrompt,
   onQuoteMessage,
+  onReplyMessage,
   onEditFromMessage,
 }: {
   row: TimelineRow
@@ -1817,6 +1818,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   onToggleBookmark: (messageId: string) => void
   onReusePrompt: (text: string) => void
   onQuoteMessage: (text: string) => void
+  onReplyMessage: (text: string) => void
   onEditFromMessage: (messageId: string, text: string) => void
 }) {
   const [copied, setCopied] = useState(false)
@@ -1826,8 +1828,9 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
   const canReuse = isUserMessage && copyText.length > 0
   const canEdit = isUserMessage && copyText.length > 0 && !!row.allowEdit
   const canQuote = !isUserMessage && copyText.length > 0
+  const canReply = copyText.length > 0
   const canBookmark = !row.message.uuid.startsWith('live-')
-  const showActions = canCopy || canReuse || canQuote || canEdit || canBookmark || (row.showForkControls && (row.allowFork || row.allowResume))
+  const showActions = canCopy || canReuse || canQuote || canReply || canEdit || canBookmark || (row.showForkControls && (row.allowFork || row.allowResume))
   const handleBookmark = useCallback(() => {
     if (!canBookmark) return
     onToggleBookmark(row.message.uuid)
@@ -1848,6 +1851,10 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
     const selection = typeof window !== 'undefined' ? window.getSelection()?.toString().trim() : ''
     onQuoteMessage(selection && selection.length > 0 ? selection : copyText)
   }, [canQuote, copyText, onQuoteMessage])
+  const handleReply = useCallback(() => {
+    if (!canReply) return
+    onReplyMessage(copyText)
+  }, [canReply, copyText, onReplyMessage])
   const handleEdit = useCallback(() => {
     if (!canEdit) return
     onEditFromMessage(row.message.uuid, copyText)
@@ -1970,7 +1977,7 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           ))}
         </div>
       )}
-      {showActions && !streamMode && (
+      {showActions && (
         <div className="timeline-row-actions">
           {canBookmark && (
             <button
@@ -2029,6 +2036,16 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
               title="Quote selection (or this message) in the composer"
             >
               QUOTE
+            </button>
+          )}
+          {canReply && (
+            <button
+              type="button"
+              className="timeline-row-action timeline-row-action--copy"
+              onClick={handleReply}
+              title="Reply to this message in the composer"
+            >
+              REPLY
             </button>
           )}
           {canCopy && (
@@ -2185,6 +2202,7 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   onToggleBookmark,
   onReusePrompt,
   onQuoteMessage,
+  onReplyMessage,
   onEditFromMessage,
 }: {
   row: TimelineRow
@@ -2208,6 +2226,7 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
   onToggleBookmark: (messageId: string) => void
   onReusePrompt: (text: string) => void
   onQuoteMessage: (text: string) => void
+  onReplyMessage: (text: string) => void
   onEditFromMessage: (messageId: string, text: string) => void
 }) {
   const rowRef = useRef<HTMLDivElement>(null)
@@ -2270,6 +2289,7 @@ const VirtualTimelineRow = memo(function VirtualTimelineRow({
           onToggleBookmark={onToggleBookmark}
           onReusePrompt={onReusePrompt}
           onQuoteMessage={onQuoteMessage}
+          onReplyMessage={onReplyMessage}
           onEditFromMessage={onEditFromMessage}
         />
       )}
@@ -6533,6 +6553,7 @@ export default function MessageView({
           onToggleBookmark={toggleBookmark}
           onReusePrompt={handleReusePrompt}
           onQuoteMessage={handleQuoteMessage}
+          onReplyMessage={handleQuoteMessage}
           onEditFromMessage={handleEditFromMessage}
         />
       )

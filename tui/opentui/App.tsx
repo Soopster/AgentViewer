@@ -4808,6 +4808,11 @@ function TranscriptCardInner({
             })}
           </box>
         </box>
+        {streamMode && hasCursor ? (
+          <text fg={theme.dim} wrapMode="none">
+            {fitText('  b bookmark   Q quote/reply   y copy', agentBodyWidth)}
+          </text>
+        ) : null}
       </box>
     )
   }
@@ -4991,6 +4996,11 @@ function TranscriptCardInner({
         )}
         </box>
         )}
+        {hasCursor ? (
+          <text fg={theme.dim} wrapMode="none">
+            {fitText('  b bookmark   Q quote/reply   y copy', streamWidth)}
+          </text>
+        ) : null}
       </box>
     )
   }
