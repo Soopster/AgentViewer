@@ -5642,6 +5642,7 @@ export function streamMessageHasContent(message: ThreadedMessage): boolean {
 
 function StreamMessageItem({ message }: { message: ThreadedMessage }) {
   const spacing = streamDensitySpacing(use(MessageDensityContext))
+  const isUserMessage = message.role === 'user'
   const textBlocks = message.blocks.filter((block) => block.type === 'text' && block.text.trim().length > 0)
   const toolThreads = dedupeStreamToolThreads(
     message.blocks.filter((block): block is ToolThread => block.type === 'tool_thread'),
@@ -5656,19 +5657,26 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
       : 'var(--text-3)'
   return (
     <SessionContext.Provider value={message.sessionId}>
-      <div style={{
+      <div className={isUserMessage ? 'av-stream-message av-stream-message--user' : 'av-stream-message'} style={{
         display: 'flex',
         flexDirection: 'column',
         gap: spacing.blockGap,
-        marginBottom: message.role === 'user' ? spacing.userMarginBottom : spacing.otherMarginBottom,
-        padding: message.role === 'user'
+        marginBottom: isUserMessage ? spacing.userMarginBottom : spacing.otherMarginBottom,
+        marginLeft: isUserMessage ? 'auto' : undefined,
+        width: isUserMessage ? 'fit-content' : undefined,
+        maxWidth: isUserMessage ? 'min(82%, 760px)' : undefined,
+        padding: isUserMessage
           ? `${spacing.userPaddingY}px ${spacing.paddingX}px`
           : `${spacing.otherPaddingY}px ${spacing.paddingX}px`,
-        background: message.role === 'user' ? 'color-mix(in srgb, var(--cyan) 10%, var(--surface))' : 'transparent',
+        borderRadius: isUserMessage ? 18 : undefined,
+        background: isUserMessage ? 'var(--surface-2)' : 'transparent',
+        boxShadow: isUserMessage ? 'inset 0 0 0 1px color-mix(in srgb, var(--border) 72%, transparent)' : undefined,
       }}>
         {textBlocks.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minWidth: 0 }}>
-            <span aria-hidden="true" style={{ color: markerColor, flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}>{marker}</span>
+            {!isUserMessage ? (
+              <span aria-hidden="true" style={{ color: markerColor, flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}>{marker}</span>
+            ) : null}
             <div style={{ display: 'flex', flex: 1, minWidth: 0, flexDirection: 'column', gap: spacing.blockGap }}>
               {textBlocks.map((block, index) => renderBlock(block, index))}
             </div>

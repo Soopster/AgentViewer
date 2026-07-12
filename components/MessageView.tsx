@@ -6351,7 +6351,7 @@ export default function MessageView({
   }, [baseLayout, estimateTimelineRowHeightForLayout, liveTimelineRows, renderedTimelineRows, rowMeasurementVersion, timelineRows])
   rowLayoutRef.current = rowLayout
 
-  const streamHistoryMetadata = useMemo<Array<Omit<StreamHistoryItem, 'position'>>>(() => {
+  const streamHistoryMetadata = useMemo<Array<Omit<StreamHistoryItem, 'position' | 'top' | 'height'>>>(() => {
     return renderedTimelineRows.map((row, index) => {
       const normalized = messageToCopyText(row.message).replace(/\s+/g, ' ').trim()
       const title = normalized.slice(0, 92) || row.previewBadge || `${row.message.role} message`
@@ -6374,18 +6374,10 @@ export default function MessageView({
     return streamHistoryMetadata.map((item, index) => ({
       ...item,
       position: Math.max(0, Math.min((rowLayout.tops[index] + rowLayout.heights[index] / 2) / denominator, 1)),
+      top: rowLayout.tops[index],
+      height: rowLayout.heights[index],
     }))
   }, [rowLayout, streamHistoryMetadata])
-
-  const streamHistoryActiveIndex = useMemo(() => {
-    if (renderedTimelineRows.length === 0) return -1
-    const anchor = findTimelineScrollAnchor(
-      renderedTimelineRows,
-      rowLayout,
-      timelineScrollTop + timelineViewportHeight * 0.32,
-    )
-    return anchor?.index ?? 0
-  }, [renderedTimelineRows, rowLayout, timelineScrollTop, timelineViewportHeight])
 
   useLayoutEffect(() => {
     const scrollDelta = pendingTimelineScrollCompensationRef.current
@@ -7512,7 +7504,7 @@ export default function MessageView({
               {viewMode === 'stream' && streamHistoryItems.length > 1 ? (
                 <StreamHistoryRail
                   items={streamHistoryItems}
-                  activeIndex={streamHistoryActiveIndex}
+                  scrollRef={timelineRef}
                   onSelect={handleJumpToMessage}
                 />
               ) : null}

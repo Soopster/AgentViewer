@@ -1400,6 +1400,7 @@ body {
 @media (max-width: 820px) {
   .av-stream-history { display: none; }
   .av-stream-timeline-scroll { padding-left: 32px !important; }
+  .av-stream-message--user { max-width: 92% !important; }
 }
 
 .timeline-row-action:hover:not(:disabled) {
