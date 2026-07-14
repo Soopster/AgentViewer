@@ -3160,15 +3160,16 @@ function renderedBodyLines(
   previewLimit: number,
   thinkingFull: boolean = false,
   agentsMode: boolean = false,
+  fullText: boolean = false,
 ): TuiTranscriptCardLine[] {
   if (agentsMode && (card.key.startsWith('agents-tools:') || isAgentsToolOnlyCard(card))) {
     return agentsToolCollapsedLines(card)
   }
 
-  const pretendExpanded = isExpanded || thinkingFull
-  const source = pretendExpanded ? card.expandedLines : card.lines
+  const useExpandedLines = isExpanded || thinkingFull || fullText
+  const source = useExpandedLines ? card.expandedLines : card.lines
   let base: TuiTranscriptCardLine[]
-  if (pretendExpanded) {
+  if (useExpandedLines) {
     // Parsed diff rows own expanded patches in every transcript view. Keeping
     // the raw diff lines here would render the same patch once as body prose
     // and again in the interactive diff immediately below it.
@@ -5085,10 +5086,13 @@ function TranscriptCardInner({
     // reader path's diff exemption) — only expanded diffs, routed to the full
     // renderer above, keep the whole pane width.
     const streamCentered = transcriptWidth === 'centered'
-    const streamAvailableWidth = Math.max(rightPaneWidth - 2, 16)
+    // The transcript pane spends two columns on its border and two more on
+    // the surrounding paddingX={1}; bodyIndent is budgeted separately below.
+    const streamAvailableWidth = Math.max(rightPaneWidth - 4, 16)
     const streamWidth = streamCentered
       ? Math.max(Math.min(streamAvailableWidth - densityState.bodyIndent, MAX_TRANSCRIPT_CARD_WIDTH), 16)
-      : streamAvailableWidth
+      : Math.max(streamAvailableWidth - densityState.bodyIndent, 16)
+    const streamLandmarkWidth = streamWidth + densityState.bodyIndent
     const streamTextWidth = Math.max(streamWidth - 2, 12)
     const streamChildTextWidth = Math.max(streamWidth - 4, 10)
     const firstLine = bodyLines[0]
@@ -5180,11 +5184,11 @@ function TranscriptCardInner({
               {...selectionColors}
               key={`${card.key}:lm:${landmarkIndex}`}
               fg={lmColor}
-              width={streamWidth}
+              width={streamLandmarkWidth}
               wrapMode="none"
               selectable
             >
-              {streamLandmarkText(landmark, streamWidth)}
+              {streamLandmarkText(landmark, streamLandmarkWidth)}
             </text>
           )
         })}
@@ -8164,6 +8168,7 @@ export default function OpenTuiApp() {
     bodyLineLimit: number
     thinkingFull: boolean
     agentsMode: boolean
+    fullText: boolean
     value: StableCardData
   }>())
   const stableCardData = useMemo((): StableCardData[] => {
@@ -8175,6 +8180,11 @@ export default function OpenTuiApp() {
       const thinkingFull = thinkingFullKeys.has(card.key)
       const agentsModeForCard = transcriptView === 'agents'
         || (transcriptView === 'stream' && isStreamOperationalCard(card))
+      // Stream is a chronological transcript, not a collapsed card preview:
+      // feed prose its untruncated formatter lines and let the text renderer
+      // wrap them to the active transcript width. Technical cards stay bounded.
+      const fullTextForCard = transcriptView === 'stream'
+        && (card.category === 'conversation' || card.category === 'insight')
       const prev = cache.get(card)
       if (
         prev
@@ -8182,6 +8192,7 @@ export default function OpenTuiApp() {
         && prev.bodyLineLimit === densityState.bodyLines
         && prev.thinkingFull === thinkingFull
         && prev.agentsMode === agentsModeForCard
+        && prev.fullText === fullTextForCard
       ) {
         return prev.value
       }
@@ -8192,13 +8203,21 @@ export default function OpenTuiApp() {
         densityState.bodyLines,
         thinkingFull,
         agentsModeForCard,
+        fullTextForCard,
       )
       const diffView = cardDiffView(card, isExpanded)
       const codeBlockLineCounts = (isExpanded && card.codeBlocks)
         ? card.codeBlocks.map((cb) => countCodeBlockLines(cb.content))
         : []
       const value: StableCardData = { bodyLines, diffView, codeBlockLineCounts }
-      cache.set(card, { isExpanded, bodyLineLimit: densityState.bodyLines, thinkingFull, agentsMode: agentsModeForCard, value })
+      cache.set(card, {
+        isExpanded,
+        bodyLineLimit: densityState.bodyLines,
+        thinkingFull,
+        agentsMode: agentsModeForCard,
+        fullText: fullTextForCard,
+        value,
+      })
       return value
     })
     if (CARD_PROFILE) {
