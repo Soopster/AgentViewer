@@ -1416,7 +1416,7 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
           {(() => {
             const groups: Array<[string, string]> = [
               ['1-4', 'sections'], ['[ ]', 'resize'], ['w', 'wide'], ['-', 'hide/show'],
-              ['j/k', 'move/fast'], ['h/l', 'fold'], ['⏎', 'toggle'], ['r', 'refresh'], ['esc', 'close'],
+              ['j/k', 'move/fast'], ['h/l', 'fold'], ['⏎', 'toggle'], ['p', 'PRs'], ['r', 'refresh'], ['esc', 'close'],
             ]
             const segs: React.ReactNode[] = [
               <span key="focus" fg={theme.cyan}>{focusLabel}</span>,

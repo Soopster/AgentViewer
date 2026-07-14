@@ -4105,6 +4105,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'ide-bridge', label: 'IDE bridge',              key: '⇧I', category: 'Session'    },
   { id: 'ide-bridge-route', label: 'Toggle composer → IDE routing', key: 'route', category: 'Session' },
   { id: 'git',        label: 'Git status',             key: '^G', category: 'Session'    },
+  { id: 'pull-requests', label: 'Review pull requests', key: '^⇧G', category: 'Session'   },
   { id: 'files',      label: 'Browse project files',   key: '^F', category: 'Session'    },
   { id: 'analytics',  label: 'Session analytics',      key: '^A', category: 'Session'    },
   { id: 'attention',  label: 'Attention inbox',        key: '!',  category: 'Session'    },
@@ -5901,6 +5902,7 @@ export default function OpenTuiApp() {
     || searchMode
     || sessionSearchMode
     || gitOpen
+    || pullRequestOpen
     || analyticsOpen
     || handoffBriefOpen
     || promptLibraryOpen
@@ -12536,6 +12538,9 @@ export default function OpenTuiApp() {
       case 'git':
         setGitOpen(true)
         break
+      case 'pull-requests':
+        setPullRequestOpen(true)
+        break
       case 'files':
         setFileViewerOpen(true)
         break
@@ -12731,6 +12736,15 @@ export default function OpenTuiApp() {
     }
 
     if (gitOpen) {
+      // p hops to the PR review popover — the reliable path on terminals whose
+      // legacy encoding folds Ctrl+Shift+G into Ctrl+G (e.g. Windows).
+      if (key.name === 'p' && !key.ctrl && !key.shift) {
+        handled(() => {
+          setGitOpen(false)
+          setPullRequestOpen(true)
+        })
+        return
+      }
       handled(() => { gitKeyHandlerRef.current?.(key) })
       return
     }
