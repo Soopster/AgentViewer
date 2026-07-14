@@ -3160,7 +3160,6 @@ function renderedBodyLines(
   previewLimit: number,
   thinkingFull: boolean = false,
   agentsMode: boolean = false,
-  preserveExpandedDiffLines: boolean = false,
 ): TuiTranscriptCardLine[] {
   if (agentsMode && (card.key.startsWith('agents-tools:') || isAgentsToolOnlyCard(card))) {
     return agentsToolCollapsedLines(card)
@@ -3170,9 +3169,10 @@ function renderedBodyLines(
   const source = pretendExpanded ? card.expandedLines : card.lines
   let base: TuiTranscriptCardLine[]
   if (pretendExpanded) {
-    base = preserveExpandedDiffLines
-      ? source
-      : source.filter((line) => !['diff_add', 'diff_remove', 'diff_meta'].includes(line.tone))
+    // Parsed diff rows own expanded patches in every transcript view. Keeping
+    // the raw diff lines here would render the same patch once as body prose
+    // and again in the interactive diff immediately below it.
+    base = source.filter((line) => !['diff_add', 'diff_remove', 'diff_meta'].includes(line.tone))
   } else if (card.category === 'diff') {
     // Keep diff_meta (file path header) but strip raw diff lines — Pierre renders those
     base = source.filter((line) => line.tone !== 'diff_add' && line.tone !== 'diff_remove')
@@ -8192,7 +8192,6 @@ export default function OpenTuiApp() {
         densityState.bodyLines,
         thinkingFull,
         agentsModeForCard,
-        transcriptView === 'stream',
       )
       const diffView = cardDiffView(card, isExpanded)
       const codeBlockLineCounts = (isExpanded && card.codeBlocks)
