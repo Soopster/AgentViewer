@@ -3438,11 +3438,9 @@ function streamToolSummarySegments(card: TuiTranscriptCard, theme: TuiThemePalet
   const markerColor = streamStatusColor(marker, theme)
   const diffLabel = streamDiffOperationLabel(card)
   if (diffLabel) {
-    const stats = diffStatsLabel(cardDiffText(card, false), card.expandedLines)
     return [
       { text: `${marker} `, fg: markerColor },
-      { text: diffLabel, fg: theme.green, attributes: TextAttributes.BOLD },
-      ...(stats ? [{ text: `  ${stats}`, fg: theme.dim }] : []),
+      { text: diffLabel, fg: theme.text, attributes: TextAttributes.BOLD },
     ]
   }
   if (summary.tone === 'tool') {
@@ -3489,8 +3487,8 @@ function streamActivitySummarySegments(cards: TuiTranscriptCard[], theme: TuiThe
   if (shellCount > 0) parts.push(`${parts.length > 0 ? 'ran' : 'Ran'} ${shellCount} shell ${shellCount === 1 ? 'command' : 'commands'}`)
   const marker = streamToolGroupMarker(activityCards)
   return [
-    { text: `${marker} `, fg: streamStatusColor(marker, theme) },
-    { text: parts.join(', '), fg: theme.muted },
+    { text: marker === '×' || marker === '▲' ? `${marker} ` : '  ', fg: streamStatusColor(marker, theme) },
+    { text: parts.join(', '), fg: theme.text },
   ]
 }
 
@@ -3608,6 +3606,8 @@ type StreamDiffPreviewData = {
   hiddenRows: number
   gutterWidth: number
   filetype: string | undefined
+  additions: number
+  deletions: number
 }
 
 const STREAM_DIFF_PREVIEW_CACHE = new WeakMap<TuiTranscriptCard, StreamDiffPreviewData | null>()
@@ -3635,6 +3635,8 @@ function streamDiffPreviewData(card: TuiTranscriptCard): StreamDiffPreviewData |
     hiddenRows: contentRows.length - rows.length,
     gutterWidth: Math.max(String(largestLineNumber).length, 2),
     filetype: detectTuiCodeFiletypeFromPath(filePath),
+    additions: contentRows.filter((row) => row.tone === 'addition').length,
+    deletions: contentRows.filter((row) => row.tone === 'deletion').length,
   }
   STREAM_DIFF_PREVIEW_CACHE.set(card, value)
   return value
@@ -3658,14 +3660,28 @@ function StreamDiffPreview({
   const gutterWidth = preview.gutterWidth + 4
   const codeWidth = Math.max(width - gutterWidth, 8)
   const codeContent = preview.rows.map((row) => row.text).join('\n')
+  const changeParts = [
+    preview.additions > 0
+      ? `Added ${preview.additions} ${preview.additions === 1 ? 'line' : 'lines'}`
+      : '',
+    preview.deletions > 0
+      ? `${preview.additions > 0 ? 'removed' : 'Removed'} ${preview.deletions} ${preview.deletions === 1 ? 'line' : 'lines'}`
+      : '',
+  ].filter(Boolean)
   return (
     <box flexDirection="column" paddingLeft={2} marginTop={0}>
+      {changeParts.length > 0 ? (
+        <text fg={theme.text} wrapMode="none" selectable {...selectionColors}>
+          <span fg={theme.dim}>{'└  '}</span>
+          {changeParts.join(', ')}
+        </text>
+      ) : null}
       <box flexDirection="row" height={preview.rows.length}>
         <box width={gutterWidth} flexDirection="column">
           {preview.rows.map((row) => {
             const lineNumber = row.newLine ?? row.oldLine
             return (
-              <text key={`${row.key}:gutter`} fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
+              <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors} key={`${row.key}:gutter`}>
                 {`${formatDiffLineNumber(lineNumber, preview.gutterWidth)} ${row.indicator ?? diffRowIndicator(row)} `}
               </text>
             )
@@ -3685,7 +3701,7 @@ function StreamDiffPreview({
         ) : (
           <box width={codeWidth} flexDirection="column">
             {preview.rows.map((row) => (
-              <text key={`${row.key}:plain`} fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
+              <text fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors} key={`${row.key}:plain`}>
                 {fitText(row.text, codeWidth)}
               </text>
             ))}
@@ -5089,7 +5105,7 @@ function TranscriptCardInner({
           ? accent
           : firstLine && ['tool', 'result_ok', 'result_error', 'system'].includes(firstLine.tone)
             ? transcriptColor(firstLine, theme)
-            : theme.dim
+            : theme.text
     const streamFirstLineColor = hasCursor && firstLine
       ? theme.text
       : firstLine
@@ -5146,6 +5162,10 @@ function TranscriptCardInner({
           : 0}
         alignSelf={streamCentered ? 'center' : undefined}
         width={streamCentered ? streamWidth + densityState.bodyIndent : undefined}
+        onMouseDown={(event) => {
+          if (event.button !== 0) return
+          onSelectCard(card.key)
+        }}
       >
         {landmarks.map((landmark, landmarkIndex) => {
           const lmColor = landmark.kind === 'resume'
