@@ -15769,6 +15769,10 @@ export default function OpenTuiApp() {
             setComposerActive(true)
             showNotice('info', 'PR question added to composer')
           }}
+          onSendDiffNoteToComposer={(prompt) => {
+            appendDiffCommentPromptToComposer(prompt)
+            showNotice('info', 'PR diff comment added to composer')
+          }}
         />
       ) : null}
 
