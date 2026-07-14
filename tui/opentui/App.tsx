@@ -2622,6 +2622,11 @@ function terminalSelectionColors(theme: TuiThemePalette): SelectionColors {
   }
 }
 
+function streamUserBackground(theme: TuiThemePalette): string {
+  const lightTheme = (relativeLuminance(theme.bg) ?? relativeLuminance(theme.surface) ?? 0) > 0.5
+  return mixHexColor(theme.violet, theme.userBg, lightTheme ? 0.16 : 0.24) ?? theme.userBg
+}
+
 type SelectionColorTarget = BaseRenderable & {
   selectionBg?: string
   selectionFg?: string
@@ -5149,13 +5154,12 @@ function TranscriptCardInner({
       || remainingLines.length > 0
       || (isExpanded && (card.codeBlocks?.length ?? 0) > 0)
     const streamRendersSomething = streamHasBody || landmarks.length > 0
-    // Native agent CLIs use one strong prompt/selection band and leave ordinary
-    // assistant prose on the terminal surface. Changing the fill never changes
-    // row geometry, so j/k navigation remains visually anchored.
-    const streamBg = hasCursor
-      ? theme.userBg
-      : card.role === 'user'
-        ? theme.surface2
+    // User prompts get a full-width tinted band plus an accent rail so they
+    // remain obvious even in palettes whose base user background is subtle.
+    const streamBg = card.role === 'user'
+      ? streamUserBackground(theme)
+      : hasCursor
+        ? theme.userBg
         : undefined
     return (
       <box
@@ -5195,7 +5199,13 @@ function TranscriptCardInner({
         {streamHasBody && (
         <box
           flexDirection="column"
-          paddingLeft={densityState.bodyIndent}
+          width={streamLandmarkWidth}
+          border={card.role === 'user' ? ['left'] : undefined}
+          borderStyle={card.role === 'user' ? 'heavy' : undefined}
+          borderColor={card.role === 'user' ? theme.violet : undefined}
+          paddingLeft={card.role === 'user'
+            ? Math.max(densityState.bodyIndent - 1, 0)
+            : densityState.bodyIndent}
           paddingBottom={0}
           backgroundColor={streamBg}
         >
