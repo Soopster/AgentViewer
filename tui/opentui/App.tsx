@@ -1129,6 +1129,7 @@ function fitText(value: string, width: number): string {
 type InlineTextSegment = {
   text: string
   fg: string
+  attributes?: number
 }
 
 function composerSendingHintSegments(value: string, theme: TuiThemePalette): InlineTextSegment[] {
@@ -1212,7 +1213,7 @@ function renderInlineTextSegments(segments: InlineTextSegment[], width: number, 
     if (!segment?.text) continue
     const clipped = clipText(segment.text, remaining)
     if (!clipped) continue
-    out.push(<span key={i} fg={segment.fg}>{clipped}</span>)
+    out.push(<span key={i} fg={segment.fg} attributes={segment.attributes}>{clipped}</span>)
     remaining -= clipped.length
   }
   if (remaining > 0) {
@@ -2802,45 +2803,43 @@ function transcriptColor(line: TuiTranscriptCardLine, theme: TuiThemePalette): s
 }
 
 function streamLineMarker(line: TuiTranscriptCardLine, role: TuiTranscriptCard['role']): string {
-  if (role === 'user') return '›'
+  if (role === 'user') return '❯'
   switch (line.tone) {
     case 'result_ok':
-      return '✓'
+      return '●'
     case 'result_error':
       return '×'
     case 'system':
       return '▲'
     default:
-      return '•'
+      return '●'
   }
 }
 
 function streamContinuationMarker(line: TuiTranscriptCardLine): string {
   switch (line.tone) {
     case 'result_ok':
-      return '  ✓ '
+      return '  └ '
     case 'result_error':
-      return '  × '
+      return '  └ '
     case 'system':
-      return '  ▲ '
+      return '  └ '
     case 'tool':
       return '  └ '
     default:
-      return '  '
+      return '    '
   }
 }
 
 function streamToolGroupMarker(cards: TuiTranscriptCard[]): string {
-  let hasSuccess = false
   let hasWarning = false
   for (const card of cards) {
     for (const line of [...card.lines, ...card.expandedLines]) {
       if (line.tone === 'result_error') return '×'
       if (line.tone === 'system') hasWarning = true
-      if (line.tone === 'result_ok') hasSuccess = true
     }
   }
-  return hasWarning ? '▲' : hasSuccess ? '✓' : '•'
+  return hasWarning ? '▲' : '●'
 }
 
 function streamToolCardMarker(card: TuiTranscriptCard): string {
@@ -2856,7 +2855,15 @@ function streamStatusColor(marker: string, theme: TuiThemePalette): string {
   if (marker === '✓') return theme.green
   if (marker === '×') return theme.red
   if (marker === '▲') return theme.amber
+  if (marker === '●') return theme.green
   return theme.dim
+}
+
+function streamLandmarkText(landmark: CardLandmark, width: number): string {
+  if (landmark.kind === 'turn') {
+    return landmark.text ? fitText(`  ${landmark.text}`, width) : ' '.repeat(Math.max(width, 1))
+  }
+  return fitText(`─ ${landmark.text} `, width).padEnd(width, '─')
 }
 
 function transcriptBackground(line: TuiTranscriptCardLine, theme: TuiThemePalette): string | undefined {
@@ -3338,6 +3345,7 @@ function transcriptToolLineSegments(
   theme: TuiThemePalette,
   marker = 'tool ',
   markerColor = theme.dim,
+  emphasizeName = false,
 ): InlineTextSegment[] {
   const cleaned = text.replace(/^tool\s+/i, '').trim()
   const colon = cleaned.indexOf(':')
@@ -3350,14 +3358,14 @@ function transcriptToolLineSegments(
   if (name.toLowerCase() === 'bash' && detail) {
     return [
       { text: marker, fg: markerColor },
-      { text: name, fg: transcriptToolColor(name, theme) },
+      { text: name, fg: transcriptToolColor(name, theme), attributes: emphasizeName ? TextAttributes.BOLD : undefined },
       { text: ' ', fg: theme.dim },
       ...bashCommandSegments(detail, theme),
     ]
   }
   return [
     { text: marker, fg: markerColor },
-    { text: name || 'tool', fg: transcriptToolColor(name, theme) },
+    { text: name || 'tool', fg: transcriptToolColor(name, theme), attributes: emphasizeName ? TextAttributes.BOLD : undefined },
     ...(detail ? [{ text: ` ${detail}`, fg: theme.dim }] : []),
   ]
 }
@@ -3367,12 +3375,25 @@ function streamToolSummarySegments(card: TuiTranscriptCard, theme: TuiThemePalet
   const marker = streamToolCardMarker(card)
   const markerColor = streamStatusColor(marker, theme)
   if (summary.tone === 'tool') {
-    return transcriptToolLineSegments(summary.text, theme, `${marker} `, markerColor)
+    return transcriptToolLineSegments(summary.text, theme, `${marker} `, markerColor, true)
   }
   return [
     { text: `${marker} `, fg: markerColor },
     { text: summary.text, fg: transcriptColor(summary, theme) },
   ]
+}
+
+function streamToolDetailLine(card: TuiTranscriptCard): TuiTranscriptCardLine | null {
+  const summaryText = agentsToolSummaryLine(card).text.trim()
+  const seen = new Set<string>()
+  for (const line of [...card.lines, ...card.expandedLines]) {
+    const text = line.text.trim()
+    if (!text || text === summaryText || text === 'No visible content' || seen.has(text)) continue
+    seen.add(text)
+    if (line.tone === 'tool' || line.tone === 'diff_add' || line.tone === 'diff_remove') continue
+    return line
+  }
+  return null
 }
 
 function dedupeStreamToolSummaryCards(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
@@ -4601,7 +4622,7 @@ function TranscriptCardInner({
     const streamAgentBg = hasCursor
       ? isExpanded && agentToolCursorKey
         ? theme.surface2
-        : theme.surface3
+        : theme.userBg
       : theme.surface
     const contentWidth = Math.max(agentWidth - 2, 16)
     const agentBodyWidth = Math.max(contentWidth - 2, 12)
@@ -4674,10 +4695,8 @@ function TranscriptCardInner({
           return (
             <box key={`${card.key}:agent-landmark:${landmarkIndex}`} paddingX={1}>
               <text fg={color} width={landmarkWidth} wrapMode="none" selectable {...selectionColors}>
-                {landmark.kind === 'turn' && streamMode
-                  ? landmark.text
-                    ? fitText(`─ ${landmark.text} `, landmarkWidth).padEnd(landmarkWidth, '─')
-                    : '─'.repeat(Math.max(landmarkWidth, 1))
+                {streamMode
+                  ? streamLandmarkText(landmark, landmarkWidth)
                   : fitText(landmark.text, landmarkWidth)}
               </text>
             </box>
@@ -4708,26 +4727,37 @@ function TranscriptCardInner({
               <box flexDirection="column">
                 {collapsedStreamToolCards.map((toolCard, toolIndex) => {
                   const segments = streamToolSummarySegments(toolCard, theme)
+                  const detailLine = streamToolDetailLine(toolCard)
+                  if (hasCursor && toolIndex === 0 && segments[0]) {
+                    segments[0] = { text: '❯ ', fg: theme.text }
+                  }
                   if (hasCursor && toolIndex === collapsedStreamToolCards.length - 1) {
                     segments.push({ text: '  ·  e details', fg: theme.dim })
                   }
                   return (
-                    <text
+                    <box
                       key={`${card.key}:stream-tool-summary:${toolCard.key}`}
-                      fg={theme.dim}
-                      wrapMode="none"
-                      selectable
-                      {...selectionColors}
+                      flexDirection="column"
                     >
-                      {renderInlineTextSegments(segments, agentBodyWidth, theme.dim)}
-                    </text>
+                      <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+                        {renderInlineTextSegments(segments, agentBodyWidth, theme.dim)}
+                      </text>
+                      {detailLine ? (
+                        <text fg={transcriptColor(detailLine, theme)} wrapMode="none" selectable {...selectionColors}>
+                          {renderInlineTextSegments([
+                            { text: '  └ ', fg: theme.dim },
+                            { text: detailLine.text.trim(), fg: transcriptColor(detailLine, theme) },
+                          ], agentBodyWidth, theme.dim)}
+                        </text>
+                      ) : null}
+                    </box>
                   )
                 })}
               </box>
             ) : streamMode ? (
               <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
                 {renderInlineTextSegments([
-                  { text: `${streamGroupMarker} `, fg: hasCursor ? agentAccent : streamStatusColor(streamGroupMarker, theme) },
+                  { text: hasCursor ? '❯ ' : `${streamGroupMarker} `, fg: hasCursor ? theme.text : streamStatusColor(streamGroupMarker, theme) },
                   { text: `${headerLabel}  ·  e collapse  ·  j/k select`, fg: theme.dim },
                 ], agentBodyWidth, theme.dim)}
               </text>
@@ -4799,7 +4829,7 @@ function TranscriptCardInner({
                 >
                   <text fg={transcriptColor(line, theme)} wrapMode="none" selectable {...selectionColors}>
                     {toolLine
-                      ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '› '), agentBodyWidth, theme.dim)
+                      ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, streamMode ? '  └ ' : '› ', theme.dim, streamMode), agentBodyWidth, theme.dim)
                       : hasInlineMarkdown(line.text)
                         ? renderInlineMarkdownClipped(line.text, theme, transcriptColor(line, theme), agentBodyWidth, `${card.key}:agent-md:${lineIndex}`)
                         : fitText(line.text, agentBodyWidth)}
@@ -4827,8 +4857,27 @@ function TranscriptCardInner({
       ? Math.max(Math.min(streamAvailableWidth - densityState.bodyIndent, MAX_TRANSCRIPT_CARD_WIDTH), 16)
       : streamAvailableWidth
     const streamTextWidth = Math.max(streamWidth - 2, 12)
+    const streamChildTextWidth = Math.max(streamWidth - 4, 10)
     const firstLine = bodyLines[0]
-    const streamMarker = firstLine ? streamLineMarker(firstLine, card.role) : card.role === 'user' ? '›' : '•'
+    const streamMarker = hasCursor
+      ? '❯'
+      : firstLine
+        ? streamLineMarker(firstLine, card.role)
+        : card.role === 'user' ? '❯' : '●'
+    const streamMarkerColor = hasCursor
+      ? theme.text
+      : isSearchHit
+        ? theme.cyan
+        : card.role === 'user'
+          ? accent
+          : firstLine && ['tool', 'result_ok', 'result_error', 'system'].includes(firstLine.tone)
+            ? transcriptColor(firstLine, theme)
+            : theme.dim
+    const streamFirstLineColor = hasCursor && firstLine
+      ? theme.text
+      : firstLine
+        ? transcriptColor(firstLine, theme)
+        : theme.dim
     const remainingLines = bodyLines.slice(1)
     // Full block markdown (tables/headings/lists/fenced code) for expanded
     // text cards, same as the reader view — null for everything else, so the
@@ -4853,14 +4902,13 @@ function TranscriptCardInner({
       || remainingLines.length > 0
       || (isExpanded && (card.codeBlocks?.length ?? 0) > 0)
     const streamRendersSomething = streamHasBody || landmarks.length > 0
-    // Match native agent CLIs: user prompts are the only persistent transcript
-    // band. Assistant prose stays on the terminal background; keyboard focus is
-    // already communicated by the accent marker and should not turn an entire
-    // multi-line answer into a second prompt-shaped block.
-    const streamBg = card.role === 'user'
+    // Native agent CLIs use one strong prompt/selection band and leave ordinary
+    // assistant prose on the terminal surface. Changing the fill never changes
+    // row geometry, so j/k navigation remains visually anchored.
+    const streamBg = hasCursor
       ? theme.userBg
-      : hasCursor
-        ? theme.surface3
+      : card.role === 'user'
+        ? theme.surface2
         : undefined
     return (
       <box
@@ -4889,11 +4937,7 @@ function TranscriptCardInner({
               wrapMode="none"
               selectable
             >
-              {landmark.kind === 'turn'
-                ? landmark.text
-                  ? fitText(`─ ${landmark.text} `, streamWidth).padEnd(streamWidth, '─')
-                  : '─'.repeat(Math.max(streamWidth, 1))
-                : fitText(`─ ${landmark.text} `, streamWidth).padEnd(streamWidth, '─')}
+              {streamLandmarkText(landmark, streamWidth)}
             </text>
           )
         })}
@@ -4907,7 +4951,7 @@ function TranscriptCardInner({
         {streamMarkdownBody ? (
           <box flexDirection="row">
             <text
-              fg={hasCursor ? accent : isSearchHit ? theme.cyan : theme.dim}
+              fg={streamMarkerColor}
               width={2}
               wrapMode="none"
               selectable
@@ -4922,44 +4966,51 @@ function TranscriptCardInner({
         ) : (
         <>
         {firstLine ? (
-          <text
-            fg={hasCursor ? accent : isSearchHit ? theme.cyan : transcriptColor(firstLine, theme)}
-            width={streamWidth}
-            wrapMode={firstLine.tone === 'tool' ? 'none' : 'word'}
-            selectable
-            {...selectionColors}
-          >
-            {firstLine.tone === 'tool'
-              ? renderInlineTextSegments(transcriptToolLineSegments(firstLine.text, theme, `${streamMarker} `), streamWidth, theme.dim)
-              : (!hasCursor && !isSearchHit && hasInlineMarkdown(firstLine.text))
-                ? [
-                    <span key={`${card.key}:f:pfx`} fg={transcriptColor(firstLine, theme)}>{`${streamMarker} `}</span>,
-                    ...renderInlineMarkdownSpans(firstLine.text, theme, transcriptColor(firstLine, theme), `${card.key}:f`),
-                  ]
-                : `${streamMarker} ${firstLine.text}`}
-          </text>
+          <box flexDirection="row">
+            <text fg={streamMarkerColor} width={2} wrapMode="none" selectable {...selectionColors}>
+              {`${streamMarker} `}
+            </text>
+            <text
+              fg={streamFirstLineColor}
+              width={streamTextWidth}
+              wrapMode={firstLine.tone === 'tool' ? 'none' : 'word'}
+              attributes={card.role === 'user' ? TextAttributes.BOLD : undefined}
+              selectable
+              {...selectionColors}
+            >
+              {firstLine.tone === 'tool'
+                ? renderInlineTextSegments(transcriptToolLineSegments(firstLine.text, theme, '', theme.dim, true), streamTextWidth, theme.dim)
+                : hasInlineMarkdown(firstLine.text)
+                  ? renderInlineMarkdownSpans(firstLine.text, theme, streamFirstLineColor, `${card.key}:f`)
+                  : firstLine.text}
+            </text>
+          </box>
         ) : (
           <text fg={theme.dim} selectable {...selectionColors}>{`${streamMarker} (no output)`}</text>
         )}
-        {remainingLines.map((line, lineIndex) => (
-          <text
-            {...selectionColors}
-            key={`${card.key}:s:${lineIndex}`}
-            fg={transcriptColor(line, theme)}
-            width={streamWidth}
-            wrapMode={line.tone === 'tool' ? 'none' : 'word'}
-            selectable
-          >
-            {line.tone === 'tool'
-              ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, streamContinuationMarker(line)), streamWidth, theme.dim)
-              : hasInlineMarkdown(line.text)
-                ? [
-                    <span key={`${card.key}:s:${lineIndex}:pfx`} fg={transcriptColor(line, theme)}>{streamContinuationMarker(line)}</span>,
-                    ...renderInlineMarkdownSpans(line.text, theme, transcriptColor(line, theme), `${card.key}:s:${lineIndex}`),
-                  ]
-                : `${streamContinuationMarker(line)}${line.text}`}
-          </text>
-        ))}
+        {remainingLines.map((line, lineIndex) => {
+          const continuationMarker = streamContinuationMarker(line)
+          return (
+            <box key={`${card.key}:s:${lineIndex}`} flexDirection="row">
+              <text fg={theme.dim} width={4} wrapMode="none" selectable {...selectionColors}>
+                {continuationMarker}
+              </text>
+              <text
+                {...selectionColors}
+                fg={transcriptColor(line, theme)}
+                width={streamChildTextWidth}
+                wrapMode={line.tone === 'tool' ? 'none' : 'word'}
+                selectable
+              >
+                {line.tone === 'tool'
+                  ? renderInlineTextSegments(transcriptToolLineSegments(line.text, theme, '', theme.dim, true), streamChildTextWidth, theme.dim)
+                  : hasInlineMarkdown(line.text)
+                    ? renderInlineMarkdownSpans(line.text, theme, transcriptColor(line, theme), `${card.key}:s:${lineIndex}`)
+                    : line.text}
+              </text>
+            </box>
+          )
+        })}
         {isExpanded && card.codeBlocks?.map((codeBlock, codeBlockIndex) => {
           const lineCount = codeBlockLineCounts[codeBlockIndex] ?? countCodeBlockLines(codeBlock.content)
           const renderHeight = codeBlockHeight(codeBlock, lineCount)
@@ -14836,7 +14887,7 @@ export default function OpenTuiApp() {
                       paddingLeft={densityState.bodyIndent}
                     >
                       <text fg={theme.text} width={Math.max(rightPaneWidth - densityState.bodyIndent - 4, 16)} wrapMode="word">
-                        {`• ${composerLiveText}`}
+                        {`● ${composerLiveText}`}
                       </text>
                     </box>
                   ) : (
@@ -15518,7 +15569,7 @@ export default function OpenTuiApp() {
           paddingTop={transcriptView === 'stream' ? 0 : 1}
           flexDirection="row"
         >
-          <text fg={theme.cyan} wrapMode="none">{transcriptView === 'stream' ? '• ' : '▌ '}</text>
+          <text fg={theme.cyan} wrapMode="none">{transcriptView === 'stream' ? '● ' : '▌ '}</text>
           <box flexGrow={1}>
             <ComposerWaitingStatus
               startedAt={composerSendStartedAt}
@@ -15547,7 +15598,7 @@ export default function OpenTuiApp() {
           paddingTop={transcriptView === 'stream' ? 0 : 1}
           flexDirection="row"
         >
-          <text fg={theme.green} wrapMode="none">{transcriptView === 'stream' ? '• ' : '▌ '}</text>
+          <text fg={theme.green} wrapMode="none">{transcriptView === 'stream' ? '● ' : '▌ '}</text>
           <text wrapMode="none">
             {renderInlineTextSegments([
               { text: 'tools  ', fg: theme.dim },
