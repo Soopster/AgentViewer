@@ -4808,11 +4808,6 @@ function TranscriptCardInner({
             })}
           </box>
         </box>
-        {streamMode && hasCursor ? (
-          <text fg={theme.dim} wrapMode="none">
-            {fitText('  b bookmark   Q quote/reply   y copy', agentBodyWidth)}
-          </text>
-        ) : null}
       </box>
     )
   }
@@ -4996,11 +4991,6 @@ function TranscriptCardInner({
         )}
         </box>
         )}
-        {hasCursor ? (
-          <text fg={theme.dim} wrapMode="none">
-            {fitText('  b bookmark   Q quote/reply   y copy', streamWidth)}
-          </text>
-        ) : null}
       </box>
     )
   }
@@ -7749,12 +7739,14 @@ export default function OpenTuiApp() {
   const showTabs = tabsEnabled && visibleTabSessions.length > 0
   const showPreviewBar = false
   const TAB_BAR_HEIGHT = 1
+  const streamActionFooterRows = transcriptView === 'stream' && visibleTranscriptCards.length > 0 ? 1 : 0
   const transcriptViewportRows = Math.max(
     mainContentHeight
     - (focusMode ? 4 : 7)
     - (showTabs || showPreviewBar ? TAB_BAR_HEIGHT : 0)
     // Fleet strip is one header row when visible.
-    - (fleetStripVisible ? 1 : 0),
+    - (fleetStripVisible ? 1 : 0)
+    - streamActionFooterRows,
     8,
   )
 
@@ -14855,6 +14847,15 @@ export default function OpenTuiApp() {
 
               </scrollbox>
             )}
+            {streamActionFooterRows > 0 ? (
+              <box height={streamActionFooterRows} paddingLeft={1}>
+                <text fg={theme.dim} wrapMode="none">
+                  {effectiveFocus === 'messages'
+                    ? fitText('b bookmark   Q quote/reply   y copy', Math.max(rightPaneWidth - 6, 12))
+                    : ' '}
+                </text>
+              </box>
+            ) : null}
           </box>
 
           {followTail && visibleTranscriptCards.length > 0 ? (
