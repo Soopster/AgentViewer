@@ -41,6 +41,7 @@ import {
   type TuiTranscriptCodeBlock,
   type TuiTranscriptCardLine,
 } from '../format'
+import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
 import { buildTaskRegistry } from '../../lib/taskRegistry'
 import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
@@ -2812,7 +2813,7 @@ function streamLineMarker(line: TuiTranscriptCardLine, role: TuiTranscriptCard['
     case 'system':
       return '▲'
     default:
-      return '●'
+      return '•'
   }
 }
 
@@ -2846,11 +2847,6 @@ function streamToolCardMarker(card: TuiTranscriptCard): string {
   return streamToolGroupMarker([card])
 }
 
-function streamToolMarkerRank(card: TuiTranscriptCard): number {
-  const marker = streamToolCardMarker(card)
-  return marker === '×' ? 3 : marker === '▲' ? 2 : marker === '✓' ? 1 : 0
-}
-
 function streamStatusColor(marker: string, theme: TuiThemePalette): string {
   if (marker === '✓') return theme.green
   if (marker === '×') return theme.red
@@ -2861,9 +2857,42 @@ function streamStatusColor(marker: string, theme: TuiThemePalette): string {
 
 function streamLandmarkText(landmark: CardLandmark, width: number): string {
   if (landmark.kind === 'turn') {
-    return landmark.text ? fitText(`  ${landmark.text}`, width) : ' '.repeat(Math.max(width, 1))
+    return landmark.text
+      ? fitText(`─ ${landmark.text} `, width).padEnd(width, '─')
+      : '─'.repeat(Math.max(width, 1))
   }
   return fitText(`─ ${landmark.text} `, width).padEnd(width, '─')
+}
+
+function streamCardLatestTimestampMs(card: TuiTranscriptCard): number | null {
+  let latest = card.timestampMs ?? null
+  for (const toolCard of (card as AgentToolGroupCard).agentToolCards ?? []) {
+    if (toolCard.timestampMs != null && (latest == null || toolCard.timestampMs > latest)) {
+      latest = toolCard.timestampMs
+    }
+  }
+  return latest
+}
+
+function streamCompletedTurnHint(cards: TuiTranscriptCard[]): string | null {
+  let userIndex = -1
+  for (let index = cards.length - 1; index >= 0; index -= 1) {
+    if (cards[index].role === 'user') {
+      userIndex = index
+      break
+    }
+  }
+  if (userIndex < 0 || userIndex === cards.length - 1) return null
+
+  const startedAt = cards[userIndex].timestampMs
+  if (startedAt == null) return null
+
+  let completedAt = startedAt
+  for (let index = userIndex + 1; index < cards.length; index += 1) {
+    completedAt = Math.max(completedAt, streamCardLatestTimestampMs(cards[index]) ?? completedAt)
+  }
+  const elapsedMs = completedAt - startedAt
+  return elapsedMs >= 1000 ? `Worked for ${formatElapsedClock(elapsedMs)}` : null
 }
 
 function transcriptBackground(line: TuiTranscriptCardLine, theme: TuiThemePalette): string | undefined {
@@ -3277,7 +3306,10 @@ function isStreamGhostCard(card: TuiTranscriptCard): boolean {
   return !hasRealLine(card.lines) && !hasRealLine(card.expandedLines)
 }
 
-function groupAgentsToolCards(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
+function groupToolCards(
+  cards: TuiTranscriptCard[],
+  shouldGroup: (card: TuiTranscriptCard) => boolean,
+): TuiTranscriptCard[] {
   const grouped: TuiTranscriptCard[] = []
   let pending: TuiTranscriptCard[] = []
 
@@ -3315,7 +3347,7 @@ function groupAgentsToolCards(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
   }
 
   for (const card of cards) {
-    if (isAgentsToolOnlyCard(card)) {
+    if (shouldGroup(card)) {
       pending.push(card)
     } else {
       flush()
@@ -3324,6 +3356,21 @@ function groupAgentsToolCards(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
   }
   flush()
   return grouped
+}
+
+function groupAgentsToolCards(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
+  return groupToolCards(cards, isAgentsToolOnlyCard)
+}
+
+function groupStreamToolCards(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
+  // Keep file edits as standalone stream events so repeated updates retain
+  // their own compact excerpt. Routine technical calls still collapse into a
+  // single Claude-style activity narration row.
+  return groupToolCards(cards, (card) => card.category === 'technical')
+}
+
+function isStreamOperationalCard(card: TuiTranscriptCard): boolean {
+  return card.key.startsWith('agents-tools:') || card.category === 'technical'
 }
 
 function agentToolCardsFor(card: TuiTranscriptCard): TuiTranscriptCard[] {
@@ -3370,16 +3417,80 @@ function transcriptToolLineSegments(
   ]
 }
 
+function streamDiffOperationLabel(card: TuiTranscriptCard): string | null {
+  if (card.category !== 'diff') return null
+  const diffText = cardDiffText(card, false)
+  const path = filePathFromDiffText(diffText, diffMetaFilePath(card) ?? card.label)
+  if (!path) return null
+  let operation = 'Update'
+  if (diffText?.includes('--- /dev/null')) operation = 'Create'
+  else if (diffText?.includes('+++ /dev/null')) operation = 'Delete'
+  else {
+    const toolName = streamToolSummaryName(card)
+    if (toolName === 'write') operation = 'Create'
+  }
+  return `${operation}(${path})`
+}
+
 function streamToolSummarySegments(card: TuiTranscriptCard, theme: TuiThemePalette): InlineTextSegment[] {
   const summary = agentsToolSummaryLine(card)
   const marker = streamToolCardMarker(card)
   const markerColor = streamStatusColor(marker, theme)
+  const diffLabel = streamDiffOperationLabel(card)
+  if (diffLabel) {
+    const stats = diffStatsLabel(cardDiffText(card, false), card.expandedLines)
+    return [
+      { text: `${marker} `, fg: markerColor },
+      { text: diffLabel, fg: theme.green, attributes: TextAttributes.BOLD },
+      ...(stats ? [{ text: `  ${stats}`, fg: theme.dim }] : []),
+    ]
+  }
   if (summary.tone === 'tool') {
     return transcriptToolLineSegments(summary.text, theme, `${marker} `, markerColor, true)
   }
   return [
     { text: `${marker} `, fg: markerColor },
     { text: summary.text, fg: transcriptColor(summary, theme) },
+  ]
+}
+
+function streamToolSummaryName(card: TuiTranscriptCard): string {
+  const summary = agentsToolSummaryLine(card)
+  return summary.tone === 'tool' ? toolNameFromTranscriptLine(summary.text).toLowerCase() : ''
+}
+
+function isStreamActivityToolCard(card: TuiTranscriptCard): boolean {
+  const name = streamToolSummaryName(card)
+  return name === 'bash' || name === 'grep' || name === 'glob' || name === 'read'
+}
+
+function streamActivitySummarySegments(cards: TuiTranscriptCard[], theme: TuiThemePalette): InlineTextSegment[] | null {
+  let shellCount = 0
+  let searchCount = 0
+  let readCount = 0
+  const activityCards: TuiTranscriptCard[] = []
+  for (const card of cards) {
+    const name = streamToolSummaryName(card)
+    if (name === 'bash') {
+      shellCount += 1
+      activityCards.push(card)
+    } else if (name === 'grep' || name === 'glob') {
+      searchCount += 1
+      activityCards.push(card)
+    } else if (name === 'read') {
+      readCount += 1
+      activityCards.push(card)
+    }
+  }
+  if (activityCards.length === 0) return null
+  const parts: string[] = []
+  if (readCount > 0) parts.push(`Read ${readCount} ${readCount === 1 ? 'file' : 'files'}`)
+  if (searchCount > 0) parts.push(`${parts.length > 0 ? 'searched' : 'Searched'} for ${searchCount} ${searchCount === 1 ? 'pattern' : 'patterns'}`)
+  if (shellCount > 0) parts.push(`${parts.length > 0 ? 'ran' : 'Ran'} ${shellCount} shell ${shellCount === 1 ? 'command' : 'commands'}`)
+  const marker = streamToolGroupMarker(activityCards)
+  return [
+    { text: `${marker} `, fg: streamStatusColor(marker, theme) },
+    { text: parts.join(', '), fg: theme.muted },
   ]
 }
 
@@ -3394,24 +3505,6 @@ function streamToolDetailLine(card: TuiTranscriptCard): TuiTranscriptCardLine | 
     return line
   }
   return null
-}
-
-function dedupeStreamToolSummaryCards(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
-  const unique: TuiTranscriptCard[] = []
-  const indexBySummary = new Map<string, number>()
-
-  for (const card of cards) {
-    const summaryKey = agentsToolSummaryLine(card).text.replace(/\s+/g, ' ').trim().toLowerCase()
-    const existingIndex = indexBySummary.get(summaryKey)
-    if (existingIndex == null) {
-      indexBySummary.set(summaryKey, unique.length)
-      unique.push(card)
-      continue
-    }
-    const existing = unique[existingIndex]
-    if (existing && streamToolMarkerRank(card) > streamToolMarkerRank(existing)) unique[existingIndex] = card
-  }
-  return unique
 }
 
 function bashCommandSegments(detail: string, theme: TuiThemePalette): InlineTextSegment[] {
@@ -3506,6 +3599,106 @@ function cardDiffRows(card: TuiTranscriptCard, isExpanded: boolean, previewLimit
   const visibleRows = isExpanded ? diffView.rows.length : Math.min(previewLimit, diffView.rows.length)
   const hiddenSummaryRows = visibleRows < diffView.rows.length ? 1 : 0
   return visibleRows + hiddenSummaryRows + 1
+}
+
+const STREAM_DIFF_PREVIEW_MAX_ROWS = 7
+
+type StreamDiffPreviewData = {
+  rows: TuiPierreDiffRow[]
+  hiddenRows: number
+  gutterWidth: number
+  filetype: string | undefined
+}
+
+const STREAM_DIFF_PREVIEW_CACHE = new WeakMap<TuiTranscriptCard, StreamDiffPreviewData | null>()
+
+function streamDiffPreviewData(card: TuiTranscriptCard): StreamDiffPreviewData | null {
+  if (STREAM_DIFF_PREVIEW_CACHE.has(card)) return STREAM_DIFF_PREVIEW_CACHE.get(card) ?? null
+  const diffView = cardDiffView(card, false)
+  if (!diffView) {
+    STREAM_DIFF_PREVIEW_CACHE.set(card, null)
+    return null
+  }
+  const contentRows = diffView.rows.filter((row) => row.oldLine != null || row.newLine != null)
+  if (contentRows.length === 0) {
+    STREAM_DIFF_PREVIEW_CACHE.set(card, null)
+    return null
+  }
+  const firstChangeIndex = contentRows.findIndex((row) => row.tone === 'addition' || row.tone === 'deletion')
+  const startIndex = Math.max((firstChangeIndex >= 0 ? firstChangeIndex : 0) - 2, 0)
+  const rows = contentRows.slice(startIndex, startIndex + STREAM_DIFF_PREVIEW_MAX_ROWS)
+  const largestLineNumber = rows.reduce((largest, row) => Math.max(largest, row.newLine ?? row.oldLine ?? 0), 0)
+  const diffText = cardDiffText(card, false)
+  const filePath = filePathFromDiffText(diffText, diffMetaFilePath(card) ?? card.label)
+  const value = {
+    rows,
+    hiddenRows: contentRows.length - rows.length,
+    gutterWidth: Math.max(String(largestLineNumber).length, 2),
+    filetype: detectTuiCodeFiletypeFromPath(filePath),
+  }
+  STREAM_DIFF_PREVIEW_CACHE.set(card, value)
+  return value
+}
+
+function StreamDiffPreview({
+  card,
+  theme,
+  syntaxStyle,
+  width,
+  selectionColors,
+}: {
+  card: TuiTranscriptCard
+  theme: TuiThemePalette
+  syntaxStyle: SyntaxStyle | null
+  width: number
+  selectionColors: SelectionColors
+}) {
+  const preview = streamDiffPreviewData(card)
+  if (!preview) return null
+  const gutterWidth = preview.gutterWidth + 4
+  const codeWidth = Math.max(width - gutterWidth, 8)
+  const codeContent = preview.rows.map((row) => row.text).join('\n')
+  return (
+    <box flexDirection="column" paddingLeft={2} marginTop={0}>
+      <box flexDirection="row" height={preview.rows.length}>
+        <box width={gutterWidth} flexDirection="column">
+          {preview.rows.map((row) => {
+            const lineNumber = row.newLine ?? row.oldLine
+            return (
+              <text key={`${row.key}:gutter`} fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
+                {`${formatDiffLineNumber(lineNumber, preview.gutterWidth)} ${row.indicator ?? diffRowIndicator(row)} `}
+              </text>
+            )
+          })}
+        </box>
+        {syntaxStyle ? (
+          <code
+            content={codeContent}
+            filetype={preview.filetype}
+            syntaxStyle={syntaxStyle}
+            drawUnstyledText={true}
+            selectable
+            {...selectionColors}
+            style={{ height: preview.rows.length }}
+            width={codeWidth}
+          />
+        ) : (
+          <box width={codeWidth} flexDirection="column">
+            {preview.rows.map((row) => (
+              <text key={`${row.key}:plain`} fg={diffRowColor(row, theme)} wrapMode="none" selectable {...selectionColors}>
+                {fitText(row.text, codeWidth)}
+              </text>
+            ))}
+          </box>
+        )}
+      </box>
+      {preview.hiddenRows > 0 ? (
+        <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+          {fitText(`   … ${preview.hiddenRows} more lines`, width)}
+        </text>
+      ) : null}
+    </box>
+  )
 }
 
 type TranscriptDiffNoteDraft = {
@@ -4623,7 +4816,7 @@ function TranscriptCardInner({
       ? isExpanded && agentToolCursorKey
         ? theme.surface2
         : theme.userBg
-      : theme.surface
+      : undefined
     const contentWidth = Math.max(agentWidth - 2, 16)
     const agentBodyWidth = Math.max(contentWidth - 2, 12)
     const agentMarkdownBody = renderCardMarkdownBody({
@@ -4674,9 +4867,13 @@ function TranscriptCardInner({
         })
       : []
     const rendersCollapsedStreamTools = streamMode && operationalCard && !isExpanded
-    const collapsedStreamToolCards = rendersCollapsedStreamTools
-      ? dedupeStreamToolSummaryCards(toolCards)
-      : toolCards
+    const collapsedStreamToolCards = toolCards
+    const streamActivitySegments = rendersCollapsedStreamTools
+      ? streamActivitySummarySegments(collapsedStreamToolCards, theme)
+      : null
+    const streamDetailToolCards = streamActivitySegments
+      ? collapsedStreamToolCards.filter((toolCard) => !isStreamActivityToolCard(toolCard))
+      : collapsedStreamToolCards
     return (
       <box
         flexDirection="column"
@@ -4725,13 +4922,24 @@ function TranscriptCardInner({
           >
             {rendersCollapsedStreamTools ? (
               <box flexDirection="column">
-                {collapsedStreamToolCards.map((toolCard, toolIndex) => {
+                {streamActivitySegments ? (
+                  <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+                    {renderInlineTextSegments([
+                      ...(hasCursor && streamActivitySegments[0]
+                        ? [{ text: '❯ ', fg: theme.text }, ...streamActivitySegments.slice(1)]
+                        : streamActivitySegments),
+                      ...(hasCursor && streamDetailToolCards.length === 0 ? [{ text: '  ·  e details', fg: theme.dim }] : []),
+                    ], agentBodyWidth, theme.dim)}
+                  </text>
+                ) : null}
+                {streamDetailToolCards.map((toolCard, toolIndex) => {
                   const segments = streamToolSummarySegments(toolCard, theme)
-                  const detailLine = streamToolDetailLine(toolCard)
-                  if (hasCursor && toolIndex === 0 && segments[0]) {
+                  const diffPreview = toolCard.category === 'diff' ? streamDiffPreviewData(toolCard) : null
+                  const detailLine = diffPreview ? null : streamToolDetailLine(toolCard)
+                  if (hasCursor && streamActivitySegments === null && toolIndex === 0 && segments[0]) {
                     segments[0] = { text: '❯ ', fg: theme.text }
                   }
-                  if (hasCursor && toolIndex === collapsedStreamToolCards.length - 1) {
+                  if (hasCursor && toolIndex === streamDetailToolCards.length - 1) {
                     segments.push({ text: '  ·  e details', fg: theme.dim })
                   }
                   return (
@@ -4749,6 +4957,15 @@ function TranscriptCardInner({
                             { text: detailLine.text.trim(), fg: transcriptColor(detailLine, theme) },
                           ], agentBodyWidth, theme.dim)}
                         </text>
+                      ) : null}
+                      {diffPreview ? (
+                        <StreamDiffPreview
+                          card={toolCard}
+                          theme={theme}
+                          syntaxStyle={syntaxStyle}
+                          width={agentBodyWidth}
+                          selectionColors={selectionColors}
+                        />
                       ) : null}
                     </box>
                   )
@@ -4863,7 +5080,7 @@ function TranscriptCardInner({
       ? '❯'
       : firstLine
         ? streamLineMarker(firstLine, card.role)
-        : card.role === 'user' ? '❯' : '●'
+        : card.role === 'user' ? '❯' : '•'
     const streamMarkerColor = hasCursor
       ? theme.text
       : isSearchHit
@@ -4879,6 +5096,15 @@ function TranscriptCardInner({
         ? transcriptColor(firstLine, theme)
         : theme.dim
     const remainingLines = bodyLines.slice(1)
+    const streamDiffPreview = card.category === 'diff' ? streamDiffPreviewData(card) : null
+    const streamDiffHeaderSegments = streamDiffPreview
+      ? (() => {
+          const segments = streamToolSummarySegments(card, theme)
+          if (hasCursor && segments[0]) segments[0] = { text: '❯ ', fg: theme.text }
+          if (hasCursor) segments.push({ text: '  ·  e details', fg: theme.dim })
+          return segments
+        })()
+      : null
     // Full block markdown (tables/headings/lists/fenced code) for expanded
     // text cards, same as the reader view — null for everything else, so the
     // per-line stream rendering below still owns tool cards and previews.
@@ -4898,6 +5124,7 @@ function TranscriptCardInner({
     // drop the body entirely, even when focused. A card with no body and no
     // landmarks collapses to zero height (id anchor preserved for scroll-to).
     const streamHasBody = Boolean(streamMarkdownBody)
+      || Boolean(streamDiffPreview)
       || Boolean(firstLine)
       || remainingLines.length > 0
       || (isExpanded && (card.codeBlocks?.length ?? 0) > 0)
@@ -4948,7 +5175,20 @@ function TranscriptCardInner({
           paddingBottom={0}
           backgroundColor={streamBg}
         >
-        {streamMarkdownBody ? (
+        {streamDiffPreview && streamDiffHeaderSegments ? (
+          <box flexDirection="column">
+            <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+              {renderInlineTextSegments(streamDiffHeaderSegments, streamTextWidth, theme.dim)}
+            </text>
+            <StreamDiffPreview
+              card={card}
+              theme={theme}
+              syntaxStyle={syntaxStyle}
+              width={streamTextWidth}
+              selectionColors={selectionColors}
+            />
+          </box>
+        ) : streamMarkdownBody ? (
           <box flexDirection="row">
             <text
               fg={streamMarkerColor}
@@ -6708,7 +6948,7 @@ export default function OpenTuiApp() {
         // Cards with no renderable content (turn boundaries, empty tool-only
         // messages) collapse to zero height in Stream view but would still be
         // selectable ghost stops for j/k — drop them from the list entirely.
-        return groupAgentsToolCards(transcriptCards.filter((card) => card.category !== 'system'))
+        return groupStreamToolCards(transcriptCards.filter((card) => card.category !== 'system'))
           .filter((card) => !isStreamGhostCard(card))
       }
       if (transcriptView === 'agents') return groupAgentsToolCards(transcriptCards)
@@ -7792,6 +8032,15 @@ export default function OpenTuiApp() {
   const showTabs = tabsEnabled && visibleTabSessions.length > 0
   const showPreviewBar = false
   const TAB_BAR_HEIGHT = 1
+  const streamTurnFooterText = useMemo(() => {
+    if (
+      transcriptView !== 'stream'
+      || composerSendState === 'sending'
+      || reattachedRunning
+      || awaitingPersistedTurn
+    ) return null
+    return streamCompletedTurnHint(visibleTranscriptCards)
+  }, [awaitingPersistedTurn, composerSendState, reattachedRunning, transcriptView, visibleTranscriptCards])
   const streamActionFooterRows = transcriptView === 'stream' && visibleTranscriptCards.length > 0 ? 1 : 0
   const transcriptViewportRows = Math.max(
     mainContentHeight
@@ -7905,7 +8154,7 @@ export default function OpenTuiApp() {
       const isExpanded = expandedKeysForRender.has(card.key)
       const thinkingFull = thinkingFullKeys.has(card.key)
       const agentsModeForCard = transcriptView === 'agents'
-        || (transcriptView === 'stream' && card.key.startsWith('agents-tools:'))
+        || (transcriptView === 'stream' && isStreamOperationalCard(card))
       const prev = cache.get(card)
       if (
         prev
@@ -8133,7 +8382,7 @@ export default function OpenTuiApp() {
           imessageStyle={imessageStyle}
           transcriptWidth={transcriptWidth}
           streamMode={transcriptView === 'stream'}
-          agentsMode={transcriptView === 'agents' || (transcriptView === 'stream' && card.key.startsWith('agents-tools:'))}
+          agentsMode={transcriptView === 'agents' || (transcriptView === 'stream' && isStreamOperationalCard(card))}
           agentToolCursorKey={groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null}
           agentToolExpandedKeys={groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS}
           agentToolCollapsedKeys={groupedToolView ? collapsedCardKeys : EMPTY_EXPANDED_KEYS}
@@ -14908,6 +15157,17 @@ export default function OpenTuiApp() {
                       </box>
                     </box>
                   )
+                ) : null}
+
+                {streamTurnFooterText ? (
+                  <box key="stream-turn-footer" paddingX={1} marginBottom={densityState.cardGap}>
+                    <text fg={theme.dim} width={Math.max(rightPaneWidth - 5, 12)} wrapMode="none" selectable>
+                      {streamLandmarkText(
+                        { kind: 'turn', text: streamTurnFooterText },
+                        Math.max(rightPaneWidth - 5, 12),
+                      )}
+                    </text>
+                  </box>
                 ) : null}
 
               </scrollbox>
