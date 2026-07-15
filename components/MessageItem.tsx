@@ -5765,11 +5765,11 @@ type StreamTreePosition = 'branch' | 'last'
 function StreamToolRow({
   thread,
   treePosition,
-  showActivitySummary = false,
+  compactActivity = false,
 }: {
   thread: ToolThread
   treePosition?: StreamTreePosition
-  showActivitySummary?: boolean
+  compactActivity?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const spacing = streamDensitySpacing(use(MessageDensityContext))
@@ -5779,7 +5779,7 @@ function StreamToolRow({
   const label = name === 'Bash' ? 'Ran' : name
   const rawSummary = summarizeAgentsTool(thread)
   const summary = name === 'Bash' ? rawSummary.replace(/^\$\s*/, '') : rawSummary
-  const outputSummary = showActivitySummary ? streamToolOutputSummary(thread) : null
+  const outputSummary = compactActivity ? streamToolOutputSummary(thread) : null
   if (open) {
     return (
       <div className="av-stream-expanded-tool">
@@ -5792,7 +5792,7 @@ function StreamToolRow({
     <div>
       <button
         type="button"
-        className={`av-stream-tool-row${treePosition ? ` av-stream-tool-row--nested av-stream-tool-row--${treePosition}` : ''}${showActivitySummary ? ' av-stream-tool-row--single-activity' : ''}`}
+        className={`av-stream-tool-row${treePosition ? ` av-stream-tool-row--nested av-stream-tool-row--${treePosition}` : ''}`}
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         style={{
@@ -5814,13 +5814,6 @@ function StreamToolRow({
         <span className="av-stream-tool-connector" style={{ color: treePosition ? 'var(--text-3)' : status.color }}>
           {treePosition ? '' : status.marker}
         </span>
-        {showActivitySummary ? (
-          <span className="av-stream-single-activity-heading">
-            <strong>Activity</strong>
-            <span className="av-stream-activity-counts">  ·  {streamActivitySummary([thread])}</span>
-          </span>
-        ) : null}
-        {showActivitySummary ? <span className="av-stream-single-activity-separator" aria-hidden="true">·</span> : null}
         <span className="av-stream-tool-label" style={{ color }}>{label}</span>
         <span className="av-stream-tool-command">
           {summary}
@@ -5963,7 +5956,7 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
                 : <StreamToolRow
                     key={thread.toolUse.id ?? `${thread.toolUse.name}:${index}`}
                     thread={thread}
-                    showActivitySummary={hasSingleActivity && isStreamActivityThread(thread)}
+                    compactActivity={hasSingleActivity && isStreamActivityThread(thread)}
                     treePosition={!hasSingleActivity && isStreamActivityThread(thread) ? index === lastActivityIndex ? 'last' : 'branch' : undefined}
                   />
             ))}

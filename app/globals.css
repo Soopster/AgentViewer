@@ -1356,25 +1356,6 @@ body {
   transition: background-color 120ms ease;
 }
 
-.av-stream-tool-row--single-activity {
-  gap: 7px;
-}
-
-.av-stream-single-activity-heading {
-  display: flex;
-  align-items: baseline;
-  color: var(--text);
-  font-family: var(--render-font);
-  font-size: 14px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.av-stream-single-activity-separator {
-  color: var(--text-3);
-  flex-shrink: 0;
-}
-
 .av-stream-single-activity-output {
   display: flex;
   min-width: 0;

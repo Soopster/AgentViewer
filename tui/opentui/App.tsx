@@ -5026,12 +5026,7 @@ function TranscriptCardInner({
                   const isSingleActivityTool = hasSingleStreamActivity && isActivityTool
                   const detailLine = diffPreview ? null : streamToolDetailLine(toolCard)
                   const isLastActivityTool = isActivityTool && toolIndex === lastStreamActivityIndex
-                  if (isSingleActivityTool && streamActivitySegments) {
-                    segments = [
-                      ...streamActivitySegments,
-                      { text: '  ·  ', fg: theme.dim },
-                      ...segments.slice(1),
-                    ]
+                  if (isSingleActivityTool && segments[0]) {
                     if (hasCursor && segments[0]) segments[0] = { text: '❯ ', fg: theme.text }
                   } else if (isActivityTool && segments[0]) {
                     segments[0] = { text: isLastActivityTool ? '  └ ' : '  ├ ', fg: theme.dim }
