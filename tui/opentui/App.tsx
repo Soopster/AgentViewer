@@ -3474,6 +3474,40 @@ function streamToolSummaryName(card: TuiTranscriptCard): string {
   return summary.tone === 'tool' ? toolNameFromTranscriptLine(summary.text).toLowerCase() : ''
 }
 
+function isStreamActivityToolCard(card: TuiTranscriptCard): boolean {
+  const name = streamToolSummaryName(card)
+  return name === 'bash' || name === 'grep' || name === 'glob' || name === 'read'
+}
+
+function streamActivitySummarySegments(cards: TuiTranscriptCard[], theme: TuiThemePalette): InlineTextSegment[] | null {
+  let shellCount = 0
+  let searchCount = 0
+  let readCount = 0
+  const activityCards: TuiTranscriptCard[] = []
+  for (const card of cards) {
+    const name = streamToolSummaryName(card)
+    if (name === 'bash') shellCount += 1
+    else if (name === 'grep' || name === 'glob') searchCount += 1
+    else if (name === 'read') readCount += 1
+    else continue
+    activityCards.push(card)
+  }
+  if (activityCards.length === 0) return null
+  const marker = streamToolGroupMarker(activityCards)
+  const segments: InlineTextSegment[] = [
+    { text: `${marker} `, fg: streamStatusColor(marker, theme) },
+    { text: 'Activity', fg: theme.text, attributes: TextAttributes.BOLD },
+  ]
+  const appendCount = (detail: string) => {
+    if (segments.length > 1) segments.push({ text: '  ·  ', fg: theme.dim })
+    segments.push({ text: detail, fg: theme.dim })
+  }
+  if (readCount > 0) appendCount(`${readCount} ${readCount === 1 ? 'file' : 'files'}`)
+  if (searchCount > 0) appendCount(`${searchCount} ${searchCount === 1 ? 'search' : 'searches'}`)
+  if (shellCount > 0) appendCount(`${shellCount} shell ${shellCount === 1 ? 'command' : 'commands'}`)
+  return segments
+}
+
 function streamToolDetailLine(card: TuiTranscriptCard): TuiTranscriptCardLine | null {
   const summaryText = agentsToolSummaryLine(card).text.trim()
   const seen = new Set<string>()
@@ -3489,6 +3523,7 @@ function streamToolDetailLine(card: TuiTranscriptCard): TuiTranscriptCardLine | 
     if (!text || text === summaryText || text === 'No visible content' || seen.has(text)) continue
     seen.add(text)
     if (line.tone === 'tool' || line.tone === 'diff_add' || line.tone === 'diff_remove') continue
+    if (/^[└├│─\s]+$/.test(text) || /^[✓✔]️?\s*(?:OK|done)?$/i.test(text)) continue
     return line
   }
   return null
@@ -4876,7 +4911,14 @@ function TranscriptCardInner({
       : []
     const rendersCollapsedStreamTools = streamMode && operationalCard && !isExpanded
     const collapsedStreamToolCards = toolCards
+    const streamActivitySegments = rendersCollapsedStreamTools
+      ? streamActivitySummarySegments(collapsedStreamToolCards, theme)
+      : null
     const streamDetailToolCards = collapsedStreamToolCards
+    let lastStreamActivityIndex = -1
+    for (let index = 0; index < streamDetailToolCards.length; index += 1) {
+      if (isStreamActivityToolCard(streamDetailToolCards[index])) lastStreamActivityIndex = index
+    }
     return (
       <box
         flexDirection="column"
@@ -4925,11 +4967,26 @@ function TranscriptCardInner({
           >
             {rendersCollapsedStreamTools ? (
               <box flexDirection="column">
+                {streamActivitySegments ? (
+                  <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
+                    {renderInlineTextSegments(
+                      hasCursor && streamActivitySegments[0]
+                        ? [{ text: '❯ ', fg: theme.text }, ...streamActivitySegments.slice(1)]
+                        : streamActivitySegments,
+                      agentBodyWidth,
+                      theme.dim,
+                    )}
+                  </text>
+                ) : null}
                 {streamDetailToolCards.map((toolCard, toolIndex) => {
                   const segments = streamToolSummarySegments(toolCard, theme)
                   const diffPreview = toolCard.category === 'diff' ? streamDiffPreviewData(toolCard) : null
                   const detailLine = diffPreview ? null : streamToolDetailLine(toolCard)
-                  if (hasCursor && toolIndex === 0 && segments[0]) {
+                  const isActivityTool = Boolean(streamActivitySegments && isStreamActivityToolCard(toolCard))
+                  const isLastActivityTool = isActivityTool && toolIndex === lastStreamActivityIndex
+                  if (isActivityTool && segments[0]) {
+                    segments[0] = { text: isLastActivityTool ? '  └ ' : '  ├ ', fg: theme.dim }
+                  } else if (hasCursor && streamActivitySegments === null && toolIndex === 0 && segments[0]) {
                     segments[0] = { text: '❯ ', fg: theme.text }
                   }
                   if (hasCursor && toolIndex === streamDetailToolCards.length - 1) {
@@ -4946,7 +5003,12 @@ function TranscriptCardInner({
                       {detailLine ? (
                         <text fg={transcriptColor(detailLine, theme)} wrapMode="none" selectable {...selectionColors}>
                           {renderInlineTextSegments([
-                            { text: '  └ ', fg: theme.dim },
+                            {
+                              text: isActivityTool
+                                ? isLastActivityTool ? '    └ ' : '  │ └ '
+                                : '  └ ',
+                              fg: theme.dim,
+                            },
                             { text: detailLine.text.trim(), fg: transcriptColor(detailLine, theme) },
                           ], agentBodyWidth, theme.dim)}
                         </text>

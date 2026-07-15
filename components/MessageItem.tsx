@@ -5563,6 +5563,29 @@ function streamToolStatus(thread: ToolThread): { marker: '•' | '✓' | '×' | 
   return { marker: '•', color: 'var(--text-3)', rank: 0 }
 }
 
+function isStreamActivityThread(thread: ToolThread): boolean {
+  return ['Bash', 'Read', 'Grep', 'Glob'].includes(canonicalToolName(thread.toolUse.name))
+}
+
+function streamActivitySummary(threads: ToolThread[]): string {
+  let readCount = 0
+  let searchCount = 0
+  let shellCount = 0
+  for (const thread of threads) {
+    const name = canonicalToolName(thread.toolUse.name)
+    if (name === 'Read') readCount += 1
+    else if (name === 'Grep' || name === 'Glob') searchCount += 1
+    else if (name === 'Bash') shellCount += 1
+  }
+  const parts: string[] = []
+  if (readCount > 0) parts.push(`${readCount} ${readCount === 1 ? 'file' : 'files'}`)
+  if (searchCount > 0) parts.push(`${searchCount} ${searchCount === 1 ? 'search' : 'searches'}`)
+  if (shellCount > 0) parts.push(`${shellCount} shell ${shellCount === 1 ? 'command' : 'commands'}`)
+  return parts.join('  ·  ')
+}
+
+type StreamTreePosition = 'branch' | 'last'
+
 function dedupeStreamToolThreads(threads: ToolThread[]): ToolThread[] {
   const unique: ToolThread[] = []
   const indexBySummary = new Map<string, number>()
@@ -5580,13 +5603,16 @@ function dedupeStreamToolThreads(threads: ToolThread[]): ToolThread[] {
   return unique
 }
 
-function StreamToolRow({ thread }: { thread: ToolThread }) {
+function StreamToolRow({ thread, treePosition }: { thread: ToolThread; treePosition?: StreamTreePosition }) {
   const [open, setOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
   const spacing = streamDensitySpacing(use(MessageDensityContext))
   const name = canonicalToolName(thread.toolUse.name)
   const status = streamToolStatus(thread)
   const color = toolColor(name)
+  const label = name === 'Bash' ? 'Ran' : name
+  const rawSummary = summarizeAgentsTool(thread)
+  const summary = name === 'Bash' ? rawSummary.replace(/^\$\s*/, '') : rawSummary
   return (
     <div style={{ background: open ? 'var(--surface-2)' : 'transparent' }}>
       <button
@@ -5601,7 +5627,7 @@ function StreamToolRow({ thread }: { thread: ToolThread }) {
           alignItems: 'baseline',
           gap: 7,
           minWidth: 0,
-          padding: `${spacing.toolRowPaddingY}px ${spacing.paddingX}px`,
+          padding: `${spacing.toolRowPaddingY}px ${spacing.paddingX}px ${spacing.toolRowPaddingY}px ${treePosition ? spacing.paddingX + 10 : spacing.paddingX}px`,
           border: 0,
           borderRadius: 0,
           background: open ? 'var(--surface-3)' : hovered ? 'var(--surface-2)' : 'transparent',
@@ -5611,10 +5637,12 @@ function StreamToolRow({ thread }: { thread: ToolThread }) {
           fontFamily: "'IBM Plex Mono', monospace",
         }}
       >
-        <span style={{ color: status.color, flexShrink: 0 }}>{status.marker}</span>
-        <span style={{ color, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>{name}</span>
+        <span style={{ color: treePosition ? 'var(--text-3)' : status.color, flexShrink: 0 }}>
+          {treePosition === 'branch' ? '├' : treePosition === 'last' ? '└' : status.marker}
+        </span>
+        <span style={{ color, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>{label}</span>
         <span style={{ color: 'var(--text-3)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-          {summarizeAgentsTool(thread)}
+          {summary}
         </span>
         <span style={{ marginLeft: 'auto', color: 'var(--text-3)', fontSize: 10, whiteSpace: 'nowrap', flexShrink: 0 }}>
           {open ? 'collapse' : 'details'}
@@ -5625,6 +5653,31 @@ function StreamToolRow({ thread }: { thread: ToolThread }) {
           <ToolThreadCard thread={thread} />
         </div>
       )}
+    </div>
+  )
+}
+
+function StreamActivitySummaryRow({ threads }: { threads: ToolThread[] }) {
+  const spacing = streamDensitySpacing(use(MessageDensityContext))
+  const status = threads.reduce<ReturnType<typeof streamToolStatus>>((current, thread) => {
+    const next = streamToolStatus(thread)
+    return next.rank > current.rank ? next : current
+  }, { marker: '•' as const, color: 'var(--text-3)', rank: -1 })
+  return (
+    <div style={{
+      width: '100%',
+      display: 'flex',
+      alignItems: 'baseline',
+      gap: 7,
+      padding: `${spacing.toolRowPaddingY}px ${spacing.paddingX}px`,
+      color: 'var(--text)',
+      fontFamily: "'IBM Plex Mono', monospace",
+    }}>
+      <span aria-hidden="true" style={{ color: status.color, width: 12 }}>{status.marker}</span>
+      <span>
+        <strong>Activity</strong>
+        <span style={{ color: 'var(--text-3)' }}>  ·  {streamActivitySummary(threads)}</span>
+      </span>
     </div>
   )
 }
@@ -5647,6 +5700,11 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
   const toolThreads = dedupeStreamToolThreads(
     message.blocks.filter((block): block is ToolThread => block.type === 'tool_thread'),
   )
+  const activityThreads = toolThreads.filter(isStreamActivityThread)
+  let lastActivityIndex = -1
+  for (let index = 0; index < toolThreads.length; index += 1) {
+    if (isStreamActivityThread(toolThreads[index])) lastActivityIndex = index
+  }
   if (textBlocks.length === 0 && toolThreads.length === 0) return null
 
   const marker = message.role === 'user' ? '›' : message.role === 'system' ? '▲' : '•'
@@ -5689,8 +5747,13 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
             gap: 0,
             marginTop: textBlocks.length > 0 ? spacing.toolListMarginTop : 0,
           }}>
+            {activityThreads.length > 0 ? <StreamActivitySummaryRow threads={activityThreads} /> : null}
             {toolThreads.map((thread, index) => (
-              <StreamToolRow key={thread.toolUse.id ?? `${thread.toolUse.name}:${index}`} thread={thread} />
+              <StreamToolRow
+                key={thread.toolUse.id ?? `${thread.toolUse.name}:${index}`}
+                thread={thread}
+                treePosition={isStreamActivityThread(thread) ? index === lastActivityIndex ? 'last' : 'branch' : undefined}
+              />
             ))}
           </div>
         )}
