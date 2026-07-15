@@ -1356,6 +1356,42 @@ body {
   transition: background-color 120ms ease;
 }
 
+.av-stream-tool-row--single-activity {
+  gap: 7px;
+}
+
+.av-stream-single-activity-heading {
+  display: flex;
+  align-items: baseline;
+  color: var(--text);
+  font-family: var(--render-font);
+  font-size: 14px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.av-stream-single-activity-separator {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.av-stream-single-activity-output {
+  display: flex;
+  min-width: 0;
+  gap: 7px;
+  padding: 0 8px 3px 30px;
+  color: var(--text-3);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+}
+
+.av-stream-single-activity-output > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .av-stream-tool-row--nested::before,
 .av-stream-tool-row--nested::after {
   position: absolute;

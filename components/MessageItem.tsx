@@ -5257,6 +5257,21 @@ function summarizeAgentsTool(thread: ToolThread): string {
   }
 }
 
+function streamToolOutputSummary(thread: ToolThread): string | null {
+  const name = canonicalToolName(thread.toolUse.name)
+  const raw = agentsOutputText(thread)
+  if (!raw) return null
+  for (const line of raw.split('\n')) {
+    const text = line.trim()
+    if (!text || text === 'No visible content') continue
+    if (/^[└├│─\s]+$/.test(text) || /^[✓✔]️?\s*(?:OK|done)?$/i.test(text)) continue
+    if (/^(?:exit_code|duration_ms):/i.test(text)) continue
+    if (name === 'Bash' && text.startsWith('$ ')) continue
+    return agentsCompactOneLine(text, 180)
+  }
+  return null
+}
+
 function formatAgentsCount(value: number, unit: string): string {
   if (value >= 1000) return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k ${unit}`
   return `${value} ${unit}`
@@ -5747,7 +5762,15 @@ function dedupeStreamToolThreads(threads: ToolThread[]): ToolThread[] {
 
 type StreamTreePosition = 'branch' | 'last'
 
-function StreamToolRow({ thread, treePosition }: { thread: ToolThread; treePosition?: StreamTreePosition }) {
+function StreamToolRow({
+  thread,
+  treePosition,
+  showActivitySummary = false,
+}: {
+  thread: ToolThread
+  treePosition?: StreamTreePosition
+  showActivitySummary?: boolean
+}) {
   const [open, setOpen] = useState(false)
   const spacing = streamDensitySpacing(use(MessageDensityContext))
   const name = canonicalToolName(thread.toolUse.name)
@@ -5756,6 +5779,7 @@ function StreamToolRow({ thread, treePosition }: { thread: ToolThread; treePosit
   const label = name === 'Bash' ? 'Ran' : name
   const rawSummary = summarizeAgentsTool(thread)
   const summary = name === 'Bash' ? rawSummary.replace(/^\$\s*/, '') : rawSummary
+  const outputSummary = showActivitySummary ? streamToolOutputSummary(thread) : null
   if (open) {
     return (
       <div className="av-stream-expanded-tool">
@@ -5768,7 +5792,7 @@ function StreamToolRow({ thread, treePosition }: { thread: ToolThread; treePosit
     <div>
       <button
         type="button"
-        className={`av-stream-tool-row${treePosition ? ` av-stream-tool-row--nested av-stream-tool-row--${treePosition}` : ''}`}
+        className={`av-stream-tool-row${treePosition ? ` av-stream-tool-row--nested av-stream-tool-row--${treePosition}` : ''}${showActivitySummary ? ' av-stream-tool-row--single-activity' : ''}`}
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         style={{
@@ -5790,12 +5814,25 @@ function StreamToolRow({ thread, treePosition }: { thread: ToolThread; treePosit
         <span className="av-stream-tool-connector" style={{ color: treePosition ? 'var(--text-3)' : status.color }}>
           {treePosition ? '' : status.marker}
         </span>
+        {showActivitySummary ? (
+          <span className="av-stream-single-activity-heading">
+            <strong>Activity</strong>
+            <span className="av-stream-activity-counts">  ·  {streamActivitySummary([thread])}</span>
+          </span>
+        ) : null}
+        {showActivitySummary ? <span className="av-stream-single-activity-separator" aria-hidden="true">·</span> : null}
         <span className="av-stream-tool-label" style={{ color }}>{label}</span>
         <span className="av-stream-tool-command">
           {summary}
         </span>
         <span className="av-stream-tool-disclosure" aria-hidden="true">›</span>
       </button>
+      {outputSummary ? (
+        <div className="av-stream-single-activity-output">
+          <span aria-hidden="true">└</span>
+          <span>{outputSummary}</span>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -5879,6 +5916,7 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
     message.blocks.filter((block): block is ToolThread => block.type === 'tool_thread'),
   )
   const activityThreads = toolThreads.filter(isStreamActivityThread)
+  const hasSingleActivity = activityThreads.length === 1
   let lastActivityIndex = -1
   for (let index = 0; index < toolThreads.length; index += 1) {
     if (isStreamActivityThread(toolThreads[index])) lastActivityIndex = index
@@ -5918,14 +5956,15 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
             gap: 0,
             marginTop: textBlocks.length > 0 ? spacing.toolListMarginTop : 0,
           }}>
-            {activityThreads.length > 0 ? <StreamActivitySummaryRow threads={activityThreads} /> : null}
+            {activityThreads.length > 1 ? <StreamActivitySummaryRow threads={activityThreads} /> : null}
             {toolThreads.map((thread, index) => (
               isStreamFileUpdateThread(thread)
                 ? <StreamFileUpdateRow key={thread.toolUse.id ?? `${thread.toolUse.name}:${index}`} thread={thread} />
                 : <StreamToolRow
                     key={thread.toolUse.id ?? `${thread.toolUse.name}:${index}`}
                     thread={thread}
-                    treePosition={isStreamActivityThread(thread) ? index === lastActivityIndex ? 'last' : 'branch' : undefined}
+                    showActivitySummary={hasSingleActivity && isStreamActivityThread(thread)}
+                    treePosition={!hasSingleActivity && isStreamActivityThread(thread) ? index === lastActivityIndex ? 'last' : 'branch' : undefined}
                   />
             ))}
           </div>

@@ -4847,6 +4847,14 @@ function TranscriptCardInner({
     const agentWidth = Math.max(readableCardWidth, 24)
     const toolCards = agentToolCardsFor(card)
     const operationalCard = toolCards.length > 0
+    const streamAskUserCard = streamMode
+      && toolCards.length === 1
+      && streamToolSummaryName(toolCards[0]) === 'ask user'
+      ? toolCards[0]
+      : null
+    const streamAskUserLines = streamAskUserCard
+      ? isExpanded ? streamAskUserCard.expandedLines : streamAskUserCard.lines
+      : []
     const agentAccent = operationalCard ? theme.amber : accent
     const agentBg = hasCursor
       ? theme.surface3
@@ -4891,7 +4899,7 @@ function TranscriptCardInner({
     const agentsCardTitle = agentsCardTitleFull.length > agentsMaxTitleWidth
       ? agentsCardTitleFull.slice(0, agentsMaxTitleWidth - 1) + '…'
       : agentsCardTitleFull
-    const expandedToolDisplays = isExpanded && toolCards.length > 0
+    const expandedToolDisplays = isExpanded && toolCards.length > 0 && !streamAskUserCard
       ? toolCards.map((toolCard) => {
           const toolExpanded = agentToolCardIsExpanded(toolCard, agentToolExpandedKeys, agentToolCollapsedKeys)
           return {
@@ -4915,10 +4923,15 @@ function TranscriptCardInner({
       ? streamActivitySummarySegments(collapsedStreamToolCards, theme)
       : null
     const streamDetailToolCards = collapsedStreamToolCards
+    let streamActivityToolCount = 0
     let lastStreamActivityIndex = -1
     for (let index = 0; index < streamDetailToolCards.length; index += 1) {
-      if (isStreamActivityToolCard(streamDetailToolCards[index])) lastStreamActivityIndex = index
+      if (isStreamActivityToolCard(streamDetailToolCards[index])) {
+        streamActivityToolCount += 1
+        lastStreamActivityIndex = index
+      }
     }
+    const hasSingleStreamActivity = streamActivityToolCount === 1
     return (
       <box
         flexDirection="column"
@@ -4965,9 +4978,37 @@ function TranscriptCardInner({
             paddingX={1}
             paddingBottom={streamMode ? 0 : densityState.bodyPad}
           >
-            {rendersCollapsedStreamTools ? (
+            {streamAskUserCard ? (
               <box flexDirection="column">
-                {streamActivitySegments ? (
+                {streamAskUserLines.map((line, lineIndex) => (
+                  <text
+                    key={`${card.key}:stream-ask-user:${lineIndex}`}
+                    fg={transcriptColor(line, theme)}
+                    wrapMode="none"
+                    selectable
+                    {...selectionColors}
+                  >
+                    {line.tone === 'tool'
+                      ? renderInlineTextSegments(
+                          transcriptToolLineSegments(line.text, theme),
+                          agentBodyWidth,
+                          theme.dim,
+                        )
+                      : hasInlineMarkdown(line.text)
+                        ? renderInlineMarkdownClipped(
+                            line.text,
+                            theme,
+                            transcriptColor(line, theme),
+                            agentBodyWidth,
+                            `${card.key}:stream-ask-user-md:${lineIndex}`,
+                          )
+                        : fitText(line.text, agentBodyWidth)}
+                  </text>
+                ))}
+              </box>
+            ) : rendersCollapsedStreamTools ? (
+              <box flexDirection="column">
+                {streamActivitySegments && !hasSingleStreamActivity ? (
                   <text fg={theme.dim} wrapMode="none" selectable {...selectionColors}>
                     {renderInlineTextSegments(
                       hasCursor && streamActivitySegments[0]
@@ -4979,12 +5020,20 @@ function TranscriptCardInner({
                   </text>
                 ) : null}
                 {streamDetailToolCards.map((toolCard, toolIndex) => {
-                  const segments = streamToolSummarySegments(toolCard, theme)
+                  let segments = streamToolSummarySegments(toolCard, theme)
                   const diffPreview = toolCard.category === 'diff' ? streamDiffPreviewData(toolCard) : null
-                  const detailLine = diffPreview ? null : streamToolDetailLine(toolCard)
                   const isActivityTool = Boolean(streamActivitySegments && isStreamActivityToolCard(toolCard))
+                  const isSingleActivityTool = hasSingleStreamActivity && isActivityTool
+                  const detailLine = diffPreview ? null : streamToolDetailLine(toolCard)
                   const isLastActivityTool = isActivityTool && toolIndex === lastStreamActivityIndex
-                  if (isActivityTool && segments[0]) {
+                  if (isSingleActivityTool && streamActivitySegments) {
+                    segments = [
+                      ...streamActivitySegments,
+                      { text: '  ·  ', fg: theme.dim },
+                      ...segments.slice(1),
+                    ]
+                    if (hasCursor && segments[0]) segments[0] = { text: '❯ ', fg: theme.text }
+                  } else if (isActivityTool && segments[0]) {
                     segments[0] = { text: isLastActivityTool ? '  └ ' : '  ├ ', fg: theme.dim }
                   } else if (hasCursor && streamActivitySegments === null && toolIndex === 0 && segments[0]) {
                     segments[0] = { text: '❯ ', fg: theme.text }
@@ -5090,7 +5139,7 @@ function TranscriptCardInner({
                   )
                 })}
               </box>
-            ) : rendersCollapsedStreamTools ? null : agentMarkdownBody ? (
+            ) : rendersCollapsedStreamTools || streamAskUserCard ? null : agentMarkdownBody ? (
               agentMarkdownBody
             ) : bodyLines.map((line, lineIndex) => {
               const toolLine = operationalCard && line.tone === 'tool'
