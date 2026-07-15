@@ -11,6 +11,7 @@ const renderer = await createCliRenderer({
   useKittyKeyboard: {
     disambiguate: true,
     alternateKeys: true,
+    allKeysAsEscapes: true,
   },
   onDestroy: () => {
     process.exit(0)

@@ -1104,6 +1104,31 @@ const COPILOT_COMPOSER_MODES = [
   },
 ] satisfies NonNullable<SessionComposerOptions['modes']>
 
+const CLAUDE_PERMISSION_MODE_OPTIONS = [
+  { value: 'default', label: 'DEFAULT', description: 'Use the session permission policy.' },
+  { value: 'acceptEdits', label: 'ACCEPT EDITS', description: 'Approve file edits while prompting for other tools.' },
+  { value: 'plan', label: 'PLAN', description: 'Plan without making changes.' },
+  { value: 'bypassPermissions', label: 'BYPASS', description: 'Run tools without permission prompts.' },
+] satisfies NonNullable<SessionComposerOptions['permissionModes']>
+
+const CODEX_PERMISSION_MODE_OPTIONS = [
+  { value: 'auto', label: 'CONFIG', description: 'Use the app-server configured approval policy.' },
+  { value: 'untrusted', label: 'UNTRUSTED', description: 'Only trusted operations run without approval.' },
+  { value: 'on-request', label: 'ON REQUEST', description: 'Ask when the agent requests elevated execution.' },
+  { value: 'on-failure', label: 'ON FAILURE', description: 'Ask after a sandboxed operation fails.' },
+  { value: 'never', label: 'NEVER', description: 'Never request approval.' },
+] satisfies NonNullable<SessionComposerOptions['permissionModes']>
+
+const COPILOT_PERMISSION_MODE_OPTIONS = [
+  { value: 'off', label: 'PROMPT', description: 'Use the normal permission approval flow.' },
+  { value: 'auto', label: 'AUTO', description: 'Attach Copilot safety recommendations to requests.' },
+  { value: 'on', label: 'ALLOW ALL', description: 'Automatically approve tool, path, and URL requests.' },
+] satisfies NonNullable<SessionComposerOptions['permissionModes']>
+
+const PROVIDER_MANAGED_PERMISSION_OPTIONS = [
+  { value: 'native', label: 'NATIVE', description: 'Permissions are managed by the provider.' },
+] satisfies NonNullable<SessionComposerOptions['permissionModes']>
+
 type CopilotAgentMode = NonNullable<CopilotMessageOptions['agentMode']>
 type CopilotPersistentMode = Exclude<CopilotAgentMode, 'shell'>
 
@@ -1118,6 +1143,12 @@ function parseCopilotModeResponse(value: unknown): CopilotAgentMode | undefined 
     return parseCopilotMode((value as { mode?: unknown }).mode)
   }
   return parseCopilotMode(value)
+}
+
+type CopilotPermissionMode = 'off' | 'auto' | 'on'
+
+function parseCopilotPermissionMode(value: unknown): CopilotPermissionMode | undefined {
+  return value === 'off' || value === 'auto' || value === 'on' ? value : undefined
 }
 
 function isCopilotPersistentMode(mode: CopilotAgentMode): mode is CopilotPersistentMode {
@@ -2510,6 +2541,13 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         await session.rpc.mode.set({ mode })
       }
       return { ok: true, mode }
+    }
+    if (action === 'setPermissionMode') {
+      const mode = parseCopilotPermissionMode(body.permissionMode)
+      if (!mode) throw new Error('permissionMode must be off, auto, or on')
+      const session = await acquireCopilotSession(sessionId)
+      const result = await session.rpc.permissions.setAllowAll({ mode })
+      return { ok: result.success, mode: result.mode ?? mode }
     }
   }
 
@@ -4831,6 +4869,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
   const effort = parseEffort(body)
   const contextTier = parseCopilotContextTier(body.contextTier)
   let turnAgentMode = parseCopilotMode(body.mode)
+  const permissionMode = parseCopilotPermissionMode(body.permissionMode)
   const manualPermissions = body.manualPermissions === true
   // Native slash execution is the default — matching the Copilot CLI (and the
   // other providers, which never leak "/command" into the prompt). Clients can
@@ -5005,6 +5044,9 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
             .catch(() => [] as CopilotModelInfo[]),
         ])
         session = acquiredSession
+        if (permissionMode) {
+          await session.rpc.permissions.setAllowAll({ mode: permissionMode })
+        }
         for (const model of availableModels) modelsById.set(model.id, model)
         if (!activeContextTier) {
           const currentModel = await withTimeout(
@@ -5961,22 +6003,52 @@ export async function readViewSessionComposerOptions(sessionId: string, provider
         agents: selectableAgents,
         mentionAgents,
         currentAgent,
+        permissionModes: PROVIDER_MANAGED_PERMISSION_OPTIONS,
+        currentPermissionMode: 'native',
       }
     } catch {
-      return { agents: [], mentionAgents: [], currentAgent: null }
+      return {
+        agents: [],
+        mentionAgents: [],
+        currentAgent: null,
+        permissionModes: PROVIDER_MANAGED_PERMISSION_OPTIONS,
+        currentPermissionMode: 'native',
+      }
     }
   }
 
   if (provider === 'copilot') {
     const session = await acquireCopilotSession(sessionId)
-    const currentMode = await session.rpc.mode.get().catch(() => 'interactive')
+    const [currentMode, currentPermissionMode] = await Promise.all([
+      session.rpc.mode.get().catch(() => 'interactive'),
+      session.rpc.permissions.getAllowAll().catch(() => ({ enabled: false, mode: 'off' as const })),
+    ])
     return {
       modes: COPILOT_COMPOSER_MODES,
       currentMode: parseCopilotModeResponse(currentMode) ?? 'interactive',
+      permissionModes: COPILOT_PERMISSION_MODE_OPTIONS,
+      currentPermissionMode: currentPermissionMode.mode ?? (currentPermissionMode.enabled ? 'on' : 'off'),
     }
   }
 
-  return {}
+  if (provider === 'claude') {
+    return {
+      permissionModes: CLAUDE_PERMISSION_MODE_OPTIONS,
+      currentPermissionMode: 'default',
+    }
+  }
+
+  if (provider === 'codex') {
+    return {
+      permissionModes: CODEX_PERMISSION_MODE_OPTIONS,
+      currentPermissionMode: 'auto',
+    }
+  }
+
+  return {
+    permissionModes: PROVIDER_MANAGED_PERMISSION_OPTIONS,
+    currentPermissionMode: 'native',
+  }
 }
 
 export async function readViewSessionSlashCommands(sessionId: string, providerOverride?: AgentProvider): Promise<Array<{ command: string; description: string; argumentHint?: string }>> {

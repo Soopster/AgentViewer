@@ -154,6 +154,8 @@ export type SessionComposerOptions = {
   currentAgent?: string | null
   modes?: SessionComposerModeOption[]
   currentMode?: string | null
+  permissionModes?: SessionComposerModeOption[]
+  currentPermissionMode?: string | null
 }
 
 export type SendAttachment = {

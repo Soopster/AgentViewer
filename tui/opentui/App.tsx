@@ -1103,7 +1103,7 @@ function formatTuiComposerIdleHint(baseHint: string, historyCount: number): stri
   const cleaned = baseHint
     .replace(/\s*·\s*(?:↑↓|⌃P\/⌃N|\^P\/\^N|\^R|⌃R)\s+(?:search\s+)?history(?:\s*\(\d+\))?/g, '')
     .trim()
-  const withSettings = cleaned.replace('⏎ send', '⏎ send · ⌥M model/effort')
+  const withSettings = cleaned.replace('⏎ send', '⏎ send · ⌥M settings')
   const historyHint = historyCount > 0
     ? `⌃P/⌃N history (${historyCount})`
     : '⌃P/⌃N history'
@@ -4042,6 +4042,9 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
 }))
 
 type TuiEffort = 'auto' | ReasoningEffortLevel
+type TuiCodexApproval = 'auto' | 'untrusted' | 'on-request' | 'on-failure' | 'never'
+type TuiCopilotPermissionMode = 'off' | 'auto' | 'on'
+type ModelPickerFocus = 'model' | 'effort' | 'permissions'
 type ModelPickerOption = SelectOption & Pick<SessionModelInfo, 'supportsEffort' | 'supportedEffortLevels'>
 
 function filterModelPickerOptions(options: ModelPickerOption[], query: string): ModelPickerOption[] {
@@ -4349,7 +4352,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
   { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
   { id: 'coord-start', label: 'Start coordinated run', key: '', category: 'Coordination' },
-  { id: 'coord-board', label: 'Open agent team board', key: '⇧O', category: 'Coordination' },
+  { id: 'coord-board', label: 'Open agent team board', key: '^⇧A', category: 'Coordination' },
   { id: 'coord-cleanup', label: 'Clean completed worktrees', key: 'c', category: 'Coordination' },
   { id: 'coord-stop', label: 'Stop coordinated run', key: '', category: 'Coordination' },
   { id: 'fleet',      label: 'Toggle fleet strip',      key: '⇧A', category: 'View'       },
@@ -4376,7 +4379,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'tools',      label: 'Toggle tool calls',      key: 'X',  category: 'View'       },
   { id: 'velocity-scroll', label: 'Toggle velocity scroll', key: '⇧V', category: 'View'  },
   { id: 'mode',       label: 'Cycle provider mode',    key: 'M',  category: 'Session'    },
-  { id: 'model',      label: 'Pick model and effort',  key: '⌥M', category: 'Session'    },
+  { id: 'model',      label: 'Composer settings',      key: '⌥M', category: 'Session'    },
   // App
   { id: 'refresh',    label: 'Refresh sessions',       key: 'r',  category: 'App'        },
   { id: 'quit',       label: 'Quit',                   key: 'q',  category: 'App'        },
@@ -6091,21 +6094,25 @@ export default function OpenTuiApp() {
   const [taskBudgetTokens, setTaskBudgetTokens] = useState<number | null>(null)
   // Provider-agnostic send knobs. Forwarded into the streamTuiSessionTurn
   // body so the TUI composer matches the web composer's send-time controls
-  // (model / reasoning effort / Claude permission mode). Defaults of `auto`
+  // (model / reasoning effort / provider permission mode). Defaults of `auto`
   // / `default` mean "let the SDK keep whatever the session was using".
   const [tuiEffort, setTuiEffort] = useState<TuiEffort>('auto')
   const [tuiPermissionModeByKey, setTuiPermissionModeByKey] = useState<Record<string, TuiPermissionMode>>({})
   const tuiPermissionModeByKeyRef = useRef<Record<string, TuiPermissionMode>>({})
+  const [tuiCodexApprovalByKey, setTuiCodexApprovalByKey] = useState<Record<string, TuiCodexApproval>>({})
+  const [tuiCopilotPermissionModeByKey, setTuiCopilotPermissionModeByKey] = useState<Record<string, TuiCopilotPermissionMode>>({})
   const [tuiCopilotMode, setTuiCopilotMode] = useState<'interactive' | 'plan' | 'autopilot' | 'shell'>('interactive')
   const [tuiOpenCodeAgent, setTuiOpenCodeAgent] = useState('')
   const [tuiModelOverride, setTuiModelOverride] = useState<Record<string, string>>({})
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [modelPickerTarget, setModelPickerTarget] = useState<Session | null>(null)
-  const [modelPickerFocus, setModelPickerFocus] = useState<'model' | 'effort'>('model')
+  const [modelPickerFocus, setModelPickerFocus] = useState<ModelPickerFocus>('model')
   const [modelPickerOptions, setModelPickerOptions] = useState<ModelPickerOption[]>([])
+  const [modelPickerPermissionOptions, setModelPickerPermissionOptions] = useState<SelectOption[]>([])
   const [modelPickerQuery, setModelPickerQuery] = useState('')
   const [modelPickerIndex, setModelPickerIndex] = useState(0)
   const [modelPickerEffortIndex, setModelPickerEffortIndex] = useState(0)
+  const [modelPickerPermissionIndex, setModelPickerPermissionIndex] = useState(0)
   const [modelPickerLoading, setModelPickerLoading] = useState(false)
   const [modelPickerError, setModelPickerError] = useState<string | null>(null)
   const [sentHistory, setSentHistory] = useState<ComposerDraftSnapshot[]>(() =>
@@ -6699,6 +6706,12 @@ export default function OpenTuiApp() {
     if (composerTargetSession?.provider !== 'claude') return 'default'
     return tuiPermissionModeByKey[sessionKey(composerTargetSession)] ?? 'default'
   }, [composerTargetSession, tuiPermissionModeByKey])
+  const composerCodexApproval = composerTargetSession?.provider === 'codex'
+    ? tuiCodexApprovalByKey[sessionKey(composerTargetSession)] ?? 'auto'
+    : 'auto'
+  const composerCopilotPermissionMode = composerTargetSession?.provider === 'copilot'
+    ? tuiCopilotPermissionModeByKey[sessionKey(composerTargetSession)] ?? 'off'
+    : 'off'
   const composerConfig = useMemo(() => getProviderComposer(composerProvider), [composerProvider])
   const composerExampleSeed = useMemo(() => {
     const source = composerTargetSession?.sessionId ?? composerProvider ?? ''
@@ -7294,6 +7307,34 @@ export default function OpenTuiApp() {
     () => effortPickerOptions(modelPickerTarget?.provider, highlightedModelPickerOption),
     [highlightedModelPickerOption, modelPickerTarget?.provider],
   )
+  const modelPickerPermissionLabel = modelPickerTarget?.provider === 'codex' ? 'APPROVALS' : 'PERMISSIONS'
+  const modelPickerPermissionValue = modelPickerTarget?.provider === 'claude'
+    ? tuiPermissionModeByKey[sessionKey(modelPickerTarget)] ?? 'default'
+    : modelPickerTarget?.provider === 'codex'
+      ? tuiCodexApprovalByKey[sessionKey(modelPickerTarget)] ?? 'auto'
+      : modelPickerTarget?.provider === 'copilot'
+        ? tuiCopilotPermissionModeByKey[sessionKey(modelPickerTarget)] ?? 'off'
+        : 'native'
+  const compactModelPickerEffortOptions = useMemo(
+    () => modelPickerEffortOptions.map((option) => ({ name: option.name, value: option.value, description: '' })),
+    [modelPickerEffortOptions],
+  )
+  const compactModelPickerPermissionOptions = useMemo(
+    () => modelPickerPermissionOptions.map((option) => ({ name: option.name, value: option.value, description: '' })),
+    [modelPickerPermissionOptions],
+  )
+  const modelPickerFocusedOption = modelPickerFocus === 'model'
+    ? highlightedModelPickerOption
+    : modelPickerFocus === 'effort'
+      ? modelPickerEffortOptions[modelPickerEffortIndex]
+      : modelPickerPermissionOptions[modelPickerPermissionIndex]
+  const modelPickerFocusedLabel = modelPickerFocus === 'model'
+    ? 'MODEL'
+    : modelPickerFocus === 'effort'
+      ? 'EFFORT'
+      : modelPickerPermissionLabel
+  const modelPickerFocusedDescription = modelPickerFocusedOption?.description
+    || String(modelPickerFocusedOption?.value ?? '')
   const composerContextUsage = useMemo(() => {
     if (!composerTargetSession) return null
     const targetKey = sessionKey(composerTargetSession)
@@ -7315,11 +7356,17 @@ export default function OpenTuiApp() {
     if (composerTargetSession?.provider === 'claude' && composerPermissionMode !== 'default') {
       parts.push({ text: `mode:${composerPermissionMode}`, fg: theme.violet })
     }
+    if (composerTargetSession?.provider === 'codex' && composerCodexApproval !== 'auto') {
+      parts.push({ text: `approvals:${composerCodexApproval}`, fg: theme.violet })
+    }
     if (composerTargetSession?.provider === 'copilot' && tuiCopilotMode !== 'interactive') {
       parts.push({ text: `mode:${tuiCopilotMode}`, fg: theme.cyan })
     }
+    if (composerTargetSession?.provider === 'copilot' && composerCopilotPermissionMode !== 'off') {
+      parts.push({ text: `permissions:${composerCopilotPermissionMode}`, fg: composerCopilotPermissionMode === 'on' ? theme.red : theme.amber })
+    }
     return parts
-  }, [composerAccentColor, composerContextUsage, composerCurrentModel, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.green, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
+  }, [composerAccentColor, composerCodexApproval, composerContextUsage, composerCopilotPermissionMode, composerCurrentModel, composerPermissionMode, composerTargetSession?.provider, theme.amber, theme.cyan, theme.green, theme.red, theme.violet, tuiCopilotMode, tuiEffort, tuiOpenCodeAgent])
   const composerKnobsChip = useMemo(
     () => composerKnobSegments.length > 0
       ? `· ${composerKnobSegments.map((part) => part.text).join(' · ')}`
@@ -7384,6 +7431,11 @@ export default function OpenTuiApp() {
     const index = modelPickerEffortOptions.findIndex((option) => option.value === tuiEffort)
     setModelPickerEffortIndex(index >= 0 ? index : 0)
   }, [modelPickerEffortOptions, modelPickerOpen, tuiEffort])
+  useEffect(() => {
+    if (!modelPickerOpen) return
+    const index = modelPickerPermissionOptions.findIndex((option) => option.value === modelPickerPermissionValue)
+    setModelPickerPermissionIndex(index >= 0 ? index : 0)
+  }, [modelPickerOpen, modelPickerPermissionOptions, modelPickerPermissionValue])
   useEffect(() => {
     if (!modelPickerOpen) return
     setModelPickerIndex((current) => Math.min(current, Math.max(filteredModelPickerOptions.length - 1, 0)))
@@ -9236,12 +9288,27 @@ export default function OpenTuiApp() {
     setModelPickerFocus('model')
     setModelPickerError(null)
     setModelPickerOptions([])
+    setModelPickerPermissionOptions([])
     setModelPickerQuery('')
     setModelPickerIndex(0)
+    setModelPickerPermissionIndex(0)
     setModelPickerLoading(true)
     setModelPickerOpen(true)
     try {
-      const meta = await readTuiSessionMetadata(target)
+      const [meta, composerOptions] = await Promise.all([
+        readTuiSessionMetadata(target),
+        readTuiComposerOptions(target.sessionId, target.provider),
+      ])
+      const permissionOptions = (composerOptions.permissionModes ?? []).map((mode): SelectOption => ({
+        name: mode.label,
+        value: mode.value,
+        description: mode.description ?? '',
+      }))
+      setModelPickerPermissionOptions(permissionOptions)
+      const reportedPermissionMode = composerOptions.currentPermissionMode
+      if (target.provider === 'copilot' && (reportedPermissionMode === 'off' || reportedPermissionMode === 'auto' || reportedPermissionMode === 'on')) {
+        setTuiCopilotPermissionModeByKey((prev) => ({ ...prev, [sessionKey(target)]: reportedPermissionMode }))
+      }
       const options = meta.models
         .filter((m): m is { value: string; displayName?: string; description?: string } & typeof m =>
           typeof m.value === 'string' && m.value.length > 0)
@@ -9278,10 +9345,38 @@ export default function OpenTuiApp() {
     pushClaudeControl(target, { action: 'setModel', model: value })
     if (effortPickerOptions(target.provider, option).length > 1) {
       setModelPickerFocus('effort')
+    } else if (modelPickerPermissionOptions.length > 0) {
+      setTuiEffort('auto')
+      setModelPickerFocus('permissions')
     } else {
       setTuiEffort('auto')
       setModelPickerOpen(false)
     }
+  })
+
+  const applyModelPickerEffort = useEffectEvent((value: string | undefined) => {
+    if (value) setTuiEffort(value as TuiEffort)
+    if (modelPickerPermissionOptions.length > 0) setModelPickerFocus('permissions')
+    else setModelPickerOpen(false)
+  })
+
+  const applyModelPickerPermission = useEffectEvent((value: string | undefined) => {
+    const target = modelPickerTarget ?? composerTargetSession ?? selectedSession
+    if (!target || !value) return
+    if (target.provider === 'claude' && CLAUDE_PERMISSION_MODE_ORDER.includes(value as TuiPermissionMode)) {
+      setClaudeComposerPermissionMode(target, value as TuiPermissionMode)
+    } else if (target.provider === 'codex' && (value === 'auto' || value === 'untrusted' || value === 'on-request' || value === 'on-failure' || value === 'never')) {
+      setTuiCodexApprovalByKey((prev) => ({ ...prev, [sessionKey(target)]: value }))
+    } else if (target.provider === 'copilot' && (value === 'off' || value === 'auto' || value === 'on')) {
+      setTuiCopilotPermissionModeByKey((prev) => ({ ...prev, [sessionKey(target)]: value }))
+      if (!target.isPending) {
+        void runTuiSessionAction(target, {
+          action: 'setPermissionMode',
+          permissionMode: value,
+        }).catch(() => { /* next send carries permissionMode */ })
+      }
+    }
+    setModelPickerOpen(false)
   })
 
   const closeCommandPalette = useCallback(() => {
@@ -10007,7 +10102,7 @@ export default function OpenTuiApp() {
         for (const agent of snapshot.agents) {
           if (agent.status === 'blocked' && !watch.blockedAgents.has(agent.id)) {
             watch.blockedAgents.add(agent.id)
-            showNotice('info', `Team: ${agent.name} is blocked${agent.taskId ? ` on ${agent.taskId}` : ''} — ⇧O to intervene`, 6000)
+            showNotice('info', `Team: ${agent.name} is blocked${agent.taskId ? ` on ${agent.taskId}` : ''} — ^⇧A to intervene`, 6000)
             notifyTeamEvent('teammate blocked', `${agent.name} is blocked${agent.taskId ? ` on ${agent.taskId}` : ''}`)
           }
         }
@@ -10016,7 +10111,7 @@ export default function OpenTuiApp() {
           watch.status = status
           if (status === 'completed' || status === 'failed' || status === 'stopped') {
             const headline = snapshot.run.summary?.split('\n')[0] ?? ''
-            showNotice(status === 'completed' ? 'info' : 'error', `Team run ${status}${headline ? `: ${headline}` : ''} — ⇧O for the board`, 8000)
+            showNotice(status === 'completed' ? 'info' : 'error', `Team run ${status}${headline ? `: ${headline}` : ''} — ^⇧A for the board`, 8000)
             notifyTeamEvent(`team run ${status}`, headline || snapshot.run.prompt.slice(0, 80))
             coordWatchStateRef.current.delete(runId)
             setCoordWatchIds((prev) => prev.filter((id) => id !== runId))
@@ -10470,6 +10565,11 @@ export default function OpenTuiApp() {
             : undefined,
           permissionMode: targetSession.provider === 'claude' && composerPermissionMode !== 'default'
             ? composerPermissionMode
+            : targetSession.provider === 'copilot'
+              ? composerCopilotPermissionMode
+              : undefined,
+          approvalPolicy: targetSession.provider === 'codex' && composerCodexApproval !== 'auto'
+            ? composerCodexApproval
             : undefined,
           // Claude/Copilot only emit interactive tool-approval prompts when the
           // client opts in. OpenCode/Codex surface them automatically.
@@ -11145,6 +11245,8 @@ export default function OpenTuiApp() {
     taskBudgetTokens,
     tuiEffort,
     tuiCopilotMode,
+    composerCopilotPermissionMode,
+    composerCodexApproval,
     tuiOpenCodeAgent,
     composerPermissionMode,
     tuiModelOverride,
@@ -12950,6 +13052,11 @@ export default function OpenTuiApp() {
         : ''
       return (key.ctrl && key.name === normalized) || sequence === ctrlSequence
     }
+    // Legacy terminal input collapses Ctrl+Shift+letter to the same single
+    // control byte as Ctrl+letter. Kitty/CSI-u and xterm modifyOtherKeys retain
+    // Shift, so only apply the ambiguous fallback to genuine one-byte input.
+    const isCtrlShift = (char: string): boolean => isCtrl(char)
+      && (key.shift || (key.source === 'raw' && key.raw.length === 1))
     const isKeyRepeat = key.eventType === 'repeat' || key.repeated === true
     const isModelEffortShortcut = (key.name === 'm' && (key.option || key.meta)) || sequence === 'µ'
     const handled = (action: () => void): void => {
@@ -13240,9 +13347,13 @@ export default function OpenTuiApp() {
       }
       if (
         key.name === 'tab'
-        || (modelPickerFocus === 'effort' && (key.name === 'left' || key.name === 'right'))
+        || (modelPickerFocus !== 'model' && (key.name === 'left' || key.name === 'right'))
       ) {
-        handled(() => setModelPickerFocus((current) => current === 'model' ? 'effort' : 'model'))
+        handled(() => setModelPickerFocus((current) => {
+          const order: ModelPickerFocus[] = ['model', 'effort', 'permissions']
+          const direction = key.shift || key.name === 'left' ? -1 : 1
+          return order[(order.indexOf(current) + direction + order.length) % order.length]!
+        }))
         return
       }
       if (modelPickerFocus === 'model' && (key.name === 'up' || key.name === 'down')) {
@@ -13257,7 +13368,7 @@ export default function OpenTuiApp() {
         })
         return
       }
-      if ((modelPickerFocus === 'effort' && key.name === 'q') || isCtrl('c')) {
+      if ((modelPickerFocus !== 'model' && key.name === 'q') || isCtrl('c')) {
         handled(requestExit)
       }
       return
@@ -13738,7 +13849,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (isShifted('G') && key.ctrl) {
+    if (isCtrlShift('g')) {
       handled(() => setPullRequestOpen(true))
       return
     }
@@ -13755,7 +13866,14 @@ export default function OpenTuiApp() {
       return
     }
 
-    // Global analytics popover
+    // Agent team board. On legacy terminals raw ^A is the portable fallback.
+    if (isCtrlShift('a')) {
+      handled(openCoordinationBoard)
+      return
+    }
+
+    // Global analytics popover. On legacy terminals ^A is reserved for the
+    // coordinator fallback above; analytics remains available in the palette.
     if (isCtrl('a')) {
       handled(() => setAnalyticsOpen(true))
       return
@@ -13796,12 +13914,6 @@ export default function OpenTuiApp() {
         setWorktreeDraft('')
         setWorktreeModalOpen(true)
       })
-      return
-    }
-
-    // Agent team board: interactive mission control for coordinated runs
-    if (isShifted('O')) {
-      handled(openCoordinationBoard)
       return
     }
 
@@ -14684,7 +14796,7 @@ export default function OpenTuiApp() {
   const composerDockFooterStatsWidth = Math.max(composerDockTextareaWidth - composerDockFooterHintWidth - 1, 8)
   const composerWindowFooterHint = composerSendState === 'sending' || reattachedRunning
     ? `${sendingHintBase} · ⌃O dock`
-    : '⏎ send · ⌥M model/effort · ⇧⏎ newline · ⌃O dock · Esc close'
+    : '⏎ send · ⌥M settings · ⇧⏎ newline · ⌃O dock · Esc close'
   const composerWindowSendingHintSegments = composerSendState === 'sending' || reattachedRunning
     ? composerSendingHintSegments(composerWindowFooterHint, theme)
     : null
@@ -15307,11 +15419,15 @@ export default function OpenTuiApp() {
 
             {modelPickerOpen ? (() => {
               const overlayWidth = Math.min(78, Math.max(width - 4, 44))
-              const overlayHeight = Math.min(18, Math.max(height - 2, 12))
+              const overlayHeight = Math.min(24, Math.max(height - 2, 14))
               const contentWidth = Math.max(overlayWidth - 5, 38)
               const headerWidth = Math.max(overlayWidth - 4, 40)
-              const modelWidth = Math.max(Math.floor(contentWidth * 0.6), 22)
+              const modelWidth = Math.max(Math.floor(contentWidth * 0.58), 22)
               const effortWidth = Math.max(contentWidth - modelWidth - 1, 15)
+              const detailHeight = overlayHeight >= 18 ? 2 : 1
+              const settingsContentHeight = Math.max(overlayHeight - detailHeight - 5, 8)
+              const effortListHeight = Math.max(Math.min(Math.floor((settingsContentHeight - 2) * 0.45), 6), 3)
+              const permissionListHeight = Math.max(settingsContentHeight - effortListHeight - 2, 3)
               return (
                 <box
                   position="absolute"
@@ -15332,15 +15448,15 @@ export default function OpenTuiApp() {
                   <box height={2} paddingX={1} flexDirection="column">
                     <text fg={ot.text} wrapMode="none">
                       {fitText(
-                        `${String(modelPickerTarget?.provider ?? 'session').toUpperCase()} · MODEL & EFFORT`,
+                        `${String(modelPickerTarget?.provider ?? 'session').toUpperCase()} · MODEL · EFFORT · ${modelPickerPermissionLabel}`,
                         headerWidth,
                       )}
                     </text>
                     <text fg={ot.dim} wrapMode="none">
-                      {fitText('type to filter · ↑/↓ choose · tab switch · enter apply · esc close', headerWidth)}
+                      {fitText('type to filter · ↑/↓ choose · tab/←/→ switch · enter apply · esc close', headerWidth)}
                     </text>
                   </box>
-                  <box flexGrow={1} paddingX={1} paddingBottom={1} flexDirection="row" gap={1}>
+                  <box height={settingsContentHeight} paddingX={1} flexDirection="row" gap={1}>
                     <box width={modelWidth} flexDirection="column">
                       <text fg={modelPickerFocus === 'model' ? ot.cyan : ot.dim} wrapMode="none">
                         {`${modelPickerFocus === 'model' ? '▸' : ' '} MODEL · ${filteredModelPickerOptions.length}/${modelPickerOptions.length}`}
@@ -15372,12 +15488,12 @@ export default function OpenTuiApp() {
                             <text fg={ot.dim} wrapMode="none">No matching models</text>
                           ) : (
                             <select
-                              style={{ height: Math.max(overlayHeight - 7, 5) }}
+                              style={{ height: Math.max(settingsContentHeight - 2, 5) }}
                               focused={false}
                               options={filteredModelPickerOptions}
                               selectedIndex={modelPickerIndex}
-                              selectedBackgroundColor={ot.surface3}
-                              selectedTextColor={ot.text}
+                              selectedBackgroundColor={modelPickerFocus === 'model' ? ot.surface3 : ot.surface}
+                              selectedTextColor={modelPickerFocus === 'model' ? ot.text : ot.muted}
                               textColor={ot.muted}
                               descriptionColor={ot.dim}
                               selectedDescriptionColor={ot.cyan}
@@ -15399,12 +15515,12 @@ export default function OpenTuiApp() {
                         {modelPickerFocus === 'effort' ? '▸ EFFORT' : '  EFFORT'}
                       </text>
                       <select
-                        style={{ height: Math.max(overlayHeight - 6, 6) }}
+                        style={{ height: effortListHeight }}
                         focused={modelPickerFocus === 'effort'}
-                        options={modelPickerEffortOptions}
+                        options={compactModelPickerEffortOptions}
                         selectedIndex={modelPickerEffortIndex}
-                        selectedBackgroundColor={ot.surface3}
-                        selectedTextColor={ot.text}
+                        selectedBackgroundColor={modelPickerFocus === 'effort' ? ot.surface3 : ot.surface}
+                        selectedTextColor={modelPickerFocus === 'effort' ? ot.text : ot.muted}
                         textColor={ot.muted}
                         descriptionColor={ot.dim}
                         selectedDescriptionColor={ot.cyan}
@@ -15415,11 +15531,43 @@ export default function OpenTuiApp() {
                         onChange={(index) => setModelPickerEffortIndex(index)}
                         onSelect={(_, option) => {
                           const value = option?.value
-                          if (typeof value === 'string') setTuiEffort(value as TuiEffort)
-                          setModelPickerOpen(false)
+                          applyModelPickerEffort(typeof value === 'string' ? value : undefined)
+                        }}
+                      />
+                      <text fg={modelPickerFocus === 'permissions' ? ot.cyan : ot.dim} wrapMode="none">
+                        {modelPickerFocus === 'permissions' ? `▸ ${modelPickerPermissionLabel}` : `  ${modelPickerPermissionLabel}`}
+                      </text>
+                      <select
+                        style={{ height: permissionListHeight }}
+                        focused={modelPickerFocus === 'permissions'}
+                        options={compactModelPickerPermissionOptions}
+                        selectedIndex={modelPickerPermissionIndex}
+                        selectedBackgroundColor={modelPickerFocus === 'permissions' ? ot.surface3 : ot.surface}
+                        selectedTextColor={modelPickerFocus === 'permissions' ? ot.text : ot.muted}
+                        textColor={ot.muted}
+                        descriptionColor={ot.dim}
+                        selectedDescriptionColor={ot.cyan}
+                        backgroundColor={ot.surface}
+                        focusedBackgroundColor={ot.surface}
+                        showScrollIndicator={false}
+                        itemSpacing={0}
+                        onChange={(index) => setModelPickerPermissionIndex(index)}
+                        onSelect={(_, option) => {
+                          const value = option?.value
+                          applyModelPickerPermission(typeof value === 'string' ? value : undefined)
                         }}
                       />
                     </box>
+                  </box>
+                  <box height={detailHeight} paddingX={1} flexDirection="column" backgroundColor={ot.surface2}>
+                    <text fg={ot.cyan} wrapMode="none">
+                      {fitText(`${modelPickerFocusedLabel} · ${modelPickerFocusedOption?.name ?? '—'}`, headerWidth)}
+                    </text>
+                    {detailHeight > 1 ? (
+                      <text fg={ot.dim} wrapMode="none">
+                        {fitText(modelPickerFocusedDescription || 'No additional details', headerWidth)}
+                      </text>
+                    ) : null}
                   </box>
                 </box>
               )
