@@ -262,26 +262,43 @@ export function formatClaudeReadRange(summary: ClaudeReadFileSummary): string | 
 
 function getClaudeBackgroundTasks(payload: SystemMessagePayload): ClaudeBackgroundTaskSummary[] {
   const raw = payload.background_tasks
-  if (!Array.isArray(raw)) return []
-  return raw.flatMap((entry) => {
-    if (!isRecord(entry)) return []
-    const id = stringValue(entry.id)
-    const type = stringValue(entry.type)
-    const status = stringValue(entry.status)
-    const description = stringValue(entry.description)
-    if (!id || !type || !status || !description) return []
-    return [{
-      id,
-      type,
-      status,
-      description,
-      command: stringValue(entry.command),
-      agent_type: stringValue(entry.agent_type),
-      server: stringValue(entry.server),
-      tool: stringValue(entry.tool),
-      name: stringValue(entry.name),
-    }]
-  })
+  if (Array.isArray(raw)) {
+    return raw.flatMap((entry) => {
+      if (!isRecord(entry)) return []
+      const id = stringValue(entry.id)
+      const type = stringValue(entry.type)
+      const status = stringValue(entry.status)
+      const description = stringValue(entry.description)
+      if (!id || !type || !status || !description) return []
+      return [{
+        id,
+        type,
+        status,
+        description,
+        command: stringValue(entry.command),
+        agent_type: stringValue(entry.agent_type),
+        server: stringValue(entry.server),
+        tool: stringValue(entry.tool),
+        name: stringValue(entry.name),
+      }]
+    })
+  }
+
+  // `background_tasks_changed` (SDK 0.3.203+) is a level signal: `tasks` is the
+  // full live set (task_id/task_type/description only, no per-task status), sent
+  // whenever membership changes. Treat every listed task as currently running.
+  if (payload.subtype === 'background_tasks_changed' && Array.isArray(payload.tasks)) {
+    return payload.tasks.flatMap((entry) => {
+      if (!isRecord(entry)) return []
+      const id = stringValue(entry.task_id)
+      const type = stringValue(entry.task_type)
+      const description = stringValue(entry.description)
+      if (!id || !type || !description) return []
+      return [{ id, type, status: 'running', description }]
+    })
+  }
+
+  return []
 }
 
 function getClaudeSessionCrons(payload: SystemMessagePayload): ClaudeSessionCronSummary[] {

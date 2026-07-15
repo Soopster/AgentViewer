@@ -1650,6 +1650,8 @@ export type TuiTranscriptCard = {
   editDiff?: string
   markdownContent?: string
   hasMermaidDiagrams?: boolean
+  /** Spawn-chain depth for subagent messages (1 = spawned by main loop). */
+  subagentDepth?: number
 }
 
 function cardLineLimit(density: TuiDensity): number {
@@ -1819,8 +1821,12 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
   const baseLabel = message.role === 'assistant'
     ? getAssistantLabel(message.provider)
     : message.role.toUpperCase()
-  const isSubagent = message.origin?.kind?.startsWith('subagent:') === true
-  const subagentLabel = isSubagent ? `${baseLabel} ↪ sub` : baseLabel
+  const originKind = message.origin?.kind ?? ''
+  const isSubagent = originKind.startsWith('subagent:')
+  // Origin kind carries the spawn chain (`subagent:parent/child`); repeat the
+  // arrow per nesting level for depth-2+ agents.
+  const subagentDepth = isSubagent ? originKind.slice('subagent:'.length).split('/').length : 0
+  const subagentLabel = isSubagent ? `${baseLabel} ${'↪'.repeat(Math.min(Math.max(subagentDepth, 1), 3))} sub` : baseLabel
   const taskSuffix = isSubagent && message.taskDescription
     ? ` · task: ${truncateLine(message.taskDescription, 48)}`
     : ''
@@ -1865,6 +1871,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
       ? extractMarkdownContent(message.blocks)
       : undefined,
     hasMermaidDiagrams,
+    subagentDepth: subagentDepth > 0 ? subagentDepth : undefined,
   }
 }
 

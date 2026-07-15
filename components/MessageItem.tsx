@@ -5922,18 +5922,14 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
     : message.role === 'system'
       ? 'var(--amber)'
       : 'var(--text-3)'
-  return (
-    <SessionContext.Provider value={message.sessionId}>
-      <div className={isUserMessage ? 'av-stream-message av-stream-message--user' : 'av-stream-message'} style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: spacing.blockGap,
-        marginBottom: isUserMessage ? spacing.userMarginBottom : spacing.otherMarginBottom,
-        width: '100%',
-        padding: isUserMessage
-          ? `${spacing.userPaddingY}px ${spacing.paddingX}px`
-          : `${spacing.otherPaddingY}px ${spacing.paddingX}px`,
-      }}>
+  // Origin kind carries the spawn chain (`subagent:parent/child`); indent the
+  // whole message behind one ↪ per nesting level so subagent activity reads as
+  // nested inside the stream.
+  const originKind = message.origin?.kind ?? ''
+  const spawnPath = originKind.startsWith('subagent:') ? originKind.slice('subagent:'.length).split('/') : []
+  const subagentArrows = spawnPath.length > 0 ? '↪'.repeat(Math.min(spawnPath.length, 3)) : ''
+  const body = (
+    <>
         {textBlocks.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minWidth: 0 }}>
             <span aria-hidden="true" style={{ color: markerColor, flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}>{marker}</span>
@@ -5962,6 +5958,34 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
             ))}
           </div>
         )}
+    </>
+  )
+  return (
+    <SessionContext.Provider value={message.sessionId}>
+      <div className={isUserMessage ? 'av-stream-message av-stream-message--user' : 'av-stream-message'} style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: spacing.blockGap,
+        marginBottom: isUserMessage ? spacing.userMarginBottom : spacing.otherMarginBottom,
+        width: '100%',
+        padding: isUserMessage
+          ? `${spacing.userPaddingY}px ${spacing.paddingX}px`
+          : `${spacing.otherPaddingY}px ${spacing.paddingX}px`,
+      }}>
+        {subagentArrows ? (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minWidth: 0 }}>
+            <span
+              aria-hidden="true"
+              title={spawnPath.length > 1 ? `subagent · spawned via ${spawnPath.join(' ▸ ')}` : 'subagent'}
+              style={{ color: 'var(--t-agent)', flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}
+            >
+              {subagentArrows}
+            </span>
+            <div style={{ display: 'flex', flex: 1, minWidth: 0, flexDirection: 'column', gap: spacing.blockGap }}>
+              {body}
+            </div>
+          </div>
+        ) : body}
       </div>
     </SessionContext.Provider>
   )
@@ -6287,12 +6311,19 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
           )}
           {message.origin?.kind && message.origin.kind !== 'task-notification' && (() => {
             const isSubagent = message.origin.kind.startsWith('subagent:')
-            const label = isSubagent ? '↪ SUBAGENT' : message.origin.kind.toUpperCase()
+            // Origin kind carries the spawn chain (`subagent:parent/child`);
+            // repeat the arrow per nesting level for depth-2+ agents.
+            const spawnPath = isSubagent ? message.origin.kind.slice('subagent:'.length).split('/') : []
+            const depth = spawnPath.length
+            const label = isSubagent ? `${'↪'.repeat(Math.min(Math.max(depth, 1), 3))} SUBAGENT` : message.origin.kind.toUpperCase()
             const color = isSubagent ? 'var(--t-agent)' : 'var(--t-other)'
             const bg    = isSubagent ? 'rgba(244,114,182,0.08)' : 'rgba(139,128,240,0.08)'
             const bdr   = isSubagent ? '1px solid rgba(244,114,182,0.22)' : '1px solid rgba(139,128,240,0.2)'
             return (
-              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', color, background: bg, border: bdr, borderRadius: 3, padding: '1px 5px' }}>
+              <span
+                title={depth > 1 ? `spawned via ${spawnPath.join(' ▸ ')}` : undefined}
+                style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', color, background: bg, border: bdr, borderRadius: 3, padding: '1px 5px' }}
+              >
                 {label}
               </span>
             )

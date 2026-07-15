@@ -3065,11 +3065,11 @@ export default function MessageView({
       if (activeProvider === 'codex') return level === 'low' || level === 'medium' || level === 'high'
       if (activeProvider === 'copilot') return level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh'
       if (activeProvider === 'claude') return level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh' || level === 'max'
-      if (activeProvider === 'pi') return level === 'off' || level === 'minimal' || level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh'
+      if (activeProvider === 'pi') return level === 'off' || level === 'minimal' || level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh' || level === 'max'
       return false
     }) ?? []
     if (levels.length > 0) return levels
-    if (activeProvider === 'pi') return ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
+    if (activeProvider === 'pi') return ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
     if (activeProvider === 'codex') return ['low', 'medium', 'high']
     return ['low', 'medium', 'high']
   }, [activeProvider, selectedModelInfo])

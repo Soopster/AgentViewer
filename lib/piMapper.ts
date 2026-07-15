@@ -341,7 +341,7 @@ export function mapPiModelsToSessionModels(models: Model<any>[], currentModel?: 
     description: `${model.provider}/${model.id}`,
     supportsEffort: model.reasoning,
     supportedEffortLevels: model.reasoning
-      ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] satisfies ReasoningEffortLevel[]
+      ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] satisfies ReasoningEffortLevel[]
       : undefined,
   }))
 

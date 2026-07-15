@@ -4094,9 +4094,7 @@ function effortLevelsForModel(
     ? ['low', 'medium', 'high']
     : provider === 'copilot'
       ? ['low', 'medium', 'high', 'xhigh']
-      : provider === 'pi'
-        ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
-        : ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+      : ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
   const reported = model?.supportedEffortLevels
   if (!reported || reported.length === 0) return allowed
   return allowed.filter((level) => reported.includes(level))
@@ -5175,14 +5173,19 @@ function TranscriptCardInner({
       ? Math.max(Math.min(streamAvailableWidth - densityState.bodyIndent, MAX_TRANSCRIPT_CARD_WIDTH), 16)
       : Math.max(streamAvailableWidth - densityState.bodyIndent, 16)
     const streamLandmarkWidth = streamWidth + densityState.bodyIndent
-    const streamTextWidth = Math.max(streamWidth - 2, 12)
+    // Subagent cards prefix the marker with one ↪ per spawn-chain level
+    // (`subagent:parent/child` origin), widening the marker gutter to match.
+    const streamSubagentArrows = card.subagentDepth ? '↪'.repeat(Math.min(card.subagentDepth, 3)) : ''
+    const streamMarkerWidth = 2 + streamSubagentArrows.length
+    const streamTextWidth = Math.max(streamWidth - streamMarkerWidth, 12)
     const streamChildTextWidth = Math.max(streamWidth - 4, 10)
     const firstLine = bodyLines[0]
-    const streamMarker = hasCursor
+    const streamBaseMarker = hasCursor
       ? '❯'
       : firstLine
         ? streamLineMarker(firstLine, card.role)
         : card.role === 'user' ? '❯' : '•'
+    const streamMarker = `${streamSubagentArrows}${streamBaseMarker}`
     const streamMarkerColor = hasCursor
       ? theme.text
       : isSearchHit
@@ -5303,7 +5306,7 @@ function TranscriptCardInner({
           <box flexDirection="row">
             <text
               fg={streamMarkerColor}
-              width={2}
+              width={streamMarkerWidth}
               wrapMode="none"
               selectable
               {...selectionColors}
@@ -5318,7 +5321,7 @@ function TranscriptCardInner({
         <>
         {firstLine ? (
           <box flexDirection="row">
-            <text fg={streamMarkerColor} width={2} wrapMode="none" selectable {...selectionColors}>
+            <text fg={streamMarkerColor} width={streamMarkerWidth} wrapMode="none" selectable {...selectionColors}>
               {`${streamMarker} `}
             </text>
             <text

@@ -415,7 +415,7 @@ export type SessionIndexRebuildResult = {
 }
 
 const REASONING_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'max', 'xhigh'] as const
-const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
+const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 const INDEX_REBUILD_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 const INDEX_REBUILD_PAGE_SIZE = 500
 const INDEX_REBUILD_MESSAGE_LIMIT = 100_000
@@ -439,6 +439,55 @@ function withOriginKind(messages: SessionMessage[], originKind: string): Session
   }))
 }
 
+/**
+ * Walk parent_agent_id links (SDK 0.3.202+) up to the main loop and return the
+ * spawn chain as a `/`-joined path (`parentId/childId`), outermost first.
+ * Depth-1 agents (parent null or unknown) return just their own id, preserving
+ * the historical `subagent:<agentId>` origin shape.
+ */
+function claudeSubagentSpawnPath(agentId: string, parentByAgent: Map<string, string | null>): string {
+  const path = [agentId]
+  let current = parentByAgent.get(agentId) ?? null
+  while (current && !path.includes(current) && path.length < 16) {
+    path.unshift(current)
+    current = parentByAgent.get(current) ?? null
+  }
+  return path.join('/')
+}
+
+function claudeSubagentParentId(rawMessages: unknown[]): string | null {
+  const first = rawMessages[0] as { parent_agent_id?: string | null } | undefined
+  return typeof first?.parent_agent_id === 'string' ? first.parent_agent_id : null
+}
+
+/** Indent each subagent under its spawner so the diagnostics list reads as a tree. */
+function formatClaudeSubagentTree(agentIds: string[], parentByAgent: Map<string, string | null>): string[] {
+  const idSet = new Set(agentIds)
+  const childrenOf = new Map<string, string[]>()
+  const roots: string[] = []
+  for (const id of agentIds) {
+    const parent = parentByAgent.get(id)
+    if (parent && idSet.has(parent) && parent !== id) {
+      childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), id])
+    } else {
+      roots.push(id)
+    }
+  }
+  const items: string[] = []
+  const visited = new Set<string>()
+  const visit = (id: string, depth: number) => {
+    if (visited.has(id)) return
+    visited.add(id)
+    items.push(depth === 0 ? id : `${'  '.repeat(depth - 1)}└ ${id}`)
+    for (const child of childrenOf.get(id) ?? []) visit(child, depth + 1)
+  }
+  for (const root of roots) visit(root, 0)
+  // Cyclic parent metadata leaves no roots; emit whatever the DFS missed so
+  // every listed agent still appears.
+  for (const id of agentIds) visit(id, 0)
+  return items
+}
+
 async function readClaudeSessionMessages(sessionId: string): Promise<SessionMessage[]> {
   const [mainRaw, subagentIds] = await Promise.all([
     getSessionMessages(sessionId, { includeSystemMessages: true }),
@@ -450,11 +499,25 @@ async function readClaudeSessionMessages(sessionId: string): Promise<SessionMess
   const cached = readMappedMessagesCache(`claude:${sessionId}`, signature)
   if (cached) return cached
 
-  const subagentMessages = await Promise.all(
-    subagentIds.map(async (agentId) => {
-      const messages = await getSubagentMessages(sessionId, agentId).catch(() => [] as SessionMessage[])
-      return withOriginKind(normalizeClaudeHistoryMessages(messages as unknown[]), `subagent:${agentId}`)
-    }),
+  const subagentRaw = await Promise.all(
+    subagentIds.map(async (agentId) => ({
+      agentId,
+      messages: await getSubagentMessages(sessionId, agentId).catch(() => [] as SessionMessage[]),
+    })),
+  )
+
+  // parent_agent_id (SDK 0.3.202+) names the subagent that spawned each agent,
+  // null for agents spawned by the main loop. Encode the spawn chain into the
+  // origin kind (`subagent:parent/child`) so renderers can show nesting depth.
+  const parentByAgent = new Map<string, string | null>()
+  for (const { agentId, messages } of subagentRaw) {
+    parentByAgent.set(agentId, claudeSubagentParentId(messages as unknown[]))
+  }
+  const subagentMessages = subagentRaw.map(({ agentId, messages }) =>
+    withOriginKind(
+      normalizeClaudeHistoryMessages(messages as unknown[]),
+      `subagent:${claudeSubagentSpawnPath(agentId, parentByAgent)}`,
+    ),
   )
 
   const deduped = new Map<string, SessionMessage>()
@@ -5376,7 +5439,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           close()
         }
         if (piSlash && piSlash.command.toLowerCase() === 'help') {
-          finishPiCommand('Pi commands: /model [provider/model], /thinking [off|minimal|low|medium|high|xhigh], /compact [instructions].')
+          finishPiCommand('Pi commands: /model [provider/model], /thinking [off|minimal|low|medium|high|xhigh|max], /compact [instructions].')
           return
         }
         if (piSlash && piSlash.command.toLowerCase() === 'model') {
@@ -5412,7 +5475,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             return
           }
           if (!PI_THINKING_LEVELS.includes(level as typeof PI_THINKING_LEVELS[number])) {
-            finishPiCommand('Use /thinking off, /thinking minimal, /thinking low, /thinking medium, /thinking high, or /thinking xhigh.')
+            finishPiCommand('Use /thinking off, /thinking minimal, /thinking low, /thinking medium, /thinking high, /thinking xhigh, or /thinking max.')
             return
           }
           agentSession.setThinkingLevel(level as typeof PI_THINKING_LEVELS[number])
@@ -6305,6 +6368,13 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
     if (init.account?.email) accountItems.push(init.account.email)
     if (init.account?.organization) accountItems.push(init.account.organization)
     if (init.account?.subscriptionType) accountItems.push(init.account.subscriptionType)
+    const subagentParents = new Map<string, string | null>()
+    if (subagents.length > 0) {
+      await Promise.all(subagents.map(async (agentId) => {
+        const messages = await getSubagentMessages(sessionId, agentId).catch(() => [] as SessionMessage[])
+        subagentParents.set(agentId, claudeSubagentParentId(messages as unknown[]))
+      }))
+    }
     return {
       currentModel: contextUsage?.model ?? null,
       sections: [
@@ -6320,7 +6390,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
         {
           id: 'subagents',
           title: 'SUBAGENTS',
-          items: subagents.length > 0 ? subagents.slice(0, 20) : ['None'],
+          items: subagents.length > 0 ? formatClaudeSubagentTree(subagents, subagentParents).slice(0, 20) : ['None'],
         },
         {
           id: 'output-style',
