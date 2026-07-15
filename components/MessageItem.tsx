@@ -5551,7 +5551,6 @@ function streamDensitySpacing(dc: DensityConfig) {
     blockGap: isDense ? 1 : isComfortable ? 5 : 2,
     toolListMarginTop: isDense ? 2 : isComfortable ? 8 : 4,
     toolRowPaddingY: isDense ? 2 : isComfortable ? 6 : 3,
-    toolDetailPadding: isDense ? '2px 8px 6px 22px' : isComfortable ? '6px 10px 10px 24px' : '4px 8px 8px 22px',
   }
 }
 
@@ -5584,12 +5583,155 @@ function streamActivitySummary(threads: ToolThread[]): string {
   return parts.join('  ·  ')
 }
 
-type StreamTreePosition = 'branch' | 'last'
+function isStreamFileUpdateThread(thread: ToolThread): boolean {
+  return ['Edit', 'MultiEdit', 'Write', 'FileChange'].includes(canonicalToolName(thread.toolUse.name))
+}
+
+type StreamDiffPreviewLine = {
+  key: string
+  tone: 'context' | 'addition' | 'deletion'
+  oldLine?: number
+  newLine?: number
+  text: string
+}
+
+type StreamFileUpdateData = {
+  operation: 'Create' | 'Update' | 'Delete'
+  path: string
+  additions: number
+  deletions: number
+  preview: StreamDiffPreviewLine[]
+  hiddenLines: number
+}
+
+const STREAM_WEB_DIFF_PREVIEW_LINES = 7
+
+function streamPatchPreview(patch: string): { lines: StreamDiffPreviewLine[]; hiddenLines: number } {
+  const parsed: StreamDiffPreviewLine[] = []
+  let oldLine = 0
+  let newLine = 0
+  let sequence = 0
+  for (const line of patch.split('\n')) {
+    const hunk = line.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/)
+    if (hunk?.[1] && hunk[2]) {
+      oldLine = Number(hunk[1])
+      newLine = Number(hunk[2])
+      continue
+    }
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ')) continue
+    if (line.startsWith('+')) {
+      parsed.push({ key: `a:${sequence}`, tone: 'addition', newLine, text: line.slice(1) })
+      newLine += 1
+      sequence += 1
+    } else if (line.startsWith('-')) {
+      parsed.push({ key: `d:${sequence}`, tone: 'deletion', oldLine, text: line.slice(1) })
+      oldLine += 1
+      sequence += 1
+    } else if (line.startsWith(' ')) {
+      parsed.push({ key: `c:${sequence}`, tone: 'context', oldLine, newLine, text: line.slice(1) })
+      oldLine += 1
+      newLine += 1
+      sequence += 1
+    }
+  }
+  const firstChange = parsed.findIndex((line) => line.tone !== 'context')
+  const start = Math.max(firstChange - 2, 0)
+  const lines = parsed.slice(start, start + STREAM_WEB_DIFF_PREVIEW_LINES)
+  return { lines, hiddenLines: Math.max(parsed.length - lines.length, 0) }
+}
+
+function streamInlineEditPreview(input: Record<string, unknown>): StreamDiffPreviewLine[] {
+  const edits = Array.isArray(input.edits) ? input.edits : [input]
+  const lines: StreamDiffPreviewLine[] = []
+  for (const edit of edits) {
+    if (!edit || typeof edit !== 'object' || Array.isArray(edit)) continue
+    const record = edit as Record<string, unknown>
+    const oldText = toolStringParam(record, ['oldText', 'old_string']) ?? ''
+    const newText = toolStringParam(record, ['newText', 'new_string']) ?? ''
+    for (const text of oldText.split('\n').filter(Boolean)) {
+      lines.push({ key: `d:${lines.length}`, tone: 'deletion', text })
+    }
+    for (const text of newText.split('\n').filter(Boolean)) {
+      lines.push({ key: `a:${lines.length}`, tone: 'addition', text })
+    }
+  }
+  return lines.slice(0, STREAM_WEB_DIFF_PREVIEW_LINES)
+}
+
+function streamFileUpdateData(thread: ToolThread): StreamFileUpdateData | null {
+  const normalized = normalizeToolThreadForNativeCard(thread)
+  const name = canonicalToolName(normalized.toolUse.name)
+  if (!['Edit', 'MultiEdit', 'Write', 'FileChange'].includes(name)) return null
+  const input = toolInputRecord(normalized)
+
+  if (name === 'FileChange') {
+    const changes = agentsFileChanges(input)
+    if (changes.length === 0) return null
+    const first = changes[0]
+    const patch = first.diff ?? ''
+    const stats = changes.reduce((total, change) => {
+      const next = agentsDiffStats(change.diff)
+      return { additions: total.additions + next.additions, deletions: total.deletions + next.deletions }
+    }, { additions: 0, deletions: 0 })
+    const kind = summarizeAgentsFileChangeKind(first.kind).toLowerCase()
+    const operation = patch.includes('--- /dev/null') || /create|add/.test(kind)
+      ? 'Create'
+      : patch.includes('+++ /dev/null') || /delete|remove/.test(kind)
+        ? 'Delete'
+        : 'Update'
+    const preview = streamPatchPreview(patch)
+    const firstPath = first.path ?? 'file'
+    return {
+      operation,
+      path: changes.length > 1 ? `${firstPath} (+${changes.length - 1} more)` : firstPath,
+      additions: stats.additions,
+      deletions: stats.deletions,
+      preview: preview.lines,
+      hiddenLines: preview.hiddenLines,
+    }
+  }
+
+  const path = toolStringParam(input, ['file_path', 'path']) ?? 'file'
+  if (name === 'Write') {
+    const content = toolStringParam(input, ['content']) ?? ''
+    const contentLines = content ? content.split('\n') : []
+    return {
+      operation: 'Create',
+      path,
+      additions: content ? lineCount(content) : 0,
+      deletions: 0,
+      preview: contentLines.slice(0, STREAM_WEB_DIFF_PREVIEW_LINES).map((text, index) => ({
+        key: `a:${index}`,
+        tone: 'addition',
+        newLine: index + 1,
+        text,
+      })),
+      hiddenLines: Math.max(contentLines.length - STREAM_WEB_DIFF_PREVIEW_LINES, 0),
+    }
+  }
+
+  const stats = agentsEditStats(input) ?? { additions: 0, deletions: 0 }
+  const preview = streamInlineEditPreview(input)
+  return {
+    operation: 'Update',
+    path,
+    additions: stats.additions,
+    deletions: stats.deletions,
+    preview,
+    hiddenLines: Math.max(stats.additions + stats.deletions - preview.length, 0),
+  }
+}
 
 function dedupeStreamToolThreads(threads: ToolThread[]): ToolThread[] {
   const unique: ToolThread[] = []
   const indexBySummary = new Map<string, number>()
   for (const thread of threads) {
+    // Preserve every file mutation as its own chronological update. Repeated
+    // edits to the same path are meaningful history, not duplicate status rows.
+    if (isStreamFileUpdateThread(thread)) {
+      unique.push(thread)
+      continue
+    }
     const key = `${canonicalToolName(thread.toolUse.name)} ${summarizeAgentsTool(thread)}`.replace(/\s+/g, ' ').trim().toLowerCase()
     const existingIndex = indexBySummary.get(key)
     if (existingIndex == null) {
@@ -5603,9 +5745,10 @@ function dedupeStreamToolThreads(threads: ToolThread[]): ToolThread[] {
   return unique
 }
 
+type StreamTreePosition = 'branch' | 'last'
+
 function StreamToolRow({ thread, treePosition }: { thread: ToolThread; treePosition?: StreamTreePosition }) {
   const [open, setOpen] = useState(false)
-  const [hovered, setHovered] = useState(false)
   const spacing = streamDensitySpacing(use(MessageDensityContext))
   const name = canonicalToolName(thread.toolUse.name)
   const status = streamToolStatus(thread)
@@ -5613,13 +5756,20 @@ function StreamToolRow({ thread, treePosition }: { thread: ToolThread; treePosit
   const label = name === 'Bash' ? 'Ran' : name
   const rawSummary = summarizeAgentsTool(thread)
   const summary = name === 'Bash' ? rawSummary.replace(/^\$\s*/, '') : rawSummary
+  if (open) {
+    return (
+      <div className="av-stream-expanded-tool">
+        <button type="button" className="av-stream-collapse" onClick={() => setOpen(false)}>‹ collapse details</button>
+        <ToolThreadCard thread={thread} />
+      </div>
+    )
+  }
   return (
-    <div style={{ background: open ? 'var(--surface-2)' : 'transparent' }}>
+    <div>
       <button
         type="button"
+        className={`av-stream-tool-row${treePosition ? ` av-stream-tool-row--nested av-stream-tool-row--${treePosition}` : ''}`}
         onClick={() => setOpen((value) => !value)}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
         aria-expanded={open}
         style={{
           width: '100%',
@@ -5629,30 +5779,23 @@ function StreamToolRow({ thread, treePosition }: { thread: ToolThread; treePosit
           minWidth: 0,
           padding: `${spacing.toolRowPaddingY}px ${spacing.paddingX}px ${spacing.toolRowPaddingY}px ${treePosition ? spacing.paddingX + 10 : spacing.paddingX}px`,
           border: 0,
-          borderRadius: 0,
-          background: open ? 'var(--surface-3)' : hovered ? 'var(--surface-2)' : 'transparent',
+          borderRadius: 4,
+          background: 'transparent',
           color: 'var(--text-2)',
           cursor: 'pointer',
           textAlign: 'left',
           fontFamily: "'IBM Plex Mono', monospace",
         }}
       >
-        <span style={{ color: treePosition ? 'var(--text-3)' : status.color, flexShrink: 0 }}>
-          {treePosition === 'branch' ? '├' : treePosition === 'last' ? '└' : status.marker}
+        <span className="av-stream-tool-connector" style={{ color: treePosition ? 'var(--text-3)' : status.color }}>
+          {treePosition ? '' : status.marker}
         </span>
-        <span style={{ color, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>{label}</span>
-        <span style={{ color: 'var(--text-3)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+        <span className="av-stream-tool-label" style={{ color }}>{label}</span>
+        <span className="av-stream-tool-command">
           {summary}
         </span>
-        <span style={{ marginLeft: 'auto', color: 'var(--text-3)', fontSize: 10, whiteSpace: 'nowrap', flexShrink: 0 }}>
-          {open ? 'collapse' : 'details'}
-        </span>
+        <span className="av-stream-tool-disclosure" aria-hidden="true">›</span>
       </button>
-      {open && (
-        <div style={{ padding: spacing.toolDetailPadding, background: 'var(--surface-2)' }}>
-          <ToolThreadCard thread={thread} />
-        </div>
-      )}
     </div>
   )
 }
@@ -5664,21 +5807,56 @@ function StreamActivitySummaryRow({ threads }: { threads: ToolThread[] }) {
     return next.rank > current.rank ? next : current
   }, { marker: '•' as const, color: 'var(--text-3)', rank: -1 })
   return (
-    <div style={{
-      width: '100%',
-      display: 'flex',
-      alignItems: 'baseline',
-      gap: 7,
-      padding: `${spacing.toolRowPaddingY}px ${spacing.paddingX}px`,
-      color: 'var(--text)',
-      fontFamily: "'IBM Plex Mono', monospace",
-    }}>
+    <div
+      className="av-stream-activity"
+      style={{ padding: `${spacing.toolRowPaddingY}px ${spacing.paddingX}px`, cursor: 'default' }}
+    >
       <span aria-hidden="true" style={{ color: status.color, width: 12 }}>{status.marker}</span>
       <span>
         <strong>Activity</strong>
-        <span style={{ color: 'var(--text-3)' }}>  ·  {streamActivitySummary(threads)}</span>
+        <span className="av-stream-activity-counts">  ·  {streamActivitySummary(threads)}</span>
       </span>
     </div>
+  )
+}
+
+function StreamFileUpdateRow({ thread }: { thread: ToolThread }) {
+  const [open, setOpen] = useState(false)
+  const data = streamFileUpdateData(thread)
+  const status = streamToolStatus(thread)
+  if (!data) return <StreamToolRow thread={thread} />
+  if (open) {
+    return (
+      <div className="av-stream-expanded-tool">
+        <button type="button" className="av-stream-collapse" onClick={() => setOpen(false)}>‹ collapse diff</button>
+        <ToolThreadCard thread={thread} />
+      </div>
+    )
+  }
+  const changes = [
+    data.additions > 0 ? `Added ${data.additions} ${data.additions === 1 ? 'line' : 'lines'}` : '',
+    data.deletions > 0 ? `${data.additions > 0 ? 'removed' : 'Removed'} ${data.deletions} ${data.deletions === 1 ? 'line' : 'lines'}` : '',
+  ].filter(Boolean).join(', ')
+  return (
+    <button type="button" className="av-stream-file-update" onClick={() => setOpen(true)} aria-expanded={false}>
+      <span className="av-stream-file-heading">
+        <span aria-hidden="true" style={{ color: status.color }}>{status.marker}</span>
+        <strong>{data.operation}({data.path})</strong>
+        <span className="av-stream-details">details</span>
+      </span>
+      {changes ? <span className="av-stream-change-summary"><span aria-hidden="true">└</span> {changes}</span> : null}
+      {data.preview.length > 0 ? (
+        <span className="av-stream-diff-preview">
+          {data.preview.map((line) => (
+            <span key={line.key} className={`av-stream-diff-line av-stream-diff-line--${line.tone}`}>
+              <span className="av-stream-diff-gutter">{line.newLine ?? line.oldLine ?? ''} {line.tone === 'addition' ? '+' : line.tone === 'deletion' ? '-' : ' '}</span>
+              <code>{line.text || ' '}</code>
+            </span>
+          ))}
+          {data.hiddenLines > 0 ? <span className="av-stream-diff-more">… {data.hiddenLines} more lines</span> : null}
+        </span>
+      ) : null}
+    </button>
   )
 }
 
@@ -5707,7 +5885,7 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
   }
   if (textBlocks.length === 0 && toolThreads.length === 0) return null
 
-  const marker = message.role === 'user' ? '›' : message.role === 'system' ? '▲' : '•'
+  const marker = message.role === 'user' ? '❯' : message.role === 'system' ? '▲' : '•'
   const markerColor = message.role === 'user'
     ? 'var(--cyan)'
     : message.role === 'system'
@@ -5720,28 +5898,21 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
         flexDirection: 'column',
         gap: spacing.blockGap,
         marginBottom: isUserMessage ? spacing.userMarginBottom : spacing.otherMarginBottom,
-        marginLeft: isUserMessage ? 'auto' : undefined,
-        width: isUserMessage ? 'fit-content' : undefined,
-        maxWidth: isUserMessage ? 'min(82%, 760px)' : undefined,
+        width: '100%',
         padding: isUserMessage
           ? `${spacing.userPaddingY}px ${spacing.paddingX}px`
           : `${spacing.otherPaddingY}px ${spacing.paddingX}px`,
-        borderRadius: isUserMessage ? 18 : undefined,
-        background: isUserMessage ? 'var(--surface-2)' : 'transparent',
-        boxShadow: isUserMessage ? 'inset 0 0 0 1px color-mix(in srgb, var(--border) 72%, transparent)' : undefined,
       }}>
         {textBlocks.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minWidth: 0 }}>
-            {!isUserMessage ? (
-              <span aria-hidden="true" style={{ color: markerColor, flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}>{marker}</span>
-            ) : null}
+            <span aria-hidden="true" style={{ color: markerColor, flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace" }}>{marker}</span>
             <div style={{ display: 'flex', flex: 1, minWidth: 0, flexDirection: 'column', gap: spacing.blockGap }}>
               {textBlocks.map((block, index) => renderBlock(block, index))}
             </div>
           </div>
         )}
         {toolThreads.length > 0 && (
-          <div style={{
+          <div className={activityThreads.length > 0 ? 'av-stream-activity-group' : undefined} style={{
             display: 'flex',
             flexDirection: 'column',
             gap: 0,
@@ -5749,11 +5920,13 @@ function StreamMessageItem({ message }: { message: ThreadedMessage }) {
           }}>
             {activityThreads.length > 0 ? <StreamActivitySummaryRow threads={activityThreads} /> : null}
             {toolThreads.map((thread, index) => (
-              <StreamToolRow
-                key={thread.toolUse.id ?? `${thread.toolUse.name}:${index}`}
-                thread={thread}
-                treePosition={isStreamActivityThread(thread) ? index === lastActivityIndex ? 'last' : 'branch' : undefined}
-              />
+              isStreamFileUpdateThread(thread)
+                ? <StreamFileUpdateRow key={thread.toolUse.id ?? `${thread.toolUse.name}:${index}`} thread={thread} />
+                : <StreamToolRow
+                    key={thread.toolUse.id ?? `${thread.toolUse.name}:${index}`}
+                    thread={thread}
+                    treePosition={isStreamActivityThread(thread) ? index === lastActivityIndex ? 'last' : 'branch' : undefined}
+                  />
             ))}
           </div>
         )}
