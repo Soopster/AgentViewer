@@ -43,6 +43,8 @@ export type TaskState = {
   taskType?: string
   subagentType?: string
   workflowName?: string
+  /** tool_use id of the Agent/Workflow tool call that started this task — joins task events to transcript tool threads. */
+  toolUseId?: string
   prompt?: string
   lastToolName?: string
   outputFile?: string
@@ -375,10 +377,19 @@ function upsertFromSystemEvent(
   }
 
   if (status && subtype !== 'task_started' && subtype !== 'task_progress') patch.status = status
-  patch.taskType = readStringField(payload, 'task_type', 'taskType')
-  patch.subagentType = readStringField(payload, 'subagent_type', 'subagentType')
-  patch.workflowName = readStringField(payload, 'workflow_name', 'workflowName')
-  patch.lastToolName = readStringField(payload, 'last_tool_name', 'lastToolName')
+  // Only overwrite identity fields when the event carries them — progress and
+  // notification events usually omit task_type/workflow_name, and clobbering
+  // them with undefined loses what task_started established.
+  const taskType = readStringField(payload, 'task_type', 'taskType')
+  if (taskType) patch.taskType = taskType
+  const subagentType = readStringField(payload, 'subagent_type', 'subagentType')
+  if (subagentType) patch.subagentType = subagentType
+  const workflowName = readStringField(payload, 'workflow_name', 'workflowName')
+  if (workflowName) patch.workflowName = workflowName
+  const lastToolName = readStringField(payload, 'last_tool_name', 'lastToolName')
+  if (lastToolName) patch.lastToolName = lastToolName
+  const toolUseId = readStringField(payload, 'tool_use_id', 'toolUseId')
+  if (toolUseId) patch.toolUseId = toolUseId
   addUsagePatch(patch, payload)
 
   const kind: TaskEventKind = subtype === 'task_started'
@@ -668,6 +679,93 @@ export function buildTaskRegistryFromTodos(todos: OpenCodeTodo[]): TaskRegistry 
 }
 
 export type TaskGroup = 'in_progress' | 'blocked' | 'paused' | 'pending' | 'failed' | 'stopped' | 'completed'
+
+/**
+ * Rollup of one Claude dynamic Workflow run (the Workflow tool). Workflow runs
+ * arrive as SDK background tasks with task_type 'local_workflow' plus the
+ * script's meta.name in workflow_name; their spawned agents are separate tasks
+ * that share the same workflow_name.
+ */
+export type WorkflowRunSummary = {
+  /** SDK task id of the workflow run (`wf_…`) — valid for stopTask(). */
+  id: string
+  name: string
+  status: TaskStatus
+  /** Latest progress line reported by the run. */
+  activity?: string
+  error?: string
+  agentTotal: number
+  agentRunning: number
+  agentCompleted: number
+  agentFailed: number
+  totalTokens?: number
+  toolUses?: number
+  durationMs?: number
+  isStoppable: boolean
+  latestEventUuid: string
+}
+
+function isWorkflowTask(task: TaskState): boolean {
+  return task.taskType === 'local_workflow' || task.taskType === 'workflow'
+}
+
+/**
+ * Separate Claude dynamic Workflow runs from ordinary tasks. `workflows`
+ * carries one rollup per run (status, spawned-agent counts, usage);
+ * `rest` is the registry without the workflow tasks themselves, ready for
+ * groupAndSortTasks so runs don't render twice. Agent tasks stay in `rest` —
+ * they are real work rows — but are counted into their run's rollup.
+ */
+export function splitWorkflowTasks(registry: TaskRegistry): { workflows: WorkflowRunSummary[]; rest: TaskRegistry } {
+  const workflowTasks = [...registry.values()].filter(isWorkflowTask)
+  if (workflowTasks.length === 0) return { workflows: [], rest: registry }
+
+  const rest: TaskRegistry = new Map()
+  for (const [id, task] of registry) {
+    if (!isWorkflowTask(task)) rest.set(id, task)
+  }
+
+  const workflows = workflowTasks.map((task) => {
+    let agentTotal = 0
+    let agentRunning = 0
+    let agentCompleted = 0
+    let agentFailed = 0
+    if (task.workflowName) {
+      for (const other of rest.values()) {
+        if (other.workflowName !== task.workflowName) continue
+        agentTotal += 1
+        if (other.status === 'in_progress' || other.status === 'pending' || other.status === 'paused') agentRunning += 1
+        else if (other.status === 'completed') agentCompleted += 1
+        else agentFailed += 1
+      }
+    }
+    return {
+      id: task.id,
+      name: task.workflowName || compactTaskText(task.subject) || `#${task.id}`,
+      status: task.status,
+      activity: compactTaskText(
+        task.status === 'in_progress'
+          ? task.activeForm ?? task.summary ?? task.description
+          : task.summary ?? task.description,
+      ) || undefined,
+      error: task.error,
+      agentTotal,
+      agentRunning,
+      agentCompleted,
+      agentFailed,
+      totalTokens: task.totalTokens,
+      toolUses: task.toolUses,
+      durationMs: task.durationMs,
+      isStoppable: isStoppableTask(task),
+      latestEventUuid: task.latestEventUuid,
+    }
+  })
+  return { workflows, rest }
+}
+
+function compactTaskText(value: string | undefined): string {
+  return value?.replace(/\s+/g, ' ').trim() ?? ''
+}
 
 // Event kinds emitted only by the Claude Agent SDK background-task stream
 // (task_started/task_progress/task_notification). Todo-list tasks parsed from

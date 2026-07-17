@@ -1991,6 +1991,7 @@ function extractToolNames(content: SubagentMessage['message']['content']): strin
 const AGENT_STATUS_COLORS: Record<string, string> = {
   completed: 'var(--green)', async_launched: 'var(--cyan)',
   sub_agent_entered: 'var(--amber)', unknown: 'var(--text-3)', pending: 'var(--text-3)',
+  failed: 'var(--red)',
 }
 const AGENT_STATUS_LABELS: Record<string, string> = {
   completed: 'done', async_launched: 'launched', sub_agent_entered: 'entered',
@@ -2022,14 +2023,19 @@ function AgentCard({ thread }: { thread: ToolThread }) {
     const raw = thread.result ? resultToString(thread.result.content) : ''
     let parsed: Record<string, unknown> | null = null
     try { if (raw) parsed = JSON.parse(raw) } catch { /* not JSON */ }
+    // Error results and plain-text async-launch receipts carry no JSON status.
+    const fallbackStatus = !thread.result ? 'pending'
+      : thread.result.is_error ? 'failed'
+      : raw.includes('Async agent launched') ? 'async_launched'
+      : 'unknown'
     return {
-      status: (parsed?.status as string) ?? (thread.result ? 'unknown' : 'pending'),
+      status: (parsed?.status as string) ?? fallbackStatus,
       resultText: (parsed?.content as Array<{ text?: string }>)?.[0]?.text ?? (parsed?.message as string) ?? '',
       totalTokens: parsed?.totalTokens as number | undefined,
       totalToolUseCount: parsed?.totalToolUseCount as number | undefined,
       totalDurationMs: parsed?.totalDurationMs as number | undefined,
       outputFile: parsed?.outputFile as string | undefined,
-      agentId: parsed?.agentId as string | undefined,
+      agentId: (parsed?.agentId as string | undefined) ?? raw.match(/agentId:\s*([a-z0-9-]+)/)?.[1],
       toolStats: parsed?.toolStats as { readCount?: number; searchCount?: number; bashCount?: number; editFileCount?: number; linesAdded?: number; linesRemoved?: number } | undefined,
     }
   }, [thread.result])

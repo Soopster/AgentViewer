@@ -1,8 +1,8 @@
 'use client'
 
 import { useMemo } from 'react'
-import type { TaskGroup, TaskRegistry, TaskState } from '@/lib/taskRegistry'
-import { groupAndSortTasks, isStoppableTask } from '@/lib/taskRegistry'
+import type { TaskGroup, TaskRegistry, TaskState, WorkflowRunSummary } from '@/lib/taskRegistry'
+import { groupAndSortTasks, isStoppableTask, splitWorkflowTasks } from '@/lib/taskRegistry'
 
 const STATUS_ICON: Record<TaskState['status'], string> = {
   pending: '○',
@@ -144,7 +144,8 @@ export function TaskRail({
    *  viewed provider/session can't stop tasks (only Claude warm sessions can). */
   onStopTask?: (taskId: string) => void
 }) {
-  const groups = useMemo(() => groupAndSortTasks(registry), [registry])
+  const { workflows, rest: nonWorkflowRegistry } = useMemo(() => splitWorkflowTasks(registry), [registry])
+  const groups = useMemo(() => groupAndSortTasks(nonWorkflowRegistry), [nonWorkflowRegistry])
   const completedIds = useMemo(() => {
     const set = new Set<string>()
     for (const t of registry.values()) if (t.status === 'completed') set.add(t.id)
@@ -198,7 +199,30 @@ export function TaskRail({
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '4px 0' }}>
-        {groups.length === 0 ? (
+        {workflows.length > 0 && (
+          <section style={{ marginBottom: 4 }}>
+            <div
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 10,
+                color: 'var(--text-3)',
+                letterSpacing: '0.08em',
+                padding: '6px 12px 4px',
+              }}
+            >
+              WORKFLOWS · {workflows.length}
+            </div>
+            {workflows.map((run) => (
+              <WorkflowRunRow
+                key={run.id}
+                run={run}
+                onJump={() => onJumpToEvent(run.latestEventUuid)}
+                onStop={onStopTask && run.isStoppable ? () => onStopTask(run.id) : undefined}
+              />
+            ))}
+          </section>
+        )}
+        {groups.length === 0 && workflows.length === 0 ? (
           <div style={{ padding: '24px 14px', fontSize: 12, color: 'var(--text-3)', textAlign: 'center', fontStyle: 'italic' }}>
             no tasks in this session
           </div>
@@ -231,6 +255,160 @@ export function TaskRail({
         )}
       </div>
     </aside>
+  )
+}
+
+function workflowMetaParts(run: WorkflowRunSummary): string[] {
+  const parts = [`#${run.id}`, STATUS_LABEL[run.status]]
+  if (run.agentTotal > 0) {
+    parts.push(run.agentRunning > 0
+      ? `${run.agentCompleted}/${run.agentTotal} agents`
+      : `${run.agentTotal} agent${run.agentTotal === 1 ? '' : 's'}`)
+    if (run.agentFailed > 0) parts.push(`${run.agentFailed} failed`)
+  }
+  if (run.toolUses != null) parts.push(`${run.toolUses} tool${run.toolUses === 1 ? '' : 's'}`)
+  if (run.durationMs != null) parts.push(formatDuration(run.durationMs))
+  if (run.totalTokens != null) parts.push(formatTokens(run.totalTokens))
+  return parts
+}
+
+function WorkflowRunRow({
+  run,
+  onJump,
+  onStop,
+}: {
+  run: WorkflowRunSummary
+  onJump: () => void
+  /** Present only while the workflow run is live on a Claude warm session. */
+  onStop?: () => void
+}) {
+  const meta = workflowMetaParts(run)
+  const detail = run.error ?? run.activity ?? ''
+  const nameColor = run.status === 'completed'
+    ? 'var(--text-3)'
+    : run.status === 'failed'
+    ? 'var(--red)'
+    : 'var(--text)'
+
+  return (
+    <div
+      style={{ position: 'relative' }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-3)' }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+    >
+      {onStop && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onStop() }}
+          title={`Stop workflow ${run.name}`}
+          aria-label={`Stop workflow ${run.name}`}
+          style={{
+            position: 'absolute',
+            top: 6,
+            right: 8,
+            zIndex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            border: '1px solid var(--red)',
+            borderRadius: 4,
+            background: 'var(--surface)',
+            color: 'var(--red)',
+            cursor: 'pointer',
+            padding: '1px 6px',
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 10,
+            lineHeight: 1.4,
+            letterSpacing: '0.04em',
+          }}
+        >
+          ■ stop
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onJump}
+        title={[run.name, detail, meta.join(' · ')].filter(Boolean).join('\n')}
+        style={{
+          display: 'block',
+          width: '100%',
+          textAlign: 'left',
+          background: 'transparent',
+          border: 'none',
+          padding: '7px 12px',
+          paddingRight: onStop ? 64 : 12,
+          cursor: 'pointer',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+          <span
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 13,
+              color: STATUS_COLOR[run.status],
+              flexShrink: 0,
+              marginTop: 1,
+              width: 12,
+              textAlign: 'center',
+            }}
+          >
+            {run.status === 'in_progress' ? '⟳' : STATUS_ICON[run.status]}
+          </span>
+          <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span
+              style={{
+                fontSize: 12.5,
+                color: nameColor,
+                lineHeight: 1.35,
+                fontFamily: "'IBM Plex Mono', monospace",
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {run.name}
+            </span>
+            {detail && (
+              <span
+                style={{
+                  fontSize: 11.5,
+                  color: run.error ? 'var(--red)' : 'var(--text-2)',
+                  lineHeight: 1.35,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {detail}
+              </span>
+            )}
+            {meta.length > 0 && (
+              <span style={{ display: 'flex', flexWrap: 'wrap', gap: '3px 6px', minWidth: 0 }}>
+                {meta.map((part) => (
+                  <span
+                    key={part}
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 10,
+                      color: 'var(--text-3)',
+                      whiteSpace: 'nowrap',
+                      maxWidth: '100%',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {part}
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
+        </div>
+      </button>
+    </div>
   )
 }
 
