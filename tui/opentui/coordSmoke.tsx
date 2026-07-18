@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
-// Agent Operations smoke: mounts CoordinationPopover against a temp data dir,
-// then against a seeded ledger, asserting overview, team, work-board, and
-// activity panes actually render. Hermetic — the coordination DB
+// Agent control-center smoke: mounts CoordinationPopover against a temp data
+// dir, then against a seeded ledger, asserting the fleet, work-board, agent,
+// activity, prompt, and keyboard surfaces render together. Hermetic — the coordination DB
 // resolves from process.cwd(), so chdir BEFORE importing anything that opens it.
 import React, { act } from 'react'
 import { testRender } from '@opentui/react/test-utils'
@@ -22,25 +22,41 @@ await listTuiProtocolRuns()
 const { Database } = await (0, eval)('import("bun:sqlite")') as { Database: new (file: string) => any }
 const db = new Database(path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination', 'coordination.sqlite'))
 const ts = new Date().toISOString()
+const oldTs = new Date(Date.now() - 60_000).toISOString()
 db.exec(`INSERT INTO protocol_runs (id, prompt, status, provider, base_cwd, max_agents, lead_agent_id, created_at, updated_at)
   VALUES ('run-smoke', 'smoke the board', 'running', 'claude', '${process.cwd()}', 3, 'lead', '${ts}', '${ts}')`)
+db.exec(`INSERT INTO protocol_runs (id, prompt, status, provider, base_cwd, max_agents, lead_agent_id, created_at, updated_at)
+  VALUES ('run-codex', 'finished provider audit', 'completed', 'codex', '${process.cwd()}', 2, 'codex-lead', '${oldTs}', '${oldTs}')`)
 db.exec(`INSERT INTO protocol_agents (id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, status, created_at, updated_at)
   VALUES ('lead', 'run-smoke', 'lead', 'lead', 'claude', 'sess-lead', '${process.cwd()}', '', 'idle', '${ts}', '${ts}')`)
 db.exec(`INSERT INTO protocol_agents (id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, status, created_at, updated_at)
   VALUES ('agent-1', 'run-smoke', 'nova', 'teammate', 'claude', 'sess-1', '/tmp/wt-1', 'agent/x', 'working', '${ts}', '${ts}')`)
-db.exec(`INSERT INTO protocol_tasks (id, run_id, title, prompt, status, paths_json, blocked_by_json, created_at, updated_at)
-  VALUES ('task-1', 'run-smoke', 'Build the widget', 'do it', 'in_progress', '[]', '[]', '${ts}', '${ts}')`)
+db.exec(`INSERT INTO protocol_agents (id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, status, created_at, updated_at)
+  VALUES ('codex-lead', 'run-codex', 'codex-01', 'lead', 'codex', 'sess-codex', '${process.cwd()}', '', 'done', '${oldTs}', '${oldTs}')`)
+db.exec(`INSERT INTO protocol_tasks (id, run_id, title, prompt, status, owner_agent_id, paths_json, blocked_by_json, created_at, updated_at)
+  VALUES ('task-1', 'run-smoke', 'Build the widget', 'do it', 'in_progress', 'agent-1', '[]', '[]', '${ts}', '${ts}')`)
+db.exec(`INSERT INTO protocol_tasks (id, run_id, title, prompt, status, owner_agent_id, paths_json, blocked_by_json, created_at, updated_at)
+  VALUES ('task-0', 'run-smoke', 'Queue dependencies', 'queue it', 'pending', 'lead', '[]', '[]', '${oldTs}', '${oldTs}')`)
+db.exec(`INSERT INTO protocol_tasks (id, run_id, title, prompt, status, owner_agent_id, paths_json, blocked_by_json, created_at, updated_at)
+  VALUES ('task-2', 'run-smoke', 'Verify output', 'verify it', 'completed', 'lead', '[]', '[]', '${oldTs}', '${ts}')`)
 db.exec(`INSERT INTO protocol_events (id, run_id, agent_id, type, summary, paths_json, timestamp, created_at)
   VALUES ('ev-1', 'run-smoke', 'agent-1', 'finding', 'widget lives in src/widget', '[]', '${ts}', '${ts}')`)
+for (let index = 2; index <= 12; index += 1) {
+  const eventTs = new Date(Date.now() + index * 1000).toISOString()
+  db.exec(`INSERT INTO protocol_events (id, run_id, agent_id, type, summary, paths_json, timestamp, created_at)
+    VALUES ('ev-${index}', 'run-smoke', 'agent-1', 'finding', 'activity event ${index}', '[]', '${eventTs}', '${eventTs}')`)
+}
 db.close()
 
 const noop = () => {}
 let handleKey: ((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null = null
+const smokeWidth = Number.parseInt(process.env.AGENT_VIEWER_COORD_SMOKE_WIDTH ?? '120', 10)
+const smokeHeight = Number.parseInt(process.env.AGENT_VIEWER_COORD_SMOKE_HEIGHT ?? '40', 10)
 const { captureCharFrame } = await testRender(
   <CoordinationPopover
     theme={LIGHT_THEME}
-    width={120}
-    height={40}
+    width={smokeWidth}
+    height={smokeHeight}
     initialRunId={null}
     onOpenSession={noop}
     onNewRun={noop}
@@ -48,13 +64,29 @@ const { captureCharFrame } = await testRender(
     onNotice={noop}
     onKeyHandlerReady={(handler) => { handleKey = handler }}
   />,
-  { width: 120, height: 40 },
+  { width: smokeWidth, height: smokeHeight },
 )
 
 // The popover discovers the run list and polls the snapshot asynchronously —
 // poll the frame until everything renders (bounded), rather than racing a
 // fixed sleep against SQLite + effect timing.
-const MARKERS = ['Agent operations', 'ACTIVE', 'TASKS 0%', 'RECENT RUNS']
+const MARKERS = [
+  'AGENT CONTROL CENTER',
+  'WORKFLOWS',
+  'WORK BOARD',
+  'AGENT INSPECTOR',
+  'LIVE ACTIVITY',
+  '2 workflows',
+  '3 agents',
+  'finished provide',
+  'CODEX',
+  'smoke the board',
+  'Queue dependen',
+  'Build the widget',
+  'Verify output',
+  'Ask all agents or run a command',
+  ...(smokeWidth >= 160 ? ['STAGE    TASK', '└─ [ ]', 'THROUGHPUT (events/min)', 'COSTS (USD)', 'CONTEXT'] : []),
+]
 let missing: string[] = MARKERS
 const deadline = Date.now() + 10_000
 while (Date.now() < deadline) {
@@ -68,37 +100,121 @@ while (Date.now() < deadline) {
 if (missing.length > 0) {
   // Explicit exit: the popover's poll interval would otherwise keep the
   // process alive long after the failure.
-  console.error(`Coordination board frame missing: ${missing.join(', ')}`)
+  console.error(`Coordination board frame missing: ${missing.join(', ')}\n${captureCharFrame()}`)
   process.exit(1)
 }
 
-const selectPane = async (sequence: string) => {
-  await act(async () => {
-    handleKey?.({ name: sequence, ctrl: false, shift: false, sequence })
-    await new Promise((resolve) => setTimeout(resolve, 50))
-  })
-}
-
-await selectPane('2')
-let frame = captureCharFrame()
-if (!frame.includes('nova') || !frame.includes('AGENT INSPECTOR')) {
-  console.error('Agent Operations team pane did not render roster and inspector')
+const frame = captureCharFrame()
+if (process.env.AGENT_VIEWER_COORD_SMOKE_FRAME === '1') console.log(frame)
+if (!frame.includes('nova') || !frame.includes('finding') || !frame.includes('[j/k] nav')) {
+  console.error('Agent control center did not render agent, activity, and keyboard controls together')
   process.exit(1)
 }
 
-await selectPane('3')
-frame = captureCharFrame()
-if (!frame.includes('task-1') || !frame.includes('TASK INSPECTOR')) {
-  console.error('Agent Operations work-board pane did not render task and inspector')
+const waitForFrameMarker = async (marker: string, timeoutMs = 2_000): Promise<boolean> => {
+  const markerDeadline = Date.now() + timeoutMs
+  while (Date.now() < markerDeadline) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+    if (captureCharFrame().includes(marker)) return true
+  }
+  return false
+}
+
+// The keyboard handler remains active for pane focus even though all panes are
+// visible at once. Exercise tab and numeric focus without changing geometry.
+await act(async () => {
+  handleKey?.({ name: 'tab', ctrl: false, shift: false, sequence: '\t' })
+  handleKey?.({ name: '2', ctrl: false, shift: false, sequence: '2' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+let navigationFrame = captureCharFrame()
+const queuedAt = navigationFrame.indexOf('Queue dependen')
+const activeAt = navigationFrame.indexOf('Build the widget')
+const verifyAt = navigationFrame.indexOf('Verify output')
+if (queuedAt < 0 || activeAt <= queuedAt || verifyAt <= activeAt || !navigationFrame.includes('Agent:    lead')) {
+  console.error('Task navigation order does not match the queued, active, verify visual order')
   process.exit(1)
 }
 
-await selectPane('4')
-frame = captureCharFrame()
-if (!frame.includes('finding') || !frame.includes('EVENT INSPECTOR')) {
-  console.error('Agent Operations activity pane did not render event and inspector')
+await act(async () => {
+  handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+navigationFrame = captureCharFrame()
+if (!navigationFrame.includes('Agent:    nova')) {
+  console.error('Down navigation did not move from the queued task to the active task')
   process.exit(1)
 }
 
-console.log('Agent Operations smoke passed')
+await act(async () => {
+  handleKey?.({ name: 'up', ctrl: false, shift: false, sequence: '' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('Agent:    lead')) {
+  console.error('Up navigation did not return from the active task to the queued task')
+  process.exit(1)
+}
+
+await act(async () => {
+  handleKey?.({ name: 'tab', ctrl: false, shift: true, sequence: '\t' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('WORK BOARD')) {
+  console.error('Shift-Tab focus navigation changed dashboard geometry')
+  process.exit(1)
+}
+
+await act(async () => {
+  handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '' })
+})
+if (!await waitForFrameMarker('WORK BOARD  finished')) {
+  console.error('Workflow down navigation did not follow the visible grouped order')
+  process.exit(1)
+}
+
+await act(async () => {
+  handleKey?.({ name: 'up', ctrl: false, shift: false, sequence: '' })
+})
+if (!await waitForFrameMarker('WORK BOARD  smoke')) {
+  console.error('Workflow up navigation did not return to the previous visible workflow')
+  process.exit(1)
+}
+
+await act(async () => {
+  handleKey?.({ name: '3', ctrl: false, shift: false, sequence: '3' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('[1/2]')) {
+  console.error('Agent pane did not start at the first visible agent')
+  process.exit(1)
+}
+
+await act(async () => {
+  handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('[2/2]')) {
+  console.error('Agent down navigation did not advance one visible agent')
+  process.exit(1)
+}
+
+await act(async () => {
+  handleKey?.({ name: '4', ctrl: false, shift: false, sequence: '4' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('12/12')) {
+  console.error('Activity pane did not start at the live tail')
+  process.exit(1)
+}
+
+await act(async () => {
+  handleKey?.({ name: 'up', ctrl: false, shift: false, sequence: '' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('11/12')) {
+  console.error('Activity up navigation did not keep the selected event in view')
+  process.exit(1)
+}
+
+console.log('Agent control center smoke passed')
 process.exit(0)

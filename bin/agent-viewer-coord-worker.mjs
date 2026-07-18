@@ -114,6 +114,10 @@ async function providerTick(state, baseUrl) {
     command = process.env.CLAUDE_PATH || 'claude'
     args = [
       '-p', '--verbose', '--output-format', 'stream-json', '--permission-mode', 'auto',
+      // Headless ticks have no human to approve MCP calls: without this
+      // pre-allow, permission-mode auto stalls every coordinator tool call
+      // and the tick burns its whole turn asking nobody for access.
+      '--allowedTools', 'mcp__agent-viewer__*',
       '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: { 'agent-viewer': config } }),
       state.providerSessionId ? '--resume' : '--session-id', state.providerSessionId || randomUUID(),
       prompt,

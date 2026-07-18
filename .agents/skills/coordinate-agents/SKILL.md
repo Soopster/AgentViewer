@@ -29,6 +29,7 @@ A playbook is a saved run definition — the plan held in an artifact instead of
 - Run one with `coord_create_run` using `playbook_name` and `args` — the whole task board is seeded instantly with phases as dependency barriers (phase N+1 waits for all of phase N), and `{{args}}` / `{{args.<key>}}` placeholders in task text are filled from `args`. No lead planning turn is needed; teammates can claim immediately.
 - When a run's board is worth repeating, the lead saves it with `coord_save_playbook` (a name slug, description, and args hint). Prefer running a saved playbook over re-deriving the same plan.
 - Status responses include a `phases` rollup (per-phase task counts) — use it to report progress phase by phase.
+- A single CLI can kick off a playbook run alone and then staff it either way: spawn unattended workers with `agent-viewer coord worker --join latest --name <name> --provider codex|claude` (one per lane, via the shell) and supervise as lead, or — when no teammates are expected — claim and work the tasks itself phase by phase. Claiming is not role-restricted; phase barriers enforce order either way.
 
 ## Lead workflow
 
