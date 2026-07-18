@@ -12,7 +12,7 @@
 // registry.
 
 import { execFile } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import {
@@ -25,6 +25,13 @@ import {
   fallbackTaskTemplates,
   parseAgentProtocolEvents,
   type AgentProtocolEvent,
+  type CreateExternalProtocolRunParams,
+  type ExternalProtocolCompletionResult,
+  type ExternalProtocolIdentity,
+  type ExternalProtocolInboxResult,
+  type ExternalProtocolParticipant,
+  type ExternalProtocolParticipantResult,
+  type JoinExternalProtocolRunParams,
   type ProtocolAgent,
   type ProtocolAgentStatus,
   type ProtocolLock,
@@ -49,7 +56,7 @@ type Row = Record<string, unknown>
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
 const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
 const LOCK_LEASE_MS = 20 * 60_000
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 const EVENT_WINDOW = 300
 // One automatic re-dispatch when a teammate's turn ends mid-task; after that
 // the teammate is marked blocked and the lead is notified (doc: teammates may
@@ -216,6 +223,14 @@ function initializeSchema(db: SqliteDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS protocol_messages_run_idx ON protocol_messages(run_id, to_agent_id, delivered_at);
+
+    CREATE TABLE IF NOT EXISTS protocol_participant_tokens (
+      run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (run_id, agent_id)
+    );
   `)
   migrateSchema(db)
   db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('schema_version', String(SCHEMA_VERSION))
@@ -230,6 +245,8 @@ function initializeSchema(db: SqliteDatabase): void {
 // with composite (run_id, id) keys.
 // v3 → v4: persist run-level day-to-day guardrails (completion gate and plan
 // approval) so snapshots and resumed UI panels show the actual run settings.
+// v4 → v5: capability tokens let independently launched CLI processes bind
+// to one registered agent identity without accepting caller-supplied ids.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -510,6 +527,607 @@ export async function listProtocolRuns(limit = 20): Promise<ProtocolRun[]> {
   const db = await getDatabase()
   const rows = db.prepare('SELECT * FROM protocol_runs ORDER BY created_at DESC LIMIT ?').all(Math.max(1, Math.min(limit, 100))) as Row[]
   return rows.map(rowToRun)
+}
+
+// ---------------------------------------------------------------------------
+// External CLI participants
+
+function normalizeParticipantName(value: string): string {
+  const name = value.trim().replace(/\s+/g, ' ')
+  if (!name) throw new Error('participant name is required')
+  if (name.length > 80) throw new Error('participant name must be 80 characters or fewer')
+  return name
+}
+
+function hashParticipantToken(token: string): Buffer {
+  return createHash('sha256').update(token).digest()
+}
+
+function participantTokenMatches(token: string, storedHex: string): boolean {
+  if (!token || !/^[a-f0-9]{64}$/i.test(storedHex)) return false
+  const supplied = hashParticipantToken(token)
+  const stored = Buffer.from(storedHex, 'hex')
+  return supplied.length === stored.length && timingSafeEqual(supplied, stored)
+}
+
+function requireExternalParticipantSync(db: SqliteDatabase, identity: ExternalProtocolIdentity): ProtocolAgent {
+  const tokenRow = db.prepare(
+    'SELECT token_hash FROM protocol_participant_tokens WHERE run_id = ? AND agent_id = ?',
+  ).get(identity.runId, identity.agentId) as Row | undefined
+  if (!tokenRow || !participantTokenMatches(identity.token, String(tokenRow.token_hash ?? ''))) {
+    throw new Error('Invalid Coordinator participant capability')
+  }
+  const agentRow = db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? AND id = ?')
+    .get(identity.runId, identity.agentId) as Row | undefined
+  if (!agentRow) throw new Error('Coordinator participant not found')
+  return rowToAgent(agentRow)
+}
+
+function externalSnapshotSync(db: SqliteDatabase, runId: string, agentId: string): ProtocolRunSnapshot {
+  const snapshot = readSnapshotSync(db, runId)
+  if (!snapshot) throw new Error('Coordinator run not found')
+  return {
+    ...snapshot,
+    messages: snapshot.messages.filter((message) => (
+      message.fromAgentId === agentId || message.toAgentId === agentId
+    )),
+    // Mailbox bodies are delivered through `messages`; keep other agents'
+    // direct message text out of the shared event timeline.
+    events: snapshot.events.filter((event) => event.type !== 'message' || event.agentId === agentId),
+  }
+}
+
+function externalParticipantInstructions(participant: ExternalProtocolParticipant): string {
+  return [
+    `You are ${participant.name} (${participant.role}) in Coordinator run ${participant.runId}.`,
+    'Read the board before acting. Claim one unblocked task, request locks before editing, and stay inside the returned task paths.',
+    'Use Coordinator tools for plans, messages, findings, blocking, completion, and heartbeats. Read your inbox between work steps.',
+    `Work from ${participant.cwd}. If another participant uses the same checkout, coordinate non-overlapping paths before editing.`,
+  ].join(' ')
+}
+
+async function participantWorktree(cwd: string): Promise<{ cwd: string; branch: string }> {
+  const resolved = path.resolve(cwd.trim() || process.cwd())
+  const worktree = await findWorktreeTaskForCwd(resolved).catch(() => null)
+  return { cwd: worktree?.path ?? resolved, branch: worktree?.branch ?? '' }
+}
+
+function issueParticipant(
+  db: SqliteDatabase,
+  params: {
+    runId: string
+    name: string
+    role: 'lead' | 'teammate'
+    provider: ProtocolRun['provider']
+    cwd: string
+    branch: string
+    agentId?: string
+  },
+): ExternalProtocolParticipant {
+  const agentId = params.agentId ?? `external-${randomUUID()}`
+  const token = randomBytes(32).toString('base64url')
+  const ts = nowIso()
+  db.prepare(`
+    INSERT INTO protocol_agents (
+      id, run_id, name, role, provider, session_id, worktree_path, worktree_branch,
+      task_id, status, last_seen_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ready', ?, ?, ?)
+  `).run(
+    agentId,
+    params.runId,
+    params.name,
+    params.role,
+    params.provider,
+    `external:${agentId}`,
+    params.cwd,
+    params.branch,
+    ts,
+    ts,
+    ts,
+  )
+  db.prepare(`
+    INSERT INTO protocol_participant_tokens (run_id, agent_id, token_hash, created_at)
+    VALUES (?, ?, ?, ?)
+  `).run(params.runId, agentId, hashParticipantToken(token).toString('hex'), ts)
+  insertEventSync(db, {
+    version: AGENT_PROTOCOL_VERSION,
+    runId: params.runId,
+    agentId,
+    type: 'agent.ready',
+    summary: `${params.name} joined from an external ${params.provider} CLI`,
+    timestamp: ts,
+  })
+  return {
+    runId: params.runId,
+    agentId,
+    token,
+    name: params.name,
+    role: params.role,
+    provider: params.provider,
+    cwd: params.cwd,
+  }
+}
+
+export async function createExternalProtocolRun(
+  params: CreateExternalProtocolRunParams,
+): Promise<ExternalProtocolParticipantResult> {
+  const prompt = params.prompt.trim()
+  if (!prompt) throw new Error('prompt is required')
+  const name = normalizeParticipantName(params.participantName)
+  const worktree = await participantWorktree(params.baseCwd)
+  const runId = randomUUID()
+  const ts = nowIso()
+  const result = await enqueueWrite((db) => {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const agentId = `external-${randomUUID()}`
+      db.prepare(`
+        INSERT INTO protocol_runs (
+          id, prompt, status, provider, base_cwd, max_agents, lead_agent_id, summary,
+          gate_command, require_plan_approval, created_at, updated_at
+        ) VALUES (?, ?, 'running', ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+      `).run(
+        runId,
+        prompt,
+        params.provider,
+        worktree.cwd,
+        Math.max(2, Math.min(params.maxAgents ?? 6, 16)),
+        agentId,
+        params.gateCommand?.trim() || null,
+        params.requirePlanApproval === true ? 1 : 0,
+        ts,
+        ts,
+      )
+      const participant = issueParticipant(db, {
+        runId,
+        agentId,
+        name,
+        role: 'lead',
+        provider: params.provider,
+        cwd: worktree.cwd,
+        branch: worktree.branch,
+      })
+      db.exec('COMMIT')
+      return { participant, snapshot: externalSnapshotSync(db, runId, participant.agentId) }
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  })
+  return { ...result, instructions: externalParticipantInstructions(result.participant) }
+}
+
+export async function joinExternalProtocolRun(
+  params: JoinExternalProtocolRunParams,
+): Promise<ExternalProtocolParticipantResult> {
+  const name = normalizeParticipantName(params.participantName)
+  const worktree = await participantWorktree(params.cwd)
+  const result = await enqueueWrite((db) => {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(params.runId) as Row | undefined
+      if (!runRow) throw new Error('Coordinator run not found')
+      const run = rowToRun(runRow)
+      if (!['planning', 'running'].includes(run.status)) throw new Error(`Coordinator run is ${run.status}`)
+      const participantCount = Number((db.prepare(
+        'SELECT COUNT(*) AS count FROM protocol_agents WHERE run_id = ?',
+      ).get(params.runId) as Row | undefined)?.count) || 0
+      if (participantCount >= run.maxAgents) throw new Error('Coordinator run has reached its participant limit')
+      const duplicate = db.prepare('SELECT 1 FROM protocol_agents WHERE run_id = ? AND lower(name) = lower(?)')
+        .get(params.runId, name)
+      if (duplicate) throw new Error(`Coordinator participant name already exists: ${name}`)
+      const participant = issueParticipant(db, {
+        runId: params.runId,
+        name,
+        role: 'teammate',
+        provider: params.provider,
+        cwd: worktree.cwd,
+        branch: worktree.branch,
+      })
+      db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), params.runId)
+      db.exec('COMMIT')
+      return { participant, snapshot: externalSnapshotSync(db, params.runId, participant.agentId) }
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  })
+  return { ...result, instructions: externalParticipantInstructions(result.participant) }
+}
+
+export async function resumeExternalProtocolParticipant(
+  identity: ExternalProtocolIdentity,
+): Promise<ExternalProtocolParticipantResult> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  const participant: ExternalProtocolParticipant = {
+    ...identity,
+    name: agent.name,
+    role: agent.role,
+    provider: agent.provider,
+    cwd: agent.worktreePath,
+  }
+  return {
+    participant,
+    snapshot: externalSnapshotSync(db, identity.runId, identity.agentId),
+    instructions: externalParticipantInstructions(participant),
+  }
+}
+
+export async function readExternalProtocolRun(identity: ExternalProtocolIdentity): Promise<ProtocolRunSnapshot> {
+  const db = await getDatabase()
+  requireExternalParticipantSync(db, identity)
+  return externalSnapshotSync(db, identity.runId, identity.agentId)
+}
+
+export async function createExternalProtocolTask(
+  identity: ExternalProtocolIdentity,
+  params: { title: string; detail: string; paths?: string[]; dependsOn?: string[] },
+): Promise<ProtocolRunSnapshot> {
+  return enqueueWrite((db) => {
+    const agent = requireExternalParticipantSync(db, identity)
+    if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can create tasks')
+    const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
+    if (!runRow || runRow.status !== 'running') throw new Error('Coordinator run is not accepting tasks')
+    const title = params.title.trim()
+    const detail = params.detail.trim()
+    if (!title || !detail) throw new Error('task title and detail are required')
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const task = insertTaskSync(db, identity.runId, {
+        title,
+        prompt: detail,
+        paths: params.paths ?? [],
+        blockedBy: params.dependsOn ?? [],
+      })
+      insertEventSync(db, {
+        version: AGENT_PROTOCOL_VERSION,
+        runId: identity.runId,
+        agentId: identity.agentId,
+        type: 'task.created',
+        taskId: task.id,
+        title,
+        detail,
+        paths: task.paths,
+        dependsOn: task.blockedBy,
+      })
+      db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), identity.runId)
+      db.exec('COMMIT')
+      return externalSnapshotSync(db, identity.runId, identity.agentId)
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  })
+}
+
+export async function claimExternalProtocolTask(
+  identity: ExternalProtocolIdentity,
+  taskId?: string,
+): Promise<{ task: ProtocolTask; snapshot: ProtocolRunSnapshot }> {
+  return enqueueWrite((db) => {
+    requireExternalParticipantSync(db, identity)
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const task = claimTaskSync(db, identity.runId, identity.agentId, taskId)
+      if (!task) throw new Error(`No claimable task${taskId ? `: ${taskId}` : ''}`)
+      db.exec('COMMIT')
+      return { task, snapshot: externalSnapshotSync(db, identity.runId, identity.agentId) }
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  })
+}
+
+export async function readExternalProtocolInbox(
+  identity: ExternalProtocolIdentity,
+  params: { after?: string; limit?: number; acknowledge?: boolean } = {},
+): Promise<ExternalProtocolInboxResult> {
+  return enqueueWrite((db) => {
+    requireExternalParticipantSync(db, identity)
+    const limit = Math.max(1, Math.min(params.limit ?? 50, 200))
+    let rows: Row[]
+    if (params.after) {
+      const cursor = db.prepare(
+        'SELECT created_at FROM protocol_messages WHERE run_id = ? AND id = ? AND to_agent_id = ?',
+      ).get(identity.runId, params.after, identity.agentId) as Row | undefined
+      if (cursor) {
+        rows = db.prepare(`
+          SELECT * FROM protocol_messages
+          WHERE run_id = ? AND to_agent_id = ?
+            AND (created_at > ? OR (created_at = ? AND id > ?))
+          ORDER BY created_at ASC, id ASC
+          LIMIT ?
+        `).all(identity.runId, identity.agentId, cursor.created_at, cursor.created_at, params.after, limit) as Row[]
+      } else {
+        rows = []
+      }
+    } else {
+      rows = db.prepare(`
+        SELECT * FROM protocol_messages
+        WHERE run_id = ? AND to_agent_id = ? AND delivered_at IS NULL
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?
+      `).all(identity.runId, identity.agentId, limit) as Row[]
+    }
+    const messages = rows.map(rowToMessage)
+    if (params.acknowledge !== false && messages.length > 0) {
+      const acknowledgedAt = nowIso()
+      const acknowledge = db.prepare(
+        'UPDATE protocol_messages SET delivered_at = COALESCE(delivered_at, ?) WHERE run_id = ? AND id = ? AND to_agent_id = ?',
+      )
+      for (const message of messages) {
+        acknowledge.run(acknowledgedAt, identity.runId, message.id, identity.agentId)
+      }
+    }
+    return { messages, nextCursor: messages.at(-1)?.id ?? params.after ?? null }
+  })
+}
+
+export async function sendExternalProtocolMessage(
+  identity: ExternalProtocolIdentity,
+  params: { to: string; body: string },
+): Promise<ProtocolRunSnapshot> {
+  const db = await getDatabase()
+  requireExternalParticipantSync(db, identity)
+  const body = params.body.trim()
+  if (!body) throw new Error('message body is required')
+  if (resolveRecipientsSync(db, identity.runId, identity.agentId, params.to).length === 0) {
+    throw new Error(`Coordinator message recipient not found: ${params.to}`)
+  }
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: identity.runId,
+    agentId: identity.agentId,
+    type: 'message',
+    to: params.to,
+    summary: body,
+  })
+  return readExternalProtocolRun(identity)
+}
+
+export async function requestExternalProtocolLocks(
+  identity: ExternalProtocolIdentity,
+  paths: string[],
+): Promise<ProtocolRunSnapshot> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  const requested = paths.map((entry) => entry.trim()).filter(Boolean)
+  if (requested.length === 0) throw new Error('at least one lock path is required')
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: identity.runId,
+    agentId: identity.agentId,
+    type: 'lock.requested',
+    taskId: agent.taskId,
+    paths: requested,
+    summary: `Requested write access for ${requested.join(', ')}`,
+  })
+  return readExternalProtocolRun(identity)
+}
+
+export async function reportExternalProtocolProgress(
+  identity: ExternalProtocolIdentity,
+  params: {
+    status: 'ready' | 'working' | 'idle' | 'blocked' | 'heartbeat'
+    taskId?: string
+    summary?: string
+    detail?: string
+  },
+): Promise<ProtocolRunSnapshot> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  const type: AgentProtocolEvent['type'] = params.status === 'working'
+    ? 'agent.start_work'
+    : params.status === 'idle'
+      ? 'agent.stop_work'
+      : params.status === 'blocked'
+        ? 'agent.blocked'
+        : params.status === 'heartbeat'
+          ? 'agent.heartbeat'
+          : 'agent.ready'
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: identity.runId,
+    agentId: identity.agentId,
+    type,
+    taskId: params.taskId ?? agent.taskId,
+    summary: params.summary,
+    detail: params.detail,
+  })
+  return readExternalProtocolRun(identity)
+}
+
+export async function publishExternalProtocolFinding(
+  identity: ExternalProtocolIdentity,
+  params: { kind: 'finding' | 'learning' | 'handoff' | 'review.requested'; summary: string; detail?: string; taskId?: string },
+): Promise<ProtocolRunSnapshot> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  const summary = params.summary.trim()
+  if (!summary) throw new Error('finding summary is required')
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: identity.runId,
+    agentId: identity.agentId,
+    type: params.kind,
+    taskId: params.taskId ?? agent.taskId,
+    summary,
+    detail: params.detail?.trim() || undefined,
+  })
+  return readExternalProtocolRun(identity)
+}
+
+export async function submitExternalProtocolPlan(
+  identity: ExternalProtocolIdentity,
+  params: { taskId: string; summary: string; detail?: string },
+): Promise<ProtocolRunSnapshot> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  const task = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
+    .get(identity.runId, params.taskId) as Row | undefined
+  if (!task || rowToTask(task).ownerAgentId !== agent.id) throw new Error('You do not own that task')
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: identity.runId,
+    agentId: identity.agentId,
+    type: 'task.planned',
+    taskId: params.taskId,
+    summary: params.summary.trim(),
+    detail: params.detail?.trim() || undefined,
+  })
+  return readExternalProtocolRun(identity)
+}
+
+export async function reviewExternalProtocolPlan(
+  identity: ExternalProtocolIdentity,
+  params: { taskId: string; approved: boolean; summary?: string; detail?: string },
+): Promise<ProtocolRunSnapshot> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can review plans')
+  const task = db.prepare('SELECT 1 FROM protocol_tasks WHERE run_id = ? AND id = ?')
+    .get(identity.runId, params.taskId)
+  if (!task) throw new Error('Coordinator task not found')
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: identity.runId,
+    agentId: identity.agentId,
+    type: params.approved ? 'plan.approved' : 'plan.rejected',
+    taskId: params.taskId,
+    summary: params.summary?.trim() || undefined,
+    detail: params.detail?.trim() || undefined,
+  })
+  return readExternalProtocolRun(identity)
+}
+
+async function rejectExternalCompletion(
+  identity: ExternalProtocolIdentity,
+  taskId: string,
+  reason: string,
+): Promise<ExternalProtocolCompletionResult> {
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: identity.runId,
+    agentId: identity.agentId,
+    type: 'agent.blocked',
+    taskId,
+    summary: 'task.completed rejected',
+    detail: reason,
+  })
+  return { accepted: false, reason, snapshot: await readExternalProtocolRun(identity) }
+}
+
+async function maybeStartExternalSynthesis(runId: string): Promise<void> {
+  if (controllers.has(runId)) return
+  await enqueueWrite((db) => {
+    const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
+    if (!runRow) return
+    const run = rowToRun(runRow)
+    if (run.status !== 'running') return
+    const tasks = listTasksSync(db, runId)
+    if (tasks.length === 0 || tasks.some((task) => !['completed', 'failed', 'cancelled'].includes(task.status))) return
+    const ts = nowIso()
+    db.prepare("UPDATE protocol_runs SET status = 'synthesizing', updated_at = ? WHERE id = ?").run(ts, runId)
+    if (run.leadAgentId) {
+      insertMessageSync(db, {
+        runId,
+        fromAgentId: 'coordinator',
+        toAgentId: run.leadAgentId,
+        body: 'All tasks are terminal. Review the board and call coord_finalize_run with the final synthesis.',
+        ts,
+      })
+    }
+  })
+}
+
+export async function completeExternalProtocolTask(
+  identity: ExternalProtocolIdentity,
+  params: { taskId: string; summary: string; detail?: string },
+): Promise<ExternalProtocolCompletionResult> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
+    .get(identity.runId, params.taskId) as Row | undefined
+  if (!taskRow) throw new Error('Coordinator task not found')
+  const task = rowToTask(taskRow)
+  if (task.ownerAgentId !== agent.id) throw new Error('You do not own that task')
+  const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
+  if (!runRow) throw new Error('Coordinator run not found')
+  const run = rowToRun(runRow)
+  if (run.requirePlanApproval && !taskPlanApprovedSync(db, identity.runId, task.id)) {
+    return rejectExternalCompletion(identity, task.id, 'This run requires lead plan approval before completion.')
+  }
+  const uncovered = await completionGateFailure(identity.runId, identity.agentId, agent.worktreePath)
+  if (uncovered) {
+    return rejectExternalCompletion(
+      identity,
+      task.id,
+      `Changes outside granted paths: ${uncovered.slice(0, 12).join(', ')}`,
+    )
+  }
+  if (run.gateCommand) {
+    const failure = await runGateCommand(run.gateCommand, agent.worktreePath)
+    if (failure) return rejectExternalCompletion(identity, task.id, `Quality gate failed:\n${failure}`)
+  }
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: identity.runId,
+    agentId: identity.agentId,
+    type: 'task.completed',
+    taskId: task.id,
+    summary: params.summary.trim() || `${task.id} completed`,
+    detail: params.detail?.trim() || undefined,
+  })
+  await maybeStartExternalSynthesis(identity.runId)
+  return { accepted: true, snapshot: await readExternalProtocolRun(identity) }
+}
+
+export async function failExternalProtocolTask(
+  identity: ExternalProtocolIdentity,
+  params: { taskId: string; summary: string; detail?: string },
+): Promise<ProtocolRunSnapshot> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
+    .get(identity.runId, params.taskId) as Row | undefined
+  if (!taskRow || rowToTask(taskRow).ownerAgentId !== agent.id) throw new Error('You do not own that task')
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: identity.runId,
+    agentId: identity.agentId,
+    type: 'task.failed',
+    taskId: params.taskId,
+    summary: params.summary.trim() || `${params.taskId} failed`,
+    detail: params.detail?.trim() || undefined,
+  })
+  await maybeStartExternalSynthesis(identity.runId)
+  return readExternalProtocolRun(identity)
+}
+
+export async function finalizeExternalProtocolRun(
+  identity: ExternalProtocolIdentity,
+  summary: string,
+): Promise<ProtocolRunSnapshot> {
+  return enqueueWrite((db) => {
+    const agent = requireExternalParticipantSync(db, identity)
+    if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can finalize a run')
+    const finalSummary = summary.trim()
+    if (!finalSummary) throw new Error('final synthesis is required')
+    const unfinished = listTasksSync(db, identity.runId).filter((task) => (
+      !['completed', 'failed', 'cancelled'].includes(task.status)
+    ))
+    if (unfinished.length > 0) throw new Error(`Coordinator run still has ${unfinished.length} unfinished task(s)`)
+    const ts = nowIso()
+    db.prepare("UPDATE protocol_runs SET status = 'completed', summary = ?, updated_at = ? WHERE id = ?")
+      .run(finalSummary, ts, identity.runId)
+    db.prepare("UPDATE protocol_agents SET status = 'done', updated_at = ? WHERE run_id = ? AND status NOT IN ('failed', 'stopped')")
+      .run(ts, identity.runId)
+    db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND status = 'active'")
+      .run(ts, identity.runId)
+    return externalSnapshotSync(db, identity.runId, identity.agentId)
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -955,7 +1573,12 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
     if (!recipient) continue
     const sessionId = controller?.sessionIds.get(recipient.id) ?? recipient.sessionId
     const text = formatMailboxDelivery(agentsById.get(message.fromAgentId), message.body)
-    const delivered = await steerRunningSession(sessionId, text).catch(() => false)
+    // External MCP participants do not have a native provider session for the
+    // coordinator to steer. Their mailbox stays queued until coord_read_inbox
+    // acknowledges it in that CLI's bridge process.
+    const delivered = sessionId.startsWith('external:')
+      ? false
+      : await steerRunningSession(sessionId, text).catch(() => false)
     if (delivered) {
       await enqueueWrite((tx) => {
         tx.prepare('UPDATE protocol_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL').run(nowIso(), id)

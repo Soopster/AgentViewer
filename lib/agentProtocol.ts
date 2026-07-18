@@ -208,6 +208,54 @@ export type StartProtocolRunResult = {
   }>
 }
 
+/** Capability-bound identity used by an independently launched CLI participant. */
+export type ExternalProtocolIdentity = {
+  runId: string
+  agentId: string
+  token: string
+}
+
+export type ExternalProtocolParticipant = ExternalProtocolIdentity & {
+  name: string
+  role: ProtocolAgentRole
+  provider: AgentProvider
+  cwd: string
+}
+
+export type CreateExternalProtocolRunParams = {
+  prompt: string
+  baseCwd: string
+  provider: AgentProvider
+  participantName: string
+  maxAgents?: number
+  gateCommand?: string
+  requirePlanApproval?: boolean
+}
+
+export type JoinExternalProtocolRunParams = {
+  runId: string
+  provider: AgentProvider
+  participantName: string
+  cwd: string
+}
+
+export type ExternalProtocolParticipantResult = {
+  participant: ExternalProtocolParticipant
+  snapshot: ProtocolRunSnapshot
+  instructions: string
+}
+
+export type ExternalProtocolInboxResult = {
+  messages: ProtocolMessage[]
+  nextCursor: string | null
+}
+
+export type ExternalProtocolCompletionResult = {
+  accepted: boolean
+  reason?: string
+  snapshot: ProtocolRunSnapshot
+}
+
 const PROTOCOL_BLOCK_RE = /```agent-protocol\s*([\s\S]*?)```/g
 
 const EVENT_TYPES: ReadonlySet<string> = new Set<ProtocolEventType>([
