@@ -53,6 +53,7 @@ import {
   broadcastClaudeTurnEnd,
   broadcastClaudeTurnStart,
 } from './claudeHarness'
+import { getClaudeCommandsOverride, noteClaudeCommandsChanged } from './claudeCommandsStore'
 import {
   broadcastLiveSessionActivity,
   broadcastLiveSessionRecycled,
@@ -718,7 +719,16 @@ async function buildClaudeUserMessage(userMessage: string, attachments: SendAtta
         : [{ type: 'text', text }, ...imageBlocks],
     },
     parent_tool_use_id: null,
-  }
+    // uuid-stamp every outgoing message: command_lifecycle frames
+    // (queued/started/completed/cancelled/discarded) and interrupt
+    // still_queued receipts only reference uuid-stamped messages.
+    uuid: crypto.randomUUID(),
+  } as SDKUserMessage
+}
+
+function claudeUserMessageUuid(message: SDKUserMessage): string | undefined {
+  const uuid = (message as { uuid?: unknown }).uuid
+  return typeof uuid === 'string' ? uuid : undefined
 }
 
 function buildCodexInput(userMessage: string, attachments: SendAttachment[]): CodexUserInput[] {
@@ -2518,7 +2528,8 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     if (!message) throw new Error('message is required')
     if (isNativeComposerCommandText(message)) return { delivered: false }
     try {
-      return { delivered: await steerRunningSession(sessionId, message) }
+      const steered = await steerRunningSession(sessionId, message)
+      return { delivered: steered.delivered, messageUuid: steered.messageUuid }
     } catch {
       return { delivered: false }
     }
@@ -3400,9 +3411,11 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       const interruptTurn = async () => {
         if (killBangShell) {
           killBangShell()
-          return
+          return undefined
         }
-        await q.interrupt()
+        // On interrupt_receipt_v1 CLIs this resolves to { still_queued }: uuids
+        // of queued async messages that WILL still run unless cancelled.
+        return await q.interrupt()
       }
 
       setRunningSession(sessionId, {
@@ -3410,7 +3423,11 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         requestId: turnRequestId,
         interrupt: interruptTurn,
         background: () => q.backgroundTasks(),
-        steer: async (text) => pushUserMessage(await buildClaudeUserMessage(text, [])),
+        steer: async (text) => {
+          const message = await buildClaudeUserMessage(text, [])
+          pushUserMessage(message)
+          return claudeUserMessageUuid(message)
+        },
       })
 
       // Keep the connection warm and the client's stall watchdog fed during the
@@ -3476,7 +3493,11 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
                 requestId: turnRequestId,
                 interrupt: interruptTurn,
                 background: () => q.backgroundTasks(),
-                steer: async (text) => pushUserMessage(await buildClaudeUserMessage(text, [])),
+                steer: async (text) => {
+                  const message = await buildClaudeUserMessage(text, [])
+                  pushUserMessage(message)
+                  return claudeUserMessageUuid(message)
+                },
               })
             }
             safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId: messageSessionId })}\n\n`)
@@ -3489,6 +3510,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           if (eventSessionId) {
             try { broadcastClaudeMessage(eventSessionId, msg.type) } catch { /* observer-only signal */ }
           }
+          noteClaudeCommandsChanged(messageSessionId ?? sessionId, msg)
           safeEnqueue(`data: ${JSON.stringify(msg)}\n\n`)
           // Break after the result so we can adopt the Query into the pool.
           // The pool's pump loop takes over consuming for any tail messages
@@ -3711,14 +3733,18 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
             interrupt: async () => {
               if (killBangShell) {
                 killBangShell()
-                return
+                return undefined
               }
-              await activeEntry.query.interrupt()
+              return await activeEntry.query.interrupt()
             },
             background: () => activeEntry.query.backgroundTasks(),
             // Mid-turn user input rides the warm query's persistent input stream —
             // the CLI queues it as steering, exactly like typing in Claude Code.
-            steer: async (text) => activeEntry.pushUserMessage(await buildClaudeUserMessage(text, [])),
+            steer: async (text) => {
+              const message = await buildClaudeUserMessage(text, [])
+              activeEntry.pushUserMessage(message)
+              return claudeUserMessageUuid(message)
+            },
           })
 
           let sawActivity = false
@@ -5917,8 +5943,17 @@ export async function createNewViewSession({
   throw new Error(`Create is not supported for ${provider} sessions`)
 }
 
-export async function interruptViewSession(sessionId: string, turnRequestId?: string): Promise<void> {
-  await interruptRunningSession(sessionId, turnRequestId)
+/**
+ * Interrupt the session's running turn. Returns the uuids of queued async
+ * messages that survive the interrupt (Claude interrupt_receipt_v1), or
+ * undefined when the provider has no receipt.
+ */
+export async function interruptViewSession(sessionId: string, turnRequestId?: string): Promise<string[] | undefined> {
+  const receipt = await interruptRunningSession(sessionId, turnRequestId)
+  const stillQueued = (receipt as { still_queued?: unknown } | undefined)?.still_queued
+  return Array.isArray(stillQueued)
+    ? stillQueued.filter((uuid): uuid is string => typeof uuid === 'string')
+    : undefined
 }
 
 /**
@@ -6125,6 +6160,10 @@ export async function readViewSessionSlashCommands(sessionId: string, providerOv
       description: command.description ?? '',
       argumentHint: command.argumentHint && command.argumentHint.trim() ? command.argumentHint : undefined,
     }))
+    // A commands_changed push supersedes any RPC fetch: supportedCommands()
+    // returns the init-captured list and never reflects mid-session changes.
+    const pushed = getClaudeCommandsOverride(sessionId)
+    if (pushed) return mapCommands(pushed)
     const warm = peekClaudeSession(sessionId)
     if (warm) {
       const commands = await warm.query.supportedCommands().catch(() => [])

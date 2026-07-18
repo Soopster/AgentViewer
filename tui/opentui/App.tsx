@@ -141,6 +141,7 @@ import { CheckpointPopover } from './CheckpointPopover'
 import { CoordinationPopover } from './CoordinationPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { isNativeComposerCommandText } from '../../lib/composerCommands'
+import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '../../lib/claudeCommandLifecycle'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
@@ -163,6 +164,13 @@ function useEffectEvent<T extends (...args: never[]) => unknown>(handler: T): T 
   React.useLayoutEffect(() => { handlerRef.current = handler })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   return React.useCallback((...args: Parameters<T>) => (handlerRef.current as T)(...args), []) as T
+}
+
+type SteeredComposerSend = {
+  text: string
+  messageUuid: string
+  liveMessageUuid: string
+  state?: Extract<ClaudeCommandLifecycleState, 'queued' | 'started' | 'completed'>
 }
 
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
@@ -6163,6 +6171,7 @@ export default function OpenTuiApp() {
   // in the composer status line while the turn is still streaming.
   const [steeredSendNotice, setSteeredSendNotice] = useState<string | null>(null)
   const steeredEchoCounterRef = useRef(0)
+  const steeredComposerSendsRef = useRef<SteeredComposerSend[]>([])
   const [livePromptSuggestion, setLivePromptSuggestion] = useState<string | null>(null)
   const [liveStatus, setLiveStatus] = useState<'requesting' | 'compacting' | 'retrying' | null>(null)
   const [liveSubagentText, setLiveSubagentText] = useState<Record<string, string>>({})
@@ -9656,6 +9665,29 @@ export default function OpenTuiApp() {
         sessionId: target.sessionId,
         provider: target.provider,
         turnRequestId: activeComposerTurnRequestIdRef.current ?? undefined,
+      }).then((stillQueued) => {
+        if (stillQueued) {
+          const survivorUuids = new Set(stillQueued)
+          const restoreEntries = steeredComposerSendsRef.current
+            .filter((entry) => entry.state === 'queued' && !survivorUuids.has(entry.messageUuid))
+          const restoreTexts = restoreEntries.map((entry) => entry.text)
+          if (restoreTexts.length > 0) {
+            const restoredMessageUuids = new Set(restoreEntries.map((entry) => entry.messageUuid))
+            const restoredLiveUuids = new Set(restoreEntries.map((entry) => entry.liveMessageUuid))
+            steeredComposerSendsRef.current = steeredComposerSendsRef.current
+              .filter((entry) => !restoredMessageUuids.has(entry.messageUuid))
+            setLiveTranscriptMessages((prev) => prev.filter((message) => !restoredLiveUuids.has(message.uuid)))
+            const currentDraft = composerTextareaRef.current?.plainText ?? composerDraft
+            const restored = [currentDraft.trim(), ...restoreTexts].filter(Boolean).join('\n\n')
+            composerTextareaRef.current?.setText(restored)
+            setComposerDraft(restored)
+          }
+          if (stillQueued.length > 0) {
+            toast.warning(`Interrupted · ${stillQueued.length} queued message${stillQueued.length === 1 ? '' : 's'} will still run`)
+          } else if (restoreTexts.length > 0) {
+            toast.info(`Interrupted · restored ${restoreTexts.length} cancelled queued message${restoreTexts.length === 1 ? '' : 's'}`)
+          }
+        }
       }).catch(() => { /* best effort */ })
     }
     // Cancel any pending transient auto-retry so it can't fire after an explicit stop.
@@ -10535,9 +10567,16 @@ export default function OpenTuiApp() {
             // native CLI. The persisted reconcile replaces this echo when the
             // turn lands.
             steeredEchoCounterRef.current += 1
+            const liveMessageUuid = `live-user-steer-${steeredEchoCounterRef.current}`
+            if (typeof result.messageUuid === 'string') {
+              steeredComposerSendsRef.current = [
+                ...steeredComposerSendsRef.current,
+                { text: trimmed, messageUuid: result.messageUuid, liveMessageUuid },
+              ]
+            }
             setLiveTranscriptMessages((prev) => [
               ...prev,
-              makeLiveUserMessage(steerTarget, trimmed, `live-user-steer-${steeredEchoCounterRef.current}`),
+              makeLiveUserMessage(steerTarget, trimmed, liveMessageUuid),
             ])
             return
           }
@@ -10566,6 +10605,7 @@ export default function OpenTuiApp() {
     activeComposerTurnRequestIdRef.current = turnRequestId
     setComposerSendState('sending')
     setSteeredSendNotice(null)
+    steeredComposerSendsRef.current = []
     setComposerSendStartedAt(sendStartedAt)
     setComposerWaitingSeed(`${targetSession.provider ?? 'claude'}:${targetSession.sessionId}:${sendStartedAt}:${trimmed}`)
     setComposerError(null)
@@ -10785,6 +10825,20 @@ export default function OpenTuiApp() {
         if (parsedRecord.type === 'system' && parsedRecord.subtype === 'commands_changed') {
           const commands = normalizeSlashCommandSuggestions(parsedRecord.commands)
           if (commands) setComposerLiveSlashCommands(commands)
+        }
+        const commandLifecycle = parseClaudeCommandLifecycle(parsedRecord)
+        if (commandLifecycle) {
+          const { commandUuid, state } = commandLifecycle
+          const tracked = steeredComposerSendsRef.current.find((entry) => entry.messageUuid === commandUuid)
+          if (tracked) {
+            if (state === 'cancelled' || state === 'discarded') {
+              steeredComposerSendsRef.current = steeredComposerSendsRef.current.filter((entry) => entry.messageUuid !== commandUuid)
+              setLiveTranscriptMessages((prev) => prev.filter((message) => message.uuid !== tracked.liveMessageUuid))
+            } else {
+              steeredComposerSendsRef.current = steeredComposerSendsRef.current.map((entry) =>
+                entry.messageUuid === commandUuid ? { ...entry, state } : entry)
+            }
+          }
         }
         if (parsedRecord.type === 'system' && parsedRecord.subtype === 'status') {
           const status = parsedRecord.status === 'requesting' || parsedRecord.status === 'compacting' ? parsedRecord.status : null

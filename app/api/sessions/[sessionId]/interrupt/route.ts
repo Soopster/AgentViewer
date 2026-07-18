@@ -14,8 +14,8 @@ export async function POST(
     : undefined
   try {
     void provider
-    await interruptViewSession(sessionId, turnRequestId)
-    return NextResponse.json({ ok: true })
+    const stillQueued = await interruptViewSession(sessionId, turnRequestId)
+    return NextResponse.json({ ok: true, ...(stillQueued !== undefined ? { stillQueued } : {}) })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: message.includes('No running session') ? 409 : 500 })

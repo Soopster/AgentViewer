@@ -36,12 +36,16 @@ export function clearRunningSession(sessionId: string): void {
   runningSessions.delete(sessionId)
 }
 
-export async function interruptRunningSession(sessionId: string, requestId?: string): Promise<void> {
+/**
+ * Interrupt the running turn. Resolves to the provider's interrupt receipt
+ * when it produces one (Claude interrupt_receipt_v1: `{ still_queued }` uuids
+ * of queued async messages that survive the interrupt), undefined otherwise.
+ */
+export async function interruptRunningSession(sessionId: string, requestId?: string): Promise<unknown> {
   const running = runningSessions.get(sessionId)
   if (running) {
-    if (requestId && running.requestId && running.requestId !== requestId) return
-    await running.interrupt()
-    return
+    if (requestId && running.requestId && running.requestId !== requestId) return undefined
+    return await running.interrupt()
   }
 
   if (!requestId) {
@@ -62,14 +66,16 @@ export async function interruptRunningSession(sessionId: string, requestId?: str
 
 /**
  * Try to steer the session's in-flight turn with an extra user message.
- * Returns false when there is no running turn or the provider can't steer —
- * the caller should fall back to queueing the message for the next turn.
+ * `delivered: false` means no running turn or no steer primitive — the caller
+ * should fall back to queueing the message for the next turn. `messageUuid` is
+ * set when the provider stamps the delivered message (Claude), so clients can
+ * correlate command_lifecycle frames and interrupt still_queued receipts.
  */
-export async function steerRunningSession(sessionId: string, text: string): Promise<boolean> {
+export async function steerRunningSession(sessionId: string, text: string): Promise<{ delivered: boolean; messageUuid?: string }> {
   const running = runningSessions.get(sessionId)
-  if (!running?.steer) return false
-  await running.steer(text)
-  return true
+  if (!running?.steer) return { delivered: false }
+  const result = await running.steer(text)
+  return { delivered: true, messageUuid: typeof result === 'string' ? result : undefined }
 }
 
 /**

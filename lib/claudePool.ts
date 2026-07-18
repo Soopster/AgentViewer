@@ -29,6 +29,7 @@ import {
   broadcastClaudeTurnEnd,
   broadcastClaudeTurnStart,
 } from './claudeHarness'
+import { noteClaudeCommandsChanged } from './claudeCommandsStore'
 
 // Phase 1 of the claudeSessionPool migration. Mirrors lib/codexHarness.ts in
 // shape: a process-wide singleton (kept on globalThis to survive Next.js HMR)
@@ -350,6 +351,7 @@ class ClaudePool {
         // Completed assistant/user/result/system messages are what move the log.
         if (message.type !== 'stream_event') {
           try { broadcastClaudeMessage(entry.sessionId, message.type) } catch { /* never let a subscriber stall the pump */ }
+          noteClaudeCommandsChanged(entry.sessionId, message)
         }
         const sub = entry.subscriber
         if (sub) {

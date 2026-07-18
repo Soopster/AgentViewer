@@ -389,18 +389,25 @@ export async function streamTuiSessionTurn(
   })
 }
 
-export async function interruptTuiSessionTurn(session: { sessionId: string; provider?: AgentProvider; turnRequestId?: string }): Promise<void> {
+/**
+ * Interrupt the session's running turn. Resolves to the uuids of queued async
+ * messages that survive the interrupt (Claude interrupt_receipt_v1), when the
+ * provider reports them.
+ */
+export async function interruptTuiSessionTurn(session: { sessionId: string; provider?: AgentProvider; turnRequestId?: string }): Promise<string[] | undefined> {
   if (isRemoteAttached()) {
-    await remoteJson(encodeSessionPath(session.sessionId, '/interrupt'), {
+    const response = await remoteJson<{ stillQueued?: unknown }>(encodeSessionPath(session.sessionId, '/interrupt'), {
       method: 'POST',
       body: JSON.stringify({
         provider: session.provider,
         turnRequestId: session.turnRequestId,
       }),
     })
-    return
+    return Array.isArray(response?.stillQueued)
+      ? response.stillQueued.filter((uuid): uuid is string => typeof uuid === 'string')
+      : undefined
   }
-  await interruptViewSession(session.sessionId, session.turnRequestId)
+  return await interruptViewSession(session.sessionId, session.turnRequestId)
 }
 
 /**

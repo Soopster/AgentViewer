@@ -33,6 +33,7 @@ import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandS
 import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer'
 import { extractCopilotPushedAttachments, extractPendingPermission, extractPermissionReply, type PendingPermission } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
+import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '@/lib/claudeCommandLifecycle'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '@/lib/transientError'
 import { respondToChannelPermission, readBridgeConfigFromEnv, type ChannelPermissionRequestEvent } from '@/lib/channelBridge'
 import { Button } from '@/components/ui/button'
@@ -187,9 +188,17 @@ type TimelineRow = {
   allowFork?: boolean
   allowResume?: boolean
   allowEdit?: boolean
+  streamTurnHint?: string
+  streamTurnFooterHint?: string
 }
 
 type TranscriptFilter = 'all' | 'user' | 'assistant' | 'system' | 'tools' | 'errors' | 'thinking' | 'media'
+
+type SteeredSendEntry = {
+  text: string
+  messageUuid?: string
+  state?: Extract<ClaudeCommandLifecycleState, 'queued' | 'started' | 'completed'>
+}
 type ActiveTranscriptFilter = Exclude<TranscriptFilter, 'all'>
 type TimelineEstimateBucket = 'text' | 'tool' | 'media' | 'system' | 'stream'
 
@@ -1536,7 +1545,8 @@ function estimateTimelineRowHeight(
     const marginBottom = message.role === 'user'
       ? (density === 'dense' ? 8 : density === 'comfortable' ? 24 : 14)
       : (density === 'dense' ? 1 : density === 'comfortable' ? 6 : 2)
-    return Math.max(36, 20 + textHeight + toolHeight + marginBottom)
+    const landmarkHeight = (row.streamTurnHint !== undefined ? 24 : 0) + (row.streamTurnFooterHint ? 22 : 0)
+    return Math.max(36, 20 + textHeight + toolHeight + marginBottom + landmarkHeight)
   }
 
   const headerHeight = 82
@@ -1753,6 +1763,7 @@ function groupAgentsToolRows(rows: TimelineRow[]): TimelineRow[] {
       groupedMessageIds: pending.map((row) => row.message.uuid),
       showSession: pending.some((row) => row.showSession),
       dimmed: pending.every((row) => row.dimmed),
+      streamTurnFooterHint: last.streamTurnFooterHint,
     })
     pending = []
   }
@@ -1767,6 +1778,52 @@ function groupAgentsToolRows(rows: TimelineRow[]): TimelineRow[] {
   }
   flush()
   return grouped
+}
+
+function streamMessageTimestampMs(message: ThreadedMessage): number | null {
+  if (!message.timestamp) return null
+  const value = Date.parse(message.timestamp)
+  return Number.isFinite(value) ? value : null
+}
+
+function formatStreamElapsed(elapsedMs: number): string {
+  const totalSeconds = Math.max(1, Math.floor(elapsedMs / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
+  if (minutes > 0) return `${minutes}m ${seconds}s`
+  return `${seconds}s`
+}
+
+function decorateStreamTurnLandmarks(rows: TimelineRow[], showLatestFooter: boolean): TimelineRow[] {
+  let turnStartedAt: number | null = null
+  let turnLatestAt: number | null = null
+  let hasPriorTurn = false
+  const decorated = rows.map((row) => {
+    const timestamp = streamMessageTimestampMs(row.message)
+    if (row.message.role === 'user') {
+      const elapsed = turnStartedAt != null && turnLatestAt != null ? turnLatestAt - turnStartedAt : 0
+      const next = hasPriorTurn
+        ? { ...row, streamTurnHint: elapsed >= 1000 ? `Worked for ${formatStreamElapsed(elapsed)}` : '' }
+        : row
+      hasPriorTurn = true
+      turnStartedAt = timestamp
+      turnLatestAt = timestamp
+      return next
+    }
+    if (timestamp != null && (turnLatestAt == null || timestamp > turnLatestAt)) turnLatestAt = timestamp
+    return row
+  })
+
+  if (!showLatestFooter || decorated.length === 0 || turnStartedAt == null || turnLatestAt == null) return decorated
+  const elapsed = turnLatestAt - turnStartedAt
+  const lastIndex = decorated.length - 1
+  const last = decorated[lastIndex]
+  if (!last || last.message.role === 'user' || elapsed < 1000) return decorated
+  const next = decorated.slice()
+  next[lastIndex] = { ...last, streamTurnFooterHint: `Worked for ${formatStreamElapsed(elapsed)}` }
+  return next
 }
 
 function timelineRowMatchesTranscriptFilter(row: TimelineRow, filter: ActiveTranscriptFilter): boolean {
@@ -1978,6 +2035,9 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
           ))}
         </div>
       )}
+      {streamMode && row.streamTurnHint !== undefined ? (
+        <div className="av-stream-turn-rule">{row.streamTurnHint}</div>
+      ) : null}
       {showActions && (
         <div className="timeline-row-actions">
           {canBookmark && (
@@ -2062,6 +2122,9 @@ const TimelineMessageRow = memo(function TimelineMessageRow({
         </div>
       )}
       <MessageItem message={row.message} showSession={row.showSession} />
+      {streamMode && row.streamTurnFooterHint ? (
+        <div className="av-stream-turn-footer">{row.streamTurnFooterHint}</div>
+      ) : null}
     </div>
   )
 })
@@ -2847,7 +2910,12 @@ export default function MessageView({
   const [optimisticUserText, setOptimisticUserText] = useState<string | null>(null)
   // Messages steered INTO the running turn — echoed in the live overlay until
   // the persisted transcript reconciles (same lifecycle as optimisticUserText).
-  const [steeredUserTexts, setSteeredUserTexts] = useState<string[]>([])
+  // `messageUuid` is the server's uuid stamp; command_lifecycle frames
+  // correlate on it and drive `state` (queued/started/completed) or drop the
+  // entry entirely (cancelled/discarded).
+  const [steeredUserTexts, setSteeredUserTexts] = useState<SteeredSendEntry[]>([])
+  const steeredUserTextsRef = useRef<SteeredSendEntry[]>([])
+  useEffect(() => { steeredUserTextsRef.current = steeredUserTexts }, [steeredUserTexts])
   const [backgroundingTasks, setBackgroundingTasks] = useState(false)
   // True from when the user hits stop until the interrupted turn's partial
   // output reconciles (or the awaitingPersistedTurn escape hatch fires). Lets
@@ -3940,6 +4008,41 @@ export default function MessageView({
           provider: session.provider,
           turnRequestId: activeTurnRequestIdRef.current ?? undefined,
         }),
+      }).then(async (res) => {
+        // interrupt_receipt_v1: uuids of queued async messages that survive
+        // the interrupt and WILL still run. Warn instead of letting the next
+        // turn look like a ghost send.
+        const json = await res.json().catch(() => null) as { stillQueued?: unknown } | null
+        const stillQueuedUuids = Array.isArray(json?.stillQueued)
+          ? json.stillQueued.filter((uuid): uuid is string => typeof uuid === 'string')
+          : null
+        if (stillQueuedUuids) {
+          const stillQueued = new Set(stillQueuedUuids)
+          // A queued lifecycle frame says the message had not started. If its
+          // uuid is absent from the interrupt receipt, the interrupt removed it
+          // and its draft is safe to restore. Receipt members remain queued in
+          // Claude and must not also be copied into the composer.
+          const restoreEntries = steeredUserTextsRef.current
+            .filter((entry) => entry.state === 'queued' && entry.messageUuid && !stillQueued.has(entry.messageUuid))
+          const restoreTexts = restoreEntries.map((entry) => entry.text)
+          if (restoreTexts.length > 0) {
+            const restoredUuids = new Set(restoreEntries.map((entry) => entry.messageUuid))
+            const nextSteeredEntries = steeredUserTextsRef.current
+              .filter((entry) => !restoredUuids.has(entry.messageUuid))
+            steeredUserTextsRef.current = nextSteeredEntries
+            setSteeredUserTexts(nextSteeredEntries)
+            const restored = [inputTextRef.current.trim(), ...restoreTexts].filter(Boolean).join('\n\n')
+            inputTextRef.current = restored
+            if (textareaRef.current) textareaRef.current.value = restored
+            setInputText(restored)
+            window.requestAnimationFrame(resizeComposer)
+          }
+          if (stillQueuedUuids.length > 0) {
+            setSessionActionNotice(`Interrupted · ${stillQueuedUuids.length} queued message${stillQueuedUuids.length === 1 ? '' : 's'} will still run`)
+          } else if (restoreTexts.length > 0) {
+            setSessionActionNotice(`Interrupted · restored ${restoreTexts.length} cancelled queued message${restoreTexts.length === 1 ? '' : 's'} to the composer`)
+          }
+        }
       }).catch(() => {})
     }
     // Cancel any pending transient auto-retry so it can't fire after the user
@@ -4121,12 +4224,15 @@ export default function MessageView({
             body: JSON.stringify({ action: 'steer', message: queueText, provider: session.provider }),
           })
           if (res.ok) {
-            const json = await res.json().catch(() => ({})) as { result?: { delivered?: unknown } }
+            const json = await res.json().catch(() => ({})) as { result?: { delivered?: unknown; messageUuid?: unknown } }
             if (json.result?.delivered === true) {
               setSteeredNotice(queueText)
               // Echo it into the live overlay immediately — it's part of the
               // running turn now, like typing in the provider's native CLI.
-              setSteeredUserTexts((prev) => [...prev, queueText])
+              const messageUuid = typeof json.result.messageUuid === 'string' ? json.result.messageUuid : undefined
+              const nextSteeredEntries = [...steeredUserTextsRef.current, { text: queueText, messageUuid }]
+              steeredUserTextsRef.current = nextSteeredEntries
+              setSteeredUserTexts(nextSteeredEntries)
               return
             }
           }
@@ -4389,6 +4495,24 @@ export default function MessageView({
               else if (parsed.status === 'retry_end' || parsed.status === 'compaction_end') setLiveStatus(null)
               else if (parsed.status === 'title_changed' && typeof parsed.name === 'string') {
                 setSessionInfo((prev) => prev ? { ...prev, customTitle: parsed.name } : prev)
+              }
+            }
+            // command_lifecycle frames: the CLI's authoritative per-message
+            // queue state, correlated to steered echoes by uuid stamp.
+            // cancelled/discarded means the message will never run — drop the
+            // echo instead of leaving a ghost the transcript never reconciles.
+            const commandLifecycle = parseClaudeCommandLifecycle(parsed)
+            if (commandLifecycle) {
+              const { commandUuid, state: lifecycleState } = commandLifecycle
+              const currentSteeredEntries = steeredUserTextsRef.current
+              if (currentSteeredEntries.some((entry) => entry.messageUuid === commandUuid)) {
+                const nextSteeredEntries = lifecycleState === 'cancelled' || lifecycleState === 'discarded'
+                  ? currentSteeredEntries.filter((entry) => entry.messageUuid !== commandUuid)
+                  : currentSteeredEntries.map((entry) => entry.messageUuid === commandUuid
+                    ? { ...entry, state: lifecycleState }
+                    : entry)
+                steeredUserTextsRef.current = nextSteeredEntries
+                setSteeredUserTexts(nextSteeredEntries)
               }
             }
             if (parsed?.type === 'stream_event' && typeof parsed.parent_tool_use_id === 'string' && parsed.parent_tool_use_id) {
@@ -6043,7 +6167,7 @@ export default function MessageView({
     })
 
     // Messages steered into the running turn — newest input, shown last.
-    steeredUserTexts.forEach((text, index) => {
+    steeredUserTexts.forEach((entry, index) => {
       rows.push({
         key: `live:steered:${index}`,
         message: {
@@ -6051,10 +6175,17 @@ export default function MessageView({
           uuid: `live-user-steer-${index}`,
           sessionId: session?.sessionId,
           provider: session?.provider,
-          blocks: [{ type: 'text', text }],
+          blocks: [{ type: 'text', text: entry.text }],
         },
         showSession: false,
         dimmed: true,
+        previewBadge: entry.state === 'queued'
+          ? 'steered · queued'
+          : entry.state === 'started'
+          ? 'steered · running'
+          : entry.state === 'completed'
+          ? 'steered · done'
+          : undefined,
       })
     })
 
@@ -6097,10 +6228,11 @@ export default function MessageView({
       // calls) must be dropped, not just render null: the row wrapper's stream
       // padding and the virtual row's minimum height would otherwise paint
       // empty selectable ghost rows.
-      return groupAgentsToolRows(transcriptTimelineRows).filter((row) => streamMessageHasContent(row.message))
+      const streamRows = decorateStreamTurnLandmarks(transcriptTimelineRows, !showLiveTimelineOverlay)
+      return groupAgentsToolRows(streamRows).filter((row) => streamMessageHasContent(row.message))
     }
     return transcriptTimelineRows
-  }, [transcriptTimelineRows, viewMode])
+  }, [showLiveTimelineOverlay, transcriptTimelineRows, viewMode])
   const hasTranscriptFocus = transcriptFilters.length > 0 || transcriptSearch.trim().length > 0 || bookmarksOnly
   const visualizerRows = useMemo<MessageVisualizerRow[]>(
     () => showVisualizer
