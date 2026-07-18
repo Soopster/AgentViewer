@@ -13,7 +13,7 @@
 
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { lstat, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   AGENT_PROTOCOL_VERSION,
@@ -31,6 +31,7 @@ import {
   type ExternalProtocolInboxResult,
   type ExternalProtocolParticipant,
   type ExternalProtocolParticipantResult,
+  type ExternalProtocolWaitResult,
   type JoinExternalProtocolRunParams,
   type ProtocolAgent,
   type ProtocolAgentStatus,
@@ -56,8 +57,9 @@ type Row = Record<string, unknown>
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
 const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
 const LOCK_LEASE_MS = 20 * 60_000
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 const EVENT_WINDOW = 300
+const EXTERNAL_AGENT_STALE_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_STALE_MS) || 5 * 60_000)
 // One automatic re-dispatch when a teammate's turn ends mid-task; after that
 // the teammate is marked blocked and the lead is notified (doc: teammates may
 // stop on errors; the lead/user nudges or replaces them).
@@ -231,6 +233,25 @@ function initializeSchema(db: SqliteDatabase): void {
       created_at TEXT NOT NULL,
       PRIMARY KEY (run_id, agent_id)
     );
+
+    CREATE TABLE IF NOT EXISTS protocol_task_baselines (
+      run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      task_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (run_id, task_id, agent_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS protocol_idempotency (
+      run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      response_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (run_id, agent_id, action, request_id)
+    );
   `)
   migrateSchema(db)
   db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('schema_version', String(SCHEMA_VERSION))
@@ -247,6 +268,8 @@ function initializeSchema(db: SqliteDatabase): void {
 // approval) so snapshots and resumed UI panels show the actual run settings.
 // v4 → v5: capability tokens let independently launched CLI processes bind
 // to one registered agent identity without accepting caller-supplied ids.
+// v5 → v6: claim-time worktree baselines and mutation idempotency make
+// external supervisors safe to resume after dirty checkouts or transport loss.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -760,6 +783,133 @@ export async function readExternalProtocolRun(identity: ExternalProtocolIdentity
   return externalSnapshotSync(db, identity.runId, identity.agentId)
 }
 
+function latestRunCursorSync(db: SqliteDatabase, runId: string): string | null {
+  const event = db.prepare(
+    "SELECT rowid AS cursor FROM protocol_events WHERE run_id = ? AND type != 'agent.heartbeat' ORDER BY rowid DESC LIMIT 1",
+  ).get(runId) as Row | undefined
+  return typeof event?.cursor === 'number' || typeof event?.cursor === 'bigint'
+    ? String(event.cursor)
+    : null
+}
+
+function hasEventAfterCursorSync(db: SqliteDatabase, runId: string, cursor: string | null): boolean {
+  if (!cursor) return true
+  if (!/^\d+$/.test(cursor)) return true
+  return Boolean(db.prepare(`
+    SELECT 1 FROM protocol_events
+    WHERE run_id = ? AND rowid > ? AND type != 'agent.heartbeat'
+    LIMIT 1
+  `).get(runId, Number(cursor)))
+}
+
+function recoverStaleExternalParticipantsSync(db: SqliteDatabase, runId: string): void {
+  const cutoff = new Date(Date.now() - EXTERNAL_AGENT_STALE_MS).toISOString()
+  const stale = db.prepare(`
+    SELECT * FROM protocol_agents
+    WHERE run_id = ? AND session_id LIKE 'external:%'
+      AND status IN ('ready', 'idle', 'working', 'blocked')
+      AND COALESCE(last_seen_at, updated_at) < ?
+  `).all(runId, cutoff) as Row[]
+  for (const row of stale) {
+    const agent = rowToAgent(row)
+    const ts = nowIso()
+    if (agent.taskId) {
+      db.prepare(`
+        UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, updated_at = ?
+        WHERE run_id = ? AND id = ? AND owner_agent_id = ?
+      `).run(ts, runId, agent.taskId, agent.id)
+    }
+    db.prepare(`
+      UPDATE protocol_locks SET status = 'released', updated_at = ?
+      WHERE run_id = ? AND agent_id = ? AND status = 'active'
+    `).run(ts, runId, agent.id)
+    db.prepare(`
+      UPDATE protocol_agents SET task_id = NULL, status = 'stopped', updated_at = ?
+      WHERE run_id = ? AND id = ?
+    `).run(ts, runId, agent.id)
+    insertEventSync(db, {
+      version: AGENT_PROTOCOL_VERSION,
+      runId,
+      agentId: agent.id,
+      type: 'agent.blocked',
+      taskId: agent.taskId,
+      summary: `${agent.name} heartbeat expired; its task and locks were released`,
+      timestamp: ts,
+      payload: { stale: true },
+    })
+  }
+}
+
+export async function waitForExternalProtocolChange(
+  identity: ExternalProtocolIdentity,
+  params: { cursor?: string; timeoutMs?: number } = {},
+): Promise<ExternalProtocolWaitResult> {
+  const timeoutMs = Math.max(0, Math.min(params.timeoutMs ?? 25_000, 55_000))
+  const deadline = Date.now() + timeoutMs
+  const cursor = params.cursor?.trim() || null
+  const db = await getDatabase()
+  await enqueueWrite((writeDb) => {
+    requireExternalParticipantSync(writeDb, identity)
+    recoverStaleExternalParticipantsSync(writeDb, identity.runId)
+    const ts = nowIso()
+    writeDb.prepare(`
+      UPDATE protocol_agents
+      SET last_seen_at = ?, updated_at = ?, status = CASE WHEN status = 'stopped' THEN 'ready' ELSE status END
+      WHERE run_id = ? AND id = ?
+    `).run(ts, ts, identity.runId, identity.agentId)
+    writeDb.prepare(`
+      UPDATE protocol_locks SET lease_expires_at = ?, updated_at = ?
+      WHERE run_id = ? AND agent_id = ? AND status = 'active'
+    `).run(leaseIso(), ts, identity.runId, identity.agentId)
+  })
+  do {
+    const changed = hasEventAfterCursorSync(db, identity.runId, cursor)
+    const latest = latestRunCursorSync(db, identity.runId)
+    if (changed || Date.now() >= deadline) {
+      const snapshot = await readExternalProtocolRun(identity)
+      const inbox = await readExternalProtocolInbox(identity, { acknowledge: false })
+      return {
+        changed,
+        timedOut: !changed,
+        cursor: latest,
+        snapshot,
+        inbox,
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(1, deadline - Date.now()))))
+  } while (Date.now() <= deadline)
+  throw new Error('Coordinator wait ended unexpectedly')
+}
+
+export async function runExternalProtocolIdempotent<T>(
+  identity: ExternalProtocolIdentity,
+  action: string,
+  requestId: string | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const key = requestId?.trim()
+  if (!key) return operation()
+  if (key.length > 160) throw new Error('requestId must be 160 characters or fewer')
+  const cached = await enqueueWrite((db) => {
+    requireExternalParticipantSync(db, identity)
+    const row = db.prepare(`
+      SELECT response_json FROM protocol_idempotency
+      WHERE run_id = ? AND agent_id = ? AND action = ? AND request_id = ?
+    `).get(identity.runId, identity.agentId, action, key) as Row | undefined
+    return typeof row?.response_json === 'string' ? JSON.parse(row.response_json) as T : undefined
+  })
+  if (cached !== undefined) return cached
+  const result = await operation()
+  await enqueueWrite((db) => {
+    db.prepare(`
+      INSERT OR IGNORE INTO protocol_idempotency
+        (run_id, agent_id, action, request_id, response_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(identity.runId, identity.agentId, action, key, JSON.stringify(result), nowIso())
+  })
+  return result
+}
+
 export async function createExternalProtocolTask(
   identity: ExternalProtocolIdentity,
   params: { title: string; detail: string; paths?: string[]; dependsOn?: string[] },
@@ -805,12 +955,20 @@ export async function claimExternalProtocolTask(
   identity: ExternalProtocolIdentity,
   taskId?: string,
 ): Promise<{ task: ProtocolTask; snapshot: ProtocolRunSnapshot }> {
+  const initialDb = await getDatabase()
+  const agent = requireExternalParticipantSync(initialDb, identity)
+  const baseline = await worktreeChangeSnapshot(agent.worktreePath).catch(() => ({} as Record<string, string>))
   return enqueueWrite((db) => {
     requireExternalParticipantSync(db, identity)
     db.exec('BEGIN IMMEDIATE')
     try {
       const task = claimTaskSync(db, identity.runId, identity.agentId, taskId)
       if (!task) throw new Error(`No claimable task${taskId ? `: ${taskId}` : ''}`)
+      db.prepare(`
+        INSERT OR REPLACE INTO protocol_task_baselines
+          (run_id, task_id, agent_id, snapshot_json, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(identity.runId, task.id, identity.agentId, JSON.stringify(baseline), nowIso())
       db.exec('COMMIT')
       return { task, snapshot: externalSnapshotSync(db, identity.runId, identity.agentId) }
     } catch (err) {
@@ -1059,7 +1217,7 @@ export async function completeExternalProtocolTask(
   if (run.requirePlanApproval && !taskPlanApprovedSync(db, identity.runId, task.id)) {
     return rejectExternalCompletion(identity, task.id, 'This run requires lead plan approval before completion.')
   }
-  const uncovered = await completionGateFailure(identity.runId, identity.agentId, agent.worktreePath)
+  const uncovered = await completionGateFailure(identity.runId, identity.agentId, agent.worktreePath, task.id)
   if (uncovered) {
     return rejectExternalCompletion(
       identity,
@@ -1388,6 +1546,12 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
       insertEventSync(db, { ...event, timestamp: ts })
       db.prepare('UPDATE protocol_agents SET last_seen_at = ?, updated_at = ? WHERE id = ? AND run_id = ?')
         .run(ts, ts, event.agentId, event.runId)
+      if (event.type === 'agent.heartbeat') {
+        db.prepare(`
+          UPDATE protocol_locks SET lease_expires_at = ?, updated_at = ?
+          WHERE run_id = ? AND agent_id = ? AND status = 'active'
+        `).run(leaseIso(), ts, event.runId, event.agentId)
+      }
       const newMessageIds: string[] = []
 
       if (event.type === 'agent.ready') {
@@ -1698,12 +1862,39 @@ function parseProtocolEventsFromWire(text: string): AgentProtocolEvent[] {
 const SESSION_EVENT_RE = /event: session\s*\ndata: (\{[^\n]*\})/
 
 /** Completion gate: reject a task.completed whose worktree changed paths outside the agent's locks. */
-async function completionGateFailure(runId: string, agentId: string, worktreePath: string): Promise<string[] | null> {
+async function completionGateFailure(
+  runId: string,
+  agentId: string,
+  worktreePath: string,
+  taskId?: string,
+): Promise<string[] | null> {
   const db = await getDatabase()
-  const locks = (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND agent_id = ? AND status = 'active'")
-    .all(runId, agentId) as Row[]).map(rowToLock)
+  const locks = (db.prepare(`
+    SELECT * FROM protocol_locks
+    WHERE run_id = ? AND agent_id = ? AND status = 'active' AND lease_expires_at > ?
+  `).all(runId, agentId, nowIso()) as Row[]).map(rowToLock)
   if (locks.some((lock) => lock.path === '**' && lock.mode === 'write')) return null
-  const files = await changedPaths(worktreePath).catch(() => [] as string[])
+  let files = await changedPaths(worktreePath).catch(() => [] as string[])
+  if (taskId) {
+    const row = db.prepare(`
+      SELECT snapshot_json FROM protocol_task_baselines
+      WHERE run_id = ? AND task_id = ? AND agent_id = ?
+    `).get(runId, taskId, agentId) as Row | undefined
+    if (typeof row?.snapshot_json === 'string') {
+      let baseline: Record<string, string> = {}
+      try { baseline = JSON.parse(row.snapshot_json) as Record<string, string> } catch { /* fall back to all changes */ }
+      const current = await worktreeChangeSnapshot(worktreePath).catch(() => ({} as Record<string, string>))
+      const changedSinceClaim = Object.keys(current)
+        .filter((file) => file !== '__head__' && current[file] !== baseline[file])
+      const baselineHead = baseline.__head__
+      const currentHead = current.__head__
+      if (baselineHead && currentHead && baselineHead !== currentHead) {
+        const committed = await changedPathsBetween(worktreePath, baselineHead, currentHead).catch(() => [] as string[])
+        changedSinceClaim.push(...committed)
+      }
+      files = [...new Set(changedSinceClaim)]
+    }
+  }
   const uncovered = files.filter((file) => !locks.some((lock) => lock.mode === 'write' && lockPathsOverlap(lock.path, file)))
   return uncovered.length > 0 ? uncovered : null
 }
@@ -2372,15 +2563,51 @@ function execGit(cwd: string, args: string[]): Promise<string> {
 }
 
 async function changedPaths(cwd: string): Promise<string[]> {
-  const out = await execGit(cwd, ['status', '--porcelain=v1', '-z'])
+  const out = await new Promise<string>((resolve, reject) => {
+    execFile('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
+      cwd,
+      encoding: 'utf8',
+      maxBuffer: 10 * 1024 * 1024,
+    }, (err, stdout, stderr) => {
+      if (err) reject(new Error(String(stderr ?? '') || (err instanceof Error ? err.message : String(err))))
+      else resolve(String(stdout ?? ''))
+    })
+  })
   if (!out) return []
   const entries = out.split('\0').filter(Boolean)
   const paths: string[] = []
-  for (const entry of entries) {
-    const file = entry.slice(3).trim()
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!
+    const status = entry.slice(0, 2)
+    const file = entry.slice(3)
     if (file) paths.push(normalizeLockPath(file.includes(' -> ') ? file.split(' -> ').at(-1) ?? file : file))
+    if (status.includes('R') || status.includes('C')) index += 1
   }
   return paths
+}
+
+async function pathFingerprint(cwd: string, file: string): Promise<string> {
+  const absolute = path.join(cwd, file)
+  try {
+    const stats = await lstat(absolute)
+    if (stats.isSymbolicLink()) return `symlink:${await readFile(absolute, 'utf8').catch(() => '')}`
+    if (!stats.isFile()) return `other:${stats.mode}:${stats.size}:${stats.mtimeMs}`
+    return `file:${createHash('sha256').update(await readFile(absolute)).digest('hex')}`
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'missing' : `error:${String(error)}`
+  }
+}
+
+async function worktreeChangeSnapshot(cwd: string): Promise<Record<string, string>> {
+  const files = await changedPaths(cwd)
+  const snapshot = Object.fromEntries(await Promise.all(files.map(async (file) => [file, await pathFingerprint(cwd, file)])))
+  snapshot.__head__ = await execGit(cwd, ['rev-parse', 'HEAD'])
+  return snapshot
+}
+
+async function changedPathsBetween(cwd: string, from: string, to: string): Promise<string[]> {
+  const output = await execGit(cwd, ['diff', '--name-only', '-z', `${from}..${to}`])
+  return output.split('\0').map(normalizeLockPath).filter(Boolean)
 }
 
 export async function cleanupProtocolRunWorktrees(

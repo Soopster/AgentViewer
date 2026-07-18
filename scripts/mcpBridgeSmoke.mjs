@@ -1,5 +1,8 @@
 import { createServer } from 'node:http'
 import { once } from 'node:events'
+import { mkdtemp, readFile, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -93,6 +96,10 @@ const daemon = createServer(async (request, response) => {
       response.end(JSON.stringify({ messages: coordinatorMessage ? [coordinatorMessage] : [], nextCursor: coordinatorMessage?.id ?? null }))
       return
     }
+    if (body?.action === 'wait') {
+      response.end(JSON.stringify({ changed: true, timedOut: false, cursor: 'event-1', snapshot, inbox: { messages: [], nextCursor: null } }))
+      return
+    }
     if (body?.action === 'complete_task') {
       coordinatorTask = { ...coordinatorTask, status: 'completed' }
       response.end(JSON.stringify({ accepted: true, snapshot: { ...snapshot, tasks: [coordinatorTask] } }))
@@ -111,10 +118,13 @@ const address = daemon.address()
 if (!address || typeof address === 'string') throw new Error('Smoke daemon did not bind a TCP port')
 
 const launcher = fileURLToPath(new URL('../bin/agent-viewer.mjs', import.meta.url))
+const identityDir = await mkdtemp(path.join(tmpdir(), 'agent-viewer-mcp-smoke-'))
+const leadIdentityFile = path.join(identityDir, 'lead.json')
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [launcher, 'mcp', '--attach', String(address.port)],
   stderr: 'pipe',
+  env: { ...process.env, AGENT_VIEWER_COORD_IDENTITY_FILE: leadIdentityFile },
 })
 const client = new Client({ name: 'agent-viewer-mcp-smoke', version: '1.0.0' })
 
@@ -124,7 +134,7 @@ try {
   const names = new Set(listed.tools.map((tool) => tool.name))
   const requiredTools = [
     'get_session_transcript', 'post_attention', 'search_sessions', 'set_bookmark',
-    'coord_list_runs', 'coord_create_run', 'coord_join_run', 'coord_resume', 'coord_status', 'coord_create_task',
+    'coord_list_runs', 'coord_create_run', 'coord_join_run', 'coord_resume', 'coord_status', 'coord_wait', 'coord_create_task',
     'coord_claim_task', 'coord_read_inbox', 'coord_send_message', 'coord_request_locks',
     'coord_progress', 'coord_publish_finding', 'coord_submit_plan', 'coord_review_plan',
     'coord_complete_task', 'coord_fail_task', 'coord_finalize_run',
@@ -185,11 +195,21 @@ try {
   })
   const createdPayload = JSON.parse(created.content?.[0]?.text ?? '{}')
   if (createdPayload.participant?.agentId !== 'external-codex') throw new Error('Codex CLI did not bind as Coordinator lead')
+  if (createdPayload.participant?.token) throw new Error('Coordinator capability leaked through MCP output')
+  const savedLeadIdentity = JSON.parse(await readFile(leadIdentityFile, 'utf8'))
+  if (savedLeadIdentity.token !== 'token-codex') throw new Error('Coordinator capability was not persisted')
+  if ((await stat(leadIdentityFile)).mode & 0o077) throw new Error('Coordinator identity file is not mode 0600')
 
+  const waited = await client.callTool({ name: 'coord_wait', arguments: { timeout_ms: 0 } })
+  const waitedPayload = JSON.parse(waited.content?.[0]?.text ?? '{}')
+  if (waitedPayload.cursor !== 'event-1') throw new Error('Coordinator wait cursor did not round-trip')
+
+  const teammateIdentityFile = path.join(identityDir, 'teammate.json')
   const secondTransport = new StdioClientTransport({
     command: process.execPath,
     args: [launcher, 'mcp', '--attach', String(address.port)],
     stderr: 'pipe',
+    env: { ...process.env, AGENT_VIEWER_COORD_IDENTITY_FILE: teammateIdentityFile },
   })
   const secondClient = new Client({ name: 'agent-viewer-mcp-smoke-claude', version: '1.0.0' })
   try {

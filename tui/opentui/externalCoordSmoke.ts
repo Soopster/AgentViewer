@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 const testCwd = mkdtempSync(path.join(tmpdir(), 'agent-viewer-external-coord-'))
 process.chdir(testCwd)
+execFileSync('git', ['init', '-q'], { cwd: testCwd })
+execFileSync('git', ['config', 'user.email', 'coord-smoke@example.test'], { cwd: testCwd })
+execFileSync('git', ['config', 'user.name', 'Coordinator Smoke'], { cwd: testCwd })
+writeFileSync(path.join(testCwd, 'README.md'), 'baseline\n')
+writeFileSync(path.join(testCwd, '.gitignore'), '.agent-viewer-data/\n')
+execFileSync('git', ['add', 'README.md', '.gitignore'], { cwd: testCwd })
+execFileSync('git', ['commit', '-qm', 'baseline'], { cwd: testCwd })
+writeFileSync(path.join(testCwd, 'README.md'), 'pre-existing dirty change\n')
 
 const coordination = await import('../../lib/agentCoordination')
 
@@ -50,7 +59,7 @@ await assert.rejects(
 const taskSnapshot = await coordination.createExternalProtocolTask(lead, {
   title: 'Implement the shared change',
   detail: 'Claim the task, publish a plan, and complete it.',
-  paths: [],
+  paths: ['owned.txt'],
 })
 const task = taskSnapshot.tasks.at(-1)
 assert.ok(task)
@@ -58,10 +67,21 @@ assert.ok(task)
 const claim = await coordination.claimExternalProtocolTask(teammate, task.id)
 assert.equal(claim.task.ownerAgentId, teammate.agentId)
 
-await coordination.sendExternalProtocolMessage(lead, {
+const initialWait = await coordination.waitForExternalProtocolChange(teammate, { timeoutMs: 0 })
+assert.ok(initialWait.cursor)
+
+const sendPlanRequest = () => coordination.sendExternalProtocolMessage(lead, {
   to: teammate.agentId,
   body: 'Please send a plan before completing the task.',
 })
+await coordination.runExternalProtocolIdempotent(lead, 'send_message', 'plan-request-1', sendPlanRequest)
+await coordination.runExternalProtocolIdempotent(lead, 'send_message', 'plan-request-1', sendPlanRequest)
+const changedWait = await coordination.waitForExternalProtocolChange(teammate, {
+  cursor: initialWait.cursor ?? undefined,
+  timeoutMs: 100,
+})
+assert.equal(changedWait.changed, true)
+assert.equal(changedWait.inbox.messages.length, 1)
 const inbox = await coordination.readExternalProtocolInbox(teammate)
 assert.equal(inbox.messages.length, 1)
 assert.match(inbox.messages[0].body, /send a plan/)
@@ -88,6 +108,8 @@ await coordination.reportExternalProtocolProgress(teammate, {
   taskId: task.id,
   summary: 'Implementing the approved plan',
 })
+await coordination.requestExternalProtocolLocks(teammate, ['owned.txt'])
+writeFileSync(path.join(testCwd, 'owned.txt'), 'participant change\n')
 
 const completed = await coordination.completeExternalProtocolTask(teammate, {
   taskId: task.id,

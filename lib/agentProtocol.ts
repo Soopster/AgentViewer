@@ -250,6 +250,14 @@ export type ExternalProtocolInboxResult = {
   nextCursor: string | null
 }
 
+export type ExternalProtocolWaitResult = {
+  changed: boolean
+  timedOut: boolean
+  cursor: string | null
+  snapshot: ProtocolRunSnapshot
+  inbox: ExternalProtocolInboxResult
+}
+
 export type ExternalProtocolCompletionResult = {
   accepted: boolean
   reason?: string

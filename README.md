@@ -127,9 +127,18 @@ codex mcp add agent-viewer \
 
 The CLI then sees session tools (`search_sessions`, `get_session_transcript`, `set_bookmark`, and `post_attention`) plus `coord_*` tools for Coordinator mode under the `agent-viewer` MCP server. Transcript reads support provider selection plus offset/limit or tail pagination, and return Agent Viewer's canonical messages without discarding tool calls, tool results, reasoning, or system events. Search needs no session context. Transcript, bookmark, and attention calls must supply `session_id`, unless the MCP configuration sets `AGENT_VIEWER_SESSION_ID`. The bridge defaults to `http://127.0.0.1:3000`; `--attach`, `AGENT_VIEWER_ATTACH`, or `AGENT_VIEWER_MCP_URL` can point it at another local daemon.
 
-To collaborate across CLIs, one client calls `coord_create_run` and shares only the returned run ID with teammates. Each additional Claude, Codex, Copilot, OpenCode, or Pi client calls `coord_join_run` with that run ID. The bridge keeps that client's capability token in memory and automatically authenticates subsequent `coord_status`, task, inbox, message, lock, plan, progress, completion, and finalization calls. Each CLI gets its own participant identity; the Coordinator board shows their provider, task, messages, findings, locks, and status in the same run.
+For interactive collaboration, one client calls `coord_create_run` and shares only the returned run ID. Additional clients call `coord_join_run`. The bridge persists each capability in a mode-0600 identity file and authenticates later `coord_*` calls without exposing the token to the model. Use `coord_wait` when no action is ready; it long-polls for meaningful inbox, task, plan, lock, participant, or run changes without token-heavy status polling.
 
-For a restarted bridge, call `coord_resume` with the participant's run ID, agent ID, and token. The same identity can instead be bootstrapped in the MCP configuration with `AGENT_VIEWER_COORD_RUN_ID`, `AGENT_VIEWER_COORD_AGENT_ID`, and `AGENT_VIEWER_COORD_TOKEN`. Treat the token as a secret: it authorizes that participant but cannot mutate another participant's identity or inbox. For code-writing tasks, launch each external CLI in its own worktree and pass that path to `coord_join_run`; completion still enforces Coordinator path locks, optional plan approval, and the run's quality gate.
+For unattended work, use the bounded supervisor. It resumes the same provider session for one useful tick, heartbeats while the CLI works, waits for the next Coordinator event, retries crashes with backoff, and exits when the run is terminal:
+
+```bash
+agent-viewer coord worker --start "Implement the release" --name codex-lead --provider codex --attach 3000
+agent-viewer coord worker --join <run-id> --name claude-api --provider claude --attach 3000
+```
+
+Joined workers create isolated git worktrees by default; pass `--shared` only when that is intentional. Claim-time baselines keep pre-existing dirty files out of completion checks while still detecting participant edits and commits. Mutating MCP tools accept a stable `request_id`, so a resumed CLI can safely repeat a request after losing its response. Stale participants are detected from heartbeat leases and have their locks and tasks released for reassignment.
+
+Restart a supervisor with `agent-viewer coord worker --identity <file>`. A bridge can also load that file with `agent-viewer mcp --identity <file>` or `AGENT_VIEWER_COORD_IDENTITY_FILE`. The older run ID, agent ID, and token environment variables remain supported for compatibility. Treat identity files as secrets.
 
 ### Codex
 

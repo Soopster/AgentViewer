@@ -14,8 +14,10 @@ import {
   requestExternalProtocolLocks,
   resumeExternalProtocolParticipant,
   reviewExternalProtocolPlan,
+  runExternalProtocolIdempotent,
   sendExternalProtocolMessage,
   submitExternalProtocolPlan,
+  waitForExternalProtocolChange,
 } from '@/lib/agentCoordination'
 import type { ExternalProtocolIdentity } from '@/lib/agentProtocol'
 import { isAgentProvider } from '@/lib/provider'
@@ -49,6 +51,12 @@ export async function POST(request: Request) {
   const action = text(body.action)
   try {
     let result: unknown
+    const requestId = optionalText(body.requestId)
+    const participantIdentity = ['create_run', 'join_run'].includes(action) ? null : identity(body)
+    const mutate = <T>(operation: () => Promise<T>) => {
+      if (!participantIdentity) return operation()
+      return runExternalProtocolIdempotent(participantIdentity, action, requestId, operation)
+    }
     if (action === 'create_run') {
       if (!isAgentProvider(body.provider)) throw new Error('Valid provider is required')
       result = await createExternalProtocolRun({
@@ -69,18 +77,25 @@ export async function POST(request: Request) {
         cwd: text(body.cwd) || process.cwd(),
       })
     } else if (action === 'resume') {
-      result = await resumeExternalProtocolParticipant(identity(body))
+      result = await resumeExternalProtocolParticipant(participantIdentity!)
     } else if (action === 'status') {
-      result = await readExternalProtocolRun(identity(body))
+      result = await readExternalProtocolRun(participantIdentity!)
+    } else if (action === 'wait') {
+      result = await waitForExternalProtocolChange(participantIdentity!, {
+        cursor: optionalText(body.cursor),
+        timeoutMs: typeof body.timeoutMs === 'number' && Number.isFinite(body.timeoutMs)
+          ? body.timeoutMs
+          : undefined,
+      })
     } else if (action === 'create_task') {
-      result = await createExternalProtocolTask(identity(body), {
+      result = await mutate(() => createExternalProtocolTask(participantIdentity!, {
         title: text(body.title),
         detail: text(body.detail),
         paths: strings(body.paths),
         dependsOn: strings(body.dependsOn),
-      })
+      }))
     } else if (action === 'claim_task') {
-      result = await claimExternalProtocolTask(identity(body), optionalText(body.taskId))
+      result = await mutate(() => claimExternalProtocolTask(participantIdentity!, optionalText(body.taskId)))
     } else if (action === 'read_inbox') {
       result = await readExternalProtocolInbox(identity(body), {
         after: optionalText(body.after),
@@ -88,59 +103,59 @@ export async function POST(request: Request) {
         acknowledge: body.acknowledge !== false,
       })
     } else if (action === 'send_message') {
-      result = await sendExternalProtocolMessage(identity(body), {
+      result = await mutate(() => sendExternalProtocolMessage(participantIdentity!, {
         to: text(body.to),
         body: text(body.message),
-      })
+      }))
     } else if (action === 'request_locks') {
-      result = await requestExternalProtocolLocks(identity(body), strings(body.paths))
+      result = await mutate(() => requestExternalProtocolLocks(participantIdentity!, strings(body.paths)))
     } else if (action === 'progress') {
       const status = text(body.status)
       if (!['ready', 'working', 'idle', 'blocked', 'heartbeat'].includes(status)) {
         throw new Error('Invalid progress status')
       }
-      result = await reportExternalProtocolProgress(identity(body), {
+      result = await mutate(() => reportExternalProtocolProgress(participantIdentity!, {
         status: status as 'ready' | 'working' | 'idle' | 'blocked' | 'heartbeat',
         taskId: optionalText(body.taskId),
         summary: optionalText(body.summary),
         detail: optionalText(body.detail),
-      })
+      }))
     } else if (action === 'finding') {
       const kind = text(body.kind)
       if (!['finding', 'learning', 'handoff', 'review.requested'].includes(kind)) throw new Error('Invalid finding kind')
-      result = await publishExternalProtocolFinding(identity(body), {
+      result = await mutate(() => publishExternalProtocolFinding(participantIdentity!, {
         kind: kind as 'finding' | 'learning' | 'handoff' | 'review.requested',
         summary: text(body.summary),
         detail: optionalText(body.detail),
         taskId: optionalText(body.taskId),
-      })
+      }))
     } else if (action === 'submit_plan') {
-      result = await submitExternalProtocolPlan(identity(body), {
+      result = await mutate(() => submitExternalProtocolPlan(participantIdentity!, {
         taskId: text(body.taskId),
         summary: text(body.summary),
         detail: optionalText(body.detail),
-      })
+      }))
     } else if (action === 'review_plan') {
-      result = await reviewExternalProtocolPlan(identity(body), {
+      result = await mutate(() => reviewExternalProtocolPlan(participantIdentity!, {
         taskId: text(body.taskId),
         approved: body.approved === true,
         summary: optionalText(body.summary),
         detail: optionalText(body.detail),
-      })
+      }))
     } else if (action === 'complete_task') {
-      result = await completeExternalProtocolTask(identity(body), {
+      result = await mutate(() => completeExternalProtocolTask(participantIdentity!, {
         taskId: text(body.taskId),
         summary: text(body.summary),
         detail: optionalText(body.detail),
-      })
+      }))
     } else if (action === 'fail_task') {
-      result = await failExternalProtocolTask(identity(body), {
+      result = await mutate(() => failExternalProtocolTask(participantIdentity!, {
         taskId: text(body.taskId),
         summary: text(body.summary),
         detail: optionalText(body.detail),
-      })
+      }))
     } else if (action === 'finalize_run') {
-      result = await finalizeExternalProtocolRun(identity(body), text(body.summary))
+      result = await mutate(() => finalizeExternalProtocolRun(participantIdentity!, text(body.summary)))
     } else {
       return NextResponse.json({ error: `Unknown external Coordinator action: ${action || '(missing)'}` }, { status: 400 })
     }

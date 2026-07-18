@@ -13,6 +13,7 @@ function parseArgs(rawArgs) {
   let port
   let legacy = false
   let attach
+  let identity
 
   for (let i = 0; i < rawArgs.length; i += 1) {
     const arg = rawArgs[i]
@@ -55,10 +56,24 @@ function parseArgs(rawArgs) {
       continue
     }
 
+    if (arg === '--identity') {
+      const next = rawArgs[i + 1]
+      if (next && !next.startsWith('-')) {
+        identity = next
+        i += 1
+        continue
+      }
+    }
+
+    if (arg.startsWith('--identity=')) {
+      identity = arg.slice('--identity='.length)
+      continue
+    }
+
     forwarded.push(arg)
   }
 
-  return { forwarded, port, legacy, attach }
+  return { forwarded, port, legacy, attach, identity }
 }
 
 function normalizeAttachUrl(attach) {
@@ -76,6 +91,7 @@ Modes:
   (default)  Launch the OpenTUI terminal app via Bun
   web        Launch the Next.js web app
   mcp        Run the Claude/Codex stdio MCP bridge
+  coord worker  Run an autonomous bounded Codex/Claude Coordinator worker
 
 Options:
   -l, --legacy         Launch the legacy Ink terminal app
@@ -87,6 +103,10 @@ Options:
 CLI MCP:
   claude mcp add agent-viewer -- npx -y agent-viewer mcp --attach 3000
   codex mcp add agent-viewer --env AGENT_VIEWER_ATTACH=http://127.0.0.1:3000 -- npx -y agent-viewer mcp
+
+Autonomous Coordinator:
+  agent-viewer coord worker --start "goal" --name lead --provider codex --attach 3000
+  agent-viewer coord worker --join <run-id> --name claude-1 --provider claude --attach 3000
 `)
 }
 
@@ -221,18 +241,28 @@ if (command === '-h' || command === '--help' || command === 'help') {
   printUsage()
   process.exitCode = 0
 } else if (command === 'mcp') {
-  const { attach } = parseArgs(args.slice(1))
+  const { attach, identity } = parseArgs(args.slice(1))
   const entrypoint = fileURLToPath(new URL('./agent-viewer-mcp.mjs', import.meta.url))
   const attachUrl = normalizeAttachUrl(attach)
   const child = spawn(process.execPath, [entrypoint], {
     stdio: 'inherit',
-    env: attachUrl ? { ...process.env, AGENT_VIEWER_ATTACH: attachUrl } : process.env,
+    env: {
+      ...process.env,
+      ...(attachUrl ? { AGENT_VIEWER_ATTACH: attachUrl } : {}),
+      ...(identity ? { AGENT_VIEWER_COORD_IDENTITY_FILE: path.resolve(identity) } : {}),
+    },
   })
 
   child.on('error', (error) => {
     throw error
   })
 
+  forwardSignals(child)
+  trackExit(child)
+} else if (command === 'coord' && args[1] === 'worker') {
+  const entrypoint = fileURLToPath(new URL('./agent-viewer-coord-worker.mjs', import.meta.url))
+  const child = spawn(process.execPath, [entrypoint, ...args.slice(2)], { stdio: 'inherit' })
+  child.on('error', (error) => { throw error })
   forwardSignals(child)
   trackExit(child)
 } else if (command === 'web') {

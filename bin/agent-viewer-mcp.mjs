@@ -2,21 +2,36 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { z } from 'zod'
 
 const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+const requestIdField = z.string().min(1).max(160).optional().describe('Stable idempotency key; reuse the same value when retrying this mutation')
 const baseUrl = normalizeBaseUrl(
   process.env.AGENT_VIEWER_MCP_URL
     ?? process.env.AGENT_VIEWER_ATTACH
     ?? 'http://127.0.0.1:3000',
 )
 const bridgeCwd = process.env.CLAUDE_PROJECT_DIR?.trim() || process.cwd()
+let coordinatorCursor = null
+let coordinatorIdentityFile = process.env.AGENT_VIEWER_COORD_IDENTITY_FILE?.trim() || null
 let coordinatorIdentity = (() => {
   const runId = process.env.AGENT_VIEWER_COORD_RUN_ID?.trim()
   const agentId = process.env.AGENT_VIEWER_COORD_AGENT_ID?.trim()
   const token = process.env.AGENT_VIEWER_COORD_TOKEN?.trim()
   return runId && agentId && token ? { runId, agentId, token } : null
 })()
+
+if (!coordinatorIdentity && coordinatorIdentityFile) {
+  try {
+    const saved = JSON.parse(await readFile(coordinatorIdentityFile, 'utf8'))
+    if (saved?.runId && saved?.agentId && saved?.token) coordinatorIdentity = saved
+  } catch {
+    // coord_resume can repair a missing or invalid identity file.
+  }
+}
 
 function normalizeBaseUrl(value) {
   const trimmed = String(value ?? '').trim().replace(/\/+$/, '')
@@ -29,9 +44,9 @@ function textResult(value) {
   return { content: [{ type: 'text', text: JSON.stringify(value) }] }
 }
 
-async function requestJson(path, init) {
+async function requestJson(path, init, timeoutMs = 10_000) {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 10_000)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   timer.unref?.()
   try {
     const response = await fetch(`${baseUrl}${path}`, {
@@ -74,13 +89,38 @@ function resolveSessionId(value) {
   return sessionId
 }
 
-function bindCoordinatorParticipant(result) {
+async function persistCoordinatorIdentity(participant) {
+  coordinatorIdentityFile ??= path.join(
+    os.homedir(),
+    '.agent-viewer',
+    'coordinator',
+    participant.runId,
+    `${participant.agentId}.json`,
+  )
+  await mkdir(path.dirname(coordinatorIdentityFile), { recursive: true, mode: 0o700 })
+  await writeFile(coordinatorIdentityFile, `${JSON.stringify({
+    runId: participant.runId,
+    agentId: participant.agentId,
+    token: participant.token,
+  }, null, 2)}\n`, { mode: 0o600 })
+  await chmod(coordinatorIdentityFile, 0o600)
+}
+
+async function bindCoordinatorParticipant(result) {
   const participant = result?.participant
   if (participant?.runId && participant?.agentId && participant?.token) {
     coordinatorIdentity = {
       runId: participant.runId,
       agentId: participant.agentId,
       token: participant.token,
+    }
+    coordinatorCursor = null
+    await persistCoordinatorIdentity(participant)
+    return {
+      ...result,
+      participant: { ...participant, token: undefined },
+      identityFile: coordinatorIdentityFile,
+      autonomy: `Run agent-viewer coord worker --identity ${JSON.stringify(coordinatorIdentityFile)} --attach ${JSON.stringify(baseUrl)} for unattended operation.`,
     }
   }
   return result
@@ -97,7 +137,7 @@ async function coordinatorRequest(action, payload = {}, requireIdentity = true) 
       ...(coordinatorIdentity ?? {}),
       ...payload,
     }),
-  })
+  }, action === 'wait' ? 65_000 : 10_000)
 }
 
 const server = new McpServer(
@@ -106,7 +146,8 @@ const server = new McpServer(
     instructions: [
       'Agent Viewer Coordinator is a shared multi-CLI task board and mailbox.',
       'Use coord_create_run to lead a new run, coord_join_run to join an existing run, or coord_resume to restore a capability.',
-      'After joining: read coord_status, claim one task, request locks before editing, report progress, read the inbox, and complete through coord_complete_task.',
+      'Prefer agent-viewer coord worker for unattended runs. In an interactive turn, use coord_wait instead of polling when no action is ready.',
+      'After joining: read coord_status, claim one task, request locks before editing, report progress, drain the inbox, and complete through coord_complete_task.',
       'Never invent agent ids or bypass Coordinator completion gates.',
     ].join(' '),
   },
@@ -260,7 +301,7 @@ server.registerTool('coord_create_run', {
     require_plan_approval: z.boolean().optional(),
   },
 }, async ({ prompt, name, provider, max_agents, cwd, gate_command, require_plan_approval }) => {
-  const result = bindCoordinatorParticipant(await coordinatorRequest('create_run', {
+  const result = await bindCoordinatorParticipant(await coordinatorRequest('create_run', {
     prompt,
     name,
     provider: provider ?? 'codex',
@@ -281,7 +322,7 @@ server.registerTool('coord_join_run', {
     cwd: z.string().min(1).optional().describe('Working checkout; defaults to this CLI project directory'),
   },
 }, async ({ run_id, name, provider, cwd }) => {
-  const result = bindCoordinatorParticipant(await coordinatorRequest('join_run', {
+  const result = await bindCoordinatorParticipant(await coordinatorRequest('join_run', {
     runId: run_id,
     name,
     provider: provider ?? 'codex',
@@ -300,7 +341,7 @@ server.registerTool('coord_resume', {
 }, async ({ run_id, agent_id, token }) => {
   coordinatorIdentity = { runId: run_id, agentId: agent_id, token }
   try {
-    const result = bindCoordinatorParticipant(await coordinatorRequest('resume'))
+    const result = await bindCoordinatorParticipant(await coordinatorRequest('resume'))
     return textResult(result)
   } catch (error) {
     coordinatorIdentity = null
@@ -313,6 +354,22 @@ server.registerTool('coord_status', {
   annotations: { readOnlyHint: true },
 }, async () => textResult(await coordinatorRequest('status')))
 
+server.registerTool('coord_wait', {
+  description: 'Efficiently wait until inbox, task, plan, lock, participant, or run state changes. Prefer this over repeated status polling.',
+  inputSchema: {
+    cursor: z.string().min(1).optional().describe('Opaque cursor from the previous coord_wait; normally omit because this bridge remembers it'),
+    timeout_ms: z.number().int().min(0).max(55_000).optional().describe('Defaults to 25000 milliseconds'),
+  },
+  annotations: { readOnlyHint: true },
+}, async ({ cursor, timeout_ms }) => {
+  const result = await coordinatorRequest('wait', {
+    cursor: cursor ?? coordinatorCursor ?? undefined,
+    timeoutMs: timeout_ms,
+  })
+  coordinatorCursor = result.cursor ?? coordinatorCursor
+  return textResult(result)
+})
+
 server.registerTool('coord_create_task', {
   description: 'Lead-only: add a task with dependencies and expected write paths to the shared board.',
   inputSchema: {
@@ -320,18 +377,20 @@ server.registerTool('coord_create_task', {
     detail: z.string().min(1).max(8000),
     paths: z.array(z.string().min(1)).max(100).optional(),
     depends_on: z.array(z.string().min(1)).max(100).optional(),
+    request_id: requestIdField,
   },
-}, async ({ title, detail, paths, depends_on }) => textResult(await coordinatorRequest('create_task', {
+}, async ({ title, detail, paths, depends_on, request_id }) => textResult(await coordinatorRequest('create_task', {
   title,
   detail,
   paths,
   dependsOn: depends_on,
+  requestId: request_id,
 })))
 
 server.registerTool('coord_claim_task', {
   description: 'Atomically claim a specific pending task, or the next unblocked task when task_id is omitted.',
-  inputSchema: { task_id: z.string().min(1).optional() },
-}, async ({ task_id }) => textResult(await coordinatorRequest('claim_task', { taskId: task_id })))
+  inputSchema: { task_id: z.string().min(1).optional(), request_id: requestIdField },
+}, async ({ task_id, request_id }) => textResult(await coordinatorRequest('claim_task', { taskId: task_id, requestId: request_id })))
 
 server.registerTool('coord_read_inbox', {
   description: 'Read and acknowledge direct Coordinator mailbox messages for this participant.',
@@ -351,13 +410,14 @@ server.registerTool('coord_send_message', {
   inputSchema: {
     to: z.string().min(1),
     message: z.string().min(1).max(8000),
+    request_id: requestIdField,
   },
-}, async ({ to, message }) => textResult(await coordinatorRequest('send_message', { to, message })))
+}, async ({ to, message, request_id }) => textResult(await coordinatorRequest('send_message', { to, message, requestId: request_id })))
 
 server.registerTool('coord_request_locks', {
   description: 'Request write locks for paths needed by the current task. Conflicting locks are denied atomically.',
-  inputSchema: { paths: z.array(z.string().min(1)).min(1).max(100) },
-}, async ({ paths }) => textResult(await coordinatorRequest('request_locks', { paths })))
+  inputSchema: { paths: z.array(z.string().min(1)).min(1).max(100), request_id: requestIdField },
+}, async ({ paths, request_id }) => textResult(await coordinatorRequest('request_locks', { paths, requestId: request_id })))
 
 server.registerTool('coord_progress', {
   description: 'Report working, idle, blocked, ready, or heartbeat state for this participant.',
@@ -366,12 +426,14 @@ server.registerTool('coord_progress', {
     task_id: z.string().min(1).optional(),
     summary: z.string().max(1000).optional(),
     detail: z.string().max(8000).optional(),
+    request_id: requestIdField,
   },
-}, async ({ status, task_id, summary, detail }) => textResult(await coordinatorRequest('progress', {
+}, async ({ status, task_id, summary, detail, request_id }) => textResult(await coordinatorRequest('progress', {
   status,
   taskId: task_id,
   summary,
   detail,
+  requestId: request_id,
 })))
 
 server.registerTool('coord_publish_finding', {
@@ -381,12 +443,14 @@ server.registerTool('coord_publish_finding', {
     summary: z.string().min(1).max(1000),
     detail: z.string().max(8000).optional(),
     task_id: z.string().min(1).optional(),
+    request_id: requestIdField,
   },
-}, async ({ kind, summary, detail, task_id }) => textResult(await coordinatorRequest('finding', {
+}, async ({ kind, summary, detail, task_id, request_id }) => textResult(await coordinatorRequest('finding', {
   kind,
   summary,
   detail,
   taskId: task_id,
+  requestId: request_id,
 })))
 
 server.registerTool('coord_submit_plan', {
@@ -395,11 +459,13 @@ server.registerTool('coord_submit_plan', {
     task_id: z.string().min(1),
     summary: z.string().min(1).max(1000),
     detail: z.string().max(8000).optional(),
+    request_id: requestIdField,
   },
-}, async ({ task_id, summary, detail }) => textResult(await coordinatorRequest('submit_plan', {
+}, async ({ task_id, summary, detail, request_id }) => textResult(await coordinatorRequest('submit_plan', {
   taskId: task_id,
   summary,
   detail,
+  requestId: request_id,
 })))
 
 server.registerTool('coord_review_plan', {
@@ -409,12 +475,14 @@ server.registerTool('coord_review_plan', {
     approved: z.boolean(),
     summary: z.string().max(1000).optional(),
     detail: z.string().max(8000).optional(),
+    request_id: requestIdField,
   },
-}, async ({ task_id, approved, summary, detail }) => textResult(await coordinatorRequest('review_plan', {
+}, async ({ task_id, approved, summary, detail, request_id }) => textResult(await coordinatorRequest('review_plan', {
   taskId: task_id,
   approved,
   summary,
   detail,
+  requestId: request_id,
 })))
 
 server.registerTool('coord_complete_task', {
@@ -423,11 +491,13 @@ server.registerTool('coord_complete_task', {
     task_id: z.string().min(1),
     summary: z.string().min(1).max(1000),
     detail: z.string().max(8000).optional(),
+    request_id: requestIdField,
   },
-}, async ({ task_id, summary, detail }) => textResult(await coordinatorRequest('complete_task', {
+}, async ({ task_id, summary, detail, request_id }) => textResult(await coordinatorRequest('complete_task', {
   taskId: task_id,
   summary,
   detail,
+  requestId: request_id,
 })))
 
 server.registerTool('coord_fail_task', {
@@ -436,17 +506,19 @@ server.registerTool('coord_fail_task', {
     task_id: z.string().min(1),
     summary: z.string().min(1).max(1000),
     detail: z.string().max(8000).optional(),
+    request_id: requestIdField,
   },
-}, async ({ task_id, summary, detail }) => textResult(await coordinatorRequest('fail_task', {
+}, async ({ task_id, summary, detail, request_id }) => textResult(await coordinatorRequest('fail_task', {
   taskId: task_id,
   summary,
   detail,
+  requestId: request_id,
 })))
 
 server.registerTool('coord_finalize_run', {
   description: 'Lead-only: finalize a run after every task is completed, failed, or cancelled.',
-  inputSchema: { summary: z.string().min(1).max(16000) },
-}, async ({ summary }) => textResult(await coordinatorRequest('finalize_run', { summary })))
+  inputSchema: { summary: z.string().min(1).max(16000), request_id: requestIdField },
+}, async ({ summary, request_id }) => textResult(await coordinatorRequest('finalize_run', { summary, requestId: request_id })))
 
 const transport = new StdioServerTransport()
 await server.connect(transport)
