@@ -46,8 +46,8 @@ type ReviewRow =
   | { kind: 'untracked'; path: string }
 
 type PendingAction =
-  | { kind: 'restore-all'; sha: string; label: string }
-  | { kind: 'restore-file'; sha: string; path: string }
+  | { kind: 'restore-all'; sha: string; label: string; sessionId?: string; provider?: string }
+  | { kind: 'restore-file'; sha: string; path: string; sessionId?: string; provider?: string }
   | { kind: 'reject-hunk'; hunk: WorkingDiffHunk }
   | { kind: 'delete-untracked'; path: string }
   | { kind: 'create-pr' }
@@ -147,10 +147,10 @@ export function CheckpointPopover({
     setBusy(true)
     try {
       if (action.kind === 'restore-all') {
-        const result = await restoreTuiCheckpoint(cwd, action.sha)
+        const result = await restoreTuiCheckpoint(cwd, action.sha, undefined, action)
         onNotice('info', `Restored ${result.restored} file${result.restored === 1 ? '' : 's'}, removed ${result.deleted}`, 4000)
       } else if (action.kind === 'restore-file') {
-        await restoreTuiCheckpoint(cwd, action.sha, [action.path])
+        await restoreTuiCheckpoint(cwd, action.sha, [action.path], action)
         onNotice('info', `Restored ${action.path}`, 4000)
       } else if (action.kind === 'reject-hunk') {
         await rejectTuiWorkingHunk(cwd, action.hunk.patchText)
@@ -235,8 +235,23 @@ export function CheckpointPopover({
     }
     if (key.name === 'r' && !key.shift && tab === 'turns') {
       const row = turnsRows[clampedCursor]
-      if (row?.kind === 'checkpoint') setPending({ kind: 'restore-all', sha: row.checkpoint.sha, label: row.checkpoint.label })
-      else if (row?.kind === 'file') setPending({ kind: 'restore-file', sha: row.sha, path: row.change.path })
+      if (row?.kind === 'checkpoint') setPending({
+        kind: 'restore-all',
+        sha: row.checkpoint.sha,
+        label: row.checkpoint.label,
+        sessionId: row.checkpoint.sessionId,
+        provider: row.checkpoint.provider,
+      })
+      else if (row?.kind === 'file') {
+        const checkpoint = checkpoints.find((entry) => entry.sha === row.sha)
+        setPending({
+          kind: 'restore-file',
+          sha: row.sha,
+          path: row.change.path,
+          sessionId: checkpoint?.sessionId,
+          provider: checkpoint?.provider,
+        })
+      }
       return
     }
     if (key.name === 'j' || key.name === 'down') {

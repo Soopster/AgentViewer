@@ -45,6 +45,7 @@ import {
   effortToSdk,
   logClaudeSubprocessStderr,
   peekClaudeSession,
+  queueClaudeReadStateSeeds,
   recycleClaudeSession,
 } from './claudePool'
 import {
@@ -54,6 +55,7 @@ import {
   broadcastClaudeTurnStart,
 } from './claudeHarness'
 import { getClaudeCommandsOverride, noteClaudeCommandsChanged } from './claudeCommandsStore'
+import { createClaudeViewerQueryExtensions } from './claudeViewerIntegration'
 import {
   broadcastLiveSessionActivity,
   broadcastLiveSessionRecycled,
@@ -73,7 +75,8 @@ import {
   type SessionEvent as CopilotSessionEvent,
   type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
-import { backgroundRunningSession, clearRunningSession, getRunningSession, getRunningSessionInfo, interruptRunningSession, listRunningSessionRefs, setRunningSession, steerRunningSession } from './sessionRuntime'
+import { backgroundRunningSession, clearRunningSession, clearWaitingSession, getRunningSession, getRunningSessionInfo, interruptRunningSession, listRunningSessionRefs, listWaitingSessions, setRunningSession, steerRunningSession } from './sessionRuntime'
+import { listViewerAttention } from './viewerAttention'
 import { createTurnCheckpoint } from './checkpoints'
 import { isNativeComposerCommandText } from './composerCommands'
 import { getProviderCapabilities } from './provider'
@@ -531,6 +534,34 @@ async function readClaudeSessionMessages(sessionId: string): Promise<SessionMess
 
   const messages = sortMessagesChronologically([...deduped.values()])
   return writeMappedMessagesCache(`claude:${sessionId}`, signature, messages)
+}
+
+/**
+ * Absolute paths the session has authoritatively observed through Claude's
+ * native Read tool. Restore flows use this set to repair the resumed Query's
+ * edit-safety cache without granting read state for unrelated files.
+ */
+export async function readClaudeObservedFilePaths(sessionId: string, cwd: string): Promise<string[]> {
+  const messages = await readClaudeSessionMessages(sessionId)
+  const observed = new Set<string>()
+  for (let messageIndex = messages.length - 1; messageIndex >= 0 && observed.size < 200; messageIndex -= 1) {
+    const content = messages[messageIndex]?.message.content
+    if (!Array.isArray(content)) continue
+    for (let blockIndex = content.length - 1; blockIndex >= 0 && observed.size < 200; blockIndex -= 1) {
+      const block = content[blockIndex]
+      if (block?.type !== 'tool_use' || String(block.name).toLowerCase() !== 'read') continue
+      const input = block.input && typeof block.input === 'object'
+        ? block.input as Record<string, unknown>
+        : {}
+      const rawPath = typeof input.file_path === 'string'
+        ? input.file_path
+        : typeof input.path === 'string'
+        ? input.path
+        : ''
+      if (rawPath) observed.add(resolvePath(cwd, rawPath))
+    }
+  }
+  return [...observed]
 }
 
 function parseEffort(body: Record<string, unknown>): ReasoningEffortLevel | undefined {
@@ -2509,6 +2540,7 @@ export async function deleteViewSession(sessionId: string, providerOverride?: Ag
   }
   if (provider === 'claude') {
     await deleteClaudeSession(sessionId)
+    clearWaitingSession(sessionId)
     await removePersistedSessionBestEffort(provider, sessionId)
     return
   }
@@ -3356,6 +3388,11 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       // (after q is created) and cleared in the finally block so future pool
       // turns can swap in a fresh bridge without recycling the subprocess.
       const bridgeBox: ClaudeBridgeBox = { fn: null, elicit: null }
+      const viewerContext = {
+        sessionId,
+        getSessionId: () => viewerContext.sessionId,
+        getCwd: () => cwdOverride,
+      }
 
       const q = query({
         prompt: iterable,
@@ -3380,6 +3417,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
             bridgeBox.elicit
               ? bridgeBox.elicit(request, elicitOpts)
               : Promise.resolve({ action: 'decline' as const }),
+          ...createClaudeViewerQueryExtensions(viewerContext),
           ...effortToSdk(effort),
           abortController,
           enableFileCheckpointing: true,
@@ -3484,6 +3522,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           if (!emittedSessionEvent && messageSessionId) {
             emittedSessionEvent = true
             realizedSessionId = messageSessionId
+            viewerContext.sessionId = messageSessionId
             // Mirror the registry entry under the realized id — a pending
             // session registers under its draft id, but reattach polls and
             // interrupts address the turn by the real id once it's known.
@@ -3680,9 +3719,10 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
       }
 
       // Liveness probe for a reused warm entry: getContextUsage() answers from
-      // the control channel in a few ms when the subprocess is healthy, so a
-      // reused entry that can't answer within the window is treated as silently
-      // dead. Doubles as the usage-frame source on success — no extra RPC.
+      // the control channel in a few ms when the subprocess is healthy. If it
+      // cannot answer, the caller first asks the SDK to reinitialize its
+      // transport; only a failed reconnect pays the subprocess-respawn cost.
+      // The usage request doubles as the usage-frame source on success.
       const probeWarmLiveness = (e: ClaudePoolEntry): Promise<'live' | 'dead'> => {
         let timer: ReturnType<typeof setTimeout> | null = null
         const timeout = new Promise<'dead'>((resolve) => {
@@ -3754,13 +3794,28 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
           let respawnRequested = false
 
           if (activeEntry.reused && attempt <= CLAUDE_WARM_MAX_RESPAWN) {
-            void probeWarmLiveness(activeEntry).then((verdict) => {
-              if (verdict === 'dead' && !sawActivity) {
-                respawnRequested = true
-                // Recycling pushes null to the turn subscriber, so the pending
-                // run() below rejects promptly — caught and respawned fresh.
-                recycleClaudeSession(sessionId)
-              }
+            void probeWarmLiveness(activeEntry).then(async (verdict) => {
+              if (verdict !== 'dead' || sawActivity) return
+
+              let timer: ReturnType<typeof setTimeout> | null = null
+              const timeout = new Promise<false>((resolve) => {
+                timer = setTimeout(() => resolve(false), CLAUDE_WARM_LIVENESS_PROBE_MS)
+                if (typeof timer === 'object' && timer && 'unref' in timer) {
+                  (timer as { unref?: () => void }).unref?.()
+                }
+              })
+              const reinitialized = Promise.resolve()
+                .then(() => activeEntry.query.reinitialize())
+                .then(() => true, () => false)
+              const recovered = await Promise.race([reinitialized, timeout]).finally(() => {
+                if (timer) clearTimeout(timer)
+              })
+              if (recovered || sawActivity) return
+
+              respawnRequested = true
+              // Recycling pushes null to the turn subscriber, so the pending
+              // run() below rejects promptly — caught and respawned fresh.
+              recycleClaudeSession(sessionId)
             })
           } else {
             // Fresh spawn (or a retry): surface context usage without gating —
@@ -5984,6 +6039,15 @@ export function listViewRunningSessions(): Array<{
   }))
 }
 
+/** Process-local control-plane state for fleet and attention clients. */
+export function readViewRuntimeActivity() {
+  return {
+    running: listViewRunningSessions(),
+    waiting: listWaitingSessions(),
+    attention: listViewerAttention(),
+  }
+}
+
 export async function readViewSessionModels(sessionId: string, providerOverride?: AgentProvider): Promise<{ models: SessionModelInfo[]; currentModel: string | null; currentContextTier?: CopilotContextTier | null; contextUsage: ContextUsage | null }> {
   const provider = await resolveProvider(providerOverride)
   if (provider === 'codex') {
@@ -6547,7 +6611,15 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
   const q = createSessionControlQuery(sessionId, model)
   try {
     await q.initializationResult()
-    return await q.rewindFiles(userMessageId, { dryRun: Boolean(body.dryRun) })
+    const result = await q.rewindFiles(userMessageId, { dryRun: Boolean(body.dryRun) })
+    if (!body.dryRun && result.canRewind && result.filesChanged?.length) {
+      const info = await getSessionInfo(sessionId).catch(() => undefined)
+      if (info?.cwd) {
+        const observedPaths = await readClaudeObservedFilePaths(sessionId, info.cwd).catch(() => [])
+        await queueClaudeReadStateSeeds(sessionId, info.cwd, observedPaths)
+      }
+    }
+    return result
   } finally {
     q.close()
   }

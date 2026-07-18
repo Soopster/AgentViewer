@@ -86,6 +86,8 @@ import {
   streamTuiSessionTurn,
   interruptTuiSessionTurn,
   listTuiRunningSessions,
+  readTuiRuntimeActivity,
+  dismissTuiViewerAttention,
   createTuiSession,
   readTuiSlashCommands,
   readTuiComposerOptions,
@@ -136,7 +138,7 @@ import {
 } from './sessionDetailWorkerClient'
 import type { TuiSessionReaderState } from '../../lib/tuiState'
 import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLevel, RunningSessionRef, SendAttachment, SendState, Session, SessionComposerAgentOption, SessionModelInfo, ToolResultBlock } from '../../lib/types'
-import { AttentionInboxPopover, type AttentionItem } from './AttentionInboxPopover'
+import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
 import { CheckpointPopover } from './CheckpointPopover'
 import { CoordinationPopover } from './CoordinationPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
@@ -5929,6 +5931,8 @@ export default function OpenTuiApp() {
   const [taskPanelWidth, setTaskPanelWidth] = useState(TASK_PANEL_DEFAULT_WIDTH)
   const [sessions, setSessions] = useState<Session[]>([])
   const [runningSessions, setRunningSessions] = useState<RunningSessionRef[]>([])
+  const [waitingSessions, setWaitingSessions] = useState<Awaited<ReturnType<typeof readTuiRuntimeActivity>>['waiting']>([])
+  const [viewerAttentionNotes, setViewerAttentionNotes] = useState<Awaited<ReturnType<typeof readTuiRuntimeActivity>>['attention']>([])
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null)
   const [sessionDetail, setSessionDetail] = useState<TuiSessionDetail | null>(null)
   const [loadingSessions, setLoadingSessions] = useState(true)
@@ -6689,6 +6693,43 @@ export default function OpenTuiApp() {
         createdAt: 0,
       })
     }
+    for (const waiting of waitingSessions) {
+      const key = sessionKey(waiting)
+      const session = sessionsByKeyRef.current.get(key)
+      const taskCount = waiting.backgroundTasks.length
+      const cronCount = waiting.sessionCrons.length
+      const details = [
+        ...waiting.backgroundTasks.map((task) => task.description || `${task.type} ${task.status}`),
+        ...waiting.sessionCrons.map((cron) => `scheduled ${cron.schedule}`),
+      ]
+      items.push({
+        key: `waiting:${key}`,
+        kind: 'waiting',
+        sessionId: waiting.sessionId,
+        provider: waiting.provider,
+        sessionKey: key,
+        sessionTitle: session ? formatSessionTitle(session) : waiting.sessionId.slice(-8),
+        title: `${taskCount} background task${taskCount === 1 ? '' : 's'}, ${cronCount} scheduled wakeup${cronCount === 1 ? '' : 's'}`,
+        detail: details.slice(0, 2).join(' · '),
+        createdAt: waiting.updatedAt,
+      })
+    }
+    for (const note of viewerAttentionNotes) {
+      const key = sessionKey(note)
+      const session = sessionsByKeyRef.current.get(key)
+      items.push({
+        key: `viewer:${note.id}`,
+        kind: 'viewer-note',
+        sessionId: note.sessionId,
+        provider: note.provider,
+        sessionKey: key,
+        sessionTitle: session ? formatSessionTitle(session) : note.sessionId.slice(-8),
+        title: note.title,
+        detail: note.detail,
+        attentionId: note.id,
+        createdAt: note.createdAt,
+      })
+    }
     for (const done of attentionDone) {
       items.push({
         key: done.key,
@@ -6703,9 +6744,9 @@ export default function OpenTuiApp() {
     }
     return items
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingPermissions, backgroundPrompts, attentionDone, sessions, composerTargetSession])
+  }, [pendingPermissions, backgroundPrompts, waitingSessions, viewerAttentionNotes, attentionDone, sessions, composerTargetSession])
   const attentionNeedsInputCount = useMemo(
-    () => attentionItems.filter((item) => item.kind !== 'turn-done').length,
+    () => attentionItems.filter(attentionItemNeedsInput).length,
     [attentionItems],
   )
 
@@ -6717,17 +6758,17 @@ export default function OpenTuiApp() {
     sessionId: string
     provider: AgentProvider
     title: string
-    status: 'needs-input' | 'running' | 'done'
+    status: 'needs-input' | 'running' | 'waiting' | 'done'
   }>>(() => {
     const needsInputKeys = new Set(
-      attentionItems.filter((item) => item.kind !== 'turn-done').map((item) => item.sessionKey),
+      attentionItems.filter(attentionItemNeedsInput).map((item) => item.sessionKey),
     )
     const entries: Array<{
       key: string
       sessionId: string
       provider: AgentProvider
       title: string
-      status: 'needs-input' | 'running' | 'done'
+      status: 'needs-input' | 'running' | 'waiting' | 'done'
     }> = runningSessions.map((ref) => {
       const key = sessionKey({ sessionId: ref.sessionId, provider: ref.provider })
       const session = sessionsByKeyRef.current.get(key)
@@ -6740,6 +6781,32 @@ export default function OpenTuiApp() {
       }
     })
     const liveKeys = new Set(entries.map((entry) => entry.key))
+    for (const waiting of waitingSessions) {
+      const key = sessionKey(waiting)
+      if (liveKeys.has(key)) continue
+      const session = sessionsByKeyRef.current.get(key)
+      entries.push({
+        key,
+        sessionId: waiting.sessionId,
+        provider: waiting.provider,
+        title: session ? formatSessionTitle(session) : waiting.sessionId.slice(-8),
+        status: needsInputKeys.has(key) ? 'needs-input' : 'waiting',
+      })
+      liveKeys.add(key)
+    }
+    for (const note of viewerAttentionNotes) {
+      const key = sessionKey(note)
+      if (liveKeys.has(key)) continue
+      const session = sessionsByKeyRef.current.get(key)
+      entries.push({
+        key,
+        sessionId: note.sessionId,
+        provider: note.provider,
+        title: session ? formatSessionTitle(session) : note.sessionId.slice(-8),
+        status: 'needs-input',
+      })
+      liveKeys.add(key)
+    }
     for (const done of attentionDone) {
       if (liveKeys.has(done.sessionKey)) continue
       entries.push({
@@ -6752,11 +6819,11 @@ export default function OpenTuiApp() {
     }
     // Blocked cells first — they are why the strip exists.
     return entries.sort((a, b) => {
-      const rank = (status: string) => (status === 'needs-input' ? 0 : status === 'running' ? 1 : 2)
+      const rank = (status: string) => (status === 'needs-input' ? 0 : status === 'running' ? 1 : status === 'waiting' ? 2 : 3)
       return rank(a.status) - rank(b.status)
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runningSessions, attentionItems, attentionDone, sessions])
+  }, [runningSessions, waitingSessions, viewerAttentionNotes, attentionItems, attentionDone, sessions])
   const fleetStripVisible = fleetStripEnabled && !focusMode && fleetEntries.length > 0
   const fleetStripSegments = useMemo<InlineTextSegment[]>(() => {
     if (!fleetStripVisible) return []
@@ -6764,8 +6831,8 @@ export default function OpenTuiApp() {
     fleetEntries.slice(0, 9).forEach((entry, index) => {
       const selected = entry.key === selectedSessionKey
       const accent = getProviderAccent(entry.provider)
-      const glyph = entry.status === 'needs-input' ? '⚠' : entry.status === 'running' ? '●' : '✓'
-      const glyphColor = entry.status === 'needs-input' ? theme.amber : entry.status === 'running' ? accent : theme.green
+      const glyph = entry.status === 'needs-input' ? '⚠' : entry.status === 'running' ? '●' : entry.status === 'waiting' ? '◌' : '✓'
+      const glyphColor = entry.status === 'needs-input' ? theme.amber : entry.status === 'running' ? accent : entry.status === 'waiting' ? theme.cyan : theme.green
       if (index > 0) segs.push({ text: '   ', fg: theme.dim })
       segs.push({ text: `${index + 1} `, fg: selected ? accent : theme.dim })
       segs.push({ text: `${glyph} `, fg: glyphColor })
@@ -9948,6 +10015,10 @@ export default function OpenTuiApp() {
     if (item.kind === 'turn-done') {
       setAttentionDone((prev) => prev.filter((done) => done.key !== item.key))
     }
+    if (item.kind === 'viewer-note' && item.attentionId) {
+      setViewerAttentionNotes((prev) => prev.filter((note) => note.id !== item.attentionId))
+      void dismissTuiViewerAttention(item.attentionId)
+    }
     if (!item.sessionId) return
     if (item.sessionKey === selectedSessionKeyRef.current) {
       setFocusedPane('messages')
@@ -9960,14 +10031,18 @@ export default function OpenTuiApp() {
   })
 
   const dismissAttentionItem = useEffectEvent((item: AttentionItem) => {
-    if (item.kind !== 'turn-done') return
-    setAttentionDone((prev) => prev.filter((done) => done.key !== item.key))
+    if (item.kind === 'turn-done') {
+      setAttentionDone((prev) => prev.filter((done) => done.key !== item.key))
+    } else if (item.kind === 'viewer-note' && item.attentionId) {
+      setViewerAttentionNotes((prev) => prev.filter((note) => note.id !== item.attentionId))
+      void dismissTuiViewerAttention(item.attentionId)
+    }
   })
 
   // ⌃N: jump straight to whatever needs a human next — prefer prompts over
   // completions, and another session over the one already on screen.
   const jumpToNextAttention = useEffectEvent(() => {
-    const needing = attentionItems.filter((item) => item.kind !== 'turn-done')
+    const needing = attentionItems.filter(attentionItemNeedsInput)
     const pool = needing.length > 0 ? needing : attentionItems
     if (pool.length === 0) {
       showNotice('info', 'Nothing needs attention', 2500)
@@ -11455,20 +11530,24 @@ export default function OpenTuiApp() {
     const poll = async () => {
       if (registryPollInFlightRef.current) return
       registryPollInFlightRef.current = true
-      let entries: Awaited<ReturnType<typeof listTuiRunningSessions>>
+      let activity: Awaited<ReturnType<typeof readTuiRuntimeActivity>>
       try {
-        entries = await listTuiRunningSessions()
+        activity = await readTuiRuntimeActivity()
       } catch {
         return // registry probe is best-effort
       } finally {
         registryPollInFlightRef.current = false
       }
+      const entries = activity.running
+      setWaitingSessions(activity.waiting)
+      setViewerAttentionNotes(activity.attention)
       const runningByKey = new Map(entries.map((entry) => [
         sessionKey({ sessionId: entry.sessionId, provider: entry.provider }),
         entry,
       ]))
       runningRegistryByKeyRef.current = runningByKey
       const ownedKey = composerAbortRef.current ? ownedTurnKeyRef.current : null
+      const waitingKeys = new Set(activity.waiting.map((entry) => sessionKey(entry)))
 
       // Sidebar liveness for turns nobody owns (started before a session
       // switch, or surviving a dead stream).
@@ -11484,7 +11563,7 @@ export default function OpenTuiApp() {
         clearSessionRunning(ref)
         // An unowned turn just finished — surface it in the attention inbox
         // unless the user is already looking at that session.
-        if (key !== selectedSessionKeyRef.current) recordAttentionTurnDone(ref)
+        if (key !== selectedSessionKeyRef.current && !waitingKeys.has(key)) recordAttentionTurnDone(ref)
       }
 
       const selectedKey = selectedSessionKeyRef.current

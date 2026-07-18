@@ -9,6 +9,8 @@ import {
   type SDKSessionStateChangedMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
+import { stat } from 'node:fs/promises'
+import { isAbsolute, resolve } from 'node:path'
 
 // Per-turn MCP elicitation handler. Mirrors the canUseTool bridge: the warm
 // Query's onElicitation delegates to this so the long-lived subprocess can route
@@ -30,6 +32,7 @@ import {
   broadcastClaudeTurnStart,
 } from './claudeHarness'
 import { noteClaudeCommandsChanged } from './claudeCommandsStore'
+import { createClaudeViewerQueryExtensions } from './claudeViewerIntegration'
 
 // Phase 1 of the claudeSessionPool migration. Mirrors lib/codexHarness.ts in
 // shape: a process-wide singleton (kept on globalThis to survive Next.js HMR)
@@ -235,6 +238,7 @@ export function effortToSdk(effort: ReasoningEffortLevel | undefined):
 
 class ClaudePool {
   private entries = new Map<string, InternalEntry>()
+  private pendingReadSeeds = new Map<string, Map<string, number>>()
   private sweepHandle: ReturnType<typeof setInterval> | null = null
 
   /** Live entry count, for memory diagnostics. */
@@ -270,6 +274,10 @@ class ClaudePool {
     // this so permission requests reach the correct SSE stream controller for
     // each turn while the underlying subprocess stays warm.
     const bridgeBox: ClaudeBridgeBox = { fn: null, elicit: null }
+    const viewerContext = {
+      getSessionId: () => opts.sessionId,
+      getCwd: () => opts.cwd,
+    }
 
     const effortOptions = effortToSdk(opts.effort)
     const q = query({
@@ -293,6 +301,7 @@ class ClaudePool {
           bridgeBox.elicit
             ? bridgeBox.elicit(request, elicitOpts)
             : Promise.resolve({ action: 'decline' as const }),
+        ...createClaudeViewerQueryExtensions(viewerContext),
         ...effortOptions,
         enableFileCheckpointing: true,
         resumeSessionAt: opts.resumeSessionAt,
@@ -333,6 +342,40 @@ class ClaudePool {
 
     void this.pumpQueryToSubscriber(entry)
     return entry
+  }
+
+  queueReadSeeds(sessionId: string, seeds: Array<{ path: string; mtime: number }>): void {
+    if (seeds.length === 0) return
+    const queued = this.pendingReadSeeds.get(sessionId) ?? new Map<string, number>()
+    for (const seed of seeds) queued.set(seed.path, seed.mtime)
+    while (queued.size > 200) {
+      const oldest = queued.keys().next().value
+      if (oldest === undefined) break
+      queued.delete(oldest)
+    }
+    this.pendingReadSeeds.delete(sessionId)
+    this.pendingReadSeeds.set(sessionId, queued)
+    while (this.pendingReadSeeds.size > 64) {
+      const oldest = this.pendingReadSeeds.keys().next().value
+      if (oldest === undefined) break
+      this.pendingReadSeeds.delete(oldest)
+    }
+  }
+
+  private async applyReadSeeds(entry: InternalEntry): Promise<void> {
+    const queued = this.pendingReadSeeds.get(entry.sessionId)
+    if (!queued || queued.size === 0) return
+    await entry.query.initializationResult().catch(() => null)
+    for (const [path, mtime] of [...queued]) {
+      try {
+        await entry.query.seedReadState(path, mtime)
+        queued.delete(path)
+      } catch {
+        // Keep failed seeds for the next reconnect; a turn must never fail just
+        // because this safety-cache repair could not be delivered.
+      }
+    }
+    if (queued.size === 0) this.pendingReadSeeds.delete(entry.sessionId)
   }
 
   private async pumpQueryToSubscriber(entry: InternalEntry): Promise<void> {
@@ -678,6 +721,7 @@ class ClaudePool {
     entry.bridgeBox.fn = options.bridge ?? null
     entry.bridgeBox.elicit = options.elicit ?? null
     try {
+      await this.applyReadSeeds(entry)
       entry.pushUserMessage(message)
       try { broadcastClaudeTurnStart(entry.sessionId) } catch { /* swallow */ }
     } catch (err) {
@@ -790,6 +834,27 @@ export function acquireClaudeSession(opts: ClaudePoolAcquireOptions): ClaudePool
 
 export function recycleClaudeSession(sessionId: string): void {
   getPool().recycle(sessionId)
+}
+
+/**
+ * Queue mtime-guarded read-state seeds after a file rewind or checkpoint
+ * restore. They are delivered to the persistent Query immediately before its
+ * next prompt, so the seed survives control-query teardown and cannot race the
+ * next Edit.
+ */
+export async function queueClaudeReadStateSeeds(sessionId: string, cwd: string, paths: string[]): Promise<number> {
+  const unique = [...new Set(paths.filter(Boolean))]
+  const seeds = (await Promise.all(unique.map(async (filePath) => {
+    const absolute = isAbsolute(filePath) ? filePath : resolve(cwd, filePath)
+    try {
+      const info = await stat(absolute)
+      return info.isFile() ? { path: absolute, mtime: Math.floor(info.mtimeMs) } : null
+    } catch {
+      return null
+    }
+  }))).filter((seed): seed is { path: string; mtime: number } => seed !== null)
+  getPool().queueReadSeeds(sessionId, seeds)
+  return seeds.length
 }
 
 /** Number of warm Claude subprocesses currently pooled. Diagnostics only. */

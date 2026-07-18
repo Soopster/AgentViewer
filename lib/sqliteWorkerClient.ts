@@ -39,6 +39,7 @@ function state(): WorkerState {
 
 const WORKER_TIMEOUT_MS = 10_000
 const WORKER_DISABLED = process.env.AGENT_VIEWER_DISABLE_SQLITE_WORKER === '1'
+  || Boolean((process.versions as Record<string, string | undefined>).bun)
 
 async function ensureWorker(dbFile: string): Promise<NodeWorker | null> {
   const s = state()

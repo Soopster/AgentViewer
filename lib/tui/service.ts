@@ -41,6 +41,8 @@ import {
 import {
   createNewViewSession,
   listViewRunningSessions,
+  readClaudeObservedFilePaths,
+  readViewRuntimeActivity,
   listViewSessionMessages,
   listViewSessions,
   patchViewSession,
@@ -54,6 +56,7 @@ import {
   runViewSessionAction,
   streamViewSessionTurn,
 } from '../sessionBackend'
+import { dismissViewerAttention } from '../viewerAttention'
 import {
   encodeSessionPath,
   isRemoteAttached,
@@ -112,6 +115,7 @@ import {
 import type { AgentProtocolEvent, ProtocolRun, ProtocolRunSnapshot, StartProtocolRunParams, StartProtocolRunResult } from '../agentProtocol'
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
+import { queueClaudeReadStateSeeds } from '../claudePool'
 
 const DEFAULT_SESSION_LIMIT = 200
 const CLAUDE_MESSAGE_LIMIT = 2000
@@ -425,6 +429,24 @@ export async function listTuiRunningSessions(): Promise<ReturnType<typeof listVi
   return listViewRunningSessions()
 }
 
+export type TuiRuntimeActivity = ReturnType<typeof readViewRuntimeActivity>
+
+export async function readTuiRuntimeActivity(): Promise<TuiRuntimeActivity> {
+  if (isRemoteAttached()) return remoteJson<TuiRuntimeActivity>('/api/sessions/running')
+  return readViewRuntimeActivity()
+}
+
+export async function dismissTuiViewerAttention(attentionId: string): Promise<boolean> {
+  if (isRemoteAttached()) {
+    const result = await remoteJson<{ dismissed: boolean }>('/api/sessions/running', {
+      method: 'DELETE',
+      body: JSON.stringify({ attentionId }),
+    })
+    return result.dismissed
+  }
+  return dismissViewerAttention(attentionId)
+}
+
 // Worktree-per-task orchestration: isolate an agent task in its own git
 // worktree + branch, then squash-merge the result back or discard it.
 export async function createTuiWorktreeTask(cwd: string, name: string): Promise<WorktreeTask> {
@@ -470,8 +492,14 @@ export async function restoreTuiCheckpoint(
   cwd: string,
   sha: string,
   paths?: string[],
+  context?: { sessionId?: string; provider?: string },
 ): Promise<{ restored: number; deleted: number }> {
-  return restoreCheckpoint(cwd, sha, paths)
+  const result = await restoreCheckpoint(cwd, sha, paths)
+  if (context?.provider === 'claude' && context.sessionId) {
+    const observedPaths = await readClaudeObservedFilePaths(context.sessionId, cwd).catch(() => [])
+    await queueClaudeReadStateSeeds(context.sessionId, cwd, observedPaths)
+  }
+  return result
 }
 
 export async function listTuiWorkingDiff(cwd: string): Promise<{ hunks: WorkingDiffHunk[]; untracked: string[] }> {

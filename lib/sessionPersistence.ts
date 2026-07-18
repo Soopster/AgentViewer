@@ -217,7 +217,9 @@ type MessageAggregate = Pick<
   | 'indexedAt'
 >
 
-type SqliteDatabase = any // DatabaseSync from 'node:sqlite' — imported inside openDatabase() to avoid loading on TUI
+// node:sqlite DatabaseSync and bun:sqlite Database share the synchronous
+// prepare/all/get/run/exec surface used below; both stay dynamically imported.
+type SqliteDatabase = any
 type Row = Record<string, unknown>
 
 let database: SqliteDatabase | null = null
@@ -425,16 +427,21 @@ function applySchemaMigrations(db: SqliteDatabase): void {
 }
 
 async function openDatabase(): Promise<SqliteDatabase> {
+  const runningInBun = Boolean((process.versions as Record<string, string | undefined>).bun)
   // Hide the dynamic import behind eval so Next.js 16's Turbopack can't
   // statically analyze it. A bare `await import('node:sqlite')` gets
   // externalized via a require() shim that is undefined inside ESM route
   // handlers ("Failed to load external module node:sqlite: ReferenceError:
   // require is not defined"). eval bypasses bundler analysis and the import
   // goes straight to Node's runtime ESM loader, which knows node:sqlite.
-  const sqliteMod = await (0, eval)('import("node:sqlite")') as typeof import('node:sqlite')
-  const { DatabaseSync } = sqliteMod
   await ensureIndexDirs()
-  const db = new DatabaseSync(DB_FILE)
+  // The primary OpenTUI runs under Bun, whose SQLite API intentionally mirrors
+  // node:sqlite's synchronous prepare/all/get/run surface. Selecting the native
+  // module here keeps the persistent index (and the in-process viewer MCP
+  // search tool) available in both runtimes without a sidecar server.
+  const db = runningInBun
+    ? new (await (0, eval)('import("bun:sqlite")')).Database(DB_FILE, { create: true })
+    : new (await (0, eval)('import("node:sqlite")') as typeof import('node:sqlite')).DatabaseSync(DB_FILE)
   try {
     configureDatabase(db)
     initializeSchema(db)

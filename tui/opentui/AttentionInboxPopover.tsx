@@ -1,16 +1,16 @@
 /** @jsxImportSource @opentui/react */
 // Cross-session attention inbox: everything blocked on a human, in one list —
 // tool permissions / AskUserQuestion / plan approvals from any running turn,
-// plus background turns that finished while the user was elsewhere. Single-key
-// triage: answer plain permissions inline, jump to a session for the full
-// question/plan picker, dismiss completions.
+// plus Stop-hook background-work pauses, explicit viewer attention requests,
+// and turns that finished while the user was elsewhere. Single-key triage:
+// answer permissions inline, jump to a session, dismiss notes/completions.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { TuiThemePalette } from '../theme'
 import { getProviderAccent } from '../theme'
 import type { AgentProvider } from '../../lib/types'
 import type { PendingPermission } from '../../lib/permissions'
 
-export type AttentionItemKind = 'permission' | 'question' | 'plan' | 'turn-done'
+export type AttentionItemKind = 'permission' | 'question' | 'plan' | 'waiting' | 'viewer-note' | 'turn-done'
 
 export type AttentionItem = {
   key: string
@@ -21,6 +21,7 @@ export type AttentionItem = {
   sessionTitle: string
   title: string
   detail?: string
+  attentionId?: string
   // Present for prompt kinds; carries the id the respond action resolves.
   permission?: PendingPermission
   // 0 for prompt kinds (arrival time is not tracked); epoch ms for turn-done.
@@ -46,7 +47,13 @@ const KIND_GLYPH: Record<AttentionItemKind, string> = {
   permission: '●',
   question: '?',
   plan: '◆',
+  waiting: '◌',
+  'viewer-note': '!',
   'turn-done': '✓',
+}
+
+export function attentionItemNeedsInput(item: AttentionItem): boolean {
+  return item.kind === 'permission' || item.kind === 'question' || item.kind === 'plan' || item.kind === 'viewer-note'
 }
 
 function kindColor(kind: AttentionItemKind, theme: TuiThemePalette): string {
@@ -54,6 +61,8 @@ function kindColor(kind: AttentionItemKind, theme: TuiThemePalette): string {
     case 'permission': return theme.amber
     case 'question': return theme.cyan
     case 'plan': return theme.violet
+    case 'waiting': return theme.cyan
+    case 'viewer-note': return theme.amber
     case 'turn-done': return theme.green
   }
 }
@@ -63,6 +72,8 @@ function kindLabel(kind: AttentionItemKind): string {
     case 'permission': return 'needs approval'
     case 'question': return 'has a question'
     case 'plan': return 'plan ready'
+    case 'waiting': return 'background work pending'
+    case 'viewer-note': return 'requested attention'
     case 'turn-done': return 'turn finished'
   }
 }
@@ -101,7 +112,7 @@ export function AttentionInboxPopover({
   }, [])
 
   const needsInputCount = useMemo(
-    () => items.filter((item) => item.kind !== 'turn-done').length,
+    () => items.filter(attentionItemNeedsInput).length,
     [items],
   )
 
@@ -133,7 +144,7 @@ export function AttentionInboxPopover({
       onRespond(item, 'reject')
       return
     }
-    if (key.name === 'x' && item.kind === 'turn-done') {
+    if (key.name === 'x' && (item.kind === 'turn-done' || item.kind === 'viewer-note')) {
       onDismiss(item)
       return
     }
@@ -152,7 +163,7 @@ export function AttentionInboxPopover({
 
   const footerHint = selected?.kind === 'permission'
     ? '⏎ open session · y allow · n deny · j/k move · esc close'
-    : selected?.kind === 'turn-done'
+    : selected?.kind === 'turn-done' || selected?.kind === 'viewer-note'
     ? '⏎ open session · x dismiss · j/k move · esc close'
     : '⏎ open session · j/k move · esc close'
 
@@ -178,7 +189,7 @@ export function AttentionInboxPopover({
           {needsInputCount > 0 ? `${needsInputCount} need${needsInputCount === 1 ? 's' : ''} input` : 'nothing needs input'}
         </text>
         <text fg={theme.dim} wrapMode="none">
-          {`  ·  ${items.length - needsInputCount} finished`}
+          {`  ·  ${items.length - needsInputCount} waiting or finished`}
         </text>
         <box flexGrow={1} />
         <text fg={theme.dim} wrapMode="none">across all sessions</text>

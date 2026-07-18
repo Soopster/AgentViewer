@@ -1,5 +1,27 @@
 import type { AgentProvider } from './types'
 
+export type SessionBackgroundTask = {
+  id: string
+  type: string
+  status: string
+  description: string
+}
+
+export type SessionCronWakeup = {
+  id: string
+  schedule: string
+  recurring: boolean
+  prompt: string
+}
+
+export type WaitingSession = {
+  sessionId: string
+  provider: AgentProvider
+  backgroundTasks: SessionBackgroundTask[]
+  sessionCrons: SessionCronWakeup[]
+  updatedAt: number
+}
+
 type RunningSession = {
   provider: AgentProvider
   interrupt: () => Promise<unknown>
@@ -15,10 +37,14 @@ type RunningSession = {
 }
 
 const runningSessions = new Map<string, RunningSession>()
+const waitingSessions = new Map<string, WaitingSession>()
 const pendingInterrupts = new Map<string, { requestId: string; timer: ReturnType<typeof setTimeout> }>()
 const PENDING_INTERRUPT_TTL_MS = 30_000
 
 export function setRunningSession(sessionId: string, session: RunningSession): void {
+  // A new foreground turn supersedes the prior Stop-hook pause snapshot. The
+  // next Stop callback will publish a fresh waiting state if work remains.
+  waitingSessions.delete(sessionId)
   runningSessions.set(sessionId, session)
   const pending = pendingInterrupts.get(sessionId)
   if (pending && session.requestId === pending.requestId) {
@@ -26,6 +52,22 @@ export function setRunningSession(sessionId: string, session: RunningSession): v
     pendingInterrupts.delete(sessionId)
     void session.interrupt().catch(() => {})
   }
+}
+
+export function setWaitingSession(state: Omit<WaitingSession, 'updatedAt'>): void {
+  if (state.backgroundTasks.length === 0 && state.sessionCrons.length === 0) {
+    waitingSessions.delete(state.sessionId)
+    return
+  }
+  waitingSessions.set(state.sessionId, { ...state, updatedAt: Date.now() })
+}
+
+export function clearWaitingSession(sessionId: string): void {
+  waitingSessions.delete(sessionId)
+}
+
+export function listWaitingSessions(): WaitingSession[] {
+  return [...waitingSessions.values()]
 }
 
 export function getRunningSession(sessionId: string): RunningSession | undefined {
