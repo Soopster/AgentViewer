@@ -17056,15 +17056,15 @@ export default function OpenTuiApp() {
       })() : null}
 
       {coordModalOpen ? (() => {
-        const overlayWidth = Math.max(20, Math.min(Math.max(width - 2, 20), Math.max(84, Math.min(132, Math.floor(width * 0.92)))))
-        const overlayHeight = Math.max(22, Math.min(Math.max(height - 2, 22), 38))
+        const overlayWidth = Math.max(20, Math.min(Math.max(width - 2, 20), Math.max(92, Math.min(160, Math.floor(width * 0.96)))))
+        const overlayHeight = Math.max(24, Math.min(Math.max(height - 2, 24), 44))
         const contentWidth = Math.max(overlayWidth - 4, 16)
         const compact = overlayHeight < 29
         const headerHeight = 3
         const footerHeight = 2
         const bodyHeight = Math.max(overlayHeight - headerHeight - footerHeight - (coordError ? 1 : 0) - 2, 12)
         const splitLayout = contentWidth >= 96 && bodyHeight >= 23
-        const runtimePaneWidth = splitLayout ? Math.max(52, Math.floor(contentWidth * 0.62)) : contentWidth
+        const runtimePaneWidth = splitLayout ? Math.max(52, Math.floor(contentWidth * 0.58)) : contentWidth
         const sidePaneWidth = splitLayout ? Math.max(contentWidth - runtimePaneWidth - 1, 34) : contentWidth
         const briefHeight = splitLayout
           ? Math.max(10, Math.floor(bodyHeight * 0.48))
@@ -17242,7 +17242,7 @@ export default function OpenTuiApp() {
                   {coordBusy ? ' ◇ LAUNCHING WORKFLOW… ' : ' ▶ LAUNCH WORKFLOW '}
                 </text>
                 <box flexGrow={1} />
-                <text fg={theme.dim} wrapMode="none">{coordDraft.trim() ? 'lead · task board · live activity' : 'brief required'}</text>
+                {!splitLayout ? <text fg={theme.dim} wrapMode="none">{coordDraft.trim() ? 'lead · task board · live activity' : 'brief required'}</text> : null}
               </box>
             </box>
             </box>
