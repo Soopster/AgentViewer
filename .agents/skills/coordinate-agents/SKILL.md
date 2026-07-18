@@ -11,21 +11,30 @@ Use the `agent-viewer` MCP Coordinator tools as the source of truth. Keep workin
 
 1. For unattended work, prefer the bounded supervisor. It persists identity and provider sessions, heartbeats during turns, waits without token usage, and restarts failed ticks:
    - Lead: `agent-viewer coord worker --start "<goal>" --name <name> --provider codex|claude --attach <url>`
-   - Teammate: `agent-viewer coord worker --join <run-id> --name <name> --provider codex|claude --attach <url>`
+   - Teammate: `agent-viewer coord worker --join <run-id> --name <name> --provider codex|claude --attach <url>` (`--join latest` auto-discovers the newest joinable run)
    Joined teammates receive an isolated git worktree by default; use `--shared` only when explicitly required.
 2. In an already-running interactive CLI, confirm the `coord_*` MCP tools are available. If not, report that the Agent Viewer MCP must be configured and stop.
 3. Determine the mode from the request:
-   - Join when a run ID is supplied. Call `coord_join_run` with a unique descriptive name, the actual provider, and the current worktree path.
+   - Join when a run ID is supplied, or when asked to join without one. Call `coord_join_run` with a unique descriptive name, the actual provider, and the current worktree path; omit `run_id` to auto-join the newest joinable run for this checkout. Use `coord_list_runs` only when you need to choose between several live runs.
    - Start when the user asks to create, coordinate, lead, or fan out a goal and provides no run ID. Call `coord_create_run` with the complete objective, actual provider, current worktree, and a realistic participant limit.
    - Resume when participant credentials are already configured. Call `coord_status`; use `coord_resume` only when explicit run ID, agent ID, and token values were supplied securely.
 4. Never print, message, commit, or otherwise disclose a participant capability token. Identity is persisted in a mode-0600 file; share only the run ID with people or other CLIs.
 5. Read `coord_status` and `coord_read_inbox` immediately after entering.
 
+## Playbooks (reusable runs)
+
+A playbook is a saved run definition — the plan held in an artifact instead of a planning turn, like Claude Code dynamic workflows. Playbooks live in `<checkout>/.agent-viewer/playbooks/<name>.json` and are shared with everyone who clones the repo.
+
+- Discover them with `coord_list_playbooks`; each entry shows a description and an `argsHint` for what to pass.
+- Run one with `coord_create_run` using `playbook_name` and `args` — the whole task board is seeded instantly with phases as dependency barriers (phase N+1 waits for all of phase N), and `{{args}}` / `{{args.<key>}}` placeholders in task text are filled from `args`. No lead planning turn is needed; teammates can claim immediately.
+- When a run's board is worth repeating, the lead saves it with `coord_save_playbook` (a name slug, description, and args hint). Prefer running a saved playbook over re-deriving the same plan.
+- Status responses include a `phases` rollup (per-phase task counts) — use it to report progress phase by phase.
+
 ## Lead workflow
 
 When the participant role is `lead`:
 
-1. Decompose the objective into small independently claimable tasks before editing.
+1. Decompose the objective into small independently claimable tasks before editing (or seed the board from a playbook and skip planning).
 2. Create tasks with `coord_create_task`. Give each task:
    - a concrete outcome and acceptance check;
    - the narrowest expected write paths;

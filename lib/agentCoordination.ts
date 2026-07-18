@@ -14,7 +14,7 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { lstat, mkdir, readFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   AGENT_PROTOCOL_VERSION,
@@ -24,7 +24,10 @@ import {
   buildTeammatePlanPreamble,
   buildTeammateTurnPreamble,
   fallbackTaskTemplates,
+  interpolatePlaybookText,
+  isValidPlaybookName,
   parseAgentProtocolEvents,
+  parseRunPlaybook,
   type AgentProtocolEvent,
   type CreateExternalProtocolRunParams,
   type ExternalProtocolActionable,
@@ -38,23 +41,26 @@ import {
   type ExternalProtocolStatusResult,
   type ExternalProtocolWaitResult,
   type JoinExternalProtocolRunParams,
+  type PlaybookSummary,
   type ProtocolAgent,
   type ProtocolAgentStatus,
   type ProtocolLock,
   type ProtocolLockStatus,
   type ProtocolMessage,
+  type ProtocolPhaseRollup,
   type ProtocolRun,
   type ProtocolRunSnapshot,
   type ProtocolRunStatus,
   type ProtocolTask,
   type ProtocolTaskStatus,
   type ProtocolWorktreeCleanupResult,
+  type RunPlaybook,
   type StartProtocolRunParams,
   type StartProtocolRunResult,
 } from './agentProtocol'
 import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
 import { getRunningSessionInfo, interruptRunningSession, steerRunningSession } from './sessionRuntime'
-import { createWorktreeTask, findWorktreeTaskForCwd, removeWorktreeTask, type WorktreeTask } from './worktreeTasks'
+import { createWorktreeTask, findRepoRoot, findWorktreeTaskForCwd, removeWorktreeTask, type WorktreeTask } from './worktreeTasks'
 
 type SqliteDatabase = any
 type Row = Record<string, unknown>
@@ -62,7 +68,7 @@ type Row = Record<string, unknown>
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
 const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
 const LOCK_LEASE_MS = 20 * 60_000
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 const EVENT_WINDOW = 300
 const EXTERNAL_AGENT_STALE_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_STALE_MS) || 5 * 60_000)
 // One automatic re-dispatch when a teammate's turn ends mid-task; after that
@@ -204,6 +210,7 @@ function initializeSchema(db: SqliteDatabase): void {
       owner_agent_id TEXT,
       paths_json TEXT NOT NULL,
       blocked_by_json TEXT NOT NULL,
+      phase TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (run_id, id)
@@ -300,6 +307,8 @@ function initializeSchema(db: SqliteDatabase): void {
 // to one registered agent identity without accepting caller-supplied ids.
 // v5 → v6: claim-time worktree baselines and mutation idempotency make
 // external supervisors safe to resume after dirty checkouts or transport loss.
+// v6 → v7: playbook runs — tasks carry a phase label for barrier grouping and
+// workflow-style progress rollups.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -320,6 +329,13 @@ function migrateSchema(db: SqliteDatabase): void {
     }
   }
   rebuildForCompositeKeys(db)
+  // v7 additions run after the composite-key rebuild so pre-v3 databases get
+  // the column on the rebuilt table rather than losing it in the copy.
+  try {
+    db.exec('ALTER TABLE protocol_tasks ADD COLUMN phase TEXT')
+  } catch {
+    // column already exists
+  }
 }
 
 function hasSingleColumnPk(db: SqliteDatabase, table: string): boolean {
@@ -492,6 +508,7 @@ function rowToTask(row: Row): ProtocolTask {
     ownerAgentId: typeof row.owner_agent_id === 'string' ? row.owner_agent_id : undefined,
     paths: parseJsonArray(row.paths_json),
     blockedBy: parseJsonArray(row.blocked_by_json),
+    phase: typeof row.phase === 'string' && row.phase ? row.phase : undefined,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
@@ -738,6 +755,50 @@ function issueParticipant(
   }
 }
 
+/**
+ * Seed the whole board from a playbook: tasks land phase by phase, every task
+ * in phase N+1 blocked by every task in phase N (barrier), plus explicit
+ * key-based dependencies. The plan is held by the artifact, not a lead turn.
+ */
+function seedPlaybookTasksSync(
+  db: SqliteDatabase,
+  runId: string,
+  agentId: string,
+  playbook: RunPlaybook,
+  args: unknown,
+): void {
+  const keyToId = new Map<string, string>()
+  let previousPhaseIds: string[] = []
+  for (const phase of playbook.phases) {
+    const phaseIds: string[] = []
+    for (const entry of phase.tasks) {
+      const explicitDeps = (entry.dependsOn ?? []).map((key) => keyToId.get(key) ?? key)
+      const task = insertTaskSync(db, runId, {
+        title: interpolatePlaybookText(entry.title, args),
+        prompt: interpolatePlaybookText(entry.detail, args),
+        paths: (entry.paths ?? []).map((lockPath) => interpolatePlaybookText(lockPath, args)),
+        blockedBy: [...new Set([...previousPhaseIds, ...explicitDeps])],
+        phase: phase.title,
+      })
+      if (entry.key) keyToId.set(entry.key, task.id)
+      phaseIds.push(task.id)
+      insertEventSync(db, {
+        version: AGENT_PROTOCOL_VERSION,
+        runId,
+        agentId,
+        type: 'task.created',
+        taskId: task.id,
+        title: task.title,
+        detail: task.prompt,
+        paths: task.paths,
+        dependsOn: task.blockedBy,
+        payload: { phase: phase.title, playbook: playbook.name },
+      })
+    }
+    previousPhaseIds = phaseIds
+  }
+}
+
 export async function createExternalProtocolRun(
   params: CreateExternalProtocolRunParams,
 ): Promise<ExternalProtocolParticipantResult> {
@@ -745,6 +806,7 @@ export async function createExternalProtocolRun(
   if (!prompt) throw new Error('prompt is required')
   const name = normalizeParticipantName(params.participantName)
   const worktree = await participantWorktree(params.baseCwd)
+  const playbook = params.playbook
   const runId = randomUUID()
   const ts = nowIso()
   const result = await enqueueWrite((db) => {
@@ -761,10 +823,10 @@ export async function createExternalProtocolRun(
         prompt,
         params.provider,
         worktree.cwd,
-        Math.max(2, Math.min(params.maxAgents ?? 6, 16)),
+        Math.max(2, Math.min(params.maxAgents ?? playbook?.maxAgents ?? 6, 16)),
         agentId,
-        params.gateCommand?.trim() || null,
-        params.requirePlanApproval === true ? 1 : 0,
+        (params.gateCommand ?? playbook?.gateCommand)?.trim() || null,
+        (params.requirePlanApproval ?? playbook?.requirePlanApproval) === true ? 1 : 0,
         ts,
         ts,
       )
@@ -777,6 +839,7 @@ export async function createExternalProtocolRun(
         cwd: worktree.cwd,
         branch: worktree.branch,
       })
+      if (playbook) seedPlaybookTasksSync(db, runId, agentId, playbook, params.playbookArgs)
       db.exec('COMMIT')
       return { participant, snapshot: externalSnapshotSync(db, runId, participant.agentId) }
     } catch (err) {
@@ -784,7 +847,36 @@ export async function createExternalProtocolRun(
       throw err
     }
   })
+  notifyRunChanged(runId)
   return { ...result, instructions: externalParticipantInstructions(result.participant) }
+}
+
+/**
+ * Discovery for "join the coordinator run" without a pasted id: newest
+ * joinable run (live, with capacity), preferring one whose base checkout
+ * contains — or is contained by — the joiner's cwd or repo root, so a second
+ * terminal in the same project lands in that project's run.
+ */
+function resolveJoinableExternalRunSync(db: SqliteDatabase, joinerPaths: string[]): ProtocolRun {
+  const rows = db.prepare(`
+    SELECT * FROM protocol_runs
+    WHERE status IN ('planning', 'running')
+    ORDER BY updated_at DESC LIMIT 50
+  `).all() as Row[]
+  const joinable = rows.map(rowToRun).filter((run) => {
+    const count = Number((db.prepare(
+      'SELECT COUNT(*) AS n FROM protocol_agents WHERE run_id = ?',
+    ).get(run.id) as Row | undefined)?.n) || 0
+    return count < run.maxAgents
+  })
+  if (joinable.length === 0) {
+    throw new Error('No joinable Coordinator run found. Create one with coord_create_run, or pass an explicit run id.')
+  }
+  const contains = (a: string, b: string) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
+  const sameCheckout = joinable.find((run) => (
+    joinerPaths.some((joinerPath) => joinerPath && contains(path.resolve(run.baseCwd), joinerPath))
+  ))
+  return sameCheckout ?? joinable[0]
 }
 
 export async function joinExternalProtocolRun(
@@ -792,37 +884,44 @@ export async function joinExternalProtocolRun(
 ): Promise<ExternalProtocolParticipantResult> {
   const name = normalizeParticipantName(params.participantName)
   const worktree = await participantWorktree(params.cwd)
+  const joinerPaths = [path.resolve(params.cwd.trim() || process.cwd()), worktree.cwd]
+  const joinerRoot = await findRepoRoot(worktree.cwd).catch(() => null)
+  if (joinerRoot) joinerPaths.push(joinerRoot)
   const result = await enqueueWrite((db) => {
     db.exec('BEGIN IMMEDIATE')
     try {
-      const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(params.runId) as Row | undefined
-      if (!runRow) throw new Error('Coordinator run not found')
-      const run = rowToRun(runRow)
+      const run = params.runId
+        ? (() => {
+            const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(params.runId) as Row | undefined
+            if (!runRow) throw new Error('Coordinator run not found')
+            return rowToRun(runRow)
+          })()
+        : resolveJoinableExternalRunSync(db, joinerPaths)
       if (!['planning', 'running'].includes(run.status)) throw new Error(`Coordinator run is ${run.status}`)
       const participantCount = Number((db.prepare(
         'SELECT COUNT(*) AS count FROM protocol_agents WHERE run_id = ?',
-      ).get(params.runId) as Row | undefined)?.count) || 0
+      ).get(run.id) as Row | undefined)?.count) || 0
       if (participantCount >= run.maxAgents) throw new Error('Coordinator run has reached its participant limit')
       const duplicate = db.prepare('SELECT 1 FROM protocol_agents WHERE run_id = ? AND lower(name) = lower(?)')
-        .get(params.runId, name)
+        .get(run.id, name)
       if (duplicate) throw new Error(`Coordinator participant name already exists: ${name}`)
       const participant = issueParticipant(db, {
-        runId: params.runId,
+        runId: run.id,
         name,
         role: 'teammate',
         provider: params.provider,
         cwd: worktree.cwd,
         branch: worktree.branch,
       })
-      db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), params.runId)
+      db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), run.id)
       db.exec('COMMIT')
-      return { participant, snapshot: externalSnapshotSync(db, params.runId, participant.agentId) }
+      return { participant, snapshot: externalSnapshotSync(db, run.id, participant.agentId) }
     } catch (err) {
       db.exec('ROLLBACK')
       throw err
     }
   })
-  notifyRunChanged(params.runId)
+  notifyRunChanged(result.participant.runId)
   return { ...result, instructions: externalParticipantInstructions(result.participant) }
 }
 
@@ -851,13 +950,36 @@ export async function readExternalProtocolRun(identity: ExternalProtocolIdentity
   return externalSnapshotSync(db, identity.runId, identity.agentId)
 }
 
+/** Workflow-style progress: task counts per playbook phase, in board order. */
+function phaseRollups(tasks: ProtocolTask[]): ProtocolPhaseRollup[] {
+  const order: string[] = []
+  const rollups = new Map<string, ProtocolPhaseRollup>()
+  for (const task of tasks) {
+    const title = task.phase ?? 'Tasks'
+    let rollup = rollups.get(title)
+    if (!rollup) {
+      rollup = { title, total: 0, pending: 0, active: 0, completed: 0, failed: 0 }
+      rollups.set(title, rollup)
+      order.push(title)
+    }
+    rollup.total += 1
+    if (task.status === 'completed') rollup.completed += 1
+    else if (task.status === 'failed' || task.status === 'cancelled') rollup.failed += 1
+    else if (task.status === 'pending') rollup.pending += 1
+    else rollup.active += 1
+  }
+  return order.map((title) => rollups.get(title)!)
+}
+
 export async function readExternalProtocolStatus(identity: ExternalProtocolIdentity): Promise<ExternalProtocolStatusResult> {
   const db = await getDatabase()
   requireExternalParticipantSync(db, identity)
+  const snapshot = externalSnapshotSync(db, identity.runId, identity.agentId)
   return {
-    snapshot: externalSnapshotSync(db, identity.runId, identity.agentId),
+    snapshot,
     actionable: externalActionableSync(db, identity.runId, identity.agentId),
     cursor: latestRunCursorSync(db, identity.runId),
+    phases: phaseRollups(snapshot.tasks),
   }
 }
 
@@ -1545,6 +1667,114 @@ export async function finalizeExternalProtocolRun(
 }
 
 // ---------------------------------------------------------------------------
+// Playbook storage — the coordinator analog of .claude/workflows/: reusable
+// run definitions live in the repo at .agent-viewer/playbooks/<name>.json so
+// everyone who clones the checkout can run them.
+
+function playbooksDir(cwd: string): string {
+  return path.join(path.resolve(cwd), '.agent-viewer', 'playbooks')
+}
+
+export async function loadRunPlaybook(cwd: string, name: string): Promise<RunPlaybook> {
+  if (!isValidPlaybookName(name)) {
+    throw new Error('playbook name must be a lowercase slug (a-z, 0-9, hyphens, max 64 chars)')
+  }
+  const file = path.join(playbooksDir(cwd), `${name}.json`)
+  let raw: string
+  try {
+    raw = await readFile(file, 'utf8')
+  } catch {
+    throw new Error(`Playbook not found: ${name} (looked in ${playbooksDir(cwd)})`)
+  }
+  return parseRunPlaybook(JSON.parse(raw))
+}
+
+export async function listRunPlaybooks(cwd: string): Promise<PlaybookSummary[]> {
+  const dir = playbooksDir(cwd)
+  let entries: string[]
+  try {
+    entries = await readdir(dir)
+  } catch {
+    return []
+  }
+  const summaries: PlaybookSummary[] = []
+  for (const entry of entries.sort()) {
+    if (!entry.endsWith('.json')) continue
+    try {
+      const playbook = parseRunPlaybook(JSON.parse(await readFile(path.join(dir, entry), 'utf8')))
+      summaries.push({
+        name: playbook.name,
+        description: playbook.description,
+        argsHint: playbook.argsHint,
+        path: path.join(dir, entry),
+        phaseCount: playbook.phases.length,
+        taskCount: playbook.phases.reduce((total, phase) => total + phase.tasks.length, 0),
+      })
+    } catch {
+      // Unparseable playbooks are skipped rather than breaking the listing.
+    }
+  }
+  return summaries
+}
+
+/**
+ * Snapshot a run's board into a reusable playbook (the doc's save-for-reuse):
+ * tasks grouped by phase in board order, task ids becoming stable keys.
+ * Explicit dependencies are preserved; phase barriers re-derive on replay.
+ */
+export async function saveExternalProtocolPlaybook(
+  identity: ExternalProtocolIdentity,
+  params: { name: string; description?: string; argsHint?: string },
+): Promise<{ playbook: RunPlaybook; path: string }> {
+  if (!isValidPlaybookName(params.name)) {
+    throw new Error('playbook name must be a lowercase slug (a-z, 0-9, hyphens, max 64 chars)')
+  }
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can save a playbook')
+  const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
+  if (!runRow) throw new Error('Coordinator run not found')
+  const run = rowToRun(runRow)
+  const tasks = listTasksSync(db, identity.runId)
+  if (tasks.length === 0) throw new Error('Nothing to save: the run has no tasks')
+  const phaseOrder: string[] = []
+  const grouped = new Map<string, ProtocolTask[]>()
+  for (const task of tasks) {
+    const phase = task.phase ?? 'Tasks'
+    let bucket = grouped.get(phase)
+    if (!bucket) {
+      bucket = []
+      grouped.set(phase, bucket)
+      phaseOrder.push(phase)
+    }
+    bucket.push(task)
+  }
+  const playbook = parseRunPlaybook({
+    name: params.name,
+    description: params.description?.trim() || run.prompt.slice(0, 200),
+    argsHint: params.argsHint?.trim() || undefined,
+    maxAgents: run.maxAgents,
+    gateCommand: run.gateCommand,
+    requirePlanApproval: run.requirePlanApproval || undefined,
+    phases: phaseOrder.map((title) => ({
+      title,
+      tasks: grouped.get(title)!.map((task) => ({
+        key: task.id,
+        title: task.title,
+        detail: task.prompt,
+        paths: task.paths.length > 0 ? task.paths : undefined,
+        dependsOn: task.blockedBy.length > 0 ? task.blockedBy : undefined,
+      })),
+    })),
+  })
+  const dir = playbooksDir(run.baseCwd)
+  await mkdir(dir, { recursive: true })
+  const file = path.join(dir, `${playbook.name}.json`)
+  await writeFile(file, `${JSON.stringify(playbook, null, 2)}\n`, 'utf8')
+  return { playbook, path: file }
+}
+
+// ---------------------------------------------------------------------------
 // Locks
 
 function normalizeLockPath(input: string): string {
@@ -1737,6 +1967,7 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
   prompt: string
   paths: string[]
   blockedBy: string[]
+  phase?: string
 }): ProtocolTask {
   const count = Number((db.prepare('SELECT COUNT(*) AS n FROM protocol_tasks WHERE run_id = ?').get(runId) as Row | undefined)?.n) || 0
   const ts = nowIso()
@@ -1748,14 +1979,15 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
     status: 'pending',
     paths: params.paths.map(normalizeLockPath).filter((entry) => entry !== '**' || params.paths.length === 1),
     blockedBy: params.blockedBy,
+    phase: params.phase,
     createdAt: ts,
     updatedAt: ts,
   }
   db.prepare(`
     INSERT INTO protocol_tasks (
-      id, run_id, title, prompt, status, owner_agent_id, paths_json, blocked_by_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(task.id, runId, task.title, task.prompt, 'pending', null, JSON.stringify(task.paths), JSON.stringify(task.blockedBy), ts, ts)
+      id, run_id, title, prompt, status, owner_agent_id, paths_json, blocked_by_json, phase, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(task.id, runId, task.title, task.prompt, 'pending', null, JSON.stringify(task.paths), JSON.stringify(task.blockedBy), task.phase ?? null, ts, ts)
   return task
 }
 

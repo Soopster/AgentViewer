@@ -127,6 +127,8 @@ export type ProtocolTask = {
   ownerAgentId?: string
   paths: string[]
   blockedBy: string[]
+  /** Playbook phase this task belongs to (display + barrier grouping). */
+  phase?: string
   createdAt: string
   updatedAt: string
 }
@@ -233,10 +235,15 @@ export type CreateExternalProtocolRunParams = {
   maxAgents?: number
   gateCommand?: string
   requirePlanApproval?: boolean
+  /** Seed the entire task board from this playbook (no lead planning turn). */
+  playbook?: RunPlaybook
+  /** Interpolated into {{args}} / {{args.<key>}} in playbook task text. */
+  playbookArgs?: unknown
 }
 
 export type JoinExternalProtocolRunParams = {
-  runId: string
+  /** Omit to auto-join the newest joinable run, preferring this checkout. */
+  runId?: string
   provider: AgentProvider
   participantName: string
   cwd: string
@@ -289,6 +296,8 @@ export type ExternalProtocolStatusResult = {
   snapshot: ProtocolRunSnapshot
   actionable: ExternalProtocolActionable
   cursor: string | null
+  /** Workflow-style progress rollup: task counts per playbook phase. */
+  phases: ProtocolPhaseRollup[]
 }
 
 export type ExternalProtocolLockResult = {
@@ -300,6 +309,142 @@ export type ExternalProtocolLockResult = {
 export type ExternalProtocolReleaseResult = {
   task: ProtocolTask
   snapshot: ProtocolRunSnapshot
+}
+
+// ---------------------------------------------------------------------------
+// Run playbooks — the Claude Code dynamic-workflows model adapted to a
+// multi-CLI board: the plan lives in a reusable, parameterized artifact
+// instead of a lead's planning turn. A playbook seeds the whole task board at
+// run creation; phases are barriers (every task in phase N+1 depends on every
+// task in phase N) plus explicit per-task dependencies by key.
+
+export type PlaybookTask = {
+  /** Stable key other tasks may reference in dependsOn. */
+  key?: string
+  title: string
+  /** Full teammate prompt. Supports {{args}} and {{args.<key>}} interpolation. */
+  detail: string
+  paths?: string[]
+  /** Keys (same or earlier phase) this task depends on, beyond the phase barrier. */
+  dependsOn?: string[]
+}
+
+export type PlaybookPhase = {
+  title: string
+  tasks: PlaybookTask[]
+}
+
+export type RunPlaybook = {
+  /** Slug used as the /command-style handle and file name. */
+  name: string
+  description?: string
+  /** Shown to the invoker as guidance for what to pass as args. */
+  argsHint?: string
+  maxAgents?: number
+  gateCommand?: string
+  requirePlanApproval?: boolean
+  phases: PlaybookPhase[]
+}
+
+export type PlaybookSummary = {
+  name: string
+  description?: string
+  argsHint?: string
+  path: string
+  phaseCount: number
+  taskCount: number
+}
+
+export type ProtocolPhaseRollup = {
+  title: string
+  total: number
+  pending: number
+  active: number
+  completed: number
+  failed: number
+}
+
+const PLAYBOOK_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
+
+export function isValidPlaybookName(value: unknown): value is string {
+  return typeof value === 'string' && PLAYBOOK_NAME_RE.test(value)
+}
+
+/** Replace {{args}} / {{args.key}} placeholders; non-string args are JSON-encoded. */
+export function interpolatePlaybookText(text: string, args: unknown): string {
+  if (!text.includes('{{')) return text
+  const render = (value: unknown): string => {
+    if (value === undefined || value === null) return ''
+    return typeof value === 'string' ? value : JSON.stringify(value)
+  }
+  return text.replace(/\{\{\s*args(?:\.([A-Za-z0-9_-]+))?\s*\}\}/g, (_match, key: string | undefined) => {
+    if (!key) return render(args)
+    if (args && typeof args === 'object' && !Array.isArray(args)) {
+      return render((args as Record<string, unknown>)[key])
+    }
+    return ''
+  })
+}
+
+/** Validate untrusted JSON into a RunPlaybook, with actionable errors. */
+export function parseRunPlaybook(value: unknown): RunPlaybook {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('playbook must be an object')
+  const record = value as Record<string, unknown>
+  if (!isValidPlaybookName(record.name)) {
+    throw new Error('playbook.name must be a lowercase slug (a-z, 0-9, hyphens, max 64 chars)')
+  }
+  if (!Array.isArray(record.phases) || record.phases.length === 0) {
+    throw new Error('playbook.phases must be a non-empty array')
+  }
+  const keys = new Set<string>()
+  const phases: PlaybookPhase[] = record.phases.map((phaseValue, phaseIndex) => {
+    if (!phaseValue || typeof phaseValue !== 'object') throw new Error(`playbook.phases[${phaseIndex}] must be an object`)
+    const phase = phaseValue as Record<string, unknown>
+    const title = typeof phase.title === 'string' && phase.title.trim() ? phase.title.trim() : `Phase ${phaseIndex + 1}`
+    if (!Array.isArray(phase.tasks) || phase.tasks.length === 0) {
+      throw new Error(`playbook phase "${title}" must have a non-empty tasks array`)
+    }
+    const tasks: PlaybookTask[] = phase.tasks.map((taskValue, taskIndex) => {
+      if (!taskValue || typeof taskValue !== 'object') throw new Error(`task ${taskIndex + 1} in phase "${title}" must be an object`)
+      const task = taskValue as Record<string, unknown>
+      const taskTitle = typeof task.title === 'string' ? task.title.trim() : ''
+      const detail = typeof task.detail === 'string' ? task.detail.trim() : ''
+      if (!taskTitle || !detail) throw new Error(`task ${taskIndex + 1} in phase "${title}" needs title and detail`)
+      const key = typeof task.key === 'string' && task.key.trim() ? task.key.trim() : undefined
+      if (key) {
+        if (keys.has(key)) throw new Error(`duplicate playbook task key: ${key}`)
+        keys.add(key)
+      }
+      return {
+        key,
+        title: taskTitle,
+        detail,
+        paths: Array.isArray(task.paths)
+          ? task.paths.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+          : undefined,
+        dependsOn: Array.isArray(task.dependsOn)
+          ? task.dependsOn.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+          : undefined,
+      }
+    })
+    return { title, tasks }
+  })
+  for (const phase of phases) {
+    for (const task of phase.tasks) {
+      for (const dep of task.dependsOn ?? []) {
+        if (!keys.has(dep)) throw new Error(`task "${task.title}" depends on unknown key: ${dep}`)
+      }
+    }
+  }
+  return {
+    name: record.name,
+    description: typeof record.description === 'string' && record.description.trim() ? record.description.trim() : undefined,
+    argsHint: typeof record.argsHint === 'string' && record.argsHint.trim() ? record.argsHint.trim() : undefined,
+    maxAgents: Number.isFinite(Number(record.maxAgents)) && Number(record.maxAgents) > 0 ? Number(record.maxAgents) : undefined,
+    gateCommand: typeof record.gateCommand === 'string' && record.gateCommand.trim() ? record.gateCommand.trim() : undefined,
+    requirePlanApproval: record.requirePlanApproval === true ? true : undefined,
+    phases,
+  }
 }
 
 export type ExternalProtocolCompletionResult = {

@@ -241,4 +241,119 @@ assert.equal(finalSnapshot.run.status, 'completed')
 assert.match(finalSnapshot.run.summary ?? '', /external MCP protocol/)
 assert.ok(finalSnapshot.events.some((event) => event.type === 'run.status'))
 
+// Run discovery: with every run terminal, an id-less join fails clearly…
+await assert.rejects(
+  coordination.joinExternalProtocolRun({
+    provider: 'claude',
+    cwd: testCwd,
+    participantName: 'Discovering teammate',
+  }),
+  /No joinable Coordinator run/,
+)
+
+// …and once a live run exists for this checkout, it is auto-joined.
+const secondRun = await coordination.createExternalProtocolRun({
+  prompt: 'Second run for join discovery',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Second lead',
+  maxAgents: 2,
+})
+const discovered = await coordination.joinExternalProtocolRun({
+  provider: 'claude',
+  cwd: testCwd,
+  participantName: 'Discovering teammate',
+})
+assert.equal(discovered.participant.runId, secondRun.participant.runId)
+assert.equal(discovered.participant.role, 'teammate')
+
+// --- Playbooks: workflow-style runs where the artifact holds the plan ------
+
+const { parseRunPlaybook, interpolatePlaybookText } = await import('../../lib/agentProtocol')
+assert.equal(
+  interpolatePlaybookText('Audit {{args.dir}} then {{ args }}', { dir: 'src/routes' }),
+  'Audit src/routes then {"dir":"src/routes"}',
+)
+
+const playbook = parseRunPlaybook({
+  name: 'smoke-audit',
+  description: 'Two-phase smoke playbook',
+  argsHint: 'target file name',
+  maxAgents: 3,
+  phases: [
+    {
+      title: 'Survey',
+      tasks: [
+        { key: 'survey', title: 'Survey {{args.target}}', detail: 'Survey the checkout for {{args.target}}.' },
+      ],
+    },
+    {
+      title: 'Fix',
+      tasks: [
+        { key: 'fix', title: 'Fix findings', detail: 'Apply fixes for {{args.target}}.', paths: ['third.txt'] },
+      ],
+    },
+  ],
+})
+
+const playbookRun = await coordination.createExternalProtocolRun({
+  prompt: 'Playbook-seeded run',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Playbook lead',
+  playbook,
+  playbookArgs: { target: 'third.txt' },
+})
+const playbookLead = playbookRun.participant
+const seeded = playbookRun.snapshot.tasks
+assert.equal(seeded.length, 2)
+assert.equal(seeded[0].title, 'Survey third.txt')
+assert.equal(seeded[0].phase, 'Survey')
+assert.equal(seeded[1].phase, 'Fix')
+// Phase barrier: the Fix task depends on the Survey task.
+assert.deepEqual(seeded[1].blockedBy, [seeded[0].id])
+assert.equal(playbookRun.snapshot.run.maxAgents, 3)
+
+// Barrier is enforced at claim time, and phases roll up in status.
+await assert.rejects(
+  coordination.claimExternalProtocolTask(playbookLead, seeded[1].id),
+  /blocked by incomplete dependencies/,
+)
+const playbookStatus = await coordination.readExternalProtocolStatus(playbookLead)
+assert.deepEqual(
+  playbookStatus.phases.map((phase) => `${phase.title}:${phase.total}`),
+  ['Survey:1', 'Fix:1'],
+)
+
+// Complete both phases, then save the board as a reusable playbook.
+await coordination.claimExternalProtocolTask(playbookLead, seeded[0].id)
+await coordination.completeExternalProtocolTask(playbookLead, { taskId: seeded[0].id, summary: 'Surveyed.' })
+await coordination.claimExternalProtocolTask(playbookLead, seeded[1].id)
+writeFileSync(path.join(testCwd, 'third.txt'), 'fixed\n')
+const playbookDone = await coordination.completeExternalProtocolTask(playbookLead, { taskId: seeded[1].id, summary: 'Fixed.' })
+assert.equal(playbookDone.accepted, true)
+
+const saved = await coordination.saveExternalProtocolPlaybook(playbookLead, {
+  name: 'smoke-audit-saved',
+  description: 'Saved from the smoke run',
+})
+assert.ok(saved.path.endsWith('smoke-audit-saved.json'))
+const listed = await coordination.listRunPlaybooks(testCwd)
+assert.ok(listed.some((entry) => entry.name === 'smoke-audit-saved' && entry.taskCount === 2))
+
+// The saved playbook reloads and reseeds an identical phased board.
+const reloaded = await coordination.loadRunPlaybook(testCwd, 'smoke-audit-saved')
+assert.equal(reloaded.phases.length, 2)
+await coordination.finalizeExternalProtocolRun(playbookLead, 'Playbook smoke complete.')
+const replay = await coordination.createExternalProtocolRun({
+  prompt: 'Replay from saved playbook',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Replay lead',
+  playbook: reloaded,
+})
+assert.equal(replay.snapshot.tasks.length, 2)
+assert.equal(replay.snapshot.tasks[1].blockedBy.length, 1)
+await coordination.finalizeExternalProtocolRun(replay.participant, 'x').catch(() => {})
+
 console.log('External Coordinator smoke passed')

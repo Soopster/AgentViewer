@@ -7,6 +7,8 @@ import {
   failExternalProtocolTask,
   finalizeExternalProtocolRun,
   joinExternalProtocolRun,
+  listRunPlaybooks,
+  loadRunPlaybook,
   publishExternalProtocolFinding,
   readExternalProtocolInbox,
   readExternalProtocolStatus,
@@ -16,11 +18,12 @@ import {
   resumeExternalProtocolParticipant,
   reviewExternalProtocolPlan,
   runExternalProtocolIdempotent,
+  saveExternalProtocolPlaybook,
   sendExternalProtocolMessage,
   submitExternalProtocolPlan,
   waitForExternalProtocolChange,
 } from '@/lib/agentCoordination'
-import type { ExternalProtocolIdentity } from '@/lib/agentProtocol'
+import { parseRunPlaybook, type ExternalProtocolIdentity } from '@/lib/agentProtocol'
 import { isAgentProvider } from '@/lib/provider'
 
 function text(value: unknown): string {
@@ -53,26 +56,35 @@ export async function POST(request: Request) {
   try {
     let result: unknown
     const requestId = optionalText(body.requestId)
-    const participantIdentity = ['create_run', 'join_run'].includes(action) ? null : identity(body)
+    const participantIdentity = ['create_run', 'join_run', 'list_playbooks'].includes(action) ? null : identity(body)
     const mutate = <T>(operation: () => Promise<T>) => {
       if (!participantIdentity) return operation()
       return runExternalProtocolIdempotent(participantIdentity, action, requestId, operation)
     }
     if (action === 'create_run') {
       if (!isAgentProvider(body.provider)) throw new Error('Valid provider is required')
+      const cwd = text(body.cwd) || process.cwd()
+      const playbookName = optionalText(body.playbookName)
+      const playbook = playbookName
+        ? await loadRunPlaybook(cwd, playbookName)
+        : body.playbook !== undefined
+          ? parseRunPlaybook(body.playbook)
+          : undefined
       result = await createExternalProtocolRun({
-        prompt: text(body.prompt),
-        baseCwd: text(body.cwd) || process.cwd(),
+        prompt: text(body.prompt) || (playbook ? `Playbook run: ${playbook.name}` : ''),
+        baseCwd: cwd,
         provider: body.provider,
         participantName: text(body.name),
         maxAgents: Number(body.maxAgents) || undefined,
         gateCommand: optionalText(body.gateCommand),
-        requirePlanApproval: body.requirePlanApproval === true,
+        requirePlanApproval: body.requirePlanApproval === true ? true : undefined,
+        playbook,
+        playbookArgs: body.args,
       })
     } else if (action === 'join_run') {
       if (!isAgentProvider(body.provider)) throw new Error('Valid provider is required')
       result = await joinExternalProtocolRun({
-        runId: text(body.runId),
+        runId: optionalText(body.runId),
         provider: body.provider,
         participantName: text(body.name),
         cwd: text(body.cwd) || process.cwd(),
@@ -162,6 +174,14 @@ export async function POST(request: Request) {
       }))
     } else if (action === 'finalize_run') {
       result = await mutate(() => finalizeExternalProtocolRun(participantIdentity!, text(body.summary)))
+    } else if (action === 'save_playbook') {
+      result = await mutate(() => saveExternalProtocolPlaybook(participantIdentity!, {
+        name: text(body.playbookName),
+        description: optionalText(body.description),
+        argsHint: optionalText(body.argsHint),
+      }))
+    } else if (action === 'list_playbooks') {
+      result = { playbooks: await listRunPlaybooks(text(body.cwd) || process.cwd()) }
     } else {
       return NextResponse.json({ error: `Unknown external Coordinator action: ${action || '(missing)'}` }, { status: 400 })
     }

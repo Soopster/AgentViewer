@@ -11,7 +11,7 @@ function usage(message) {
   if (message) console.error(message)
   console.log(`Usage:
   agent-viewer coord worker --start <goal> --name <name> [--provider codex|claude]
-  agent-viewer coord worker --join <run-id> --name <name> [--provider codex|claude]
+  agent-viewer coord worker --join <run-id|latest> --name <name> [--provider codex|claude]
   agent-viewer coord worker --identity <file> [--provider codex|claude]
 
 Options:
@@ -20,6 +20,8 @@ Options:
   --shared             Join in the current checkout instead of an isolated worktree
   --once               Run one CLI tick and exit
   --identity <file>    Durable 0600 participant and provider-session state
+  --playbook <name>    With --start: seed the board from a saved playbook
+  --args <value>       With --playbook: args interpolated into task text (JSON or string)
 `)
   process.exit(message ? 1 : 0)
 }
@@ -191,9 +193,19 @@ if (options.identity && !options.start && !options.join) {
     usage('Provide --name and exactly one of --start or --join')
   }
   let cwd = path.resolve(options.cwd)
-  if (options.join && !options.shared) cwd = await isolatedWorktree(cwd, options.join, options.name)
+  // `--join latest` (or `auto`) discovers the newest joinable run server-side.
+  const joinRunId = ['latest', 'auto'].includes(options.join ?? '') ? undefined : options.join
+  if (options.join && !options.shared) {
+    cwd = await isolatedWorktree(cwd, joinRunId ?? `latest-${Date.now().toString(36)}`, options.name)
+  }
+  let playbookArgs = options.args
+  if (typeof playbookArgs === 'string') {
+    try { playbookArgs = JSON.parse(playbookArgs) } catch { /* keep as plain string */ }
+  }
   const result = await api(baseUrl, options.start ? 'create_run' : 'join_run', {
-    ...(options.start ? { prompt: options.start } : { runId: options.join }),
+    ...(options.start
+      ? { prompt: options.start, playbookName: options.playbook, args: playbookArgs }
+      : { runId: joinRunId }),
     name: options.name,
     provider: options.provider,
     cwd,

@@ -1,0 +1,48 @@
+{
+  "name": "audit",
+  "description": "Fan an audit target across independent investigation lanes, adversarially verify the findings, then synthesize one report",
+  "argsHint": "What to audit, e.g. \"error handling under lib/\" or \"auth checks in app/api\"",
+  "maxAgents": 5,
+  "phases": [
+    {
+      "title": "Investigate",
+      "tasks": [
+        {
+          "key": "correctness",
+          "title": "Correctness lane: {{args}}",
+          "detail": "Audit {{args}} for correctness bugs: broken edge cases, race conditions, wrong error handling, state that can go stale. Read-only — do not edit files. Publish every defect you find with coord_publish_finding (kind: finding), one finding per defect, with file:line references and a concrete failure scenario. Finish by completing this task with a one-paragraph summary."
+        },
+        {
+          "key": "consistency",
+          "title": "Consistency lane: {{args}}",
+          "detail": "Audit {{args}} for consistency problems: duplicated logic that has drifted, naming that contradicts behavior, patterns that diverge from how the surrounding codebase does the same thing. Read-only — do not edit files. Publish each issue with coord_publish_finding (kind: finding) with file:line references. Finish by completing this task with a one-paragraph summary."
+        },
+        {
+          "key": "resilience",
+          "title": "Resilience lane: {{args}}",
+          "detail": "Audit {{args}} for resilience gaps: missing timeouts, unbounded growth, unhandled rejections, failure modes that strand state. Read-only — do not edit files. Publish each gap with coord_publish_finding (kind: finding) with file:line references and what breaks when it triggers. Finish by completing this task with a one-paragraph summary."
+        }
+      ]
+    },
+    {
+      "title": "Verify",
+      "tasks": [
+        {
+          "key": "verify",
+          "title": "Adversarially verify the findings",
+          "detail": "Read every finding published in this run (coord_status events). For each, try to REFUTE it against the actual code: reproduce the reasoning, check the cited lines, and decide confirmed or refuted. Publish one coord_publish_finding (kind: learning) per verdict, prefixed CONFIRMED: or REFUTED: with your reasoning. Read-only — do not edit files."
+        }
+      ]
+    },
+    {
+      "title": "Synthesize",
+      "tasks": [
+        {
+          "key": "report",
+          "title": "Synthesize the audit report",
+          "detail": "Collect the confirmed findings (skip anything the verify phase refuted) and write one ranked report: most severe first, each with file:line, why it matters, and a suggested fix direction. Complete this task with the full report in the completion detail so the lead can finalize the run with it."
+        }
+      ]
+    }
+  ]
+}

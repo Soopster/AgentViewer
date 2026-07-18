@@ -152,6 +152,7 @@ const server = new McpServer(
     instructions: [
       'Agent Viewer Coordinator is a shared multi-CLI task board and mailbox.',
       'Use coord_create_run to lead a new run, coord_join_run to join an existing run, or coord_resume to restore a capability.',
+      'Reusable run definitions (playbooks) live in .agent-viewer/playbooks/: list with coord_list_playbooks, run via coord_create_run playbook_name + args, save a good board with coord_save_playbook.',
       'Prefer agent-viewer coord worker for unattended runs. In an interactive turn, use coord_wait instead of polling when no action is ready.',
       'After joining: read coord_status, claim one task, request locks before editing, report progress, drain the inbox, and complete through coord_complete_task.',
       'coord_wait and coord_status return an `actionable` digest (claimable tasks, inbox count, plans awaiting review, your task state) — act on it instead of diffing snapshots.',
@@ -298,17 +299,20 @@ server.registerTool('coord_list_runs', {
 })
 
 server.registerTool('coord_create_run', {
-  description: 'Create a ledger-only Coordinator run and bind this CLI as its lead. Add tasks next with coord_create_task.',
+  description: 'Create a Coordinator run and bind this CLI as its lead. Seed the whole board from a saved playbook (playbook_name + args) or an inline playbook object — phases become dependency barriers and no planning turn is needed — or omit both and add tasks with coord_create_task.',
   inputSchema: {
-    prompt: z.string().min(1),
+    prompt: z.string().min(1).optional().describe('Run objective; optional when a playbook is supplied'),
     name: z.string().min(1).max(80).describe('Human-readable name for this CLI participant'),
     provider: z.enum(PROVIDERS).optional().describe('Defaults to codex'),
     max_agents: z.number().int().min(2).max(16).optional(),
     cwd: z.string().min(1).optional().describe('Working checkout; defaults to this CLI project directory'),
     gate_command: z.string().max(1000).optional(),
     require_plan_approval: z.boolean().optional(),
+    playbook_name: z.string().min(1).max(64).optional().describe('Saved playbook in <cwd>/.agent-viewer/playbooks/ to seed the board from'),
+    playbook: z.record(z.string(), z.unknown()).optional().describe('Inline playbook object: { name, description?, phases: [{ title, tasks: [{ key?, title, detail, paths?, dependsOn? }] }] }'),
+    args: z.unknown().optional().describe('Interpolated into {{args}} / {{args.<key>}} in playbook task text'),
   },
-}, async ({ prompt, name, provider, max_agents, cwd, gate_command, require_plan_approval }) => {
+}, async ({ prompt, name, provider, max_agents, cwd, gate_command, require_plan_approval, playbook_name, playbook, args }) => {
   const result = await bindCoordinatorParticipant(await coordinatorRequest('create_run', {
     prompt,
     name,
@@ -317,14 +321,40 @@ server.registerTool('coord_create_run', {
     cwd: cwd ?? bridgeCwd,
     gateCommand: gate_command,
     requirePlanApproval: require_plan_approval,
+    playbookName: playbook_name,
+    playbook,
+    args,
   }, false))
   return textResult(result)
 })
 
-server.registerTool('coord_join_run', {
-  description: 'Join an existing Coordinator run and bind this CLI as a named teammate.',
+server.registerTool('coord_list_playbooks', {
+  description: 'List saved Coordinator playbooks (reusable run definitions) for a checkout. Run one with coord_create_run playbook_name + args.',
   inputSchema: {
-    run_id: z.string().min(1),
+    cwd: z.string().min(1).optional().describe('Checkout to search; defaults to this CLI project directory'),
+  },
+  annotations: { readOnlyHint: true },
+}, async ({ cwd }) => textResult(await coordinatorRequest('list_playbooks', { cwd: cwd ?? bridgeCwd }, false)))
+
+server.registerTool('coord_save_playbook', {
+  description: 'Lead-only: save the current run\'s task board as a reusable playbook under <run cwd>/.agent-viewer/playbooks/<name>.json, preserving phases and dependencies so the run can be replayed with coord_create_run.',
+  inputSchema: {
+    playbook_name: z.string().min(1).max(64).describe('Lowercase slug (a-z, 0-9, hyphens)'),
+    description: z.string().max(500).optional(),
+    args_hint: z.string().max(500).optional().describe('Guidance for what to pass as args when replaying'),
+    request_id: requestIdField,
+  },
+}, async ({ playbook_name, description, args_hint, request_id }) => textResult(await coordinatorRequest('save_playbook', {
+  playbookName: playbook_name,
+  description,
+  argsHint: args_hint,
+  requestId: request_id,
+})))
+
+server.registerTool('coord_join_run', {
+  description: 'Join a Coordinator run and bind this CLI as a named teammate. Omit run_id to auto-join the newest joinable run, preferring one whose checkout matches this CLI\'s project directory; use coord_list_runs first only when you need to pick between several live runs.',
+  inputSchema: {
+    run_id: z.string().min(1).optional().describe('Explicit run to join; omit to discover the newest joinable run for this checkout'),
     name: z.string().min(1).max(80),
     provider: z.enum(PROVIDERS).optional().describe('Defaults to codex'),
     cwd: z.string().min(1).optional().describe('Working checkout; defaults to this CLI project directory'),
