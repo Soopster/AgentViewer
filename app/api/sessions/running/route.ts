@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { readViewRuntimeActivity } from '@/lib/sessionBackend'
-import { dismissViewerAttention } from '@/lib/viewerAttention'
+import { isAgentProvider } from '@/lib/provider'
+import { dismissViewerAttention, postViewerAttention } from '@/lib/viewerAttention'
 
 // Every session with a turn running in THIS server process, each carrying any
 // Claude prompts the turn is blocked on. Process-local, like the per-session
@@ -20,4 +21,18 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: 'attentionId is required' }, { status: 400 })
   }
   return NextResponse.json({ dismissed: dismissViewerAttention(body.attentionId) })
+}
+
+export async function POST(request: Request) {
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>
+  const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+  const title = typeof body.title === 'string' ? body.title.trim() : ''
+  const detail = typeof body.detail === 'string' ? body.detail : undefined
+  const provider = isAgentProvider(body.provider) ? body.provider : 'claude'
+  if (!sessionId || !title) {
+    return NextResponse.json({ error: 'sessionId and title are required' }, { status: 400 })
+  }
+  return NextResponse.json({
+    attention: postViewerAttention({ sessionId, provider, title, detail }),
+  })
 }

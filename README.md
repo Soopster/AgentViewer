@@ -103,6 +103,30 @@ Claude sessions are read through `@anthropic-ai/claude-agent-sdk`.
 
 Supported viewer operations include listing, reading messages, sending, renaming, tagging, deleting, forking, resuming from a message, file rewind, diagnostics, models, context usage, and subagent messages where the SDK exposes them.
 
+#### Claude and Codex CLI MCP bridge
+
+Agent Viewer can expose cross-provider session search and transcripts, message bookmarks, and the human-attention inbox to standalone Claude and Codex CLIs over stdio. Start the web daemon first so the bridge and any attached TUI share one runtime:
+
+```bash
+npx agent-viewer web --port 3000
+```
+
+Register the packaged bridge with Claude Code:
+
+```bash
+claude mcp add agent-viewer -- npx -y agent-viewer mcp --attach 3000
+```
+
+Or register it with Codex:
+
+```bash
+codex mcp add agent-viewer \
+  --env AGENT_VIEWER_ATTACH=http://127.0.0.1:3000 \
+  -- npx -y agent-viewer mcp
+```
+
+The CLI then sees `search_sessions`, `get_session_transcript`, `set_bookmark`, and `post_attention` under the `agent-viewer` MCP server. Transcript reads support provider selection plus offset/limit or tail pagination, and return Agent Viewer's canonical messages without discarding tool calls, tool results, reasoning, or system events. Search needs no session context. Transcript, bookmark, and attention calls must supply `session_id`, unless the MCP configuration sets `AGENT_VIEWER_SESSION_ID`. The bridge defaults to `http://127.0.0.1:3000`; `--attach`, `AGENT_VIEWER_ATTACH`, or `AGENT_VIEWER_MCP_URL` can point it at another local daemon.
+
 ### Codex
 
 Codex uses the local `codex` CLI by spawning:

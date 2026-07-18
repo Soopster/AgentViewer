@@ -75,13 +75,18 @@ function printUsage() {
 Modes:
   (default)  Launch the OpenTUI terminal app via Bun
   web        Launch the Next.js web app
+  mcp        Run the Claude/Codex stdio MCP bridge
 
 Options:
   -l, --legacy         Launch the legacy Ink terminal app
   -p, --port <port>    Use a custom port in web mode
-  -a, --attach <url>   Attach the TUI to a running \`agent-viewer web\` daemon
+  -a, --attach <url>   Connect the TUI or MCP bridge to an \`agent-viewer web\` daemon
                        (e.g. --attach 3000 or --attach http://127.0.0.1:3000).
                        Turns run in the daemon and survive TUI restarts.
+
+CLI MCP:
+  claude mcp add agent-viewer -- npx -y agent-viewer mcp --attach 3000
+  codex mcp add agent-viewer --env AGENT_VIEWER_ATTACH=http://127.0.0.1:3000 -- npx -y agent-viewer mcp
 `)
 }
 
@@ -215,6 +220,21 @@ function failMissingBun() {
 if (command === '-h' || command === '--help' || command === 'help') {
   printUsage()
   process.exitCode = 0
+} else if (command === 'mcp') {
+  const { attach } = parseArgs(args.slice(1))
+  const entrypoint = fileURLToPath(new URL('./agent-viewer-mcp.mjs', import.meta.url))
+  const attachUrl = normalizeAttachUrl(attach)
+  const child = spawn(process.execPath, [entrypoint], {
+    stdio: 'inherit',
+    env: attachUrl ? { ...process.env, AGENT_VIEWER_ATTACH: attachUrl } : process.env,
+  })
+
+  child.on('error', (error) => {
+    throw error
+  })
+
+  forwardSignals(child)
+  trackExit(child)
 } else if (command === 'web') {
   const { forwarded, port, legacy } = parseArgs(args.slice(1))
   if (legacy) {
