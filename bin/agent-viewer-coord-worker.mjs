@@ -98,8 +98,9 @@ function mcpConfig(state, baseUrl) {
 function tickPrompt(state) {
   return [
     `Continue Coordinator run ${state.runId} as ${state.name || state.agentId} (${state.role || 'participant'}).`,
+    'You are ALREADY bound to this run: never call coord_create_run, coord_join_run, or coord_list_runs — start with coord_status and act on its actionable digest.',
     'Use the coordinate-agents skill and the agent-viewer coord_* MCP tools now.',
-    'Drain the inbox, read status, and perform every immediately actionable role-appropriate step, including implementation and verification.',
+    'Drain the inbox, then perform every immediately actionable role-appropriate step, including implementation and verification.',
     'Use stable request_id values before retrying mutations. If no action is ready, return control to the supervisor; do not poll or sleep.',
     'If all tasks are terminal and you are lead, review results and finalize the run. Never print participant credentials.',
   ].join(' ')

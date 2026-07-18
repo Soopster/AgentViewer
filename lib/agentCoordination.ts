@@ -28,13 +28,16 @@ import {
   isValidPlaybookName,
   parseAgentProtocolEvents,
   parseRunPlaybook,
+  playbookExpectsArgs,
   type AgentProtocolEvent,
   type CreateExternalProtocolRunParams,
   type ExternalProtocolActionable,
+  type ExternalProtocolClaimResult,
   type ExternalProtocolCompletionResult,
   type ExternalProtocolIdentity,
   type ExternalProtocolInboxResult,
   type ExternalProtocolLockResult,
+  type ExternalProtocolMutationResult,
   type ExternalProtocolParticipant,
   type ExternalProtocolParticipantResult,
   type ExternalProtocolReleaseResult,
@@ -426,10 +429,26 @@ async function openDatabase(): Promise<SqliteDatabase> {
   try {
     configureDatabase(db)
     initializeSchema(db)
+    pruneExpiredRunsSync(db)
     return db
   } catch (err) {
     db.close()
     throw err
+  }
+}
+
+// Terminal runs older than the retention window are pruned when the ledger
+// opens; FK cascades clean their events, tasks, agents, tokens, messages,
+// locks, baselines, and idempotency rows, so long-lived daemons and heavy
+// playbook reuse can't grow coordination.sqlite forever.
+const RUN_RETENTION_MS = Math.max(1, Number(process.env.AGENT_VIEWER_COORD_RETENTION_DAYS) || 14) * 86_400_000
+
+function pruneExpiredRunsSync(db: SqliteDatabase): void {
+  try {
+    const cutoff = new Date(Date.now() - RUN_RETENTION_MS).toISOString()
+    db.prepare("DELETE FROM protocol_runs WHERE status IN ('completed', 'failed', 'stopped') AND updated_at < ?").run(cutoff)
+  } catch {
+    // Best-effort: a partially migrated schema must not block opening.
   }
 }
 
@@ -768,12 +787,27 @@ function seedPlaybookTasksSync(
   playbook: RunPlaybook,
   args: unknown,
 ): void {
+  // Pre-assign every task id in insertion order so key references resolve
+  // regardless of declaration order within a phase. (Later-phase references
+  // are rejected at parse time — they would deadlock against the barrier.)
+  const startCount = Number((db.prepare('SELECT COUNT(*) AS n FROM protocol_tasks WHERE run_id = ?').get(runId) as Row | undefined)?.n) || 0
   const keyToId = new Map<string, string>()
+  let assigned = startCount
+  for (const phase of playbook.phases) {
+    for (const entry of phase.tasks) {
+      assigned += 1
+      if (entry.key) keyToId.set(entry.key, `task-${assigned}`)
+    }
+  }
   let previousPhaseIds: string[] = []
   for (const phase of playbook.phases) {
     const phaseIds: string[] = []
     for (const entry of phase.tasks) {
-      const explicitDeps = (entry.dependsOn ?? []).map((key) => keyToId.get(key) ?? key)
+      const explicitDeps = (entry.dependsOn ?? []).map((key) => {
+        const id = keyToId.get(key)
+        if (!id) throw new Error(`playbook task "${entry.title}" depends on unknown key: ${key}`)
+        return id
+      })
       const task = insertTaskSync(db, runId, {
         title: interpolatePlaybookText(entry.title, args),
         prompt: interpolatePlaybookText(entry.detail, args),
@@ -808,6 +842,11 @@ export async function createExternalProtocolRun(
   const name = normalizeParticipantName(params.participantName)
   const worktree = await participantWorktree(params.baseCwd)
   const playbook = params.playbook
+  if (playbook && params.playbookArgs === undefined && playbookExpectsArgs(playbook)) {
+    throw new Error(
+      `Playbook "${playbook.name}" expects args (${playbook.argsHint ?? 'see the {{args}} placeholders in its task text'}) — pass args when creating the run`,
+    )
+  }
   const runId = randomUUID()
   const ts = nowIso()
   const result = await enqueueWrite((db) => {
@@ -951,12 +990,15 @@ export async function readExternalProtocolRun(identity: ExternalProtocolIdentity
   return externalSnapshotSync(db, identity.runId, identity.agentId)
 }
 
+/** Rollup/save group for tasks created outside any playbook phase. */
+const UNPHASED_GROUP = 'Tasks'
+
 /** Workflow-style progress: task counts per playbook phase, in board order. */
 function phaseRollups(tasks: ProtocolTask[]): ProtocolPhaseRollup[] {
   const order: string[] = []
   const rollups = new Map<string, ProtocolPhaseRollup>()
   for (const task of tasks) {
-    const title = task.phase ?? 'Tasks'
+    const title = task.phase ?? UNPHASED_GROUP
     let rollup = rollups.get(title)
     if (!rollup) {
       rollup = { title, total: 0, pending: 0, active: 0, completed: 0, failed: 0 }
@@ -970,6 +1012,37 @@ function phaseRollups(tasks: ProtocolTask[]): ProtocolPhaseRollup[] {
     else rollup.active += 1
   }
   return order.map((title) => rollups.get(title)!)
+}
+
+/**
+ * Compact post-mutation view: enough for the agent's next decision without
+ * echoing the board it already knows. Full views stay on status/wait. The
+ * cursor lets the MCP bridge advance past the caller's own events so its next
+ * coord_wait doesn't wake on them.
+ */
+function externalMutationResultSync(
+  db: SqliteDatabase,
+  runId: string,
+  agentId: string,
+  task?: ProtocolTask,
+): ExternalProtocolMutationResult {
+  const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
+  if (!runRow) throw new Error('Coordinator run not found')
+  return {
+    runStatus: String(runRow.status) as ProtocolRunStatus,
+    cursor: latestRunCursorSync(db, runId),
+    phases: phaseRollups(listTasksSync(db, runId)),
+    actionable: externalActionableSync(db, runId, agentId),
+    ...(task ? { task } : {}),
+  }
+}
+
+async function externalMutationResult(
+  identity: ExternalProtocolIdentity,
+  task?: ProtocolTask,
+): Promise<ExternalProtocolMutationResult> {
+  const db = await getDatabase()
+  return externalMutationResultSync(db, identity.runId, identity.agentId, task)
 }
 
 export async function readExternalProtocolStatus(identity: ExternalProtocolIdentity): Promise<ExternalProtocolStatusResult> {
@@ -1142,9 +1215,9 @@ export async function runExternalProtocolIdempotent<T>(
 
 export async function createExternalProtocolTask(
   identity: ExternalProtocolIdentity,
-  params: { title: string; detail: string; paths?: string[]; dependsOn?: string[] },
-): Promise<ProtocolRunSnapshot> {
-  const snapshot = await enqueueWrite((db) => {
+  params: { title: string; detail: string; paths?: string[]; dependsOn?: string[]; phase?: string },
+): Promise<ExternalProtocolMutationResult> {
+  const result = await enqueueWrite((db) => {
     const agent = requireExternalParticipantSync(db, identity)
     const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
     if (!runRow) throw new Error('Coordinator run not found')
@@ -1163,6 +1236,7 @@ export async function createExternalProtocolTask(
         prompt: detail,
         paths: params.paths ?? [],
         blockedBy: params.dependsOn ?? [],
+        phase: params.phase?.trim() || undefined,
       })
       insertEventSync(db, {
         version: AGENT_PROTOCOL_VERSION,
@@ -1174,6 +1248,7 @@ export async function createExternalProtocolTask(
         detail,
         paths: task.paths,
         dependsOn: task.blockedBy,
+        ...(task.phase ? { payload: { phase: task.phase } } : {}),
       })
       if (reopening) {
         db.prepare("UPDATE protocol_runs SET status = 'running' WHERE id = ?").run(identity.runId)
@@ -1188,23 +1263,29 @@ export async function createExternalProtocolTask(
       }
       db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), identity.runId)
       db.exec('COMMIT')
-      return externalSnapshotSync(db, identity.runId, identity.agentId)
+      return externalMutationResultSync(db, identity.runId, identity.agentId, task)
     } catch (err) {
       db.exec('ROLLBACK')
       throw err
     }
   })
   notifyRunChanged(identity.runId)
-  return snapshot
+  return result
 }
 
 export async function claimExternalProtocolTask(
   identity: ExternalProtocolIdentity,
   taskId?: string,
-): Promise<{ task: ProtocolTask; snapshot: ProtocolRunSnapshot }> {
+): Promise<ExternalProtocolClaimResult> {
   const initialDb = await getDatabase()
   const agent = requireExternalParticipantSync(initialDb, identity)
-  const baseline = await worktreeChangeSnapshot(agent.worktreePath).catch(() => ({} as Record<string, string>))
+  // A failed snapshot must not silently degrade into an empty baseline —
+  // that would make every pre-existing dirty file look like task work and
+  // reject the eventual completion far from the real cause. Mark it so the
+  // gate fails open (with an audit event) instead of failing confusing.
+  const baseline = await worktreeChangeSnapshot(agent.worktreePath)
+    .catch(() => ({ __baselineUnavailable: '1' } as Record<string, string>))
+  const baselineFailed = baseline.__baselineUnavailable === '1'
   const result = await enqueueWrite((db) => {
     requireExternalParticipantSync(db, identity)
     db.exec('BEGIN IMMEDIATE')
@@ -1219,8 +1300,18 @@ export async function claimExternalProtocolTask(
           (run_id, task_id, agent_id, snapshot_json, created_at)
         VALUES (?, ?, ?, ?, ?)
       `).run(identity.runId, task.id, identity.agentId, JSON.stringify(baseline), nowIso())
+      if (baselineFailed) {
+        insertEventSync(db, {
+          version: AGENT_PROTOCOL_VERSION,
+          runId: identity.runId,
+          agentId: identity.agentId,
+          type: 'learning',
+          taskId: task.id,
+          summary: `Worktree baseline could not be captured at claim of ${task.id}; the outside-paths completion gate is disabled for this task`,
+        })
+      }
       db.exec('COMMIT')
-      return { task, snapshot: externalSnapshotSync(db, identity.runId, identity.agentId) }
+      return { ...externalMutationResultSync(db, identity.runId, identity.agentId, task), task }
     } catch (err) {
       db.exec('ROLLBACK')
       throw err
@@ -1292,7 +1383,7 @@ export async function readExternalProtocolInbox(
 export async function sendExternalProtocolMessage(
   identity: ExternalProtocolIdentity,
   params: { to: string; body: string },
-): Promise<ProtocolRunSnapshot> {
+): Promise<ExternalProtocolMutationResult> {
   const db = await getDatabase()
   requireExternalParticipantSync(db, identity)
   const body = params.body.trim()
@@ -1308,7 +1399,7 @@ export async function sendExternalProtocolMessage(
     to: params.to,
     summary: body,
   })
-  return readExternalProtocolRun(identity)
+  return externalMutationResult(identity)
 }
 
 export async function requestExternalProtocolLocks(
@@ -1340,6 +1431,7 @@ export async function requestExternalProtocolLocks(
       db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), identity.runId)
       db.exec('COMMIT')
       return {
+        ...externalMutationResultSync(db, identity.runId, identity.agentId),
         granted: locks.filter((lock) => lock.status === 'active')
           .map((lock) => ({ lockId: lock.id, path: lock.path })),
         denied: locks.filter((lock) => lock.status === 'denied')
@@ -1349,7 +1441,6 @@ export async function requestExternalProtocolLocks(
               ? `conflicts with an active lock held by ${lock.conflict.agentId} on ${lock.conflict.path}`
               : 'conflicts with an active lock',
           })),
-        snapshot: externalSnapshotSync(db, identity.runId, identity.agentId),
       }
     } catch (err) {
       db.exec('ROLLBACK')
@@ -1368,7 +1459,7 @@ export async function reportExternalProtocolProgress(
     summary?: string
     detail?: string
   },
-): Promise<ProtocolRunSnapshot> {
+): Promise<ExternalProtocolMutationResult> {
   const db = await getDatabase()
   const agent = requireExternalParticipantSync(db, identity)
   const type: AgentProtocolEvent['type'] = params.status === 'working'
@@ -1389,13 +1480,13 @@ export async function reportExternalProtocolProgress(
     summary: params.summary,
     detail: params.detail,
   })
-  return readExternalProtocolRun(identity)
+  return externalMutationResult(identity)
 }
 
 export async function publishExternalProtocolFinding(
   identity: ExternalProtocolIdentity,
   params: { kind: 'finding' | 'learning' | 'handoff' | 'review.requested'; summary: string; detail?: string; taskId?: string },
-): Promise<ProtocolRunSnapshot> {
+): Promise<ExternalProtocolMutationResult> {
   const db = await getDatabase()
   const agent = requireExternalParticipantSync(db, identity)
   const summary = params.summary.trim()
@@ -1409,13 +1500,13 @@ export async function publishExternalProtocolFinding(
     summary,
     detail: params.detail?.trim() || undefined,
   })
-  return readExternalProtocolRun(identity)
+  return externalMutationResult(identity)
 }
 
 export async function submitExternalProtocolPlan(
   identity: ExternalProtocolIdentity,
   params: { taskId: string; summary: string; detail?: string },
-): Promise<ProtocolRunSnapshot> {
+): Promise<ExternalProtocolMutationResult> {
   const db = await getDatabase()
   const agent = requireExternalParticipantSync(db, identity)
   const task = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
@@ -1430,13 +1521,13 @@ export async function submitExternalProtocolPlan(
     summary: params.summary.trim(),
     detail: params.detail?.trim() || undefined,
   })
-  return readExternalProtocolRun(identity)
+  return externalMutationResult(identity)
 }
 
 export async function reviewExternalProtocolPlan(
   identity: ExternalProtocolIdentity,
   params: { taskId: string; approved: boolean; summary?: string; detail?: string },
-): Promise<ProtocolRunSnapshot> {
+): Promise<ExternalProtocolMutationResult> {
   const db = await getDatabase()
   const agent = requireExternalParticipantSync(db, identity)
   if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can review plans')
@@ -1452,7 +1543,7 @@ export async function reviewExternalProtocolPlan(
     summary: params.summary?.trim() || undefined,
     detail: params.detail?.trim() || undefined,
   })
-  return readExternalProtocolRun(identity)
+  return externalMutationResult(identity)
 }
 
 async function rejectExternalCompletion(
@@ -1469,7 +1560,7 @@ async function rejectExternalCompletion(
     summary: 'task.completed rejected',
     detail: reason,
   })
-  return { accepted: false, reason, snapshot: await readExternalProtocolRun(identity) }
+  return { accepted: false, reason, ...await externalMutationResult(identity) }
 }
 
 async function maybeStartExternalSynthesis(runId: string): Promise<void> {
@@ -1547,7 +1638,7 @@ export async function completeExternalProtocolTask(
     detail: params.detail?.trim() || undefined,
   })
   await maybeStartExternalSynthesis(identity.runId)
-  return { accepted: true, snapshot: await readExternalProtocolRun(identity) }
+  return { accepted: true, ...await externalMutationResult(identity) }
 }
 
 /**
@@ -1593,11 +1684,11 @@ export async function releaseExternalProtocolTask(
       })
       db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(ts, identity.runId)
       db.exec('COMMIT')
-      const updated = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
-        .get(identity.runId, task.id) as Row
+      const updated = rowToTask(db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
+        .get(identity.runId, task.id) as Row)
       return {
-        task: rowToTask(updated),
-        snapshot: externalSnapshotSync(db, identity.runId, identity.agentId),
+        ...externalMutationResultSync(db, identity.runId, identity.agentId, updated),
+        task: updated,
       }
     } catch (err) {
       db.exec('ROLLBACK')
@@ -1611,7 +1702,7 @@ export async function releaseExternalProtocolTask(
 export async function failExternalProtocolTask(
   identity: ExternalProtocolIdentity,
   params: { taskId: string; summary: string; detail?: string },
-): Promise<ProtocolRunSnapshot> {
+): Promise<ExternalProtocolMutationResult> {
   const db = await getDatabase()
   const agent = requireExternalParticipantSync(db, identity)
   const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
@@ -1627,7 +1718,7 @@ export async function failExternalProtocolTask(
     detail: params.detail?.trim() || undefined,
   })
   await maybeStartExternalSynthesis(identity.runId)
-  return readExternalProtocolRun(identity)
+  return externalMutationResult(identity)
 }
 
 export async function finalizeExternalProtocolRun(
@@ -1687,35 +1778,48 @@ export async function loadRunPlaybook(cwd: string, name: string): Promise<RunPla
   } catch {
     throw new Error(`Playbook not found: ${name} (looked in ${playbooksDir(cwd)})`)
   }
-  return parseRunPlaybook(JSON.parse(raw))
+  try {
+    return parseRunPlaybook(JSON.parse(raw))
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'invalid playbook'
+    throw new Error(`Playbook "${name}" (${file}) is invalid: ${reason}`)
+  }
 }
 
-export async function listRunPlaybooks(cwd: string): Promise<PlaybookSummary[]> {
+export type RunPlaybookListing = {
+  playbooks: PlaybookSummary[]
+  /** Files present but unusable — surfaced so a typo'd playbook doesn't silently vanish. */
+  invalid: Array<{ file: string; error: string }>
+}
+
+export async function listRunPlaybooks(cwd: string): Promise<RunPlaybookListing> {
   const dir = playbooksDir(cwd)
   let entries: string[]
   try {
     entries = await readdir(dir)
   } catch {
-    return []
+    return { playbooks: [], invalid: [] }
   }
-  const summaries: PlaybookSummary[] = []
+  const playbooks: PlaybookSummary[] = []
+  const invalid: Array<{ file: string; error: string }> = []
   for (const entry of entries.sort()) {
     if (!entry.endsWith('.json')) continue
+    const file = path.join(dir, entry)
     try {
-      const playbook = parseRunPlaybook(JSON.parse(await readFile(path.join(dir, entry), 'utf8')))
-      summaries.push({
+      const playbook = parseRunPlaybook(JSON.parse(await readFile(file, 'utf8')))
+      playbooks.push({
         name: playbook.name,
         description: playbook.description,
         argsHint: playbook.argsHint,
-        path: path.join(dir, entry),
+        path: file,
         phaseCount: playbook.phases.length,
         taskCount: playbook.phases.reduce((total, phase) => total + phase.tasks.length, 0),
       })
-    } catch {
-      // Unparseable playbooks are skipped rather than breaking the listing.
+    } catch (error) {
+      invalid.push({ file, error: error instanceof Error ? error.message : 'invalid playbook' })
     }
   }
-  return summaries
+  return { playbooks, invalid }
 }
 
 /**
@@ -1741,7 +1845,7 @@ export async function saveExternalProtocolPlaybook(
   const phaseOrder: string[] = []
   const grouped = new Map<string, ProtocolTask[]>()
   for (const task of tasks) {
-    const phase = task.phase ?? 'Tasks'
+    const phase = task.phase ?? UNPHASED_GROUP
     let bucket = grouped.get(phase)
     if (!bucket) {
       bucket = []
@@ -2398,6 +2502,9 @@ async function completionGateFailure(
     if (typeof row?.snapshot_json === 'string') {
       let baseline: Record<string, string> = {}
       try { baseline = JSON.parse(row.snapshot_json) as Record<string, string> } catch { /* fall back to all changes */ }
+      // Baseline capture failed at claim (recorded with an audit event then):
+      // fail open rather than rejecting completions for pre-existing changes.
+      if (baseline.__baselineUnavailable === '1') return null
       const current = await worktreeChangeSnapshot(worktreePath).catch(() => ({} as Record<string, string>))
       const changedSinceClaim = Object.keys(current)
         .filter((file) => file !== '__head__' && current[file] !== baseline[file])

@@ -126,6 +126,18 @@ async function bindCoordinatorParticipant(result) {
   return result
 }
 
+// A bound bridge speaks for exactly one participant. A confused model that
+// re-joins mid-run would fork a duplicate identity and orphan the original
+// (observed live: a resumed worker created a stray teammate) — refuse instead.
+function requireUnboundBridge(tool) {
+  if (coordinatorIdentity) {
+    throw new Error(
+      `This bridge is already bound to run ${coordinatorIdentity.runId} as participant ${coordinatorIdentity.agentId}. `
+      + `Use coord_status/coord_wait to continue that run; use coord_resume only to rebind explicitly. ${tool} is for unbound bridges.`,
+    )
+  }
+}
+
 async function coordinatorRequest(action, payload = {}, requireIdentity = true) {
   if (requireIdentity && !coordinatorIdentity) {
     throw new Error('Join, create, or resume a Coordinator run before using participant tools')
@@ -156,6 +168,7 @@ const server = new McpServer(
       'Prefer agent-viewer coord worker for unattended runs. In an interactive turn, use coord_wait instead of polling when no action is ready.',
       'After joining: read coord_status, claim one task, request locks before editing, report progress, drain the inbox, and complete through coord_complete_task.',
       'coord_wait and coord_status return an `actionable` digest (claimable tasks, inbox count, plans awaiting review, your task state) — act on it instead of diffing snapshots.',
+      'Mutations return a compact result (runStatus, cursor, phases, actionable, affected task) — call coord_status only when you need the full board.',
       'Hand back work you cannot finish with coord_release_task rather than failing it; any participant may coord_create_task for newly discovered work.',
       'Never invent agent ids or bypass Coordinator completion gates.',
     ].join(' '),
@@ -313,6 +326,7 @@ server.registerTool('coord_create_run', {
     args: z.unknown().optional().describe('Interpolated into {{args}} / {{args.<key>}} in playbook task text'),
   },
 }, async ({ prompt, name, provider, max_agents, cwd, gate_command, require_plan_approval, playbook_name, playbook, args }) => {
+  requireUnboundBridge('coord_create_run')
   const result = await bindCoordinatorParticipant(await coordinatorRequest('create_run', {
     prompt,
     name,
@@ -360,6 +374,7 @@ server.registerTool('coord_join_run', {
     cwd: z.string().min(1).optional().describe('Working checkout; defaults to this CLI project directory'),
   },
 }, async ({ run_id, name, provider, cwd }) => {
+  requireUnboundBridge('coord_join_run')
   const result = await bindCoordinatorParticipant(await coordinatorRequest('join_run', {
     runId: run_id,
     name,
@@ -405,19 +420,21 @@ server.registerTool('coord_wait', {
 })))
 
 server.registerTool('coord_create_task', {
-  description: 'Add a task with dependencies and expected write paths to the shared board. Any participant may add discovered work; the lead may also add tasks during synthesis, which reopens the run.',
+  description: 'Add a task with dependencies and expected write paths to the shared board. Any participant may add discovered work; the lead may also add tasks during synthesis, which reopens the run. On playbook boards, pass the phase title the task belongs to so progress rollups stay accurate.',
   inputSchema: {
     title: z.string().min(1).max(160),
     detail: z.string().min(1).max(8000),
     paths: z.array(z.string().min(1)).max(100).optional(),
     depends_on: z.array(z.string().min(1)).max(100).optional(),
+    phase: z.string().min(1).max(120).optional().describe('Playbook phase title this task belongs to (rollup grouping; barriers are not re-derived mid-run)'),
     request_id: requestIdField,
   },
-}, async ({ title, detail, paths, depends_on, request_id }) => textResult(await coordinatorRequest('create_task', {
+}, async ({ title, detail, paths, depends_on, phase, request_id }) => textResult(await coordinatorRequest('create_task', {
   title,
   detail,
   paths,
   dependsOn: depends_on,
+  phase,
   requestId: request_id,
 })))
 

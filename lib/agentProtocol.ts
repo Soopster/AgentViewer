@@ -303,15 +303,33 @@ export type ExternalProtocolStatusResult = {
   phases: ProtocolPhaseRollup[]
 }
 
-export type ExternalProtocolLockResult = {
-  granted: Array<{ lockId: string; path: string }>
-  denied: Array<{ path: string; reason: string }>
-  snapshot: ProtocolRunSnapshot
+/**
+ * Compact result for every board mutation. Mutations ride MCP tool results
+ * into a model's context, so they return what the agent needs to decide its
+ * next step — run status, fresh cursor, phase rollups, the actionable digest,
+ * and the affected task — never the full snapshot (coord_status/coord_wait
+ * remain the full views).
+ */
+export type ExternalProtocolMutationResult = {
+  runStatus: ProtocolRunStatus
+  cursor: string | null
+  phases: ProtocolPhaseRollup[]
+  actionable: ExternalProtocolActionable
+  /** The task this mutation created or affected, when applicable. */
+  task?: ProtocolTask
 }
 
-export type ExternalProtocolReleaseResult = {
+export type ExternalProtocolLockResult = ExternalProtocolMutationResult & {
+  granted: Array<{ lockId: string; path: string }>
+  denied: Array<{ path: string; reason: string }>
+}
+
+export type ExternalProtocolReleaseResult = ExternalProtocolMutationResult & {
   task: ProtocolTask
-  snapshot: ProtocolRunSnapshot
+}
+
+export type ExternalProtocolClaimResult = ExternalProtocolMutationResult & {
+  task: ProtocolTask
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +407,14 @@ export function interpolatePlaybookText(text: string, args: unknown): string {
   })
 }
 
+/** True when any task text carries {{args…}} placeholders. */
+export function playbookExpectsArgs(playbook: RunPlaybook): boolean {
+  const needs = (text: string) => /\{\{\s*args/.test(text)
+  return playbook.phases.some((phase) => phase.tasks.some((task) => (
+    needs(task.title) || needs(task.detail) || (task.paths ?? []).some(needs)
+  )))
+}
+
 /** Validate untrusted JSON into a RunPlaybook, with actionable errors. */
 export function parseRunPlaybook(value: unknown): RunPlaybook {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('playbook must be an object')
@@ -399,7 +425,7 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
   if (!Array.isArray(record.phases) || record.phases.length === 0) {
     throw new Error('playbook.phases must be a non-empty array')
   }
-  const keys = new Set<string>()
+  const keyPhase = new Map<string, number>()
   const phases: PlaybookPhase[] = record.phases.map((phaseValue, phaseIndex) => {
     if (!phaseValue || typeof phaseValue !== 'object') throw new Error(`playbook.phases[${phaseIndex}] must be an object`)
     const phase = phaseValue as Record<string, unknown>
@@ -415,8 +441,8 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
       if (!taskTitle || !detail) throw new Error(`task ${taskIndex + 1} in phase "${title}" needs title and detail`)
       const key = typeof task.key === 'string' && task.key.trim() ? task.key.trim() : undefined
       if (key) {
-        if (keys.has(key)) throw new Error(`duplicate playbook task key: ${key}`)
-        keys.add(key)
+        if (keyPhase.has(key)) throw new Error(`duplicate playbook task key: ${key}`)
+        keyPhase.set(key, phaseIndex)
       }
       return {
         key,
@@ -432,13 +458,19 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
     })
     return { title, tasks }
   })
-  for (const phase of phases) {
+  phases.forEach((phase, phaseIndex) => {
     for (const task of phase.tasks) {
       for (const dep of task.dependsOn ?? []) {
-        if (!keys.has(dep)) throw new Error(`task "${task.title}" depends on unknown key: ${dep}`)
+        const depPhase = keyPhase.get(dep)
+        if (depPhase === undefined) throw new Error(`task "${task.title}" depends on unknown key: ${dep}`)
+        // A dependency on a later phase can never complete first — the barrier
+        // makes the later phase wait on this one, so the board deadlocks.
+        if (depPhase > phaseIndex) {
+          throw new Error(`task "${task.title}" depends on "${dep}" in a later phase — later-phase dependencies deadlock the phase barrier`)
+        }
       }
     }
-  }
+  })
   return {
     name: record.name,
     description: typeof record.description === 'string' && record.description.trim() ? record.description.trim() : undefined,
@@ -450,10 +482,9 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
   }
 }
 
-export type ExternalProtocolCompletionResult = {
+export type ExternalProtocolCompletionResult = ExternalProtocolMutationResult & {
   accepted: boolean
   reason?: string
-  snapshot: ProtocolRunSnapshot
 }
 
 const PROTOCOL_BLOCK_RE = /```agent-protocol\s*([\s\S]*?)```/g
@@ -571,15 +602,19 @@ export function formatInbox(messages: ProtocolMessage[], agentsById: Map<string,
 
 function protocolGrammar(runId: string, agentId: string): string {
   return [
-    'Speak the protocol by emitting fenced JSON blocks (each on its own lines):',
-    makeProtocolBlock({
+    'This is an internal Agent Viewer run already bound through the in-band protocol below.',
+    'Do not call `coord_*` MCP tools, invoke an external Coordinator workflow, or try to create, join, resume, or inspect the run through the MCP bridge. The fenced events you emit here are the authoritative control channel.',
+    '',
+    'Speak the protocol by emitting JSON blocks fenced with the `agent-protocol` language (each on its own lines).',
+    'Illustrative payload shape only — do not echo this example as an event:',
+    JSON.stringify({
       version: AGENT_PROTOCOL_VERSION,
       runId,
       agentId,
       type: 'message',
       to: 'lead',
-      summary: 'Example: send a message to a teammate by name, or to "lead" or "all".',
-    }),
+      summary: 'Send a message to a teammate by name, or to "lead" or "all".',
+    }, null, 2),
     '',
     'Event types you may emit:',
     '- `agent.start_work` / `agent.stop_work` (include taskId) — bracket every work stint.',

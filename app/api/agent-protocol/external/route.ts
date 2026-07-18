@@ -106,6 +106,7 @@ export async function POST(request: Request) {
         detail: text(body.detail),
         paths: strings(body.paths),
         dependsOn: strings(body.dependsOn),
+        phase: optionalText(body.phase),
       }))
     } else if (action === 'claim_task') {
       result = await mutate(() => claimExternalProtocolTask(participantIdentity!, optionalText(body.taskId)))

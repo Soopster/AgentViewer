@@ -56,13 +56,17 @@ await assert.rejects(
   /Invalid Coordinator participant capability/,
 )
 
-const taskSnapshot = await coordination.createExternalProtocolTask(lead, {
+const createResult = await coordination.createExternalProtocolTask(lead, {
   title: 'Implement the shared change',
   detail: 'Claim the task, publish a plan, and complete it.',
   paths: ['owned.txt'],
 })
-const task = taskSnapshot.tasks.at(-1)
+const task = createResult.task
 assert.ok(task)
+// Mutations return the compact result, not the board.
+assert.equal(createResult.runStatus, 'running')
+assert.ok(createResult.actionable.claimableTasks.some((entry) => entry.id === task.id))
+assert.ok(!('snapshot' in createResult))
 
 const claim = await coordination.claimExternalProtocolTask(teammate, task.id)
 assert.equal(claim.task.ownerAgentId, teammate.agentId)
@@ -159,8 +163,8 @@ const discovery = await coordination.createExternalProtocolTask(teammate, {
   detail: 'Write second.txt with the follow-up change.',
   paths: ['second.txt'],
 })
-assert.equal(discovery.tasks.length, 2)
-const followUp = discovery.tasks.at(-1)!
+const followUp = discovery.task!
+assert.equal(followUp.id, 'task-2')
 const leadWake = await coordination.waitForExternalProtocolChange(lead, {
   cursor: leadCursor ?? undefined,
   timeoutMs: 1_000,
@@ -181,7 +185,7 @@ const completed = await coordination.runExternalProtocolIdempotent(
   }),
 )
 assert.equal(completed.accepted, true)
-assert.equal(completed.snapshot.run.status, 'running')
+assert.equal(completed.runStatus, 'running')
 
 // Claimed work can be handed back: the task requeues and its locks release.
 const leadClaim = await coordination.claimExternalProtocolTask(lead, followUp.id)
@@ -206,7 +210,7 @@ const followUpDone = await coordination.completeExternalProtocolTask(teammate, {
   summary: 'Follow-up implemented.',
 })
 assert.equal(followUpDone.accepted, true)
-assert.equal(followUpDone.snapshot.run.status, 'synthesizing')
+assert.equal(followUpDone.runStatus, 'synthesizing')
 
 const leadInbox = await coordination.readExternalProtocolInbox(lead)
 assert.match(leadInbox.messages.at(-1)?.body ?? '', /coord_finalize_run/)
@@ -215,9 +219,11 @@ assert.match(leadInbox.messages.at(-1)?.body ?? '', /coord_finalize_run/)
 const reopened = await coordination.createExternalProtocolTask(lead, {
   title: 'Post-review fix',
   detail: 'Follow-up identified during synthesis review.',
+  phase: 'Fix',
 })
-assert.equal(reopened.run.status, 'running')
-const reopenedTask = reopened.tasks.at(-1)!
+assert.equal(reopened.runStatus, 'running')
+const reopenedTask = reopened.task!
+assert.equal(reopenedTask.phase, 'Fix')
 
 // A failed task frees its locks and leaves an external participant available.
 await coordination.claimExternalProtocolTask(lead, reopenedTask.id)
@@ -339,7 +345,8 @@ const saved = await coordination.saveExternalProtocolPlaybook(playbookLead, {
 })
 assert.ok(saved.path.endsWith('smoke-audit-saved.json'))
 const listed = await coordination.listRunPlaybooks(testCwd)
-assert.ok(listed.some((entry) => entry.name === 'smoke-audit-saved' && entry.taskCount === 2))
+assert.ok(listed.playbooks.some((entry) => entry.name === 'smoke-audit-saved' && entry.taskCount === 2))
+assert.equal(listed.invalid.length, 0)
 
 // The saved playbook reloads and reseeds an identical phased board.
 const reloaded = await coordination.loadRunPlaybook(testCwd, 'smoke-audit-saved')
@@ -355,5 +362,46 @@ const replay = await coordination.createExternalProtocolRun({
 assert.equal(replay.snapshot.tasks.length, 2)
 assert.equal(replay.snapshot.tasks[1].blockedBy.length, 1)
 await coordination.finalizeExternalProtocolRun(replay.participant, 'x').catch(() => {})
+
+// Later-phase dependencies are rejected at parse time — with the barrier they
+// can never complete first, so seeding them would deadlock the board.
+assert.throws(() => parseRunPlaybook({
+  name: 'fwd-bad',
+  phases: [
+    { title: 'P1', tasks: [{ key: 'a', title: 'A', detail: 'a', dependsOn: ['b'] }] },
+    { title: 'P2', tasks: [{ key: 'b', title: 'B', detail: 'b' }] },
+  ],
+}), /later phase/)
+
+// A playbook whose text expects {{args}} refuses to seed without args.
+await assert.rejects(
+  coordination.createExternalProtocolRun({
+    prompt: 'missing args',
+    provider: 'codex',
+    baseCwd: testCwd,
+    participantName: 'No-args lead',
+    playbook,
+  }),
+  /expects args/,
+)
+
+// Same-phase forward references resolve to real task ids via pre-assignment.
+const fwd = await coordination.createExternalProtocolRun({
+  prompt: 'Same-phase forward reference',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Fwd lead',
+  playbook: parseRunPlaybook({
+    name: 'fwd-ok',
+    phases: [{
+      title: 'P1',
+      tasks: [
+        { key: 'first', title: 'First', detail: 'x', dependsOn: ['second'] },
+        { key: 'second', title: 'Second', detail: 'y' },
+      ],
+    }],
+  }),
+})
+assert.deepEqual(fwd.snapshot.tasks[0].blockedBy, ['task-2'])
 
 console.log('External Coordinator smoke passed')
