@@ -130,7 +130,7 @@ async function coordinatorRequest(action, payload = {}, requireIdentity = true) 
   if (requireIdentity && !coordinatorIdentity) {
     throw new Error('Join, create, or resume a Coordinator run before using participant tools')
   }
-  return requestJson('/api/agent-protocol/external', {
+  const result = await requestJson('/api/agent-protocol/external', {
     method: 'POST',
     body: JSON.stringify({
       action,
@@ -138,6 +138,12 @@ async function coordinatorRequest(action, payload = {}, requireIdentity = true) 
       ...payload,
     }),
   }, action === 'wait' ? 65_000 : 10_000)
+  // status/wait return the latest event cursor; remembering it here keeps the
+  // next coord_wait from waking on state this bridge has already seen.
+  if (result && typeof result.cursor === 'string' && result.cursor) {
+    coordinatorCursor = result.cursor
+  }
+  return result
 }
 
 const server = new McpServer(
@@ -148,6 +154,8 @@ const server = new McpServer(
       'Use coord_create_run to lead a new run, coord_join_run to join an existing run, or coord_resume to restore a capability.',
       'Prefer agent-viewer coord worker for unattended runs. In an interactive turn, use coord_wait instead of polling when no action is ready.',
       'After joining: read coord_status, claim one task, request locks before editing, report progress, drain the inbox, and complete through coord_complete_task.',
+      'coord_wait and coord_status return an `actionable` digest (claimable tasks, inbox count, plans awaiting review, your task state) — act on it instead of diffing snapshots.',
+      'Hand back work you cannot finish with coord_release_task rather than failing it; any participant may coord_create_task for newly discovered work.',
       'Never invent agent ids or bypass Coordinator completion gates.',
     ].join(' '),
   },
@@ -350,28 +358,24 @@ server.registerTool('coord_resume', {
 })
 
 server.registerTool('coord_status', {
-  description: 'Read the current shared task board, roster, locks, relevant events, and this participant\'s mailbox state.',
+  description: 'Read the shared task board, roster, locks, recent events, and an `actionable` digest (claimable tasks, inbox count, plans awaiting review, own task state) for this participant.',
   annotations: { readOnlyHint: true },
 }, async () => textResult(await coordinatorRequest('status')))
 
 server.registerTool('coord_wait', {
-  description: 'Efficiently wait until inbox, task, plan, lock, participant, or run state changes. Prefer this over repeated status polling.',
+  description: 'Block until another participant changes the run (your own writes do not wake you). Returns the events that occurred plus an `actionable` digest saying what you can do now. Prefer this over repeated status polling.',
   inputSchema: {
     cursor: z.string().min(1).optional().describe('Opaque cursor from the previous coord_wait; normally omit because this bridge remembers it'),
     timeout_ms: z.number().int().min(0).max(55_000).optional().describe('Defaults to 25000 milliseconds'),
   },
   annotations: { readOnlyHint: true },
-}, async ({ cursor, timeout_ms }) => {
-  const result = await coordinatorRequest('wait', {
-    cursor: cursor ?? coordinatorCursor ?? undefined,
-    timeoutMs: timeout_ms,
-  })
-  coordinatorCursor = result.cursor ?? coordinatorCursor
-  return textResult(result)
-})
+}, async ({ cursor, timeout_ms }) => textResult(await coordinatorRequest('wait', {
+  cursor: cursor ?? coordinatorCursor ?? undefined,
+  timeoutMs: timeout_ms,
+})))
 
 server.registerTool('coord_create_task', {
-  description: 'Lead-only: add a task with dependencies and expected write paths to the shared board.',
+  description: 'Add a task with dependencies and expected write paths to the shared board. Any participant may add discovered work; the lead may also add tasks during synthesis, which reopens the run.',
   inputSchema: {
     title: z.string().min(1).max(160),
     detail: z.string().min(1).max(8000),
@@ -391,6 +395,19 @@ server.registerTool('coord_claim_task', {
   description: 'Atomically claim a specific pending task, or the next unblocked task when task_id is omitted.',
   inputSchema: { task_id: z.string().min(1).optional(), request_id: requestIdField },
 }, async ({ task_id, request_id }) => textResult(await coordinatorRequest('claim_task', { taskId: task_id, requestId: request_id })))
+
+server.registerTool('coord_release_task', {
+  description: 'Return a claimed task to the board without failing it, releasing its locks so another participant can claim it. Owners hand back work they cannot finish; the lead can also release a wedged or failed task to requeue it.',
+  inputSchema: {
+    task_id: z.string().min(1),
+    reason: z.string().max(1000).optional(),
+    request_id: requestIdField,
+  },
+}, async ({ task_id, reason, request_id }) => textResult(await coordinatorRequest('release_task', {
+  taskId: task_id,
+  reason,
+  requestId: request_id,
+})))
 
 server.registerTool('coord_read_inbox', {
   description: 'Read and acknowledge direct Coordinator mailbox messages for this participant.',
@@ -415,7 +432,7 @@ server.registerTool('coord_send_message', {
 }, async ({ to, message, request_id }) => textResult(await coordinatorRequest('send_message', { to, message, requestId: request_id })))
 
 server.registerTool('coord_request_locks', {
-  description: 'Request write locks for paths needed by the current task. Conflicting locks are denied atomically.',
+  description: 'Request write locks for paths needed by the current task. Returns explicit `granted` and `denied` (with the conflicting holder) lists; do not edit paths that were denied.',
   inputSchema: { paths: z.array(z.string().min(1)).min(1).max(100), request_id: requestIdField },
 }, async ({ paths, request_id }) => textResult(await coordinatorRequest('request_locks', { paths, requestId: request_id })))
 

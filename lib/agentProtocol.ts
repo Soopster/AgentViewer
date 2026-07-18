@@ -38,6 +38,7 @@ export type ProtocolEventType =
   | 'task.planned'
   | 'task.claim'
   | 'task.claimed'
+  | 'task.released'
   | 'task.completed'
   | 'task.failed'
   | 'plan.completed'
@@ -55,6 +56,8 @@ export type ProtocolEventType =
   | 'handoff'
   | 'review.requested'
   | 'shutdown.requested'
+  // run lifecycle (coordinator-authored: synthesizing, reopened, completed…)
+  | 'run.status'
 
 export type AgentProtocolEvent = {
   version: AgentProtocolVersion
@@ -250,12 +253,53 @@ export type ExternalProtocolInboxResult = {
   nextCursor: string | null
 }
 
+export type ProtocolTaskPlanState = 'none' | 'awaiting' | 'approved' | 'rejected'
+
+/**
+ * Role-aware digest of what this participant can act on right now. Returned by
+ * wait/status so an autonomous CLI can decide whether to spend a model turn
+ * without diffing snapshots.
+ */
+export type ExternalProtocolActionable = {
+  runStatus: ProtocolRunStatus
+  /** Pending, unowned tasks whose dependencies are all completed. */
+  claimableTasks: Array<{ id: string; title: string }>
+  /** Undelivered mailbox messages addressed to this participant. */
+  inboxCount: number
+  /** Lead only: task ids with submitted plans awaiting review. */
+  plansAwaitingReview: string[]
+  /** The task this participant currently owns, if any. */
+  myTask: { id: string; status: ProtocolTaskStatus; planState: ProtocolTaskPlanState } | null
+  /** Every task is completed/failed/cancelled — the lead should finalize. */
+  allTasksTerminal: boolean
+}
+
 export type ExternalProtocolWaitResult = {
   changed: boolean
   timedOut: boolean
   cursor: string | null
   snapshot: ProtocolRunSnapshot
   inbox: ExternalProtocolInboxResult
+  /** Non-heartbeat events after the supplied cursor (what actually changed). */
+  events: AgentProtocolEvent[]
+  actionable: ExternalProtocolActionable
+}
+
+export type ExternalProtocolStatusResult = {
+  snapshot: ProtocolRunSnapshot
+  actionable: ExternalProtocolActionable
+  cursor: string | null
+}
+
+export type ExternalProtocolLockResult = {
+  granted: Array<{ lockId: string; path: string }>
+  denied: Array<{ path: string; reason: string }>
+  snapshot: ProtocolRunSnapshot
+}
+
+export type ExternalProtocolReleaseResult = {
+  task: ProtocolTask
+  snapshot: ProtocolRunSnapshot
 }
 
 export type ExternalProtocolCompletionResult = {
@@ -270,11 +314,11 @@ const EVENT_TYPES: ReadonlySet<string> = new Set<ProtocolEventType>([
   'agent.ready', 'agent.heartbeat', 'agent.start_work', 'agent.stop_work',
   'agent.blocked', 'agent.unblocked',
   'task.created', 'task.planned', 'task.claim', 'task.claimed',
-  'task.completed', 'task.failed', 'plan.completed',
+  'task.released', 'task.completed', 'task.failed', 'plan.completed',
   'plan.approved', 'plan.rejected',
   'lock.requested', 'lock.granted', 'lock.denied', 'lock.released',
   'finding', 'learning', 'message', 'handoff', 'review.requested',
-  'shutdown.requested',
+  'shutdown.requested', 'run.status',
 ])
 
 export function isProtocolEventType(value: unknown): value is ProtocolEventType {

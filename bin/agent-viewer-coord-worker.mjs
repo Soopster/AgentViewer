@@ -206,9 +206,30 @@ await saveState(state.identityFile, state)
 console.error(`Coordinator ${state.runId}: ${state.name || state.agentId} (${state.role || 'participant'})`)
 console.error(`Identity: ${state.identityFile}`)
 
+function isTerminal(wait) {
+  return ['completed', 'failed', 'stopped'].includes(wait.snapshot.run.status)
+}
+
+// A provider tick is a full model turn; only spend one when the wait's
+// actionable digest shows work for this role. Leads act on mail, submitted
+// plans, and a finished board (never on unclaimed tasks — those are for
+// teammates); teammates act on mail, claimable tasks, or their owned task.
+// Daemons that predate the digest omit it — then every wake ticks, as before.
+function shouldTick(actionable, role) {
+  if (!actionable) return true
+  if ((actionable.inboxCount ?? 0) > 0) return true
+  if (role === 'lead') {
+    return (actionable.plansAwaitingReview?.length ?? 0) > 0
+      || actionable.allTasksTerminal === true
+      || actionable.runStatus === 'synthesizing'
+  }
+  return (actionable.claimableTasks?.length ?? 0) > 0 || Boolean(actionable.myTask)
+}
+
 let cursor = null
 let failures = 0
-for (;;) {
+const role = state.role === 'lead' ? 'lead' : 'teammate'
+outer: for (;;) {
   try {
     await providerTick(state, baseUrl)
     failures = 0
@@ -223,8 +244,11 @@ for (;;) {
   if (options.once) break
   const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
   cursor = current.cursor
-  if (['completed', 'failed', 'stopped'].includes(current.snapshot.run.status)) break
-  const next = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 55_000 })
-  cursor = next.cursor
-  if (['completed', 'failed', 'stopped'].includes(next.snapshot.run.status)) break
+  if (isTerminal(current)) break
+  for (;;) {
+    const next = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 55_000 })
+    cursor = next.cursor
+    if (isTerminal(next)) break outer
+    if (shouldTick(next.actionable, role)) break
+  }
 }

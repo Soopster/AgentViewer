@@ -34,8 +34,8 @@ When the participant role is `lead`:
 4. Keep one integration or review task for the lead when useful; otherwise coordinate instead of duplicating teammate work.
 5. Send important context or changed priorities through `coord_send_message`; do not assume another CLI sees local terminal output.
 6. Review submitted plans promptly when plan approval is enabled.
-7. Monitor status, inbox, findings, blocked tasks, and expired or conflicting locks. Respond to blockers with a message or a new task.
-8. When all tasks are terminal, inspect the board, reconcile findings, run any final integration checks, and call `coord_finalize_run` with a concise synthesis.
+7. Monitor status, inbox, findings, blocked tasks, and expired or conflicting locks. Respond to blockers with a message or a new task. Requeue a wedged or failed task with `coord_release_task` so another participant can claim it.
+8. When all tasks are terminal, inspect the board, reconcile findings, run any final integration checks, and call `coord_finalize_run` with a concise synthesis. If the review uncovers follow-up work, call `coord_create_task` instead — during synthesis this reopens the run.
 
 ## Teammate workflow
 
@@ -46,20 +46,20 @@ When the participant role is `teammate`:
 3. If plan approval is required, call `coord_submit_plan` and wait for approval before modifying files.
 4. Request any additional write paths with `coord_request_locks` before editing. Stay inside granted paths.
 5. Call `coord_progress` with `working`, perform the task, and run proportionate verification.
-6. Publish reusable discoveries with `coord_publish_finding`. Send direct questions or handoffs with `coord_send_message`.
-7. Call `coord_complete_task` only after verification. If completion is rejected, address the stated gate failure; never bypass it or claim work that was not performed.
-8. Call `coord_fail_task` only when the task genuinely cannot be completed, with a useful reason and recovery detail.
+6. Publish reusable discoveries with `coord_publish_finding`. Add newly discovered work to the board with `coord_create_task` (any participant may create tasks). Send direct questions or handoffs with `coord_send_message`.
+7. Call `coord_complete_task` only after verification. If completion is rejected, address the stated gate failure and retry (the same `request_id` is safe — rejections are never replayed from cache); never bypass the gate or claim work that was not performed.
+8. If you cannot finish a claimed task but it remains achievable, hand it back with `coord_release_task` and a reason so someone else can claim it. Call `coord_fail_task` only when the task genuinely cannot be completed, with a useful reason and recovery detail.
 
 ## Autonomous coordination loop
 
 Repeat while the run is `planning`, `running`, or `synthesizing`:
 
 1. Read and acknowledge the inbox.
-2. Read status and react to task, plan, lock, participant, or run changes.
+2. Read status and react to the `actionable` digest — it lists your claimable tasks, undelivered inbox count, plans awaiting your review (lead), and your own task's state, so you rarely need to diff snapshots.
 3. Perform the next role-appropriate action.
 4. Report a heartbeat or meaningful progress during long work.
-5. When no immediate action exists, call `coord_wait` with the previous cursor. Do not shell-sleep or repeatedly poll status.
-6. After any wait, assume state may have changed and reread the board before acting.
+5. When no immediate action exists, call `coord_wait` with the previous cursor. Do not shell-sleep or repeatedly poll status. Your own writes do not wake your wait; it returns when another participant changes the run, with the new `events` and a fresh `actionable` digest.
+6. After any wait, act on `actionable` and the returned events; the snapshot is authoritative if anything is unclear.
 
 Do not end merely because the board is temporarily idle. End when the run becomes `completed`, `failed`, or `stopped`; the user interrupts; or an external prerequisite cannot be resolved after notifying the lead.
 

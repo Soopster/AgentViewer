@@ -9,7 +9,8 @@ import {
   joinExternalProtocolRun,
   publishExternalProtocolFinding,
   readExternalProtocolInbox,
-  readExternalProtocolRun,
+  readExternalProtocolStatus,
+  releaseExternalProtocolTask,
   reportExternalProtocolProgress,
   requestExternalProtocolLocks,
   resumeExternalProtocolParticipant,
@@ -79,7 +80,7 @@ export async function POST(request: Request) {
     } else if (action === 'resume') {
       result = await resumeExternalProtocolParticipant(participantIdentity!)
     } else if (action === 'status') {
-      result = await readExternalProtocolRun(participantIdentity!)
+      result = await readExternalProtocolStatus(participantIdentity!)
     } else if (action === 'wait') {
       result = await waitForExternalProtocolChange(participantIdentity!, {
         cursor: optionalText(body.cursor),
@@ -96,6 +97,11 @@ export async function POST(request: Request) {
       }))
     } else if (action === 'claim_task') {
       result = await mutate(() => claimExternalProtocolTask(participantIdentity!, optionalText(body.taskId)))
+    } else if (action === 'release_task') {
+      result = await mutate(() => releaseExternalProtocolTask(participantIdentity!, {
+        taskId: text(body.taskId),
+        reason: optionalText(body.reason),
+      }))
     } else if (action === 'read_inbox') {
       result = await readExternalProtocolInbox(identity(body), {
         after: optionalText(body.after),
