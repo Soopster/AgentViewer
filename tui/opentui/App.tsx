@@ -4378,7 +4378,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
   { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
   { id: 'coord-start', label: 'Start coordinated run', key: '', category: 'Coordination' },
-  { id: 'coord-board', label: 'Open agent team board', key: '^⇧A', category: 'Coordination' },
+  { id: 'coord-board', label: 'Open Agent Operations', key: '^⇧A', category: 'Coordination' },
   { id: 'coord-cleanup', label: 'Clean completed worktrees', key: 'c', category: 'Coordination' },
   { id: 'coord-stop', label: 'Stop coordinated run', key: '', category: 'Coordination' },
   { id: 'fleet',      label: 'Toggle fleet strip',      key: '⇧A', category: 'View'       },
@@ -10173,7 +10173,18 @@ export default function OpenTuiApp() {
     setCoordBoardOpen(true)
   })
 
-  // Jump from a team-board agent row straight into that agent's transcript.
+  const copyCoordinationJoinCommand = useEffectEvent((runId: string) => {
+    const attachUrl = process.env.AGENT_VIEWER_ATTACH?.trim().replace(/\/+$/, '') || 'http://127.0.0.1:3000'
+    const command = `agent-viewer coord worker --join ${runId} --name <name> --provider codex --attach ${attachUrl}`
+    if (NATIVE_OSC_ENABLED && renderer.capabilities?.osc52 !== false) {
+      renderer.copyToClipboardOSC52(command)
+      showNotice('info', 'External CLI join command copied', 4000)
+    } else {
+      showNotice('info', command, 8000)
+    }
+  })
+
+  // Jump from an Agent Operations row straight into that agent's transcript.
   const openCoordinationAgentSession = useEffectEvent((agent: import('../../lib/agentProtocol').ProtocolAgent) => {
     const draft: Session = {
       sessionId: agent.sessionId,
@@ -14076,7 +14087,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    // Agent team board. On legacy terminals raw ^A is the portable fallback.
+    // Agent Operations. On legacy terminals raw ^A is the portable fallback.
     if (isCtrlShift('a')) {
       handled(openCoordinationBoard)
       return
@@ -17139,6 +17150,7 @@ export default function OpenTuiApp() {
           }}
           onClose={() => setCoordBoardOpen(false)}
           onNotice={showNotice}
+          onCopyJoinCommand={copyCoordinationJoinCommand}
           onKeyHandlerReady={(handler) => { coordBoardKeyHandlerRef.current = handler }}
         />
       ) : null}

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
-// Coordination-board smoke: mounts CoordinationPopover against a temp data
-// dir (empty state), then against a seeded ledger, asserting the team roster,
-// task board, and event feed actually render. Hermetic — the coordination DB
+// Agent Operations smoke: mounts CoordinationPopover against a temp data dir,
+// then against a seeded ledger, asserting overview, team, work-board, and
+// activity panes actually render. Hermetic — the coordination DB
 // resolves from process.cwd(), so chdir BEFORE importing anything that opens it.
 import React, { act } from 'react'
 import { testRender } from '@opentui/react/test-utils'
@@ -35,6 +35,7 @@ db.exec(`INSERT INTO protocol_events (id, run_id, agent_id, type, summary, paths
 db.close()
 
 const noop = () => {}
+let handleKey: ((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null = null
 const { captureCharFrame } = await testRender(
   <CoordinationPopover
     theme={LIGHT_THEME}
@@ -45,7 +46,7 @@ const { captureCharFrame } = await testRender(
     onNewRun={noop}
     onClose={noop}
     onNotice={noop}
-    onKeyHandlerReady={noop}
+    onKeyHandlerReady={(handler) => { handleKey = handler }}
   />,
   { width: 120, height: 40 },
 )
@@ -53,7 +54,7 @@ const { captureCharFrame } = await testRender(
 // The popover discovers the run list and polls the snapshot asynchronously —
 // poll the frame until everything renders (bounded), rather than racing a
 // fixed sleep against SQLite + effect timing.
-const MARKERS = ['Agent team', 'RUNNING', 'nova', 'lead', 'task-1', 'finding']
+const MARKERS = ['Agent operations', 'ACTIVE', 'TASKS 0%', 'RECENT RUNS']
 let missing: string[] = MARKERS
 const deadline = Date.now() + 10_000
 while (Date.now() < deadline) {
@@ -70,5 +71,34 @@ if (missing.length > 0) {
   console.error(`Coordination board frame missing: ${missing.join(', ')}`)
   process.exit(1)
 }
-console.log('Coordination board smoke passed')
+
+const selectPane = async (sequence: string) => {
+  await act(async () => {
+    handleKey?.({ name: sequence, ctrl: false, shift: false, sequence })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  })
+}
+
+await selectPane('2')
+let frame = captureCharFrame()
+if (!frame.includes('nova') || !frame.includes('AGENT INSPECTOR')) {
+  console.error('Agent Operations team pane did not render roster and inspector')
+  process.exit(1)
+}
+
+await selectPane('3')
+frame = captureCharFrame()
+if (!frame.includes('task-1') || !frame.includes('TASK INSPECTOR')) {
+  console.error('Agent Operations work-board pane did not render task and inspector')
+  process.exit(1)
+}
+
+await selectPane('4')
+frame = captureCharFrame()
+if (!frame.includes('finding') || !frame.includes('EVENT INSPECTOR')) {
+  console.error('Agent Operations activity pane did not render event and inspector')
+  process.exit(1)
+}
+
+console.log('Agent Operations smoke passed')
 process.exit(0)
