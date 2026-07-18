@@ -181,7 +181,10 @@ export type ProtocolRunSnapshot = {
 export type StartProtocolRunParams = {
   prompt: string
   baseCwd: string
+  /** Provider used by the lead that plans, coordinates, and synthesizes. */
   provider: AgentProvider
+  /** Provider pool assigned round-robin to teammates. Defaults to the lead provider. */
+  teammateProviders?: AgentProvider[]
   maxAgents: number
   title?: string
   model?: string

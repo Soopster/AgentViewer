@@ -2,9 +2,11 @@
 
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ToggleGroup as ToggleGroupPrimitive } from 'radix-ui'
 import {
   Activity,
   AlertTriangle,
+  ArrowLeft,
   Bot,
   CircleStop,
   CheckCircle2,
@@ -17,6 +19,7 @@ import {
   ListFilter,
   Mail,
   MessageSquare,
+  Minus,
   MoreVertical,
   Play,
   Plus,
@@ -25,6 +28,8 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Sparkles,
+  Terminal,
   Trash2,
   UsersRound,
   Workflow,
@@ -32,14 +37,16 @@ import {
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { AGENT_PROTOCOL_VERSION } from '@/lib/agentProtocol'
 import type { AgentProtocolEvent, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot, ProtocolTask } from '@/lib/agentProtocol'
-import type { ProviderSelection, Session } from '@/lib/types'
+import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import type { WorktreeTask } from '@/lib/worktreeTasks'
 
 const GitPopover = dynamic(() => import('@/components/GitPopover'), { ssr: false })
@@ -195,6 +202,8 @@ export default function AgentTeamCoordinator({
   const [startOpen, setStartOpen] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
   const [maxAgents, setMaxAgents] = useState(3)
+  const [runProviderOverride, setRunProviderOverride] = useState<AgentProvider | null>(null)
+  const [teammateProviderOverride, setTeammateProviderOverride] = useState<AgentProvider[] | null>(null)
   const [gateCommand, setGateCommand] = useState('')
   const [requirePlanApproval, setRequirePlanApproval] = useState(true)
   const [runQuery, setRunQuery] = useState('')
@@ -227,7 +236,9 @@ export default function AgentTeamCoordinator({
   const terminalRun = run ? ['completed', 'failed', 'stopped'].includes(run.status) : false
   const actionableMail = terminalRun ? 0 : undeliveredMail
   const completedTasks = tasks.filter((task) => task.status === 'completed').length
-  const targetProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
+  const suggestedProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
+  const targetProvider = runProviderOverride ?? suggestedProvider
+  const teammateProviders = teammateProviderOverride ?? [targetProvider]
   const baseCwd = selectedSession?.cwd ?? run?.baseCwd ?? ''
   const filteredRuns = useMemo(() => {
     const query = runQuery.trim().toLowerCase()
@@ -543,6 +554,7 @@ export default function AgentTeamCoordinator({
           prompt,
           baseCwd: baseCwd || undefined,
           provider: targetProvider,
+          teammateProviders,
           maxAgents,
           title: prompt.slice(0, 40),
           gateCommand: gateCommand.trim() || undefined,
@@ -555,6 +567,8 @@ export default function AgentTeamCoordinator({
       setStartOpen(false)
       setPromptDraft('')
       setGateCommand('')
+      setRunProviderOverride(null)
+      setTeammateProviderOverride(null)
       const lead = result.sessions[0]
       if (lead) {
         onOpenSession({
@@ -574,7 +588,7 @@ export default function AgentTeamCoordinator({
     } finally {
       setBusyAction(null)
     }
-  }, [baseCwd, busyAction, gateCommand, maxAgents, onOpenSession, onSessionsChanged, promptDraft, requirePlanApproval, showNotice, targetProvider])
+  }, [baseCwd, busyAction, gateCommand, maxAgents, onOpenSession, onSessionsChanged, promptDraft, requirePlanApproval, showNotice, targetProvider, teammateProviders])
 
   const sendMessage = useCallback(async () => {
     const body = messageDraft.trim()
@@ -827,63 +841,185 @@ export default function AgentTeamCoordinator({
           <main className="av-coord-main">
             {startOpen || !run ? (
               <section className="av-coord-start">
-                <div className="av-coord-section-title">
-                  <Play size={16} />
-                  <h3>New Run</h3>
-                </div>
-                <label className="av-coord-field av-coord-prompt-field">
-                  <span>Prompt</span>
-                  <Textarea
-                    id="coord-run-prompt"
-                    name="run-prompt"
-                    autoComplete="off"
-                    value={promptDraft}
-                    onChange={(event) => setPromptDraft(event.target.value)}
-                    placeholder="Describe the outcome, constraints, and acceptance checks…"
-                    className="av-coord-textarea"
-                    rows={6}
-                  />
-                </label>
-                <div className="av-coord-start-grid">
-                  <label className="av-coord-field">
-                    <span>Provider</span>
-                    <Input name="run-provider" autoComplete="off" value={String(targetProvider).toUpperCase()} readOnly className="av-coord-input" />
-                  </label>
-                  <label className="av-coord-field">
-                    <span>Teammates</span>
-                    <Input
-                      type="number"
-                      name="run-teammates"
-                      autoComplete="off"
-                      min={1}
-                      max={6}
-                      value={maxAgents}
-                      onChange={(event) => setMaxAgents(Math.max(1, Math.min(6, Number(event.target.value) || 1)))}
-                      className="av-coord-input"
-                    />
-                  </label>
-                  <label className="av-coord-field av-coord-wide">
-                    <span>Gate command</span>
-                    <Input
-                      value={gateCommand}
-                      name="run-gate-command"
-                      autoComplete="off"
-                      onChange={(event) => setGateCommand(event.target.value)}
-                      placeholder="Example: npx tsc --noEmit"
-                      className="av-coord-input"
-                    />
-                  </label>
-                </div>
-                <label className="av-coord-check">
-                  <Checkbox className="av-coord-checkbox" checked={requirePlanApproval} onCheckedChange={(checked) => setRequirePlanApproval(checked === true)} />
-                  <span>Require lead plan approval before implementation</span>
-                </label>
-                <div className="av-coord-form-actions">
-                  {run ? <Button type="button" variant="outline" onClick={() => setStartOpen(false)} className="av-coord-btn">Cancel</Button> : null}
-                  <Button type="button" onClick={() => void startRun()} disabled={!promptDraft.trim() || busyAction === 'start'} className="av-coord-btn av-coord-primary">
-                    {busyAction === 'start' ? <RefreshCw aria-hidden="true" /> : <Play aria-hidden="true" />} {busyAction === 'start' ? 'Starting…' : 'Start Run'}
-                  </Button>
-                </div>
+                <form
+                  className="av-coord-start-form"
+                  onSubmit={(event) => { event.preventDefault(); void startRun() }}
+                  onKeyDown={(event) => {
+                    if (!(event.metaKey || event.ctrlKey) || event.key !== 'Enter' || !promptDraft.trim() || busyAction === 'start') return
+                    event.preventDefault()
+                    void startRun()
+                  }}
+                >
+                  <header className="av-coord-start-hero">
+                    <div className="av-coord-start-mark"><Sparkles aria-hidden="true" /></div>
+                    <div>
+                      <span>Agent operations</span>
+                      <h3>Launch a workflow</h3>
+                      <p>Define the outcome, choose the runtime, and set the checks the team must satisfy.</p>
+                    </div>
+                    {run ? (
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setStartOpen(false)} className="av-coord-start-back">
+                        <ArrowLeft data-icon="inline-start" aria-hidden="true" /> Back to workflow
+                      </Button>
+                    ) : null}
+                  </header>
+
+                  <div className="av-coord-start-layout">
+                    <div className="av-coord-start-primary">
+                      <Card className="av-coord-start-card av-coord-start-brief">
+                        <CardHeader>
+                          <div className="av-coord-start-card-heading"><span>01</span><div><CardTitle>Workflow brief</CardTitle><CardDescription>Give the lead enough context to build and assign a useful task board.</CardDescription></div></div>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="av-coord-field">
+                            <Label htmlFor="coord-run-prompt">Outcome and acceptance criteria</Label>
+                            <Textarea
+                              id="coord-run-prompt"
+                              name="run-prompt"
+                              autoComplete="off"
+                              required
+                              aria-invalid={promptDraft.length > 0 && !promptDraft.trim()}
+                              value={promptDraft}
+                              onChange={(event) => setPromptDraft(event.target.value)}
+                              placeholder="Example: Audit the session handoff flow. Fix correctness issues, add regression coverage, and finish only when web and TUI type-checks pass."
+                              className="av-coord-textarea"
+                              rows={8}
+                            />
+                          </div>
+                        </CardContent>
+                        <CardFooter className="av-coord-start-card-meta">
+                          <span>Include constraints, paths in scope, and a concrete definition of done.</span>
+                          <b>{promptDraft.length} characters</b>
+                        </CardFooter>
+                      </Card>
+
+                      <Card className="av-coord-start-card">
+                        <CardHeader>
+                          <div className="av-coord-start-card-heading"><span>02</span><div><CardTitle>Runtime and controls</CardTitle><CardDescription>Choose who runs the work and how completion is verified.</CardDescription></div></div>
+                        </CardHeader>
+                        <CardContent className="av-coord-runtime-grid">
+                          <div className="av-coord-field">
+                            <Label htmlFor="coord-run-provider">Lead provider</Label>
+                            <NativeSelect
+                              id="coord-run-provider"
+                              name="run-provider"
+                              value={targetProvider}
+                              onChange={(event) => setRunProviderOverride(event.target.value as AgentProvider)}
+                              className="av-coord-start-select"
+                            >
+                              {PROVIDER_ORDER.map((providerName) => <NativeSelectOption key={providerName} value={providerName}>{providerName.toUpperCase()}</NativeSelectOption>)}
+                            </NativeSelect>
+                            <small>The lead session coordinates every task and teammate.</small>
+                          </div>
+
+                          <div className="av-coord-field">
+                            <Label htmlFor="coord-run-agents">Agent limit</Label>
+                            <div className="av-coord-agent-stepper" role="group" aria-label="Maximum agents including the lead">
+                              <Button type="button" variant="outline" size="icon" onClick={() => setMaxAgents((current) => Math.max(2, current - 1))} disabled={maxAgents <= 2} aria-label="Remove one agent"><Minus aria-hidden="true" /></Button>
+                              <Input
+                                id="coord-run-agents"
+                                type="number"
+                                name="run-agents"
+                                autoComplete="off"
+                                min={2}
+                                max={6}
+                                value={maxAgents}
+                                onChange={(event) => setMaxAgents(Math.max(2, Math.min(6, Number(event.target.value) || 2)))}
+                                className="av-coord-input"
+                              />
+                              <Button type="button" variant="outline" size="icon" onClick={() => setMaxAgents((current) => Math.min(6, current + 1))} disabled={maxAgents >= 6} aria-label="Add one agent"><Plus aria-hidden="true" /></Button>
+                            </div>
+                            <small>Includes the lead; increase for independent parallel lanes.</small>
+                          </div>
+
+                          <div className="av-coord-field av-coord-wide">
+                            <Label>Teammate provider pool</Label>
+                            <ToggleGroupPrimitive.Root
+                              type="multiple"
+                              value={teammateProviders}
+                              onValueChange={(next) => setTeammateProviderOverride(next.length > 0 ? next as AgentProvider[] : [targetProvider])}
+                              className="av-coord-provider-pool"
+                              aria-label="Providers available for teammate agents"
+                            >
+                              {PROVIDER_ORDER.map((providerName) => {
+                                const selected = teammateProviders.includes(providerName)
+                                return (
+                                  <ToggleGroupPrimitive.Item
+                                    key={providerName}
+                                    value={providerName}
+                                    className={cn(`av-provider-${providerName}`, selected && 'av-selected')}
+                                    aria-label={`${selected ? 'Remove' : 'Add'} ${providerName} from teammate provider pool`}
+                                  >
+                                    <span aria-hidden="true">{selected ? '✓' : '+'}</span>{providerName.toUpperCase()}
+                                  </ToggleGroupPrimitive.Item>
+                                )
+                              })}
+                            </ToggleGroupPrimitive.Root>
+                            <small>Selected providers are assigned round-robin to teammate sessions. The lead provider can differ from the worker pool.</small>
+                          </div>
+
+                          <div className="av-coord-role-guide av-coord-wide">
+                            <div><b>Lead</b><span>Plans the board, delegates work, resolves blockers, and synthesizes the final result.</span></div>
+                            <div><b>Teammates</b><span>Claim independent worker or verification lanes, publish findings, and message the lead or peers.</span></div>
+                          </div>
+
+                          <div className="av-coord-field av-coord-wide">
+                            <Label htmlFor="coord-run-gate">Completion gate <em>optional</em></Label>
+                            <div className="av-coord-command-input">
+                              <Terminal aria-hidden="true" />
+                              <Input
+                                id="coord-run-gate"
+                                value={gateCommand}
+                                name="run-gate-command"
+                                autoComplete="off"
+                                onChange={(event) => setGateCommand(event.target.value)}
+                                placeholder="Example: npx tsc --noEmit"
+                                className="av-coord-input"
+                              />
+                            </div>
+                            <div className="av-coord-gate-presets" aria-label="Suggested completion gates">
+                              {['npx tsc --noEmit', 'npm run tui:check', 'npm run build'].map((command) => <button key={command} type="button" onClick={() => setGateCommand(command)}>{command}</button>)}
+                            </div>
+                          </div>
+
+                          <div className="av-coord-plan-control av-coord-wide">
+                            <Checkbox id="coord-plan-approval" className="av-coord-checkbox" checked={requirePlanApproval} onCheckedChange={(checked) => setRequirePlanApproval(checked === true)} />
+                            <div><Label htmlFor="coord-plan-approval">Review the lead plan before implementation</Label><small>The team pauses after planning until you approve or reject the proposed task board.</small></div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    <Card className="av-coord-start-card av-coord-launch-card">
+                      <CardHeader>
+                        <div className="av-coord-start-card-heading"><span>03</span><div><CardTitle>Launch summary</CardTitle><CardDescription>These settings are applied to the new coordinated run.</CardDescription></div></div>
+                      </CardHeader>
+                      <CardContent className="av-coord-launch-summary">
+                        <div><span>Workspace</span><strong title={baseCwd}>{baseCwd.split('/').at(-1) || 'agentViewer'}</strong></div>
+                        <div><span>Lead provider</span><strong className={`av-provider-${targetProvider}`}>{String(targetProvider).toUpperCase()}</strong></div>
+                        <div><span>Teammate providers</span><strong>{teammateProviders.map((entry) => entry.toUpperCase()).join(' · ')}</strong></div>
+                        <div><span>Agent limit</span><strong>{maxAgents} total</strong></div>
+                        <div><span>Plan review</span><strong>{requirePlanApproval ? 'Required' : 'Automatic'}</strong></div>
+                        <div><span>Completion gate</span><strong title={gateCommand}>{gateCommand.trim() || 'Not configured'}</strong></div>
+                        <div className="av-coord-launch-preview">
+                          <span>Brief preview</span>
+                          <p>{promptDraft.trim() ? firstLine(promptDraft) : 'Your workflow outcome will appear here.'}</p>
+                        </div>
+                        <div className="av-coord-launch-checks">
+                          <span><CheckCircle2 aria-hidden="true" /> Lead session created</span>
+                          <span><CheckCircle2 aria-hidden="true" /> Teammates assigned by provider pool</span>
+                          <span><CheckCircle2 aria-hidden="true" /> Task board and live activity enabled</span>
+                        </div>
+                      </CardContent>
+                      <CardFooter className="av-coord-launch-actions">
+                        <Button type="submit" size="lg" disabled={!promptDraft.trim() || busyAction === 'start'} className="av-coord-btn av-coord-primary">
+                          {busyAction === 'start' ? <RefreshCw data-icon="inline-start" aria-hidden="true" /> : <Play data-icon="inline-start" aria-hidden="true" />} {busyAction === 'start' ? 'Launching workflow…' : 'Launch workflow'}
+                        </Button>
+                        <small>{promptDraft.trim() ? <><kbd>⌘</kbd><kbd>Enter</kbd> to launch</> : 'Add a workflow brief to continue'}</small>
+                      </CardFooter>
+                    </Card>
+                  </div>
+                </form>
               </section>
             ) : (
               <>

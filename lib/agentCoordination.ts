@@ -90,6 +90,7 @@ type RunController = {
   runId: string
   prompt: string
   provider: ProtocolRun['provider']
+  teammateProviders: ProtocolRun['provider'][]
   baseCwd: string
   maxAgents: number
   title?: string
@@ -2840,14 +2841,14 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
   if (tasks.length === 0) {
     // Lead produced nothing usable — fall back to role lanes so the run still works.
     await enqueueWrite((tx) => {
-      for (const template of fallbackTaskTemplates(controller.prompt, controller.maxAgents)) {
+      for (const template of fallbackTaskTemplates(controller.prompt, Math.max(1, controller.maxAgents - 1))) {
         insertTaskSync(tx, controller.runId, { ...template, blockedBy: [] })
       }
     })
     tasks = listTasksSync(db, controller.runId)
   }
 
-  const teammateCount = Math.max(1, Math.min(controller.maxAgents, tasks.length))
+  const teammateCount = Math.max(1, Math.min(controller.maxAgents - 1, tasks.length))
   const ts = nowIso()
   for (let index = 0; index < teammateCount; index += 1) {
     if (controller.stopped) return
@@ -2857,7 +2858,7 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
     try {
       worktree = await createWorktreeTask(controller.baseCwd, `${controller.title ?? 'coord'}-${name}`)
       session = await createNewViewSession({
-        provider: controller.provider,
+        provider: controller.teammateProviders[index % controller.teammateProviders.length] ?? controller.provider,
         cwd: worktree.path,
         title: `${controller.title ?? 'Coordinated run'} · ${name}`,
       })
@@ -2908,7 +2909,9 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
   if (!prompt) throw new Error('prompt is required')
   const runId = randomUUID()
   const ts = nowIso()
-  const maxAgents = Math.max(1, Math.min(params.maxAgents, 6))
+  const maxAgents = Math.max(2, Math.min(params.maxAgents, 6))
+  const teammateProviders = [...new Set(params.teammateProviders?.filter(Boolean) ?? [])]
+  if (teammateProviders.length === 0) teammateProviders.push(params.provider)
 
   const leadSession = await createNewViewSession({
     provider: params.provider,
@@ -2920,6 +2923,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     runId,
     prompt,
     provider: params.provider,
+    teammateProviders,
     baseCwd: params.baseCwd,
     maxAgents,
     title: params.title,
@@ -2977,7 +2981,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     runId,
     agent: { id: 'lead', name: 'lead' },
     prompt,
-    teammateCount: maxAgents,
+    teammateCount: maxAgents - 1,
   })
   void dispatchAgentTurn(controller, 'lead', planMessage).catch(async (err) => {
     await appendProtocolEvent({

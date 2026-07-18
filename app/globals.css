@@ -6360,6 +6360,102 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-global-footer kbd { border: 1px solid var(--av-coord-line); border-radius: 4px; background: var(--surface-3); color: var(--text-2); font: inherit; padding: 4px 6px; }
 .av-coord-drawer { bottom: 60px; }
 
+/* New workflow launcher */
+.av-coord-start {
+  max-width: none;
+  margin: 0;
+  background:
+    radial-gradient(circle at 75% 4%, color-mix(in srgb, var(--cyan) 7%, transparent), transparent 34%),
+    color-mix(in srgb, var(--surface) 94%, var(--bg));
+  padding: 0;
+}
+.av-coord-start-form { display: grid; width: min(1220px, 100%); gap: 20px; margin: 0 auto; padding: 26px clamp(20px, 3vw, 42px) 72px; }
+.av-coord-start-hero { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 14px; border-bottom: 1px solid var(--av-coord-line); padding: 0 0 20px; }
+.av-coord-start-mark { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid color-mix(in srgb, var(--cyan) 55%, var(--av-coord-line)); border-radius: 8px; background: color-mix(in srgb, var(--cyan) 10%, var(--surface-2)); color: var(--cyan); }
+.av-coord-start-mark svg { width: 20px; height: 20px; }
+.av-coord-start-hero > div:nth-child(2) { display: grid; gap: 3px; }
+.av-coord-start-hero span { color: var(--cyan); font: 700 9px "IBM Plex Mono", monospace; letter-spacing: .1em; text-transform: uppercase; }
+.av-coord-start-hero h3 { margin: 0; color: var(--text); font: 700 24px "Oxanium", monospace; letter-spacing: .025em; }
+.av-coord-start-hero p { margin: 0; color: var(--text-3); font: 11px/1.5 "IBM Plex Mono", monospace; }
+.av-coord-start-back { color: var(--text-3); }
+
+.av-coord-start-layout { display: grid; grid-template-columns: minmax(0, 1fr) 350px; align-items: start; gap: 18px; }
+.av-coord-start-primary { display: grid; min-width: 0; gap: 18px; }
+.av-coord-start-card { gap: 0; overflow: hidden; border-color: var(--av-coord-line); border-radius: 8px; background: color-mix(in srgb, var(--surface-2) 76%, var(--surface)); box-shadow: none; }
+.av-coord-start-card [data-slot="card-header"] { border-bottom: 1px solid var(--av-coord-line); padding: 16px 18px; }
+.av-coord-start-card [data-slot="card-content"] { padding: 18px; }
+.av-coord-start-card [data-slot="card-footer"] { padding: 12px 18px; }
+.av-coord-start-card-heading { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: start; gap: 11px; }
+.av-coord-start-card-heading > span { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid color-mix(in srgb, var(--cyan) 45%, var(--av-coord-line)); border-radius: 6px; background: color-mix(in srgb, var(--cyan) 8%, transparent); color: var(--cyan); font: 700 9px "IBM Plex Mono", monospace; }
+.av-coord-start-card-heading > div { display: grid; gap: 5px; }
+.av-coord-start-card [data-slot="card-title"] { color: var(--text); font: 700 13px "IBM Plex Mono", monospace; letter-spacing: .02em; }
+.av-coord-start-card [data-slot="card-description"] { color: var(--text-3); font: 10px/1.45 "IBM Plex Mono", monospace; }
+.av-coord-start-card .av-coord-field { gap: 8px; }
+.av-coord-start-card .av-coord-field > label { color: var(--text-2); font: 700 9px "IBM Plex Mono", monospace; letter-spacing: .075em; text-transform: uppercase; }
+.av-coord-start-card .av-coord-field > label em { color: var(--text-3); font-style: normal; font-weight: 400; }
+.av-coord-start-card .av-coord-field > small { color: var(--text-3); font: 9px/1.45 "IBM Plex Mono", monospace; }
+.av-coord-start-brief .av-coord-textarea { min-height: 184px; border-color: color-mix(in srgb, var(--cyan) 24%, var(--av-coord-line)); background: color-mix(in srgb, var(--surface) 72%, transparent); font-size: 12px; line-height: 1.6; padding: 14px; }
+.av-coord-start-card-meta { justify-content: space-between; gap: 16px; border-top: 1px solid var(--av-coord-line); color: var(--text-3); font: 9px/1.4 "IBM Plex Mono", monospace; }
+.av-coord-start-card-meta b { flex: 0 0 auto; color: var(--text-2); font-weight: 500; }
+
+.av-coord-runtime-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.av-coord-start-select { height: 40px; border-color: var(--av-coord-line); background: color-mix(in srgb, var(--surface) 72%, transparent); color: var(--text); }
+.av-coord-agent-stepper { display: grid; grid-template-columns: 40px minmax(70px, 1fr) 40px; gap: 6px; }
+.av-coord-agent-stepper .av-coord-input { height: 40px; text-align: center; }
+.av-coord-agent-stepper button { width: 40px; height: 40px; border-color: var(--av-coord-line); background: color-mix(in srgb, var(--surface) 72%, transparent); }
+.av-coord-provider-pool { display: flex; flex-wrap: wrap; gap: 7px; }
+.av-coord-provider-pool button { display: inline-flex; min-height: 34px; align-items: center; gap: 7px; border: 1px solid var(--av-coord-line); border-radius: 5px; background: color-mix(in srgb, var(--surface) 72%, transparent); color: var(--text-3); font: 700 9px "IBM Plex Mono", monospace; padding: 0 10px; }
+.av-coord-provider-pool button span { display: grid; width: 14px; height: 14px; place-items: center; border: 1px solid currentColor; border-radius: 3px; font-size: 8px; }
+.av-coord-provider-pool button:hover { border-color: currentColor; color: var(--text-2); }
+.av-coord-provider-pool button.av-selected { border-color: currentColor; background: color-mix(in srgb, currentColor 10%, var(--surface-2)); color: var(--cyan); }
+.av-coord-provider-pool button.av-provider-claude.av-selected { color: var(--violet); }
+.av-coord-provider-pool button.av-provider-copilot.av-selected { color: var(--amber); }
+.av-coord-provider-pool button.av-provider-opencode.av-selected { color: var(--green); }
+.av-coord-provider-pool button.av-provider-pi.av-selected { color: var(--blue); }
+.av-coord-role-guide { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.av-coord-role-guide > div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 9px; border: 1px solid var(--av-coord-line); border-radius: 6px; background: color-mix(in srgb, var(--surface) 62%, transparent); padding: 10px; }
+.av-coord-role-guide b { color: var(--cyan); font: 700 9px "IBM Plex Mono", monospace; text-transform: uppercase; }
+.av-coord-role-guide span { color: var(--text-3); font: 9px/1.45 "IBM Plex Mono", monospace; }
+.av-coord-command-input { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: center; overflow: hidden; border: 1px solid var(--av-coord-line); border-radius: 6px; background: color-mix(in srgb, var(--surface) 72%, transparent); }
+.av-coord-command-input > svg { width: 15px; height: 15px; justify-self: center; color: var(--green); }
+.av-coord-command-input .av-coord-input { border: 0; background: transparent; box-shadow: none; padding-left: 0; }
+.av-coord-gate-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.av-coord-gate-presets button { border: 1px solid var(--av-coord-line); border-radius: 4px; background: transparent; color: var(--text-3); font: 8px "IBM Plex Mono", monospace; padding: 5px 7px; }
+.av-coord-gate-presets button:hover { border-color: color-mix(in srgb, var(--cyan) 45%, var(--av-coord-line)); color: var(--cyan); }
+.av-coord-plan-control { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 10px; border: 1px solid color-mix(in srgb, var(--violet) 26%, var(--av-coord-line)); border-radius: 6px; background: color-mix(in srgb, var(--violet) 6%, transparent); padding: 12px; }
+.av-coord-plan-control > div { display: grid; gap: 4px; }
+.av-coord-plan-control label { color: var(--text-2); font: 600 10px "IBM Plex Mono", monospace; }
+.av-coord-plan-control small { color: var(--text-3); font: 9px/1.45 "IBM Plex Mono", monospace; }
+
+.av-coord-launch-card { position: sticky; top: 0; }
+.av-coord-launch-summary { display: grid; gap: 0; }
+.av-coord-launch-summary > div:not(.av-coord-launch-preview):not(.av-coord-launch-checks) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); align-items: center; gap: 12px; border-bottom: 1px solid color-mix(in srgb, var(--av-coord-line) 66%, transparent); padding: 10px 0; }
+.av-coord-launch-summary span { color: var(--text-3); font: 9px "IBM Plex Mono", monospace; }
+.av-coord-launch-summary strong { overflow: hidden; color: var(--text-2); font: 600 10px "IBM Plex Mono", monospace; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.av-coord-launch-preview { display: grid; gap: 7px; border: 1px solid var(--av-coord-line); border-radius: 6px; background: color-mix(in srgb, var(--surface) 62%, transparent); margin-top: 14px; padding: 11px; }
+.av-coord-launch-preview p { display: -webkit-box; overflow: hidden; min-height: 38px; margin: 0; color: var(--text-2); font: 10px/1.5 "IBM Plex Mono", monospace; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.av-coord-launch-checks { display: grid; gap: 7px; border-top: 1px solid var(--av-coord-line); margin-top: 14px; padding-top: 14px; }
+.av-coord-launch-checks span { display: flex; align-items: center; gap: 7px; }
+.av-coord-launch-checks svg { width: 13px; height: 13px; color: var(--green); }
+.av-coord-launch-actions { display: grid; gap: 9px; border-top: 1px solid var(--av-coord-line); }
+.av-coord-launch-actions .av-coord-btn { width: 100%; height: 42px; font-size: 11px; }
+.av-coord-launch-actions small { display: flex; min-height: 18px; align-items: center; justify-content: center; gap: 4px; color: var(--text-3); font: 9px "IBM Plex Mono", monospace; }
+.av-coord-launch-actions kbd { border: 1px solid var(--av-coord-line); border-radius: 3px; background: var(--surface-3); color: var(--text-2); font: inherit; padding: 2px 4px; }
+
+@media (max-width: 980px) {
+  .av-coord-start-layout { grid-template-columns: 1fr; }
+  .av-coord-launch-card { position: static; }
+}
+
+@media (max-width: 640px) {
+  .av-coord-start-form { padding-inline: 14px; }
+  .av-coord-start-hero { grid-template-columns: 40px minmax(0, 1fr); }
+  .av-coord-start-back { grid-column: 1 / -1; width: fit-content; }
+  .av-coord-runtime-grid { grid-template-columns: 1fr; }
+  .av-coord-role-guide { grid-template-columns: 1fr; }
+  .av-coord-start-card-meta { align-items: flex-start; flex-direction: column; }
+}
+
 @media (max-width: 1500px) {
   .av-coord-main { grid-template-columns: minmax(0, 1fr) 390px; }
   .av-coord-task-panel .av-coord-filterbar,

@@ -19,7 +19,10 @@ export async function POST(request: NextRequest) {
   const prompt = typeof body.prompt === 'string' ? body.prompt : ''
   const baseCwd = typeof body.baseCwd === 'string' && body.baseCwd.trim() ? body.baseCwd.trim() : process.cwd()
   const provider = isAgentProvider(body.provider) ? body.provider : 'claude'
-  const maxAgents = Math.min(Math.max(Number(body.maxAgents) || 3, 1), 6)
+  const teammateProviders = Array.isArray(body.teammateProviders)
+    ? [...new Set(body.teammateProviders.filter(isAgentProvider))]
+    : undefined
+  const maxAgents = Math.min(Math.max(Number(body.maxAgents) || 3, 2), 6)
   const title = typeof body.title === 'string' ? body.title : undefined
   const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined
   const effort = typeof body.effort === 'string' && body.effort.trim() ? body.effort.trim() : undefined
@@ -27,7 +30,7 @@ export async function POST(request: NextRequest) {
   const requirePlanApproval = body.requirePlanApproval === true
 
   try {
-    const result = await startProtocolRun({ prompt, baseCwd, provider, maxAgents, title, model, effort, gateCommand, requirePlanApproval })
+    const result = await startProtocolRun({ prompt, baseCwd, provider, teammateProviders, maxAgents, title, model, effort, gateCommand, requirePlanApproval })
     return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
