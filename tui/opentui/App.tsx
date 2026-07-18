@@ -4053,8 +4053,22 @@ function cycleDensityValue(current: TuiDensity): TuiDensity {
     : 'comfortable'
 }
 
-function cycleTranscriptViewValue(current: TuiTranscriptView): TuiTranscriptView {
-  return current === 'conversation' ? 'full' : current === 'full' ? 'continue' : current === 'continue' ? 'stream' : current === 'stream' ? 'agents' : 'conversation'
+const TRANSCRIPT_VIEWS: TuiTranscriptView[] = ['conversation', 'full', 'continue', 'stream', 'agents']
+
+const TRANSCRIPT_VIEW_LABELS: Record<TuiTranscriptView, string> = {
+  conversation: 'CONVERSATION',
+  full: 'FULL',
+  continue: 'CONTINUE',
+  stream: 'STREAM',
+  agents: 'AGENTS',
+}
+
+const TRANSCRIPT_VIEW_DESCRIPTIONS: Record<TuiTranscriptView, string> = {
+  conversation: 'Conversation with technical details folded',
+  full: 'Every transcript card expanded',
+  continue: 'Focus on the latest continuation',
+  stream: 'Chronological Claude-style activity stream',
+  agents: 'Group tool activity by agent',
 }
 
 const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
@@ -4406,7 +4420,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'thinking',   label: 'Toggle thinking mode',   key: 'i',  category: 'View'       },
   { id: 'density',    label: 'Toggle density',         key: 'd',  category: 'View'       },
   { id: 'diff-layout', label: 'Toggle diff layout',    key: 's',  category: 'View'       },
-  { id: 'view',       label: 'Toggle transcript view', key: 'v',  category: 'View'       },
+  { id: 'view',       label: 'Switch transcript view', key: 'v',  category: 'View'       },
   { id: 'width',      label: 'Toggle transcript width', key: '⇧W', category: 'View'       },
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
@@ -5954,6 +5968,8 @@ export default function OpenTuiApp() {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [themeMenuIndex, setThemeMenuIndex] = useState(0)
   const [themeMenuGroup, setThemeMenuGroup] = useState<'light' | 'dark'>('dark')
+  const [transcriptViewMenuOpen, setTranscriptViewMenuOpen] = useState(false)
+  const [transcriptViewMenuIndex, setTranscriptViewMenuIndex] = useState(0)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [commandPaletteQuery, setCommandPaletteQuery] = useState('')
   const [commandPaletteIndex, setCommandPaletteIndex] = useState(0)
@@ -6317,6 +6333,7 @@ export default function OpenTuiApp() {
   const runningSessionsRef = useRef<RunningSessionRef[]>([])
   const tabsEnabledRef = useRef(true)
   const themeMenuOriginRef = useRef<TuiThemeMode | null>(null)
+  const transcriptViewMenuOriginRef = useRef<TuiTranscriptView | null>(null)
   const currentThemeRef = useRef<TuiThemeMode>('light')
   const exitConfirmOpenRef = useRef(false)
   const exitInProgressRef = useRef(false)
@@ -6350,6 +6367,7 @@ export default function OpenTuiApp() {
     || providerMenuOpen
     || modelPickerOpen
     || themeMenuOpen
+    || transcriptViewMenuOpen
     || commandPaletteOpen
     || transcriptDiffDraft,
   )
@@ -9396,6 +9414,34 @@ export default function OpenTuiApp() {
       setError(err instanceof Error ? err.message : 'Failed to store theme')
     })
     setThemeMenuOpen(false)
+  }, [])
+
+  const openTranscriptViewMenu = useEffectEvent(() => {
+    transcriptViewMenuOriginRef.current = transcriptView
+    setTranscriptViewMenuIndex(Math.max(TRANSCRIPT_VIEWS.indexOf(transcriptView), 0))
+    setTranscriptViewMenuOpen(true)
+  })
+
+  const closeTranscriptViewMenu = useEffectEvent(() => {
+    const originView = transcriptViewMenuOriginRef.current
+    setTranscriptViewMenuOpen(false)
+    if (originView) {
+      setTranscriptView(originView)
+      setTranscriptViewMenuIndex(Math.max(TRANSCRIPT_VIEWS.indexOf(originView), 0))
+    } else {
+      setTranscriptViewMenuIndex(Math.max(TRANSCRIPT_VIEWS.indexOf(transcriptView), 0))
+    }
+    transcriptViewMenuOriginRef.current = null
+  })
+
+  const chooseTranscriptView = useCallback((nextView: TuiTranscriptView) => {
+    setTranscriptView(nextView)
+    setTranscriptViewMenuIndex(Math.max(TRANSCRIPT_VIEWS.indexOf(nextView), 0))
+    transcriptViewMenuOriginRef.current = null
+    void writeTuiTranscriptView(nextView).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store transcript view')
+    })
+    setTranscriptViewMenuOpen(false)
   }, [])
 
   const persistTheme = useCallback(() => {
@@ -13126,9 +13172,7 @@ export default function OpenTuiApp() {
         break
       }
       case 'view': {
-        const next = cycleTranscriptViewValue(transcriptView)
-        setTranscriptView(next)
-        void writeTuiTranscriptView(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store transcript view'))
+        openTranscriptViewMenu()
         break
       }
       case 'width': {
@@ -13669,6 +13713,17 @@ export default function OpenTuiApp() {
       }
       if (key.name === 'escape' || key.name === 't') {
         handled(closeThemeMenu)
+        return
+      }
+      if (key.name === 'q' || isCtrl('c')) {
+        handled(requestExit)
+      }
+      return
+    }
+
+    if (transcriptViewMenuOpen) {
+      if (key.name === 'escape' || (sequence === 'v' && !key.ctrl && !key.meta)) {
+        handled(closeTranscriptViewMenu)
         return
       }
       if (key.name === 'q' || isCtrl('c')) {
@@ -14895,13 +14950,7 @@ export default function OpenTuiApp() {
     }
 
     if (sequence === 'v' && !key.ctrl && !key.meta) {
-      handled(() => {
-        const next = cycleTranscriptViewValue(transcriptView)
-        setTranscriptView(next)
-        void writeTuiTranscriptView(next).catch((err) => {
-          setError(err instanceof Error ? err.message : 'Failed to store transcript view')
-        })
-      })
+      handled(openTranscriptViewMenu)
       return
     }
 
@@ -15918,6 +15967,66 @@ export default function OpenTuiApp() {
                   onSelect={(_, option) => {
                     const next = option?.value as TuiThemeMode | undefined
                     if (next) chooseTheme(next)
+                  }}
+                />
+              </box>
+            </box>
+          )
+        })() : null}
+
+        {transcriptViewMenuOpen ? (() => {
+          const menuWidth = Math.min(Math.max(width - 8, 28), 46)
+          const menuHeight = 10
+          const originView = transcriptViewMenuOriginRef.current
+          const viewOptions = TRANSCRIPT_VIEWS.map((view) => ({
+            name: TRANSCRIPT_VIEW_LABELS[view] + (view === originView ? ' ✓' : ''),
+            description: TRANSCRIPT_VIEW_DESCRIPTIONS[view],
+            value: view,
+          }))
+          return (
+            <box
+              position="absolute"
+              top={focusMode ? 1 : 3}
+              right={2}
+              width={menuWidth}
+              height={menuHeight}
+              border
+              borderStyle="single"
+              borderColor={theme.border2}
+              backgroundColor={theme.surface}
+              zIndex={20}
+              flexDirection="column"
+            >
+              <box paddingX={2} paddingBottom={1} flexDirection="row">
+                <text fg={theme.cyan} wrapMode="none">TRANSCRIPT VIEW</text>
+                <text fg={theme.dim} wrapMode="none">  v / esc close</text>
+              </box>
+              <box flexGrow={1} paddingX={1} paddingBottom={1}>
+                <select
+                  style={{ height: menuHeight - 4 }}
+                  focused
+                  options={viewOptions}
+                  selectedIndex={transcriptViewMenuIndex}
+                  selectedBackgroundColor={theme.surface3}
+                  selectedTextColor={theme.text}
+                  textColor={theme.muted}
+                  descriptionColor={theme.dim}
+                  selectedDescriptionColor={theme.cyan}
+                  backgroundColor={theme.surface}
+                  focusedBackgroundColor={theme.surface}
+                  showScrollIndicator={false}
+                  showDescription={false}
+                  itemSpacing={0}
+                  onChange={(index) => {
+                    const next = TRANSCRIPT_VIEWS[index]
+                    if (next) {
+                      setTranscriptViewMenuIndex(index)
+                      setTranscriptView(next)
+                    }
+                  }}
+                  onSelect={(_, option) => {
+                    const next = option?.value as TuiTranscriptView | undefined
+                    if (next) chooseTranscriptView(next)
                   }}
                 />
               </box>
