@@ -15419,10 +15419,10 @@ export default function OpenTuiApp() {
             // Focused pane lights its frame in its own title color (transcript →
             // provider accent, like the sidebar → cyan) so it's obvious which
             // side has focus instead of the frame staying uniformly dim.
-            borderColor={transcriptView === 'stream'
-              ? theme.surface
-              : effectiveFocus === 'messages'
-                ? providerAccent
+            borderColor={effectiveFocus === 'messages'
+              ? providerAccent
+              : transcriptView === 'stream'
+                ? theme.surface
                 : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
