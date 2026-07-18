@@ -4,19 +4,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
+  Bot,
   CircleStop,
   CheckCircle2,
+  ClipboardCopy,
+  Clock3,
   GitMerge,
+  Inbox,
+  ListFilter,
   Mail,
   MessageSquare,
   Play,
   Plus,
   Radio,
   RefreshCw,
+  Search,
   Send,
   ShieldCheck,
   Trash2,
   UsersRound,
+  Workflow,
   X,
   Zap,
 } from 'lucide-react'
@@ -32,10 +39,8 @@ import type { ProviderSelection, Session } from '@/lib/types'
 import type { WorktreeTask } from '@/lib/worktreeTasks'
 
 type Props = {
-  open: boolean
   provider: ProviderSelection
   selectedSession: Session | null
-  onClose: () => void
   onOpenSession: (session: Session) => void
   onSessionsChanged: () => void
 }
@@ -50,6 +55,35 @@ type PendingAction =
 
 const POLL_MS = 2000
 const WORKTREE_STATS_MS = 10_000
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+const ACTIVE_TASK_STATUSES = new Set(['claimed', 'planning', 'planned', 'in_progress'])
+const ATTENTION_TASK_STATUSES = new Set(['blocked', 'failed', 'planned'])
+
+type TaskFilter = 'all' | 'attention' | 'active' | 'done'
+type EventFilter = 'all' | 'attention' | 'messages' | 'tasks'
+
+function FilterButton({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean
+  children: React.ReactNode
+  onClick: () => void
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className={cn('av-coord-filter', active ? 'av-active' : '')}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
+  )
+}
 
 function firstLine(value: string, fallback = 'Untitled'): string {
   return value.split('\n')[0]?.trim() || fallback
@@ -103,10 +137,8 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export default function AgentTeamCoordinator({
-  open,
   provider,
   selectedSession,
-  onClose,
   onOpenSession,
   onSessionsChanged,
 }: Props) {
@@ -128,6 +160,9 @@ export default function AgentTeamCoordinator({
   const [maxAgents, setMaxAgents] = useState(3)
   const [gateCommand, setGateCommand] = useState('')
   const [requirePlanApproval, setRequirePlanApproval] = useState(true)
+  const [runQuery, setRunQuery] = useState('')
+  const [taskFilter, setTaskFilter] = useState<TaskFilter>('all')
+  const [eventFilter, setEventFilter] = useState<EventFilter>('all')
 
   const eventsListRef = useRef<HTMLDivElement | null>(null)
 
@@ -137,17 +172,74 @@ export default function AgentTeamCoordinator({
   const events = snapshot?.events ?? []
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents])
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0] ?? null
-  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null
-  const selectedEvent = events.length === 0
-    ? null
-    : events[selectedEventIndex < 0 ? events.length - 1 : Math.min(selectedEventIndex, events.length - 1)] ?? null
   const undeliveredMail = (snapshot?.messages ?? []).filter((message) => !message.deliveredAt).length
+  const terminalRun = run ? ['completed', 'failed', 'stopped'].includes(run.status) : false
+  const actionableMail = terminalRun ? 0 : undeliveredMail
   const liveAgents = agents.filter((agent) => agent.turnActive).length
   const blockedAgents = agents.filter((agent) => agent.status === 'blocked' || agent.status === 'failed').length
   const completedTasks = tasks.filter((task) => task.status === 'completed').length
   const taskProgress = tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0
   const targetProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
   const baseCwd = selectedSession?.cwd ?? run?.baseCwd ?? ''
+  const filteredRuns = useMemo(() => {
+    const query = runQuery.trim().toLowerCase()
+    if (!query) return runs
+    return runs.filter((entry) => (
+      entry.prompt.toLowerCase().includes(query)
+      || entry.status.toLowerCase().includes(query)
+      || String(entry.provider).toLowerCase().includes(query)
+      || entry.id.toLowerCase().includes(query)
+    ))
+  }, [runQuery, runs])
+  const planStates = useMemo(() => {
+    const states = new Map<string, 'awaiting' | 'approved' | 'rejected'>()
+    for (const event of events) {
+      if (!event.taskId) continue
+      if (event.type === 'task.planned') states.set(event.taskId, 'awaiting')
+      else if (event.type === 'plan.approved') states.set(event.taskId, 'approved')
+      else if (event.type === 'plan.rejected') states.set(event.taskId, 'rejected')
+    }
+    return states
+  }, [events])
+  const pendingPlanTasks = useMemo(
+    () => tasks.filter((task) => planStates.get(task.id) === 'awaiting'),
+    [planStates, tasks],
+  )
+  const filteredTasks = useMemo(() => tasks.filter((task) => {
+    if (taskFilter === 'attention') return ATTENTION_TASK_STATUSES.has(task.status) || planStates.get(task.id) === 'awaiting'
+    if (taskFilter === 'active') return ACTIVE_TASK_STATUSES.has(task.status)
+    if (taskFilter === 'done') return TERMINAL_TASK_STATUSES.has(task.status)
+    return true
+  }), [planStates, taskFilter, tasks])
+  const displayedTask = filteredTasks.find((task) => task.id === selectedTaskId) ?? filteredTasks[0] ?? null
+  const filteredEvents = useMemo(() => events.flatMap((event, index) => {
+    const include = eventFilter === 'all'
+      || (eventFilter === 'attention' && ['agent.blocked', 'task.failed', 'lock.denied', 'plan.rejected', 'review.requested'].includes(event.type))
+      || (eventFilter === 'messages' && ['message', 'finding', 'learning', 'handoff'].includes(event.type))
+      || (eventFilter === 'tasks' && (event.type.startsWith('task.') || event.type.startsWith('plan.')))
+    return include ? [{ event, index }] : []
+  }), [eventFilter, events])
+  const selectedEvent = selectedEventIndex < 0
+    ? filteredEvents.at(-1)?.event ?? null
+    : filteredEvents.find((entry) => entry.index === selectedEventIndex)?.event ?? filteredEvents.at(-1)?.event ?? null
+  const attentionTaskCount = tasks.filter((task) => task.status === 'blocked' || task.status === 'failed').length
+  const attentionCount = terminalRun ? 0 : blockedAgents + attentionTaskCount + pendingPlanTasks.length + actionableMail
+  const workingAgents = agents.filter((agent) => agent.status === 'working' || agent.turnActive).length
+  const doneAgents = agents.filter((agent) => ['done', 'failed', 'stopped'].includes(agent.status)).length
+  const lastEventAt = events.at(-1)?.timestamp
+  const runHealth = run?.status === 'completed'
+    ? { label: 'Completed', tone: 'good' as const }
+    : run?.status === 'failed'
+      ? { label: 'Failed', tone: 'bad' as const }
+      : run?.status === 'stopped'
+        ? { label: 'Stopped', tone: 'muted' as const }
+        : run?.status === 'blocked'
+          ? { label: 'Blocked', tone: 'bad' as const }
+          : attentionCount > 0
+            ? { label: 'Needs attention', tone: 'bad' as const }
+            : liveAgents > 0 || workingAgents > 0
+              ? { label: 'Active', tone: 'warn' as const }
+              : { label: 'Waiting', tone: 'info' as const }
 
   const showNotice = useCallback((text: string) => {
     setNotice(text)
@@ -178,16 +270,15 @@ export default function AgentTeamCoordinator({
   }, [])
 
   useEffect(() => {
-    if (!open) return
     let cancelled = false
     void loadRuns().catch((err) => {
       if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to load coordinated runs')
     })
     return () => { cancelled = true }
-  }, [loadRuns, open])
+  }, [loadRuns])
 
   useEffect(() => {
-    if (!open || !runId) {
+    if (!runId) {
       setSnapshot(null)
       return
     }
@@ -200,11 +291,11 @@ export default function AgentTeamCoordinator({
     poll()
     const timer = window.setInterval(poll, POLL_MS)
     return () => { cancelled = true; window.clearInterval(timer) }
-  }, [loadSnapshot, open, runId])
+  }, [loadSnapshot, runId])
 
   useEffect(() => {
     const cwd = snapshot?.run.baseCwd
-    if (!open || !cwd) return
+    if (!cwd) return
     let cancelled = false
     const refresh = () => {
       void refreshWorktrees(cwd).catch(() => {
@@ -214,7 +305,7 @@ export default function AgentTeamCoordinator({
     refresh()
     const timer = window.setInterval(refresh, WORKTREE_STATS_MS)
     return () => { cancelled = true; window.clearInterval(timer) }
-  }, [open, refreshWorktrees, snapshot?.run.baseCwd])
+  }, [refreshWorktrees, snapshot?.run.baseCwd])
 
   // Keep the newest event in view while following the tail (index -1). A
   // click on any event pauses the follow; the panel-head button resumes it.
@@ -223,7 +314,7 @@ export default function AgentTeamCoordinator({
     if (!followingEvents) return
     const list = eventsListRef.current
     if (list) list.scrollTop = list.scrollHeight
-  }, [followingEvents, events.length])
+  }, [followingEvents, filteredEvents.length])
 
   const appendEvent = useCallback(async (event: AgentProtocolEvent) => {
     const next = await jsonFetch<ProtocolRunSnapshot>(`/api/agent-protocol/runs/${encodeURIComponent(event.runId)}/events`, {
@@ -233,6 +324,75 @@ export default function AgentTeamCoordinator({
     })
     setSnapshot(next)
   }, [])
+
+  const refreshDashboard = useCallback(async () => {
+    if (!runId || busyAction) return
+    setBusyAction('refresh')
+    try {
+      await Promise.all([
+        loadRuns(),
+        loadSnapshot(runId),
+        snapshot?.run.baseCwd ? refreshWorktrees(snapshot.run.baseCwd) : Promise.resolve(),
+      ])
+      showNotice('Dashboard refreshed')
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to refresh dashboard')
+    } finally {
+      setBusyAction(null)
+    }
+  }, [busyAction, loadRuns, loadSnapshot, refreshWorktrees, runId, showNotice, snapshot?.run.baseCwd])
+
+  const copyJoinCommand = useCallback(async () => {
+    if (!run) return
+    const command = `agent-viewer coord worker --join ${run.id} --name <name> --provider codex --attach ${window.location.origin}`
+    try {
+      await navigator.clipboard.writeText(command)
+      showNotice('CLI join command copied')
+    } catch {
+      showNotice(`Run ID: ${run.id}`)
+    }
+  }, [run, showNotice])
+
+  const reviewPlan = useCallback(async (task: ProtocolTask, approved: boolean) => {
+    if (!runId || busyAction) return
+    setBusyAction(`plan:${task.id}`)
+    try {
+      await appendEvent({
+        version: AGENT_PROTOCOL_VERSION,
+        runId,
+        agentId: 'user',
+        type: approved ? 'plan.approved' : 'plan.rejected',
+        taskId: task.id,
+        summary: approved ? `${task.id} plan approved from the control dashboard` : `${task.id} plan rejected from the control dashboard`,
+      })
+      showNotice(`${task.id} plan ${approved ? 'approved' : 'rejected'}`)
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to review plan')
+    } finally {
+      setBusyAction(null)
+    }
+  }, [appendEvent, busyAction, runId, showNotice])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const editing = target?.matches('input, textarea, select, [contenteditable="true"]') === true
+      if (event.key === 'Escape') {
+        if (messageTarget !== null) setMessageTarget(null)
+        else if (pendingAction) setPendingAction(null)
+        else if (startOpen && run) setStartOpen(false)
+        return
+      }
+      if (editing || event.metaKey || event.ctrlKey || event.altKey) return
+      if (event.key.toLowerCase() === 'n') setStartOpen(true)
+      if (event.key.toLowerCase() === 'm' && run) {
+        setMessageTarget(selectedAgent?.name ?? 'all')
+        setMessageDraft('')
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [messageTarget, pendingAction, run, selectedAgent?.name, startOpen])
 
   const startRun = useCallback(async () => {
     const prompt = promptDraft.trim()
@@ -389,8 +549,7 @@ export default function AgentTeamCoordinator({
       lastModified: Date.now(),
       summary: `${agent.name} · ${agent.role}`,
     })
-    onClose()
-  }, [onClose, onOpenSession])
+  }, [onOpenSession])
 
   const pendingLabel = pendingAction?.kind === 'stop'
     ? 'Stop this run and interrupt every live teammate turn?'
@@ -402,17 +561,15 @@ export default function AgentTeamCoordinator({
     ? `Mark ${pendingAction.task.id} failed?`
     : null
 
-  if (!open) return null
-
   return (
-    <div className="av-coord-overlay" role="dialog" aria-modal="true" aria-label="Agent team coordinator">
-      <div className="av-coord-shell">
+    <main className="av-coord-page" aria-labelledby="agent-operations-title">
+      <div className="av-coord-shell av-coord-shell-page">
         <header className="av-coord-header">
           <div className="av-coord-title">
-            <UsersRound size={18} />
+            <UsersRound aria-hidden="true" />
             <div>
-              <h2>Agent Team</h2>
-              <span>{run ? `${run.status.toUpperCase()} · ${String(run.provider).toUpperCase()} · ${formatAge(run.createdAt)} ago` : 'No run selected'}</span>
+              <h2 id="agent-operations-title">Agent Operations</h2>
+              <span>{run ? `${firstLine(run.prompt)} · ${String(run.provider).toUpperCase()} · started ${formatAge(run.createdAt)} ago` : 'Start a run or select one from the control rail'}</span>
             </div>
           </div>
           <div className="av-coord-header-actions">
@@ -420,18 +577,21 @@ export default function AgentTeamCoordinator({
             {blockedAgents > 0 ? <span className="av-coord-blocked-chip"><AlertTriangle size={13} /> {blockedAgents} blocked</span> : null}
             {run?.requirePlanApproval ? <span className="av-coord-guard"><ShieldCheck size={13} /> plans</span> : null}
             {run?.gateCommand ? <span className="av-coord-guard"><Zap size={13} /> gate</span> : null}
-            {undeliveredMail > 0 ? <span className="av-coord-mail"><Mail size={13} /> {undeliveredMail}</span> : null}
+            {actionableMail > 0 ? <span className="av-coord-mail"><Mail size={13} /> {actionableMail}</span> : null}
+            {run ? <span className={cn('av-coord-health', `av-tone-${runHealth.tone}`)}>{runHealth.label}</span> : null}
+            {run ? (
+              <Button type="button" variant="outline" size="sm" className="av-coord-btn" onClick={() => void copyJoinCommand()}>
+                <ClipboardCopy data-icon="inline-start" aria-hidden="true" /> Invite CLI
+              </Button>
+            ) : null}
             <Button type="button" variant="outline" size="sm" className="av-coord-btn" onClick={() => setStartOpen(true)}>
-              <Plus size={14} /> New
-            </Button>
-            <Button type="button" variant="ghost" size="icon" className="av-coord-icon" onClick={onClose} aria-label="Close coordinator">
-              <X size={18} />
+              <Plus data-icon="inline-start" aria-hidden="true" /> New Run
             </Button>
           </div>
         </header>
 
         {notice || loadError ? (
-          <div className={cn('av-coord-notice', loadError ? 'av-coord-notice-error' : '')}>
+          <div className={cn('av-coord-notice', loadError ? 'av-coord-notice-error' : '')} aria-live="polite">
             {loadError ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
             <span>{loadError ?? notice}</span>
             <button type="button" onClick={() => { setLoadError(null); setNotice(null) }} aria-label="Dismiss notice">
@@ -443,17 +603,32 @@ export default function AgentTeamCoordinator({
         <div className="av-coord-body">
           <aside className="av-coord-runs">
             <div className="av-coord-panel-head">
-              <span>Runs</span>
+              <span>Run Control</span>
               <button type="button" onClick={() => void loadRuns()} aria-label="Refresh runs">
                 <RefreshCw size={13} />
               </button>
             </div>
+            <label className="av-coord-run-search">
+              <Search aria-hidden="true" />
+              <span className="sr-only">Search runs</span>
+              <Input
+                type="search"
+                name="run-search"
+                autoComplete="off"
+                value={runQuery}
+                onChange={(event) => setRunQuery(event.target.value)}
+                placeholder="Search runs…"
+                aria-label="Search runs"
+              />
+            </label>
             <div className="av-coord-run-list">
               {runs.length === 0 ? (
                 <button type="button" className="av-coord-empty-run" onClick={() => setStartOpen(true)}>
                   <Plus size={15} /> New run
                 </button>
-              ) : runs.map((entry) => (
+              ) : filteredRuns.length === 0 ? (
+                <div className="av-coord-empty-state">No runs match “{runQuery}”.</div>
+              ) : filteredRuns.map((entry) => (
                 <button
                   key={entry.id}
                   type="button"
@@ -465,6 +640,11 @@ export default function AgentTeamCoordinator({
                   <small>{String(entry.provider).toUpperCase()} · {formatAge(entry.createdAt)} ago</small>
                 </button>
               ))}
+            </div>
+            <div className="av-coord-rail-footer">
+              <span><kbd>N</kbd> new run</span>
+              <span><kbd>M</kbd> message</span>
+              <span><kbd>Esc</kbd> dismiss</span>
             </div>
           </aside>
 
@@ -478,9 +658,12 @@ export default function AgentTeamCoordinator({
                 <label className="av-coord-field av-coord-prompt-field">
                   <span>Prompt</span>
                   <Textarea
+                    id="coord-run-prompt"
+                    name="run-prompt"
+                    autoComplete="off"
                     value={promptDraft}
                     onChange={(event) => setPromptDraft(event.target.value)}
-                    placeholder="Describe the work for the lead to decompose."
+                    placeholder="Describe the outcome, constraints, and acceptance checks…"
                     className="av-coord-textarea"
                     rows={6}
                   />
@@ -488,12 +671,14 @@ export default function AgentTeamCoordinator({
                 <div className="av-coord-start-grid">
                   <label className="av-coord-field">
                     <span>Provider</span>
-                    <Input value={String(targetProvider).toUpperCase()} readOnly className="av-coord-input" />
+                    <Input name="run-provider" autoComplete="off" value={String(targetProvider).toUpperCase()} readOnly className="av-coord-input" />
                   </label>
                   <label className="av-coord-field">
                     <span>Teammates</span>
                     <Input
                       type="number"
+                      name="run-teammates"
+                      autoComplete="off"
                       min={1}
                       max={6}
                       value={maxAgents}
@@ -505,8 +690,10 @@ export default function AgentTeamCoordinator({
                     <span>Gate command</span>
                     <Input
                       value={gateCommand}
+                      name="run-gate-command"
+                      autoComplete="off"
                       onChange={(event) => setGateCommand(event.target.value)}
-                      placeholder="npx tsc --noEmit"
+                      placeholder="Example: npx tsc --noEmit"
                       className="av-coord-input"
                     />
                   </label>
@@ -518,39 +705,95 @@ export default function AgentTeamCoordinator({
                 <div className="av-coord-form-actions">
                   {run ? <Button type="button" variant="outline" onClick={() => setStartOpen(false)} className="av-coord-btn">Cancel</Button> : null}
                   <Button type="button" onClick={() => void startRun()} disabled={!promptDraft.trim() || busyAction === 'start'} className="av-coord-btn av-coord-primary">
-                    {busyAction === 'start' ? <RefreshCw size={14} /> : <Play size={14} />} Start
+                    {busyAction === 'start' ? <RefreshCw aria-hidden="true" /> : <Play aria-hidden="true" />} {busyAction === 'start' ? 'Starting…' : 'Start Run'}
                   </Button>
                 </div>
               </section>
             ) : (
               <>
                 <section className="av-coord-toolbar">
-                  <div className="av-coord-progress">
+                  <div className="av-coord-run-heading">
+                    <span className={cn('av-coord-status', `av-tone-${statusTone(run.status)}`)}>{run.status}</span>
                     <div>
-                      <strong>{completedTasks}/{tasks.length}</strong>
-                      <span>tasks complete</span>
-                    </div>
-                    <div className="av-coord-progress-track" aria-label={`${taskProgress}% complete`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={taskProgress}>
-                      <span style={{ width: `${taskProgress}%` }} />
+                      <strong>{firstLine(run.prompt)}</strong>
+                      <span translate="no">{run.id}</span>
                     </div>
                   </div>
                   <div className="av-coord-toolbar-actions">
+                    <Button type="button" variant="outline" size="sm" className="av-coord-btn" onClick={() => void refreshDashboard()} disabled={busyAction === 'refresh'}>
+                      <RefreshCw data-icon="inline-start" aria-hidden="true" /> {busyAction === 'refresh' ? 'Refreshing…' : 'Refresh'}
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" className="av-coord-btn" onClick={() => { setMessageTarget('all'); setMessageDraft('') }}>
+                      <Mail data-icon="inline-start" aria-hidden="true" /> Message Team
+                    </Button>
                     <Button type="button" variant="outline" size="sm" className="av-coord-btn" onClick={() => setPendingAction({ kind: 'stop' })} disabled={!['planning', 'running', 'synthesizing'].includes(run.status)}>
-                      <CircleStop size={13} /> Stop
+                      <CircleStop data-icon="inline-start" aria-hidden="true" /> Stop Run
                     </Button>
                     <Button type="button" variant="outline" size="sm" className="av-coord-btn" onClick={() => void cleanupRun()} disabled={busyAction === 'cleanup'}>
-                      <ShieldCheck size={13} /> Clean
+                      <ShieldCheck data-icon="inline-start" aria-hidden="true" /> {busyAction === 'cleanup' ? 'Cleaning…' : 'Clean Worktrees'}
                     </Button>
                     <Button type="button" variant="outline" size="sm" className="av-coord-btn av-danger" onClick={() => setPendingAction({ kind: 'delete-run' })}>
-                      <Trash2 size={13} /> Delete
+                      <Trash2 data-icon="inline-start" aria-hidden="true" /> Delete
                     </Button>
                   </div>
                 </section>
 
+                <section className="av-coord-overview" aria-label="Run overview">
+                  <div className="av-coord-metrics">
+                    <div className="av-coord-metric">
+                      <Workflow aria-hidden="true" />
+                      <div><strong>{taskProgress}%</strong><span>{completedTasks}/{tasks.length} tasks complete</span></div>
+                      <div className="av-coord-progress-track" aria-label={`${taskProgress}% complete`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={taskProgress}>
+                        <span style={{ width: `${taskProgress}%` }} />
+                      </div>
+                    </div>
+                    <div className="av-coord-metric">
+                      <Bot aria-hidden="true" />
+                      <div><strong>{agents.length}</strong><span>{workingAgents} working · {doneAgents} done</span></div>
+                    </div>
+                    <div className={cn('av-coord-metric', attentionCount > 0 ? 'av-needs-attention' : '')}>
+                      <Inbox aria-hidden="true" />
+                      <div><strong>{attentionCount}</strong><span>{attentionCount === 1 ? 'item needs action' : 'items need action'}</span></div>
+                    </div>
+                    <div className="av-coord-metric">
+                      <Clock3 aria-hidden="true" />
+                      <div><strong>{lastEventAt ? formatAge(lastEventAt) : '—'}</strong><span>since last activity</span></div>
+                    </div>
+                  </div>
+
+                  {attentionCount > 0 ? (
+                    <div className="av-coord-attention" aria-label="Needs attention">
+                      <div className="av-coord-attention-title"><AlertTriangle aria-hidden="true" /><span>Needs Attention</span></div>
+                      <div className="av-coord-attention-items">
+                        {pendingPlanTasks.map((task) => (
+                          <button key={`plan:${task.id}`} type="button" onClick={() => { setSelectedTaskId(task.id); setTaskFilter('attention') }}>
+                            <span className="av-tone-info">Plan</span><strong>{task.id}</strong><small>awaiting approval</small>
+                          </button>
+                        ))}
+                        {agents.filter((agent) => agent.status === 'blocked' || agent.status === 'failed').map((agent) => (
+                          <button key={`agent:${agent.id}`} type="button" onClick={() => setSelectedAgentId(agent.id)}>
+                            <span className="av-tone-bad">Agent</span><strong>{agent.name}</strong><small>{agent.status}</small>
+                          </button>
+                        ))}
+                        {tasks.filter((task) => task.status === 'blocked' || task.status === 'failed').map((task) => (
+                          <button key={`task:${task.id}`} type="button" onClick={() => { setSelectedTaskId(task.id); setTaskFilter('attention') }}>
+                            <span className="av-tone-bad">Task</span><strong>{task.id}</strong><small>{task.status}</small>
+                          </button>
+                        ))}
+                        {actionableMail > 0 ? (
+                          <button type="button" onClick={() => setEventFilter('messages')}>
+                            <span className="av-tone-info">Inbox</span><strong>{actionableMail}</strong><small>undelivered</small>
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+                </section>
+
                 <section className="av-coord-grid">
-                  <div className="av-coord-panel">
+                  <div className="av-coord-panel av-coord-team-panel">
                     <div className="av-coord-panel-head">
-                      <span>Team</span>
+                      <span>Live Team · {agents.length}</span>
                       <button type="button" onClick={() => { setMessageTarget('all'); setMessageDraft('') }} aria-label="Message all teammates">
                         <Mail size={13} />
                       </button>
@@ -581,22 +824,26 @@ export default function AgentTeamCoordinator({
                               </small>
                             ) : null}
                             {stats && (stats.aheadCommits > 0 || stats.dirtyFiles > 0) ? (
-                              <em>{stats.aheadCommits > 0 ? `+${stats.aheadCommits}` : ''}{stats.dirtyFiles > 0 ? ` ~${stats.dirtyFiles}` : ''}</em>
+                              <em>{stats.aheadCommits > 0 ? `${stats.aheadCommits} commits` : ''}{stats.dirtyFiles > 0 ? ` · ${stats.dirtyFiles} dirty` : ''}</em>
                             ) : null}
                           </button>
                         )
                       })}
                     </div>
                     {selectedAgent ? (
-                      <div className="av-coord-action-row">
+                      <div className="av-coord-detail av-coord-agent-detail">
+                        <div><span>Provider</span><strong>{String(selectedAgent.provider).toUpperCase()}</strong></div>
+                        <div><span>Task</span><strong>{selectedAgent.taskId ?? 'No task claimed'}</strong></div>
+                        <div><span>Worktree</span><strong title={selectedAgent.worktreePath}>{selectedAgent.worktreePath || 'Shared checkout'}</strong></div>
+                        <div className="av-coord-action-row">
                         <Button type="button" size="sm" variant="outline" className="av-coord-btn" onClick={() => openAgentSession(selectedAgent)}>
-                          <Radio size={13} /> Open
+                          <Radio data-icon="inline-start" aria-hidden="true" /> Open Session
                         </Button>
                         <Button type="button" size="sm" variant="outline" className="av-coord-btn" onClick={() => { setMessageTarget(selectedAgent.name); setMessageDraft('') }}>
-                          <MessageSquare size={13} /> Message
+                          <MessageSquare data-icon="inline-start" aria-hidden="true" /> Message
                         </Button>
                         <Button type="button" size="sm" variant="outline" className="av-coord-btn" onClick={() => void interruptAgent(selectedAgent)} disabled={busyAction === `interrupt:${selectedAgent.id}`}>
-                          <CircleStop size={13} /> Interrupt
+                          <CircleStop data-icon="inline-start" aria-hidden="true" /> Interrupt
                         </Button>
                         <Button
                           type="button"
@@ -609,86 +856,124 @@ export default function AgentTeamCoordinator({
                             else showNotice(`${selectedAgent.name} has no merge-ready worktree`)
                           }}
                         >
-                          <GitMerge size={13} /> Merge
+                          <GitMerge data-icon="inline-start" aria-hidden="true" /> Merge Work
                         </Button>
+                        </div>
                       </div>
                     ) : null}
                   </div>
 
-                  <div className="av-coord-panel">
+                  <div className="av-coord-panel av-coord-task-panel">
                     <div className="av-coord-panel-head">
-                      <span>Tasks</span>
+                      <span>Work Board</span>
                       <span>{completedTasks}/{tasks.length}</span>
                     </div>
+                    <div className="av-coord-filterbar" aria-label="Filter tasks">
+                      <ListFilter aria-hidden="true" />
+                      {(['all', 'attention', 'active', 'done'] as const).map((filter) => (
+                        <FilterButton key={filter} active={taskFilter === filter} onClick={() => setTaskFilter(filter)}>{filter}</FilterButton>
+                      ))}
+                    </div>
                     <div className="av-coord-list">
-                      {tasks.map((task) => (
+                      {filteredTasks.length === 0 ? <div className="av-coord-empty-state">No tasks in this view.</div> : filteredTasks.map((task) => (
                         <button
                           key={task.id}
                           type="button"
-                          className={cn('av-coord-task-row', selectedTask?.id === task.id ? 'av-selected' : '')}
+                          className={cn('av-coord-task-row', displayedTask?.id === task.id ? 'av-selected' : '')}
                           onClick={() => setSelectedTaskId(task.id)}
                         >
                           <span className={cn('av-coord-status', `av-tone-${statusTone(task.status)}`)}>{task.status}</span>
                           <strong>{task.id}</strong>
                           <span>{task.title}</span>
+                          {planStates.get(task.id) === 'awaiting' ? <small>plan review</small> : null}
                         </button>
                       ))}
                     </div>
-                    {selectedTask ? (
+                    {displayedTask ? (
                       <div className="av-coord-detail">
-                        <div><span>Owner</span><strong>{selectedTask.ownerAgentId ? agentsById.get(selectedTask.ownerAgentId)?.name ?? selectedTask.ownerAgentId : 'unassigned'}</strong></div>
-                        {selectedTask.blockedBy.length > 0 ? <div><span>Deps</span><strong>{selectedTask.blockedBy.join(', ')}</strong></div> : null}
-                        {selectedTask.paths.length > 0 ? <div><span>Paths</span><strong>{selectedTask.paths.join(', ')}</strong></div> : null}
-                        <p>{selectedTask.prompt}</p>
-                        {!['completed', 'failed', 'cancelled'].includes(selectedTask.status) ? (
-                          <Button type="button" variant="outline" size="sm" className="av-coord-btn av-danger" onClick={() => setPendingAction({ kind: 'fail-task', task: selectedTask })}>
-                            <AlertTriangle size={13} /> Mark failed
-                          </Button>
-                        ) : null}
+                        <div><span>Owner</span><strong>{displayedTask.ownerAgentId ? agentsById.get(displayedTask.ownerAgentId)?.name ?? displayedTask.ownerAgentId : 'unassigned'}</strong></div>
+                        {displayedTask.blockedBy.length > 0 ? <div><span>Deps</span><strong>{displayedTask.blockedBy.join(', ')}</strong></div> : null}
+                        {displayedTask.paths.length > 0 ? <div><span>Paths</span><strong>{displayedTask.paths.join(', ')}</strong></div> : null}
+                        {planStates.get(displayedTask.id) ? <div><span>Plan</span><strong>{planStates.get(displayedTask.id)}</strong></div> : null}
+                        <p>{displayedTask.prompt}</p>
+                        <div className="av-coord-action-row">
+                          {planStates.get(displayedTask.id) === 'awaiting' ? (
+                            <>
+                              <Button type="button" size="sm" className="av-coord-btn av-coord-primary" onClick={() => void reviewPlan(displayedTask, true)} disabled={busyAction === `plan:${displayedTask.id}`}>
+                                <CheckCircle2 data-icon="inline-start" aria-hidden="true" /> Approve Plan
+                              </Button>
+                              <Button type="button" variant="outline" size="sm" className="av-coord-btn av-danger" onClick={() => void reviewPlan(displayedTask, false)} disabled={busyAction === `plan:${displayedTask.id}`}>
+                                <X data-icon="inline-start" aria-hidden="true" /> Reject Plan
+                              </Button>
+                            </>
+                          ) : null}
+                          {displayedTask.ownerAgentId ? (
+                            <Button type="button" variant="outline" size="sm" className="av-coord-btn" onClick={() => { setMessageTarget(agentsById.get(displayedTask.ownerAgentId!)?.name ?? displayedTask.ownerAgentId!); setMessageDraft('') }}>
+                              <MessageSquare data-icon="inline-start" aria-hidden="true" /> Message Owner
+                            </Button>
+                          ) : null}
+                          {!TERMINAL_TASK_STATUSES.has(displayedTask.status) ? (
+                            <Button type="button" variant="outline" size="sm" className="av-coord-btn av-danger" onClick={() => setPendingAction({ kind: 'fail-task', task: displayedTask })}>
+                              <AlertTriangle data-icon="inline-start" aria-hidden="true" /> Mark Failed
+                            </Button>
+                          ) : null}
+                        </div>
                       </div>
                     ) : null}
                   </div>
 
-                  <div className="av-coord-panel">
+                  <div className="av-coord-panel av-coord-events-panel">
                     <div className="av-coord-panel-head">
-                      <span>Events{followingEvents ? ' · live' : ' · paused'}</span>
+                      <span>Activity{followingEvents ? ' · live' : ' · paused'}</span>
                       <button type="button" onClick={() => setSelectedEventIndex(-1)} aria-label="Follow latest event" title={followingEvents ? 'Following latest event' : 'Resume following latest event'}>
                         <Radio size={13} className={followingEvents ? 'av-coord-follow-on' : undefined} />
                       </button>
                     </div>
-                    <div className="av-coord-list" ref={eventsListRef}>
-                      {events.map((event, index) => {
-                        const selected = selectedEvent === event
-                        const who = agentsById.get(event.agentId)?.name ?? event.agentId
-                        return (
-                          <button
-                            key={`${event.timestamp ?? index}:${index}`}
-                            type="button"
-                            className={cn('av-coord-event-row', selected ? 'av-selected' : '')}
-                            onClick={() => setSelectedEventIndex(index)}
-                          >
-                            <span className={cn('av-coord-dot', `av-tone-${eventTone(event)}`)} />
-                            <strong>{who}</strong>
-                            <span>{event.type}{event.to ? ` -> ${event.to}` : ''}</span>
-                            {event.summary ? <small>{event.summary}</small> : null}
-                          </button>
-                        )
-                      })}
+                    <div className="av-coord-filterbar" aria-label="Filter activity">
+                      <ListFilter aria-hidden="true" />
+                      {(['all', 'attention', 'messages', 'tasks'] as const).map((filter) => (
+                        <FilterButton key={filter} active={eventFilter === filter} onClick={() => setEventFilter(filter)}>{filter}</FilterButton>
+                      ))}
+                      <span className="av-coord-filter-count">{filteredEvents.length} events</span>
                     </div>
-                    {selectedEvent ? (
-                      <div className="av-coord-detail">
-                        <div><span>Event</span><strong>{selectedEvent.type}</strong></div>
-                        {selectedEvent.taskId ? <div><span>Task</span><strong>{selectedEvent.taskId}</strong></div> : null}
-                        {selectedEvent.paths && selectedEvent.paths.length > 0 ? <div><span>Paths</span><strong>{selectedEvent.paths.join(', ')}</strong></div> : null}
-                        {selectedEvent.detail ? <p>{selectedEvent.detail}</p> : selectedEvent.summary ? <p>{selectedEvent.summary}</p> : null}
+                    <div className="av-coord-events-content">
+                      <div className="av-coord-list" ref={eventsListRef}>
+                        {filteredEvents.length === 0 ? <div className="av-coord-empty-state">No activity in this view.</div> : filteredEvents.map(({ event, index }) => {
+                          const selected = selectedEvent === event
+                          const who = agentsById.get(event.agentId)?.name ?? event.agentId
+                          return (
+                            <button
+                              key={`${event.timestamp ?? index}:${index}`}
+                              type="button"
+                              className={cn('av-coord-event-row', selected ? 'av-selected' : '')}
+                              onClick={() => setSelectedEventIndex(index)}
+                            >
+                              <span className={cn('av-coord-dot', `av-tone-${eventTone(event)}`)} />
+                              <strong>{who}</strong>
+                              <span>{event.type}{event.to ? ` -> ${event.to}` : ''}</span>
+                              {event.summary ? <small>{event.summary}</small> : null}
+                            </button>
+                          )
+                        })}
                       </div>
-                    ) : null}
-                    {run.summary ? (
-                      <div className="av-coord-summary">
-                        <span>Synthesis</span>
-                        <p>{run.summary}</p>
-                      </div>
-                    ) : null}
+                      <aside className="av-coord-event-inspector" aria-label="Selected activity details">
+                        {selectedEvent ? (
+                          <div className="av-coord-detail">
+                            <div><span>Event</span><strong>{selectedEvent.type}</strong></div>
+                            {selectedEvent.taskId ? <div><span>Task</span><strong>{selectedEvent.taskId}</strong></div> : null}
+                            {selectedEvent.paths && selectedEvent.paths.length > 0 ? <div><span>Paths</span><strong>{selectedEvent.paths.join(', ')}</strong></div> : null}
+                            {selectedEvent.detail ? <p>{selectedEvent.detail}</p> : selectedEvent.summary ? <p>{selectedEvent.summary}</p> : null}
+                          </div>
+                        ) : null}
+                        {run.summary ? (
+                          <div className="av-coord-summary">
+                            <span>Run Synthesis</span>
+                            <p>{run.summary}</p>
+                          </div>
+                        ) : null}
+                        {!selectedEvent && !run.summary ? <div className="av-coord-empty-state">Select an event to inspect it.</div> : null}
+                      </aside>
+                    </div>
                   </div>
                 </section>
               </>
@@ -704,9 +989,17 @@ export default function AgentTeamCoordinator({
                 <X size={14} />
               </button>
             </div>
-            <Input value={messageDraft} onChange={(event) => setMessageDraft(event.target.value)} className="av-coord-input" autoFocus />
+            <Input
+              name="coordinator-message"
+              autoComplete="off"
+              value={messageDraft}
+              onChange={(event) => setMessageDraft(event.target.value)}
+              className="av-coord-input"
+              aria-label={`Message ${messageTarget}`}
+              placeholder="Write an instruction or ask for an update…"
+            />
             <Button type="button" className="av-coord-btn av-coord-primary" onClick={() => void sendMessage()} disabled={!messageDraft.trim() || busyAction === 'message'}>
-              <Send size={14} /> Send
+              <Send data-icon="inline-start" aria-hidden="true" /> {busyAction === 'message' ? 'Sending…' : 'Send Message'}
             </Button>
           </div>
         ) : null}
@@ -720,6 +1013,6 @@ export default function AgentTeamCoordinator({
           </div>
         ) : null}
       </div>
-    </div>
+    </main>
   )
 }

@@ -529,8 +529,8 @@ export default function CommandPalette({
       },
       {
         id: 'open-agent-team',
-        label: 'Open agent team board',
-        description: 'Coordinate multi-agent runs with teammates, task board, messages, worktrees, and merge controls',
+        label: 'Open Agent Operations dashboard',
+        description: 'Open the multi-agent dashboard for teammates, tasks, messages, worktrees, and merge controls',
         icon: <UsersRound size={16} />,
         shortcut: 'Team',
         group: 'actions',

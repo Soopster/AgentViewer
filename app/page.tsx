@@ -6,6 +6,8 @@ import SessionList from '@/components/SessionList'
 import MessageView from '@/components/MessageView'
 import { CodeThemeProvider } from '@/components/CodeThemeContext'
 import { Sidebar, SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { LayoutDashboard, UsersRound } from 'lucide-react'
 import { isProviderSelection } from '@/lib/provider'
 import { pathBasename, sameProjectPath } from '@/lib/projectPaths'
 import { compactStableFingerprint } from '@/lib/compactFingerprint'
@@ -74,6 +76,7 @@ const MESSAGE_STREAM_RETRY_MAX_MS = 30000
 const PROJECT_MESSAGE_TOTAL_MEMORY_LIMIT = 2500
 const PROJECT_MESSAGE_PER_SESSION_MEMORY_LIMIT = 200
 const RUN_DASHBOARD_KEY = '__run-dashboard__'
+type DashboardTab = 'sessions' | 'agents'
 
 type MessageStreamPayload = {
   sessionId?: string
@@ -332,7 +335,7 @@ export default function Home() {
   const composerInsertRequestRef = useRef(0)
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
   const [provenanceOpen, setProvenanceOpen] = useState(false)
-  const [coordinatorOpen, setCoordinatorOpen] = useState(false)
+  const [dashboardTab, setDashboardTab] = useState<DashboardTab>('sessions')
   const [taskPanelOpenRequest, setTaskPanelOpenRequest] = useState(0)
   const [promptLibraryOpenRequest, setPromptLibraryOpenRequest] = useState(0)
   const [channelBridgeOpenRequest, setChannelBridgeOpenRequest] = useState(0)
@@ -438,13 +441,20 @@ export default function Home() {
 
   const openRunDashboard = useCallback(() => {
     setDashboardContextSession(selectedSession)
+    setDashboardTab('sessions')
     setSelectedProject(null)
     setTargetMessage(null)
     setSelectedTabKey(RUN_DASHBOARD_KEY)
   }, [selectedSession])
 
   const openCommandPalette = useCallback(() => setCommandPaletteOpen(true), [])
-  const openCoordinator = useCallback(() => setCoordinatorOpen(true), [])
+  const openCoordinator = useCallback(() => {
+    setDashboardContextSession(selectedSession)
+    setDashboardTab('agents')
+    setSelectedProject(null)
+    setTargetMessage(null)
+    setSelectedTabKey(RUN_DASHBOARD_KEY)
+  }, [selectedSession])
   const openTaskPanel = useCallback(() => setTaskPanelOpenRequest((value) => value + 1), [])
   const openPromptLibrary = useCallback(() => setPromptLibraryOpenRequest((value) => value + 1), [])
   const openChannelBridge = useCallback(() => setChannelBridgeOpenRequest((value) => value + 1), [])
@@ -1187,7 +1197,8 @@ export default function Home() {
             switchingProvider={switchingProvider}
             selectedId={selectedTabKey}
             selectedProject={selectedProject?.dir ?? null}
-            dashboardSelected={dashboardSelected}
+            dashboardSelected={dashboardSelected && dashboardTab === 'sessions'}
+            agentOperationsSelected={dashboardSelected && dashboardTab === 'agents'}
             scrollToSessionRequest={sessionListScrollRequest}
             onSelect={selectSession}
             onSelectProject={selectProject}
@@ -1270,15 +1281,45 @@ export default function Home() {
               </button>
               <ViewTransition key={messageAreaKey} enter="fade-in" exit="fade-out" default="none">
                 {dashboardSelected ? (
-                  <RunDashboard
-                    sessions={sessions}
-                    selectedSession={selectedSession}
-                    messages={messages}
-                    loading={loadingSessions}
-                    providerLabel={provider}
-                    scopeLabel={sessionScope === 'project' ? activeProjectName : null}
-                    onSelectSession={selectSession}
-                  />
+                  <Tabs
+                    value={dashboardTab}
+                    onValueChange={(value) => setDashboardTab(value as DashboardTab)}
+                    className="av-dashboard-tabs"
+                  >
+                    <nav className="av-dashboard-tabbar" aria-label="Dashboard views">
+                      <TabsList variant="line" className="av-dashboard-tablist">
+                        <TabsTrigger value="sessions" className="av-dashboard-tab">
+                          <LayoutDashboard aria-hidden="true" /> Session Runs
+                        </TabsTrigger>
+                        <TabsTrigger value="agents" className="av-dashboard-tab">
+                          <UsersRound aria-hidden="true" /> Agent Operations
+                        </TabsTrigger>
+                      </TabsList>
+                    </nav>
+                    <TabsContent value="sessions" className="av-dashboard-tab-content">
+                      <RunDashboard
+                        sessions={sessions}
+                        selectedSession={selectedSession}
+                        messages={messages}
+                        loading={loadingSessions}
+                        providerLabel={provider}
+                        scopeLabel={sessionScope === 'project' ? activeProjectName : null}
+                        onSelectSession={selectSession}
+                      />
+                    </TabsContent>
+                    <TabsContent value="agents" className="av-dashboard-tab-content">
+                      <AgentTeamCoordinator
+                        provider={provider}
+                        selectedSession={selectedSession}
+                        onOpenSession={selectCommandPaletteSession}
+                        onSessionsChanged={() => {
+                          void loadSessionsForProvider(provider).catch((err) => {
+                            setSessionsError(err instanceof Error ? err.message : 'Failed to refresh sessions')
+                          })
+                        }}
+                      />
+                    </TabsContent>
+                  </Tabs>
                 ) : (
                   <MessageView
                     messages={messages}
@@ -1395,20 +1436,6 @@ export default function Home() {
             onClose={() => setBookmarksPanelOpen(false)}
             onSelect={({ sessionId, provider: bookmarkProvider, uuid }) => {
               selectCommandPaletteSession({ sessionId, provider: bookmarkProvider } as Session, uuid)
-            }}
-          />
-        ) : null}
-        {coordinatorOpen ? (
-          <AgentTeamCoordinator
-            open={coordinatorOpen}
-            provider={provider}
-            selectedSession={selectedSession}
-            onClose={() => setCoordinatorOpen(false)}
-            onOpenSession={selectCommandPaletteSession}
-            onSessionsChanged={() => {
-              void loadSessionsForProvider(provider).catch((err) => {
-                setSessionsError(err instanceof Error ? err.message : 'Failed to refresh sessions')
-              })
             }}
           />
         ) : null}

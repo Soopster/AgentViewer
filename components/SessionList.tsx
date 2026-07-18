@@ -135,6 +135,7 @@ type Props = {
   selectedId: string | null
   selectedProject: string | null
   dashboardSelected?: boolean
+  agentOperationsSelected?: boolean
   scrollToSessionRequest?: { sessionKey: string; requestId: number } | null
   onSelect: (session: Session) => void
   onSelectProject: (projectDir: string, projectName: string, sessions: Session[]) => void
@@ -732,6 +733,7 @@ function SessionListInner({
   selectedId,
   selectedProject,
   dashboardSelected = false,
+  agentOperationsSelected = false,
   scrollToSessionRequest,
   onSelect,
   onSelectProject,
@@ -1085,10 +1087,10 @@ function SessionListInner({
                   setCollapsedPanel(null)
                   onOpenCoordinator()
                 }}
-                aria-label="Agent team board"
-                title="Agent team board"
+                aria-label="Agent Operations dashboard"
+                title="Agent Operations"
                 className="av-hover-control"
-                style={collapsedIconButtonStyle(false)}
+                style={collapsedIconButtonStyle(agentOperationsSelected)}
               >
                 <UsersRound size={20} strokeWidth={2.2} />
               </button>
@@ -1772,9 +1774,9 @@ function SessionListInner({
                       onClick={onOpenCoordinator}
                       variant="outline"
                       size="sm"
-                      aria-label="Open agent team board"
+                      aria-label="Open Agent Operations dashboard"
                       className="av-hover-control"
-                      style={sidebarHeaderIconActionStyle({ accent: 'cyan' })}
+                      style={sidebarHeaderIconActionStyle({ active: agentOperationsSelected, accent: 'cyan' })}
                     >
                       <UsersRound size={16} strokeWidth={2.2} />
                     </Button>
