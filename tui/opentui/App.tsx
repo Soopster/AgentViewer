@@ -17061,10 +17061,17 @@ export default function OpenTuiApp() {
         const contentWidth = Math.max(overlayWidth - 4, 16)
         const compact = overlayHeight < 29
         const headerHeight = 3
-        const runtimeHeight = 9
-        const summaryHeight = compact ? 4 : 5
         const footerHeight = 2
-        const briefHeight = Math.max(compact ? 5 : 7, overlayHeight - headerHeight - runtimeHeight - summaryHeight - footerHeight - (coordError ? 1 : 0) - 2)
+        const bodyHeight = Math.max(overlayHeight - headerHeight - footerHeight - (coordError ? 1 : 0) - 2, 12)
+        const splitLayout = contentWidth >= 96 && bodyHeight >= 23
+        const runtimePaneWidth = splitLayout ? Math.max(52, Math.floor(contentWidth * 0.62)) : contentWidth
+        const sidePaneWidth = splitLayout ? Math.max(contentWidth - runtimePaneWidth - 1, 34) : contentWidth
+        const briefHeight = splitLayout
+          ? Math.max(10, Math.floor(bodyHeight * 0.48))
+          : Math.max(compact ? 5 : 7, bodyHeight - 11 - (compact ? 4 : 5))
+        const lowerHeight = Math.max(bodyHeight - briefHeight, 11)
+        const runtimeHeight = splitLayout ? lowerHeight : 11
+        const summaryHeight = splitLayout ? lowerHeight : (compact ? 4 : 5)
         const suggestedProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
         const targetProvider = coordProviderOverride ?? suggestedProvider
         const teammateProviders = coordTeammateProviderOverride ?? [targetProvider]
@@ -17105,6 +17112,7 @@ export default function OpenTuiApp() {
               <text fg={theme.dim} wrapMode="none">{fitText('Define the outcome, configure the team, then review exactly what will launch.', contentWidth)}</text>
             </box>
 
+            <box flexGrow={1} flexDirection="column" overflow="hidden">
             <box
               height={briefHeight}
               paddingX={1}
@@ -17135,12 +17143,14 @@ export default function OpenTuiApp() {
               {!compact ? <text fg={theme.dim} wrapMode="none">Include a concrete definition of done. Shift+Enter adds a line.</text> : null}
             </box>
 
+            <box height={splitLayout ? lowerHeight : undefined} flexGrow={splitLayout ? 0 : 1} flexDirection={splitLayout ? 'row' : 'column'} overflow="hidden">
             <box
               height={runtimeHeight}
+              width={splitLayout ? runtimePaneWidth : undefined}
               paddingX={1}
               backgroundColor={theme.surface}
               flexDirection="column"
-              border={['bottom']}
+              border={splitLayout ? ['right'] : ['bottom']}
               borderStyle="single"
               borderColor={theme.border}
             >
@@ -17151,19 +17161,23 @@ export default function OpenTuiApp() {
                 <box flexGrow={1} />
                 <text fg={focusColor('provider')} wrapMode="none">{coordModalFocus === 'provider' ? '←/→ choose' : 'coordinates the team'}</text>
               </box>
-              <box height={1} flexDirection="row" backgroundColor={focusBackground('pool')} overflow="hidden">
-                <text fg={coordModalFocus === 'pool' ? theme.text : theme.dim} wrapMode="none">{'Teammate pool '}</text>
-                {COORD_RUN_PROVIDERS.map((providerName, index) => {
-                  const selected = teammateProviders.includes(providerName)
-                  const cursor = coordModalFocus === 'pool' && coordProviderPoolIndex === index
-                  return (
-                    <text key={providerName} fg={selected ? getProviderAccent(providerName) : theme.dim} bg={cursor ? theme.surface3 : undefined} wrapMode="none">
-                      {`${selected ? '[x]' : '[ ]'}${providerName.toUpperCase()} `}
-                    </text>
-                  )
-                })}
-                <box flexGrow={1} />
-                <text fg={focusColor('pool')} wrapMode="none">{coordModalFocus === 'pool' ? '←/→ · Space' : 'round-robin'}</text>
+              <box height={2} flexDirection="column" backgroundColor={focusBackground('pool')} overflow="hidden">
+                <box height={1} flexDirection="row">
+                  <text fg={coordModalFocus === 'pool' ? theme.text : theme.dim} wrapMode="none">Teammate provider pool</text>
+                  <box flexGrow={1} />
+                  <text fg={focusColor('pool')} wrapMode="none">{coordModalFocus === 'pool' ? '←/→ · Space' : 'round-robin'}</text>
+                </box>
+                <box height={1} flexDirection="row" overflow="hidden">
+                  {COORD_RUN_PROVIDERS.map((providerName, index) => {
+                    const selected = teammateProviders.includes(providerName)
+                    const cursor = coordModalFocus === 'pool' && coordProviderPoolIndex === index
+                    return (
+                      <text key={providerName} fg={selected ? getProviderAccent(providerName) : theme.dim} bg={cursor ? theme.surface3 : undefined} wrapMode="none">
+                        {`${selected ? '[x]' : '[ ]'}${providerName.toUpperCase()} `}
+                      </text>
+                    )
+                  })}
+                </box>
               </box>
               <box height={1} flexDirection="row" backgroundColor={focusBackground('agents')}>
                 <text fg={coordModalFocus === 'agents' ? theme.text : theme.dim} wrapMode="none">{'Agent limit   '}</text>
@@ -17190,25 +17204,39 @@ export default function OpenTuiApp() {
                 <box flexGrow={1} />
                 <text fg={focusColor('plans')} wrapMode="none">{coordRequirePlanApproval ? 'required' : 'automatic'}</text>
               </box>
-              <text fg={theme.dim} wrapMode="none">{fitText(compact ? 'Roles  Lead coordinates and synthesizes · Teammates claim worker and verification lanes.' : 'Roles  Lead plans, delegates, resolves blockers, and synthesizes · Teammates claim worker/verification lanes and message peers.', contentWidth)}</text>
+              <text fg={theme.dim} wrapMode="none">ROLE GUIDE</text>
+              <text fg={theme.dim} wrapMode="none">{fitText('Lead  Plans, delegates, resolves blockers, and synthesizes.', runtimePaneWidth - 2)}</text>
+              <text fg={theme.dim} wrapMode="none">{fitText('Team  Claims worker/verification lanes and messages peers.', runtimePaneWidth - 2)}</text>
             </box>
 
-            <box height={summaryHeight} paddingX={1} backgroundColor={theme.surface} flexDirection="column">
+            <box height={summaryHeight} width={splitLayout ? sidePaneWidth : undefined} flexGrow={splitLayout ? 1 : 0} paddingX={1} backgroundColor={theme.surface} flexDirection="column">
               <text fg={theme.cyan} wrapMode="none">03  LAUNCH SUMMARY</text>
-              <text fg={theme.dim} wrapMode="none">
-                {renderInlineTextSegments([
-                  { text: `workspace ${workspaceLabel}`, fg: theme.text },
-                  { text: '  ·  ', fg: theme.dim },
-                  { text: targetProvider.toUpperCase(), fg: getProviderAccent(targetProvider) },
-                  { text: '  ·  ', fg: theme.dim },
-                  { text: `pool ${teammateProviders.map((entry) => entry.toUpperCase()).join('+')}`, fg: theme.violet },
-                  { text: '  ·  ', fg: theme.dim },
-                  { text: `${coordMaxAgents} agents`, fg: theme.cyan },
-                  { text: '  ·  ', fg: theme.dim },
-                  { text: coordRequirePlanApproval ? 'plan review required' : 'plan review automatic', fg: coordRequirePlanApproval ? theme.amber : theme.green },
-                ], contentWidth, theme.dim)}
-              </text>
-              {!compact ? <text fg={theme.dim} wrapMode="none">{fitText(`Brief: ${briefPreview}`, contentWidth)}</text> : null}
+              {splitLayout ? (
+                <>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Workspace</text><box flexGrow={1} /><text fg={theme.text}>{fitText(workspaceLabel, Math.max(sidePaneWidth - 16, 12))}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Lead</text><box flexGrow={1} /><text fg={getProviderAccent(targetProvider)}>{targetProvider.toUpperCase()}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Teammate pool</text><box flexGrow={1} /><text fg={theme.violet}>{fitText(teammateProviders.map((entry) => entry.toUpperCase()).join(' + '), Math.max(sidePaneWidth - 20, 12))}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Agent limit</text><box flexGrow={1} /><text fg={theme.cyan}>{`${coordMaxAgents} total`}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Plan review</text><box flexGrow={1} /><text fg={coordRequirePlanApproval ? theme.amber : theme.green}>{coordRequirePlanApproval ? 'Required' : 'Automatic'}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Completion gate</text><box flexGrow={1} /><text fg={coordGateDraft.trim() ? theme.amber : theme.dim}>{fitText(coordGateDraft.trim() || 'Not configured', Math.max(sidePaneWidth - 23, 12))}</text></box>
+                  <box height={2} marginTop={1} flexDirection="column"><text fg={theme.dim}>BRIEF PREVIEW</text><text fg={theme.text}>{fitText(briefPreview, sidePaneWidth - 2)}</text></box>
+                </>
+              ) : (
+                <>
+                  <text fg={theme.dim} wrapMode="none">
+                    {renderInlineTextSegments([
+                      { text: `workspace ${workspaceLabel}`, fg: theme.text },
+                      { text: '  ·  ', fg: theme.dim },
+                      { text: targetProvider.toUpperCase(), fg: getProviderAccent(targetProvider) },
+                      { text: '  ·  ', fg: theme.dim },
+                      { text: `pool ${teammateProviders.map((entry) => entry.toUpperCase()).join('+')}`, fg: theme.violet },
+                      { text: '  ·  ', fg: theme.dim },
+                      { text: `${coordMaxAgents} agents`, fg: theme.cyan },
+                    ], sidePaneWidth - 2, theme.dim)}
+                  </text>
+                  {!compact ? <text fg={theme.dim} wrapMode="none">{fitText(`Brief: ${briefPreview}`, sidePaneWidth - 2)}</text> : null}
+                </>
+              )}
               <box height={1} flexDirection="row" backgroundColor={focusBackground('launch')}>
                 <text fg={coordDraft.trim() ? (coordModalFocus === 'launch' ? theme.surface : theme.green) : theme.dim} bg={coordDraft.trim() && coordModalFocus === 'launch' ? theme.green : undefined} wrapMode="none">
                   {coordBusy ? ' ◇ LAUNCHING WORKFLOW… ' : ' ▶ LAUNCH WORKFLOW '}
@@ -17216,6 +17244,8 @@ export default function OpenTuiApp() {
                 <box flexGrow={1} />
                 <text fg={theme.dim} wrapMode="none">{coordDraft.trim() ? 'lead · task board · live activity' : 'brief required'}</text>
               </box>
+            </box>
+            </box>
             </box>
 
             {coordError ? (
