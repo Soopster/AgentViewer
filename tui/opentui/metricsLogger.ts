@@ -27,7 +27,7 @@
 // (registerTuiMetricsGauge still returns an unregister fn so call sites don't
 // need to branch), and nothing samples, monitors, or writes.
 
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFile, appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { monitorEventLoopDelay, PerformanceObserver, type IntervalHistogram } from 'node:perf_hooks'
 
@@ -198,11 +198,27 @@ const CARD_PROFILE_PATH = process.env.AGENT_VIEWER_TUI_CARD_PROFILE_LOG
   ?? join(process.cwd(), '.agent-viewer-data', 'tui-card-profile.jsonl')
 
 let cardProfileReady = false
+let cardProfileBuffer = ''
+let cardProfileFlushTimer: ReturnType<typeof setTimeout> | null = null
 function ensureCardProfileFile(): void {
   if (cardProfileReady || !CARD_PROFILE) return
   cardProfileReady = true
   try { mkdirSync(dirname(CARD_PROFILE_PATH), { recursive: true }) } catch { /* logging is best-effort */ }
   console.log(`[tui-card-profile] enabled → ${CARD_PROFILE_PATH}`)
+}
+
+function scheduleCardProfileFlush(): void {
+  if (cardProfileFlushTimer !== null) return
+  cardProfileFlushTimer = setTimeout(() => {
+    cardProfileFlushTimer = null
+    const pending = cardProfileBuffer
+    cardProfileBuffer = ''
+    if (!pending) return
+    appendFile(CARD_PROFILE_PATH, pending, () => { /* profiling is best-effort */ })
+  }, 50)
+  if (typeof cardProfileFlushTimer === 'object' && cardProfileFlushTimer && 'unref' in cardProfileFlushTimer) {
+    cardProfileFlushTimer.unref()
+  }
 }
 
 export function cardProfileEnabled(): boolean {
@@ -227,9 +243,8 @@ export function logCardRecompute(sample: {
     liveCards: sample.liveCards,
     durationMs: Math.round(sample.durationMs * 100) / 100,
   }
-  try {
-    appendFileSync(CARD_PROFILE_PATH, JSON.stringify(line) + '\n')
-  } catch { /* never break the UI for logging */ }
+  cardProfileBuffer += JSON.stringify(line) + '\n'
+  scheduleCardProfileFlush()
 }
 
 // ── Sampler ──────────────────────────────────────────────────────────────────

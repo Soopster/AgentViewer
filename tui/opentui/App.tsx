@@ -151,7 +151,11 @@ import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandS
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
 import { extractPendingPermission, extractPermissionReply, type PendingPermission, type PermissionResponse } from '../../lib/permissions'
 import type { readViewSessionComposerOptions } from '../../lib/sessionBackend'
-import { compactStableFingerprint } from '../../lib/compactFingerprint'
+import {
+  sessionMessageFingerprint,
+  sessionMessageSequenceFingerprint,
+  summarizeDurableSessionMessages,
+} from './messageFingerprint'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { readFile, rm, stat } from 'node:fs/promises'
 import { release, tmpdir } from 'node:os'
@@ -2227,17 +2231,28 @@ function hasLiveAssistantMessage(messages: ThreadedMessage[], key: string): bool
 }
 
 function hasPersistedAssistantAfterBaseline(rawMessages: import('../../lib/types').SessionMessage[], baselineCount: number): boolean {
-  const durableMessages = rawMessages.filter(isDurableSessionMessage)
-  const start = durableMessages.length > baselineCount
+  const durableCount = summarizeDurableSessionMessages(rawMessages).count
+  const start = durableCount > baselineCount
     ? baselineCount
     : Math.max(baselineCount - 1, 0)
-  return durableMessages.slice(start).some((message) => message.type === 'assistant')
+  let durableIndex = 0
+  for (const message of rawMessages) {
+    if (!isDurableSessionMessage(message)) continue
+    if (durableIndex >= start && message.type === 'assistant') return true
+    durableIndex++
+  }
+  return false
 }
 
 function hasPersistedUserAfterBaseline(rawMessages: import('../../lib/types').SessionMessage[], baselineCount: number): boolean {
-  const durableMessages = rawMessages.filter(isDurableSessionMessage)
-  if (durableMessages.length <= baselineCount) return false
-  return durableMessages.slice(baselineCount).some((message) => message.type === 'user')
+  if (summarizeDurableSessionMessages(rawMessages).count <= baselineCount) return false
+  let durableIndex = 0
+  for (const message of rawMessages) {
+    if (!isDurableSessionMessage(message)) continue
+    if (durableIndex >= baselineCount && message.type === 'user') return true
+    durableIndex++
+  }
+  return false
 }
 
 function makeLiveUserMessage(session: Session, text: string, uuid = 'live-user'): ThreadedMessage {
@@ -2443,27 +2458,6 @@ function sessionsShallowEqual(a: Session[], b: Session[]): boolean {
     ) return false
   }
   return true
-}
-
-const sessionMessageFingerprintCache = new WeakMap<object, string>()
-function sessionMessageFingerprint(message: import('../../lib/types').SessionMessage | undefined): string | null {
-  if (!message) return null
-  const cached = sessionMessageFingerprintCache.get(message)
-  if (cached !== undefined) return cached
-  const fingerprint = [
-    message.type,
-    message.uuid,
-    message.timestamp ?? '',
-    message.turnId ?? '',
-    message.origin?.kind ?? '',
-    compactStableFingerprint(message.message),
-  ].join('|')
-  sessionMessageFingerprintCache.set(message, fingerprint)
-  return fingerprint
-}
-
-function sessionMessageSequenceFingerprint(messages: import('../../lib/types').SessionMessage[]): string {
-  return `${messages.length}:${messages.map((message) => sessionMessageFingerprint(message) ?? '').join('\n')}`
 }
 
 function isDurableSessionMessage(message: import('../../lib/types').SessionMessage): boolean {
@@ -7066,44 +7060,11 @@ export default function OpenTuiApp() {
     ? liveTranscriptBaselineRef.current.get(sessionKey(selectedSessionTarget))?.startedAt
     : undefined
 
-  // ── Live overlay — O(N_live) per delta, base cards always cache-hit ────────
-  const transcriptCards = useMemo<TuiTranscriptCard[]>(() => {
-    const profileStart = CARD_PROFILE ? performance.now() : 0
-    // No overlay (the common case, and always the case while browsing/scrubbing):
-    // return the base array as-is. Skipping the copy + sort keeps array identity
-    // stable so every downstream per-card WeakMap cache keeps hitting, and avoids
-    // an O(N log N) pass over the whole session on every recompute.
-    if (liveTranscriptMessagesForSession.length === 0 && bridgeTranscriptEntries.length === 0) {
-      if (CARD_PROFILE) {
-        logCardRecompute({
-          scope: 'transcriptCards',
-          totalCards: baseTranscriptCards.length,
-          recomputed: 0,
-          liveCards: 0,
-          durationMs: performance.now() - profileStart,
-        })
-      }
-      return baseTranscriptCards
-    }
-    const liveMessages = showToolCalls
-      ? liveTranscriptMessagesForSession
-      : stripToolCallBlocks(liveTranscriptMessagesForSession)
-    const latestBaseTimestamp = baseTranscriptCards.reduce(
-      (latest, card) => Math.max(latest, card.timestampMs ?? 0),
-      0,
-    )
-    const liveTimestampBase = liveTurnStartedAt ?? latestBaseTimestamp + 1
-    const liveCards = liveMessages.map((message, index) => {
-      const timestampedMessage = message.timestamp
-        ? message
-        : { ...message, timestamp: new Date(liveTimestampBase + index).toISOString() }
-      return {
-        ...formatTranscriptCard(timestampedMessage, density, baseTaskContext.activeForms, baseTaskContext.taskRegistry),
-        key: `live:${message.uuid}`,
-      }
-    })
-
-    // Convert bridge transcript entries to cards
+  // Bridge entries change rarely compared with streamed assistant deltas.
+  // Format and interleave them with the persisted transcript separately so a
+  // token update does not rebuild bridge cards or sort all N persisted cards.
+  const baseAndBridgeTranscriptCards = useMemo<TuiTranscriptCard[]>(() => {
+    if (bridgeTranscriptEntries.length === 0) return baseTranscriptCards
     const bridgeCards: TuiTranscriptCard[] = bridgeTranscriptEntries.map((entry, i) => {
       const bridgeMessage: ThreadedMessage = {
         role: entry.kind === 'sent' ? 'user' : 'assistant',
@@ -7117,24 +7078,73 @@ export default function OpenTuiApp() {
         key: `bridge:${i}`,
       }
     })
+    return [...baseTranscriptCards, ...bridgeCards]
+      .sort((a, b) => (a.timestampMs ?? 0) - (b.timestampMs ?? 0))
+  }, [baseTaskContext, baseTranscriptCards, bridgeTranscriptEntries, density])
 
-    const allCards = [...baseTranscriptCards, ...liveCards, ...bridgeCards]
-    // Sort by timestamp to interleave bridge messages chronologically.
-    // timestampMs is pre-parsed by formatTranscriptCard — constructing a Date
-    // per comparison cost O(N log N) parses over the full session.
-    const sortedCards = allCards.sort((a, b) => (a.timestampMs ?? 0) - (b.timestampMs ?? 0))
+  const latestBaseAndBridgeTimestamp = useMemo(
+    () => baseAndBridgeTranscriptCards.reduce(
+      (latest, card) => Math.max(latest, card.timestampMs ?? 0),
+      0,
+    ),
+    [baseAndBridgeTranscriptCards],
+  )
+
+  // ── Live overlay — O(N_live) per delta, base cards always cache-hit ────────
+  const transcriptCards = useMemo<TuiTranscriptCard[]>(() => {
+    const profileStart = CARD_PROFILE ? performance.now() : 0
+    // No live overlay (the common case while browsing/scrubbing): return the
+    // stable persisted/bridge array as-is. Skipping the copy + sort keeps array
+    // identity stable so every downstream per-card WeakMap cache keeps hitting.
+    if (liveTranscriptMessagesForSession.length === 0) {
+      if (CARD_PROFILE) {
+        logCardRecompute({
+          scope: 'transcriptCards',
+          totalCards: baseAndBridgeTranscriptCards.length,
+          recomputed: 0,
+          liveCards: 0,
+          durationMs: performance.now() - profileStart,
+        })
+      }
+      return baseAndBridgeTranscriptCards
+    }
+    const liveMessages = showToolCalls
+      ? liveTranscriptMessagesForSession
+      : stripToolCallBlocks(liveTranscriptMessagesForSession)
+    const liveTimestampBase = liveTurnStartedAt ?? latestBaseAndBridgeTimestamp + 1
+    const liveCards = liveMessages.map((message, index) => {
+      const timestampedMessage = message.timestamp
+        ? message
+        : { ...message, timestamp: new Date(liveTimestampBase + index).toISOString() }
+      return {
+        ...formatTranscriptCard(timestampedMessage, density, baseTaskContext.activeForms, baseTaskContext.taskRegistry),
+        key: `live:${message.uuid}`,
+      }
+    })
+
+    // Live turns normally follow every persisted/bridge card. Avoid sorting the
+    // full transcript on every token in that overwhelmingly common case. Keep
+    // the sort fallback for imported/provider events carrying an older clock.
+    const firstLiveTimestamp = liveCards[0]?.timestampMs ?? liveTimestampBase
+    const liveCardsAreOrdered = liveCards.every((card, index) => (
+      index === 0 || (liveCards[index - 1]?.timestampMs ?? 0) <= (card.timestampMs ?? 0)
+    ))
+    const sortedCards = firstLiveTimestamp >= latestBaseAndBridgeTimestamp && liveCardsAreOrdered
+      ? [...baseAndBridgeTranscriptCards, ...liveCards]
+      : [...baseAndBridgeTranscriptCards, ...liveCards]
+        .sort((a, b) => (a.timestampMs ?? 0) - (b.timestampMs ?? 0))
 
     if (CARD_PROFILE) {
       logCardRecompute({
         scope: 'transcriptCards',
         totalCards: sortedCards.length,
-        recomputed: liveCards.length + bridgeCards.length,
+        recomputed: liveCards.length,
         liveCards: liveCards.length,
         durationMs: performance.now() - profileStart,
       })
     }
     return sortedCards
-  }, [baseTranscriptCards, baseTaskContext, bridgeTranscriptEntries, density, liveTranscriptMessagesForSession, liveTurnStartedAt, showToolCalls])
+  }, [baseAndBridgeTranscriptCards, baseTaskContext, density, latestBaseAndBridgeTimestamp, liveTranscriptMessagesForSession, liveTurnStartedAt, showToolCalls])
 
   // Continue is prose-only. Stream mirrors native agent CLIs: conversation plus
   // compact operational rows, while low-level system bookkeeping stays hidden.
@@ -7162,13 +7172,11 @@ export default function OpenTuiApp() {
     const key = sessionKey(selectedSessionTarget)
     const baseline = liveTranscriptBaselineRef.current.get(key)
     if (!baseline) return
-    const durableMessages = sessionDetail.rawMessages.filter(isDurableSessionMessage)
-    const lastFingerprint = sessionMessageFingerprint(durableMessages.at(-1))
-    const sequenceFingerprint = sessionMessageSequenceFingerprint(durableMessages)
+    const durableSummary = summarizeDurableSessionMessages(sessionDetail.rawMessages)
     const persistedTurnArrived =
-      durableMessages.length > baseline.count
-      || lastFingerprint !== baseline.lastFingerprint
-      || sequenceFingerprint !== baseline.sequenceFingerprint
+      durableSummary.count > baseline.count
+      || durableSummary.lastFingerprint !== baseline.lastFingerprint
+      || durableSummary.sequenceFingerprint !== baseline.sequenceFingerprint
     if (!persistedTurnArrived) return
     const liveAssistantVisible = Boolean(composerLiveText.trim())
       || hasLiveAssistantMessage(liveTranscriptMessagesForSession, key)
@@ -9038,13 +9046,11 @@ export default function OpenTuiApp() {
       if (requestId !== detailRequestRef.current) return
       const liveBaseline = liveTranscriptBaselineRef.current.get(cacheKeyForGuards)
       if (liveBaseline) {
-        const durableMessages = detail.rawMessages.filter(isDurableSessionMessage)
-        const lastFingerprint = sessionMessageFingerprint(durableMessages.at(-1))
-        const sequenceFingerprint = sessionMessageSequenceFingerprint(durableMessages)
+        const durableSummary = summarizeDurableSessionMessages(detail.rawMessages)
         const persistedTurnArrived =
-          durableMessages.length > liveBaseline.count
-          || lastFingerprint !== liveBaseline.lastFingerprint
-          || sequenceFingerprint !== liveBaseline.sequenceFingerprint
+          durableSummary.count > liveBaseline.count
+          || durableSummary.lastFingerprint !== liveBaseline.lastFingerprint
+          || durableSummary.sequenceFingerprint !== liveBaseline.sequenceFingerprint
         if (persistedTurnArrived) {
           const liveAssistantVisible = Boolean(pendingLiveTextRef.current.trim())
             || hasLiveAssistantMessage(liveTranscriptMessagesRef.current, cacheKeyForGuards)
@@ -10724,11 +10730,9 @@ export default function OpenTuiApp() {
     ownedTurnKeyRef.current = targetKey
     const baselineDetail = sessionDetailCacheRef.current.get(targetKey)
       ?? (selectedSessionKeyRef.current === targetKey ? sessionDetail : null)
-    const baselineMessages = baselineDetail?.rawMessages.filter(isDurableSessionMessage) ?? []
+    const baselineSummary = summarizeDurableSessionMessages(baselineDetail?.rawMessages ?? [])
     liveTranscriptBaselineRef.current.set(targetKey, {
-      count: baselineMessages.length,
-      lastFingerprint: sessionMessageFingerprint(baselineMessages.at(-1)),
-      sequenceFingerprint: sessionMessageSequenceFingerprint(baselineMessages),
+      ...baselineSummary,
       startedAt: sendStartedAt,
     })
     liveToolIndexesRef.current.clear()
