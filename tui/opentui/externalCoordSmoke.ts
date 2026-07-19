@@ -171,10 +171,28 @@ await coordination.reportExternalProtocolProgress(teammate, {
 const ownLocks = await coordination.requestExternalProtocolLocks(teammate, ['owned.txt'])
 assert.equal(ownLocks.granted.length, 1)
 assert.equal(ownLocks.denied.length, 0)
+const lockEventCursor = (await coordination.waitForExternalProtocolChange(lead, { timeoutMs: 0 })).cursor
+const renewedOwnLocks = await coordination.requestExternalProtocolLocks(teammate, ['owned.txt'])
+assert.equal(renewedOwnLocks.granted[0]?.lockId, ownLocks.granted[0]?.lockId)
+const lockSnapshot = await coordination.readExternalProtocolRun(teammate)
+assert.equal(lockSnapshot.locks.filter((lock) => lock.agentId === teammate.agentId
+  && lock.taskId === task.id
+  && lock.path === 'owned.txt'
+  && lock.status === 'active').length, 1)
+const renewalWake = await coordination.waitForExternalProtocolChange(lead, {
+  cursor: lockEventCursor ?? undefined,
+  timeoutMs: 0,
+})
+assert.equal(renewalWake.changed, false)
 const conflictedLocks = await coordination.requestExternalProtocolLocks(lead, ['owned.txt'])
 assert.equal(conflictedLocks.granted.length, 0)
 assert.equal(conflictedLocks.denied.length, 1)
 assert.match(conflictedLocks.denied[0].reason, new RegExp(teammate.agentId))
+for (let index = 0; index < 205; index += 1) {
+  await coordination.requestExternalProtocolLocks(lead, ['owned.txt'])
+}
+const boundedLockSnapshot = await coordination.readExternalProtocolRun(lead)
+assert.equal(boundedLockSnapshot.locks.filter((lock) => lock.status !== 'active').length, 200)
 
 writeFileSync(path.join(testCwd, 'owned.txt'), 'participant change\n')
 

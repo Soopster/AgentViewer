@@ -73,6 +73,7 @@ const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
 const LOCK_LEASE_MS = 20 * 60_000
 const SCHEMA_VERSION = 7
 const EVENT_WINDOW = 300
+const LOCK_HISTORY_WINDOW = 200
 const EXTERNAL_AGENT_STALE_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_STALE_MS) || 5 * 60_000)
 // One automatic re-dispatch when a teammate's turn ends mid-task; after that
 // the teammate is marked blocked and the lead is notified (doc: teammates may
@@ -600,7 +601,12 @@ function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapsho
   if (!runRow) return null
   const agents = annotateLiveTurns(runId, db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? ORDER BY created_at ASC').all(runId).map(rowToAgent))
   const tasks = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? ORDER BY created_at ASC').all(runId).map(rowToTask)
-  const locks = db.prepare('SELECT * FROM protocol_locks WHERE run_id = ? ORDER BY created_at ASC').all(runId).map(rowToLock)
+  const activeLocks = (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND status = 'active' AND lease_expires_at > ? ORDER BY created_at ASC")
+    .all(runId, nowIso()) as Row[]).map(rowToLock)
+  const recentInactiveLocks = (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND status != 'active' ORDER BY created_at DESC LIMIT ?")
+    .all(runId, LOCK_HISTORY_WINDOW) as Row[]).map(rowToLock).reverse()
+  const locks = [...recentInactiveLocks, ...activeLocks]
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   const messages = db.prepare('SELECT * FROM protocol_messages WHERE run_id = ? ORDER BY created_at ASC LIMIT 200').all(runId).map(rowToMessage)
   // Latest window, chronological — an active run must show its NEWEST events.
   const events = (db.prepare('SELECT * FROM protocol_events WHERE run_id = ? ORDER BY created_at DESC LIMIT ?')
@@ -1442,15 +1448,28 @@ export async function requestExternalProtocolLocks(
     const agent = requireExternalParticipantSync(db, identity)
     db.exec('BEGIN IMMEDIATE')
     try {
-      insertEventSync(db, {
-        version: AGENT_PROTOCOL_VERSION,
-        runId: identity.runId,
-        agentId: identity.agentId,
-        type: 'lock.requested',
-        taskId: agent.taskId,
-        paths: requested,
-        summary: `Requested write access for ${requested.join(', ')}`,
+      const requestedAt = Date.now()
+      const activeLocks = (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND status = 'active'")
+        .all(identity.runId) as Row[]).map(rowToLock)
+      const allRenewals = requested.every((entry) => {
+        const requestedPath = normalizeLockPath(entry)
+        return activeLocks.some((lock) => lock.agentId === identity.agentId
+          && lock.taskId === agent.taskId
+          && lock.path === requestedPath
+          && lock.mode === 'write'
+          && new Date(lock.leaseExpiresAt).getTime() > requestedAt)
       })
+      if (!allRenewals) {
+        insertEventSync(db, {
+          version: AGENT_PROTOCOL_VERSION,
+          runId: identity.runId,
+          agentId: identity.agentId,
+          type: 'lock.requested',
+          taskId: agent.taskId,
+          paths: requested,
+          summary: `Requested write access for ${requested.join(', ')}`,
+        })
+      }
       const locks = requested.map((entry) => acquireLockSync(db, {
         runId: identity.runId,
         agentId: identity.agentId,
@@ -1958,8 +1977,30 @@ function acquireLockSync(db: SqliteDatabase, params: {
   mode: 'read' | 'write'
 }): ProtocolLock & { conflict?: ProtocolLock } {
   const requestedPath = normalizeLockPath(params.path)
+  const expiredAt = nowIso()
+  db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND status = 'active' AND lease_expires_at <= ?")
+    .run(expiredAt, params.runId, expiredAt)
   const activeRows = db.prepare('SELECT * FROM protocol_locks WHERE run_id = ? AND status = ?').all(params.runId, 'active') as Row[]
   const active = activeRows.map(rowToLock)
+  const equivalent = active
+    .filter((lock) => lock.agentId === params.agentId
+      && lock.taskId === params.taskId
+      && lock.path === requestedPath
+      && lock.mode === params.mode
+      && new Date(lock.leaseExpiresAt).getTime() > Date.now())
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  if (equivalent.length > 0) {
+    const [keeper, ...duplicates] = equivalent
+    const ts = nowIso()
+    const leaseExpiresAt = leaseIso()
+    db.prepare('UPDATE protocol_locks SET lease_expires_at = ?, updated_at = ? WHERE id = ?')
+      .run(leaseExpiresAt, ts, keeper.id)
+    if (duplicates.length > 0) {
+      const release = db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE id = ?")
+      for (const duplicate of duplicates) release.run(ts, duplicate.id)
+    }
+    return { ...keeper, leaseExpiresAt, updatedAt: ts }
+  }
   const conflict = params.mode === 'write'
     ? active.find((lock) => writeLocksConflict(lock, requestedPath, params.agentId))
     : undefined

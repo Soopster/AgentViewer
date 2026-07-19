@@ -130,6 +130,11 @@ async function providerTick(state, baseUrl) {
       '-c', `mcp_servers.agent-viewer.command=${JSON.stringify(config.command)}`,
       '-c', `mcp_servers.agent-viewer.args=${JSON.stringify(config.args)}`,
       '-c', 'mcp_servers.agent-viewer.required=true',
+      // Headless ticks cannot answer Codex's per-MCP-tool approval prompt.
+      // `approval_policy="never"` covers command approvals, while MCP servers
+      // have their own tool approval mode. Trust only this Coordinator server;
+      // all other configured MCP servers retain the user's normal policy.
+      '-c', 'mcp_servers.agent-viewer.default_tools_approval_mode="approve"',
       '-c', 'approval_policy="never"',
       '-c', 'sandbox_mode="workspace-write"',
     ]
@@ -261,6 +266,11 @@ outer: for (;;) {
       cursor = current.cursor
       if (isTerminal(current)) break
     } catch { /* retain the provider error and retry when the daemon is unavailable */ }
+    if (options.once) {
+      console.error(`Coordinator tick failed: ${error.message}`)
+      process.exitCode = 1
+      break
+    }
     const delay = Math.min(30_000, 1_000 * 2 ** Math.min(failures - 1, 5))
     console.error(`Coordinator tick failed: ${error.message}; retrying in ${delay}ms`)
     await new Promise((resolve) => setTimeout(resolve, delay))
