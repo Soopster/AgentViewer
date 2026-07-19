@@ -2,10 +2,14 @@
 
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
-import os from 'node:os'
+import { appendFile, chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  coordinatorStateRoot,
+  workerLogPath,
+  writeWorkerRecord,
+} from './agent-viewer-coord-state.mjs'
 
 function usage(message) {
   if (message) console.error(message)
@@ -84,7 +88,40 @@ async function saveState(file, state) {
 }
 
 function identityFileFor(state) {
-  return path.join(os.homedir(), '.agent-viewer', 'coordinator', state.runId, `${state.agentId}.json`)
+  return path.join(coordinatorStateRoot(), state.runId, `${state.agentId}.json`)
+}
+
+async function workerLog(state, message) {
+  const line = `[${new Date().toISOString()}] ${message}\n`
+  try {
+    await mkdir(path.dirname(state.logFile), { recursive: true, mode: 0o700 })
+    await appendFile(state.logFile, line, { mode: 0o600 })
+  } catch { /* logging must never stop coordination */ }
+}
+
+function classifyProviderFailure(error) {
+  const text = `${error?.message || error}\n${error?.providerOutput || ''}`.toLowerCase()
+  if (error?.code === 'ENOENT' || /enoent|command not found|not recognized as/.test(text)) return 'cli_missing'
+  if (/rate.?limit|quota|usage limit|too many requests|429/.test(text)) return 'rate_limited'
+  if (/unauthori[sz]ed|authentication|not logged in|invalid api key|401|403/.test(text)) return 'authentication_failed'
+  if (/context (window|length)|maximum context|context.*exceed|too many tokens/.test(text)) return 'context_exhausted'
+  if (/approval|permission.*denied|not approved|requires approval/.test(text)) return 'approval_blocked'
+  if (/econnreset|econnrefused|timed? out|temporar|network|socket|transport/.test(text)) return 'transient_transport'
+  return 'provider_failure'
+}
+
+function workerNegotiation() {
+  return {
+    client: { name: 'agent-viewer-coord-worker', version: '1.0.0', protocolVersion: 2 },
+    capabilities: {
+      unattended: true,
+      sessionResume: true,
+      filesystemWrite: true,
+      git: true,
+      maxParallelTasks: 1,
+      tools: ['coord_*'],
+    },
+  }
 }
 
 function mcpConfig(state, baseUrl) {
@@ -150,12 +187,16 @@ async function providerTick(state, baseUrl) {
         ...process.env,
         AGENT_VIEWER_ATTACH: baseUrl,
         AGENT_VIEWER_COORD_IDENTITY_FILE: state.identityFile,
+        AGENT_VIEWER_COORD_WORKER: '1',
       },
-      stdio: ['ignore', 'pipe', 'inherit'],
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
     let buffered = ''
+    let providerOutput = ''
     child.stdout.on('data', (chunk) => {
       process.stdout.write(chunk)
+      void appendFile(state.logFile, chunk).catch(() => {})
+      providerOutput = `${providerOutput}${chunk.toString()}`.slice(-16_000)
       buffered += chunk.toString()
       const lines = buffered.split('\n')
       buffered = lines.pop() || ''
@@ -167,6 +208,11 @@ async function providerTick(state, baseUrl) {
         } catch { /* provider text or partial JSON */ }
       }
     })
+    child.stderr.on('data', (chunk) => {
+      process.stderr.write(chunk)
+      void appendFile(state.logFile, chunk).catch(() => {})
+      providerOutput = `${providerOutput}${chunk.toString()}`.slice(-16_000)
+    })
     const heartbeat = setInterval(() => {
       void api(baseUrl, 'progress', {
         runId: state.runId,
@@ -177,10 +223,19 @@ async function providerTick(state, baseUrl) {
       }, 10_000).catch(() => {})
     }, 45_000)
     heartbeat.unref()
-    child.on('error', (error) => { clearInterval(heartbeat); reject(error) })
+    child.on('error', (error) => {
+      clearInterval(heartbeat)
+      error.providerOutput = providerOutput
+      reject(error)
+    })
     child.on('exit', (code, signal) => {
       clearInterval(heartbeat)
-      code === 0 ? resolve() : reject(new Error(`${command} exited ${code ?? signal}`))
+      if (code === 0) resolve()
+      else {
+        const error = new Error(`${command} exited ${code ?? signal}`)
+        error.providerOutput = providerOutput
+        reject(error)
+      }
     })
   })
 }
@@ -192,7 +247,9 @@ if (!['codex', 'claude'].includes(options.provider)) usage('--provider must be c
 
 let baseUrl = normalizeUrl(options.attach || 'http://127.0.0.1:3000')
 let state
+let loadedIdentity = false
 if (options.identity && !options.start && !options.join) {
+  loadedIdentity = true
   state = JSON.parse(await readFile(path.resolve(options.identity), 'utf8'))
   state.identityFile = path.resolve(options.identity)
   state.provider ||= options.provider
@@ -219,14 +276,36 @@ if (options.identity && !options.start && !options.join) {
     name: options.name,
     provider: options.provider,
     cwd,
+    ...workerNegotiation(),
   })
   state = { ...result.participant, cwd, attach: baseUrl }
   state.identityFile = path.resolve(options.identity || identityFileFor(state))
 }
 state.attach = baseUrl
+state.logFile ||= workerLogPath(state.identityFile)
+if (loadedIdentity) {
+  const resumed = await api(baseUrl, 'resume', { ...state, ...workerNegotiation() })
+  if (resumed?.participant) {
+    state = { ...state, ...resumed.participant, identityFile: state.identityFile, logFile: state.logFile, attach: baseUrl }
+  }
+}
 await saveState(state.identityFile, state)
 console.error(`Coordinator ${state.runId}: ${state.name || state.agentId} (${state.role || 'participant'})`)
 console.error(`Identity: ${state.identityFile}`)
+await workerLog(state, `worker starting pid=${process.pid} provider=${state.provider} run=${state.runId}`)
+await writeWorkerRecord(state.identityFile, {
+  runId: state.runId,
+  agentId: state.agentId,
+  name: state.name,
+  role: state.role,
+  provider: state.provider,
+  cwd: state.cwd,
+  attach: baseUrl,
+  logFile: state.logFile,
+  pid: process.pid,
+  status: 'running',
+  startedAt: new Date().toISOString(),
+})
 
 function isTerminal(wait) {
   const status = wait?.actionable?.runStatus ?? wait?.snapshot?.run?.status
@@ -241,6 +320,7 @@ function isTerminal(wait) {
 function shouldTick(actionable, role) {
   if (!actionable) return true
   if ((actionable.inboxCount ?? 0) > 0) return true
+  if ((actionable.replyRequiredCount ?? 0) > 0) return true
   if (role === 'lead') {
     return (actionable.plansAwaitingReview?.length ?? 0) > 0
       || actionable.allTasksTerminal === true
@@ -251,6 +331,7 @@ function shouldTick(actionable, role) {
 
 let cursor = null
 let failures = 0
+let finalStatus = 'stopped'
 const role = state.role === 'lead' ? 'lead' : 'teammate'
 outer: for (;;) {
   try {
@@ -259,13 +340,46 @@ outer: for (;;) {
     await saveState(state.identityFile, state)
   } catch (error) {
     failures += 1
+    const failureClass = classifyProviderFailure(error)
+    state.lastFailureClass = failureClass
+    state.lastError = error.message
+    await workerLog(state, `provider tick failed class=${failureClass} attempt=${failures}: ${error.message}`)
+    await writeWorkerRecord(state.identityFile, {
+      status: 'retrying',
+      failureClass,
+      failures,
+      lastError: error.message,
+    })
     // A broken provider CLI must not strand the supervisor forever after the
     // run was stopped or completed by another participant.
+    let current
     try {
-      const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
+      current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
       cursor = current.cursor
       if (isTerminal(current)) break
     } catch { /* retain the provider error and retry when the daemon is unavailable */ }
+    const durableFailure = failureClass !== 'transient_transport'
+      && (failureClass !== 'provider_failure' || failures >= 3)
+    const ownedTask = current?.actionable?.myTask
+    if (ownedTask && durableFailure) {
+      const summary = `${state.provider} worker checkpointed ${ownedTask.id} after ${failureClass}`
+      try {
+        await api(baseUrl, 'handoff_task', {
+          ...state,
+          taskId: ownedTask.id,
+          summary,
+          detail: `Provider CLI error: ${error.message}`,
+          failureClass,
+          requestId: `worker-handoff-${ownedTask.id}-${failureClass}`,
+        })
+        finalStatus = 'handed_off'
+        await workerLog(state, `${summary}; task returned to board`)
+        console.error(`${summary}; task returned to board`)
+        break
+      } catch (handoffError) {
+        await workerLog(state, `automatic handoff failed: ${handoffError.message}`)
+      }
+    }
     if (options.once) {
       console.error(`Coordinator tick failed: ${error.message}`)
       process.exitCode = 1
@@ -287,3 +401,14 @@ outer: for (;;) {
     if (shouldTick(next.actionable, role)) break
   }
 }
+
+await saveState(state.identityFile, state)
+await writeWorkerRecord(state.identityFile, {
+  status: finalStatus,
+  pid: process.pid,
+  stoppedAt: new Date().toISOString(),
+  failures,
+  failureClass: state.lastFailureClass,
+  lastError: state.lastError,
+})
+await workerLog(state, `worker exiting status=${finalStatus}`)

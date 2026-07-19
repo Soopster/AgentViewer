@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -14,6 +14,36 @@ writeFileSync(path.join(testCwd, '.gitignore'), '.agent-viewer-data/\n')
 execFileSync('git', ['add', 'README.md', '.gitignore'], { cwd: testCwd })
 execFileSync('git', ['commit', '-qm', 'baseline'], { cwd: testCwd })
 writeFileSync(path.join(testCwd, 'README.md'), 'pre-existing dirty change\n')
+
+// Seed the two tables changed by schema v8 in their v7 shape. Opening the
+// Coordinator must migrate real pre-existing rows, not only pass on a fresh DB.
+const coordinationDir = path.join(testCwd, '.agent-viewer-data', 'agent-coordination')
+mkdirSync(coordinationDir, { recursive: true })
+const { Database } = await (0, eval)('import("bun:sqlite")') as {
+  Database: new (file: string) => { exec(sql: string): void; close(): void }
+}
+const legacyDb = new Database(path.join(coordinationDir, 'coordination.sqlite'))
+legacyDb.exec(`
+  CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  INSERT INTO meta (key, value) VALUES ('schema_version', '7');
+  CREATE TABLE protocol_runs (
+    id TEXT PRIMARY KEY, prompt TEXT NOT NULL, status TEXT NOT NULL, provider TEXT NOT NULL,
+    base_cwd TEXT NOT NULL, max_agents INTEGER NOT NULL, lead_agent_id TEXT, summary TEXT,
+    gate_command TEXT, require_plan_approval INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE TABLE protocol_agents (
+    id TEXT NOT NULL, run_id TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'teammate',
+    provider TEXT NOT NULL, session_id TEXT NOT NULL, worktree_path TEXT NOT NULL, worktree_branch TEXT NOT NULL,
+    task_id TEXT, status TEXT NOT NULL, last_seen_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, id)
+  );
+  CREATE TABLE protocol_messages (
+    id TEXT PRIMARY KEY, run_id TEXT NOT NULL, from_agent_id TEXT NOT NULL, to_agent_id TEXT NOT NULL,
+    body TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT
+  );
+`)
+legacyDb.close()
 
 const coordination = await import('../../lib/agentCoordination')
 
@@ -29,17 +59,41 @@ const lead = leadResult.participant
 assert.equal(lead.role, 'lead')
 assert.equal(lead.provider, 'codex')
 assert.ok(lead.token.length >= 32)
+assert.equal(lead.serverProtocolVersion, 2)
+assert.equal(lead.negotiatedProtocolVersion, 1)
+assert.deepEqual(lead.capabilities, {})
+
+await assert.rejects(
+  coordination.createExternalProtocolRun({
+    prompt: 'Reject a client newer than the server',
+    provider: 'codex',
+    baseCwd: testCwd,
+    participantName: 'Future client',
+    client: { name: 'future-cli', protocolVersion: 3 },
+  }),
+  /newer than server protocol 2/,
+)
 
 const teammateResult = await coordination.joinExternalProtocolRun({
   runId: lead.runId,
   provider: 'claude',
   cwd: testCwd,
   participantName: 'Claude teammate',
+  client: { name: 'claude-mcp', version: '1.3.0', protocolVersion: 2 },
+  capabilities: { unattended: true, filesystemWrite: true, tools: ['coord_*', 'coord_*'] },
 })
 const teammate = teammateResult.participant
 assert.equal(teammate.role, 'teammate')
 assert.equal(teammate.provider, 'claude')
 assert.notEqual(teammate.token, lead.token)
+assert.equal(teammate.negotiatedProtocolVersion, 2)
+assert.deepEqual(teammate.capabilities.tools, ['coord_*'])
+const resumedTeammate = await coordination.resumeExternalProtocolParticipant(teammate, {
+  client: { name: 'claude-mcp', version: '1.3.1', protocolVersion: 2 },
+  capabilities: { unattended: true, sessionResume: true, tools: ['coord_*'] },
+})
+assert.equal(resumedTeammate.participant.negotiatedProtocolVersion, 2)
+assert.equal(resumedTeammate.snapshot.agents.find((agent) => agent.id === teammate.agentId)?.client?.version, '1.3.1')
 
 await assert.rejects(
   coordination.joinExternalProtocolRun({
@@ -83,6 +137,10 @@ assert.ok(initialWait.cursor)
 const sendPlanRequest = () => coordination.sendExternalProtocolMessage(lead, {
   to: teammate.agentId,
   body: 'Please send a plan before completing the task.',
+  kind: 'request',
+  priority: 'urgent',
+  replyRequired: true,
+  correlationId: 'plan-approval',
 })
 await Promise.all([
   coordination.runExternalProtocolIdempotent(lead, 'send_message', 'plan-request-1', sendPlanRequest),
@@ -95,13 +153,48 @@ const changedWait = await coordination.waitForExternalProtocolChange(teammate, {
 assert.equal(changedWait.changed, true)
 assert.equal(changedWait.inbox.messages.length, 1)
 assert.equal(changedWait.actionable.inboxCount, 1)
+assert.equal(changedWait.actionable.urgentCount, 1)
+assert.equal(changedWait.actionable.replyRequiredCount, 1)
 // Direct-message bodies ride the inbox, not the shared event feed, so a
 // message-only wake can legitimately return no events.
 assert.ok(Array.isArray(changedWait.events))
 const inbox = await coordination.readExternalProtocolInbox(teammate)
 assert.equal(inbox.messages.length, 1)
 assert.match(inbox.messages[0].body, /send a plan/)
+assert.equal(inbox.messages[0].kind, 'request')
+assert.equal(inbox.messages[0].priority, 'urgent')
+assert.equal(inbox.messages[0].replyRequired, true)
+assert.equal(inbox.messages[0].correlationId, 'plan-approval')
 assert.equal((await coordination.readExternalProtocolInbox(teammate)).messages.length, 0)
+await coordination.sendExternalProtocolMessage(teammate, {
+  to: lead.agentId,
+  body: 'Plan acknowledged.',
+  kind: 'response',
+  inReplyTo: inbox.messages[0].id,
+})
+assert.equal((await coordination.readExternalProtocolStatus(teammate)).actionable.replyRequiredCount, 0)
+const responseInbox = await coordination.readExternalProtocolInbox(lead)
+assert.equal(responseInbox.messages[0].kind, 'response')
+assert.equal(responseInbox.messages[0].inReplyTo, inbox.messages[0].id)
+assert.equal(responseInbox.messages[0].correlationId, 'plan-approval')
+
+for (let index = 1; index <= 3; index += 1) {
+  await coordination.sendExternalProtocolMessage(lead, {
+    to: teammate.agentId,
+    body: `Progress ${index}/3`,
+    kind: 'status',
+    priority: 'status',
+    correlationId: 'progress-batch',
+  })
+}
+const batchedStatus = await coordination.readExternalProtocolStatus(teammate)
+assert.equal(batchedStatus.actionable.statusCount, 3)
+assert.equal(batchedStatus.actionable.inboxCount, 1)
+const statusInbox = await coordination.readExternalProtocolInbox(teammate)
+assert.equal(statusInbox.messages.length, 1)
+assert.equal(statusInbox.messages[0].kind, 'status_summary')
+assert.equal(statusInbox.messages[0].batchedMessageIds?.length, 3)
+assert.match(statusInbox.messages[0].body, /3 status updates/)
 
 // A burst larger than the 100-event wait page must be drained over multiple
 // calls without advancing the first response cursor past unseen events.
@@ -313,6 +406,33 @@ const discovered = await coordination.joinExternalProtocolRun({
 })
 assert.equal(discovered.participant.runId, secondRun.participant.runId)
 assert.equal(discovered.participant.role, 'teammate')
+
+// A classified provider failure checkpoints and atomically hands owned work
+// back: task pending, locks released, worker blocked, lead urgently notified.
+const handoffTask = (await coordination.createExternalProtocolTask(secondRun.participant, {
+  title: 'Provider failure handoff',
+  detail: 'This work should survive a failed CLI.',
+  paths: ['handoff.txt'],
+})).task!
+await coordination.claimExternalProtocolTask(discovered.participant, handoffTask.id)
+await coordination.requestExternalProtocolLocks(discovered.participant, ['handoff.txt'])
+const handedOff = await coordination.handoffExternalProtocolTask(discovered.participant, {
+  taskId: handoffTask.id,
+  summary: 'Checkpoint before quota handoff',
+  detail: 'No file changes were made; resume from task start.',
+  failureClass: 'rate_limited',
+})
+assert.equal(handedOff.task.status, 'pending')
+assert.equal(handedOff.task.ownerAgentId, undefined)
+const handoffSnapshot = await coordination.readExternalProtocolRun(secondRun.participant)
+assert.equal(handoffSnapshot.agents.find((agent) => agent.id === discovered.participant.agentId)?.status, 'blocked')
+assert.equal(handoffSnapshot.locks.some((lock) => lock.taskId === handoffTask.id && lock.status === 'active'), false)
+assert.ok(handoffSnapshot.events.some((event) => event.type === 'handoff'
+  && event.taskId === handoffTask.id
+  && event.payload?.failureClass === 'rate_limited'))
+const handoffInbox = await coordination.readExternalProtocolInbox(secondRun.participant)
+assert.equal(handoffInbox.messages.at(-1)?.kind, 'handoff')
+assert.equal(handoffInbox.messages.at(-1)?.priority, 'urgent')
 
 // --- Playbooks: workflow-style runs where the artifact holds the plan ------
 

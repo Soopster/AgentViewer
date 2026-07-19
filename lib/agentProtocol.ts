@@ -17,6 +17,8 @@ export const AGENT_PROTOCOL_VERSION = 'AVP/2' as const
 // AVP/1 events (earlier runs, older prompts still in a model's context) are
 // accepted on parse; new blocks are always emitted as AVP/2.
 export const SUPPORTED_PROTOCOL_VERSIONS = ['AVP/1', 'AVP/2'] as const
+export const EXTERNAL_COORD_PROTOCOL_VERSION = 2 as const
+export const MIN_EXTERNAL_COORD_PROTOCOL_VERSION = 1 as const
 
 export type AgentProtocolVersion = typeof AGENT_PROTOCOL_VERSION
 export type ProtocolRunStatus = 'planning' | 'running' | 'synthesizing' | 'blocked' | 'completed' | 'failed' | 'stopped'
@@ -24,6 +26,26 @@ export type ProtocolAgentStatus = 'ready' | 'idle' | 'working' | 'blocked' | 'do
 export type ProtocolAgentRole = 'lead' | 'teammate'
 export type ProtocolTaskStatus = 'pending' | 'claimed' | 'planning' | 'planned' | 'in_progress' | 'blocked' | 'completed' | 'failed' | 'cancelled'
 export type ProtocolLockStatus = 'active' | 'released' | 'expired' | 'denied'
+export type ProtocolMessageKind = 'request' | 'response' | 'status' | 'status_summary' | 'finding' | 'handoff' | 'review_request' | 'review_result'
+export type ProtocolMessagePriority = 'urgent' | 'normal' | 'status'
+export type ProtocolFailureClass = 'rate_limited' | 'authentication_failed' | 'context_exhausted' | 'approval_blocked' | 'cli_missing' | 'transient_transport' | 'provider_failure'
+
+export type ExternalProtocolClient = {
+  name: string
+  version?: string
+  protocolVersion: number
+}
+
+export type ExternalProtocolCapabilities = {
+  unattended?: boolean
+  sessionResume?: boolean
+  midTurnSteer?: boolean
+  filesystemWrite?: boolean
+  git?: boolean
+  browser?: boolean
+  maxParallelTasks?: number
+  tools?: string[]
+}
 
 export type ProtocolEventType =
   // agent lifecycle
@@ -108,6 +130,8 @@ export type ProtocolAgent = {
   taskId?: string
   status: ProtocolAgentStatus
   lastSeenAt?: string
+  client?: ExternalProtocolClient
+  capabilities?: ExternalProtocolCapabilities
   /**
    * A turn is streaming for this agent right now. Runtime-only (derived from
    * the process-local running-turn registry at snapshot time, never persisted)
@@ -153,9 +177,16 @@ export type ProtocolMessage = {
   fromAgentId: string
   toAgentId: string
   body: string
+  kind: ProtocolMessageKind
+  priority: ProtocolMessagePriority
+  replyRequired: boolean
+  correlationId?: string
+  inReplyTo?: string
   createdAt: string
   /** Set when steered into a live turn or included in a dispatched turn. */
   deliveredAt?: string
+  resolvedAt?: string
+  batchedMessageIds?: string[]
 }
 
 export type ProtocolWorktreeCleanupResult = {
@@ -228,6 +259,9 @@ export type ExternalProtocolParticipant = ExternalProtocolIdentity & {
   role: ProtocolAgentRole
   provider: AgentProvider
   cwd: string
+  serverProtocolVersion: number
+  negotiatedProtocolVersion: number
+  capabilities: ExternalProtocolCapabilities
 }
 
 export type CreateExternalProtocolRunParams = {
@@ -235,6 +269,8 @@ export type CreateExternalProtocolRunParams = {
   baseCwd: string
   provider: AgentProvider
   participantName: string
+  client?: ExternalProtocolClient
+  capabilities?: ExternalProtocolCapabilities
   maxAgents?: number
   gateCommand?: string
   requirePlanApproval?: boolean
@@ -250,6 +286,8 @@ export type JoinExternalProtocolRunParams = {
   provider: AgentProvider
   participantName: string
   cwd: string
+  client?: ExternalProtocolClient
+  capabilities?: ExternalProtocolCapabilities
 }
 
 export type ExternalProtocolParticipantResult = {
@@ -276,6 +314,9 @@ export type ExternalProtocolActionable = {
   claimableTasks: Array<{ id: string; title: string }>
   /** Undelivered mailbox messages addressed to this participant. */
   inboxCount: number
+  urgentCount: number
+  statusCount: number
+  replyRequiredCount: number
   /** Lead only: task ids with submitted plans awaiting review. */
   plansAwaitingReview: string[]
   /** The task this participant currently owns, if any. */

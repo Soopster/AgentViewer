@@ -58,8 +58,8 @@ const daemon = createServer(async (request, response) => {
   }
   if (request.url === '/api/agent-protocol/external') {
     const participant = body?.agentId === 'external-claude'
-      ? { runId: 'run-1', agentId: 'external-claude', token: 'token-claude', name: 'claude-cli', role: 'teammate', provider: 'claude', cwd: '/tmp/claude' }
-      : { runId: 'run-1', agentId: 'external-codex', token: 'token-codex', name: 'codex-cli', role: 'lead', provider: 'codex', cwd: '/tmp/codex' }
+      ? { runId: 'run-1', agentId: 'external-claude', token: 'token-claude', name: 'claude-cli', role: 'teammate', provider: 'claude', cwd: '/tmp/claude', serverProtocolVersion: 2, negotiatedProtocolVersion: body?.client?.protocolVersion ?? 1, capabilities: body?.capabilities ?? {} }
+      : { runId: 'run-1', agentId: 'external-codex', token: 'token-codex', name: 'codex-cli', role: 'lead', provider: 'codex', cwd: '/tmp/codex', serverProtocolVersion: 2, negotiatedProtocolVersion: body?.client?.protocolVersion ?? 1, capabilities: body?.capabilities ?? {} }
     const snapshot = {
       run: { id: 'run-1', prompt: 'ship together', status: 'running', provider: 'codex', baseCwd: '/tmp/codex', maxAgents: 4, leadAgentId: 'external-codex' },
       agents: [participant],
@@ -88,7 +88,19 @@ const daemon = createServer(async (request, response) => {
       return
     }
     if (body?.action === 'send_message') {
-      coordinatorMessage = { id: 'mail-1', runId: 'run-1', fromAgentId: 'external-codex', toAgentId: 'external-claude', body: body.message, createdAt: '2026-07-18T00:00:00Z' }
+      coordinatorMessage = {
+        id: 'mail-1',
+        runId: 'run-1',
+        fromAgentId: 'external-codex',
+        toAgentId: 'external-claude',
+        body: body.message,
+        kind: body.kind ?? 'request',
+        priority: body.priority ?? 'normal',
+        replyRequired: body.replyRequired === true,
+        correlationId: body.correlationId,
+        inReplyTo: body.inReplyTo,
+        createdAt: '2026-07-18T00:00:00Z',
+      }
       response.end(JSON.stringify({ ...snapshot, messages: [coordinatorMessage] }))
       return
     }
@@ -137,7 +149,7 @@ try {
     'coord_list_runs', 'coord_create_run', 'coord_join_run', 'coord_resume', 'coord_status', 'coord_wait', 'coord_create_task',
     'coord_claim_task', 'coord_read_inbox', 'coord_send_message', 'coord_request_locks',
     'coord_progress', 'coord_publish_finding', 'coord_submit_plan', 'coord_review_plan',
-    'coord_complete_task', 'coord_fail_task', 'coord_finalize_run',
+    'coord_complete_task', 'coord_handoff_task', 'coord_fail_task', 'coord_finalize_run',
   ]
   const missingTools = requiredTools.filter((name) => !names.has(name))
   if (missingTools.length > 0) {
@@ -195,6 +207,7 @@ try {
   })
   const createdPayload = JSON.parse(created.content?.[0]?.text ?? '{}')
   if (createdPayload.participant?.agentId !== 'external-codex') throw new Error('Codex CLI did not bind as Coordinator lead')
+  if (createdPayload.participant?.negotiatedProtocolVersion !== 2) throw new Error('Coordinator protocol version was not negotiated')
   if (createdPayload.participant?.token) throw new Error('Coordinator capability leaked through MCP output')
   if (createdPayload.snapshot?.events?.length || createdPayload.snapshot?.messages?.length) {
     throw new Error('Coordinator create echoed historical events or messages into the initial MCP result')
@@ -202,6 +215,10 @@ try {
   const savedLeadIdentity = JSON.parse(await readFile(leadIdentityFile, 'utf8'))
   if (savedLeadIdentity.token !== 'token-codex') throw new Error('Coordinator capability was not persisted')
   if ((await stat(leadIdentityFile)).mode & 0o077) throw new Error('Coordinator identity file is not mode 0600')
+  const createRequest = seen.find((entry) => entry.url === '/api/agent-protocol/external' && entry.body?.action === 'create_run')
+  if (createRequest?.body?.client?.protocolVersion !== 2 || !Array.isArray(createRequest?.body?.capabilities?.tools)) {
+    throw new Error('MCP bridge did not advertise its protocol version and capabilities')
+  }
 
   const waited = await client.callTool({ name: 'coord_wait', arguments: { timeout_ms: 0 } })
   const waitedPayload = JSON.parse(waited.content?.[0]?.text ?? '{}')
@@ -235,8 +252,25 @@ try {
 
     await client.callTool({
       name: 'coord_send_message',
-      arguments: { to: 'claude-cli', message: 'Please finish task-1' },
+      arguments: {
+        to: 'claude-cli',
+        message: 'Please finish task-1',
+        kind: 'review_request',
+        priority: 'urgent',
+        reply_required: true,
+        correlation_id: 'review-task-1',
+      },
     })
+    const typedMessageRequest = seen.find((entry) => (
+      entry.url === '/api/agent-protocol/external'
+      && entry.body?.action === 'send_message'
+      && entry.body?.correlationId === 'review-task-1'
+    ))
+    if (typedMessageRequest?.body?.kind !== 'review_request'
+      || typedMessageRequest?.body?.priority !== 'urgent'
+      || typedMessageRequest?.body?.replyRequired !== true) {
+      throw new Error('Typed Coordinator mailbox fields did not cross the MCP bridge')
+    }
     const inbox = await secondClient.callTool({ name: 'coord_read_inbox', arguments: {} })
     const inboxPayload = JSON.parse(inbox.content?.[0]?.text ?? '{}')
     if (inboxPayload.messages?.[0]?.body !== 'Please finish task-1') throw new Error('Coordinator mailbox did not cross CLI processes')

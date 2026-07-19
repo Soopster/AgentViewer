@@ -6,6 +6,7 @@ import {
   createExternalProtocolTask,
   failExternalProtocolTask,
   finalizeExternalProtocolRun,
+  handoffExternalProtocolTask,
   joinExternalProtocolRun,
   listRunPlaybooks,
   loadRunPlaybook,
@@ -23,7 +24,16 @@ import {
   submitExternalProtocolPlan,
   waitForExternalProtocolChange,
 } from '@/lib/agentCoordination'
-import { parseRunPlaybook, type ExternalProtocolIdentity } from '@/lib/agentProtocol'
+import {
+  EXTERNAL_COORD_PROTOCOL_VERSION,
+  parseRunPlaybook,
+  type ExternalProtocolCapabilities,
+  type ExternalProtocolClient,
+  type ExternalProtocolIdentity,
+  type ProtocolFailureClass,
+  type ProtocolMessageKind,
+  type ProtocolMessagePriority,
+} from '@/lib/agentProtocol'
 import { isAgentProvider } from '@/lib/provider'
 
 function text(value: unknown): string {
@@ -47,6 +57,35 @@ function identity(body: Record<string, unknown>): ExternalProtocolIdentity {
   const token = text(body.token)
   if (!runId || !agentId || !token) throw new Error('Coordinator participant capability is required')
   return { runId, agentId, token }
+}
+
+function negotiation(body: Record<string, unknown>): {
+  client: ExternalProtocolClient
+  capabilities: ExternalProtocolCapabilities
+} {
+  const clientRecord = body.client && typeof body.client === 'object' && !Array.isArray(body.client)
+    ? body.client as Record<string, unknown>
+    : {}
+  const capabilityRecord = body.capabilities && typeof body.capabilities === 'object' && !Array.isArray(body.capabilities)
+    ? body.capabilities as Record<string, unknown>
+    : {}
+  return {
+    client: {
+      name: text(clientRecord.name) || 'legacy-mcp-client',
+      version: optionalText(clientRecord.version),
+      protocolVersion: Number(clientRecord.protocolVersion) || 1,
+    },
+    capabilities: {
+      unattended: capabilityRecord.unattended === true || undefined,
+      sessionResume: capabilityRecord.sessionResume === true || undefined,
+      midTurnSteer: capabilityRecord.midTurnSteer === true || undefined,
+      filesystemWrite: capabilityRecord.filesystemWrite === true || undefined,
+      git: capabilityRecord.git === true || undefined,
+      browser: capabilityRecord.browser === true || undefined,
+      maxParallelTasks: Number(capabilityRecord.maxParallelTasks) || undefined,
+      tools: strings(capabilityRecord.tools),
+    },
+  }
 }
 
 export async function POST(request: Request) {
@@ -75,6 +114,7 @@ export async function POST(request: Request) {
         baseCwd: cwd,
         provider: body.provider,
         participantName: text(body.name),
+        ...negotiation(body),
         maxAgents: Number(body.maxAgents) || undefined,
         gateCommand: optionalText(body.gateCommand),
         requirePlanApproval: body.requirePlanApproval === true ? true : undefined,
@@ -88,9 +128,10 @@ export async function POST(request: Request) {
         provider: body.provider,
         participantName: text(body.name),
         cwd: text(body.cwd) || process.cwd(),
+        ...negotiation(body),
       })
     } else if (action === 'resume') {
-      result = await resumeExternalProtocolParticipant(participantIdentity!)
+      result = await resumeExternalProtocolParticipant(participantIdentity!, negotiation(body))
     } else if (action === 'status') {
       result = await readExternalProtocolStatus(participantIdentity!)
     } else if (action === 'wait') {
@@ -122,9 +163,31 @@ export async function POST(request: Request) {
         acknowledge: body.acknowledge !== false,
       })
     } else if (action === 'send_message') {
+      const kind = text(body.kind) || 'request'
+      const priority = text(body.priority) || (kind === 'status' ? 'status' : 'normal')
+      if (!['request', 'response', 'status', 'finding', 'handoff', 'review_request', 'review_result'].includes(kind)) {
+        throw new Error('Invalid message kind')
+      }
+      if (!['urgent', 'normal', 'status'].includes(priority)) throw new Error('Invalid message priority')
       result = await mutate(() => sendExternalProtocolMessage(participantIdentity!, {
         to: text(body.to),
         body: text(body.message),
+        kind: kind as ProtocolMessageKind,
+        priority: priority as ProtocolMessagePriority,
+        replyRequired: body.replyRequired === true,
+        correlationId: optionalText(body.correlationId),
+        inReplyTo: optionalText(body.inReplyTo),
+      }))
+    } else if (action === 'handoff_task') {
+      const failureClass = text(body.failureClass)
+      if (!['rate_limited', 'authentication_failed', 'context_exhausted', 'approval_blocked', 'cli_missing', 'transient_transport', 'provider_failure'].includes(failureClass)) {
+        throw new Error('Invalid provider failure class')
+      }
+      result = await mutate(() => handoffExternalProtocolTask(participantIdentity!, {
+        taskId: text(body.taskId),
+        summary: text(body.summary),
+        detail: optionalText(body.detail),
+        failureClass: failureClass as ProtocolFailureClass,
       }))
     } else if (action === 'request_locks') {
       result = await mutate(() => requestExternalProtocolLocks(participantIdentity!, strings(body.paths)))
@@ -186,7 +249,12 @@ export async function POST(request: Request) {
     } else {
       return NextResponse.json({ error: `Unknown external Coordinator action: ${action || '(missing)'}` }, { status: 400 })
     }
-    return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } })
+    return NextResponse.json(result, {
+      headers: {
+        'Cache-Control': 'no-store',
+        'X-Agent-Viewer-Coord-Protocol': String(EXTERNAL_COORD_PROTOCOL_VERSION),
+      },
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Coordinator action failed'
     const status = /capability/i.test(message) ? 403 : 400

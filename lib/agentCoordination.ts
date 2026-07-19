@@ -18,6 +18,8 @@ import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   AGENT_PROTOCOL_VERSION,
+  EXTERNAL_COORD_PROTOCOL_VERSION,
+  MIN_EXTERNAL_COORD_PROTOCOL_VERSION,
   buildLeadInterventionPreamble,
   buildLeadPlanPreamble,
   buildLeadSynthesisPreamble,
@@ -32,6 +34,8 @@ import {
   type AgentProtocolEvent,
   type CreateExternalProtocolRunParams,
   type ExternalProtocolActionable,
+  type ExternalProtocolCapabilities,
+  type ExternalProtocolClient,
   type ExternalProtocolClaimResult,
   type ExternalProtocolCompletionResult,
   type ExternalProtocolIdentity,
@@ -50,6 +54,9 @@ import {
   type ProtocolLock,
   type ProtocolLockStatus,
   type ProtocolMessage,
+  type ProtocolMessageKind,
+  type ProtocolMessagePriority,
+  type ProtocolFailureClass,
   type ProtocolPhaseRollup,
   type ProtocolRun,
   type ProtocolRunSnapshot,
@@ -71,10 +78,12 @@ type Row = Record<string, unknown>
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
 const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
 const LOCK_LEASE_MS = 20 * 60_000
-const SCHEMA_VERSION = 7
+const SCHEMA_VERSION = 8
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 const EXTERNAL_AGENT_STALE_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_STALE_MS) || 5 * 60_000)
+const STATUS_BATCH_THRESHOLD = 3
+const STATUS_BATCH_MAX_WAIT_MS = 15_000
 // One automatic re-dispatch when a teammate's turn ends mid-task; after that
 // the teammate is marked blocked and the lead is notified (doc: teammates may
 // stop on errors; the lead/user nudges or replaces them).
@@ -198,6 +207,10 @@ function initializeSchema(db: SqliteDatabase): void {
       task_id TEXT,
       status TEXT NOT NULL,
       last_seen_at TEXT,
+      client_name TEXT,
+      client_version TEXT,
+      protocol_version INTEGER NOT NULL DEFAULT 1,
+      capabilities_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (run_id, id)
@@ -262,8 +275,14 @@ function initializeSchema(db: SqliteDatabase): void {
       from_agent_id TEXT NOT NULL,
       to_agent_id TEXT NOT NULL,
       body TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'request',
+      priority TEXT NOT NULL DEFAULT 'normal',
+      reply_required INTEGER NOT NULL DEFAULT 0,
+      correlation_id TEXT,
+      in_reply_to TEXT,
       created_at TEXT NOT NULL,
-      delivered_at TEXT
+      delivered_at TEXT,
+      resolved_at TEXT
     );
 
     CREATE INDEX IF NOT EXISTS protocol_messages_run_idx ON protocol_messages(run_id, to_agent_id, delivered_at);
@@ -314,6 +333,8 @@ function initializeSchema(db: SqliteDatabase): void {
 // external supervisors safe to resume after dirty checkouts or transport loss.
 // v6 → v7: playbook runs — tasks carry a phase label for barrier grouping and
 // workflow-style progress rollups.
+// v7 → v8: external client negotiation/capabilities plus typed mailbox intent,
+// correlations, reply requirements, and resolution state.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -340,6 +361,25 @@ function migrateSchema(db: SqliteDatabase): void {
     db.exec('ALTER TABLE protocol_tasks ADD COLUMN phase TEXT')
   } catch {
     // column already exists
+  }
+  const v8Alters = [
+    'ALTER TABLE protocol_agents ADD COLUMN client_name TEXT',
+    'ALTER TABLE protocol_agents ADD COLUMN client_version TEXT',
+    'ALTER TABLE protocol_agents ADD COLUMN protocol_version INTEGER NOT NULL DEFAULT 1',
+    "ALTER TABLE protocol_agents ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE protocol_messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'request'",
+    "ALTER TABLE protocol_messages ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'",
+    'ALTER TABLE protocol_messages ADD COLUMN reply_required INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE protocol_messages ADD COLUMN correlation_id TEXT',
+    'ALTER TABLE protocol_messages ADD COLUMN in_reply_to TEXT',
+    'ALTER TABLE protocol_messages ADD COLUMN resolved_at TEXT',
+  ]
+  for (const statement of v8Alters) {
+    try {
+      db.exec(statement)
+    } catch {
+      // column already exists
+    }
   }
 }
 
@@ -484,6 +524,16 @@ function parseJsonArray(value: unknown): string[] {
   }
 }
 
+function parseJsonObject<T>(value: unknown): T | undefined {
+  if (typeof value !== 'string' || !value) return undefined
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as T : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function rowToRun(row: Row): ProtocolRun {
   return {
     id: String(row.id),
@@ -502,6 +552,8 @@ function rowToRun(row: Row): ProtocolRun {
 }
 
 function rowToAgent(row: Row): ProtocolAgent {
+  const protocolVersion = Number(row.protocol_version) || MIN_EXTERNAL_COORD_PROTOCOL_VERSION
+  const capabilities = parseJsonObject<ExternalProtocolCapabilities>(row.capabilities_json)
   return {
     id: String(row.id),
     runId: String(row.run_id),
@@ -514,6 +566,14 @@ function rowToAgent(row: Row): ProtocolAgent {
     taskId: typeof row.task_id === 'string' ? row.task_id : undefined,
     status: String(row.status) as ProtocolAgentStatus,
     lastSeenAt: typeof row.last_seen_at === 'string' ? row.last_seen_at : undefined,
+    client: typeof row.client_name === 'string' && row.client_name
+      ? {
+          name: row.client_name,
+          version: typeof row.client_version === 'string' && row.client_version ? row.client_version : undefined,
+          protocolVersion,
+        }
+      : undefined,
+    capabilities,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
@@ -551,14 +611,22 @@ function rowToLock(row: Row): ProtocolLock {
 }
 
 function rowToMessage(row: Row): ProtocolMessage {
+  const kind = typeof row.kind === 'string' ? row.kind as ProtocolMessageKind : 'request'
+  const priority = typeof row.priority === 'string' ? row.priority as ProtocolMessagePriority : 'normal'
   return {
     id: String(row.id),
     runId: String(row.run_id),
     fromAgentId: String(row.from_agent_id),
     toAgentId: String(row.to_agent_id),
     body: String(row.body),
+    kind,
+    priority,
+    replyRequired: row.reply_required === 1 || row.reply_required === true,
+    correlationId: typeof row.correlation_id === 'string' ? row.correlation_id : undefined,
+    inReplyTo: typeof row.in_reply_to === 'string' ? row.in_reply_to : undefined,
     createdAt: String(row.created_at),
     deliveredAt: typeof row.delivered_at === 'string' ? row.delivered_at : undefined,
+    resolvedAt: typeof row.resolved_at === 'string' ? row.resolved_at : undefined,
   }
 }
 
@@ -635,6 +703,44 @@ function normalizeParticipantName(value: string): string {
   return name
 }
 
+function negotiateExternalClient(
+  client: ExternalProtocolClient | undefined,
+  capabilities: ExternalProtocolCapabilities | undefined,
+): { client: ExternalProtocolClient; capabilities: ExternalProtocolCapabilities } {
+  const protocolVersion = client?.protocolVersion ?? MIN_EXTERNAL_COORD_PROTOCOL_VERSION
+  if (!Number.isInteger(protocolVersion) || protocolVersion < MIN_EXTERNAL_COORD_PROTOCOL_VERSION) {
+    throw new Error(`Unsupported Coordinator protocol version: ${protocolVersion}`)
+  }
+  if (protocolVersion > EXTERNAL_COORD_PROTOCOL_VERSION) {
+    throw new Error(
+      `Coordinator client protocol ${protocolVersion} is newer than server protocol ${EXTERNAL_COORD_PROTOCOL_VERSION}; upgrade Agent Viewer`,
+    )
+  }
+  const tools = Array.isArray(capabilities?.tools)
+    ? [...new Set(capabilities.tools.map((entry) => entry.trim()).filter(Boolean))].slice(0, 100)
+    : undefined
+  const maxParallelTasks = capabilities?.maxParallelTasks === undefined
+    ? undefined
+    : Math.max(1, Math.min(32, Math.trunc(capabilities.maxParallelTasks)))
+  return {
+    client: {
+      name: client?.name.trim().slice(0, 80) || 'legacy-mcp-client',
+      version: client?.version?.trim().slice(0, 80) || undefined,
+      protocolVersion,
+    },
+    capabilities: JSON.parse(JSON.stringify({
+      unattended: capabilities?.unattended === true || undefined,
+      sessionResume: capabilities?.sessionResume === true || undefined,
+      midTurnSteer: capabilities?.midTurnSteer === true || undefined,
+      filesystemWrite: capabilities?.filesystemWrite === true || undefined,
+      git: capabilities?.git === true || undefined,
+      browser: capabilities?.browser === true || undefined,
+      maxParallelTasks,
+      tools,
+    })) as ExternalProtocolCapabilities,
+  }
+}
+
 function hashParticipantToken(token: string): Buffer {
   return createHash('sha256').update(token).digest()
 }
@@ -662,6 +768,30 @@ function requireExternalParticipantSync(db: SqliteDatabase, identity: ExternalPr
 // External responses ride MCP tool results into a model's context; a tighter
 // event window than the UI's keeps every mutation response affordable.
 const EXTERNAL_EVENT_WINDOW = 20
+
+function statusMessageGroupKey(row: Row): string {
+  return `${String(row.from_agent_id ?? '')}\0${String(row.correlation_id ?? '')}`
+}
+
+function readyStatusMessageGroups(rows: Row[], now = Date.now()): Set<string> {
+  const groups = new Map<string, Row[]>()
+  for (const row of rows) {
+    if (row.priority !== 'status' && row.kind !== 'status') continue
+    const key = statusMessageGroupKey(row)
+    const group = groups.get(key) ?? []
+    group.push(row)
+    groups.set(key, group)
+  }
+  const ready = new Set<string>()
+  for (const [key, group] of groups) {
+    const oldest = group.reduce((value, row) => {
+      const created = typeof row.created_at === 'string' ? new Date(row.created_at).getTime() : now
+      return Math.min(value, created)
+    }, Number.POSITIVE_INFINITY)
+    if (group.length >= STATUS_BATCH_THRESHOLD || oldest <= now - STATUS_BATCH_MAX_WAIT_MS) ready.add(key)
+  }
+  return ready
+}
 
 function externalSnapshotSync(db: SqliteDatabase, runId: string, agentId: string): ProtocolRunSnapshot {
   const snapshot = readSnapshotSync(db, runId)
@@ -691,14 +821,25 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
   const claimable = tasks.filter((task) => (
     task.status === 'pending' && !task.ownerAgentId && taskDepsCompleted(task, tasksById)
   ))
-  const inboxCount = Number((db.prepare(
-    'SELECT COUNT(*) AS n FROM protocol_messages WHERE run_id = ? AND to_agent_id = ? AND delivered_at IS NULL',
-  ).get(runId, agentId) as Row | undefined)?.n) || 0
+  const mailbox = db.prepare(`
+    SELECT kind, priority, created_at, from_agent_id, correlation_id FROM protocol_messages
+    WHERE run_id = ? AND to_agent_id = ? AND delivered_at IS NULL
+  `).all(runId, agentId) as Row[]
+  const statusRows = mailbox.filter((row) => row.priority === 'status' || row.kind === 'status')
+  const ordinaryRows = mailbox.filter((row) => row.priority !== 'status' && row.kind !== 'status')
+  const readyStatusGroups = readyStatusMessageGroups(mailbox)
+  const replyRequiredCount = Number((db.prepare(`
+    SELECT COUNT(*) AS n FROM protocol_messages
+    WHERE run_id = ? AND to_agent_id = ? AND reply_required = 1 AND resolved_at IS NULL
+  `).get(runId, agentId) as Row | undefined)?.n) || 0
   const myTaskRow = agent?.taskId ? tasksById.get(agent.taskId) : undefined
   return {
     runStatus: run.status,
     claimableTasks: claimable.map((task) => ({ id: task.id, title: task.title })),
-    inboxCount,
+    inboxCount: ordinaryRows.length + readyStatusGroups.size,
+    urgentCount: ordinaryRows.filter((row) => row.priority === 'urgent').length,
+    statusCount: statusRows.length,
+    replyRequiredCount,
     plansAwaitingReview: agent?.role === 'lead'
       ? tasks.filter((task) => task.status === 'planned').map((task) => task.id)
       : [],
@@ -735,16 +876,20 @@ function issueParticipant(
     cwd: string
     branch: string
     agentId?: string
+    client?: ExternalProtocolClient
+    capabilities?: ExternalProtocolCapabilities
   },
 ): ExternalProtocolParticipant {
+  const negotiated = negotiateExternalClient(params.client, params.capabilities)
   const agentId = params.agentId ?? `external-${randomUUID()}`
   const token = randomBytes(32).toString('base64url')
   const ts = nowIso()
   db.prepare(`
     INSERT INTO protocol_agents (
       id, run_id, name, role, provider, session_id, worktree_path, worktree_branch,
-      task_id, status, last_seen_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ready', ?, ?, ?)
+      task_id, status, last_seen_at, client_name, client_version, protocol_version,
+      capabilities_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ready', ?, ?, ?, ?, ?, ?, ?)
   `).run(
     agentId,
     params.runId,
@@ -755,6 +900,10 @@ function issueParticipant(
     params.cwd,
     params.branch,
     ts,
+    negotiated.client.name,
+    negotiated.client.version ?? null,
+    negotiated.client.protocolVersion,
+    JSON.stringify(negotiated.capabilities),
     ts,
     ts,
   )
@@ -778,6 +927,9 @@ function issueParticipant(
     role: params.role,
     provider: params.provider,
     cwd: params.cwd,
+    serverProtocolVersion: EXTERNAL_COORD_PROTOCOL_VERSION,
+    negotiatedProtocolVersion: negotiated.client.protocolVersion,
+    capabilities: negotiated.capabilities,
   }
 }
 
@@ -884,6 +1036,8 @@ export async function createExternalProtocolRun(
         provider: params.provider,
         cwd: worktree.cwd,
         branch: worktree.branch,
+        client: params.client,
+        capabilities: params.capabilities,
       })
       if (playbook) seedPlaybookTasksSync(db, runId, agentId, playbook, params.playbookArgs)
       db.exec('COMMIT')
@@ -958,6 +1112,8 @@ export async function joinExternalProtocolRun(
         provider: params.provider,
         cwd: worktree.cwd,
         branch: worktree.branch,
+        client: params.client,
+        capabilities: params.capabilities,
       })
       db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), run.id)
       db.exec('COMMIT')
@@ -973,15 +1129,41 @@ export async function joinExternalProtocolRun(
 
 export async function resumeExternalProtocolParticipant(
   identity: ExternalProtocolIdentity,
+  negotiation?: { client?: ExternalProtocolClient; capabilities?: ExternalProtocolCapabilities },
 ): Promise<ExternalProtocolParticipantResult> {
   const db = await getDatabase()
-  const agent = requireExternalParticipantSync(db, identity)
+  let agent = requireExternalParticipantSync(db, identity)
+  if (negotiation?.client || negotiation?.capabilities) {
+    const negotiated = negotiateExternalClient(negotiation.client, negotiation.capabilities)
+    await enqueueWrite((writeDb) => {
+      requireExternalParticipantSync(writeDb, identity)
+      writeDb.prepare(`
+        UPDATE protocol_agents
+        SET client_name = ?, client_version = ?, protocol_version = ?, capabilities_json = ?, updated_at = ?
+        WHERE run_id = ? AND id = ?
+      `).run(
+        negotiated.client.name,
+        negotiated.client.version ?? null,
+        negotiated.client.protocolVersion,
+        JSON.stringify(negotiated.capabilities),
+        nowIso(),
+        identity.runId,
+        identity.agentId,
+      )
+    })
+    const refreshed = db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? AND id = ?')
+      .get(identity.runId, identity.agentId) as Row | undefined
+    if (refreshed) agent = rowToAgent(refreshed)
+  }
   const participant: ExternalProtocolParticipant = {
     ...identity,
     name: agent.name,
     role: agent.role,
     provider: agent.provider,
     cwd: agent.worktreePath,
+    serverProtocolVersion: EXTERNAL_COORD_PROTOCOL_VERSION,
+    negotiatedProtocolVersion: agent.client?.protocolVersion ?? MIN_EXTERNAL_COORD_PROTOCOL_VERSION,
+    capabilities: agent.capabilities ?? {},
   }
   return {
     participant,
@@ -1387,7 +1569,7 @@ export async function readExternalProtocolInbox(
         rows = db.prepare(`
           SELECT * FROM protocol_messages
           WHERE run_id = ? AND to_agent_id = ?
-            AND (created_at > ? OR (created_at = ? AND id > ?))
+            AND (delivered_at IS NULL OR created_at > ? OR (created_at = ? AND id > ?))
           ORDER BY created_at ASC, id ASC
           LIMIT ?
         `).all(identity.runId, identity.agentId, cursor.created_at, cursor.created_at, params.after, limit) as Row[]
@@ -1402,30 +1584,85 @@ export async function readExternalProtocolInbox(
         LIMIT ?
       `).all(identity.runId, identity.agentId, limit) as Row[]
     }
-    const messages = rows.map(rowToMessage)
-    if (params.acknowledge !== false && messages.length > 0) {
+    const readyStatusGroups = readyStatusMessageGroups(rows)
+    rows = rows.filter((row) => (
+      (row.priority !== 'status' && row.kind !== 'status') || readyStatusGroups.has(statusMessageGroupKey(row))
+    ))
+    const rawMessages = rows.map(rowToMessage)
+    if (params.acknowledge !== false && rawMessages.length > 0) {
       const acknowledgedAt = nowIso()
       const acknowledge = db.prepare(
         'UPDATE protocol_messages SET delivered_at = COALESCE(delivered_at, ?) WHERE run_id = ? AND id = ? AND to_agent_id = ?',
       )
-      for (const message of messages) {
+      for (const message of rawMessages) {
         acknowledge.run(acknowledgedAt, identity.runId, message.id, identity.agentId)
       }
     }
-    return { messages, nextCursor: messages.at(-1)?.id ?? params.after ?? null }
+    return {
+      messages: batchStatusMessages(rawMessages),
+      nextCursor: rawMessages.at(-1)?.id ?? params.after ?? null,
+    }
   })
+}
+
+function batchStatusMessages(messages: ProtocolMessage[]): ProtocolMessage[] {
+  const groups = new Map<string, ProtocolMessage[]>()
+  for (const message of messages) {
+    if (message.priority !== 'status' && message.kind !== 'status') continue
+    const key = `${message.fromAgentId}\0${message.correlationId ?? ''}`
+    const group = groups.get(key) ?? []
+    group.push(message)
+    groups.set(key, group)
+  }
+  const emitted = new Set<string>()
+  const result: ProtocolMessage[] = []
+  for (const message of messages) {
+    if (message.priority !== 'status' && message.kind !== 'status') {
+      result.push(message)
+      continue
+    }
+    const key = `${message.fromAgentId}\0${message.correlationId ?? ''}`
+    if (emitted.has(key)) continue
+    emitted.add(key)
+    const group = groups.get(key) ?? [message]
+    const latest = group.at(-1)!
+    result.push({
+      ...message,
+      id: `status-summary:${latest.id}`,
+      kind: 'status_summary',
+      priority: 'normal',
+      body: group.length === 1
+        ? message.body
+        : `[${group.length} status updates]\n${group.map((entry) => `- ${entry.body}`).join('\n')}`,
+      createdAt: latest.createdAt,
+      batchedMessageIds: group.map((entry) => entry.id),
+    })
+  }
+  return result
 }
 
 export async function sendExternalProtocolMessage(
   identity: ExternalProtocolIdentity,
-  params: { to: string; body: string },
+  params: {
+    to: string
+    body: string
+    kind?: ProtocolMessageKind
+    priority?: ProtocolMessagePriority
+    replyRequired?: boolean
+    correlationId?: string
+    inReplyTo?: string
+  },
 ): Promise<ExternalProtocolMutationResult> {
   const db = await getDatabase()
   requireExternalParticipantSync(db, identity)
   const body = params.body.trim()
   if (!body) throw new Error('message body is required')
-  if (resolveRecipientsSync(db, identity.runId, identity.agentId, params.to).length === 0) {
+  const recipients = resolveRecipientsSync(db, identity.runId, identity.agentId, params.to)
+  if (recipients.length === 0) {
     throw new Error(`Coordinator message recipient not found: ${params.to}`)
+  }
+  if (params.inReplyTo && recipients.length !== 1) {
+    throw new Error('A correlated reply must address exactly one participant')
   }
   await appendProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
@@ -1434,6 +1671,13 @@ export async function sendExternalProtocolMessage(
     type: 'message',
     to: params.to,
     summary: body,
+    payload: {
+      kind: params.kind ?? 'request',
+      priority: params.priority ?? (params.kind === 'status' ? 'status' : 'normal'),
+      replyRequired: params.replyRequired === true,
+      correlationId: params.correlationId,
+      inReplyTo: params.inReplyTo,
+    },
   })
   return externalMutationResult(identity)
 }
@@ -1745,6 +1989,77 @@ export async function releaseExternalProtocolTask(
     }
   })
   notifyRunChanged(identity.runId)
+  return result
+}
+
+/**
+ * Persist a clean checkpoint and atomically return work to the board after a
+ * provider-level failure. Unlike task failure, handoff preserves the task as
+ * pending so a different CLI can resume it from the durable event/mailbox note.
+ */
+export async function handoffExternalProtocolTask(
+  identity: ExternalProtocolIdentity,
+  params: {
+    taskId: string
+    summary: string
+    detail?: string
+    failureClass: ProtocolFailureClass
+  },
+): Promise<ExternalProtocolReleaseResult> {
+  const delivery: { ids: string[] } = { ids: [] }
+  const result = await enqueueWrite((db) => {
+    const agent = requireExternalParticipantSync(db, identity)
+    const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
+      .get(identity.runId, params.taskId) as Row | undefined
+    if (!taskRow) throw new Error('Coordinator task not found')
+    const task = rowToTask(taskRow)
+    if (task.ownerAgentId !== agent.id) throw new Error('You do not own that task')
+    const summary = params.summary.trim() || `${task.id} checkpointed for handoff`
+    const detail = params.detail?.trim() || undefined
+    const ts = nowIso()
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.prepare("UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, updated_at = ? WHERE run_id = ? AND id = ?")
+        .run(ts, identity.runId, task.id)
+      db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'")
+        .run(ts, identity.runId, agent.id, task.id)
+      db.prepare("UPDATE protocol_agents SET task_id = NULL, status = 'blocked', last_seen_at = ?, updated_at = ? WHERE run_id = ? AND id = ?")
+        .run(ts, ts, identity.runId, agent.id)
+      insertEventSync(db, {
+        version: AGENT_PROTOCOL_VERSION,
+        runId: identity.runId,
+        agentId: agent.id,
+        type: 'handoff',
+        taskId: task.id,
+        summary,
+        detail,
+        payload: { failureClass: params.failureClass, provider: agent.provider, checkpoint: true },
+        timestamp: ts,
+      })
+      for (const leadId of resolveRecipientsSync(db, identity.runId, agent.id, 'lead')) {
+        delivery.ids.push(insertMessageSync(db, {
+          runId: identity.runId,
+          fromAgentId: agent.id,
+          toAgentId: leadId,
+          body: [summary, detail, `Failure class: ${params.failureClass}`, `${task.id} is available for reassignment.`]
+            .filter(Boolean).join('\n\n'),
+          kind: 'handoff',
+          priority: 'urgent',
+          ts,
+        }))
+      }
+      db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(ts, identity.runId)
+      db.exec('COMMIT')
+      const updated = rowToTask(db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
+        .get(identity.runId, task.id) as Row)
+      return { ...externalMutationResultSync(db, identity.runId, identity.agentId, updated), task: updated }
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  })
+  notifyRunChanged(identity.runId)
+  if (delivery.ids.length > 0) void deliverMessagesLive(identity.runId, delivery.ids).catch(() => {})
   return result
 }
 
@@ -2187,12 +2502,36 @@ function insertMessageSync(db: SqliteDatabase, params: {
   toAgentId: string
   body: string
   ts: string
+  kind?: ProtocolMessageKind
+  priority?: ProtocolMessagePriority
+  replyRequired?: boolean
+  correlationId?: string
+  inReplyTo?: string
 }): string {
   const id = randomUUID()
+  let correlationId = params.correlationId
+  if (params.inReplyTo) {
+    const original = db.prepare(`
+      SELECT * FROM protocol_messages
+      WHERE id = ? AND run_id = ? AND to_agent_id = ? AND from_agent_id = ?
+    `).get(params.inReplyTo, params.runId, params.fromAgentId, params.toAgentId) as Row | undefined
+    if (!original) throw new Error(`Reply target not found or not addressed to this participant: ${params.inReplyTo}`)
+    correlationId ||= typeof original.correlation_id === 'string' ? original.correlation_id : String(original.id)
+    db.prepare('UPDATE protocol_messages SET resolved_at = COALESCE(resolved_at, ?) WHERE id = ?')
+      .run(params.ts, params.inReplyTo)
+  }
+  const kind = params.kind ?? 'request'
+  const priority = params.priority ?? (kind === 'status' ? 'status' : 'normal')
   db.prepare(`
-    INSERT INTO protocol_messages (id, run_id, from_agent_id, to_agent_id, body, created_at, delivered_at)
-    VALUES (?, ?, ?, ?, ?, ?, NULL)
-  `).run(id, params.runId, params.fromAgentId, params.toAgentId, params.body, params.ts)
+    INSERT INTO protocol_messages (
+      id, run_id, from_agent_id, to_agent_id, body, kind, priority, reply_required,
+      correlation_id, in_reply_to, created_at, delivered_at, resolved_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+  `).run(
+    id, params.runId, params.fromAgentId, params.toAgentId, params.body,
+    kind, priority, params.replyRequired ? 1 : 0, correlationId ?? (params.replyRequired ? id : null),
+    params.inReplyTo ?? null, params.ts,
+  )
   return id
 }
 
@@ -2350,6 +2689,8 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
           .run('released', ts, event.lockId, event.runId, event.agentId)
       } else if (event.type === 'message') {
         const body = [event.summary, event.detail].filter(Boolean).join(' — ') || '(empty message)'
+        const messageKind = typeof event.payload?.kind === 'string' ? event.payload.kind as ProtocolMessageKind : 'request'
+        const messagePriority = typeof event.payload?.priority === 'string' ? event.payload.priority as ProtocolMessagePriority : undefined
         for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, event.to)) {
           newMessageIds.push(insertMessageSync(db, {
             runId: event.runId,
@@ -2357,6 +2698,11 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
             toAgentId: recipient,
             body,
             ts,
+            kind: messageKind,
+            priority: messagePriority,
+            replyRequired: event.payload?.replyRequired === true,
+            correlationId: typeof event.payload?.correlationId === 'string' ? event.payload.correlationId : undefined,
+            inReplyTo: typeof event.payload?.inReplyTo === 'string' ? event.payload.inReplyTo : undefined,
           }))
         }
       } else if (event.type === 'plan.approved' || event.type === 'plan.rejected') {

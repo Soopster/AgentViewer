@@ -10,9 +10,12 @@ import { fileURLToPath } from 'node:url'
 const testDir = await mkdtemp(path.join(tmpdir(), 'agent-viewer-coord-worker-'))
 const fakeCodex = path.join(testDir, 'fake-codex.mjs')
 const failingCodex = path.join(testDir, 'failing-codex.mjs')
+const rateLimitedCodex = path.join(testDir, 'rate-limited-codex.mjs')
 const identityFile = path.join(testDir, 'identity.json')
 const terminalIdentityFile = path.join(testDir, 'terminal-identity.json')
 const onceFailureIdentityFile = path.join(testDir, 'once-failure-identity.json')
+const handoffIdentityFile = path.join(testDir, 'handoff-identity.json')
+const coordHome = path.join(testDir, 'coord-home')
 const codexArgsFile = path.join(testDir, 'codex-args.json')
 await writeFile(fakeCodex, `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs'
@@ -25,6 +28,11 @@ await writeFile(failingCodex, `#!/usr/bin/env node
 process.exit(1)
 `)
 await chmod(failingCodex, 0o700)
+await writeFile(rateLimitedCodex, `#!/usr/bin/env node
+console.error('429 rate limit exceeded; quota window exhausted')
+process.exit(1)
+`)
+await chmod(rateLimitedCodex, 0o700)
 await writeFile(path.join(testDir, '.gitignore'), '.agent-viewer-data/\n')
 await writeFile(path.join(testDir, 'README.md'), 'worker smoke\n')
 execFileSync('git', ['init', '-q'], { cwd: testDir })
@@ -34,6 +42,19 @@ execFileSync('git', ['add', '.gitignore', 'README.md'], { cwd: testDir })
 execFileSync('git', ['commit', '-qm', 'baseline'], { cwd: testDir })
 
 const requests = []
+let handoffMode = false
+
+function runNode(args, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('error', reject)
+    child.on('exit', (code) => code === 0 ? resolve(stdout) : reject(new Error(`command exited ${code}: ${stderr || stdout}`)))
+  })
+}
 const snapshot = {
   run: { id: 'run-worker', prompt: 'smoke goal', status: 'running', provider: 'codex', baseCwd: testDir, maxAgents: 4, leadAgentId: 'lead-worker' },
   agents: [], tasks: [], locks: [], messages: [], events: [],
@@ -41,9 +62,10 @@ const snapshot = {
 const daemon = createServer(async (request, response) => {
   let raw = ''
   for await (const chunk of request) raw += chunk
-  const body = JSON.parse(raw)
+  const body = raw ? JSON.parse(raw) : {}
   requests.push(body)
   response.setHeader('Content-Type', 'application/json')
+  response.setHeader('X-Agent-Viewer-Coord-Protocol', '2')
   if (body.action === 'join_run') {
     response.end(JSON.stringify({
       participant: {
@@ -62,8 +84,22 @@ const daemon = createServer(async (request, response) => {
       snapshot,
       inbox: { messages: [], nextCursor: null },
       events: [],
-      actionable: { runStatus: snapshot.run.status, inboxCount: 0, claimableTasks: [], plansAwaitingReview: [], myTask: null, allTasksTerminal: snapshot.run.status === 'completed' },
+      actionable: {
+        runStatus: snapshot.run.status,
+        inboxCount: 0,
+        urgentCount: 0,
+        statusCount: 0,
+        replyRequiredCount: 0,
+        claimableTasks: [],
+        plansAwaitingReview: [],
+        myTask: handoffMode ? { id: 'task-handoff', status: 'in_progress', planState: 'approved' } : null,
+        allTasksTerminal: snapshot.run.status === 'completed',
+      },
     }))
+    return
+  }
+  if (body.action === 'handoff_task') {
+    response.end(JSON.stringify({ runStatus: 'running', task: { id: body.taskId, status: 'pending' } }))
     return
   }
   response.end(JSON.stringify(snapshot))
@@ -79,7 +115,7 @@ await new Promise((resolve, reject) => {
     worker, '--join', 'run-worker', '--name', 'worker-smoke', '--provider', 'codex',
     '--attach', String(address.port), '--cwd', testDir, '--once', '--identity', identityFile,
   ], {
-    env: { ...process.env, CODEX_PATH: fakeCodex, CODEX_ARGS_FILE: codexArgsFile },
+    env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, CODEX_PATH: fakeCodex, CODEX_ARGS_FILE: codexArgsFile },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let stderr = ''
@@ -93,6 +129,9 @@ if (state.token !== 'worker-secret') throw new Error('worker did not persist its
 if (state.providerSessionId !== '019-worker-smoke') throw new Error('worker did not persist the Codex session id')
 if ((await stat(identityFile)).mode & 0o077) throw new Error('worker identity is not mode 0600')
 if (requests[0]?.action !== 'join_run') throw new Error('worker did not join the Coordinator run')
+if (requests[0]?.client?.protocolVersion !== 2 || requests[0]?.capabilities?.unattended !== true) {
+  throw new Error('worker did not negotiate protocol v2 with unattended capabilities')
+}
 if (!state.cwd.includes(`${path.sep}coord-worktrees${path.sep}`)) throw new Error('joined worker did not use an isolated worktree')
 const codexArgs = JSON.parse(await readFile(codexArgsFile, 'utf8'))
 const approvalConfigIndex = codexArgs.indexOf('mcp_servers.agent-viewer.default_tools_approval_mode="approve"')
@@ -109,7 +148,7 @@ await new Promise((resolve, reject) => {
     worker, '--join', 'run-worker', '--name', 'terminal-worker', '--provider', 'codex',
     '--attach', String(address.port), '--cwd', testDir, '--shared', '--identity', terminalIdentityFile,
   ], {
-    env: { ...process.env, CODEX_PATH: failingCodex },
+    env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, CODEX_PATH: failingCodex },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let stderr = ''
@@ -129,7 +168,7 @@ await new Promise((resolve, reject) => {
     worker, '--join', 'run-worker', '--name', 'once-failure-worker', '--provider', 'codex',
     '--attach', String(address.port), '--cwd', testDir, '--shared', '--once', '--identity', onceFailureIdentityFile,
   ], {
-    env: { ...process.env, CODEX_PATH: failingCodex },
+    env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, CODEX_PATH: failingCodex },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let stderr = ''
@@ -141,6 +180,66 @@ await new Promise((resolve, reject) => {
     else resolve()
   })
 })
+
+// A classified durable provider failure with owned work checkpoints and
+// hands the task back instead of entering the retry loop.
+handoffMode = true
+await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [
+    worker, '--join', 'run-worker', '--name', 'handoff-worker', '--provider', 'codex',
+    '--attach', String(address.port), '--cwd', testDir, '--shared', '--once', '--identity', handoffIdentityFile,
+  ], {
+    env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, CODEX_PATH: rateLimitedCodex },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stderr = ''
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  child.on('error', reject)
+  child.on('exit', (code) => code === 0
+    ? resolve()
+    : reject(new Error(`handoff worker exited ${code}: ${stderr}`)))
+})
+const handoffRequest = requests.find((request) => request.action === 'handoff_task')
+if (handoffRequest?.taskId !== 'task-handoff' || handoffRequest?.failureClass !== 'rate_limited') {
+  throw new Error('classified provider failure did not trigger an atomic task handoff')
+}
+
+// Registry, logs, restart, and read-only doctor are real CLI surfaces.
+const launcher = fileURLToPath(new URL('../bin/agent-viewer.mjs', import.meta.url))
+const adminEnv = {
+  ...process.env,
+  AGENT_VIEWER_COORD_HOME: coordHome,
+  CODEX_PATH: fakeCodex,
+  CLAUDE_PATH: fakeCodex,
+  CODEX_ARGS_FILE: codexArgsFile,
+}
+const workerList = JSON.parse(execFileSync(process.execPath, [launcher, 'coord', 'workers', '--json'], {
+  env: adminEnv,
+  encoding: 'utf8',
+}))
+if (!workerList.some((record) => record.identityFile === identityFile && record.logFile)) {
+  throw new Error('coord workers omitted the persistent worker registration')
+}
+const logOutput = execFileSync(process.execPath, [launcher, 'coord', 'logs', identityFile, '-n', '20'], {
+  env: adminEnv,
+  encoding: 'utf8',
+})
+if (!logOutput.includes('worker starting') || !logOutput.includes('worker exiting')) {
+  throw new Error('coord logs did not read the registered worker lifecycle log')
+}
+const doctor = JSON.parse(await runNode([
+  launcher, 'coord', 'doctor', '--json', '--attach', String(address.port), '--identity', identityFile,
+], adminEnv))
+if (!doctor.ok || doctor.checks?.protocol?.serverExpected !== 2) {
+  throw new Error('coord doctor did not report a healthy negotiated setup')
+}
+snapshot.run.status = 'completed'
+const restartOutput = execFileSync(process.execPath, [launcher, 'coord', 'restart', identityFile], {
+  env: adminEnv,
+  encoding: 'utf8',
+})
+if (!restartOutput.includes('Restarted')) throw new Error('coord restart did not relaunch the selected worker')
+await new Promise((resolve) => setTimeout(resolve, 750))
 
 daemon.close()
 

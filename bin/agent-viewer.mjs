@@ -92,6 +92,10 @@ Modes:
   web        Launch the Next.js web app
   mcp        Run the Claude/Codex stdio MCP bridge
   coord worker  Run an autonomous bounded Codex/Claude Coordinator worker
+  coord doctor  Diagnose daemon, CLI, identity, protocol, and worker health
+  coord workers List persistent Coordinator worker registrations
+  coord restart Restart a registered worker by name, id, or identity file
+  coord logs    Read or follow a registered worker log
 
 Options:
   -l, --legacy         Launch the legacy Ink terminal app
@@ -107,6 +111,8 @@ CLI MCP:
 Autonomous Coordinator:
   agent-viewer coord worker --start "goal" --name lead --provider codex --attach 3000
   agent-viewer coord worker --join <run-id> --name claude-1 --provider claude --attach 3000
+  agent-viewer coord doctor --json --attach 3000
+  agent-viewer coord workers --json
 `)
 }
 
@@ -262,6 +268,12 @@ if (command === '-h' || command === '--help' || command === 'help') {
 } else if (command === 'coord' && args[1] === 'worker') {
   const entrypoint = fileURLToPath(new URL('./agent-viewer-coord-worker.mjs', import.meta.url))
   const child = spawn(process.execPath, [entrypoint, ...args.slice(2)], { stdio: 'inherit' })
+  child.on('error', (error) => { throw error })
+  forwardSignals(child)
+  trackExit(child)
+} else if (command === 'coord' && ['doctor', 'workers', 'restart', 'logs'].includes(args[1])) {
+  const entrypoint = fileURLToPath(new URL('./agent-viewer-coord-admin.mjs', import.meta.url))
+  const child = spawn(process.execPath, [entrypoint, ...args.slice(1)], { stdio: 'inherit' })
   child.on('error', (error) => { throw error })
   forwardSignals(child)
   trackExit(child)

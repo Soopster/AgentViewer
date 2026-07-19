@@ -8,6 +8,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+const EXTERNAL_COORD_PROTOCOL_VERSION = 2
 const requestIdField = z.string().min(1).max(160).optional().describe('Stable idempotency key; reuse the same value when retrying this mutation')
 const baseUrl = normalizeBaseUrl(
   process.env.AGENT_VIEWER_MCP_URL
@@ -23,6 +24,18 @@ let coordinatorIdentity = (() => {
   const token = process.env.AGENT_VIEWER_COORD_TOKEN?.trim()
   return runId && agentId && token ? { runId, agentId, token } : null
 })()
+
+function coordinatorNegotiation() {
+  return {
+    client: { name: 'agent-viewer-mcp', version: '1.3.0', protocolVersion: EXTERNAL_COORD_PROTOCOL_VERSION },
+    capabilities: {
+      unattended: process.env.AGENT_VIEWER_COORD_WORKER === '1',
+      sessionResume: true,
+      maxParallelTasks: 1,
+      tools: ['coord_*'],
+    },
+  }
+}
 
 if (!coordinatorIdentity && coordinatorIdentityFile) {
   try {
@@ -164,7 +177,7 @@ async function coordinatorRequest(action, payload = {}, requireIdentity = true) 
 }
 
 const server = new McpServer(
-  { name: 'agent-viewer', version: '1.2.0' },
+  { name: 'agent-viewer', version: '1.3.0' },
   {
     instructions: [
       'Agent Viewer Coordinator is a shared multi-CLI task board and mailbox.',
@@ -337,6 +350,7 @@ server.registerTool('coord_create_run', {
     playbookName: playbook_name,
     playbook,
     args,
+    ...coordinatorNegotiation(),
   }, false))
   return textResult(result)
 })
@@ -379,6 +393,7 @@ server.registerTool('coord_join_run', {
     name,
     provider: provider ?? 'codex',
     cwd: cwd ?? bridgeCwd,
+    ...coordinatorNegotiation(),
   }, false))
   return textResult(result)
 })
@@ -393,7 +408,7 @@ server.registerTool('coord_resume', {
 }, async ({ run_id, agent_id, token }) => {
   coordinatorIdentity = { runId: run_id, agentId: agent_id, token }
   try {
-    const result = await bindCoordinatorParticipant(await coordinatorRequest('resume'))
+    const result = await bindCoordinatorParticipant(await coordinatorRequest('resume', coordinatorNegotiation()))
     return textResult(result)
   } catch (error) {
     coordinatorIdentity = null
@@ -472,13 +487,44 @@ server.registerTool('coord_read_inbox', {
 })))
 
 server.registerTool('coord_send_message', {
-  description: 'Send a direct message to a teammate name, agent id, lead, or all participants.',
+  description: 'Send a typed direct message. Status messages are batched; reply-required requests remain actionable until answered with in_reply_to.',
   inputSchema: {
     to: z.string().min(1),
     message: z.string().min(1).max(8000),
+    kind: z.enum(['request', 'response', 'status', 'finding', 'handoff', 'review_request', 'review_result']).optional(),
+    priority: z.enum(['urgent', 'normal', 'status']).optional(),
+    reply_required: z.boolean().optional(),
+    correlation_id: z.string().min(1).max(160).optional(),
+    in_reply_to: z.string().min(1).optional(),
     request_id: requestIdField,
   },
-}, async ({ to, message, request_id }) => textResult(await coordinatorRequest('send_message', { to, message, requestId: request_id })))
+}, async ({ to, message, kind, priority, reply_required, correlation_id, in_reply_to, request_id }) => textResult(await coordinatorRequest('send_message', {
+  to,
+  message,
+  kind,
+  priority,
+  replyRequired: reply_required,
+  correlationId: correlation_id,
+  inReplyTo: in_reply_to,
+  requestId: request_id,
+})))
+
+server.registerTool('coord_handoff_task', {
+  description: 'Checkpoint owned work after a provider/CLI failure, release its locks, and return it to the board. The lead receives an urgent durable handoff.',
+  inputSchema: {
+    task_id: z.string().min(1),
+    summary: z.string().min(1).max(1000),
+    detail: z.string().max(8000).optional(),
+    failure_class: z.enum(['rate_limited', 'authentication_failed', 'context_exhausted', 'approval_blocked', 'cli_missing', 'transient_transport', 'provider_failure']),
+    request_id: requestIdField,
+  },
+}, async ({ task_id, summary, detail, failure_class, request_id }) => textResult(await coordinatorRequest('handoff_task', {
+  taskId: task_id,
+  summary,
+  detail,
+  failureClass: failure_class,
+  requestId: request_id,
+})))
 
 server.registerTool('coord_request_locks', {
   description: 'Request write locks for paths needed by the current task. Returns explicit `granted` and `denied` (with the conflicting holder) lists; do not edit paths that were denied.',
