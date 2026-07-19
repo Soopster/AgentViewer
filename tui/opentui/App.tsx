@@ -65,7 +65,6 @@ import {
   readTuiSessionDetail,
   readTuiSessionDiagnostics,
   readTuiSessionReaderState,
-  readTuiSessions,
   readTuiSessionMetadata,
   readTuiSidebarSort,
   readTuiSidebarWidth,
@@ -133,6 +132,7 @@ import { normalizeCodexStreamThreadedMessage } from '../../lib/codexMapper'
 import { readTuiSessionMetadataAsync } from './metadataWorkerClient'
 import {
   readTuiSessionDetailAsync,
+  readTuiSessionsAsync,
   formatTranscriptCardsAsync,
   getTranscriptCardsSync,
 } from './sessionDetailWorkerClient'
@@ -8787,7 +8787,7 @@ export default function OpenTuiApp() {
     if (!providerSwitchRef.current) setError(null)
 
     try {
-      const nextSessions = await readTuiSessions(nextProvider)
+      const nextSessions = await readTuiSessionsAsync(nextProvider)
       if (requestId !== sessionRequestRef.current) return
       startTransition(() => {
         setSessions((prev) => sessionsShallowEqual(prev, nextSessions) ? prev : nextSessions)

@@ -135,6 +135,7 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
       }
       piSessionPool.set(id, entry)
       schedulePiEviction(id)
+      enforcePiPoolLimit(id)
       return result.session
     } catch (error) {
       throw wrapPiError(error)
@@ -152,8 +153,34 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
 // process alive between prompts — this pool mirrors that. Entries are evicted
 // after `PI_SESSION_TTL_MS` of inactivity to bound memory.
 const PI_SESSION_TTL_MS = 5 * 60 * 1000
+const PI_SESSION_POOL_MAX = 3
 type PiPoolEntry = { session: AgentSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
 const piSessionPool = new Map<string, PiPoolEntry>()
+
+type PiPoolSnapshotEntry = { sessionId: string; lastUsed: number; isStreaming: boolean }
+
+/**
+ * Select the least-recently-used idle sessions that can be removed to reach
+ * the warm-pool cap. Streaming sessions deliberately make this a soft cap:
+ * they remain alive until a later insertion or the existing TTL can evict
+ * them safely.
+ *
+ * Exported so the memory policy can be regression-tested without importing
+ * the heavyweight Pi SDK or constructing real AgentSessions.
+ */
+export function selectPiPoolEvictions(
+  entries: readonly PiPoolSnapshotEntry[],
+  maxEntries = PI_SESSION_POOL_MAX,
+  protectedSessionId?: string,
+): string[] {
+  const excess = entries.length - Math.max(0, maxEntries)
+  if (excess <= 0) return []
+  return entries
+    .filter((entry) => !entry.isStreaming && entry.sessionId !== protectedSessionId)
+    .toSorted((a, b) => a.lastUsed - b.lastUsed)
+    .slice(0, excess)
+    .map((entry) => entry.sessionId)
+}
 
 /** Number of warm Pi AgentSessions currently pooled. Diagnostics only. */
 export function piPoolSize(): number {
@@ -169,6 +196,25 @@ function disposePiEntry(entry: PiPoolEntry): void {
     entry.session.dispose()
   } catch {
     // Dispose must not throw out of an eviction/teardown path.
+  }
+}
+
+function enforcePiPoolLimit(protectedSessionId: string): void {
+  const evictions = selectPiPoolEvictions(
+    Array.from(piSessionPool, ([sessionId, entry]) => ({
+      sessionId,
+      lastUsed: entry.lastUsed,
+      isStreaming: entry.session.isStreaming,
+    })),
+    PI_SESSION_POOL_MAX,
+    protectedSessionId,
+  )
+  for (const sessionId of evictions) {
+    const entry = piSessionPool.get(sessionId)
+    if (!entry || entry.session.isStreaming) continue
+    clearTimeout(entry.timer)
+    piSessionPool.delete(sessionId)
+    disposePiEntry(entry)
   }
 }
 
@@ -217,6 +263,7 @@ export async function openPiAgentSession(sessionId: string): Promise<AgentSessio
       }
       piSessionPool.set(sessionId, entry)
       schedulePiEviction(sessionId)
+      enforcePiPoolLimit(sessionId)
       return result.session
     } catch (error) {
       throw wrapPiError(error)

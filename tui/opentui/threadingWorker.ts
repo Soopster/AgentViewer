@@ -8,8 +8,8 @@ import {
 import { buildTaskRegistry } from '../../lib/taskRegistry'
 import { buildTaskActiveForms, formatTranscriptCard, type TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
-import type { Session, SessionInfo, SessionMessage } from '../../lib/types'
-import { readTuiSessionDetailSource } from '../../lib/tui/service'
+import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
+import { readTuiSessionDetailSource, readTuiSessions } from '../../lib/tui/service'
 import { sameSessionMessageContent, threadedMessageFingerprint } from './messageFingerprint'
 
 // Reads the session from disk/SDK *inside the worker*, then threads + formats.
@@ -30,7 +30,12 @@ type FormatRequest = {
   density: TuiDensity
   showToolCalls: boolean
 }
-type WorkerRequest = DetailRequest | FormatRequest
+type SessionsRequest = {
+  kind: 'sessions'
+  id: number
+  provider: ProviderSelection
+}
+type WorkerRequest = DetailRequest | FormatRequest | SessionsRequest
 
 type WorkerResponse =
   | {
@@ -50,6 +55,7 @@ type WorkerResponse =
       cardsPrefix: number
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[] }
+  | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: false; error: string }
 
 declare const self: {
@@ -248,6 +254,11 @@ function formatCards(
 self.onmessage = async (event) => {
   const data = event.data
   try {
+    if (data.kind === 'sessions') {
+      const sessions = await readTuiSessions(data.provider)
+      self.postMessage({ id: data.id, ok: true, sessions })
+      return
+    }
     if (data.kind === 'format') {
       const sessionCacheKey = cacheKey(data.session)
       const transcriptCards = formatCards(sessionCacheKey, data.threaded, data.density, data.showToolCalls)

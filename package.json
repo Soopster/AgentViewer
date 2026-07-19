@@ -32,7 +32,7 @@
     "tui": "bun run ./tui/opentui/main.tsx",
     "tui:dev": "bun --watch ./tui/opentui/main.tsx",
     "tui:check": "tsc -p tsconfig.opentui.json --noEmit",
-    "tui:smoke": "bun run ./tui/opentui/renderSmoke.tsx && bun run ./tui/opentui/gitPopoverSmoke.tsx && bun run ./tui/opentui/appSmoke.tsx && bun run ./tui/opentui/fleetSmoke.tsx && bun run ./tui/opentui/coordSmoke.tsx && bun run ./tui/opentui/externalCoordSmoke.ts",
+    "tui:smoke": "bun run ./tui/opentui/renderSmoke.tsx && bun run ./tui/opentui/gitPopoverSmoke.tsx && bun run ./tui/opentui/appSmoke.tsx && bun run ./tui/opentui/fleetSmoke.tsx && bun run ./tui/opentui/coordSmoke.tsx && bun run ./tui/opentui/externalCoordSmoke.ts && bun run ./tui/opentui/piPoolSmoke.tsx",
     "mcp:smoke": "node ./scripts/mcpBridgeSmoke.mjs && node ./scripts/coordWorkerSmoke.mjs",
     "tui:ink": "node --import tsx ./tui/main.tsx",
     "tui:ink:dev": "node --watch --import tsx ./tui/main.tsx",

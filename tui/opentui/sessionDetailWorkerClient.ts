@@ -23,4 +23,4 @@ export async function readTuiSessionDetailAsync(
   }
 }
 
-export { formatTranscriptCardsAsync, getTranscriptCardsSync } from './threadingWorkerClient'
+export { formatTranscriptCardsAsync, getTranscriptCardsSync, readTuiSessionsAsync } from './threadingWorkerClient'

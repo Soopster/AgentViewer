@@ -22,6 +22,21 @@ Use the `agent-viewer` MCP Coordinator tools as the source of truth. Keep workin
 5. Read `coord_status` and `coord_read_inbox` immediately after entering.
 6. If setup or recovery is unclear, run `agent-viewer coord doctor --json`; inspect persistent supervisors with `coord workers`, `coord logs`, and `coord restart` rather than creating a duplicate participant.
 
+## Multi-agent startup invariant
+
+When the user requests multiple participating agents, seed the board before starting teammate workers. A joined or `ready` agent is roster presence, not participation.
+
+1. Create one independent, initially claimable lane per teammate, with non-overlapping paths and a concrete evidence or implementation outcome. Create a separate lead integration task that depends on the teammate lanes. For three agents, the normal shape is two parallel teammate tasks plus one dependent lead task.
+2. Do not let the lead claim an umbrella task that contains the work intended for teammates. The lead coordinates while teammate lanes run, then claims the dependent integration task.
+3. Choose a startup path that makes board seeding happen before autonomous claiming:
+   - With an unbound interactive MCP bridge, call `coord_create_run`, create the complete task graph, verify it with `coord_status`, and only then start or join teammate workers.
+   - With unattended workers, start from a saved playbook using `coord worker --start ... --playbook <name>`. The playbook must contain the parallel lanes and dependent integration task.
+   - Never use an unseeded `coord worker --start "<goal>"` for a multi-agent request. Its lead may create and claim the only broad task before teammates arrive. If no suitable playbook exists and the bridge cannot create a seeded run, stop and establish the task graph first instead of launching idle workers.
+4. After workers join, inspect `coord_status` before considering kickoff complete. Confirm the requested roster count, distinct task owners, and a claimed or `working` task for every teammate. If a teammate is idle, create or release/re-scope tasks immediately and send the assignment with `coord_send_message`; do not rely on terminal stdin, local logs, or a worker process being alive as assignment delivery.
+5. Keep write lanes disjoint. Use read-only profiling, audit, or verification lanes without write paths when implementation paths must remain locked by another task.
+
+Before finalization, audit substantive participation. Count an agent only when Coordinator evidence shows at least one of: a claimed and worked task, a completed task, a published finding, or a substantive task-related mailbox response. `agent.ready`, heartbeats, idle status, and worktree creation do not count. If the user requested N participating agents, do not finalize until N agents meet this gate; create follow-up review or verification tasks when useful, or report the shortfall honestly if meaningful work no longer remains.
+
 ## Playbooks (reusable runs)
 
 A playbook is a saved run definition — the plan held in an artifact instead of a planning turn, like Claude Code dynamic workflows. Playbooks live in `<checkout>/.agent-viewer/playbooks/<name>.json` and are shared with everyone who clones the repo.
@@ -42,11 +57,11 @@ When the participant role is `lead`:
    - the narrowest expected write paths;
    - explicit dependencies when another task must finish first.
 3. Prefer separate clean worktrees for each external CLI. Do not assign overlapping paths to parallel tasks.
-4. Keep one integration or review task for the lead when useful; otherwise coordinate instead of duplicating teammate work.
+4. Keep one integration or review task for the lead when useful; make it depend on teammate lanes so the lead cannot absorb their work before they participate.
 5. Send important context or changed priorities through `coord_send_message`; do not assume another CLI sees local terminal output. Use `priority: urgent` only when it should wake a worker, `priority: status` for batchable progress, and `reply_required` for a request that must stay actionable until answered.
 6. Review submitted plans promptly when plan approval is enabled.
 7. Monitor status, inbox, findings, blocked tasks, and expired or conflicting locks. Respond to blockers with a message or a new task. Requeue a wedged or failed task with `coord_release_task` so another participant can claim it.
-8. When all tasks are terminal, inspect the board, reconcile findings, run any final integration checks, and call `coord_finalize_run` with a concise synthesis. If the review uncovers follow-up work, call `coord_create_task` instead — during synthesis this reopens the run.
+8. When all tasks are terminal, inspect the board, verify the requested participation count using task/finding/message evidence, reconcile findings, run any final integration checks, and call `coord_finalize_run` with a concise synthesis. If participation is short or review uncovers follow-up work, call `coord_create_task` instead — during synthesis this reopens the run.
 
 ## Teammate workflow
 
@@ -84,4 +99,4 @@ Do not end merely because the board is temporarily idle. End when the run become
 
 ## Handoff output
 
-Keep user-facing updates concise. Include the run ID, participant role and name, task state, blockers, and next action. Never include the capability token.
+Keep user-facing updates concise. Include the run ID, participant role and name, task state, substantive participation evidence, blockers, and next action. Never include the capability token.

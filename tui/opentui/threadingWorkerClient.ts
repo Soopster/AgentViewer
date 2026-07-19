@@ -1,7 +1,7 @@
 import type { ThreadedMessage } from '../../lib/threading'
 import type { TuiTranscriptCard } from '../format'
 import type { TuiDensity } from '../theme'
-import type { Session, SessionInfo, SessionMessage } from '../../lib/types'
+import type { ProviderSelection, Session, SessionInfo, SessionMessage } from '../../lib/types'
 
 export type SessionDetailPayload = {
   info: SessionInfo | null
@@ -30,6 +30,11 @@ type Pending =
       resolve: (cards: TuiTranscriptCard[]) => void
       reject: (error: Error) => void
     }
+  | {
+      kind: 'sessions'
+      resolve: (sessions: Session[]) => void
+      reject: (error: Error) => void
+    }
 
 type WorkerResponse =
   | {
@@ -44,6 +49,7 @@ type WorkerResponse =
       cardsPrefix: number
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[] }
+  | { id: number; ok: true; sessions: Session[] }
   | { id: number; ok: false; error: string }
 
 let worker: Worker | null = null
@@ -164,8 +170,10 @@ function ensureWorker(): Worker {
         threadedMessages,
         transcriptCards,
       })
-    } else if (entry.kind === 'format') {
+    } else if (entry.kind === 'format' && 'transcriptCards' in data) {
       entry.resolve(data.transcriptCards)
+    } else if (entry.kind === 'sessions' && 'sessions' in data) {
+      entry.resolve(data.sessions)
     }
   }
   w.onerror = (event) => {
@@ -180,6 +188,20 @@ function ensureWorker(): Worker {
   }
   worker = w
   return w
+}
+
+/**
+ * List sessions in the transcript worker so provider SDKs are loaded in one
+ * isolate. Pi's SDK has a large fixed resident cost; listing in the main TUI
+ * and reading detail in this worker otherwise loads a full copy in each.
+ */
+export function readTuiSessionsAsync(provider: ProviderSelection): Promise<Session[]> {
+  const id = ++requestCounter
+  const w = ensureWorker()
+  return new Promise<Session[]>((resolve, reject) => {
+    pending.set(id, { kind: 'sessions', resolve, reject })
+    w.postMessage({ kind: 'sessions', id, provider })
+  })
 }
 
 /**
