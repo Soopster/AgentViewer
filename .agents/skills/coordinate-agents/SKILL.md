@@ -1,17 +1,20 @@
 ---
 name: coordinate-agents
-description: Start, join, and operate an Agent Viewer Coordinator run through the agent-viewer MCP. Use when a Codex or Claude CLI session should coordinate with other external CLIs, fan a goal into parallel tasks, claim work, exchange inbox messages, manage path locks or plan approval, monitor teammates autonomously, synthesize results, or finalize a multi-agent run.
+description: Start, join, and operate an Agent Viewer Coordinator run through the agent-viewer MCP. Use when any agent CLI session (Claude, Codex, OpenCode, Copilot, or Pi) should coordinate with other external CLIs, fan a goal into parallel tasks, claim work, exchange inbox messages, manage path locks or plan approval, monitor teammates autonomously, synthesize results, or finalize a multi-agent run.
 ---
 
 # Coordinate Agents
 
 Use the `agent-viewer` MCP Coordinator tools as the source of truth. Keep working until the run is terminal or the user interrupts.
 
+Communication is part of the work, not overhead. Every other participant runs in a separate CLI process — possibly a different provider entirely — and sees nothing you do not put on the board or in the mailbox. A finished edit that no teammate knows about is unfinished coordination: report it, publish what you learned, and check what others reported before duplicating effort. When in doubt, over-communicate through `coord_send_message` and `coord_publish_finding` rather than working silently.
+
 ## Enter the run
 
 1. For unattended work, prefer the bounded supervisor. It persists identity and provider sessions, heartbeats during turns, waits without token usage, and restarts failed ticks:
-   - Lead: `agent-viewer coord worker --start "<goal>" --name <name> --provider codex|claude --attach <url>`
-   - Teammate: `agent-viewer coord worker --join <run-id> --name <name> --provider codex|claude --attach <url>` (`--join latest` auto-discovers the newest joinable run)
+   - Lead: `agent-viewer coord worker --start "<goal>" --name <name> --provider codex|claude|opencode|copilot|pi --attach <url>`
+   - Teammate: `agent-viewer coord worker --join <run-id> --name <name> --provider codex|claude|opencode|copilot|pi --attach <url>` (`--join latest` auto-discovers the newest joinable run)
+   Mixing providers across teammates is encouraged — every worker speaks the same coord_* protocol, so a Claude lead can supervise Codex, OpenCode, Copilot, and Pi lanes (or any other combination) on one board.
    Joined teammates receive an isolated git worktree by default; use `--shared` only when explicitly required.
 2. In an already-running interactive CLI, confirm the `coord_*` MCP tools are available. If not, report that the Agent Viewer MCP must be configured and stop.
 3. Determine the mode from the request:
@@ -45,7 +48,7 @@ A playbook is a saved run definition — the plan held in an artifact instead of
 - Run one with `coord_create_run` using `playbook_name` and `args` — the whole task board is seeded instantly with phases as dependency barriers (phase N+1 waits for all of phase N), and `{{args}}` / `{{args.<key>}}` placeholders in task text are filled from `args`. No lead planning turn is needed; teammates can claim immediately.
 - When a run's board is worth repeating, the lead saves it with `coord_save_playbook` (a name slug, description, and args hint). Prefer running a saved playbook over re-deriving the same plan.
 - Status responses include a `phases` rollup (per-phase task counts) — use it to report progress phase by phase.
-- A single CLI can kick off a playbook run alone and then staff it either way: spawn unattended workers with `agent-viewer coord worker --join latest --name <name> --provider codex|claude` (one per lane, via the shell) and supervise as lead, or — when no teammates are expected — claim and work the tasks itself phase by phase. Claiming is not role-restricted; phase barriers enforce order either way.
+- A single CLI can kick off a playbook run alone and then staff it either way: spawn unattended workers with `agent-viewer coord worker --join latest --name <name> --provider codex|claude|opencode|copilot|pi` (one per lane, via the shell) and supervise as lead, or — when no teammates are expected — claim and work the tasks itself phase by phase. Claiming is not role-restricted; phase barriers enforce order either way.
 
 ## Lead workflow
 

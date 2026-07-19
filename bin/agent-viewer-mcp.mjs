@@ -180,8 +180,9 @@ const server = new McpServer(
   { name: 'agent-viewer', version: '1.3.0' },
   {
     instructions: [
-      'Agent Viewer Coordinator is a shared multi-CLI task board and mailbox.',
+      'Agent Viewer Coordinator is a shared multi-CLI task board and mailbox for agents from any provider (Claude, Codex, OpenCode, Copilot, Pi).',
       'Create or join a run, then read status and inbox; claim one task, lock paths before editing, report progress, and complete it or release unfinished work.',
+      'Teammates run in other CLI processes and see only the board and mailbox — communicate deliberately: answer reply_required mail promptly, publish reusable discoveries with coord_publish_finding, and message teammates whose lanes your work affects.',
       'Use coord_wait instead of polling while idle, prefer coord worker for unattended runs, and never disclose participant capabilities or bypass completion gates.',
     ].join(' '),
   },

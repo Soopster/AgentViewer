@@ -14,9 +14,9 @@ import {
 function usage(message) {
   if (message) console.error(message)
   console.log(`Usage:
-  agent-viewer coord worker --start <goal> --name <name> [--provider codex|claude]
-  agent-viewer coord worker --join <run-id|latest> --name <name> [--provider codex|claude]
-  agent-viewer coord worker --identity <file> [--provider codex|claude]
+  agent-viewer coord worker --start <goal> --name <name> [--provider codex|claude|opencode|copilot|pi]
+  agent-viewer coord worker --join <run-id|latest> --name <name> [--provider codex|claude|opencode|copilot|pi]
+  agent-viewer coord worker --identity <file> [--provider codex|claude|opencode|copilot|pi]
 
 Options:
   --attach <url>       Agent Viewer web daemon (default http://127.0.0.1:3000)
@@ -24,6 +24,7 @@ Options:
   --shared             Join in the current checkout instead of an isolated worktree
   --once               Run one CLI tick and exit
   --identity <file>    Durable 0600 participant and provider-session state
+  --model <id>         Provider model override (e.g. sonnet, gpt-5.2-codex, openai-codex/gpt-5.2-codex)
   --playbook <name>    With --start: seed the board from a saved playbook
   --args <value>       With --playbook: args interpolated into task text (JSON or string)
 `)
@@ -138,6 +139,7 @@ function tickPrompt(state) {
     'You are ALREADY bound to this run: never call coord_create_run, coord_join_run, or coord_list_runs — start with coord_status and act on its actionable digest.',
     'Use the coordinate-agents skill and the agent-viewer coord_* MCP tools now.',
     'Drain the inbox, then perform every immediately actionable role-appropriate step, including implementation and verification.',
+    'Coordinate actively — teammates run in other CLIs and cannot see your terminal: answer reply_required mail first, publish reusable discoveries with coord_publish_finding, and send coord_send_message whenever your progress, blockers, or findings affect another lane.',
     'Use stable request_id values before retrying mutations. If no action is ready, return control to the supervisor; do not poll or sleep.',
     'If all tasks are terminal and you are lead, review results and finalize the run. Never print participant credentials.',
   ].join(' ')
@@ -148,6 +150,7 @@ async function providerTick(state, baseUrl) {
   const prompt = tickPrompt(state)
   let command
   let args
+  const extraEnv = {}
   if (state.provider === 'claude') {
     command = process.env.CLAUDE_PATH || 'claude'
     args = [
@@ -156,11 +159,63 @@ async function providerTick(state, baseUrl) {
       // pre-allow, permission-mode auto stalls every coordinator tool call
       // and the tick burns its whole turn asking nobody for access.
       '--allowedTools', 'mcp__agent-viewer__*',
+      ...(state.model ? ['--model', state.model] : []),
       '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: { 'agent-viewer': config } }),
       state.providerSessionId ? '--resume' : '--session-id', state.providerSessionId || randomUUID(),
       prompt,
     ]
     state.providerSessionId ||= args[args.indexOf('--session-id') + 1]
+  } else if (state.provider === 'opencode') {
+    command = process.env.OPENCODE_PATH || 'opencode'
+    // OpenCode reads MCP servers from its config file; OPENCODE_CONFIG points
+    // at a worker-owned file so the project's opencode.json stays untouched.
+    const configFile = `${state.identityFile}.opencode.json`
+    await writeFile(configFile, JSON.stringify({
+      mcp: {
+        'agent-viewer': { type: 'local', command: [config.command, ...config.args], enabled: true },
+      },
+    }, null, 2), { mode: 0o600 })
+    extraEnv.OPENCODE_CONFIG = configFile
+    // Headless ticks cannot answer permission prompts; --auto approves
+    // anything not explicitly denied by the user's permission config.
+    args = [
+      'run', '--format', 'json', '--auto',
+      ...(state.model ? ['--model', state.model] : []),
+      ...(state.providerSessionId ? ['--session', state.providerSessionId] : []),
+      prompt,
+    ]
+  } else if (state.provider === 'copilot') {
+    command = process.env.COPILOT_CLI_PATH || 'copilot'
+    args = [
+      '-p', prompt,
+      // Non-interactive mode requires --allow-all-tools; worktree .git files
+      // point outside the checkout, so path verification must not prompt either.
+      '--allow-all-tools', '--allow-all-paths', '--no-ask-user', '--no-auto-update',
+      '--output-format', 'json',
+      ...(state.model ? ['--model', state.model] : []),
+      '--additional-mcp-config', JSON.stringify({
+        mcpServers: { 'agent-viewer': { type: 'local', command: config.command, args: config.args, tools: ['*'] } },
+      }),
+      ...(state.providerSessionId ? ['--resume', state.providerSessionId] : []),
+    ]
+  } else if (state.provider === 'pi') {
+    command = process.env.PI_PATH || 'pi'
+    // Pi reaches MCP through the pi-mcp-adapter extension; directTools with no
+    // prefix registers coord_* as first-class tools instead of a proxy.
+    const configFile = `${state.identityFile}.mcp.json`
+    await writeFile(configFile, JSON.stringify({
+      mcpServers: {
+        'agent-viewer': { command: config.command, args: config.args, directTools: true },
+      },
+      settings: { toolPrefix: 'none' },
+    }, null, 2), { mode: 0o600 })
+    // Pi creates the session for a supplied id, so resume needs no output parsing.
+    state.providerSessionId ||= randomUUID()
+    args = [
+      '-p', '--mode', 'json', '--mcp-config', configFile,
+      ...(state.model ? ['--model', state.model] : []),
+      '--session-id', state.providerSessionId, prompt,
+    ]
   } else {
     command = process.env.CODEX_PATH || 'codex'
     const configArgs = [
@@ -174,6 +229,7 @@ async function providerTick(state, baseUrl) {
       '-c', 'mcp_servers.agent-viewer.default_tools_approval_mode="approve"',
       '-c', 'approval_policy="never"',
       '-c', 'sandbox_mode="workspace-write"',
+      ...(state.model ? ['-c', `model=${JSON.stringify(state.model)}`] : []),
     ]
     args = state.providerSessionId
       ? ['exec', ...configArgs, 'resume', '--json', state.providerSessionId, prompt]
@@ -185,6 +241,7 @@ async function providerTick(state, baseUrl) {
       cwd: state.cwd,
       env: {
         ...process.env,
+        ...extraEnv,
         AGENT_VIEWER_ATTACH: baseUrl,
         AGENT_VIEWER_COORD_IDENTITY_FILE: state.identityFile,
         AGENT_VIEWER_COORD_WORKER: '1',
@@ -203,7 +260,10 @@ async function providerTick(state, baseUrl) {
       for (const line of lines) {
         try {
           const event = JSON.parse(line)
-          const sessionId = event.thread_id || event.session_id
+          // codex: thread_id · claude: session_id · opencode: sessionID (also
+          // nested under info/part) · copilot: sessionId
+          const sessionId = event.thread_id || event.session_id || event.sessionID || event.sessionId
+            || event.info?.sessionID || event.part?.sessionID
           if (typeof sessionId === 'string' && sessionId) state.providerSessionId = sessionId
         } catch { /* provider text or partial JSON */ }
       }
@@ -243,7 +303,7 @@ async function providerTick(state, baseUrl) {
 let options
 try { options = parseArgs(process.argv.slice(2)) } catch (error) { usage(error.message) }
 if (!options || options.help) usage()
-if (!['codex', 'claude'].includes(options.provider)) usage('--provider must be codex or claude')
+if (!['codex', 'claude', 'opencode', 'copilot', 'pi'].includes(options.provider)) usage('--provider must be codex, claude, opencode, copilot, or pi')
 
 let baseUrl = normalizeUrl(options.attach || 'http://127.0.0.1:3000')
 let state
@@ -254,6 +314,7 @@ if (options.identity && !options.start && !options.join) {
   state.identityFile = path.resolve(options.identity)
   state.provider ||= options.provider
   state.cwd ||= options.cwd
+  if (options.model) state.model = options.model
   if (!options.attach && state.attach) baseUrl = normalizeUrl(state.attach)
 } else {
   if (!options.name || (!options.start && !options.join) || (options.start && options.join)) {
@@ -279,6 +340,7 @@ if (options.identity && !options.start && !options.join) {
     ...workerNegotiation(),
   })
   state = { ...result.participant, cwd, attach: baseUrl }
+  if (options.model) state.model = options.model
   state.identityFile = path.resolve(options.identity || identityFileFor(state))
 }
 state.attach = baseUrl
