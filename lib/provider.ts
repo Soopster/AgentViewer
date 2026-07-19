@@ -57,7 +57,7 @@ export const PI_CAPABILITIES: SessionCapabilities = {
   resumeAtMessage: false,
   fileRewind: false,
   rollback: false,
-  deleteSession: false,
+  deleteSession: true,
   shareSession: false,
   unshareSession: false,
   summarizeSession: true,

@@ -182,6 +182,7 @@ import type { AgentEvent as PiAgentEvent, AgentMessage as PiAgentMessage } from 
 import { normalizeProjectPath, sameProjectPath } from './projectPaths'
 import {
   createPiAgentSession,
+  deletePiSession,
   evictPiAgentSession,
   forkPiSession,
   getPiSessionEntries,
@@ -2549,6 +2550,11 @@ export async function deleteViewSession(sessionId: string, providerOverride?: Ag
   if (provider === 'claude') {
     await deleteClaudeSession(sessionId)
     clearWaitingSession(sessionId)
+    await removePersistedSessionBestEffort(provider, sessionId)
+    return
+  }
+  if (provider === 'pi') {
+    await deletePiSession(sessionId)
     await removePersistedSessionBestEffort(provider, sessionId)
     return
   }
