@@ -17,8 +17,37 @@ function loadPiSdk(): Promise<PiSdk> {
   return (piSdkPromise ??= import('@earendil-works/pi-coding-agent'))
 }
 
-// Cache session ID → file path mappings (populated on list, refreshed on miss)
+// Cache session ID → file path mappings (populated on list, refreshed on miss).
+// SessionManager.listAll() can return every Pi session on the machine, so keep
+// only a recent working set instead of retaining one path string per session
+// for the lifetime of the AgentViewer server.
+const PI_SESSION_PATH_CACHE_MAX = 1024
 const sessionPathCache = new Map<string, string>()
+
+function rememberPiSessionPath(sessionId: string, sessionPath: string): void {
+  // Map insertion order doubles as LRU order. Refresh hits so the entry a user
+  // just opened survives the next bulk session-list refresh.
+  sessionPathCache.delete(sessionId)
+  sessionPathCache.set(sessionId, sessionPath)
+  while (sessionPathCache.size > PI_SESSION_PATH_CACHE_MAX) {
+    const oldest = sessionPathCache.keys().next().value
+    if (typeof oldest !== 'string') break
+    sessionPathCache.delete(oldest)
+  }
+}
+
+function rememberPiSessions(sessions: readonly PiSessionInfo[]): void {
+  // Pi returns newest first. Insert the bounded slice oldest-to-newest so the
+  // most recently modified sessions finish at the hot end of the LRU map.
+  for (const session of sessions.slice(0, PI_SESSION_PATH_CACHE_MAX).toReversed()) {
+    rememberPiSessionPath(session.id, session.path)
+  }
+}
+
+/** Number of cached id-to-path strings. Diagnostics only. */
+export function piSessionPathCacheSize(): number {
+  return sessionPathCache.size
+}
 
 function sessionIdFromPath(filePath: string): string {
   const base = filePath.split('/').pop() ?? filePath
@@ -46,9 +75,7 @@ export async function listPiSessions(cwd?: string): Promise<PiSessionListEntry[]
     const sessions = cwd
       ? await SessionManager.list(cwd, process.env.PI_SESSION_DIR)
       : await SessionManager.listAll()
-    for (const session of sessions) {
-      sessionPathCache.set(session.id, session.path)
-    }
+    rememberPiSessions(sessions)
     return sessions
   } catch (error) {
     throw wrapPiError(error)
@@ -57,12 +84,14 @@ export async function listPiSessions(cwd?: string): Promise<PiSessionListEntry[]
 
 export async function openPiSessionManager(sessionId: string): Promise<SessionManager> {
   let sessionPath = sessionPathCache.get(sessionId)
+  if (sessionPath) rememberPiSessionPath(sessionId, sessionPath)
   if (!sessionPath) {
     // The path cache is process-local and empties on every server restart.
     // Resolve from disk before giving up — sending to a session by id must
     // work without a prior session-list fetch, like `pi --resume` does.
-    await listPiSessions().catch(() => [])
-    sessionPath = sessionPathCache.get(sessionId)
+    const sessions = await listPiSessions().catch(() => [])
+    sessionPath = sessions.find((session) => session.id === sessionId)?.path
+    if (sessionPath) rememberPiSessionPath(sessionId, sessionPath)
   }
   if (!sessionPath) {
     throw new Error(`Pi session not found: ${sessionId}. Try refreshing the session list.`)
@@ -123,7 +152,7 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
       const id = result.session.sessionId
       const file = result.session.sessionFile
       if (file) {
-        sessionPathCache.set(id, file)
+        rememberPiSessionPath(id, file)
       }
       // Seed the pool so openPiAgentSession hits the cache on the 2nd message instead of
       // calling createAgentSession again (which would re-run resourceLoader.reload() and
@@ -290,9 +319,7 @@ export async function refreshPiSessionCache(cwd?: string): Promise<void> {
   const sessions = cwd
     ? await SessionManager.list(cwd, process.env.PI_SESSION_DIR)
     : await SessionManager.listAll()
-  for (const session of sessions) {
-    sessionPathCache.set(session.id, session.path)
-  }
+  rememberPiSessions(sessions)
 }
 
 export async function forkPiSession(sessionId: string, entryId: string): Promise<string | undefined> {
@@ -303,6 +330,24 @@ export async function forkPiSession(sessionId: string, entryId: string): Promise
   const newPath = sm.createBranchedSession(leafId)
   if (!newPath) return undefined
   const newId = sessionIdFromPath(newPath)
-  sessionPathCache.set(newId, newPath)
+  rememberPiSessionPath(newId, newPath)
   return newId
+}
+
+/** Remove a Pi session file and all process-local references to it. */
+export async function deletePiSession(sessionId: string): Promise<void> {
+  // If a prewarm/open is still constructing, let it settle before resolution
+  // and disposal so it cannot repopulate the pool after deletion.
+  await piSessionInflight.get(sessionId)?.catch(() => {})
+  const sessions = sessionPathCache.has(sessionId)
+    ? null
+    : await listPiSessions().catch(() => [])
+  const sessionPath = sessionPathCache.get(sessionId)
+    ?? sessions?.find((session) => session.id === sessionId)?.path
+  if (!sessionPath) throw new Error(`Pi session not found: ${sessionId}`)
+
+  evictPiAgentSession(sessionId)
+  const { unlink } = await import('node:fs/promises')
+  await unlink(sessionPath)
+  sessionPathCache.delete(sessionId)
 }
