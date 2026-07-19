@@ -147,13 +147,30 @@ async function bindCoordinatorParticipant(result) {
 // A bound bridge speaks for exactly one participant. A confused model that
 // re-joins mid-run would fork a duplicate identity and orphan the original
 // (observed live: a resumed worker created a stray teammate) — refuse instead.
-function requireUnboundBridge(tool) {
-  if (coordinatorIdentity) {
-    throw new Error(
-      `This bridge is already bound to run ${coordinatorIdentity.runId} as participant ${coordinatorIdentity.agentId}. `
-      + `Use coord_status/coord_wait to continue that run; use coord_resume only to rebind explicitly. ${tool} is for unbound bridges.`,
-    )
+// A binding to a TERMINAL run is spent, not sacred: a lead that finalized one
+// run must be able to create or join the next without restarting its CLI, so
+// check the run's status before refusing and auto-unbind when it is finished.
+async function requireUnboundBridge(tool) {
+  if (!coordinatorIdentity) return
+  let runStatus = null
+  try {
+    const status = await coordinatorRequest('status')
+    runStatus = status?.actionable?.runStatus ?? status?.snapshot?.run?.status ?? null
+  } catch (error) {
+    // Unknown run/participant (pruned or deleted ledger rows) is a dead
+    // binding; anything else (daemon unreachable) keeps the refusal below.
+    if (/unknown|not found|no such/i.test(String(error?.message ?? ''))) runStatus = 'stopped'
   }
+  if (['completed', 'failed', 'stopped'].includes(runStatus)) {
+    coordinatorIdentity = null
+    coordinatorCursor = null
+    if (!process.env.AGENT_VIEWER_COORD_IDENTITY_FILE?.trim()) coordinatorIdentityFile = null
+    return
+  }
+  throw new Error(
+    `This bridge is already bound to run ${coordinatorIdentity.runId} as participant ${coordinatorIdentity.agentId}. `
+    + `Use coord_status/coord_wait to continue that run; use coord_resume only to rebind explicitly. ${tool} is for unbound bridges.`,
+  )
 }
 
 async function coordinatorRequest(action, payload = {}, requireIdentity = true) {
@@ -339,7 +356,7 @@ server.registerTool('coord_create_run', {
     args: z.unknown().optional().describe('Interpolated into {{args}} / {{args.<key>}} in playbook task text'),
   },
 }, async ({ prompt, name, provider, max_agents, cwd, gate_command, require_plan_approval, playbook_name, playbook, args }) => {
-  requireUnboundBridge('coord_create_run')
+  await requireUnboundBridge('coord_create_run')
   const result = await bindCoordinatorParticipant(await coordinatorRequest('create_run', {
     prompt,
     name,
@@ -388,7 +405,7 @@ server.registerTool('coord_join_run', {
     cwd: z.string().min(1).optional().describe('Working checkout; defaults to this CLI project directory'),
   },
 }, async ({ run_id, name, provider, cwd }) => {
-  requireUnboundBridge('coord_join_run')
+  await requireUnboundBridge('coord_join_run')
   const result = await bindCoordinatorParticipant(await coordinatorRequest('join_run', {
     runId: run_id,
     name,
