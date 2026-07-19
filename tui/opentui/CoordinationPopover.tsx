@@ -440,6 +440,9 @@ export function CoordinationPopover({
       } else if (section === 'tasks' && selectedOwner) {
         onOpenSession(selectedOwner)
         onClose()
+      } else if (section === 'events' && eventAgent) {
+        onOpenSession(eventAgent)
+        onClose()
       } else if (section === 'overview' && runId) {
         setSection('tasks')
       }
@@ -479,7 +482,9 @@ export function CoordinationPopover({
         ? selectedAgent.name
         : section === 'tasks' && selectedOwner
           ? selectedOwner.name
-          : 'lead'
+          : section === 'events' && eventAgent
+            ? eventAgent.name
+            : 'lead'
       setMessageTarget(target)
       setMessageDraft('')
       return
@@ -519,8 +524,8 @@ export function CoordinationPopover({
     if (key.name === 'c') { void cleanupRun(); return }
     if (key.name === 'n') { onClose(); onNewRun(); return }
     if (key.name === 'g' && section === 'events') { setEventIndex(-1); return }
-    if (key.name === 'r' || (key.name === 'r' && key.shift)) { void refreshAll(); return }
-  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, filteredEvents.length, interruptAgentTurn, messageTarget, navigableTasks.length, onClose, onCopyJoinCommand, onNewRun, onNotice, onOpenSession, pending, planStates, refreshAll, reviewPlan, run, runId, runPendingAction, section, selectedAgent, selectedOwner, selectedTask, sendTeamMessage, snapshot, switchRun, worktreeStats])
+    if (key.name === 'r') { void refreshAll(); return }
+  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, eventAgent, filteredEvents.length, interruptAgentTurn, messageTarget, navigableTasks.length, onClose, onCopyJoinCommand, onNewRun, onNotice, onOpenSession, pending, planStates, refreshAll, reviewPlan, run, runId, runPendingAction, section, selectedAgent, selectedOwner, selectedTask, sendTeamMessage, snapshot, switchRun, worktreeStats])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -553,6 +558,8 @@ export function CoordinationPopover({
       selectedLocks={selectedLocks}
       taskFilter={taskFilter}
       eventFilter={eventFilter}
+      selectedTaskPlanState={selectedTask ? planStates.get(selectedTask.id) : undefined}
+      canCopyJoinCommand={Boolean(onCopyJoinCommand && runId)}
       now={now}
       busy={busy}
       loadError={loadError}

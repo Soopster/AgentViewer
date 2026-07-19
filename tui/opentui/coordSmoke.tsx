@@ -41,24 +41,32 @@ db.exec(`INSERT INTO protocol_tasks (id, run_id, title, prompt, status, owner_ag
   VALUES ('task-2', 'run-smoke', 'Verify output', 'verify it', 'completed', 'lead', '[]', '[]', '${oldTs}', '${ts}')`)
 db.exec(`INSERT INTO protocol_events (id, run_id, agent_id, type, summary, paths_json, timestamp, created_at)
   VALUES ('ev-1', 'run-smoke', 'agent-1', 'finding', 'widget lives in src/widget', '[]', '${ts}', '${ts}')`)
+db.exec(`INSERT INTO protocol_messages (id, run_id, from_agent_id, to_agent_id, body, kind, priority, reply_required, created_at)
+  VALUES ('msg-1', 'run-smoke', 'agent-1', 'lead', 'activity event 12', 'request', 'urgent', 1, '${ts}')`)
+db.exec(`INSERT INTO protocol_messages (id, run_id, from_agent_id, to_agent_id, body, kind, priority, reply_required, created_at, delivered_at)
+  VALUES ('msg-2', 'run-smoke', 'lead', 'agent-1', 'review approved', 'response', 'normal', 0, '${ts}', '${ts}')`)
 for (let index = 2; index <= 12; index += 1) {
   const eventTs = new Date(Date.now() + index * 1000).toISOString()
+  const eventType = index >= 11 ? 'message' : 'finding'
+  const eventAgent = index === 11 ? 'lead' : 'agent-1'
+  const summary = index === 11 ? 'review approved' : `activity event ${index}`
   db.exec(`INSERT INTO protocol_events (id, run_id, agent_id, type, summary, paths_json, timestamp, created_at)
-    VALUES ('ev-${index}', 'run-smoke', 'agent-1', 'finding', 'activity event ${index}', '[]', '${eventTs}', '${eventTs}')`)
+    VALUES ('ev-${index}', 'run-smoke', '${eventAgent}', '${eventType}', '${summary}', '[]', '${eventTs}', '${eventTs}')`)
 }
 db.close()
 
 const noop = () => {}
+let openedSessionAgent: string | null = null
 let handleKey: ((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null = null
 const smokeWidth = Number.parseInt(process.env.AGENT_VIEWER_COORD_SMOKE_WIDTH ?? '120', 10)
 const smokeHeight = Number.parseInt(process.env.AGENT_VIEWER_COORD_SMOKE_HEIGHT ?? '40', 10)
-const { captureCharFrame } = await testRender(
+const { captureCharFrame, captureSpans } = await testRender(
   <CoordinationPopover
     theme={LIGHT_THEME}
     width={smokeWidth}
     height={smokeHeight}
     initialRunId={null}
-    onOpenSession={noop}
+    onOpenSession={(agent) => { openedSessionAgent = agent.name }}
     onNewRun={noop}
     onClose={noop}
     onNotice={noop}
@@ -76,6 +84,10 @@ const MARKERS = [
   'WORK BOARD',
   'AGENT INSPECTOR',
   'LIVE ACTIVITY',
+  'TOPOLOGY',
+  'nova→le',
+  'lead→no',
+  'request!',
   '2 workflows',
   '3 agents',
   'finished provide',
@@ -84,8 +96,8 @@ const MARKERS = [
   'Queue dependen',
   'Build the widget',
   'Verify output',
-  'Ask all agents or run a command',
-  ...(smokeWidth >= 160 ? ['STAGE    TASK', '└─ [ ]', 'THROUGHPUT (events/min)', 'COSTS (USD)', 'CONTEXT'] : []),
+  'Message the current context',
+  ...(smokeWidth >= 160 ? ['STAGE    TASK', '└─ [ ]', 'THROUGHPUT (events/min)', 'RUN STATE', 'OWNERSHIP'] : []),
 ]
 let missing: string[] = MARKERS
 const deadline = Date.now() + 10_000
@@ -106,8 +118,23 @@ if (missing.length > 0) {
 
 const frame = captureCharFrame()
 if (process.env.AGENT_VIEWER_COORD_SMOKE_FRAME === '1') console.log(frame)
-if (!frame.includes('nova') || !frame.includes('finding') || !frame.includes('[j/k] nav')) {
+if (!frame.includes('nova') || !frame.includes('finding') || !frame.includes('1 focus')) {
   console.error('Agent control center did not render agent, activity, and keyboard controls together')
+  process.exit(1)
+}
+
+const spanBackground = (marker: string): string | null => {
+  for (const line of captureSpans().lines) {
+    const span = line.spans.find((entry) => entry.text.includes(marker))
+    if (span) return span.bg.toString()
+  }
+  return null
+}
+
+const overviewFocusBackground = spanBackground('[1] WORKFLOWS')
+const inactiveTaskBackground = spanBackground('[2] WORK BOARD')
+if (!overviewFocusBackground || !inactiveTaskBackground || overviewFocusBackground === inactiveTaskBackground) {
+  console.error('Initial workflow focus is not visually distinct from inactive panes')
   process.exit(1)
 }
 
@@ -127,6 +154,10 @@ await act(async () => {
   handleKey?.({ name: '2', ctrl: false, shift: false, sequence: '2' })
   await new Promise((resolve) => setTimeout(resolve, 50))
 })
+if (spanBackground('[1] WORKFLOWS') !== inactiveTaskBackground || spanBackground('[2] WORK BOARD') !== overviewFocusBackground) {
+  console.error('Task focus did not move the active-pane highlight from workflows to the work board')
+  process.exit(1)
+}
 let navigationFrame = captureCharFrame()
 const queuedAt = navigationFrame.indexOf('Queue dependen')
 const activeAt = navigationFrame.indexOf('Build the widget')
@@ -188,6 +219,10 @@ if (!captureCharFrame().includes('[1/2]')) {
   console.error('Agent pane did not start at the first visible agent')
   process.exit(1)
 }
+if (spanBackground('[3] AGENT INSPECTOR') !== overviewFocusBackground || !captureCharFrame().includes('[3 TEAM]')) {
+  console.error('Agent focus did not highlight the inspector and expose its contextual hotkeys')
+  process.exit(1)
+}
 
 await act(async () => {
   handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '' })
@@ -206,6 +241,23 @@ if (!captureCharFrame().includes('12/12')) {
   console.error('Activity pane did not start at the live tail')
   process.exit(1)
 }
+if (spanBackground('[4] LIVE ACTIVITY') !== overviewFocusBackground || !captureCharFrame().includes('[4 EVENTS]')) {
+  console.error('Activity focus did not highlight live activity and expose its contextual hotkeys')
+  process.exit(1)
+}
+
+await act(async () => {
+  handleKey?.({ name: 'm', ctrl: false, shift: false, sequence: 'm' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('> nova:')) {
+  console.error('Activity message hotkey did not target the selected event agent')
+  process.exit(1)
+}
+await act(async () => {
+  handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
 
 await act(async () => {
   handleKey?.({ name: 'up', ctrl: false, shift: false, sequence: '' })
@@ -213,6 +265,15 @@ await act(async () => {
 })
 if (!captureCharFrame().includes('11/12')) {
   console.error('Activity up navigation did not keep the selected event in view')
+  process.exit(1)
+}
+
+await act(async () => {
+  handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (openedSessionAgent !== 'lead') {
+  console.error('Activity inspect hotkey did not open the selected event agent session')
   process.exit(1)
 }
 
