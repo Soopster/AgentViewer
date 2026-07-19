@@ -105,14 +105,12 @@ const SLASH_COMMANDS_BY_PROVIDER: Record<AgentProvider, SlashCommandSuggestion[]
     { command: '/mode', description: 'Switch Copilot interaction mode', argumentHint: '[interactive|plan|autopilot|shell]' },
   ],
   pi: [
-    { command: '/help', description: 'Show available actions' },
-    { command: '/clear', description: 'Reset the conversation' },
-    { command: '/compact', description: 'Compact conversation history' },
-    { command: '/model', description: 'Switch the active model', argumentHint: '[model]' },
-    { command: '/thinking', description: 'Change thinking effort', argumentHint: '[low|medium|high]' },
-    { command: '/skills', description: 'List available skills' },
-    { command: '/init', description: 'Generate a PI.md for this project' },
-    { command: '/exit', description: 'Exit Pi' },
+    { command: '/help', description: 'Show available AgentViewer Pi commands' },
+    { command: '/model', description: 'Show or switch the active model', argumentHint: '[provider/model]' },
+    { command: '/thinking', description: 'Show or change thinking effort', argumentHint: '[off|minimal|low|medium|high|xhigh|max]' },
+    { command: '/compact', description: 'Compact conversation history', argumentHint: '[instructions]' },
+    { command: '/name', description: 'Set the session display name', argumentHint: '<name>' },
+    { command: '/session', description: 'Show session usage and cost' },
   ],
 }
 

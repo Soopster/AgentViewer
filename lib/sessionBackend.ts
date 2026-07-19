@@ -420,6 +420,14 @@ export type SessionIndexRebuildResult = {
 
 const REASONING_EFFORT_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'max', 'xhigh'] as const
 const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+const PI_SLASH_COMMANDS = [
+  { command: '/help', description: 'Show available AgentViewer Pi commands' },
+  { command: '/model', description: 'Show or switch the active model', argumentHint: '[provider/model]' },
+  { command: '/thinking', description: 'Show or change thinking effort', argumentHint: `[${PI_THINKING_LEVELS.join('|')}]` },
+  { command: '/compact', description: 'Compact conversation history', argumentHint: '[instructions]' },
+  { command: '/name', description: 'Set the session display name', argumentHint: '<name>' },
+  { command: '/session', description: 'Show session usage and cost' },
+] as const
 const INDEX_REBUILD_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 const INDEX_REBUILD_PAGE_SIZE = 500
 const INDEX_REBUILD_MESSAGE_LIMIT = 100_000
@@ -2610,6 +2618,14 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         body: { response },
       })
       return { ok: openCodeData<boolean>(result) }
+    }
+  }
+
+  if (resolvedProvider === 'pi') {
+    if (action === 'summarize') {
+      const session = await openPiAgentSession(sessionId)
+      await session.compact()
+      return { ok: true }
     }
   }
 
@@ -5520,7 +5536,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           close()
         }
         if (piSlash && piSlash.command.toLowerCase() === 'help') {
-          finishPiCommand('Pi commands: /model [provider/model], /thinking [off|minimal|low|medium|high|xhigh|max], /compact [instructions].')
+          finishPiCommand('Pi commands: /model [provider/model], /thinking [off|minimal|low|medium|high|xhigh|max], /compact [instructions], /name <name>, /session.')
           return
         }
         if (piSlash && piSlash.command.toLowerCase() === 'model') {
@@ -5580,6 +5596,33 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             schedulePiLiveTranscriptCleanup(targetSessionId)
             close()
           }
+          return
+        }
+        if (piSlash && piSlash.command.toLowerCase() === 'name') {
+          const name = piSlash.arguments.trim()
+          if (!name) {
+            finishPiCommand(agentSession.sessionName
+              ? `Pi session name is "${agentSession.sessionName}".`
+              : 'This Pi session has no display name.')
+            return
+          }
+          agentSession.setSessionName(name)
+          finishPiCommand(`Pi session named "${name}".`)
+          return
+        }
+        if (piSlash && piSlash.command.toLowerCase() === 'session') {
+          const stats = agentSession.getSessionStats()
+          const contextUsage = stats.contextUsage
+          const contextTokens = contextUsage?.tokens ?? 0
+          const contextWindow = contextUsage?.contextWindow ?? 0
+          const contextPercent = contextUsage?.percent
+            ?? (contextWindow > 0 ? contextTokens / contextWindow * 100 : 0)
+          const context = contextUsage
+            ? ` Context: ${contextTokens}/${contextWindow} tokens (${contextPercent.toFixed(1)}%).`
+            : ''
+          finishPiCommand(
+            `Pi session ${stats.sessionId}: ${stats.userMessages} user, ${stats.assistantMessages} assistant, ${stats.toolCalls} tool calls; ${stats.tokens.total} tokens; $${stats.cost.toFixed(4)}.${context}`,
+          )
           return
         }
 
@@ -6257,20 +6300,10 @@ export async function readViewSessionSlashCommands(sessionId: string, providerOv
     }
   }
   if (provider === 'pi') {
-    try {
-      // Subpath import — bypass TS bundler resolution since the package only exports '.' but ships the file.
-      const specifier = '@earendil-works/pi-coding-agent/dist/core/slash-commands.js'
-      const mod = await (0, eval)(`import('${specifier}')`) as {
-        BUILTIN_SLASH_COMMANDS?: ReadonlyArray<{ name: string; description: string }>
-      }
-      const list = mod.BUILTIN_SLASH_COMMANDS ?? []
-      return list.map((command) => ({
-        command: command.name.startsWith('/') ? command.name : `/${command.name}`,
-        description: command.description ?? '',
-      }))
-    } catch {
-      return []
-    }
+    // Pi's SDK catalog includes interactive-only commands such as /settings,
+    // /resume, and /quit. AgentViewer has no matching modal/terminal lifecycle
+    // for those, so advertise only commands this composer executes natively.
+    return PI_SLASH_COMMANDS.map((command) => ({ ...command }))
   }
   if (provider === 'copilot') {
     try {

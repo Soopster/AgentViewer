@@ -60,7 +60,7 @@ export const PI_CAPABILITIES: SessionCapabilities = {
   deleteSession: false,
   shareSession: false,
   unshareSession: false,
-  summarizeSession: false,
+  summarizeSession: true,
   unrevertSession: false,
   respondToPermission: false,
 }

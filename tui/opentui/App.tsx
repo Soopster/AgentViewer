@@ -1430,7 +1430,7 @@ const TUI_SLASH_HINTS: Record<string, string[]> = {
   codex: ['/clear', '/diff', '/status', '/compact'],
   opencode: ['/clear', '/summarize', '/help'],
   copilot: ['/help', '/clear'],
-  pi: ['/help', '/clear'],
+  pi: ['/help', '/model', '/thinking', '/compact', '/name', '/session'],
 }
 
 function detectMentionAtCursor(text: string, cursor: number): { start: number; query: string } | null {
