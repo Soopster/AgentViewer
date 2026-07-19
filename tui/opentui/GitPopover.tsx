@@ -1233,7 +1233,7 @@ export function GitPopover({ cwd, scopeLabel, zIndex = 50, theme, width, height,
       backgroundColor={theme.surface}
       zIndex={zIndex}
       flexDirection="row"
-      title={scopeLabel ? ` Git · ${scopeLabel} ` : ' Git '}
+      title={scopeLabel ? ` Git · ${fitTerminalText(scopeLabel, Math.max(popW - 10, 8))} ` : ' Git '}
       titleColor={theme.cyan}
       titleAlignment="left"
     >
