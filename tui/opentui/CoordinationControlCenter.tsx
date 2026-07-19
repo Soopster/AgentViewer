@@ -268,8 +268,8 @@ export function CoordinationControlCenter({
         ? `j/k agent${inspectedAgent ? ' · enter session · x interrupt · w merge · m message' : ''}`
         : `j/k event${selectedEventAgent ? ' · enter session' : ''} · g tail · / filter · m ${selectedEventAgent ? 'event agent' : 'lead'}`
   const globalKeys = innerW >= 154
-    ? `1-4 focus · tab next · n new · M broadcast · s stop · D delete · c cleanup${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
-    : '1-4 focus · tab next · n new · M all · s stop · r refresh · q close'
+    ? `1-4 focus · tab next · G agent changes · n new · M broadcast · s stop · D delete · c cleanup${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
+    : '1-4 focus · tab next · G changes · n new · M all · s stop · r refresh · q close'
   const footerText = `${contextualKeys}  │  ${globalKeys}`
   const activityFooterText = rightW >= 40 ? '4 focus  ·  g tail  ·  / filter  ·  m message' : '4 focus  ·  g tail'
 

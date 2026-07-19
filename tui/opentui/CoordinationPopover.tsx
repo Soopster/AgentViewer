@@ -2,9 +2,11 @@
 // Terminal-first Agent Operations dashboard for AVP/2 coordinated runs.
 // The web dashboard can expose several panels at once; the TUI presents the
 // same controls as numbered panes with stable geometry and contextual keys.
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { RGBA } from '@opentui/core'
 import type { TuiThemePalette } from '../theme'
 import { CoordinationControlCenter } from './CoordinationControlCenter'
+import { GitPopover } from './GitPopover'
 import { AGENT_PROTOCOL_VERSION } from '../../lib/agentProtocol'
 import type { AgentProtocolEvent, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot, ProtocolTask } from '../../lib/agentProtocol'
 import {
@@ -33,6 +35,7 @@ type Props = {
   onClose: () => void
   onNotice: (tone: 'info' | 'error', text: string, durationMs?: number) => void
   onCopyJoinCommand?: (runId: string) => void
+  onSendDiffNoteToComposer?: (prompt: string) => void
   onKeyHandlerReady: (handler: (key: CoordinationKeyEvent) => void) => void
 }
 
@@ -87,6 +90,7 @@ export function CoordinationPopover({
   onClose,
   onNotice,
   onCopyJoinCommand,
+  onSendDiffNoteToComposer,
   onKeyHandlerReady,
 }: Props) {
   const [runs, setRuns] = useState<ProtocolRun[]>([])
@@ -105,7 +109,9 @@ export function CoordinationPopover({
   const [worktreeStats, setWorktreeStats] = useState<Map<string, WorktreeTask>>(new Map())
   const [messageTarget, setMessageTarget] = useState<string | null>(null)
   const [messageDraft, setMessageDraft] = useState('')
+  const [gitAgent, setGitAgent] = useState<ProtocolAgent | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  const gitKeyHandlerRef = useRef<((key: CoordinationKeyEvent) => void) | null>(null)
 
   const refreshRuns = useCallback(async () => {
     const nextRuns = await listTuiProtocolRuns(20)
@@ -395,7 +401,20 @@ export function CoordinationPopover({
     setEventIndex(-1)
   }, [navigableRuns, runId])
 
+  const closeAgentGit = useCallback(() => {
+    gitKeyHandlerRef.current = null
+    setGitAgent(null)
+  }, [])
+
+  const registerAgentGitKeyHandler = useCallback((handler: (key: CoordinationKeyEvent) => void) => {
+    gitKeyHandlerRef.current = handler
+  }, [])
+
   const handleKey = useCallback((key: CoordinationKeyEvent) => {
+    if (gitAgent) {
+      gitKeyHandlerRef.current?.(key)
+      return
+    }
     if (messageTarget !== null) {
       if (key.name === 'escape') {
         setMessageTarget(null)
@@ -473,6 +492,10 @@ export function CoordinationPopover({
       setMessageDraft('')
       return
     }
+    if (key.name === 'g' && key.shift && inspectedAgent) {
+      setGitAgent(inspectedAgent)
+      return
+    }
     if (key.name === 'i' && runId) {
       onCopyJoinCommand?.(runId)
       return
@@ -525,7 +548,7 @@ export function CoordinationPopover({
     if (key.name === 'n') { onClose(); onNewRun(); return }
     if (key.name === 'g' && section === 'events') { setEventIndex(-1); return }
     if (key.name === 'r') { void refreshAll(); return }
-  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, eventAgent, filteredEvents.length, interruptAgentTurn, messageTarget, navigableTasks.length, onClose, onCopyJoinCommand, onNewRun, onNotice, onOpenSession, pending, planStates, refreshAll, reviewPlan, run, runId, runPendingAction, section, selectedAgent, selectedOwner, selectedTask, sendTeamMessage, snapshot, switchRun, worktreeStats])
+  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, eventAgent, filteredEvents.length, gitAgent, inspectedAgent, interruptAgentTurn, messageTarget, navigableTasks.length, onClose, onCopyJoinCommand, onNewRun, onNotice, onOpenSession, pending, planStates, refreshAll, reviewPlan, run, runId, runPendingAction, section, selectedAgent, selectedOwner, selectedTask, sendTeamMessage, snapshot, switchRun, worktreeStats])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -538,36 +561,63 @@ export function CoordinationPopover({
         : pending?.kind === 'fail-task'
           ? `Mark ${pending.task.id} failed? y/Enter · n/Esc`
           : null
+  const gitAgentUsesWorktree = Boolean(gitAgent?.worktreePath && run?.baseCwd && gitAgent.worktreePath !== run.baseCwd)
   return (
-    <CoordinationControlCenter
-      theme={theme}
-      width={width}
-      height={height}
-      runs={navigableRuns}
-      runId={runId}
-      snapshot={snapshot}
-      fleetSnapshots={fleetSnapshots}
-      filteredTasks={navigableTasks}
-      filteredEvents={filteredEvents.map((entry) => entry.event)}
-      fleet={fleet}
-      worktreeStats={worktreeStats}
-      section={section}
-      selectedTask={selectedTask}
-      inspectedAgent={inspectedAgent}
-      selectedEvent={selectedEvent}
-      selectedLocks={selectedLocks}
-      taskFilter={taskFilter}
-      eventFilter={eventFilter}
-      selectedTaskPlanState={selectedTask ? planStates.get(selectedTask.id) : undefined}
-      canCopyJoinCommand={Boolean(onCopyJoinCommand && runId)}
-      now={now}
-      busy={busy}
-      loadError={loadError}
-      messageTarget={messageTarget}
-      messageDraft={messageDraft}
-      pendingLabel={pendingLabel}
-      onMessageDraft={setMessageDraft}
-      onSubmitMessage={() => { void sendTeamMessage() }}
-    />
+    <>
+      <CoordinationControlCenter
+        theme={theme}
+        width={width}
+        height={height}
+        runs={navigableRuns}
+        runId={runId}
+        snapshot={snapshot}
+        fleetSnapshots={fleetSnapshots}
+        filteredTasks={navigableTasks}
+        filteredEvents={filteredEvents.map((entry) => entry.event)}
+        fleet={fleet}
+        worktreeStats={worktreeStats}
+        section={section}
+        selectedTask={selectedTask}
+        inspectedAgent={inspectedAgent}
+        selectedEvent={selectedEvent}
+        selectedLocks={selectedLocks}
+        taskFilter={taskFilter}
+        eventFilter={eventFilter}
+        selectedTaskPlanState={selectedTask ? planStates.get(selectedTask.id) : undefined}
+        canCopyJoinCommand={Boolean(onCopyJoinCommand && runId)}
+        now={now}
+        busy={busy}
+        loadError={loadError}
+        messageTarget={messageTarget}
+        messageDraft={messageDraft}
+        pendingLabel={pendingLabel}
+        onMessageDraft={setMessageDraft}
+        onSubmitMessage={() => { void sendTeamMessage() }}
+      />
+      {gitAgent ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={84}
+        />
+      ) : null}
+      {gitAgent ? (
+        <GitPopover
+          cwd={gitAgent.worktreePath || run?.baseCwd}
+          scopeLabel={`${gitAgent.name} · ${gitAgentUsesWorktree ? (gitAgent.worktreeBranch || 'worktree') : 'shared checkout'}`}
+          zIndex={85}
+          theme={theme}
+          width={width}
+          height={height}
+          onClose={closeAgentGit}
+          onKeyHandlerReady={registerAgentGitKeyHandler}
+          onSendDiffNoteToComposer={onSendDiffNoteToComposer}
+        />
+      ) : null}
+    </>
   )
 }

@@ -520,6 +520,8 @@ const LEFT_PANE_RESIZE_STEP = 4
 
 type Props = {
   cwd?: string | null
+  scopeLabel?: string
+  zIndex?: number
   theme: TuiThemePalette
   width: number
   height: number
@@ -528,7 +530,7 @@ type Props = {
   onSendDiffNoteToComposer?: (prompt: string) => void
 }
 
-export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer }: Props) {
+export function GitPopover({ cwd, scopeLabel, zIndex = 50, theme, width, height, onClose, onKeyHandlerReady, onSendDiffNoteToComposer }: Props) {
   const repoCwd = cwd || process.cwd()
   const [data, setData] = useState<GitData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -1229,9 +1231,9 @@ export function GitPopover({ cwd, theme, width, height, onClose, onKeyHandlerRea
       borderStyle="single"
       borderColor={theme.border2}
       backgroundColor={theme.surface}
-      zIndex={50}
+      zIndex={zIndex}
       flexDirection="row"
-      title=" Git "
+      title={scopeLabel ? ` Git · ${scopeLabel} ` : ' Git '}
       titleColor={theme.cyan}
       titleAlignment="left"
     >

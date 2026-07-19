@@ -17406,6 +17406,10 @@ export default function OpenTuiApp() {
           onClose={() => setCoordBoardOpen(false)}
           onNotice={showNotice}
           onCopyJoinCommand={copyCoordinationJoinCommand}
+          onSendDiffNoteToComposer={(prompt) => {
+            appendDiffCommentPromptToComposer(prompt)
+            showNotice('info', 'Agent diff comment added to composer')
+          }}
           onKeyHandlerReady={(handler) => { coordBoardKeyHandlerRef.current = handler }}
         />
       ) : null}

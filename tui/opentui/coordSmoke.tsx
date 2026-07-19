@@ -5,11 +5,25 @@
 // resolves from process.cwd(), so chdir BEFORE importing anything that opens it.
 import React, { act } from 'react'
 import { testRender } from '@opentui/react/test-utils'
-import { mkdtempSync } from 'fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
 
-process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-coord-smoke-')))
+const smokeRoot = mkdtempSync(path.join(tmpdir(), 'agent-viewer-coord-smoke-'))
+const smokeRepo = path.join(smokeRoot, 'main')
+const agentWorktreePath = path.join(smokeRoot, 'agent-worktree')
+mkdirSync(smokeRepo)
+execFileSync('git', ['init', '-q'], { cwd: smokeRepo })
+writeFileSync(path.join(smokeRepo, 'agent-change.txt'), 'baseline\n')
+execFileSync('git', ['add', '.'], { cwd: smokeRepo })
+execFileSync('git', ['-c', 'user.name=Agent Viewer', '-c', 'user.email=agent-viewer@example.invalid', 'commit', '-qm', 'baseline'], { cwd: smokeRepo })
+execFileSync('git', ['worktree', 'add', '-q', '-b', 'agent/x', agentWorktreePath], { cwd: smokeRepo })
+writeFileSync(path.join(agentWorktreePath, 'agent-change.txt'), 'changed by nova\n')
+execFileSync('git', ['add', '.'], { cwd: agentWorktreePath })
+execFileSync('git', ['-c', 'user.name=Agent Viewer', '-c', 'user.email=agent-viewer@example.invalid', 'commit', '-qm', 'agent committed change'], { cwd: agentWorktreePath })
+writeFileSync(path.join(agentWorktreePath, 'agent-change.txt'), 'changed again by nova\n')
+process.chdir(smokeRepo)
 
 const { CoordinationPopover } = await import('./CoordinationPopover')
 const { listTuiProtocolRuns } = await import('../../lib/tui/service')
@@ -30,7 +44,7 @@ db.exec(`INSERT INTO protocol_runs (id, prompt, status, provider, base_cwd, max_
 db.exec(`INSERT INTO protocol_agents (id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, status, created_at, updated_at)
   VALUES ('lead', 'run-smoke', 'lead', 'lead', 'claude', 'sess-lead', '${process.cwd()}', '', 'idle', '${ts}', '${ts}')`)
 db.exec(`INSERT INTO protocol_agents (id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, status, created_at, updated_at)
-  VALUES ('agent-1', 'run-smoke', 'nova', 'teammate', 'claude', 'sess-1', '/tmp/wt-1', 'agent/x', 'working', '${ts}', '${ts}')`)
+  VALUES ('agent-1', 'run-smoke', 'nova', 'teammate', 'claude', 'sess-1', '${agentWorktreePath}', 'agent/x', 'working', '${ts}', '${ts}')`)
 db.exec(`INSERT INTO protocol_agents (id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, status, created_at, updated_at)
   VALUES ('codex-lead', 'run-codex', 'codex-01', 'lead', 'codex', 'sess-codex', '${process.cwd()}', '', 'done', '${oldTs}', '${oldTs}')`)
 db.exec(`INSERT INTO protocol_tasks (id, run_id, title, prompt, status, owner_agent_id, paths_json, blocked_by_json, created_at, updated_at)
@@ -97,6 +111,7 @@ const MARKERS = [
   'Build the widget',
   'Verify output',
   'Message the current context',
+  'G changes',
   ...(smokeWidth >= 160 ? ['STAGE    TASK', '└─ [ ]', 'THROUGHPUT (events/min)', 'RUN STATE', 'OWNERSHIP'] : []),
 ]
 let missing: string[] = MARKERS
@@ -224,12 +239,62 @@ if (spanBackground('[3] AGENT INSPECTOR') !== overviewFocusBackground || !captur
   process.exit(1)
 }
 
+// Git review follows the currently inspected agent. The lead uses the clean
+// shared checkout, while nova's isolated worktree contains the only diff.
+await act(async () => {
+  handleKey?.({ name: 'g', ctrl: false, shift: true, sequence: 'G' })
+})
+if (!await waitForFrameMarker('Git · lead · shared checkout')) {
+  console.error('Lead Git review did not open against the shared checkout')
+  process.exit(1)
+}
+await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)) })
+if (captureCharFrame().includes('M agent-change.txt')) {
+  console.error('Lead Git review leaked changes from nova’s isolated worktree')
+  process.exit(1)
+}
+if (captureCharFrame().includes('agent committed change')) {
+  console.error('Lead Git history leaked commits from nova’s isolated branch')
+  process.exit(1)
+}
+await act(async () => {
+  handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('[3] AGENT INSPECTOR')) {
+  console.error('Closing lead Git review did not return to the Coordinator')
+  process.exit(1)
+}
+
 await act(async () => {
   handleKey?.({ name: 'down', ctrl: false, shift: false, sequence: '' })
   await new Promise((resolve) => setTimeout(resolve, 50))
 })
 if (!captureCharFrame().includes('[2/2]')) {
   console.error('Agent down navigation did not advance one visible agent')
+  process.exit(1)
+}
+
+await act(async () => {
+  handleKey?.({ name: 'g', ctrl: false, shift: true, sequence: 'G' })
+})
+if (!await waitForFrameMarker('Git · nova · agent/x') || !await waitForFrameMarker('M agent-change.txt')) {
+  console.error(`Nova Git review did not use the agent worktree:\n${captureCharFrame()}`)
+  process.exit(1)
+}
+await act(async () => {
+  handleKey?.({ name: '4', ctrl: false, shift: false, sequence: '4' })
+})
+if (!await waitForFrameMarker('agent committed change')) {
+  console.error('Nova Git review did not expose commits from the agent branch')
+  process.exit(1)
+}
+await act(async () => {
+  handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('[2/2]')) {
+  console.error('Closing worktree Git review did not preserve the selected agent')
   process.exit(1)
 }
 
