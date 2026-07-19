@@ -224,7 +224,8 @@ console.error(`Coordinator ${state.runId}: ${state.name || state.agentId} (${sta
 console.error(`Identity: ${state.identityFile}`)
 
 function isTerminal(wait) {
-  return ['completed', 'failed', 'stopped'].includes(wait.snapshot.run.status)
+  const status = wait?.actionable?.runStatus ?? wait?.snapshot?.run?.status
+  return ['completed', 'failed', 'stopped'].includes(status)
 }
 
 // A provider tick is a full model turn; only spend one when the wait's
@@ -253,6 +254,13 @@ outer: for (;;) {
     await saveState(state.identityFile, state)
   } catch (error) {
     failures += 1
+    // A broken provider CLI must not strand the supervisor forever after the
+    // run was stopped or completed by another participant.
+    try {
+      const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
+      cursor = current.cursor
+      if (isTerminal(current)) break
+    } catch { /* retain the provider error and retry when the daemon is unavailable */ }
     const delay = Math.min(30_000, 1_000 * 2 ** Math.min(failures - 1, 5))
     console.error(`Coordinator tick failed: ${error.message}; retrying in ${delay}ms`)
     await new Promise((resolve) => setTimeout(resolve, delay))

@@ -196,6 +196,9 @@ try {
   const createdPayload = JSON.parse(created.content?.[0]?.text ?? '{}')
   if (createdPayload.participant?.agentId !== 'external-codex') throw new Error('Codex CLI did not bind as Coordinator lead')
   if (createdPayload.participant?.token) throw new Error('Coordinator capability leaked through MCP output')
+  if (createdPayload.snapshot?.events?.length || createdPayload.snapshot?.messages?.length) {
+    throw new Error('Coordinator create echoed historical events or messages into the initial MCP result')
+  }
   const savedLeadIdentity = JSON.parse(await readFile(leadIdentityFile, 'utf8'))
   if (savedLeadIdentity.token !== 'token-codex') throw new Error('Coordinator capability was not persisted')
   if ((await stat(leadIdentityFile)).mode & 0o077) throw new Error('Coordinator identity file is not mode 0600')
@@ -203,6 +206,7 @@ try {
   const waited = await client.callTool({ name: 'coord_wait', arguments: { timeout_ms: 0 } })
   const waitedPayload = JSON.parse(waited.content?.[0]?.text ?? '{}')
   if (waitedPayload.cursor !== 'event-1') throw new Error('Coordinator wait cursor did not round-trip')
+  if ('snapshot' in waitedPayload) throw new Error('Coordinator wait leaked the full board snapshot into the MCP result')
 
   const teammateIdentityFile = path.join(identityDir, 'teammate.json')
   const secondTransport = new StdioClientTransport({

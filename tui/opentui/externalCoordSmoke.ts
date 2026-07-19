@@ -84,8 +84,10 @@ const sendPlanRequest = () => coordination.sendExternalProtocolMessage(lead, {
   to: teammate.agentId,
   body: 'Please send a plan before completing the task.',
 })
-await coordination.runExternalProtocolIdempotent(lead, 'send_message', 'plan-request-1', sendPlanRequest)
-await coordination.runExternalProtocolIdempotent(lead, 'send_message', 'plan-request-1', sendPlanRequest)
+await Promise.all([
+  coordination.runExternalProtocolIdempotent(lead, 'send_message', 'plan-request-1', sendPlanRequest),
+  coordination.runExternalProtocolIdempotent(lead, 'send_message', 'plan-request-1', sendPlanRequest),
+])
 const changedWait = await coordination.waitForExternalProtocolChange(teammate, {
   cursor: initialWait.cursor ?? undefined,
   timeoutMs: 100,
@@ -100,6 +102,27 @@ const inbox = await coordination.readExternalProtocolInbox(teammate)
 assert.equal(inbox.messages.length, 1)
 assert.match(inbox.messages[0].body, /send a plan/)
 assert.equal((await coordination.readExternalProtocolInbox(teammate)).messages.length, 0)
+
+// A burst larger than the 100-event wait page must be drained over multiple
+// calls without advancing the first response cursor past unseen events.
+const burstStart = await coordination.waitForExternalProtocolChange(teammate, { timeoutMs: 0 })
+for (let index = 0; index < 105; index += 1) {
+  await coordination.reportExternalProtocolProgress(lead, {
+    status: 'ready',
+    summary: `burst event ${index}`,
+  })
+}
+const burstPageOne = await coordination.waitForExternalProtocolChange(teammate, {
+  cursor: burstStart.cursor ?? undefined,
+  timeoutMs: 0,
+})
+assert.equal(burstPageOne.events.length, 100)
+const burstPageTwo = await coordination.waitForExternalProtocolChange(teammate, {
+  cursor: burstPageOne.cursor ?? undefined,
+  timeoutMs: 0,
+})
+assert.equal(burstPageTwo.changed, true)
+assert.equal(burstPageTwo.events.length, 5)
 
 // A participant's own writes never wake its own wait.
 const idleWait = await coordination.waitForExternalProtocolChange(teammate, { timeoutMs: 0 })

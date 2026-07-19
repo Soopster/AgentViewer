@@ -655,18 +655,18 @@ function requireExternalParticipantSync(db: SqliteDatabase, identity: ExternalPr
 
 // External responses ride MCP tool results into a model's context; a tighter
 // event window than the UI's keeps every mutation response affordable.
-const EXTERNAL_EVENT_WINDOW = 60
+const EXTERNAL_EVENT_WINDOW = 20
 
 function externalSnapshotSync(db: SqliteDatabase, runId: string, agentId: string): ProtocolRunSnapshot {
   const snapshot = readSnapshotSync(db, runId)
   if (!snapshot) throw new Error('Coordinator run not found')
   return {
     ...snapshot,
-    messages: snapshot.messages.filter((message) => (
-      message.fromAgentId === agentId || message.toAgentId === agentId
-    )),
-    // Mailbox bodies are delivered through `messages`; keep other agents'
-    // direct message text out of the shared event timeline.
+    // Mail is consumed through the cursor-aware inbox API. Repeating up to 200
+    // historical bodies on every status/wait response made context scale with
+    // run age without helping the next decision.
+    messages: [],
+    // Keep other agents' direct message text out of the shared event timeline.
     events: snapshot.events
       .filter((event) => event.type !== 'message' || event.agentId === agentId)
       .slice(-EXTERNAL_EVENT_WINDOW),
@@ -1081,19 +1081,28 @@ function hasEventAfterCursorSync(db: SqliteDatabase, runId: string, cursor: stri
 }
 
 /** Events after `cursor` (all authors), oldest first, message-privacy filtered. */
-function eventsAfterCursorSync(db: SqliteDatabase, runId: string, agentId: string, cursor: string | null): AgentProtocolEvent[] {
+function eventsAfterCursorSync(
+  db: SqliteDatabase,
+  runId: string,
+  agentId: string,
+  cursor: string | null,
+): { events: AgentProtocolEvent[]; cursor: string | null } {
   const rows = cursor && /^\d+$/.test(cursor)
     ? db.prepare(`
-        SELECT * FROM protocol_events
+        SELECT rowid AS cursor, * FROM protocol_events
         WHERE run_id = ? AND rowid > ? AND type != 'agent.heartbeat'
         ORDER BY rowid ASC LIMIT 100
       `).all(runId, Number(cursor)) as Row[]
     : (db.prepare(`
-        SELECT * FROM protocol_events
+        SELECT rowid AS cursor, * FROM protocol_events
         WHERE run_id = ? AND type != 'agent.heartbeat'
         ORDER BY rowid DESC LIMIT 50
       `).all(runId) as Row[]).reverse()
-  return rows.map(rowToEvent).filter((event) => event.type !== 'message' || event.agentId === agentId)
+  const last = rows.at(-1)?.cursor
+  return {
+    events: rows.map(rowToEvent).filter((event) => event.type !== 'message' || event.agentId === agentId),
+    cursor: typeof last === 'number' || typeof last === 'bigint' ? String(last) : cursor,
+  }
 }
 
 function recoverStaleExternalParticipantsSync(db: SqliteDatabase, runId: string): void {
@@ -1159,16 +1168,21 @@ export async function waitForExternalProtocolChange(
   for (;;) {
     const changed = hasEventAfterCursorSync(db, identity.runId, cursor, identity.agentId)
     if (changed || Date.now() >= deadline) {
-      const latest = latestRunCursorSync(db, identity.runId)
+      const page = changed
+        ? eventsAfterCursorSync(db, identity.runId, identity.agentId, cursor)
+        : { events: [], cursor: latestRunCursorSync(db, identity.runId) }
       const snapshot = await readExternalProtocolRun(identity)
       const inbox = await readExternalProtocolInbox(identity, { acknowledge: false })
       return {
         changed,
         timedOut: !changed,
-        cursor: latest,
+        // Advance only through the rows returned by this page. If more than
+        // 100 events arrived in a burst, the next wait returns immediately
+        // with the next page instead of skipping straight to the newest row.
+        cursor: page.cursor,
         snapshot,
         inbox,
-        events: changed ? eventsAfterCursorSync(db, identity.runId, identity.agentId, cursor) : [],
+        events: page.events,
         actionable: externalActionableSync(db, identity.runId, identity.agentId),
       }
     }
@@ -1177,6 +1191,8 @@ export async function waitForExternalProtocolChange(
     await waitForRunSignal(identity.runId, Math.min(1_000, deadline - Date.now()))
   }
 }
+
+const externalIdempotencyInFlight = new Map<string, Promise<unknown>>()
 
 export async function runExternalProtocolIdempotent<T>(
   identity: ExternalProtocolIdentity,
@@ -1196,21 +1212,35 @@ export async function runExternalProtocolIdempotent<T>(
     return typeof row?.response_json === 'string' ? JSON.parse(row.response_json) as T : undefined
   })
   if (cached !== undefined) return cached
-  const result = await operation()
-  // Rejected completions (gate/plan failures) must not be cached: the agent is
-  // told to retry mutations with the SAME request_id, and a retry after fixing
-  // the gate must re-run the checks rather than replay the stale rejection.
-  if (result && typeof result === 'object' && (result as { accepted?: unknown }).accepted === false) {
+  const inFlightKey = `${identity.runId}\0${identity.agentId}\0${action}\0${key}`
+  const existing = externalIdempotencyInFlight.get(inFlightKey) as Promise<T> | undefined
+  if (existing) return existing
+
+  const pending = (async () => {
+    const result = await operation()
+    // Rejected completions (gate/plan failures) must not be cached: the agent is
+    // told to retry mutations with the SAME request_id, and a retry after fixing
+    // the gate must re-run the checks rather than replay the stale rejection.
+    if (result && typeof result === 'object' && (result as { accepted?: unknown }).accepted === false) {
+      return result
+    }
+    await enqueueWrite((db) => {
+      db.prepare(`
+        INSERT OR IGNORE INTO protocol_idempotency
+          (run_id, agent_id, action, request_id, response_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(identity.runId, identity.agentId, action, key, JSON.stringify(result), nowIso())
+    })
     return result
+  })()
+  externalIdempotencyInFlight.set(inFlightKey, pending)
+  try {
+    return await pending
+  } finally {
+    if (externalIdempotencyInFlight.get(inFlightKey) === pending) {
+      externalIdempotencyInFlight.delete(inFlightKey)
+    }
   }
-  await enqueueWrite((db) => {
-    db.prepare(`
-      INSERT OR IGNORE INTO protocol_idempotency
-        (run_id, agent_id, action, request_id, response_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(identity.runId, identity.agentId, action, key, JSON.stringify(result), nowIso())
-  })
-  return result
 }
 
 export async function createExternalProtocolTask(

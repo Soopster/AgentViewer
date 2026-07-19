@@ -118,6 +118,11 @@ async function bindCoordinatorParticipant(result) {
     await persistCoordinatorIdentity(participant)
     return {
       ...result,
+      // The first model turn needs the current board, not a replay of a mature
+      // run's history. Status/wait and inbox provide the incremental context.
+      ...(result.snapshot ? {
+        snapshot: { ...result.snapshot, messages: [], events: [] },
+      } : {}),
       participant: { ...participant, token: undefined },
       identityFile: coordinatorIdentityFile,
       autonomy: `Run agent-viewer coord worker --identity ${JSON.stringify(coordinatorIdentityFile)} --attach ${JSON.stringify(baseUrl)} for unattended operation.`,
@@ -163,14 +168,8 @@ const server = new McpServer(
   {
     instructions: [
       'Agent Viewer Coordinator is a shared multi-CLI task board and mailbox.',
-      'Use coord_create_run to lead a new run, coord_join_run to join an existing run, or coord_resume to restore a capability.',
-      'Reusable run definitions (playbooks) live in .agent-viewer/playbooks/: list with coord_list_playbooks, run via coord_create_run playbook_name + args, save a good board with coord_save_playbook.',
-      'Prefer agent-viewer coord worker for unattended runs. In an interactive turn, use coord_wait instead of polling when no action is ready.',
-      'After joining: read coord_status, claim one task, request locks before editing, report progress, drain the inbox, and complete through coord_complete_task.',
-      'coord_wait and coord_status return an `actionable` digest (claimable tasks, inbox count, plans awaiting review, your task state) — act on it instead of diffing snapshots.',
-      'Mutations return a compact result (runStatus, cursor, phases, actionable, affected task) — call coord_status only when you need the full board.',
-      'Hand back work you cannot finish with coord_release_task rather than failing it; any participant may coord_create_task for newly discovered work.',
-      'Never invent agent ids or bypass Coordinator completion gates.',
+      'Create or join a run, then read status and inbox; claim one task, lock paths before editing, report progress, and complete it or release unfinished work.',
+      'Use coord_wait instead of polling while idle, prefer coord worker for unattended runs, and never disclose participant capabilities or bypass completion gates.',
     ].join(' '),
   },
 )
@@ -414,10 +413,13 @@ server.registerTool('coord_wait', {
     timeout_ms: z.number().int().min(0).max(55_000).optional().describe('Defaults to 25000 milliseconds'),
   },
   annotations: { readOnlyHint: true },
-}, async ({ cursor, timeout_ms }) => textResult(await coordinatorRequest('wait', {
-  cursor: cursor ?? coordinatorCursor ?? undefined,
-  timeoutMs: timeout_ms,
-})))
+}, async ({ cursor, timeout_ms }) => {
+  const { snapshot: _snapshot, ...compact } = await coordinatorRequest('wait', {
+    cursor: cursor ?? coordinatorCursor ?? undefined,
+    timeoutMs: timeout_ms,
+  })
+  return textResult(compact)
+})
 
 server.registerTool('coord_create_task', {
   description: 'Add a task with dependencies and expected write paths to the shared board. Any participant may add discovered work; the lead may also add tasks during synthesis, which reopens the run. On playbook boards, pass the phase title the task belongs to so progress rollups stay accurate.',
