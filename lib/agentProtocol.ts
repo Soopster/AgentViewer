@@ -113,6 +113,8 @@ export type ProtocolRun = {
   summary?: string
   gateCommand?: string
   requirePlanApproval?: boolean
+  /** Whether locally managed teammates receive isolated git worktrees. */
+  useWorktrees?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -234,6 +236,11 @@ export type StartProtocolRunParams = {
    * read-only mode.
    */
   requirePlanApproval?: boolean
+  /**
+   * Give every locally managed teammate an isolated git worktree. Defaults to
+   * true; disable only when the user explicitly chooses a shared checkout.
+   */
+  useWorktrees?: boolean
 }
 
 export type StartProtocolRunResult = {

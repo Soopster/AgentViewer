@@ -8,6 +8,7 @@ import {
   coordinatorStateRoot,
   inspectIdentity,
   listWorkerRecords,
+  managedWorkerProcess,
   processAlive,
   resolveWorkerRecord,
   workerLogPath,
@@ -16,6 +17,7 @@ import {
 
 const args = process.argv.slice(2)
 const command = args[0]
+const PROVIDER_CHECK_TIMEOUT_MS = Math.max(100, Number(process.env.AGENT_VIEWER_COORD_CLI_TIMEOUT_MS) || 5_000)
 
 function option(name, fallback) {
   const direct = args.indexOf(name)
@@ -43,24 +45,15 @@ function usage(message) {
 
 function executableCheck(name, envName) {
   const executable = process.env[envName] || name
-  const result = spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: 5_000 })
+  const result = spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: PROVIDER_CHECK_TIMEOUT_MS })
+  const ok = !result.error && result.status === 0
   return {
     name,
     executable,
-    ok: result.status === 0,
-    version: result.status === 0 ? String(result.stdout || result.stderr).trim().split('\n')[0] : undefined,
-    error: result.error?.message || (result.status !== 0 ? String(result.stderr || '').trim() || `exit ${result.status}` : undefined),
+    ok,
+    version: ok ? String(result.stdout || result.stderr).trim().split('\n')[0] : undefined,
+    error: result.error?.message || (!ok ? String(result.stderr || '').trim() || `exit ${result.status}` : undefined),
   }
-}
-
-function managedWorkerProcess(pid) {
-  if (process.platform === 'win32') return false
-  const result = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: 2_000 })
-  const commandLine = String(result.stdout || '')
-  return result.status === 0 && (
-    commandLine.includes('agent-viewer-coord-worker.mjs')
-    || (commandLine.includes('agent-viewer.mjs') && commandLine.includes('coord') && commandLine.includes('worker'))
-  )
 }
 
 async function daemonCheck(baseUrl) {
@@ -140,7 +133,7 @@ async function doctor() {
     console.log(`Daemon: ${checks.daemon.ok ? 'reachable' : `unreachable (${checks.daemon.error})`}`)
     for (const cli of checks.providerClis) console.log(`${cli.name}: ${cli.ok ? cli.version : `unavailable (${cli.error})`}`)
     if (checks.identity) console.log(`Identity: ${checks.identity.ok && checks.identity.secureMode ? 'valid 0600' : 'invalid or insecure'}`)
-    console.log(`Workers: ${records.length} registered, ${records.filter((record) => record.alive).length} alive`)
+    console.log(`Workers: ${records.length} registered, ${records.filter((record) => record.alive).length} alive, ${records.filter((record) => record.stale).length} stale`)
   }
   if (!report.ok) process.exitCode = 1
 }
@@ -157,7 +150,7 @@ async function workers() {
   }
   for (const record of records) {
     console.log([
-      record.alive ? 'running' : record.status || 'stopped',
+      record.alive ? 'running' : record.stale ? 'stale' : record.status || 'stopped',
       record.name || record.agentId || 'unknown',
       record.provider || 'unknown',
       record.runId || 'unknown-run',
@@ -172,12 +165,15 @@ async function restart() {
   if (!selector || selector.startsWith('-')) usage('coord restart requires a worker selector')
   const record = await resolveWorkerRecord(selector)
   if (!record.identityFile) throw new Error('Worker record has no identity file')
-  if (record.alive && processAlive(Number(record.pid))) {
-    if (!managedWorkerProcess(Number(record.pid))) {
-      throw new Error(`Refusing to signal pid ${record.pid}: it is not an Agent Viewer Coordinator worker`)
+  if (processAlive(Number(record.pid))) {
+    const verifiedWorker = managedWorkerProcess(Number(record.pid), record)
+      || (record.alive && record.liveness === 'heartbeat')
+    if (!verifiedWorker) {
+      if (record.alive) throw new Error(`Refusing to signal pid ${record.pid}: it is not the recorded Agent Viewer Coordinator worker`)
+    } else {
+      process.kill(Number(record.pid), 'SIGTERM')
+      await new Promise((resolve) => setTimeout(resolve, 250))
     }
-    process.kill(Number(record.pid), 'SIGTERM')
-    await new Promise((resolve) => setTimeout(resolve, 250))
   }
   const launcher = fileURLToPath(new URL('./agent-viewer.mjs', import.meta.url))
   const child = spawn(process.execPath, [launcher, 'coord', 'worker', '--identity', record.identityFile], {

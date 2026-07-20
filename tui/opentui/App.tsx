@@ -4078,7 +4078,7 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
 }))
 
 const COORD_RUN_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
-const COORD_MODAL_FOCUS_ORDER = ['prompt', 'provider', 'pool', 'agents', 'gate', 'plans', 'launch'] as const
+const COORD_MODAL_FOCUS_ORDER = ['prompt', 'provider', 'pool', 'agents', 'worktrees', 'gate', 'plans', 'launch'] as const
 type CoordModalFocus = (typeof COORD_MODAL_FOCUS_ORDER)[number]
 
 function moveCoordModalFocus(current: CoordModalFocus, direction: 1 | -1): CoordModalFocus {
@@ -4399,7 +4399,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'worktree-new',     label: 'New worktree task',              key: '⇧F', category: 'Worktree' },
   { id: 'worktree-merge',   label: 'Merge worktree task into main',  key: '',   category: 'Worktree' },
   { id: 'worktree-discard', label: 'Discard worktree task',          key: '',   category: 'Worktree' },
-  { id: 'coord-start', label: 'Start coordinated run', key: '', category: 'Coordination' },
+  { id: 'coord-start', label: 'Start coordinated run', key: '^⇧N', category: 'Coordination' },
   { id: 'coord-board', label: 'Open Agent Operations', key: '^⇧A', category: 'Coordination' },
   { id: 'coord-cleanup', label: 'Clean completed worktrees', key: 'c', category: 'Coordination' },
   { id: 'coord-stop', label: 'Stop coordinated run', key: '', category: 'Coordination' },
@@ -6052,6 +6052,8 @@ export default function OpenTuiApp() {
   const [coordGateDraft, setCoordGateDraft] = useState('')
   // Plan-approval guard: teammates must plan first and wait for lead approval.
   const [coordRequirePlanApproval, setCoordRequirePlanApproval] = useState(true)
+  // Isolate teammate edits by default, with an explicit shared-checkout mode.
+  const [coordUseWorktrees, setCoordUseWorktrees] = useState(true)
   const [coordProviderOverride, setCoordProviderOverride] = useState<AgentProvider | null>(null)
   const [coordTeammateProviderOverride, setCoordTeammateProviderOverride] = useState<AgentProvider[] | null>(null)
   const [coordProviderPoolIndex, setCoordProviderPoolIndex] = useState(0)
@@ -10242,6 +10244,16 @@ export default function OpenTuiApp() {
     setCoordBoardOpen(true)
   })
 
+  const openNewWorkflowModal = useEffectEvent(() => {
+    setCoordDraft(composerDraft.trim() || selectedSession?.firstPrompt || '')
+    setCoordError(null)
+    setCoordProviderOverride(null)
+    setCoordTeammateProviderOverride(null)
+    setCoordProviderPoolIndex(0)
+    setCoordModalFocus('prompt')
+    setCoordModalOpen(true)
+  })
+
   const copyCoordinationJoinCommand = useEffectEvent((runId: string) => {
     const attachUrl = process.env.AGENT_VIEWER_ATTACH?.trim().replace(/\/+$/, '') || 'http://127.0.0.1:3000'
     const command = `agent-viewer coord worker --join ${runId} --name <name> --provider codex --attach ${attachUrl}`
@@ -10295,6 +10307,7 @@ export default function OpenTuiApp() {
         effort: tuiEffort === 'auto' ? undefined : tuiEffort,
         gateCommand: coordGateDraft.trim() || undefined,
         requirePlanApproval: coordRequirePlanApproval,
+        useWorktrees: coordUseWorktrees,
       })
       const drafts: Session[] = result.sessions.map((session) => ({
         sessionId: session.sessionId,
@@ -13070,13 +13083,7 @@ export default function OpenTuiApp() {
         else showNotice('info', 'Selected session is not a worktree task', 3500)
         break
       case 'coord-start':
-        setCoordDraft(composerDraft.trim() || selectedSession?.firstPrompt || '')
-        setCoordError(null)
-        setCoordProviderOverride(null)
-        setCoordTeammateProviderOverride(null)
-        setCoordProviderPoolIndex(0)
-        setCoordModalFocus('prompt')
-        setCoordModalOpen(true)
+        openNewWorkflowModal()
         break
       case 'coord-board':
         void openCoordinationBoard()
@@ -13477,7 +13484,9 @@ export default function OpenTuiApp() {
       } else if ((key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down') && coordModalFocus === 'agents') {
         const direction = key.name === 'left' || key.name === 'down' ? -1 : 1
         handled(() => setCoordMaxAgents((current) => Math.min(6, Math.max(2, current + direction))))
-      } else if (key.name === 'return' && coordModalFocus === 'plans') {
+      } else if ((key.name === 'return' || key.name === 'space' || key.sequence === ' ') && coordModalFocus === 'worktrees') {
+        handled(() => setCoordUseWorktrees((current) => !current))
+      } else if ((key.name === 'return' || key.name === 'space' || key.sequence === ' ') && coordModalFocus === 'plans') {
         handled(() => setCoordRequirePlanApproval((current) => !current))
       } else if (key.name === 'return' && coordModalFocus === 'launch') {
         handled(() => { void submitCoordinatedRun() })
@@ -14202,6 +14211,13 @@ export default function OpenTuiApp() {
     // Agent Operations. On legacy terminals raw ^A is the portable fallback.
     if (isCtrlShift('a')) {
       handled(openCoordinationBoard)
+      return
+    }
+
+    // New coordinated workflow, reachable from anywhere — mirrors plain N
+    // (new single-agent session) without requiring a trip through the board.
+    if (isCtrlShift('n')) {
+      handled(openNewWorkflowModal)
       return
     }
 
@@ -17177,9 +17193,9 @@ export default function OpenTuiApp() {
         const sidePaneWidth = splitLayout ? Math.max(contentWidth - runtimePaneWidth - 1, 34) : contentWidth
         const briefHeight = splitLayout
           ? Math.max(10, Math.floor(bodyHeight * 0.48))
-          : Math.max(compact ? 5 : 7, bodyHeight - 11 - (compact ? 4 : 5))
-        const lowerHeight = Math.max(bodyHeight - briefHeight, 11)
-        const runtimeHeight = splitLayout ? lowerHeight : 11
+          : Math.max(compact ? 5 : 7, bodyHeight - 12 - (compact ? 4 : 5))
+        const lowerHeight = Math.max(bodyHeight - briefHeight, 12)
+        const runtimeHeight = splitLayout ? lowerHeight : 12
         const summaryHeight = splitLayout ? lowerHeight : (compact ? 4 : 5)
         const suggestedProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
         const targetProvider = coordProviderOverride ?? suggestedProvider
@@ -17294,6 +17310,12 @@ export default function OpenTuiApp() {
                 <box flexGrow={1} />
                 <text fg={focusColor('agents')} wrapMode="none">{coordModalFocus === 'agents' ? '←/→ adjust' : 'includes the lead'}</text>
               </box>
+              <box height={1} flexDirection="row" backgroundColor={focusBackground('worktrees')}>
+                <text fg={coordUseWorktrees ? theme.green : theme.amber} wrapMode="none">{coordUseWorktrees ? '[x]' : '[ ]'}</text>
+                <text fg={coordModalFocus === 'worktrees' ? theme.text : theme.dim} wrapMode="none">{' Isolate teammates in git worktrees'}</text>
+                <box flexGrow={1} />
+                <text fg={focusColor('worktrees')} wrapMode="none">{coordUseWorktrees ? 'isolated' : 'shared checkout'}</text>
+              </box>
               <box height={2} flexDirection="row" backgroundColor={focusBackground('gate')}>
                 <text fg={coordModalFocus === 'gate' ? theme.text : theme.dim} wrapMode="none">{'Completion gate  '}</text>
                 <box flexGrow={1} border={['bottom']} borderStyle="single" borderColor={focusColor('gate')}>
@@ -17326,6 +17348,7 @@ export default function OpenTuiApp() {
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Lead</text><box flexGrow={1} /><text fg={getProviderAccent(targetProvider)}>{targetProvider.toUpperCase()}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Teammate pool</text><box flexGrow={1} /><text fg={theme.violet}>{fitText(teammateProviders.map((entry) => entry.toUpperCase()).join(' + '), Math.max(sidePaneWidth - 20, 12))}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Agent limit</text><box flexGrow={1} /><text fg={theme.cyan}>{`${coordMaxAgents} total`}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Checkout mode</text><box flexGrow={1} /><text fg={coordUseWorktrees ? theme.green : theme.amber}>{coordUseWorktrees ? 'Isolated worktrees' : 'Shared checkout'}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Plan review</text><box flexGrow={1} /><text fg={coordRequirePlanApproval ? theme.amber : theme.green}>{coordRequirePlanApproval ? 'Required' : 'Automatic'}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Completion gate</text><box flexGrow={1} /><text fg={coordGateDraft.trim() ? theme.amber : theme.dim}>{fitText(coordGateDraft.trim() || 'Not configured', Math.max(sidePaneWidth - 23, 12))}</text></box>
                   <box height={2} marginTop={1} flexDirection="column"><text fg={theme.dim}>BRIEF PREVIEW</text><text fg={theme.text}>{fitText(briefPreview, sidePaneWidth - 2)}</text></box>
@@ -17341,6 +17364,8 @@ export default function OpenTuiApp() {
                       { text: `pool ${teammateProviders.map((entry) => entry.toUpperCase()).join('+')}`, fg: theme.violet },
                       { text: '  ·  ', fg: theme.dim },
                       { text: `${coordMaxAgents} agents`, fg: theme.cyan },
+                      { text: '  ·  ', fg: theme.dim },
+                      { text: coordUseWorktrees ? 'isolated' : 'shared checkout', fg: coordUseWorktrees ? theme.green : theme.amber },
                     ], sidePaneWidth - 2, theme.dim)}
                   </text>
                   {!compact ? <text fg={theme.dim} wrapMode="none">{fitText(`Brief: ${briefPreview}`, sidePaneWidth - 2)}</text> : null}

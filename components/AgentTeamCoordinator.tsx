@@ -206,6 +206,7 @@ export default function AgentTeamCoordinator({
   const [teammateProviderOverride, setTeammateProviderOverride] = useState<AgentProvider[] | null>(null)
   const [gateCommand, setGateCommand] = useState('')
   const [requirePlanApproval, setRequirePlanApproval] = useState(true)
+  const [useWorktrees, setUseWorktrees] = useState(true)
   const [runQuery, setRunQuery] = useState('')
   const [providerFilter, setProviderFilter] = useState<string | null>(null)
   const [taskFilter, setTaskFilter] = useState<TaskFilter>('all')
@@ -224,7 +225,9 @@ export default function AgentTeamCoordinator({
   const events = snapshot?.events ?? []
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents])
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0] ?? null
-  const selectedAgentWorktree = selectedAgent?.worktreePath ? worktreeStats.get(selectedAgent.worktreePath) : undefined
+  const selectedAgentWorktree = selectedAgent?.worktreeBranch && selectedAgent.worktreePath !== run?.baseCwd
+    ? worktreeStats.get(selectedAgent.worktreePath)
+    : undefined
   const selectedAgentLatestEvent = useMemo(() => {
     if (!selectedAgent) return null
     for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -559,6 +562,7 @@ export default function AgentTeamCoordinator({
           title: prompt.slice(0, 40),
           gateCommand: gateCommand.trim() || undefined,
           requirePlanApproval,
+          useWorktrees,
         }),
       })
       setSnapshot(result.snapshot)
@@ -588,7 +592,7 @@ export default function AgentTeamCoordinator({
     } finally {
       setBusyAction(null)
     }
-  }, [baseCwd, busyAction, gateCommand, maxAgents, onOpenSession, onSessionsChanged, promptDraft, requirePlanApproval, showNotice, targetProvider, teammateProviders])
+  }, [baseCwd, busyAction, gateCommand, maxAgents, onOpenSession, onSessionsChanged, promptDraft, requirePlanApproval, showNotice, targetProvider, teammateProviders, useWorktrees])
 
   const sendMessage = useCallback(async () => {
     const body = messageDraft.trim()
@@ -986,6 +990,11 @@ export default function AgentTeamCoordinator({
                             <Checkbox id="coord-plan-approval" className="av-coord-checkbox" checked={requirePlanApproval} onCheckedChange={(checked) => setRequirePlanApproval(checked === true)} />
                             <div><Label htmlFor="coord-plan-approval">Review the lead plan before implementation</Label><small>The team pauses after planning until you approve or reject the proposed task board.</small></div>
                           </div>
+
+                          <div className="av-coord-plan-control av-coord-wide">
+                            <Checkbox id="coord-use-worktrees" className="av-coord-checkbox" checked={useWorktrees} onCheckedChange={(checked) => setUseWorktrees(checked === true)} />
+                            <div><Label htmlFor="coord-use-worktrees">Isolate teammates in git worktrees</Label><small>Recommended for parallel edits. Turn this off when every agent should deliberately share the current checkout.</small></div>
+                          </div>
                         </CardContent>
                       </Card>
                     </div>
@@ -999,6 +1008,7 @@ export default function AgentTeamCoordinator({
                         <div><span>Lead provider</span><strong className={`av-provider-${targetProvider}`}>{String(targetProvider).toUpperCase()}</strong></div>
                         <div><span>Teammate providers</span><strong>{teammateProviders.map((entry) => entry.toUpperCase()).join(' · ')}</strong></div>
                         <div><span>Agent limit</span><strong>{maxAgents} total</strong></div>
+                        <div><span>Checkout mode</span><strong>{useWorktrees ? 'Isolated worktrees' : 'Shared checkout'}</strong></div>
                         <div><span>Plan review</span><strong>{requirePlanApproval ? 'Required' : 'Automatic'}</strong></div>
                         <div><span>Completion gate</span><strong title={gateCommand}>{gateCommand.trim() || 'Not configured'}</strong></div>
                         <div className="av-coord-launch-preview">
@@ -1008,6 +1018,7 @@ export default function AgentTeamCoordinator({
                         <div className="av-coord-launch-checks">
                           <span><CheckCircle2 aria-hidden="true" /> Lead session created</span>
                           <span><CheckCircle2 aria-hidden="true" /> Teammates assigned by provider pool</span>
+                          <span><CheckCircle2 aria-hidden="true" /> {useWorktrees ? 'Separate teammate worktrees' : 'Shared checkout selected'}</span>
                           <span><CheckCircle2 aria-hidden="true" /> Task board and live activity enabled</span>
                         </div>
                       </CardContent>
@@ -1027,7 +1038,7 @@ export default function AgentTeamCoordinator({
                   <div className="av-coord-run-heading">
                     <div>
                       <strong>{firstLine(run.prompt)}</strong>
-                      <span><b>{run.status}</b> · agentViewer · {run.baseCwd.split('/').at(-1) || run.id} · {formatAge(run.createdAt)}</span>
+                      <span><b>{run.status}</b> · {run.useWorktrees === false ? 'shared checkout' : 'isolated worktrees'} · {run.baseCwd.split('/').at(-1) || run.id} · {formatAge(run.createdAt)}</span>
                     </div>
                   </div>
                   <div className="av-coord-toolbar-actions">
@@ -1141,7 +1152,9 @@ export default function AgentTeamCoordinator({
                           variant="outline"
                           className="av-coord-btn"
                           onClick={() => {
-                            const worktree = worktreeStats.get(selectedAgent.worktreePath)
+                            const worktree = selectedAgent.worktreeBranch && selectedAgent.worktreePath !== run.baseCwd
+                              ? worktreeStats.get(selectedAgent.worktreePath)
+                              : undefined
                             if (worktree) setPendingAction({ kind: 'merge', agent: selectedAgent, worktree })
                             else showNotice(`${selectedAgent.name} has no merge-ready worktree`)
                           }}

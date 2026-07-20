@@ -355,6 +355,7 @@ await saveState(state.identityFile, state)
 console.error(`Coordinator ${state.runId}: ${state.name || state.agentId} (${state.role || 'participant'})`)
 console.error(`Identity: ${state.identityFile}`)
 await workerLog(state, `worker starting pid=${process.pid} provider=${state.provider} run=${state.runId}`)
+const workerInstanceId = randomUUID()
 await writeWorkerRecord(state.identityFile, {
   runId: state.runId,
   agentId: state.agentId,
@@ -365,9 +366,21 @@ await writeWorkerRecord(state.identityFile, {
   attach: baseUrl,
   logFile: state.logFile,
   pid: process.pid,
+  workerInstanceId,
+  heartbeatAt: new Date().toISOString(),
   status: 'running',
   startedAt: new Date().toISOString(),
 })
+const heartbeatTimer = setInterval(() => {
+  void writeWorkerRecord(state.identityFile, {
+    pid: process.pid,
+    workerInstanceId,
+    heartbeatAt: new Date().toISOString(),
+  }).catch((error) => {
+    void workerLog(state, `worker heartbeat failed: ${error instanceof Error ? error.message : error}`)
+  })
+}, 5_000)
+heartbeatTimer.unref?.()
 
 function isTerminal(wait) {
   const status = wait?.actionable?.runStatus ?? wait?.snapshot?.run?.status
@@ -465,6 +478,7 @@ outer: for (;;) {
 }
 
 await saveState(state.identityFile, state)
+clearInterval(heartbeatTimer)
 await writeWorkerRecord(state.identityFile, {
   status: finalStatus,
   pid: process.pid,

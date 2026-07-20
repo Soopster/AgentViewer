@@ -264,7 +264,7 @@ OpenTUI is the default terminal runtime. It supports provider selection, session
 
 ### Agent Teams
 
-Press `Ctrl+Shift+A` in the OpenTUI app to open the agent-team board, then `n` to start a coordinated run. A team run uses a lead agent to decompose the request, named teammates in isolated git worktrees, a shared task board, direct teammate messages, path locks, optional completion gates, and an optional plan-approval guard.
+Press `Ctrl+Shift+N` anywhere in the OpenTUI app to launch a coordinated workflow directly, or `Ctrl+Shift+A` to open Agent Operations first and press `n` from there. The launcher creates a lead that decomposes the request, a shared task board, direct teammate messages, path locks, optional completion gates, and an optional plan-approval guard. Teammates use isolated git worktrees by default; turn off **Isolate teammates in git worktrees** in the launcher only when they should deliberately share the current checkout.
 
 OpenTUI enables enhanced keyboard reporting for terminals that support Kitty/CSI-u. In legacy terminals that cannot distinguish `Ctrl+letter` from `Ctrl+Shift+letter`, the raw `Ctrl+A` and `Ctrl+G` sequences fall back to the coordinator and pull-request shortcuts; analytics and Git status remain available from the command palette.
 

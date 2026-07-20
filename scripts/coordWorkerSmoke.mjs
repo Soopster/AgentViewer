@@ -11,6 +11,7 @@ const testDir = await mkdtemp(path.join(tmpdir(), 'agent-viewer-coord-worker-'))
 const fakeCodex = path.join(testDir, 'fake-codex.mjs')
 const failingCodex = path.join(testDir, 'failing-codex.mjs')
 const rateLimitedCodex = path.join(testDir, 'rate-limited-codex.mjs')
+const slowVersionCli = path.join(testDir, 'slow-version-cli.mjs')
 const identityFile = path.join(testDir, 'identity.json')
 const terminalIdentityFile = path.join(testDir, 'terminal-identity.json')
 const onceFailureIdentityFile = path.join(testDir, 'once-failure-identity.json')
@@ -33,6 +34,11 @@ console.error('429 rate limit exceeded; quota window exhausted')
 process.exit(1)
 `)
 await chmod(rateLimitedCodex, 0o700)
+await writeFile(slowVersionCli, `#!/usr/bin/env node
+process.on('SIGTERM', () => {})
+setTimeout(() => process.exit(0), 1_200)
+`)
+await chmod(slowVersionCli, 0o700)
 await writeFile(path.join(testDir, '.gitignore'), '.agent-viewer-data/\n')
 await writeFile(path.join(testDir, 'README.md'), 'worker smoke\n')
 execFileSync('git', ['init', '-q'], { cwd: testDir })
@@ -211,6 +217,10 @@ const adminEnv = {
   AGENT_VIEWER_COORD_HOME: coordHome,
   CODEX_PATH: fakeCodex,
   CLAUDE_PATH: fakeCodex,
+  OPENCODE_PATH: fakeCodex,
+  COPILOT_PATH: fakeCodex,
+  PI_PATH: slowVersionCli,
+  AGENT_VIEWER_COORD_CLI_TIMEOUT_MS: '1000',
   CODEX_ARGS_FILE: codexArgsFile,
 }
 const workerList = JSON.parse(execFileSync(process.execPath, [launcher, 'coord', 'workers', '--json'], {
@@ -232,6 +242,10 @@ const doctor = JSON.parse(await runNode([
 ], adminEnv))
 if (!doctor.ok || doctor.checks?.protocol?.serverExpected !== 2) {
   throw new Error('coord doctor did not report a healthy negotiated setup')
+}
+const piDoctor = doctor.checks?.providerClis?.find((entry) => entry.name === 'pi')
+if (piDoctor?.ok !== false || !String(piDoctor?.error ?? '').includes('ETIMEDOUT')) {
+  throw new Error('coord doctor reported a timed-out provider CLI as healthy')
 }
 snapshot.run.status = 'completed'
 const restartOutput = execFileSync(process.execPath, [launcher, 'coord', 'restart', identityFile], {

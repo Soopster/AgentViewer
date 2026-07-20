@@ -78,7 +78,7 @@ type Row = Record<string, unknown>
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
 const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
 const LOCK_LEASE_MS = 20 * 60_000
-const SCHEMA_VERSION = 8
+const SCHEMA_VERSION = 9
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 const EXTERNAL_AGENT_STALE_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_STALE_MS) || 5 * 60_000)
@@ -111,6 +111,7 @@ type RunController = {
   effort?: string
   gateCommand?: string
   requirePlanApproval: boolean
+  useWorktrees: boolean
   stopped: boolean
   synthesisStarted: boolean
   interventionsUsed: number
@@ -191,6 +192,7 @@ function initializeSchema(db: SqliteDatabase): void {
       summary TEXT,
       gate_command TEXT,
       require_plan_approval INTEGER NOT NULL DEFAULT 0,
+      use_worktrees INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -335,6 +337,8 @@ function initializeSchema(db: SqliteDatabase): void {
 // workflow-style progress rollups.
 // v7 → v8: external client negotiation/capabilities plus typed mailbox intent,
 // correlations, reply requirements, and resolution state.
+// v8 → v9: persist whether locally managed teammates use isolated worktrees
+// or intentionally share the run checkout.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -380,6 +384,11 @@ function migrateSchema(db: SqliteDatabase): void {
     } catch {
       // column already exists
     }
+  }
+  try {
+    db.exec('ALTER TABLE protocol_runs ADD COLUMN use_worktrees INTEGER NOT NULL DEFAULT 1')
+  } catch {
+    // column already exists
   }
 }
 
@@ -546,6 +555,7 @@ function rowToRun(row: Row): ProtocolRun {
     summary: typeof row.summary === 'string' ? row.summary : undefined,
     gateCommand: typeof row.gate_command === 'string' && row.gate_command ? row.gate_command : undefined,
     requirePlanApproval: Boolean(Number(row.require_plan_approval ?? 0)),
+    useWorktrees: row.use_worktrees == null ? true : Boolean(Number(row.use_worktrees)),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
@@ -2905,6 +2915,11 @@ async function completionGateFailure(
   taskId?: string,
 ): Promise<string[] | null> {
   const db = await getDatabase()
+  const runRow = db.prepare('SELECT use_worktrees FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
+  // A shared checkout cannot reliably attribute concurrent file changes to a
+  // specific participant. Task path locks still prevent conflicting claims,
+  // while the configured gate command validates the combined checkout.
+  if (runRow && !Boolean(Number(runRow.use_worktrees ?? 1))) return null
   const locks = (db.prepare(`
     SELECT * FROM protocol_locks
     WHERE run_id = ? AND agent_id = ? AND status = 'active' AND lease_expires_at > ?
@@ -3377,13 +3392,15 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
   for (let index = 0; index < teammateCount; index += 1) {
     if (controller.stopped) return
     const name = TEAMMATE_NAMES[index % TEAMMATE_NAMES.length]!
-    let worktree: WorktreeTask
+    let workspace: { path: string; branch: string }
     let session: Awaited<ReturnType<typeof createNewViewSession>>
     try {
-      worktree = await createWorktreeTask(controller.baseCwd, `${controller.title ?? 'coord'}-${name}`)
+      workspace = controller.useWorktrees
+        ? await createWorktreeTask(controller.baseCwd, `${controller.title ?? 'coord'}-${name}`)
+        : { path: controller.baseCwd, branch: '' }
       session = await createNewViewSession({
         provider: controller.teammateProviders[index % controller.teammateProviders.length] ?? controller.provider,
-        cwd: worktree.path,
+        cwd: workspace.path,
         title: `${controller.title ?? 'Coordinated run'} · ${name}`,
       })
     } catch (err) {
@@ -3402,7 +3419,7 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
         INSERT INTO protocol_agents (
           id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at
         ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, ?, NULL, 'idle', NULL, ?, ?)
-      `).run(agentId, controller.runId, name, session.provider, session.sessionId, worktree.path, worktree.branch, ts, ts)
+      `).run(agentId, controller.runId, name, session.provider, session.sessionId, workspace.path, workspace.branch, ts, ts)
       claimTaskSync(tx, controller.runId, agentId)
     })
     if (session.isPending) controller.pendingSessions.add(agentId)
@@ -3455,6 +3472,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     effort: params.effort,
     gateCommand: params.gateCommand?.trim() || undefined,
     requirePlanApproval: params.requirePlanApproval === true,
+    useWorktrees: params.useWorktrees !== false,
     stopped: false,
     synthesisStarted: false,
     interventionsUsed: 0,
@@ -3472,9 +3490,9 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
       db.prepare(`
         INSERT INTO protocol_runs (
           id, prompt, status, provider, base_cwd, max_agents, lead_agent_id, summary,
-          gate_command, require_plan_approval, created_at, updated_at
+          gate_command, require_plan_approval, use_worktrees, created_at, updated_at
         )
-        VALUES (?, ?, 'planning', ?, ?, ?, 'lead', NULL, ?, ?, ?, ?)
+        VALUES (?, ?, 'planning', ?, ?, ?, 'lead', NULL, ?, ?, ?, ?, ?)
       `).run(
         runId,
         prompt,
@@ -3483,6 +3501,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
         maxAgents,
         controller.gateCommand ?? null,
         controller.requirePlanApproval ? 1 : 0,
+        controller.useWorktrees ? 1 : 0,
         ts,
         ts,
       )
@@ -3573,7 +3592,7 @@ export async function deleteProtocolRun(runId: string): Promise<{ deleted: boole
   // agent's work as a side effect of tidying the board.
   const keptWorktrees: string[] = []
   for (const agent of agents) {
-    if (agent.role !== 'teammate' || !agent.worktreePath) continue
+    if (agent.role !== 'teammate' || !agent.worktreePath || !agent.worktreeBranch) continue
     const worktree = await findWorktreeTaskForCwd(agent.worktreePath).catch(() => null)
     if (!worktree) continue
     if (worktree.dirtyFiles === 0 && worktree.aheadCommits === 0) {
@@ -3669,6 +3688,10 @@ export async function cleanupProtocolRunWorktrees(
       agentName: agent.name,
       path: agent.worktreePath,
       branch: agent.worktreeBranch,
+    }
+    if (!agent.worktreeBranch) {
+      results.push({ ...base, status: 'skipped', reason: 'agent used the shared checkout' })
+      continue
     }
     const task = await findWorktreeTaskForCwd(agent.worktreePath).catch(() => null)
     if (!task) {

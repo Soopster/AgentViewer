@@ -16,6 +16,7 @@ Communication is part of the work, not overhead. Every other participant runs in
    - Teammate: `agent-viewer coord worker --join <run-id> --name <name> --provider codex|claude|opencode|copilot|pi --attach <url>` (`--join latest` auto-discovers the newest joinable run)
    Mixing providers across teammates is encouraged — every worker speaks the same coord_* protocol, so a Claude lead can supervise Codex, OpenCode, Copilot, and Pi lanes (or any other combination) on one board.
    Joined teammates receive an isolated git worktree by default; use `--shared` only when explicitly required.
+   From the OpenTUI app, press `Ctrl+Shift+N` anywhere (or `Ctrl+Shift+A` for Agent Operations, then `n`) to open the same new-workflow launcher. Keep **Isolate teammates in git worktrees** enabled for parallel edits; disable it only for an intentional shared-checkout workflow.
 2. In an already-running interactive CLI, confirm the `coord_*` MCP tools are available. If not, report that the Agent Viewer MCP must be configured and stop.
 3. Determine the mode from the request:
    - Join when a run ID is supplied, or when asked to join without one. Call `coord_join_run` with a unique descriptive name, the actual provider, and the current worktree path; omit `run_id` to auto-join the newest joinable run for this checkout. Use `coord_list_runs` only when you need to choose between several live runs.

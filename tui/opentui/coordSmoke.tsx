@@ -71,6 +71,7 @@ db.close()
 
 const noop = () => {}
 let openedSessionAgent: string | null = null
+let newRunRequests = 0
 let handleKey: ((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null = null
 const smokeWidth = Number.parseInt(process.env.AGENT_VIEWER_COORD_SMOKE_WIDTH ?? '120', 10)
 const smokeHeight = Number.parseInt(process.env.AGENT_VIEWER_COORD_SMOKE_HEIGHT ?? '40', 10)
@@ -81,7 +82,7 @@ const { captureCharFrame, captureSpans } = await testRender(
     height={smokeHeight}
     initialRunId={null}
     onOpenSession={(agent) => { openedSessionAgent = agent.name }}
-    onNewRun={noop}
+    onNewRun={() => { newRunRequests += 1 }}
     onClose={noop}
     onNotice={noop}
     onKeyHandlerReady={(handler) => { handleKey = handler }}
@@ -259,9 +260,8 @@ if (captureCharFrame().includes('agent committed change')) {
 }
 await act(async () => {
   handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '' })
-  await new Promise((resolve) => setTimeout(resolve, 50))
 })
-if (!captureCharFrame().includes('[3] AGENT INSPECTOR')) {
+if (!await waitForFrameMarker('[3] AGENT INSPECTOR')) {
   console.error('Closing lead Git review did not return to the Coordinator')
   process.exit(1)
 }
@@ -291,9 +291,8 @@ if (!await waitForFrameMarker('agent committed change')) {
 }
 await act(async () => {
   handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '' })
-  await new Promise((resolve) => setTimeout(resolve, 50))
 })
-if (!captureCharFrame().includes('[2/2]')) {
+if (!await waitForFrameMarker('[2/2]')) {
   console.error('Closing worktree Git review did not preserve the selected agent')
   process.exit(1)
 }
@@ -339,6 +338,14 @@ await act(async () => {
 })
 if (openedSessionAgent !== 'lead') {
   console.error('Activity inspect hotkey did not open the selected event agent session')
+  process.exit(1)
+}
+
+await act(async () => {
+  handleKey?.({ name: 'n', ctrl: false, shift: false, sequence: 'n' })
+})
+if (newRunRequests !== 1) {
+  console.error('N did not open the new workflow launcher from Agent Operations')
   process.exit(1)
 }
 

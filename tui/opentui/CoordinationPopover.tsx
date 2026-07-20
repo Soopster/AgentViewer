@@ -526,7 +526,9 @@ export function CoordinationPopover({
       return
     }
     if (key.name === 'w' && section === 'team' && selectedAgent) {
-      const worktree = worktreeStats.get(selectedAgent.worktreePath)
+      const worktree = selectedAgent.worktreeBranch && selectedAgent.worktreePath !== run?.baseCwd
+        ? worktreeStats.get(selectedAgent.worktreePath)
+        : undefined
       if (!worktree) onNotice('info', `${selectedAgent.name} has no merge-ready worktree`, 3000)
       else setPending({ kind: 'merge', agent: selectedAgent, worktree })
       return

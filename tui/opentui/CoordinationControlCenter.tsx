@@ -243,7 +243,9 @@ export function CoordinationControlCenter({
     }
     return byKey
   }, [snapshot?.messages])
-  const worktree = inspectedAgent ? worktreeStats.get(inspectedAgent.worktreePath) : undefined
+  const worktree = inspectedAgent?.worktreeBranch && inspectedAgent.worktreePath !== run?.baseCwd
+    ? worktreeStats.get(inspectedAgent.worktreePath)
+    : undefined
   const completed = tasks.filter((task) => task.status === 'completed').length
   const undelivered = snapshot?.messages.filter((message) => !message.deliveredAt).length ?? 0
   const providerSummary = PROVIDERS.map((provider) => ({ provider, count: fleet.providers.get(provider) ?? 0 }))
@@ -312,6 +314,7 @@ export function CoordinationControlCenter({
           <text fg={theme.green} wrapMode="none">{`${fleet.working} working`}</text>
           <text fg={theme.text} wrapMode="none">{`  ·  ${fleet.queued} queued  ·  `}</text>
           <text fg={fleet.attention > 0 ? theme.amber : theme.green} wrapMode="none">{`${fleet.attention} attention`}</text>
+          {run ? <text fg={run.useWorktrees === false ? theme.amber : theme.green} wrapMode="none">{`  ·  ${run.useWorktrees === false ? 'shared checkout' : 'isolated worktrees'}`}</text> : null}
           {busy ? <text fg={theme.amber} wrapMode="none">{'  ·  refreshing'}</text> : null}
         </box>
       </box>

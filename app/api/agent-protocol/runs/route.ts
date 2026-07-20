@@ -28,9 +28,10 @@ export async function POST(request: NextRequest) {
   const effort = typeof body.effort === 'string' && body.effort.trim() ? body.effort.trim() : undefined
   const gateCommand = typeof body.gateCommand === 'string' && body.gateCommand.trim() ? body.gateCommand.trim() : undefined
   const requirePlanApproval = body.requirePlanApproval === true
+  const useWorktrees = body.useWorktrees !== false
 
   try {
-    const result = await startProtocolRun({ prompt, baseCwd, provider, teammateProviders, maxAgents, title, model, effort, gateCommand, requirePlanApproval })
+    const result = await startProtocolRun({ prompt, baseCwd, provider, teammateProviders, maxAgents, title, model, effort, gateCommand, requirePlanApproval, useWorktrees })
     return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

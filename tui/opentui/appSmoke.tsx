@@ -15,7 +15,14 @@ import path from 'path'
 process.chdir(mkdtempSync(path.join(tmpdir(), 'agent-viewer-app-smoke-')))
 const { default: OpenTuiApp } = await import('./App')
 
-const { captureCharFrame } = await testRender(<OpenTuiApp />, { width: 120, height: 40 })
+const setup = await testRender(<OpenTuiApp />, {
+  width: 120,
+  height: 40,
+  // Preserve distinct Ctrl+Shift chords so the smoke exercises the same
+  // Agent Operations shortcuts as a modern terminal.
+  kittyKeyboard: true,
+})
+const { captureCharFrame } = setup
 
 await act(async () => {
   await new Promise((resolve) => setTimeout(resolve, 2500))
@@ -29,7 +36,37 @@ if (!frame.includes('COMPOSER')) {
   throw new Error('Full app frame missing the composer dock')
 }
 
-console.log('Full App smoke render passed')
+// Exercise the real root keyboard dispatcher and overlay hand-off. This is
+// intentionally App-level: the CoordinationPopover smoke also covers `n`, but
+// it cannot prove the board closes and the New Workflow launcher replaces it.
+act(() => {
+  setup.mockInput.pressKey('a', { ctrl: true, shift: true })
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 200))
+})
+let coordinationFrame = captureCharFrame()
+if (!coordinationFrame.includes('AGENT CONTROL CENTER')) {
+  throw new Error(`Ctrl+Shift+A did not open Agent Operations:\n${coordinationFrame}`)
+}
+
+act(() => {
+  setup.mockInput.pressKey('n')
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 200))
+})
+coordinationFrame = captureCharFrame()
+if (!coordinationFrame.includes('NEW WORKFLOW')) {
+  throw new Error(`N from Agent Operations did not open New Workflow:\n${coordinationFrame}`)
+}
+if (!coordinationFrame.includes('Isolate teammates in git worktrees')) {
+  throw new Error(`New Workflow is missing the optional worktree control:\n${coordinationFrame}`)
+}
+
+console.log('Full App smoke render and Agent Operations N launch passed')
 // Boot effects leave live timers (session polls, registry reconcile) — exit
 // explicitly instead of waiting for them.
 process.exit(0)
