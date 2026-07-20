@@ -272,10 +272,10 @@ export function CoordinationControlCenter({
     : section === 'tasks'
       ? `j/k task${selectedTask?.ownerAgentId ? ' · enter owner' : ''} · / filter${selectedTaskPlanState === 'awaiting' ? ' · a approve · R reject' : ''} · f fail · m ${selectedTask?.ownerAgentId ? 'owner' : 'lead'}`
       : section === 'team'
-        ? `j/k agent${inspectedAgent ? ` · enter session · x interrupt · w merge · m message${STUCK_AGENT_STATUSES.has(inspectedAgent.status) ? ' · R rerun' : ''}` : ''}`
+        ? `j/k agent${inspectedAgent ? ` · enter session · x interrupt${run?.useWorktrees === false ? '' : ' · w merge'} · m message${STUCK_AGENT_STATUSES.has(inspectedAgent.status) ? ' · R rerun' : ''}` : ''}`
         : `j/k event${selectedEventAgent ? ' · enter session' : ''} · g tail · / filter · m ${selectedEventAgent ? 'event agent' : 'lead'}`
   const globalKeys = innerW >= 154
-    ? `1-4 focus · tab next · G agent changes · n new · M broadcast · s stop · D delete · c cleanup${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
+    ? `1-4 focus · tab next · G agent changes · n new · M broadcast · s stop · D delete${run?.useWorktrees === false ? '' : ' · c cleanup'}${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
     : '1-4 focus · tab next · G changes · n new · M all · s stop · r refresh · q close'
   const footerText = `${contextualKeys}  │  ${globalKeys}`
   const activityFooterText = rightW >= 40 ? '4 focus  ·  g tail  ·  / filter  ·  m message' : '4 focus  ·  g tail'
@@ -319,7 +319,7 @@ export function CoordinationControlCenter({
           <text fg={theme.green} wrapMode="none">{`${fleet.working} working`}</text>
           <text fg={theme.text} wrapMode="none">{`  ·  ${fleet.queued} queued  ·  `}</text>
           <text fg={fleet.attention > 0 ? theme.amber : theme.green} wrapMode="none">{`${fleet.attention} attention`}</text>
-          {run ? <text fg={run.useWorktrees === false ? theme.amber : theme.green} wrapMode="none">{`  ·  ${run.useWorktrees === false ? 'shared checkout' : 'isolated worktrees'}`}</text> : null}
+          {run ? <text fg={run.useWorktrees === false ? theme.amber : theme.green} wrapMode="none">{`  ·  ${run.useWorktrees === false ? 'shared checkout' : 'isolated checkouts'}`}</text> : null}
           {busy ? <text fg={theme.amber} wrapMode="none">{'  ·  refreshing'}</text> : null}
         </box>
       </box>

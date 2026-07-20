@@ -15,13 +15,15 @@ Communication is part of the work, not overhead. Every other participant runs in
    - Lead: `agent-viewer coord worker --start "<goal>" --name <name> --provider codex|claude|opencode|copilot|pi --attach <url>`
    - Teammate: `agent-viewer coord worker --join <run-id> --name <name> --provider codex|claude|opencode|copilot|pi --attach <url>` (`--join latest` auto-discovers the newest joinable run)
    Mixing providers across teammates is encouraged — every worker speaks the same coord_* protocol, so a Claude lead can supervise Codex, OpenCode, Copilot, and Pi lanes (or any other combination) on one board.
-   Joined teammates receive an isolated git worktree by default; use `--shared` only when explicitly required.
-   From the OpenTUI app, press `Ctrl+Shift+N` anywhere (or `Ctrl+Shift+A` for Agent Operations, then `n`) to open the same new-workflow launcher. Keep **Isolate teammates in git worktrees** enabled for parallel edits; disable it only for an intentional shared-checkout workflow.
+   Joined teammates receive an isolated checkout by default; use `--shared` only when explicitly required.
+   From the OpenTUI app, press `Ctrl+Shift+N` anywhere (or `Ctrl+Shift+A` for Agent Operations, then `n`) to open the same new-workflow launcher. Keep **Isolate teammates in separate checkouts** enabled for parallel edits; disable it only for an intentional shared-checkout workflow.
 2. In an already-running interactive CLI, confirm the `coord_*` MCP tools are available. If not, report that the Agent Viewer MCP must be configured and stop.
-3. Determine the mode from the request:
-   - Join when a run ID is supplied, or when asked to join without one. Call `coord_join_run` with a unique descriptive name, the actual provider, and the current worktree path; omit `run_id` to auto-join the newest joinable run for this checkout. Use `coord_list_runs` only when you need to choose between several live runs.
-   - Start when the user asks to create, coordinate, lead, or fan out a goal and provides no run ID. Call `coord_create_run` with the complete objective, actual provider, current worktree, and a realistic participant limit.
+3. Determine the run and checkout mode from the request:
+   - Join when a run ID is supplied, or when asked to join without one. Call `coord_join_run` with a unique descriptive name, the actual provider, and the current checkout path; omit `run_id` to auto-join the newest joinable run for this checkout. Use `coord_list_runs` only when you need to choose between several live runs.
+   - Start when the user asks to create, coordinate, lead, or fan out a goal and provides no run ID. Call `coord_create_run` with the complete objective, actual provider, current checkout, and a realistic participant limit.
    - Resume when participant credentials are already configured. Call `coord_status`; use `coord_resume` only when explicit run ID, agent ID, and token values were supplied securely.
+   - In isolated mode, keep each participant in its assigned checkout and use isolation/integration terminology when relevant.
+   - In shared mode, refer only to the shared checkout. Emphasize disjoint write locks and preservation of existing changes; do not suggest isolation, merge, cleanup, or branch-management steps that do not apply.
 4. Never print, message, commit, or otherwise disclose a participant capability token. Identity is persisted in a mode-0600 file; share only the run ID with people or other CLIs.
 5. Read `coord_status` and `coord_read_inbox` immediately after entering.
 6. If setup or recovery is unclear, run `agent-viewer coord doctor --json`; inspect persistent supervisors with `coord workers`, `coord logs`, and `coord restart` rather than creating a duplicate participant.
@@ -39,7 +41,7 @@ When the user requests multiple participating agents, seed the board before star
 4. After workers join, inspect `coord_status` before considering kickoff complete. Confirm the requested roster count, distinct task owners, and a claimed or `working` task for every teammate. If a teammate is idle, create or release/re-scope tasks immediately and send the assignment with `coord_send_message`; do not rely on terminal stdin, local logs, or a worker process being alive as assignment delivery.
 5. Keep write lanes disjoint. Use read-only profiling, audit, or verification lanes without write paths when implementation paths must remain locked by another task.
 
-Before finalization, audit substantive participation. Count an agent only when Coordinator evidence shows at least one of: a claimed and worked task, a completed task, a published finding, or a substantive task-related mailbox response. `agent.ready`, heartbeats, idle status, and worktree creation do not count. If the user requested N participating agents, do not finalize until N agents meet this gate; create follow-up review or verification tasks when useful, or report the shortfall honestly if meaningful work no longer remains.
+Before finalization, audit substantive participation. Count an agent only when Coordinator evidence shows at least one of: a claimed and worked task, a completed task, a published finding, or a substantive task-related mailbox response. `agent.ready`, heartbeats, idle status, and checkout setup do not count. If the user requested N participating agents, do not finalize until N agents meet this gate; create follow-up review or verification tasks when useful, or report the shortfall honestly if meaningful work no longer remains.
 
 ## Playbooks (reusable runs)
 
@@ -60,7 +62,7 @@ When the participant role is `lead`:
    - a concrete outcome and acceptance check;
    - the narrowest expected write paths;
    - explicit dependencies when another task must finish first.
-3. Prefer separate clean worktrees for each external CLI. Do not assign overlapping paths to parallel tasks.
+3. Match the configured checkout mode. In isolated mode, keep each external CLI in its assigned clean checkout. In shared mode, keep every write lane disjoint and make ownership explicit before editing.
 4. Keep one integration or review task for the lead when useful; make it depend on teammate lanes so the lead cannot absorb their work before they participate.
 5. Send important context or changed priorities through `coord_send_message`; do not assume another CLI sees local terminal output. Use `priority: urgent` only when it should wake a worker, `priority: status` for batchable progress, and `reply_required` for a request that must stay actionable until answered.
 6. Review submitted plans promptly when plan approval is enabled.
@@ -97,7 +99,8 @@ Do not end merely because the board is temporarily idle. End when the run become
 ## Shared-checkout guardrails
 
 - Treat existing dirty files as belonging to their current owner. Never overwrite or clean them to satisfy a completion gate.
-- Completion is baseline-aware: pre-existing dirty files are ignored unless this participant changes them after claiming. Still prefer isolated worktrees because concurrent edits remain unsafe.
+- Completion is baseline-aware: pre-existing dirty files are ignored unless this participant changes them after claiming. Concurrent edits are still unsafe, so locks and task paths must remain disjoint.
+- Keep all guidance in shared-checkout terms. Do not ask participants to create, merge, clean, remove, or inspect isolated checkouts as part of this run.
 - Treat mailbox delivery as at-least-once. Supply a stable `request_id` before retrying any mutation so the Coordinator can return the original result.
 - If a participant disappears, notify the lead. Do not silently take its owned task or paths until the board releases or reassigns them.
 

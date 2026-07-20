@@ -319,7 +319,9 @@ export function CoordinationPopover({
         const result = await deleteTuiProtocolRun(runId)
         onNotice('info', result.keptWorktrees.length > 0
           ? `Run deleted · kept ${result.keptWorktrees.length} worktree${result.keptWorktrees.length === 1 ? '' : 's'} with unmerged work`
-          : 'Run deleted — clean worktrees removed', 6000)
+          : run?.useWorktrees === false
+            ? 'Run deleted · shared checkout left unchanged'
+            : 'Run deleted — clean worktrees removed', 6000)
         const remaining = runs.filter((entry) => entry.id !== runId)
         setRuns(remaining)
         setRunId(remaining[0]?.id ?? null)
@@ -389,6 +391,10 @@ export function CoordinationPopover({
 
   const cleanupRun = useCallback(async () => {
     if (!runId || busy) return
+    if (run?.useWorktrees === false) {
+      onNotice('info', 'This workflow uses a shared checkout; there are no isolated agent checkouts to clean', 4000)
+      return
+    }
     setBusy(true)
     try {
       const result = await cleanupTuiProtocolRunWorktrees(runId)
@@ -402,7 +408,7 @@ export function CoordinationPopover({
     } finally {
       setBusy(false)
     }
-  }, [busy, onNotice, runId])
+  }, [busy, onNotice, run, runId])
 
   const refreshAll = useCallback(async () => {
     if (busy) return
@@ -558,7 +564,9 @@ export function CoordinationPopover({
       const worktree = selectedAgent.worktreeBranch && selectedAgent.worktreePath !== run?.baseCwd
         ? worktreeStats.get(selectedAgent.worktreePath)
         : undefined
-      if (!worktree) onNotice('info', `${selectedAgent.name} has no merge-ready worktree`, 3000)
+      if (!worktree) onNotice('info', run?.useWorktrees === false
+        ? `${selectedAgent.name} uses the shared checkout; no merge step is needed`
+        : `${selectedAgent.name} has no merge-ready worktree`, 3000)
       else setPending({ kind: 'merge', agent: selectedAgent, worktree })
       return
     }
@@ -591,7 +599,9 @@ export function CoordinationPopover({
   const pendingLabel = pending?.kind === 'stop'
     ? 'Stop run and interrupt every live turn? y/Enter confirm · n/Esc cancel'
     : pending?.kind === 'delete-run'
-      ? 'DELETE run ledger? Clean worktrees removed; unmerged work kept. y/Enter · n/Esc'
+      ? run?.useWorktrees === false
+        ? 'DELETE run ledger? Shared checkout left unchanged. y/Enter · n/Esc'
+        : 'DELETE run ledger? Clean worktrees removed; unmerged work kept. y/Enter · n/Esc'
       : pending?.kind === 'merge'
         ? `Squash-merge ${pending.agent.name}'s worktree into main checkout? y/Enter · n/Esc`
         : pending?.kind === 'fail-task'

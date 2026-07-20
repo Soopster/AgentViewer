@@ -631,7 +631,11 @@ export default function AgentTeamCoordinator({
         setRuns(remaining)
         setRunId(remaining[0]?.id ?? null)
         setSnapshot(null)
-        showNotice(result.keptWorktrees.length > 0 ? `Run deleted; kept ${result.keptWorktrees.length} worktree(s)` : 'Run deleted')
+        showNotice(result.keptWorktrees.length > 0
+          ? `Run deleted; kept ${result.keptWorktrees.length} worktree(s)`
+          : snapshot?.run.useWorktrees === false
+            ? 'Run deleted; shared checkout left unchanged'
+            : 'Run deleted')
       } else if (pendingAction.kind === 'merge') {
         const result = await jsonFetch<{ staged: boolean }>('/api/worktrees', {
           method: 'POST',
@@ -657,7 +661,7 @@ export default function AgentTeamCoordinator({
       setBusyAction(null)
       setPendingAction(null)
     }
-  }, [appendEvent, busyAction, pendingAction, refreshWorktrees, runId, runs, showNotice, snapshot?.run.baseCwd])
+  }, [appendEvent, busyAction, pendingAction, refreshWorktrees, runId, runs, showNotice, snapshot?.run.baseCwd, snapshot?.run.useWorktrees])
 
   const cleanupRun = useCallback(async () => {
     if (!runId || busyAction) return
@@ -709,7 +713,9 @@ export default function AgentTeamCoordinator({
   const pendingLabel = pendingAction?.kind === 'stop'
     ? 'Stop this run and interrupt every live teammate turn?'
     : pendingAction?.kind === 'delete-run'
-    ? 'Delete this run ledger? Clean worktrees are removed; unmerged ones are kept.'
+    ? run?.useWorktrees === false
+      ? 'Delete this run ledger? The shared checkout is left unchanged.'
+      : 'Delete this run ledger? Clean worktrees are removed; unmerged ones are kept.'
     : pendingAction?.kind === 'merge'
     ? `Squash-merge ${pendingAction.agent.name}'s worktree into the main checkout?`
     : pendingAction?.kind === 'fail-task'
@@ -993,7 +999,7 @@ export default function AgentTeamCoordinator({
 
                           <div className="av-coord-plan-control av-coord-wide">
                             <Checkbox id="coord-use-worktrees" className="av-coord-checkbox" checked={useWorktrees} onCheckedChange={(checked) => setUseWorktrees(checked === true)} />
-                            <div><Label htmlFor="coord-use-worktrees">Isolate teammates in git worktrees</Label><small>Recommended for parallel edits. Turn this off when every agent should deliberately share the current checkout.</small></div>
+                            <div><Label htmlFor="coord-use-worktrees">Use separate teammate checkouts</Label><small>Recommended for parallel edits. Turn this off when every agent should deliberately share the current checkout.</small></div>
                           </div>
                         </CardContent>
                       </Card>
@@ -1008,7 +1014,7 @@ export default function AgentTeamCoordinator({
                         <div><span>Lead provider</span><strong className={`av-provider-${targetProvider}`}>{String(targetProvider).toUpperCase()}</strong></div>
                         <div><span>Teammate providers</span><strong>{teammateProviders.map((entry) => entry.toUpperCase()).join(' · ')}</strong></div>
                         <div><span>Agent limit</span><strong>{maxAgents} total</strong></div>
-                        <div><span>Checkout mode</span><strong>{useWorktrees ? 'Isolated worktrees' : 'Shared checkout'}</strong></div>
+                        <div><span>Checkout mode</span><strong>{useWorktrees ? 'Isolated checkouts' : 'Shared checkout'}</strong></div>
                         <div><span>Plan review</span><strong>{requirePlanApproval ? 'Required' : 'Automatic'}</strong></div>
                         <div><span>Completion gate</span><strong title={gateCommand}>{gateCommand.trim() || 'Not configured'}</strong></div>
                         <div className="av-coord-launch-preview">
@@ -1018,7 +1024,7 @@ export default function AgentTeamCoordinator({
                         <div className="av-coord-launch-checks">
                           <span><CheckCircle2 aria-hidden="true" /> Lead session created</span>
                           <span><CheckCircle2 aria-hidden="true" /> Teammates assigned by provider pool</span>
-                          <span><CheckCircle2 aria-hidden="true" /> {useWorktrees ? 'Separate teammate worktrees' : 'Shared checkout selected'}</span>
+                          <span><CheckCircle2 aria-hidden="true" /> {useWorktrees ? 'Separate teammate checkouts' : 'Shared checkout selected'}</span>
                           <span><CheckCircle2 aria-hidden="true" /> Task board and live activity enabled</span>
                         </div>
                       </CardContent>
@@ -1038,7 +1044,7 @@ export default function AgentTeamCoordinator({
                   <div className="av-coord-run-heading">
                     <div>
                       <strong>{firstLine(run.prompt)}</strong>
-                      <span><b>{run.status}</b> · {run.useWorktrees === false ? 'shared checkout' : 'isolated worktrees'} · {run.baseCwd.split('/').at(-1) || run.id} · {formatAge(run.createdAt)}</span>
+                      <span><b>{run.status}</b> · {run.useWorktrees === false ? 'shared checkout' : 'isolated checkouts'} · {run.baseCwd.split('/').at(-1) || run.id} · {formatAge(run.createdAt)}</span>
                     </div>
                   </div>
                   <div className="av-coord-toolbar-actions">
@@ -1066,7 +1072,9 @@ export default function AgentTeamCoordinator({
                         {displayedTask && !TERMINAL_TASK_STATUSES.has(displayedTask.status) ? (
                           <button type="button" className="av-danger" onClick={() => { setRunMenuOpen(false); setPendingAction({ kind: 'fail-task', task: displayedTask }) }}><AlertTriangle aria-hidden="true" /> Mark task failed</button>
                         ) : null}
-                        <button type="button" onClick={() => { setRunMenuOpen(false); void cleanupRun() }} disabled={busyAction === 'cleanup'}><ShieldCheck aria-hidden="true" /> Clean worktrees</button>
+                        {run.useWorktrees !== false ? (
+                          <button type="button" onClick={() => { setRunMenuOpen(false); void cleanupRun() }} disabled={busyAction === 'cleanup'}><ShieldCheck aria-hidden="true" /> Clean worktrees</button>
+                        ) : null}
                         <button type="button" className="av-danger" onClick={() => { setRunMenuOpen(false); setPendingAction({ kind: 'delete-run' }) }}><Trash2 aria-hidden="true" /> Delete workflow</button>
                       </div>
                     ) : null}
@@ -1146,21 +1154,23 @@ export default function AgentTeamCoordinator({
                         <Button type="button" size="sm" variant="outline" className="av-coord-btn av-danger" onClick={() => void interruptAgent(selectedAgent)} disabled={busyAction === `interrupt:${selectedAgent.id}`}>
                           <CircleStop data-icon="inline-start" aria-hidden="true" /> Stop
                         </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="av-coord-btn"
-                          onClick={() => {
-                            const worktree = selectedAgent.worktreeBranch && selectedAgent.worktreePath !== run.baseCwd
-                              ? worktreeStats.get(selectedAgent.worktreePath)
-                              : undefined
-                            if (worktree) setPendingAction({ kind: 'merge', agent: selectedAgent, worktree })
-                            else showNotice(`${selectedAgent.name} has no merge-ready worktree`)
-                          }}
-                        >
-                          <GitMerge data-icon="inline-start" aria-hidden="true" /> Merge Work
-                        </Button>
+                        {run.useWorktrees !== false ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="av-coord-btn"
+                            onClick={() => {
+                              const worktree = selectedAgent.worktreeBranch && selectedAgent.worktreePath !== run.baseCwd
+                                ? worktreeStats.get(selectedAgent.worktreePath)
+                                : undefined
+                              if (worktree) setPendingAction({ kind: 'merge', agent: selectedAgent, worktree })
+                              else showNotice(`${selectedAgent.name} has no merge-ready worktree`)
+                            }}
+                          >
+                            <GitMerge data-icon="inline-start" aria-hidden="true" /> Merge Work
+                          </Button>
+                        ) : null}
                         </div>
                       </div>
                     ) : null}

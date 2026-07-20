@@ -78,10 +78,12 @@ type Row = Record<string, unknown>
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
 const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
 const LOCK_LEASE_MS = 20 * 60_000
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 const EXTERNAL_AGENT_STALE_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_STALE_MS) || 5 * 60_000)
+const MAIL_SWEEP_INTERVAL_MS = 5_000
+const REPLY_ESCALATION_MS = 3 * 60_000
 const STATUS_BATCH_THRESHOLD = 3
 const STATUS_BATCH_MAX_WAIT_MS = 15_000
 // One automatic re-dispatch when a teammate's turn ends mid-task; after that
@@ -284,7 +286,8 @@ function initializeSchema(db: SqliteDatabase): void {
       in_reply_to TEXT,
       created_at TEXT NOT NULL,
       delivered_at TEXT,
-      resolved_at TEXT
+      resolved_at TEXT,
+      escalated_at TEXT
     );
 
     CREATE INDEX IF NOT EXISTS protocol_messages_run_idx ON protocol_messages(run_id, to_agent_id, delivered_at);
@@ -339,6 +342,8 @@ function initializeSchema(db: SqliteDatabase): void {
 // correlations, reply requirements, and resolution state.
 // v8 → v9: persist whether locally managed teammates use isolated worktrees
 // or intentionally share the run checkout.
+// v9 → v10: track when a stale reply-required message was escalated, so the
+// mailbox sweep nudges a silent recipient (and the lead) exactly once.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -387,6 +392,11 @@ function migrateSchema(db: SqliteDatabase): void {
   }
   try {
     db.exec('ALTER TABLE protocol_runs ADD COLUMN use_worktrees INTEGER NOT NULL DEFAULT 1')
+  } catch {
+    // column already exists
+  }
+  try {
+    db.exec('ALTER TABLE protocol_messages ADD COLUMN escalated_at TEXT')
   } catch {
     // column already exists
   }
@@ -2701,7 +2711,22 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
         const body = [event.summary, event.detail].filter(Boolean).join(' — ') || '(empty message)'
         const messageKind = typeof event.payload?.kind === 'string' ? event.payload.kind as ProtocolMessageKind : 'request'
         const messagePriority = typeof event.payload?.priority === 'string' ? event.payload.priority as ProtocolMessagePriority : undefined
-        for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, event.to)) {
+        const recipients = resolveRecipientsSync(db, event.runId, event.agentId, event.to)
+        const target = (event.to ?? 'lead').trim()
+        if (recipients.length === 0 && target.toLowerCase() !== 'all') {
+          // A typo'd or stale teammate name must not vanish a message with no
+          // trace — tell the sender delivery failed instead of silently
+          // dropping it (the external send path already throws on this).
+          newMessageIds.push(insertMessageSync(db, {
+            runId: event.runId,
+            fromAgentId: 'coordinator',
+            toAgentId: event.agentId,
+            body: `Delivery failed: no teammate named "${target}" in this run. Check the roster and resend.`,
+            ts,
+            kind: 'status',
+          }))
+        }
+        for (const recipient of recipients) {
           newMessageIds.push(insertMessageSync(db, {
             runId: event.runId,
             fromAgentId: event.agentId,
@@ -2819,6 +2844,102 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
     }
   }
 }
+
+/**
+ * A message nobody has answered gets exactly one fresh, visible nudge: a
+ * reminder to the original recipient plus a status ping to the run's lead.
+ * `escalated_at` is stamped up front so a message is only ever escalated
+ * once — this is a safety net for mail that was handed off (delivered) but
+ * never actually acted on (recipient crashed, forgot, or its CLI process
+ * was compacted before it replied), not a repeating nag loop.
+ */
+async function escalateStaleReplyRequiredMessages(runId: string): Promise<string[]> {
+  const cutoff = new Date(Date.now() - REPLY_ESCALATION_MS).toISOString()
+  const newMessageIds: string[] = []
+  await enqueueWrite((db) => {
+    const stale = db.prepare(`
+      SELECT * FROM protocol_messages
+      WHERE run_id = ? AND reply_required = 1 AND resolved_at IS NULL
+        AND escalated_at IS NULL AND delivered_at IS NOT NULL AND created_at < ?
+    `).all(runId, cutoff) as Row[]
+    if (stale.length === 0) return
+    const agents = listAgentsSync(db, runId)
+    const agentsById = new Map(agents.map((agent) => [agent.id, agent]))
+    const lead = agents.find((agent) => agent.role === 'lead')
+    const ts = nowIso()
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const row of stale) {
+        const message = rowToMessage(row)
+        db.prepare('UPDATE protocol_messages SET escalated_at = ? WHERE id = ?').run(ts, message.id)
+        const recipient = agentsById.get(message.toAgentId)
+        if (!recipient) continue
+        newMessageIds.push(insertMessageSync(db, {
+          runId,
+          fromAgentId: 'coordinator',
+          toAgentId: recipient.id,
+          body: `Reminder: reply required — you have not answered "${message.body.slice(0, 160)}" (sent ${message.createdAt}).`,
+          ts,
+          kind: 'request',
+          priority: 'urgent',
+          replyRequired: true,
+          correlationId: message.correlationId ?? message.id,
+        }))
+        if (lead && lead.id !== recipient.id) {
+          const fromName = agentsById.get(message.fromAgentId)?.name ?? 'a teammate'
+          newMessageIds.push(insertMessageSync(db, {
+            runId,
+            fromAgentId: 'coordinator',
+            toAgentId: lead.id,
+            body: `${recipient.name} has not replied to a reply-required message from ${fromName} in over ${Math.round(REPLY_ESCALATION_MS / 60_000)}m.`,
+            ts,
+            kind: 'status',
+          }))
+        }
+      }
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  })
+  if (newMessageIds.length > 0) notifyRunChanged(runId)
+  return newMessageIds
+}
+
+/**
+ * The mailbox's only durability guarantee: every active run gets retried
+ * delivery attempts and reply-required escalation for its whole lifetime,
+ * independent of whether the original insert's fire-and-forget delivery
+ * succeeded. Cheap when idle (one indexed query per run, no active runs is
+ * one query total) so it just runs for the life of the process.
+ */
+async function sweepMailboxes(): Promise<void> {
+  const db = await getDatabase()
+  const runs = db.prepare(`
+    SELECT id FROM protocol_runs WHERE status IN ('planning', 'running', 'synthesizing', 'blocked')
+  `).all() as Row[]
+  for (const row of runs) {
+    const runId = String(row.id)
+    const undelivered = db.prepare('SELECT id FROM protocol_messages WHERE run_id = ? AND delivered_at IS NULL')
+      .all(runId) as Row[]
+    if (undelivered.length > 0) {
+      await deliverMessagesLive(runId, undelivered.map((entry) => String(entry.id))).catch(() => {})
+    }
+    const escalated = await escalateStaleReplyRequiredMessages(runId).catch(() => [] as string[])
+    if (escalated.length > 0) await deliverMessagesLive(runId, escalated).catch(() => {})
+  }
+}
+
+let mailSweepTimer: ReturnType<typeof setInterval> | null = null
+
+function ensureMailSweep(): void {
+  if (mailSweepTimer) return
+  mailSweepTimer = setInterval(() => { void sweepMailboxes().catch(() => {}) }, MAIL_SWEEP_INTERVAL_MS)
+  mailSweepTimer.unref?.()
+}
+
+ensureMailSweep()
 
 /**
  * Wake the lead mid-run to unstick the team. Budgeted (MAX_LEAD_INTERVENTIONS)
@@ -3171,6 +3292,7 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
       inbox,
       agentsById,
       note,
+      useWorktrees: controller.useWorktrees,
     })
     void dispatchAgentTurn(controller, agentId, message, { permissionMode: 'plan' })
     return
@@ -3189,6 +3311,7 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
     note,
     gateCommand: controller.gateCommand,
     requirePlanApproval: controller.requirePlanApproval,
+    useWorktrees: controller.useWorktrees,
   })
   void dispatchAgentTurn(controller, agentId, message)
 }
@@ -3324,6 +3447,7 @@ async function maybeStartSynthesis(controller: RunController): Promise<void> {
       detail: typeof row.detail === 'string' ? row.detail : undefined,
     })),
     agentsById,
+    useWorktrees: controller.useWorktrees,
   })
   void dispatchAgentTurn(controller, lead.id, message)
 }
@@ -3442,7 +3566,7 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
 /**
  * Start a coordinated run: create the LEAD session immediately (returned so
  * the UI can open its tab), then asynchronously run the phases — lead plans
- * the task board, teammates spawn into worktrees and work the claim loop,
+ * the task board, teammates spawn into their configured checkouts and work the claim loop,
  * lead synthesizes when the board is done.
  */
 export async function startProtocolRun(params: StartProtocolRunParams): Promise<StartProtocolRunResult> {
@@ -3525,6 +3649,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     agent: { id: 'lead', name: 'lead' },
     prompt,
     teammateCount: maxAgents - 1,
+    useWorktrees: controller.useWorktrees,
   })
   void dispatchAgentTurn(controller, 'lead', planMessage).catch(async (err) => {
     await appendProtocolEvent({

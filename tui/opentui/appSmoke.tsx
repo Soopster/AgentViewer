@@ -62,7 +62,7 @@ coordinationFrame = captureCharFrame()
 if (!coordinationFrame.includes('NEW WORKFLOW')) {
   throw new Error(`N from Agent Operations did not open New Workflow:\n${coordinationFrame}`)
 }
-if (!coordinationFrame.includes('Isolate teammates in git worktrees')) {
+if (!coordinationFrame.includes('Use separate teammate checkouts')) {
   throw new Error(`New Workflow is missing the optional worktree control:\n${coordinationFrame}`)
 }
 

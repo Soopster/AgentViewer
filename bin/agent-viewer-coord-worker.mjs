@@ -134,12 +134,17 @@ function mcpConfig(state, baseUrl) {
 }
 
 function tickPrompt(state) {
+  const checkoutGuidance = state.checkoutMode === 'isolated'
+    ? `You are working in an isolated git worktree at ${state.cwd}; stay within granted paths and leave integration to the lead.`
+    : `You are working in the shared checkout at ${state.cwd}; keep writes inside granted non-overlapping paths, preserve existing changes, and do not reset or clean files owned by another participant.`
   return [
     `Continue Coordinator run ${state.runId} as ${state.name || state.agentId} (${state.role || 'participant'}).`,
     'You are ALREADY bound to this run: never call coord_create_run, coord_join_run, or coord_list_runs — start with coord_status and act on its actionable digest.',
     'Use the coordinate-agents skill and the agent-viewer coord_* MCP tools now.',
+    checkoutGuidance,
     'Drain the inbox, then perform every immediately actionable role-appropriate step, including implementation and verification.',
     'Coordinate actively — teammates run in other CLIs and cannot see your terminal: answer reply_required mail first, publish reusable discoveries with coord_publish_finding, and send coord_send_message whenever your progress, blockers, or findings affect another lane.',
+    'If your task work will take several steps, call coord_read_inbox again partway through rather than only at the start — a reply_required message from the lead can arrive mid-task and change your plan; you will not be woken for it until you check.',
     'Use stable request_id values before retrying mutations. If no action is ready, return control to the supervisor; do not poll or sleep.',
     'If all tasks are terminal and you are lead, review results and finalize the run. Never print participant credentials.',
   ].join(' ')
@@ -314,6 +319,7 @@ if (options.identity && !options.start && !options.join) {
   state.identityFile = path.resolve(options.identity)
   state.provider ||= options.provider
   state.cwd ||= options.cwd
+  state.checkoutMode ||= state.cwd.includes(`${path.sep}coord-worktrees${path.sep}`) ? 'isolated' : 'shared'
   if (options.model) state.model = options.model
   if (!options.attach && state.attach) baseUrl = normalizeUrl(state.attach)
 } else {
@@ -339,7 +345,12 @@ if (options.identity && !options.start && !options.join) {
     cwd,
     ...workerNegotiation(),
   })
-  state = { ...result.participant, cwd, attach: baseUrl }
+  state = {
+    ...result.participant,
+    cwd,
+    attach: baseUrl,
+    checkoutMode: options.join && !options.shared ? 'isolated' : 'shared',
+  }
   if (options.model) state.model = options.model
   state.identityFile = path.resolve(options.identity || identityFileFor(state))
 }

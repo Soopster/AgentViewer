@@ -685,13 +685,16 @@ export function buildLeadPlanPreamble(params: {
   agent: Pick<ProtocolAgent, 'id' | 'name'>
   prompt: string
   teammateCount: number
+  useWorktrees: boolean
 }): string {
   return [
     `You are the TEAM LEAD of a coordinated multi-agent run (protocol ${AGENT_PROTOCOL_VERSION}).`,
     `Run ID: ${params.runId} · Your agent ID: ${params.agent.id} · Your name: ${params.agent.name}`,
     '',
     `Up to ${params.teammateCount} teammates will be spawned to execute the task list you produce.`,
-    'Each teammate works in its own isolated git worktree and self-claims tasks from the board.',
+    params.useWorktrees
+      ? 'Each teammate works in its own isolated git worktree and self-claims tasks from the board.'
+      : 'All teammates work in the same shared checkout. Give every task strictly non-overlapping write paths; path locks are the concurrency boundary.',
     '',
     'Your job THIS TURN (do not implement anything yourself):',
     `1. Study the request below. Explore the repository read-only as needed.`,
@@ -721,6 +724,7 @@ export function buildTeammatePlanPreamble(params: {
   inbox: ProtocolMessage[]
   agentsById: Map<string, ProtocolAgent>
   note?: string
+  useWorktrees: boolean
 }): string {
   const pathList = params.task.paths.length > 0
     ? params.task.paths.map((path) => `- ${path}`).join('\n')
@@ -728,6 +732,9 @@ export function buildTeammatePlanPreamble(params: {
   return [
     `You are teammate "${params.agent.name}" in a coordinated multi-agent run (protocol ${AGENT_PROTOCOL_VERSION}).`,
     `Run ID: ${params.runId} · Your agent ID: ${params.agent.id}`,
+    params.useWorktrees
+      ? 'Your task will run in an isolated git worktree. Plan only for your granted paths; integration happens after the task is complete.'
+      : 'Your task will run in the shared checkout. Plan only for your granted paths, preserve existing changes, and avoid every path owned by another participant.',
     '',
     'THIS TURN IS PLAN-ONLY. Do not edit files, run destructive commands, or mark the task complete.',
     'Study the repo read-only and propose the approach. The team lead must approve before you implement.',
@@ -773,6 +780,7 @@ export function buildTeammateTurnPreamble(params: {
   note?: string
   gateCommand?: string
   requirePlanApproval?: boolean
+  useWorktrees: boolean
 }): string {
   const pathList = params.task && params.task.paths.length > 0
     ? params.task.paths.map((path) => `- ${path}`).join('\n')
@@ -780,7 +788,9 @@ export function buildTeammateTurnPreamble(params: {
   return [
     `You are teammate "${params.agent.name}" in a coordinated multi-agent run (protocol ${AGENT_PROTOCOL_VERSION}).`,
     `Run ID: ${params.runId} · Your agent ID: ${params.agent.id}`,
-    'You work in an isolated git worktree; your changes merge back later. Never edit files outside your granted paths.',
+    params.useWorktrees
+      ? 'You work in an isolated git worktree; your changes merge back later. Never edit files outside your granted paths.'
+      : 'You work in the shared checkout. Never edit files outside your granted paths, overwrite another participant\'s changes, or reset or clean existing files.',
     '',
     ...(params.note ? [`Coordinator note: ${params.note}`, ''] : []),
     'Team roster (message anyone by name):',
@@ -809,7 +819,7 @@ export function buildTeammateTurnPreamble(params: {
       ? ['- This task has lead-approved planning. Stay inside the approved plan or emit `message`/`task.planned` again if the approach needs material changes.']
       : []),
     ...(params.gateCommand
-      ? [`- Completions are gate-checked: \`${params.gateCommand}\` runs in your worktree and must exit 0, or the completion is rejected with its output. Run it yourself before completing.`]
+      ? [`- Completions are gate-checked: \`${params.gateCommand}\` runs in ${params.useWorktrees ? 'your worktree' : 'the shared checkout'} and must exit 0, or the completion is rejected with its output. Run it yourself before completing.`]
       : []),
     '- Share what you find: `finding` for facts others need, `learning` for reusable context — teammates and the lead see them.',
     '- If blocked, emit `agent.blocked` with the blocker and `message` the teammate (or lead) who can unblock you. Do not silently stop.',
@@ -875,6 +885,7 @@ export function buildLeadSynthesisPreamble(params: {
   tasks: ProtocolTask[]
   knowledge: Array<{ agentId: string; type: string; summary?: string; detail?: string }>
   agentsById: Map<string, ProtocolAgent>
+  useWorktrees: boolean
 }): string {
   const knowledgeList = params.knowledge.length > 0
     ? params.knowledge.map((item) => {
@@ -896,7 +907,9 @@ export function buildLeadSynthesisPreamble(params: {
     knowledgeList,
     '',
     'Synthesize the run: what was done, what was learned, what remains, and any',
-    'risks in merging the worktrees. Then emit ONE `finding` block whose `summary`',
+    params.useWorktrees
+      ? 'risks in merging the worktrees. Then emit ONE `finding` block whose `summary`'
+      : 'risks from concurrent edits in the shared checkout. Then emit ONE `finding` block whose `summary`',
     'is a one-line result and whose `detail` is the full synthesis — that block is',
     'recorded as the run summary. End with `agent.stop_work`.',
     '',

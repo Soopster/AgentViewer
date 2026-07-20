@@ -17312,7 +17312,7 @@ export default function OpenTuiApp() {
               </box>
               <box height={1} flexDirection="row" backgroundColor={focusBackground('worktrees')}>
                 <text fg={coordUseWorktrees ? theme.green : theme.amber} wrapMode="none">{coordUseWorktrees ? '[x]' : '[ ]'}</text>
-                <text fg={coordModalFocus === 'worktrees' ? theme.text : theme.dim} wrapMode="none">{' Isolate teammates in git worktrees'}</text>
+                <text fg={coordModalFocus === 'worktrees' ? theme.text : theme.dim} wrapMode="none">{' Use separate teammate checkouts'}</text>
                 <box flexGrow={1} />
                 <text fg={focusColor('worktrees')} wrapMode="none">{coordUseWorktrees ? 'isolated' : 'shared checkout'}</text>
               </box>
@@ -17348,7 +17348,7 @@ export default function OpenTuiApp() {
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Lead</text><box flexGrow={1} /><text fg={getProviderAccent(targetProvider)}>{targetProvider.toUpperCase()}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Teammate pool</text><box flexGrow={1} /><text fg={theme.violet}>{fitText(teammateProviders.map((entry) => entry.toUpperCase()).join(' + '), Math.max(sidePaneWidth - 20, 12))}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Agent limit</text><box flexGrow={1} /><text fg={theme.cyan}>{`${coordMaxAgents} total`}</text></box>
-                  <box height={1} flexDirection="row"><text fg={theme.dim}>Checkout mode</text><box flexGrow={1} /><text fg={coordUseWorktrees ? theme.green : theme.amber}>{coordUseWorktrees ? 'Isolated worktrees' : 'Shared checkout'}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Checkout mode</text><box flexGrow={1} /><text fg={coordUseWorktrees ? theme.green : theme.amber}>{coordUseWorktrees ? 'Isolated checkouts' : 'Shared checkout'}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Plan review</text><box flexGrow={1} /><text fg={coordRequirePlanApproval ? theme.amber : theme.green}>{coordRequirePlanApproval ? 'Required' : 'Automatic'}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Completion gate</text><box flexGrow={1} /><text fg={coordGateDraft.trim() ? theme.amber : theme.dim}>{fitText(coordGateDraft.trim() || 'Not configured', Math.max(sidePaneWidth - 23, 12))}</text></box>
                   <box height={2} marginTop={1} flexDirection="column"><text fg={theme.dim}>BRIEF PREVIEW</text><text fg={theme.text}>{fitText(briefPreview, sidePaneWidth - 2)}</text></box>
