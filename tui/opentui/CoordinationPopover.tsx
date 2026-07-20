@@ -48,6 +48,7 @@ type PendingAction =
   | { kind: 'delete-run' }
   | { kind: 'merge'; agent: ProtocolAgent; worktree: WorktreeTask }
   | { kind: 'fail-task'; task: ProtocolTask }
+  | { kind: 'rerun-agent'; agent: ProtocolAgent; task: ProtocolTask | null }
 
 const POLL_MS = 2000
 const WORKTREE_STATS_MS = 10_000
@@ -58,6 +59,7 @@ const EVENT_FILTERS: EventFilter[] = ['all', 'attention', 'messages', 'tasks']
 const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 const ACTIVE_TASK_STATUSES = new Set(['claimed', 'planning', 'planned', 'in_progress'])
 const ATTENTION_EVENT_TYPES = new Set(['agent.blocked', 'task.failed', 'lock.denied', 'plan.rejected', 'review.requested'])
+const STUCK_AGENT_STATUSES = new Set(['blocked', 'failed', 'stopped'])
 const MESSAGE_EVENT_TYPES = new Set(['message', 'finding', 'learning', 'handoff'])
 const PROVIDERS = ['codex', 'claude', 'copilot', 'opencode', 'pi'] as const
 
@@ -224,6 +226,12 @@ export function CoordinationPopover({
   const inspectedAgent = section === 'tasks' ? selectedOwner ?? defaultAgent : section === 'events' ? eventAgent ?? defaultAgent : section === 'team' ? selectedAgent : defaultAgent
   const selectedLocks = inspectedAgent ? (snapshot?.locks ?? []).filter((lock) => lock.agentId === inspectedAgent.id && lock.status === 'active') : []
 
+  const stuckAgentTask = useCallback((agent: ProtocolAgent) => (
+    (agent.taskId ? tasks.find((task) => task.id === agent.taskId) : undefined)
+      ?? tasks.find((task) => task.ownerAgentId === agent.id && (task.status === 'blocked' || task.status === 'failed'))
+      ?? null
+  ), [tasks])
+
   const fleet = useMemo(() => {
     const snapshots = runs.flatMap((entry) => {
       const current = entry.id === snapshot?.run.id ? snapshot : fleetSnapshots.get(entry.id)
@@ -329,7 +337,7 @@ export function CoordinationPopover({
           const nextTasks = await listTuiWorktreeTasks(baseCwd).catch(() => [] as WorktreeTask[])
           setWorktreeStats(new Map(nextTasks.map((task) => [task.path, task])))
         }
-      } else {
+      } else if (action.kind === 'fail-task') {
         const next = await appendTuiProtocolEvent({
           version: AGENT_PROTOCOL_VERSION,
           runId,
@@ -340,6 +348,27 @@ export function CoordinationPopover({
         })
         if (next) setSnapshot(next)
         onNotice('info', `${action.task.id} marked failed`, 4000)
+      } else {
+        let next = snapshot
+        if (action.task) {
+          next = await appendTuiProtocolEvent({
+            version: AGENT_PROTOCOL_VERSION,
+            runId,
+            agentId: action.agent.id,
+            type: 'task.released',
+            taskId: action.task.id,
+            summary: `${action.task.id} requeued from Agent Operations to rerun ${action.agent.name}`,
+          }) ?? next
+        }
+        next = await appendTuiProtocolEvent({
+          version: AGENT_PROTOCOL_VERSION,
+          runId,
+          agentId: action.agent.id,
+          type: 'agent.ready',
+          summary: `${action.agent.name} reset from Agent Operations`,
+        }) ?? next
+        if (next) setSnapshot(next)
+        onNotice('info', `${action.agent.name} reset and ready to rerun`, 4000)
       }
     } catch (err) {
       onNotice('error', err instanceof Error ? err.message : 'Action failed')
@@ -347,7 +376,7 @@ export function CoordinationPopover({
       setBusy(false)
       setPending(null)
     }
-  }, [busy, onNotice, runId, runs, snapshot?.run.baseCwd])
+  }, [busy, onNotice, runId, runs, snapshot])
 
   const interruptAgentTurn = useCallback(async (agent: ProtocolAgent) => {
     try {
@@ -541,6 +570,11 @@ export function CoordinationPopover({
       void reviewPlan(selectedTask, false)
       return
     }
+    if (key.name === 'r' && key.shift && section === 'team' && selectedAgent) {
+      if (!STUCK_AGENT_STATUSES.has(selectedAgent.status)) onNotice('info', `${selectedAgent.name} is not stuck`, 2500)
+      else setPending({ kind: 'rerun-agent', agent: selectedAgent, task: stuckAgentTask(selectedAgent) })
+      return
+    }
     if (key.name === 'f' && section === 'tasks' && selectedTask) {
       if (TERMINAL_TASK_STATUSES.has(selectedTask.status)) onNotice('info', `${selectedTask.id} is already terminal`, 2500)
       else setPending({ kind: 'fail-task', task: selectedTask })
@@ -550,7 +584,7 @@ export function CoordinationPopover({
     if (key.name === 'n') { onClose(); onNewRun(); return }
     if (key.name === 'g' && section === 'events') { setEventIndex(-1); return }
     if (key.name === 'r') { void refreshAll(); return }
-  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, eventAgent, filteredEvents.length, gitAgent, inspectedAgent, interruptAgentTurn, messageTarget, navigableTasks.length, onClose, onCopyJoinCommand, onNewRun, onNotice, onOpenSession, pending, planStates, refreshAll, reviewPlan, run, runId, runPendingAction, section, selectedAgent, selectedOwner, selectedTask, sendTeamMessage, snapshot, switchRun, worktreeStats])
+  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, eventAgent, filteredEvents.length, gitAgent, inspectedAgent, interruptAgentTurn, messageTarget, navigableTasks.length, onClose, onCopyJoinCommand, onNewRun, onNotice, onOpenSession, pending, planStates, refreshAll, reviewPlan, run, runId, runPendingAction, section, selectedAgent, selectedOwner, selectedTask, sendTeamMessage, snapshot, stuckAgentTask, switchRun, worktreeStats])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -562,7 +596,9 @@ export function CoordinationPopover({
         ? `Squash-merge ${pending.agent.name}'s worktree into main checkout? y/Enter · n/Esc`
         : pending?.kind === 'fail-task'
           ? `Mark ${pending.task.id} failed? y/Enter · n/Esc`
-          : null
+          : pending?.kind === 'rerun-agent'
+            ? `Rerun ${pending.agent.name}${pending.task ? ` — requeue ${pending.task.id} and reset the agent` : ' — reset the agent to ready'}? y/Enter · n/Esc`
+            : null
   const gitAgentUsesWorktree = Boolean(gitAgent?.worktreePath && run?.baseCwd && gitAgent.worktreePath !== run.baseCwd)
   return (
     <>

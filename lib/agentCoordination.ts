@@ -2680,7 +2680,7 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
           if (task.ownerAgentId) {
             db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'")
               .run(ts, event.runId, task.ownerAgentId, task.id)
-            db.prepare('UPDATE protocol_agents SET task_id = NULL, updated_at = ? WHERE run_id = ? AND id = ? AND task_id = ?')
+            db.prepare("UPDATE protocol_agents SET task_id = NULL, status = CASE WHEN status IN ('working', 'blocked') THEN 'idle' ELSE status END, updated_at = ? WHERE run_id = ? AND id = ? AND task_id = ?")
               .run(ts, event.runId, task.ownerAgentId, task.id)
           }
         }

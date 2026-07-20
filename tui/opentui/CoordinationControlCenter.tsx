@@ -49,6 +49,8 @@ const PROVIDERS = ['codex', 'claude', 'copilot', 'opencode', 'pi'] as const
 const ACTIVE_TASKS = new Set(['claimed', 'planning', 'planned', 'in_progress'])
 const TERMINAL_TASKS = new Set(['completed', 'failed', 'cancelled'])
 const ATTENTION_EVENTS = new Set(['agent.blocked', 'task.failed', 'lock.denied', 'plan.rejected', 'review.requested'])
+const STUCK_AGENT_STATUSES = new Set(['blocked', 'failed', 'stopped'])
+const ERROR_EVENT_TYPES = new Set(['task.failed', 'agent.blocked'])
 
 function paneNumber(section: ControlCenterSection): number {
   return section === 'overview' ? 1 : section === 'tasks' ? 2 : section === 'team' ? 3 : 4
@@ -227,6 +229,9 @@ export function CoordinationControlCenter({
   const selectedEventIndex = selectedEvent ? filteredEvents.indexOf(selectedEvent) : filteredEvents.length - 1
   const visibleEvents = visibleWindow(filteredEvents, selectedEventIndex, eventRows)
   const latestAgentEvent = inspectedAgent ? [...events].reverse().find((event) => event.agentId === inspectedAgent.id) : undefined
+  const agentErrorEvent = inspectedAgent && STUCK_AGENT_STATUSES.has(inspectedAgent.status)
+    ? [...events].reverse().find((event) => event.agentId === inspectedAgent.id && ERROR_EVENT_TYPES.has(event.type))
+    : undefined
   const inspectedTask = inspectedAgent
     ? (inspectedAgent.taskId ? taskById.get(inspectedAgent.taskId) : undefined)
       ?? tasks.find((task) => task.ownerAgentId === inspectedAgent.id && ACTIVE_TASKS.has(task.status))
@@ -267,7 +272,7 @@ export function CoordinationControlCenter({
     : section === 'tasks'
       ? `j/k task${selectedTask?.ownerAgentId ? ' · enter owner' : ''} · / filter${selectedTaskPlanState === 'awaiting' ? ' · a approve · R reject' : ''} · f fail · m ${selectedTask?.ownerAgentId ? 'owner' : 'lead'}`
       : section === 'team'
-        ? `j/k agent${inspectedAgent ? ' · enter session · x interrupt · w merge · m message' : ''}`
+        ? `j/k agent${inspectedAgent ? ` · enter session · x interrupt · w merge · m message${STUCK_AGENT_STATUSES.has(inspectedAgent.status) ? ' · R rerun' : ''}` : ''}`
         : `j/k event${selectedEventAgent ? ' · enter session' : ''} · g tail · / filter · m ${selectedEventAgent ? 'event agent' : 'lead'}`
   const globalKeys = innerW >= 154
     ? `1-4 focus · tab next · G agent changes · n new · M broadcast · s stop · D delete · c cleanup${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
@@ -457,6 +462,9 @@ export function CoordinationControlCenter({
                 <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Task:     </text><text fg={theme.text} wrapMode="none">{fit(inspectedTask?.title ?? inspectedAgent.taskId ?? 'unassigned', rightW - 12)}</text></box>
                 <box flexDirection="row"><text fg={theme.dim} wrapMode="none">CWD:      </text><text fg={theme.muted} wrapMode="none">{fit(inspectedAgent.worktreePath, rightW - 12)}</text></box>
                 <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Current:  </text><text fg={latestAgentEvent ? eventTone(latestAgentEvent, theme) : theme.dim} wrapMode="none">{fit(latestAgentEvent?.summary ?? latestAgentEvent?.type ?? 'waiting for activity', rightW - 12)}</text></box>
+                {agentErrorEvent ? (
+                  <box flexDirection="row"><text fg={theme.red} wrapMode="none">Error:    </text><text fg={theme.red} wrapMode="none">{fit(agentErrorEvent.detail ?? agentErrorEvent.summary ?? agentErrorEvent.type, rightW - 12)}</text></box>
+                ) : null}
                 {showInspectorDetails ? (
                   <>
                     <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Branch:   </text><text fg={theme.muted} wrapMode="none">{fit(`${inspectedAgent.worktreeBranch || 'main'} · ${worktree ? `${worktree.dirtyFiles} dirty, ${worktree.aheadCommits} ahead` : 'shared checkout'}`, rightW - 12)}</text></box>
