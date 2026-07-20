@@ -136,12 +136,14 @@ function agentProtocolSubject(event: AgentProtocolEvent): string {
 
 function formatAgentProtocolEvent(event: AgentProtocolEvent, expanded: boolean): TuiTranscriptCardLine[] {
   const tone = agentProtocolTone(event)
-  const target = event.to ? ` -> ${event.to}` : ''
-  const task = event.taskId ? ` ${event.taskId}` : ''
+  const target = event.to ? ` · to ${event.to}` : ''
+  const task = event.taskId ? ` · ${event.taskId}` : ''
   const subject = agentProtocolSubject(event)
+  const eventLabel = event.type.replace(/^agent\./, '').replace(/[._]/g, ' ')
   const lines: TuiTranscriptCardLine[] = [
-    line(`protocol ${event.type}${task}${target}${subject ? `: ${truncateLine(subject, 96)}` : ''}`, tone),
-    line(`  agent ${event.agentId} · run ${event.runId.slice(0, 8)}`, 'dim'),
+    line(`coordinator ${eventLabel}${task}${target}`, tone),
+    ...(subject ? [line(`  ${truncateLine(subject, 112)}`, tone === 'result_error' ? 'result_error' : 'muted')] : []),
+    line(`  ${event.agentId} · run ${event.runId.slice(0, 8)}`, 'dim'),
   ]
   if (expanded) {
     if (event.detail && event.detail !== event.summary) {
@@ -156,7 +158,10 @@ function formatAgentProtocolEvent(event: AgentProtocolEvent, expanded: boolean):
 }
 
 function textLinesForProtocolAwareBlock(text: string, expanded: boolean): TuiTranscriptCardLine[] | null {
-  if (!text.includes('agent-protocol')) return null
+  // Some clients preserve the AVP/2 fence name while others rewrite it to
+  // `json`. The version discriminator lets us recognize both without trying to
+  // parse every ordinary fenced code block in the transcript.
+  if (!text.includes('agent-protocol') && !text.includes('"AVP/')) return null
   const lines: TuiTranscriptCardLine[] = []
   let replacedAny = false
   let lastIndex = 0
@@ -169,7 +174,9 @@ function textLinesForProtocolAwareBlock(text: string, expanded: boolean): TuiTra
       lines.push(...beforeLines.map((entry) => line(entry.trimEnd())).filter((entry) => entry.text.trim()))
     }
     const content = (match[2] ?? '').trim()
-    const event = lang === 'agent-protocol' ? parseAgentProtocolCodeBlock(content) : null
+    const event = (lang === 'agent-protocol' || lang === 'json')
+      ? parseAgentProtocolCodeBlock(content)
+      : null
     if (event) {
       replacedAny = true
       lines.push(...formatAgentProtocolEvent(event, expanded))
@@ -188,6 +195,10 @@ function textLinesForProtocolAwareBlock(text: string, expanded: boolean): TuiTra
   return replacedAny ? lines : null
 }
 
+function isAgentProtocolText(text: string): boolean {
+  return text.includes('agent-protocol') && text.includes('"AVP/')
+}
+
 type McpToolId = { server: string; tool: string }
 
 function parseMcpToolName(name: string): McpToolId | null {
@@ -199,6 +210,169 @@ function parseMcpToolName(name: string): McpToolId | null {
   const tool = rest.slice(idx + 2)
   if (!server || !tool) return null
   return { server, tool }
+}
+
+function mcpToolIdForThread(thread: ToolThread): McpToolId | null {
+  const encoded = parseMcpToolName(thread.toolUse.name)
+  if (encoded) return encoded
+  const input = toolInputRecord(thread)
+  const server = typeof input.server === 'string' ? input.server.trim() : ''
+  return server ? { server, tool: thread.toolUse.name } : null
+}
+
+function coordinatorToolName(thread: ToolThread): string | null {
+  const id = mcpToolIdForThread(thread)
+  if (!id || !normalizedToolKey(id.tool).startsWith('coord_')) return null
+  return normalizedToolKey(id.tool)
+}
+
+function coordinatorActionLabel(toolName: string): string {
+  const labels: Record<string, string> = {
+    coord_create_run: 'create run',
+    coord_join_run: 'join run',
+    coord_list_runs: 'list runs',
+    coord_resume: 'resume',
+    coord_status: 'status',
+    coord_wait: 'wait',
+    coord_create_task: 'create task',
+    coord_claim_task: 'claim task',
+    coord_release_task: 'release task',
+    coord_read_inbox: 'inbox',
+    coord_send_message: 'send message',
+    coord_handoff_task: 'handoff task',
+    coord_request_locks: 'request locks',
+    coord_progress: 'progress',
+    coord_publish_finding: 'publish finding',
+    coord_submit_plan: 'submit plan',
+    coord_review_plan: 'review plan',
+    coord_complete_task: 'complete task',
+    coord_fail_task: 'fail task',
+    coord_finalize_run: 'finalize run',
+  }
+  return labels[toolName] ?? toolName.slice('coord_'.length).replace(/_/g, ' ')
+}
+
+function parseJsonValue(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+function coordinatorResultText(thread: ToolThread): string {
+  const raw = extractResultText(thread.result?.content).trim()
+  const envelope = parseJsonValue(raw)
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) return raw
+  const content = (envelope as Record<string, unknown>).content
+  if (!Array.isArray(content)) return raw
+  const text = content.flatMap((entry): string[] => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+    const value = (entry as Record<string, unknown>).text
+    return typeof value === 'string' ? [value] : []
+  }).join('\n').trim()
+  return text || raw
+}
+
+function coordinatorInputSummary(input: Record<string, unknown>): string {
+  const parts: string[] = []
+  for (const [key, value] of Object.entries(input)) {
+    if (key === 'server' || key === 'request_id' || value == null) continue
+    // Codex includes the MCP transport status beside the actual arguments.
+    if (key === 'status' && (value === 'completed' || value === 'inProgress' || value === 'failed')) continue
+    if (key === 'value' && typeof value === 'object' && Object.keys(value as object).length === 0) continue
+    if (typeof value === 'string') parts.push(`${key.replace(/_/g, ' ')} ${compactOneLine(value, 48)}`)
+    else if (typeof value === 'number' || typeof value === 'boolean') parts.push(`${key.replace(/_/g, ' ')} ${String(value)}`)
+    else if (Array.isArray(value)) parts.push(`${key.replace(/_/g, ' ')} ${value.length}`)
+  }
+  return parts.slice(0, 3).join(' · ')
+}
+
+function coordinatorPayloadLines(raw: string, expanded: boolean): TuiTranscriptCardLine[] {
+  const parsed = parseJsonValue(raw)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    const text = raw.split('\n').find((entry) => entry.trim())?.trim() ?? ''
+    return text ? [line(truncateLine(text, expanded ? MAX_PREVIEW_CHARS : 120), 'muted')] : []
+  }
+
+  const payload = parsed as Record<string, unknown>
+  const lines: TuiTranscriptCardLine[] = []
+  const participant = payload.participant && typeof payload.participant === 'object'
+    ? payload.participant as Record<string, unknown>
+    : null
+  const task = payload.task && typeof payload.task === 'object'
+    ? payload.task as Record<string, unknown>
+    : null
+  const snapshot = payload.snapshot && typeof payload.snapshot === 'object'
+    ? payload.snapshot as Record<string, unknown>
+    : payload
+  const run = snapshot.run && typeof snapshot.run === 'object'
+    ? snapshot.run as Record<string, unknown>
+    : null
+  const messages = Array.isArray(payload.messages) ? payload.messages : []
+  const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : []
+  const agents = Array.isArray(snapshot.agents) ? snapshot.agents : []
+
+  if (participant) {
+    const name = typeof participant.name === 'string' ? participant.name : participant.agentId
+    const role = typeof participant.role === 'string' ? ` · ${participant.role}` : ''
+    if (name) lines.push(line(`participant ${String(name)}${role}`, 'agent'))
+  }
+  if (task) {
+    const id = typeof task.id === 'string' ? task.id : typeof task.taskId === 'string' ? task.taskId : 'task'
+    const title = typeof task.title === 'string' ? ` · ${task.title}` : ''
+    const status = typeof task.status === 'string' ? ` · ${task.status}` : ''
+    lines.push(line(`${id}${title}${status}`, 'agent'))
+  }
+  if (run || tasks.length > 0 || agents.length > 0) {
+    const status = run && typeof run.status === 'string' ? run.status : 'run'
+    lines.push(line(`${status} · ${tasks.length} task${tasks.length === 1 ? '' : 's'} · ${agents.length} agent${agents.length === 1 ? '' : 's'}`, 'agent'))
+  }
+  if (messages.length > 0) {
+    lines.push(line(`${messages.length} inbox message${messages.length === 1 ? '' : 's'}`, 'agent'))
+    if (expanded) {
+      for (const message of messages.slice(0, MAX_BLOCK_LINES)) {
+        if (!message || typeof message !== 'object' || Array.isArray(message)) continue
+        const record = message as Record<string, unknown>
+        const from = typeof record.fromName === 'string' ? record.fromName : typeof record.from === 'string' ? record.from : 'agent'
+        const body = typeof record.body === 'string' ? record.body : typeof record.message === 'string' ? record.message : ''
+        if (body) lines.push(line(`  ${from}: ${truncateLine(compactOneLine(body), 120)}`, 'muted'))
+      }
+    }
+  }
+  if (payload.accepted === true) lines.push(line('accepted', 'result_ok'))
+  if (lines.length === 0) {
+    const keys = Object.keys(payload).filter((key) => !key.startsWith('_')).slice(0, 4)
+    if (keys.length > 0) lines.push(line(keys.join(' · '), 'dim'))
+  }
+  return lines
+}
+
+function formatCoordinatorTool(thread: ToolThread, expanded: boolean): TuiTranscriptCardLine[] | null {
+  const toolName = coordinatorToolName(thread)
+  if (!toolName) return null
+  const input = toolInputRecord(thread)
+  const inputSummary = coordinatorInputSummary(input)
+  const lines: TuiTranscriptCardLine[] = [
+    line(`coordinator ${coordinatorActionLabel(toolName)}${inputSummary ? ` · ${inputSummary}` : ''}`, 'tool'),
+  ]
+  if (!thread.result) return [...lines, line('… pending', 'dim')]
+
+  const transportFailed = input.status === 'failed'
+  const isError = thread.result.is_error === true || transportFailed
+  const resultText = coordinatorResultText(thread)
+  const payloadLines = coordinatorPayloadLines(resultText, expanded)
+  if (!expanded) {
+    const detail = payloadLines[0]?.text
+    return [
+      ...lines,
+      line(`${isError ? '✗' : '✓'} ${detail || (isError ? 'failed' : 'complete')}`, isError ? 'result_error' : 'result_ok'),
+    ]
+  }
+  lines.push(line(isError ? '✗ failed' : '✓ complete', isError ? 'result_error' : 'result_ok'))
+  if (isError && payloadLines.length > 0) payloadLines[0] = { ...payloadLines[0], tone: 'result_error' }
+  lines.push(...payloadLines)
+  return lines
 }
 
 function prettifyFencedJson(text: string): string {
@@ -1300,6 +1474,9 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
   const normalizedThread = normalizeToolThreadForTui(thread)
   const toolName = normalizedThread.toolUse.name
 
+  const coordinatorLines = formatCoordinatorTool(normalizedThread, false)
+  if (coordinatorLines) return coordinatorLines
+
   if (toolName === 'FileChange') {
     return previewFileChange(normalizedThread)
   }
@@ -1437,7 +1614,7 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
     ]
   }
 
-  const mcpId = parseMcpToolName(toolName)
+  const mcpId = mcpToolIdForThread(normalizedThread)
   if (mcpId) {
     const isError = normalizedThread.result?.is_error === true
     const summary = summarizeMcpInput(input)
@@ -1769,6 +1946,7 @@ function classifyCardCategory(message: ThreadedMessage): TuiTranscriptCardCatego
     || block.type === 'bash_input'
     || block.type === 'bash_output'
     || block.type === 'claude_system'
+    || (block.type === 'text' && isAgentProtocolText(block.text))
   ))
 
   return hasOperationalBlock ? 'technical' : 'conversation'
@@ -2010,7 +2188,7 @@ function extractCodeBlocksFromBlocks(blocks: ThreadedBlock[], activeForms?: Task
       continue
     }
 
-    if (block.type === 'tool_thread' && parseMcpToolName(block.toolUse.name)) {
+    if (block.type === 'tool_thread' && mcpToolIdForThread(block)) {
       const rawLines = formatBlockExpanded(block, activeForms, taskRegistry).filter((l) => l.text.trim())
       const lifted: TuiTranscriptCardLine[] = []
       let i = 0
@@ -2094,6 +2272,9 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
       const normalizedBlock = normalizeToolThreadForTui(block)
       const input = toolInputRecord(normalizedBlock)
       const toolName = normalizedBlock.toolUse.name
+
+      const coordinatorLines = formatCoordinatorTool(normalizedBlock, true)
+      if (coordinatorLines) return coordinatorLines
 
       if (TASK_TOOL_NAMES.has(toolName)) {
         return formatTaskTool(normalizedBlock, true, activeForms, taskRegistry)
@@ -2225,7 +2406,7 @@ function formatBlockExpanded(block: ThreadedBlock, activeForms?: TaskActiveForms
         return lines
       }
 
-      const mcpId = parseMcpToolName(toolName)
+      const mcpId = mcpToolIdForThread(normalizedBlock)
       if (mcpId) {
         const isError = normalizedBlock.result?.is_error === true
         const lines: TuiTranscriptCardLine[] = [line(mcpHeaderLabel(mcpId), 'tool')]

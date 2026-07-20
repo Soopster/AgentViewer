@@ -68,6 +68,15 @@ function cycleValue<T>(values: readonly T[], current: T, direction: 1 | -1 = 1):
   return values[(index + direction + values.length) % values.length] ?? values[0]!
 }
 
+// The Agent Operations key handler owns every keystroke while the board is
+// open (App.tsx forwards raw keys here instead of letting them reach a
+// natively focused OpenTUI <input> — see coordBoardOpen in App.tsx), so the
+// message composer has to build its own draft from key events rather than
+// relying on the <input>'s built-in typing.
+function isPrintable(key: CoordinationKeyEvent): boolean {
+  return !key.ctrl && key.sequence.length === 1 && key.sequence >= ' '
+}
+
 function taskFilterMatches(task: ProtocolTask, filter: TaskFilter, awaitingPlan: boolean): boolean {
   if (filter === 'attention') return task.status === 'blocked' || task.status === 'failed' || awaitingPlan
   if (filter === 'active') return ACTIVE_TASK_STATUSES.has(task.status)
@@ -456,6 +465,10 @@ export function CoordinationPopover({
         setMessageDraft('')
       } else if (key.name === 'return') {
         void sendTeamMessage()
+      } else if (key.name === 'backspace' || key.name === 'delete') {
+        setMessageDraft((draft) => draft.slice(0, -1))
+      } else if (isPrintable(key)) {
+        setMessageDraft((draft) => draft + key.sequence)
       }
       return
     }

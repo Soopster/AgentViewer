@@ -7,6 +7,7 @@ import {
   type ProtocolAgent,
   type ProtocolTask,
 } from '../../lib/agentProtocol'
+import { formatTranscriptCard } from '../format'
 
 const timestamp = new Date(0).toISOString()
 const agent: ProtocolAgent = {
@@ -80,10 +81,21 @@ function prompts(useWorktrees: boolean): string[] {
   ]
 }
 
-for (const prompt of prompts(false)) {
+const sharedCheckoutPrompts = prompts(false)
+for (const prompt of sharedCheckoutPrompts) {
   assert.match(prompt, /shared checkout/i)
   assert.doesNotMatch(prompt, /worktree/i)
 }
 for (const prompt of prompts(true)) assert.match(prompt, /worktree/i)
+
+const protocolPromptCard = formatTranscriptCard({
+  role: 'user',
+  uuid: 'coordinator-prompt',
+  provider: 'codex',
+  blocks: [{ type: 'text', text: sharedCheckoutPrompts[1]! }],
+})
+assert.equal(protocolPromptCard.category, 'technical')
+assert.equal(protocolPromptCard.autoFold, true)
+assert.equal(protocolPromptCard.markdownContent, undefined)
 
 console.log('Coordinator prompt smoke passed')

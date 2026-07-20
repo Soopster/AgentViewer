@@ -318,6 +318,24 @@ if (!captureCharFrame().includes('> nova:')) {
   console.error('Activity message hotkey did not target the selected event agent')
   process.exit(1)
 }
+
+await act(async () => {
+  for (const char of 'hi') handleKey?.({ name: char, ctrl: false, shift: false, sequence: char })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('> nova: hi')) {
+  console.error('Typing into the message composer did not update the draft')
+  process.exit(1)
+}
+await act(async () => {
+  handleKey?.({ name: 'backspace', ctrl: false, shift: false, sequence: '' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('> nova: h') || captureCharFrame().includes('> nova: hi')) {
+  console.error('Backspace did not remove the last character from the message draft')
+  process.exit(1)
+}
+
 await act(async () => {
   handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '' })
   await new Promise((resolve) => setTimeout(resolve, 50))

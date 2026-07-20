@@ -208,7 +208,7 @@ function mapItemToMessages(
         ? stringify(item.result)
         : `${item.server}/${item.tool} completed with no structured result`
       const result = makeMessage(threadId, `${baseId}:result`, 'user', [
-        makeToolResult(toolUseId, resultText, Boolean(item.error)),
+        makeToolResult(toolUseId, resultText, item.status === 'failed' || Boolean(item.error)),
       ], turnId, timestamp)
       return includeToolResults ? [assistant, result] : [assistant]
     }
