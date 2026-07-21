@@ -2602,6 +2602,25 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
           db.prepare("UPDATE protocol_tasks SET status = 'blocked', updated_at = ? WHERE id = ? AND run_id = ?")
             .run(ts, event.taskId, event.runId)
         }
+        // Blocking is itself a coordination event. Relying on a separate
+        // model-authored message can strand the run forever when it is omitted:
+        // blocked agents count as active, so neither idle-recovery sweep wakes
+        // the lead. Make
+        // the state transition reliably actionable and let live delivery wake
+        // the lead immediately. Teammates may still message a specific peer
+        // when that peer is better placed to resolve the blocker.
+        const blocker = [event.summary, event.detail].filter(Boolean).join(' — ') || 'No blocker detail was provided.'
+        for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, 'lead')) {
+          newMessageIds.push(insertMessageSync(db, {
+            runId: event.runId,
+            fromAgentId: event.agentId,
+            toAgentId: recipient,
+            body: `${event.taskId ? `${event.taskId} is blocked` : 'I am blocked'}: ${blocker}\nCoordinate an unblock, reassignment, or failure decision.`,
+            ts,
+            kind: 'request',
+            priority: 'urgent',
+          }))
+        }
       } else if (event.type === 'agent.unblocked') {
         setAgentStatusSync(db, event.runId, event.agentId, 'working', ts)
         if (event.taskId) {
@@ -2798,9 +2817,17 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
 // Mailbox delivery: steer live turns; anything undelivered rides the
 // recipient's next dispatched turn (marked delivered at dispatch).
 
-function formatMailboxDelivery(from: ProtocolAgent | undefined, body: string): string {
-  return `[team message from ${from?.name ?? 'coordinator'}] ${body}`
+function formatMailboxDelivery(messageId: string, from: ProtocolAgent | undefined, body: string): string {
+  return `[team message ${messageId} from ${from?.name ?? 'coordinator'}] ${body}`
 }
+
+// Initial insert delivery, the mailbox sweep, and pending-session realization
+// can race in the same process. Only one may steer a given durable message at
+// a time; otherwise a slow successful steer can be duplicated before it gets
+// a chance to stamp delivered_at. External participants are pull-based, so
+// their cross-process durability remains in SQLite rather than this set.
+const liveDeliveryInFlight = new Set<string>()
+const inboxDispatchInFlight = new Set<string>()
 
 async function deliverMessagesLive(runId: string, messageIds: string[]): Promise<void> {
   const db = await getDatabase()
@@ -2809,28 +2836,36 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
   const controller = controllers.get(runId)
   const wake = new Set<string>()
   for (const id of messageIds) {
-    const row = db.prepare('SELECT * FROM protocol_messages WHERE id = ?').get(id) as Row | undefined
-    if (!row) continue
-    const message = rowToMessage(row)
-    if (message.deliveredAt) continue
-    const recipient = agentsById.get(message.toAgentId)
-    if (!recipient) continue
-    const sessionId = controller?.sessionIds.get(recipient.id) ?? recipient.sessionId
-    const text = formatMailboxDelivery(agentsById.get(message.fromAgentId), message.body)
-    // External MCP participants do not have a native provider session for the
-    // coordinator to steer. Their mailbox stays queued until coord_read_inbox
-    // acknowledges it in that CLI's bridge process.
-    const delivered = sessionId.startsWith('external:')
-      ? false
-      : await steerRunningSession(sessionId, text)
-        .then((result) => result.delivered)
-        .catch(() => false)
-    if (delivered) {
-      await enqueueWrite((tx) => {
-        tx.prepare('UPDATE protocol_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL').run(nowIso(), id)
-      })
-    } else {
-      wake.add(recipient.id)
+    // A new provider turn already contains this message in its preamble. Do
+    // not also steer it into that turn while startup is awaiting acceptance.
+    if (liveDeliveryInFlight.has(id) || inboxDispatchInFlight.has(id)) continue
+    liveDeliveryInFlight.add(id)
+    try {
+      const row = db.prepare('SELECT * FROM protocol_messages WHERE id = ?').get(id) as Row | undefined
+      if (!row) continue
+      const message = rowToMessage(row)
+      if (message.deliveredAt) continue
+      const recipient = agentsById.get(message.toAgentId)
+      if (!recipient) continue
+      const sessionId = controller?.sessionIds.get(recipient.id) ?? recipient.sessionId
+      const text = formatMailboxDelivery(message.id, agentsById.get(message.fromAgentId), message.body)
+      // External MCP participants do not have a native provider session for the
+      // coordinator to steer. Their mailbox stays queued until coord_read_inbox
+      // acknowledges it in that CLI's bridge process.
+      const delivered = sessionId.startsWith('external:')
+        ? false
+        : await steerRunningSession(sessionId, text)
+          .then((result) => result.delivered)
+          .catch(() => false)
+      if (delivered) {
+        await enqueueWrite((tx) => {
+          tx.prepare('UPDATE protocol_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL').run(nowIso(), id)
+        })
+      } else {
+        wake.add(recipient.id)
+      }
+    } finally {
+      liveDeliveryInFlight.delete(id)
     }
   }
   // A message WAKES an idle recipient (doc: a message from the lead or another
@@ -2905,7 +2940,6 @@ async function escalateStaleReplyRequiredMessages(runId: string): Promise<string
           ts,
           kind: 'request',
           priority: 'urgent',
-          replyRequired: true,
           correlationId: message.correlationId ?? message.id,
         }))
         if (lead && lead.id !== recipient.id) {
@@ -3112,20 +3146,23 @@ async function dispatchLeadIntervention(controller: RunController, opts: { force
     requirePlanApproval: controller.requirePlanApproval,
     reviewingPlans,
   })
-  void dispatchAgentTurn(controller, lead.id, message)
+  void dispatchAgentTurn(controller, lead.id, message, { inboxMessageIds: inbox.map((entry) => entry.id) })
 }
 
 function takeInboxSync(db: SqliteDatabase, runId: string, agentId: string): ProtocolMessage[] {
   const rows = db.prepare('SELECT * FROM protocol_messages WHERE run_id = ? AND to_agent_id = ? AND delivered_at IS NULL ORDER BY created_at ASC')
     .all(runId, agentId) as Row[]
-  const messages = rows.map(rowToMessage)
-  if (messages.length > 0) {
-    const ts = nowIso()
-    for (const message of messages) {
-      db.prepare('UPDATE protocol_messages SET delivered_at = ? WHERE id = ?').run(ts, message.id)
-    }
-  }
-  return messages
+  return rows.map(rowToMessage)
+}
+
+function acknowledgeInboxSync(db: SqliteDatabase, runId: string, agentId: string, messageIds: string[]): void {
+  if (messageIds.length === 0) return
+  const acknowledge = db.prepare(`
+    UPDATE protocol_messages SET delivered_at = COALESCE(delivered_at, ?)
+    WHERE id = ? AND run_id = ? AND to_agent_id = ?
+  `)
+  const ts = nowIso()
+  for (const messageId of messageIds) acknowledge.run(ts, messageId, runId, agentId)
 }
 
 // ---------------------------------------------------------------------------
@@ -3360,10 +3397,11 @@ async function dispatchAgentTurn(
   controller: RunController,
   agentId: string,
   message: string,
-  opts: { permissionMode?: 'plan' } = {},
+  opts: { permissionMode?: 'plan'; inboxMessageIds?: string[] } = {},
 ): Promise<void> {
   if (controller.stopped || controller.turnInFlight.has(agentId)) return
   controller.turnInFlight.add(agentId)
+  for (const messageId of opts.inboxMessageIds ?? []) inboxDispatchInFlight.add(messageId)
   try {
     const db = await getDatabase()
     const agentRow = db.prepare('SELECT * FROM protocol_agents WHERE id = ? AND run_id = ?').get(agentId, controller.runId) as Row | undefined
@@ -3398,8 +3436,15 @@ async function dispatchAgentTurn(
       })
       return
     }
+    // The provider accepted the turn containing this exact inbox batch. Only
+    // now is it safe to acknowledge those messages; a failed startup leaves
+    // them durable for the next dispatch instead of silently losing them.
+    if (opts.inboxMessageIds?.length) {
+      await enqueueWrite((tx) => acknowledgeInboxSync(tx, controller.runId, agent.id, opts.inboxMessageIds!))
+    }
     await drainAgentStream(controller, agent, response)
   } finally {
+    for (const messageId of opts.inboxMessageIds ?? []) inboxDispatchInFlight.delete(messageId)
     controller.turnInFlight.delete(agentId)
   }
   await handleAgentTurnEnd(controller, agentId).catch(() => {})
@@ -3442,7 +3487,10 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
       note,
       useWorktrees: controller.useWorktrees,
     })
-    void dispatchAgentTurn(controller, agentId, message, { permissionMode: 'plan' })
+    void dispatchAgentTurn(controller, agentId, message, {
+      permissionMode: 'plan',
+      inboxMessageIds: inbox.map((entry) => entry.id),
+    })
     return
   }
 
@@ -3461,7 +3509,7 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
     requirePlanApproval: controller.requirePlanApproval,
     useWorktrees: controller.useWorktrees,
   })
-  void dispatchAgentTurn(controller, agentId, message)
+  void dispatchAgentTurn(controller, agentId, message, { inboxMessageIds: inbox.map((entry) => entry.id) })
 }
 
 /**
@@ -3520,14 +3568,6 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
       type: 'agent.blocked',
       taskId: owned.id,
       summary: `${agent.name} stalled on ${owned.id} after ${MAX_TURN_NUDGES + 1} turns`,
-    })
-    await appendProtocolEvent({
-      version: AGENT_PROTOCOL_VERSION,
-      runId: controller.runId,
-      agentId,
-      type: 'message',
-      to: 'lead',
-      summary: `${agent.name} is stuck on ${owned.id} and needs help or reassignment.`,
     })
     return
   }

@@ -144,6 +144,7 @@ function tickPrompt(state) {
     checkoutGuidance,
     'Drain the inbox, then perform every immediately actionable role-appropriate step, including implementation and verification.',
     'Coordinate actively — teammates run in other CLIs and cannot see your terminal: answer reply_required mail first, publish reusable discoveries with coord_publish_finding, and send coord_send_message whenever your progress, blockers, or findings affect another lane.',
+    'If blocked, report blocked with coord_progress and include the exact obstacle; the Coordinator will alert the lead. Also message the teammate best placed to help, check the inbox for guidance, and report working again as soon as you can resume.',
     'If your task work will take several steps, call coord_read_inbox again partway through rather than only at the start — a reply_required message from the lead can arrive mid-task and change your plan; you will not be woken for it until you check.',
     'Use stable request_id values before retrying mutations. If no action is ready, return control to the supervisor; do not poll or sleep.',
     'If all tasks are terminal and you are lead, review results and finalize the run. Never print participant credentials.',
@@ -444,8 +445,12 @@ outer: for (;;) {
       cursor = current.cursor
       if (isTerminal(current)) break
     } catch { /* retain the provider error and retry when the daemon is unavailable */ }
-    const durableFailure = failureClass !== 'transient_transport'
-      && (failureClass !== 'provider_failure' || failures >= 3)
+    // Transient transport failures deserve retries, but not an infinite lease
+    // on owned work. After a bounded retry window, checkpoint exactly like a
+    // persistent provider failure so another healthy teammate can take over.
+    const durableFailure = failureClass === 'transient_transport'
+      ? failures >= 5
+      : (failureClass !== 'provider_failure' || failures >= 3)
     const ownedTask = current?.actionable?.myTask
     if (ownedTask && durableFailure) {
       const summary = `${state.provider} worker checkpointed ${ownedTask.id} after ${failureClass}`
@@ -477,14 +482,34 @@ outer: for (;;) {
     continue
   }
   if (options.once) break
-  const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
-  cursor = current.cursor
-  if (isTerminal(current)) break
-  for (;;) {
-    const next = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 55_000 })
-    cursor = next.cursor
-    if (isTerminal(next)) break outer
-    if (shouldTick(next.actionable, role)) break
+  try {
+    const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
+    cursor = current.cursor
+    if (isTerminal(current)) break
+    // The provider turn may have claimed a task, received mail, or left owned
+    // work open. Act on that returned digest immediately instead of entering a
+    // 55-second long poll and adding avoidable coordination latency.
+    if (shouldTick(current.actionable, role)) continue
+    for (;;) {
+      const next = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 55_000 })
+      cursor = next.cursor
+      if (isTerminal(next)) break outer
+      if (shouldTick(next.actionable, role)) break
+    }
+  } catch (error) {
+    failures += 1
+    state.lastFailureClass = 'transient_transport'
+    state.lastError = error.message
+    await workerLog(state, `coordinator wait failed attempt=${failures}: ${error.message}`)
+    await writeWorkerRecord(state.identityFile, {
+      status: 'retrying',
+      failureClass: 'transient_transport',
+      failures,
+      lastError: error.message,
+    })
+    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(failures - 1, 5))
+    console.error(`Coordinator wait failed: ${error.message}; retrying in ${delay}ms`)
+    await new Promise((resolve) => setTimeout(resolve, delay))
   }
 }
 

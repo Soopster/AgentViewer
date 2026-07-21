@@ -22,7 +22,10 @@ mkdirSync(coordinationDir, { recursive: true })
 const { Database } = await (0, eval)('import("bun:sqlite")') as {
   Database: new (file: string) => {
     exec(sql: string): void
-    prepare(sql: string): { get(...params: unknown[]): Record<string, unknown> | null }
+    prepare(sql: string): {
+      get(...params: unknown[]): Record<string, unknown> | null
+      run(...params: unknown[]): unknown
+    }
     close(): void
   }
 }
@@ -135,6 +138,49 @@ await assert.rejects(
   coordination.claimExternalProtocolTask(lead, task.id),
   /already owned/,
 )
+
+// Reporting blocked is sufficient to wake the lead even if the model omits a
+// separate message event. The lead's guidance then wakes the blocked teammate,
+// which can resume its owned task without waiting for an idle sweep.
+const leadBeforeBlock = await coordination.waitForExternalProtocolChange(lead, { timeoutMs: 0 })
+await coordination.reportExternalProtocolProgress(teammate, {
+  status: 'blocked',
+  taskId: task.id,
+  summary: 'Need the lead to choose the safe implementation direction.',
+})
+const leadBlockWake = await coordination.waitForExternalProtocolChange(lead, {
+  cursor: leadBeforeBlock.cursor ?? undefined,
+  timeoutMs: 100,
+})
+assert.equal(leadBlockWake.changed, true)
+assert.equal(leadBlockWake.actionable.inboxCount, 1)
+assert.equal(leadBlockWake.actionable.urgentCount, 1)
+const blockerInbox = await coordination.readExternalProtocolInbox(lead)
+assert.equal(blockerInbox.messages.length, 1)
+assert.match(blockerInbox.messages[0].body, /task-1 is blocked/)
+assert.match(blockerInbox.messages[0].body, /safe implementation direction/)
+const teammateBeforeGuidance = await coordination.waitForExternalProtocolChange(teammate, { timeoutMs: 0 })
+await coordination.sendExternalProtocolMessage(lead, {
+  to: teammate.agentId,
+  body: 'Use the narrow implementation path and continue.',
+  kind: 'response',
+  priority: 'urgent',
+})
+const teammateGuidanceWake = await coordination.waitForExternalProtocolChange(teammate, {
+  cursor: teammateBeforeGuidance.cursor ?? undefined,
+  timeoutMs: 100,
+})
+assert.equal(teammateGuidanceWake.changed, true)
+assert.equal(teammateGuidanceWake.actionable.myTask?.status, 'blocked')
+assert.equal(teammateGuidanceWake.actionable.inboxCount, 1)
+const guidanceInbox = await coordination.readExternalProtocolInbox(teammate)
+assert.match(guidanceInbox.messages[0].body, /narrow implementation path/)
+await coordination.reportExternalProtocolProgress(teammate, {
+  status: 'working',
+  taskId: task.id,
+  summary: 'Unblocked by lead guidance; resuming work.',
+})
+assert.equal((await coordination.readExternalProtocolStatus(teammate)).actionable.myTask?.status, 'in_progress')
 
 const initialWait = await coordination.waitForExternalProtocolChange(teammate, { timeoutMs: 0 })
 assert.ok(initialWait.cursor)
@@ -597,18 +643,29 @@ const steeredMessages: string[] = []
 sessionRuntime.setRunningSession('live-session', {
   provider: 'codex',
   interrupt: async () => {},
-  steer: async (text) => { steeredMessages.push(text) },
+  // Stay unresolved across a mailbox-sweep interval. The initial delivery and
+  // sweep must not steer this same durable message twice while delivered_at is
+  // still unset.
+  steer: async (text) => {
+    steeredMessages.push(text)
+    await new Promise((resolve) => setTimeout(resolve, 5_500))
+  },
 })
 await coordination.sendExternalProtocolMessage(deliveryLead.participant, {
   to: 'live-agent',
   body: 'priority changed while you were working',
 })
-const steerDeadline = Date.now() + 2_000
-while (steeredMessages.length === 0 && Date.now() < steerDeadline) {
-  await new Promise((resolve) => setTimeout(resolve, 20))
-}
+await new Promise((resolve) => setTimeout(resolve, 6_000))
 sessionRuntime.clearRunningSession('live-session')
-assert.deepEqual(steeredMessages, ['[team message from Delivery lead] priority changed while you were working'])
+assert.equal(steeredMessages.length, 1)
+assert.match(steeredMessages[0]!, /^\[team message [^ ]+ from Delivery lead\] priority changed while you were working$/)
+const deliveredDb = new Database(deliveryDbPath)
+const deliveredRow = deliveredDb.prepare(`
+  SELECT delivered_at FROM protocol_messages
+  WHERE run_id = ? AND to_agent_id = 'live-agent' AND body = ?
+`).get(deliveryLead.participant.runId, 'priority changed while you were working')
+deliveredDb.close()
+assert.ok(deliveredRow?.delivered_at)
 
 await coordination.sendExternalProtocolMessage(deliveryLead.participant, {
   to: 'queued-agent',
@@ -622,6 +679,133 @@ const queuedRow = queuedDb.prepare(`
 `).get(deliveryLead.participant.runId, 'retain this until steering becomes available')
 queuedDb.close()
 assert.equal(queuedRow?.delivered_at, null)
+
+// Escalation creates one urgent wake-up, not a new reply-required message that
+// can recursively escalate and amplify mailbox traffic on a large team.
+await coordination.sendExternalProtocolMessage(deliveryLead.participant, {
+  to: 'queued-agent',
+  body: 'Please acknowledge this stale request.',
+  kind: 'request',
+  priority: 'urgent',
+  replyRequired: true,
+})
+const staleInboxDb = new Database(deliveryDbPath)
+staleInboxDb.prepare(`
+  UPDATE protocol_messages SET delivered_at = ?, created_at = ?
+  WHERE run_id = ? AND to_agent_id = 'queued-agent' AND body = ?
+`).run(
+  new Date(Date.now() - 4 * 60_000).toISOString(),
+  new Date(Date.now() - 4 * 60_000).toISOString(),
+  deliveryLead.participant.runId,
+  'Please acknowledge this stale request.',
+)
+staleInboxDb.close()
+await new Promise((resolve) => setTimeout(resolve, 5_500))
+const escalationDb = new Database(deliveryDbPath)
+const reminderRow = escalationDb.prepare(`
+  SELECT reply_required, priority FROM protocol_messages
+  WHERE run_id = ? AND to_agent_id = 'queued-agent' AND body LIKE 'Reminder:%'
+`).get(deliveryLead.participant.runId)
+escalationDb.close()
+assert.equal(reminderRow?.reply_required, 0)
+assert.equal(reminderRow?.priority, 'urgent')
+
+// Maximum-size external roster: fan-out reaches every participant, and a
+// blocked teammate can actively ask a peer for help while the automatic block
+// notification wakes the lead in parallel.
+const scaleLead = await coordination.createExternalProtocolRun({
+  prompt: 'Exercise sixteen-agent messaging and peer unblocking',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Scale lead',
+  maxAgents: 16,
+})
+const scaleTeammates = []
+for (let index = 1; index < 16; index += 1) {
+  scaleTeammates.push((await coordination.joinExternalProtocolRun({
+    runId: scaleLead.participant.runId,
+    provider: 'codex',
+    cwd: testCwd,
+    participantName: `Scale teammate ${index}`,
+  })).participant)
+}
+assert.equal((await coordination.readExternalProtocolRun(scaleLead.participant)).agents.length, 16)
+const scaleTask = (await coordination.createExternalProtocolTask(scaleLead.participant, {
+  title: 'Peer-assisted task',
+  detail: 'Ask another teammate for the missing context, then resume.',
+  paths: [],
+})).task!
+const blockedTeammate = scaleTeammates[0]!
+const helperTeammate = scaleTeammates[1]!
+await coordination.claimExternalProtocolTask(blockedTeammate, scaleTask.id)
+const scaleLeadCursor = (await coordination.waitForExternalProtocolChange(scaleLead.participant, { timeoutMs: 0 })).cursor
+const helperCursor = (await coordination.waitForExternalProtocolChange(helperTeammate, { timeoutMs: 0 })).cursor
+await coordination.reportExternalProtocolProgress(blockedTeammate, {
+  status: 'blocked',
+  taskId: scaleTask.id,
+  summary: 'Need the helper teammate to identify the safe API boundary.',
+})
+await coordination.sendExternalProtocolMessage(blockedTeammate, {
+  to: helperTeammate.agentId,
+  body: 'Which API boundary should this task use?',
+  kind: 'request',
+  priority: 'urgent',
+  replyRequired: true,
+  correlationId: 'peer-unblock',
+})
+const [scaleLeadWake, helperWake] = await Promise.all([
+  coordination.waitForExternalProtocolChange(scaleLead.participant, {
+    cursor: scaleLeadCursor ?? undefined,
+    timeoutMs: 100,
+  }),
+  coordination.waitForExternalProtocolChange(helperTeammate, {
+    cursor: helperCursor ?? undefined,
+    timeoutMs: 100,
+  }),
+])
+assert.equal(scaleLeadWake.actionable.urgentCount, 1)
+assert.equal(helperWake.actionable.urgentCount, 1)
+const scaleBlockInbox = await coordination.readExternalProtocolInbox(scaleLead.participant)
+assert.match(scaleBlockInbox.messages[0].body, /safe API boundary/)
+const peerRequestInbox = await coordination.readExternalProtocolInbox(helperTeammate)
+assert.equal(peerRequestInbox.messages[0].replyRequired, true)
+const blockedCursor = (await coordination.waitForExternalProtocolChange(blockedTeammate, { timeoutMs: 0 })).cursor
+await coordination.sendExternalProtocolMessage(helperTeammate, {
+  to: blockedTeammate.agentId,
+  body: 'Use the sessionBackend boundary; it preserves provider isolation.',
+  kind: 'response',
+  priority: 'urgent',
+  inReplyTo: peerRequestInbox.messages[0].id,
+})
+const peerResponseWake = await coordination.waitForExternalProtocolChange(blockedTeammate, {
+  cursor: blockedCursor ?? undefined,
+  timeoutMs: 100,
+})
+assert.equal(peerResponseWake.actionable.inboxCount, 1)
+const peerResponseInbox = await coordination.readExternalProtocolInbox(blockedTeammate)
+assert.match(peerResponseInbox.messages[0].body, /sessionBackend boundary/)
+await coordination.reportExternalProtocolProgress(blockedTeammate, {
+  status: 'working',
+  taskId: scaleTask.id,
+  summary: 'Peer guidance cleared the blocker.',
+})
+await coordination.sendExternalProtocolMessage(scaleLead.participant, {
+  to: 'all',
+  body: 'Scale fan-out check',
+  kind: 'request',
+  priority: 'urgent',
+})
+for (const teammateEntry of scaleTeammates) {
+  const status = await coordination.readExternalProtocolStatus(teammateEntry)
+  assert.equal(status.actionable.inboxCount, 1)
+  const fanoutInbox = await coordination.readExternalProtocolInbox(teammateEntry)
+  assert.match(fanoutInbox.messages[0].body, /Scale fan-out check/)
+}
+await coordination.completeExternalProtocolTask(blockedTeammate, {
+  taskId: scaleTask.id,
+  summary: 'Peer-assisted task resumed and completed.',
+})
+await coordination.finalizeExternalProtocolRun(scaleLead.participant, 'Sixteen-agent fan-out and peer unblocking passed.')
 
 // Whole-team-idle recovery: two teammates each finish their own task while a
 // third task sits unclaimed. Nobody messages the lead about it (that's model

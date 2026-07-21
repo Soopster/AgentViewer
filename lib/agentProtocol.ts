@@ -761,7 +761,7 @@ export function buildTeammatePlanPreamble(params: {
     '  - `taskId`: this task id',
     '  - `summary`: one-line approach',
     '  - `detail`: files to touch, implementation steps, verification, risks/conflicts',
-    '- If the task is impossible as scoped, emit `agent.blocked` and `message` the lead instead.',
+    '- If the task is impossible as scoped, emit `agent.blocked`; this automatically alerts the lead. Also `message` the specific teammate who can resolve it when applicable.',
     '- End with `agent.stop_work`. Do not emit `task.completed` until the lead emits `plan.approved`.',
     '',
     protocolGrammar(params.runId, params.agent.id),
@@ -822,7 +822,7 @@ export function buildTeammateTurnPreamble(params: {
       ? [`- Completions are gate-checked: \`${params.gateCommand}\` runs in ${params.useWorktrees ? 'your worktree' : 'the shared checkout'} and must exit 0, or the completion is rejected with its output. Run it yourself before completing.`]
       : []),
     '- Share what you find: `finding` for facts others need, `learning` for reusable context — teammates and the lead see them.',
-    '- If blocked, emit `agent.blocked` with the blocker and `message` the teammate (or lead) who can unblock you. Do not silently stop.',
+    '- If blocked, emit `agent.blocked` with the exact blocker; this automatically alerts the lead. Also `message` the specific teammate best placed to unblock you, then read your inbox and resume with `agent.unblocked` when guidance clears it. Do not silently stop.',
     '- After completing, you may immediately `task.claim` the next pending unblocked task in this same turn, or end the turn — the coordinator will re-dispatch you.',
     '- Do not repeat work another agent owns; the board and locks are authoritative.',
     '',

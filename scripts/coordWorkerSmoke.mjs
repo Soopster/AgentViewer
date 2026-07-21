@@ -11,13 +11,16 @@ const testDir = await mkdtemp(path.join(tmpdir(), 'agent-viewer-coord-worker-'))
 const fakeCodex = path.join(testDir, 'fake-codex.mjs')
 const failingCodex = path.join(testDir, 'failing-codex.mjs')
 const rateLimitedCodex = path.join(testDir, 'rate-limited-codex.mjs')
+const continuationCodex = path.join(testDir, 'continuation-codex.mjs')
 const slowVersionCli = path.join(testDir, 'slow-version-cli.mjs')
 const identityFile = path.join(testDir, 'identity.json')
 const terminalIdentityFile = path.join(testDir, 'terminal-identity.json')
 const onceFailureIdentityFile = path.join(testDir, 'once-failure-identity.json')
 const handoffIdentityFile = path.join(testDir, 'handoff-identity.json')
+const continuationIdentityFile = path.join(testDir, 'continuation-identity.json')
 const coordHome = path.join(testDir, 'coord-home')
 const codexArgsFile = path.join(testDir, 'codex-args.json')
+const continuationCountFile = path.join(testDir, 'continuation-count.txt')
 await writeFile(fakeCodex, `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs'
 writeFileSync(process.env.CODEX_ARGS_FILE, JSON.stringify(process.argv.slice(2)))
@@ -34,6 +37,16 @@ console.error('429 rate limit exceeded; quota window exhausted')
 process.exit(1)
 `)
 await chmod(rateLimitedCodex, 0o700)
+await writeFile(continuationCodex, `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from 'node:fs'
+let count = 0
+try { count = Number(readFileSync(process.env.CONTINUATION_COUNT_FILE, 'utf8')) || 0 } catch {}
+count += 1
+writeFileSync(process.env.CONTINUATION_COUNT_FILE, String(count))
+console.log(JSON.stringify({ type: 'thread.started', thread_id: '019-worker-continuation' }))
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'continuation tick complete' } }))
+`)
+await chmod(continuationCodex, 0o700)
 await writeFile(slowVersionCli, `#!/usr/bin/env node
 process.on('SIGTERM', () => {})
 setTimeout(() => process.exit(0), 1_200)
@@ -49,6 +62,7 @@ execFileSync('git', ['commit', '-qm', 'baseline'], { cwd: testDir })
 
 const requests = []
 let handoffMode = false
+let continuationMode = false
 
 function runNode(args, env) {
   return new Promise((resolve, reject) => {
@@ -83,6 +97,11 @@ const daemon = createServer(async (request, response) => {
     return
   }
   if (body.action === 'wait') {
+    let continuationCount = 0
+    if (continuationMode) {
+      try { continuationCount = Number(await readFile(continuationCountFile, 'utf8')) || 0 } catch {}
+    }
+    const continuationComplete = continuationMode && continuationCount >= 2
     response.end(JSON.stringify({
       changed: false,
       timedOut: true,
@@ -91,15 +110,19 @@ const daemon = createServer(async (request, response) => {
       inbox: { messages: [], nextCursor: null },
       events: [],
       actionable: {
-        runStatus: snapshot.run.status,
+        runStatus: continuationComplete ? 'completed' : snapshot.run.status,
         inboxCount: 0,
         urgentCount: 0,
         statusCount: 0,
         replyRequiredCount: 0,
         claimableTasks: [],
         plansAwaitingReview: [],
-        myTask: handoffMode ? { id: 'task-handoff', status: 'in_progress', planState: 'approved' } : null,
-        allTasksTerminal: snapshot.run.status === 'completed',
+        myTask: handoffMode
+          ? { id: 'task-handoff', status: 'in_progress', planState: 'approved' }
+          : continuationMode && !continuationComplete
+            ? { id: 'task-continuation', status: 'in_progress', planState: 'approved' }
+            : null,
+        allTasksTerminal: continuationComplete || snapshot.run.status === 'completed',
       },
     }))
     return
@@ -143,6 +166,37 @@ const codexArgs = JSON.parse(await readFile(codexArgsFile, 'utf8'))
 const approvalConfigIndex = codexArgs.indexOf('mcp_servers.agent-viewer.default_tools_approval_mode="approve"')
 if (approvalConfigIndex < 1 || codexArgs[approvalConfigIndex - 1] !== '-c') {
   throw new Error('worker did not pre-approve Agent Viewer MCP tools for unattended Codex ticks')
+}
+
+// A post-turn digest that still owns work must trigger the next provider turn
+// immediately. Before this regression fix the worker entered a 55-second long
+// poll even though myTask was already actionable.
+continuationMode = true
+const continuationStartedAt = Date.now()
+await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [
+    worker, '--join', 'run-worker', '--name', 'continuation-worker', '--provider', 'codex',
+    '--attach', String(address.port), '--cwd', testDir, '--shared', '--identity', continuationIdentityFile,
+  ], {
+    env: {
+      ...process.env,
+      AGENT_VIEWER_COORD_HOME: coordHome,
+      CODEX_PATH: continuationCodex,
+      CONTINUATION_COUNT_FILE: continuationCountFile,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stderr = ''
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  child.on('error', reject)
+  child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`continuation worker exited ${code}: ${stderr}`)))
+})
+continuationMode = false
+if (Number(await readFile(continuationCountFile, 'utf8')) !== 2) {
+  throw new Error('actionable owned task did not trigger an immediate continuation tick')
+}
+if (Date.now() - continuationStartedAt > 10_000) {
+  throw new Error('actionable continuation waited instead of running immediately')
 }
 
 // Even when the provider CLI is persistently broken, the worker must notice
