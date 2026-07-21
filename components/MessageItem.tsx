@@ -220,7 +220,7 @@ function agentProtocolTitle(event: AgentProtocolEvent): string {
 function AgentProtocolCard({ codeString }: { codeString: string }) {
   const [open, setOpen] = useState(false)
   const event = useMemo(() => parseAgentProtocolCode(codeString), [codeString])
-  if (!event) return <FencedCodeBlock language="agent-protocol" codeString={codeString} />
+  if (!event) return <FencedCodeBlock language="a2a" codeString={codeString} />
 
   const tone = agentProtocolTone(event.type)
   const title = agentProtocolTitle(event)
@@ -420,7 +420,7 @@ function MarkdownCodeBlock({ className, children, ...rest }: React.ComponentProp
   const isFenced = !!className
   if (isFenced) {
     const codeString = String(children).replace(/\n$/, '')
-    if (language === 'agent-protocol') return <AgentProtocolCard codeString={codeString} />
+    if (language === 'a2a' || language === 'agent-protocol') return <AgentProtocolCard codeString={codeString} />
     if (language === 'mermaid' || language === 'mmd') return <MermaidDiagram codeString={codeString} />
     return <FencedCodeBlock language={language} codeString={codeString} />
   }

@@ -74,7 +74,7 @@ try {
   await listTuiProtocolRuns(7)
   await readTuiProtocolRun(snapshot.run.id)
   const event: AgentProtocolEvent = {
-    version: 'AVP/2',
+    version: '1.0',
     runId: snapshot.run.id,
     agentId: 'lead',
     type: 'message',

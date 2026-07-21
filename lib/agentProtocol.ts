@@ -1,9 +1,9 @@
-// Agent Viewer Protocol (AVP/2) — the wire format for coordinated multi-agent
-// runs, modeled on Claude Code agent teams (one lead decomposes and
-// synthesizes; named teammates self-claim tasks from a shared list, message
-// each other through a mailbox, and hold path locks so work never overlaps).
+// A2A Protocol 1.0 wire format for coordinated multi-agent runs. Agent Viewer
+// uses the standard A2A Task, Message, TaskStatusUpdateEvent, and Artifact
+// shapes plus a documented extension payload for coordination-only operations
+// such as path locks and plan approval.
 //
-// Agents speak the protocol by emitting fenced ```agent-protocol JSON blocks
+// Agents speak the protocol by emitting fenced ```a2a JSON blocks
 // in their normal output; the coordinator (lib/agentCoordination.ts) parses
 // them off each agent's stream, applies them to the shared ledger, and drives
 // the work loop (claims, dependency unblocking, message delivery, follow-up
@@ -13,18 +13,172 @@
 
 import type { AgentProvider } from './types'
 
-export const AGENT_PROTOCOL_VERSION = 'AVP/2' as const
-// AVP/1 events (earlier runs, older prompts still in a model's context) are
-// accepted on parse; new blocks are always emitted as AVP/2.
-export const SUPPORTED_PROTOCOL_VERSIONS = ['AVP/1', 'AVP/2'] as const
+export const AGENT_PROTOCOL_VERSION = '1.0' as const
+export const A2A_COORDINATION_EXTENSION_URI = 'https://agent-viewer.dev/extensions/coordination/v1' as const
+// Earlier AVP events remain readable for persisted transcripts and runs. New
+// blocks are always emitted as A2A 1.0 StreamResponse objects.
+export const SUPPORTED_PROTOCOL_VERSIONS = ['AVP/1', 'AVP/2', AGENT_PROTOCOL_VERSION] as const
 export const EXTERNAL_COORD_PROTOCOL_VERSION = 2 as const
 export const MIN_EXTERNAL_COORD_PROTOCOL_VERSION = 1 as const
 
 export type AgentProtocolVersion = typeof AGENT_PROTOCOL_VERSION
+export type A2ATaskState =
+  | 'TASK_STATE_UNSPECIFIED'
+  | 'TASK_STATE_SUBMITTED'
+  | 'TASK_STATE_WORKING'
+  | 'TASK_STATE_COMPLETED'
+  | 'TASK_STATE_FAILED'
+  | 'TASK_STATE_CANCELED'
+  | 'TASK_STATE_INPUT_REQUIRED'
+  | 'TASK_STATE_REJECTED'
+  | 'TASK_STATE_AUTH_REQUIRED'
+
+export type A2APart = {
+  text?: string
+  raw?: string
+  url?: string
+  data?: unknown
+  metadata?: Record<string, unknown>
+  filename?: string
+  mediaType?: string
+}
+
+export type A2AMessage = {
+  messageId: string
+  contextId?: string
+  taskId?: string
+  role: 'ROLE_USER' | 'ROLE_AGENT'
+  parts: A2APart[]
+  metadata?: Record<string, unknown>
+  extensions?: string[]
+  referenceTaskIds?: string[]
+}
+
+export type A2ATaskStatus = {
+  state: A2ATaskState
+  message?: A2AMessage
+  timestamp?: string
+}
+
+export type A2AArtifact = {
+  artifactId: string
+  name?: string
+  description?: string
+  parts: A2APart[]
+  metadata?: Record<string, unknown>
+  extensions?: string[]
+}
+
+export type A2ATask = {
+  id: string
+  contextId?: string
+  status: A2ATaskStatus
+  artifacts?: A2AArtifact[]
+  history?: A2AMessage[]
+  metadata?: Record<string, unknown>
+}
+
+export type A2ATaskStatusUpdateEvent = {
+  taskId: string
+  contextId: string
+  status: A2ATaskStatus
+  /** True once the task has reached a terminal state — signals stream end. */
+  final?: boolean
+  metadata?: Record<string, unknown>
+}
+
+export type A2ATaskArtifactUpdateEvent = {
+  taskId: string
+  contextId: string
+  artifact: A2AArtifact
+  append?: boolean
+  lastChunk?: boolean
+  metadata?: Record<string, unknown>
+}
+
+/** A2A streaming/push union: exactly one field is present on the wire. */
+export type A2AStreamResponse =
+  | { task: A2ATask }
+  | { message: A2AMessage }
+  | { statusUpdate: A2ATaskStatusUpdateEvent }
+  | { artifactUpdate: A2ATaskArtifactUpdateEvent }
+
+// --- A2A Agent Card (spec §5, served from /.well-known/agent-card.json) ---
+
+export type A2AAgentCapabilities = {
+  streaming?: boolean
+  pushNotifications?: boolean
+  stateTransitionHistory?: boolean
+}
+
+export type A2AAgentSkill = {
+  id: string
+  name: string
+  description: string
+  tags: string[]
+  examples?: string[]
+  inputModes?: string[]
+  outputModes?: string[]
+}
+
+export type A2AAgentCardProvider = {
+  organization: string
+  url?: string
+}
+
+export type A2AAgentInterface = {
+  url: string
+  transport: string
+}
+
+export type A2AAgentCard = {
+  protocolVersion: string
+  name: string
+  description: string
+  url: string
+  preferredTransport?: string
+  additionalInterfaces?: A2AAgentInterface[]
+  provider?: A2AAgentCardProvider
+  version: string
+  capabilities: A2AAgentCapabilities
+  defaultInputModes: string[]
+  defaultOutputModes: string[]
+  skills: A2AAgentSkill[]
+}
+
 export type ProtocolRunStatus = 'planning' | 'running' | 'synthesizing' | 'blocked' | 'completed' | 'failed' | 'stopped'
 export type ProtocolAgentStatus = 'ready' | 'idle' | 'working' | 'blocked' | 'done' | 'failed' | 'stopped'
 export type ProtocolAgentRole = 'lead' | 'teammate'
 export type ProtocolTaskStatus = 'pending' | 'claimed' | 'planning' | 'planned' | 'in_progress' | 'blocked' | 'completed' | 'failed' | 'cancelled'
+
+/**
+ * Maps the Coordinator's task-board status onto the A2A task-state enum.
+ * Lives here (rather than lib/a2aAdapter.ts) so lib/agentCoordination.ts can
+ * use it too — e.g. to shape push-notification payloads — without an
+ * adapter/coordination import cycle.
+ */
+export function taskStateFromStatus(status: ProtocolTaskStatus): A2ATaskState {
+  switch (status) {
+    case 'pending':
+    case 'blocked':
+      return 'TASK_STATE_SUBMITTED'
+    case 'claimed':
+    case 'planning':
+    case 'in_progress':
+      return 'TASK_STATE_WORKING'
+    case 'planned':
+      // Awaiting the lead's plan-approval review before implementation starts.
+      return 'TASK_STATE_INPUT_REQUIRED'
+    case 'completed':
+      return 'TASK_STATE_COMPLETED'
+    case 'failed':
+      return 'TASK_STATE_FAILED'
+    case 'cancelled':
+      return 'TASK_STATE_CANCELED'
+    default:
+      return 'TASK_STATE_UNSPECIFIED'
+  }
+}
 export type ProtocolLockStatus = 'active' | 'released' | 'expired' | 'denied'
 export type ProtocolMessageKind = 'request' | 'response' | 'status' | 'status_summary' | 'finding' | 'handoff' | 'review_request' | 'review_result'
 export type ProtocolMessagePriority = 'urgent' | 'normal' | 'status'
@@ -63,6 +217,7 @@ export type ProtocolEventType =
   | 'task.released'
   | 'task.completed'
   | 'task.failed'
+  | 'task.cancelled'
   | 'plan.completed'
   | 'plan.approved'
   | 'plan.rejected'
@@ -538,7 +693,8 @@ export type ExternalProtocolCompletionResult = ExternalProtocolMutationResult & 
   reason?: string
 }
 
-const PROTOCOL_BLOCK_RE = /```agent-protocol\s*([\s\S]*?)```/g
+const PROTOCOL_BLOCK_RE = /```(?:a2a|agent-protocol)\s*([\s\S]*?)```/g
+const A2A_EXTENSION_KEY = A2A_COORDINATION_EXTENSION_URI
 
 const EVENT_TYPES: ReadonlySet<string> = new Set<ProtocolEventType>([
   'agent.ready', 'agent.heartbeat', 'agent.start_work', 'agent.stop_work',
@@ -569,9 +725,143 @@ function cleanStringArray(value: unknown): string[] | undefined {
   return items.length > 0 ? items.map((item) => item.trim()) : undefined
 }
 
+function cleanRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function textFromParts(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined
+  const text = value
+    .map((part) => cleanRecord(part)?.text)
+    .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+    .join('\n\n')
+    .trim()
+  return text || undefined
+}
+
+function splitSummaryDetail(text: string | undefined): { summary?: string; detail?: string } {
+  if (!text) return {}
+  const [summary, ...detail] = text.split('\n\n')
+  return { summary: cleanString(summary), detail: cleanString(detail.join('\n\n')) }
+}
+
+function extensionFromMetadata(value: unknown): Record<string, unknown> | undefined {
+  const metadata = cleanRecord(value)
+  return cleanRecord(metadata?.[A2A_EXTENSION_KEY])
+}
+
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key)
+}
+
+function isA2APart(value: unknown): boolean {
+  const part = cleanRecord(value)
+  if (!part) return false
+  return ['text', 'raw', 'url', 'data'].filter((key) => hasOwn(part, key)).length === 1
+}
+
+function isA2AMessage(value: unknown): boolean {
+  const message = cleanRecord(value)
+  return Boolean(
+    message
+    && cleanString(message.messageId)
+    && (message.role === 'ROLE_USER' || message.role === 'ROLE_AGENT')
+    && Array.isArray(message.parts)
+    && message.parts.length > 0
+    && message.parts.every(isA2APart),
+  )
+}
+
+function isA2ATaskStatus(value: unknown): boolean {
+  const status = cleanRecord(value)
+  const states: ReadonlySet<unknown> = new Set<A2ATaskState>([
+    'TASK_STATE_UNSPECIFIED', 'TASK_STATE_SUBMITTED', 'TASK_STATE_WORKING',
+    'TASK_STATE_COMPLETED', 'TASK_STATE_FAILED', 'TASK_STATE_CANCELED',
+    'TASK_STATE_INPUT_REQUIRED', 'TASK_STATE_REJECTED', 'TASK_STATE_AUTH_REQUIRED',
+  ])
+  return Boolean(status && states.has(status.state) && (!status.message || isA2AMessage(status.message)))
+}
+
+function isA2AArtifact(value: unknown): boolean {
+  const artifact = cleanRecord(value)
+  return Boolean(
+    artifact
+    && cleanString(artifact.artifactId)
+    && Array.isArray(artifact.parts)
+    && artifact.parts.length > 0
+    && artifact.parts.every(isA2APart),
+  )
+}
+
+function sanitizeA2AStreamResponse(value: unknown): AgentProtocolEvent | null {
+  const response = cleanRecord(value)
+  if (!response) return null
+
+  const populated = ['task', 'message', 'statusUpdate', 'artifactUpdate']
+    .filter((key) => cleanRecord(response[key]))
+  if (populated.length !== 1) return null
+
+  const kind = populated[0]
+  const body = cleanRecord(response[kind])!
+  const artifact = kind === 'artifactUpdate' ? cleanRecord(body.artifact) : undefined
+  const status = kind === 'task' || kind === 'statusUpdate' ? cleanRecord(body.status) : undefined
+  const valid = kind === 'message'
+    ? isA2AMessage(body)
+    : kind === 'task'
+      ? Boolean(cleanString(body.id) && isA2ATaskStatus(status)
+        && (!body.artifacts || (Array.isArray(body.artifacts) && body.artifacts.every(isA2AArtifact))))
+      : kind === 'statusUpdate'
+        ? Boolean(cleanString(body.taskId) && cleanString(body.contextId) && isA2ATaskStatus(status))
+        : Boolean(cleanString(body.taskId) && cleanString(body.contextId) && isA2AArtifact(artifact))
+  if (!valid) return null
+  const statusMessage = cleanRecord(status?.message)
+  const metadata = extensionFromMetadata(
+    kind === 'message' ? body.metadata
+      : kind === 'artifactUpdate' ? body.metadata ?? artifact?.metadata
+        : body.metadata,
+  )
+  if (!metadata) return null
+
+  const type = metadata.operation
+  const runId = cleanString(body.contextId)
+  const agentId = cleanString(metadata.agentId)
+  if (!isProtocolEventType(type) || !runId || !agentId) return null
+
+  const taskId = cleanString(body.taskId) ?? (kind === 'task' ? cleanString(body.id) : undefined)
+  const messageText = kind === 'message'
+    ? textFromParts(body.parts)
+    : statusMessage
+      ? textFromParts(statusMessage.parts)
+      : artifact
+        ? textFromParts(artifact.parts)
+        : undefined
+  const fallbackText = splitSummaryDetail(messageText)
+  return {
+    version: AGENT_PROTOCOL_VERSION,
+    runId,
+    agentId,
+    type,
+    taskId,
+    lockId: cleanString(metadata.lockId),
+    to: cleanString(metadata.to),
+    title: cleanString(metadata.title) ?? (kind === 'task' ? cleanString(cleanRecord(body.metadata)?.title) : undefined),
+    dependsOn: cleanStringArray(metadata.dependsOn),
+    summary: cleanString(metadata.summary) ?? fallbackText.summary,
+    detail: cleanString(metadata.detail) ?? fallbackText.detail,
+    paths: cleanStringArray(metadata.paths),
+    payload: cleanRecord(metadata.payload),
+    timestamp: cleanString(metadata.timestamp) ?? cleanString(status?.timestamp),
+  }
+}
+
+/** Normalize A2A 1.0 wire objects and legacy AVP events into the ledger shape. */
 export function sanitizeProtocolEvent(value: unknown): AgentProtocolEvent | null {
   if (!value || typeof value !== 'object') return null
   const record = value as Record<string, unknown>
+  const a2a = sanitizeA2AStreamResponse(record)
+  if (a2a) return a2a
   if (!isSupportedProtocolVersion(record.version)) return null
   if (typeof record.runId !== 'string' || !record.runId.trim()) return null
   if (typeof record.agentId !== 'string' || !record.agentId.trim()) return null
@@ -598,7 +888,7 @@ export function sanitizeProtocolEvent(value: unknown): AgentProtocolEvent | null
 }
 
 export function parseAgentProtocolEvents(text: string): AgentProtocolEvent[] {
-  if (!text.includes('agent-protocol')) return []
+  if (!text.includes('```a2a') && !text.includes('agent-protocol')) return []
   const events: AgentProtocolEvent[] = []
   for (const match of text.matchAll(PROTOCOL_BLOCK_RE)) {
     const raw = match[1]?.trim()
@@ -614,10 +904,122 @@ export function parseAgentProtocolEvents(text: string): AgentProtocolEvent[] {
   return events
 }
 
+function a2aStateForEvent(type: ProtocolEventType): A2ATaskState {
+  if (type === 'task.completed') return 'TASK_STATE_COMPLETED'
+  if (type === 'task.failed') return 'TASK_STATE_FAILED'
+  if (type === 'task.released') return 'TASK_STATE_SUBMITTED'
+  if (type === 'agent.blocked' || type === 'task.planned') return 'TASK_STATE_INPUT_REQUIRED'
+  if (type === 'task.created' || type === 'task.claim') return 'TASK_STATE_SUBMITTED'
+  return 'TASK_STATE_WORKING'
+}
+
+function eventExtension(event: AgentProtocolEvent): Record<string, unknown> {
+  return {
+    agentId: event.agentId,
+    operation: event.type,
+    ...(event.lockId ? { lockId: event.lockId } : {}),
+    ...(event.to ? { to: event.to } : {}),
+    ...(event.title ? { title: event.title } : {}),
+    ...(event.dependsOn ? { dependsOn: event.dependsOn } : {}),
+    ...(event.summary ? { summary: event.summary } : {}),
+    ...(event.detail ? { detail: event.detail } : {}),
+    ...(event.paths ? { paths: event.paths } : {}),
+    ...(event.payload ? { payload: event.payload } : {}),
+    ...(event.timestamp ? { timestamp: event.timestamp } : {}),
+  }
+}
+
+function eventText(event: AgentProtocolEvent): string {
+  return [event.summary, event.detail].filter(Boolean).join('\n\n') || event.type
+}
+
+/** Convert the internal ledger event to a standards-shaped A2A StreamResponse. */
+export function makeA2AStreamResponse(event: AgentProtocolEvent): A2AStreamResponse {
+  const metadata = { [A2A_EXTENSION_KEY]: eventExtension(event) }
+  const message: A2AMessage = {
+    messageId: `${event.runId}:${event.agentId}:${event.timestamp ?? 'current'}:${event.type}`,
+    contextId: event.runId,
+    ...(event.taskId ? { taskId: event.taskId } : {}),
+    role: 'ROLE_AGENT',
+    parts: [{ text: eventText(event), mediaType: 'text/plain' }],
+    metadata,
+    extensions: [A2A_COORDINATION_EXTENSION_URI],
+    ...(event.dependsOn ? { referenceTaskIds: event.dependsOn } : {}),
+  }
+
+  if (event.type === 'task.created' && event.taskId) {
+    return {
+      task: {
+        id: event.taskId,
+        contextId: event.runId,
+        status: { state: 'TASK_STATE_SUBMITTED', message, ...(event.timestamp ? { timestamp: event.timestamp } : {}) },
+        metadata: { ...metadata, title: event.title ?? event.summary ?? event.taskId },
+      },
+    }
+  }
+
+  if (event.type === 'task.completed' && event.taskId) {
+    return {
+      task: {
+        id: event.taskId,
+        contextId: event.runId,
+        status: { state: 'TASK_STATE_COMPLETED', message, ...(event.timestamp ? { timestamp: event.timestamp } : {}) },
+        artifacts: [{
+          artifactId: `${event.taskId}:result`,
+          name: 'Task result',
+          description: event.summary,
+          parts: [{ text: eventText(event), mediaType: 'text/plain' }],
+          metadata,
+          extensions: [A2A_COORDINATION_EXTENSION_URI],
+        }],
+        metadata,
+      },
+    }
+  }
+
+  if (event.taskId && (
+    event.type.startsWith('task.')
+    || event.type.startsWith('plan.')
+    || event.type === 'agent.start_work'
+    || event.type === 'agent.stop_work'
+    || event.type === 'agent.blocked'
+    || event.type === 'agent.unblocked'
+  )) {
+    return {
+      statusUpdate: {
+        taskId: event.taskId,
+        contextId: event.runId,
+        status: { state: a2aStateForEvent(event.type), message, ...(event.timestamp ? { timestamp: event.timestamp } : {}) },
+        metadata,
+      },
+    }
+  }
+
+  if ((event.type === 'finding' || event.type === 'learning') && event.taskId) {
+    return {
+      artifactUpdate: {
+        taskId: event.taskId,
+        contextId: event.runId,
+        artifact: {
+          artifactId: `${event.taskId}:${event.type}:${event.agentId}`,
+          name: event.type === 'finding' ? 'Finding' : 'Learning',
+          parts: [{ text: eventText(event), mediaType: 'text/plain' }],
+          metadata,
+          extensions: [A2A_COORDINATION_EXTENSION_URI],
+        },
+        append: true,
+        metadata,
+      },
+    }
+  }
+
+  return { message }
+}
+
 export function makeProtocolBlock(event: AgentProtocolEvent): string {
   return [
-    '```agent-protocol',
-    JSON.stringify({ ...event, version: AGENT_PROTOCOL_VERSION }, null, 2),
+    '```a2a',
+    JSON.stringify(makeA2AStreamResponse(event), null, 2),
     '```',
   ].join('\n')
 }
@@ -668,32 +1070,34 @@ export function formatInbox(messages: ProtocolMessage[], agentsById: Map<string,
 }
 
 function protocolGrammar(runId: string, agentId: string): string {
+  const example = makeA2AStreamResponse({
+    version: AGENT_PROTOCOL_VERSION,
+    runId,
+    agentId,
+    type: 'message',
+    to: 'lead',
+    summary: 'Send a message to the lead.',
+  })
   return [
-    'This is an internal Agent Viewer run already bound through the in-band protocol below.',
+    `This is an internal Agent Viewer run bound to A2A Protocol ${AGENT_PROTOCOL_VERSION}.`,
     'Do not call `coord_*` MCP tools, invoke an external Coordinator workflow, or try to create, join, resume, or inspect the run through the MCP bridge. The fenced events you emit here are the authoritative control channel.',
     '',
-    'Speak the protocol by emitting JSON blocks fenced with the `agent-protocol` language (each on its own lines).',
-    'Illustrative payload shape only — do not echo this example as an event:',
-    JSON.stringify({
-      version: AGENT_PROTOCOL_VERSION,
-      runId,
-      agentId,
-      type: 'message',
-      to: 'lead',
-      summary: 'Send a message to a teammate by name, or to "lead" or "all".',
-    }, null, 2),
+    'Speak the protocol by emitting A2A StreamResponse JSON objects fenced with the `a2a` language (each on its own lines). Emit exactly one of `task`, `message`, `statusUpdate`, or `artifactUpdate` in each block.',
+    `Use contextId ${runId}. Put Agent Viewer coordination fields in metadata["${A2A_COORDINATION_EXTENSION_URI}"] and declare that same URI in the extensions array on Messages and Artifacts.`,
+    'Illustrative A2A message only — do not echo this example as an event:',
+    JSON.stringify(example, null, 2),
     '',
-    'Event types you may emit:',
+    `Set \`metadata["${A2A_COORDINATION_EXTENSION_URI}"].operation\` to one of these coordination operations:`,
     '- `agent.start_work` / `agent.stop_work` (include taskId) — bracket every work stint.',
     '- `agent.blocked` — you cannot proceed; summary = the blocker. `agent.unblocked` when cleared.',
     '- `task.claim` (taskId) — request the next pending task. The coordinator grants or denies it.',
-    '- `task.created` (title, detail, paths, dependsOn) — add newly discovered work to the board.',
+    '- `task.created` (taskId, title, detail, paths, dependsOn) — add newly discovered work as an A2A Task in SUBMITTED state.',
     '- `task.planned` (taskId, summary, detail) — submit an implementation plan for your claimed task before editing when plan approval is required.',
     '- `plan.approved` / `plan.rejected` (taskId, summary/detail) — lead-only approval decision for a teammate plan.',
-    '- `task.completed` / `task.failed` (taskId, summary) — end your task. Completion is gated: changes outside your locked paths are rejected with feedback.',
+    '- `task.completed` / `task.failed` (taskId, summary/detail) — complete with an A2A Task result Artifact or fail with a TaskStatusUpdateEvent. Completion is gated: changes outside your locked paths are rejected with feedback.',
     '- `lock.requested` (paths) — ask for write access before touching paths you do not hold.',
-    '- `finding` — a fact other agents need (summary + detail). `learning` — reusable implementation context.',
-    '- `message` (to, summary/detail) — direct mail to one teammate by name, "lead", or "all". Delivered live when the recipient is mid-turn, else on their next turn.',
+    '- `finding` — a fact other agents need (summary + detail). `learning` — reusable implementation context. When task-scoped, emit these as Artifact updates.',
+    '- `message` (to, summary/detail) — an A2A Message to one teammate by name, "lead", or "all". Delivered live when the recipient is mid-turn, else on their next turn.',
     '- `shutdown.requested` — ask the coordinator to retire you when your work is done.',
   ].join('\n')
 }

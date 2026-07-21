@@ -1,4 +1,4 @@
-// Coordinator for AVP/2 multi-agent runs, modeled on Claude Code agent teams:
+// Coordinator for A2A 1.0 multi-agent runs, modeled on Claude Code agent teams:
 // a LEAD session decomposes the prompt into a shared task list, named
 // TEAMMATES (each in an isolated git worktree) self-claim tasks and work a
 // continuous loop (claim → work → complete → claim next), a MAILBOX carries
@@ -31,6 +31,7 @@ import {
   parseAgentProtocolEvents,
   parseRunPlaybook,
   playbookExpectsArgs,
+  taskStateFromStatus,
   type AgentProtocolEvent,
   type CreateExternalProtocolRunParams,
   type ExternalProtocolActionable,
@@ -78,7 +79,10 @@ type Row = Record<string, unknown>
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
 const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
 const LOCK_LEASE_MS = 20 * 60_000
-const SCHEMA_VERSION = 11
+// v11 → v12: protocol_push_configs table (A2A tasks/pushNotificationConfig/*)
+// — a new IF-NOT-EXISTS table needs no ALTER migration, but the version bump
+// keeps the meta row honest for anyone diagnosing schema drift.
+const SCHEMA_VERSION = 12
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 const EXTERNAL_AGENT_STALE_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_STALE_MS) || 5 * 60_000)
@@ -330,6 +334,18 @@ function initializeSchema(db: SqliteDatabase): void {
       created_at TEXT NOT NULL,
       PRIMARY KEY (run_id, agent_id, action, request_id)
     );
+
+    CREATE TABLE IF NOT EXISTS protocol_push_configs (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES protocol_runs(id) ON DELETE CASCADE,
+      task_id TEXT NOT NULL,
+      url TEXT NOT NULL,
+      token TEXT,
+      created_at TEXT NOT NULL,
+      fired_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS protocol_push_configs_task_idx ON protocol_push_configs(run_id, task_id);
   `)
   migrateSchema(db)
   db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run('schema_version', String(SCHEMA_VERSION))
@@ -1537,6 +1553,58 @@ export async function createExternalProtocolTask(
   return result
 }
 
+/** Sentinel agent id recorded on events/tasks created by an unauthenticated A2A caller. */
+const A2A_CLIENT_AGENT_ID = 'a2a-client'
+
+/**
+ * Task creation for the A2A `message/send` and `message/stream` operations.
+ * An A2A caller isn't a registered participant (no join/claim handshake) — it
+ * addresses the run's task board as a whole, so this skips the identity
+ * checks createExternalProtocolTask enforces for teammates.
+ */
+export async function createProtocolTaskAdmin(
+  runId: string,
+  params: { title: string; detail: string; paths?: string[] },
+): Promise<ProtocolTask> {
+  const result = await enqueueWrite((db) => {
+    const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
+    if (!runRow) throw new Error('Coordinator run not found')
+    if (!['running', 'planning'].includes(String(runRow.status))) {
+      throw new Error('Coordinator run is not accepting tasks')
+    }
+    const title = params.title.trim()
+    const detail = params.detail.trim()
+    if (!title || !detail) throw new Error('task title and detail are required')
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const task = insertTaskSync(db, runId, {
+        title,
+        prompt: detail,
+        paths: params.paths ?? [],
+        blockedBy: [],
+      })
+      insertEventSync(db, {
+        version: AGENT_PROTOCOL_VERSION,
+        runId,
+        agentId: A2A_CLIENT_AGENT_ID,
+        type: 'task.created',
+        taskId: task.id,
+        title,
+        detail,
+        paths: task.paths,
+      })
+      db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), runId)
+      db.exec('COMMIT')
+      return task
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  })
+  notifyRunChanged(runId)
+  return result
+}
+
 export async function claimExternalProtocolTask(
   identity: ExternalProtocolIdentity,
   taskId?: string,
@@ -2036,6 +2104,162 @@ export async function releaseExternalProtocolTask(
   })
   notifyRunChanged(identity.runId)
   return result
+}
+
+/**
+ * Administrative cancellation for the A2A `tasks/cancel` operation. Not
+ * scoped to a registered participant for the same reason as
+ * createProtocolTaskAdmin — an A2A client addresses the board, not a task
+ * it owns as a named teammate.
+ */
+export async function cancelProtocolTask(runId: string, taskId: string, reason?: string): Promise<ProtocolTask> {
+  const result = await enqueueWrite((db) => {
+    const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
+      .get(runId, taskId) as Row | undefined
+    if (!taskRow) throw new Error('Coordinator task not found')
+    const task = rowToTask(taskRow)
+    if (['completed', 'failed', 'cancelled'].includes(task.status)) {
+      throw new Error(`Coordinator task is already ${task.status}`)
+    }
+    const ts = nowIso()
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.prepare("UPDATE protocol_tasks SET status = 'cancelled', updated_at = ? WHERE run_id = ? AND id = ?")
+        .run(ts, runId, task.id)
+      if (task.ownerAgentId) {
+        db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'")
+          .run(ts, runId, task.ownerAgentId, task.id)
+        db.prepare("UPDATE protocol_agents SET task_id = NULL, status = CASE WHEN status IN ('working', 'blocked') THEN 'idle' ELSE status END, updated_at = ? WHERE run_id = ? AND id = ? AND task_id = ?")
+          .run(ts, runId, task.ownerAgentId, task.id)
+      }
+      insertEventSync(db, {
+        version: AGENT_PROTOCOL_VERSION,
+        runId,
+        agentId: A2A_CLIENT_AGENT_ID,
+        type: 'task.cancelled',
+        taskId: task.id,
+        summary: reason?.trim() || `${task.id} cancelled via A2A tasks/cancel`,
+        timestamp: ts,
+      })
+      db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(ts, runId)
+      db.exec('COMMIT')
+      return rowToTask(db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, task.id) as Row)
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  })
+  notifyRunChanged(runId)
+  return result
+}
+
+export type ProtocolPushConfig = {
+  id: string
+  runId: string
+  taskId: string
+  url: string
+  token?: string
+  createdAt: string
+}
+
+function rowToPushConfig(row: Row): ProtocolPushConfig {
+  return {
+    id: String(row.id),
+    runId: String(row.run_id),
+    taskId: String(row.task_id),
+    url: String(row.url),
+    token: typeof row.token === 'string' && row.token ? row.token : undefined,
+    createdAt: String(row.created_at),
+  }
+}
+
+/** A2A `tasks/pushNotificationConfig/set`. */
+export async function setProtocolPushConfig(
+  runId: string,
+  taskId: string,
+  params: { url: string; token?: string; id?: string },
+): Promise<ProtocolPushConfig> {
+  const db = await getDatabase()
+  const taskRow = db.prepare('SELECT id FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, taskId) as Row | undefined
+  if (!taskRow) throw new Error('Coordinator task not found')
+  const url = params.url.trim()
+  if (!url) throw new Error('Push notification url is required')
+  const id = params.id?.trim() || randomUUID()
+  const ts = nowIso()
+  db.prepare(`
+    INSERT INTO protocol_push_configs (id, run_id, task_id, url, token, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET url = excluded.url, token = excluded.token, fired_at = NULL
+  `).run(id, runId, taskId, url, params.token?.trim() || null, ts)
+  return rowToPushConfig(db.prepare('SELECT * FROM protocol_push_configs WHERE id = ?').get(id) as Row)
+}
+
+/** A2A `tasks/pushNotificationConfig/get`. */
+export async function getProtocolPushConfig(
+  runId: string,
+  taskId: string,
+  configId: string,
+): Promise<ProtocolPushConfig | null> {
+  const db = await getDatabase()
+  const row = db.prepare('SELECT * FROM protocol_push_configs WHERE id = ? AND run_id = ? AND task_id = ?')
+    .get(configId, runId, taskId) as Row | undefined
+  return row ? rowToPushConfig(row) : null
+}
+
+/** A2A `tasks/pushNotificationConfig/list`. */
+export async function listProtocolPushConfigs(runId: string, taskId: string): Promise<ProtocolPushConfig[]> {
+  const db = await getDatabase()
+  return (db.prepare('SELECT * FROM protocol_push_configs WHERE run_id = ? AND task_id = ? ORDER BY created_at ASC')
+    .all(runId, taskId) as Row[]).map(rowToPushConfig)
+}
+
+/** A2A `tasks/pushNotificationConfig/delete`. */
+export async function deleteProtocolPushConfig(runId: string, taskId: string, configId: string): Promise<boolean> {
+  const db = await getDatabase()
+  const result = db.prepare('DELETE FROM protocol_push_configs WHERE id = ? AND run_id = ? AND task_id = ?')
+    .run(configId, runId, taskId) as { changes?: number }
+  return (result?.changes ?? 0) > 0
+}
+
+const PUSH_TERMINAL_TASK_STATUSES = new Set<ProtocolTaskStatus>(['completed', 'failed', 'cancelled'])
+
+/**
+ * Fires each pending push config once its task reaches a terminal state,
+ * then marks it fired so it never re-sends. Piggybacks on the mailbox sweep
+ * timer (see ensureMailSweep below) rather than adding a second process-wide
+ * interval, and polls like the A2A SSE streams do rather than hooking every
+ * task-status call site — task status changes happen across ~8 functions
+ * (claim/complete/fail/release/handoff/cancel/…) with no single reducer
+ * chokepoint in this schema.
+ */
+async function sweepPushNotifications(): Promise<void> {
+  const db = await getDatabase()
+  const pending = db.prepare('SELECT * FROM protocol_push_configs WHERE fired_at IS NULL').all() as Row[]
+  if (pending.length === 0) return
+  const ts = nowIso()
+  for (const row of pending) {
+    const config = rowToPushConfig(row)
+    const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
+      .get(config.runId, config.taskId) as Row | undefined
+    if (!taskRow) continue
+    const task = rowToTask(taskRow)
+    if (!PUSH_TERMINAL_TASK_STATUSES.has(task.status)) continue
+    db.prepare('UPDATE protocol_push_configs SET fired_at = ? WHERE id = ?').run(ts, config.id)
+    const payload = {
+      taskId: task.id,
+      contextId: task.runId,
+      status: { state: taskStateFromStatus(task.status), timestamp: task.updatedAt },
+      final: true,
+    }
+    void fetch(config.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    }).catch(() => {})
+  }
 }
 
 /**
@@ -3242,13 +3466,17 @@ async function sweepMailboxes(): Promise<void> {
 /** Run one maintenance pass immediately (used by diagnostics and smokes). */
 export async function runProtocolMaintenanceSweep(): Promise<void> {
   await sweepMailboxes()
+  await sweepPushNotifications().catch(() => {})
 }
 
 let mailSweepTimer: ReturnType<typeof setInterval> | null = null
 
 function ensureMailSweep(): void {
   if (mailSweepTimer) return
-  mailSweepTimer = setInterval(() => { void sweepMailboxes().catch(() => {}) }, MAIL_SWEEP_INTERVAL_MS)
+  mailSweepTimer = setInterval(() => {
+    void sweepMailboxes().catch(() => {})
+    void sweepPushNotifications().catch(() => {})
+  }, MAIL_SWEEP_INTERVAL_MS)
   mailSweepTimer.unref?.()
 }
 
@@ -3321,7 +3549,7 @@ function acknowledgeInboxSync(db: SqliteDatabase, runId: string, agentId: string
 function collectStrings(value: unknown, out: string[], depth = 0): void {
   if (depth > 8) return
   if (typeof value === 'string') {
-    if (value.includes('agent-protocol')) out.push(value)
+    if (value.includes('```a2a') || value.includes('agent-protocol')) out.push(value)
     return
   }
   if (!value || typeof value !== 'object') return

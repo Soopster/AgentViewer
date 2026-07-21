@@ -158,10 +158,10 @@ function formatAgentProtocolEvent(event: AgentProtocolEvent, expanded: boolean):
 }
 
 function textLinesForProtocolAwareBlock(text: string, expanded: boolean): TuiTranscriptCardLine[] | null {
-  // Some clients preserve the AVP/2 fence name while others rewrite it to
-  // `json`. The version discriminator lets us recognize both without trying to
-  // parse every ordinary fenced code block in the transcript.
-  if (!text.includes('agent-protocol') && !text.includes('"AVP/')) return null
+  // Some clients preserve the A2A fence while others rewrite it to `json`.
+  // The StreamResponse keys let us recognize both without parsing every
+  // ordinary fenced code block in the transcript. Legacy AVP remains readable.
+  if (!text.includes('```a2a') && !text.includes('agent-protocol') && !text.includes('"AVP/') && !text.includes('"statusUpdate"') && !text.includes('"artifactUpdate"')) return null
   const lines: TuiTranscriptCardLine[] = []
   let replacedAny = false
   let lastIndex = 0
@@ -174,7 +174,7 @@ function textLinesForProtocolAwareBlock(text: string, expanded: boolean): TuiTra
       lines.push(...beforeLines.map((entry) => line(entry.trimEnd())).filter((entry) => entry.text.trim()))
     }
     const content = (match[2] ?? '').trim()
-    const event = (lang === 'agent-protocol' || lang === 'json')
+    const event = (lang === 'a2a' || lang === 'agent-protocol' || lang === 'json')
       ? parseAgentProtocolCodeBlock(content)
       : null
     if (event) {
@@ -196,7 +196,8 @@ function textLinesForProtocolAwareBlock(text: string, expanded: boolean): TuiTra
 }
 
 function isAgentProtocolText(text: string): boolean {
-  return text.includes('agent-protocol') && text.includes('"AVP/')
+  return ((text.includes('```a2a') || text.includes('A2A Protocol')) && text.includes('agent-viewer.dev/extensions/coordination/v1'))
+    || (text.includes('agent-protocol') && text.includes('"AVP/'))
 }
 
 type McpToolId = { server: string; tool: string }

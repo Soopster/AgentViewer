@@ -506,7 +506,7 @@ assert.equal(handoffInbox.messages.at(-1)?.priority, 'urgent')
 
 // --- Playbooks: workflow-style runs where the artifact holds the plan ------
 
-const { parseRunPlaybook, interpolatePlaybookText } = await import('../../lib/agentProtocol')
+const { parseRunPlaybook, interpolatePlaybookText, makeA2AStreamResponse } = await import('../../lib/agentProtocol')
 assert.equal(
   interpolatePlaybookText('Audit {{args.dir}} then {{ args }}', { dir: 'src/routes' }),
   'Audit src/routes then {"dir":"src/routes"}',
@@ -668,10 +668,10 @@ sessionRuntime.setRunningSession(manualTeammateSessionId, {
   steer: async (text) => { manualSteers.push(text) },
 })
 const manualEvent = {
-  version: 'AVP/2',
+  version: '1.0' as const,
   runId: manualRunId,
   agentId: 'manual-lead',
-  type: 'message',
+  type: 'message' as const,
   to: 'Manual teammate',
   summary: 'Change priority now and keep working.',
 }
@@ -679,7 +679,7 @@ const manualWire = `data: ${JSON.stringify({
   type: 'item.completed',
   item: {
     type: 'agent_message',
-    text: `\`\`\`agent-protocol\n${JSON.stringify(manualEvent)}\n\`\`\``,
+    text: `\`\`\`a2a\n${JSON.stringify(makeA2AStreamResponse(manualEvent))}\n\`\`\``,
   },
 })}\n\n`
 const observedResponse = await coordination.observeCoordinatorSessionTurn(

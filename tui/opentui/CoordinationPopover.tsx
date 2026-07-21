@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-// Terminal-first Agent Operations dashboard for AVP/2 coordinated runs.
+// Terminal-first Agent Operations dashboard for A2A coordinated runs.
 // The web dashboard can expose several panels at once; the TUI presents the
 // same controls as numbered panes with stable geometry and contextual keys.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
