@@ -155,6 +155,9 @@ export type ProtocolTask = {
   blockedBy: string[]
   /** Playbook phase this task belongs to (display + barrier grouping). */
   phase?: string
+  /** Durable terminal report supplied by the task owner. */
+  resultSummary?: string
+  resultDetail?: string
   createdAt: string
   updatedAt: string
 }
@@ -629,7 +632,13 @@ export function formatTaskBoard(tasks: ProtocolTask[]): string {
   return tasks.map((task) => {
     const deps = task.blockedBy.length > 0 ? ` deps:[${task.blockedBy.join(',')}]` : ''
     const owner = task.ownerAgentId ? ` owner:${task.ownerAgentId}` : ''
-    return `- ${task.id} [${task.status}]${owner}${deps} ${task.title}`
+    const resultDetail = task.resultDetail && task.resultDetail.length > 1200
+      ? `${task.resultDetail.slice(0, 1199)}…`
+      : task.resultDetail
+    const result = task.resultSummary
+      ? `\n  result: ${task.resultSummary}${resultDetail ? ` — ${resultDetail}` : ''}`
+      : ''
+    return `- ${task.id} [${task.status}]${owner}${deps} ${task.title}${result}`
   }).join('\n')
 }
 
@@ -638,6 +647,16 @@ export function formatRoster(agents: ProtocolAgent[]): string {
   return agents.map((agent) => (
     `- ${agent.name} (${agent.role}, id:${agent.id}, status:${agent.status}${agent.taskId ? `, task:${agent.taskId}` : ''})`
   )).join('\n')
+}
+
+function formatLeadSupervisionRoster(agents: ProtocolAgent[]): string {
+  if (agents.length === 0) return '- (no teammates yet)'
+  return agents.map((agent) => {
+    const task = agent.taskId ? `, task:${agent.taskId}` : ''
+    const turn = agent.turnActive ? ', turn:active' : ''
+    const lastSeen = agent.lastSeenAt ?? agent.updatedAt
+    return `- ${agent.name} (${agent.role}, id:${agent.id}, status:${agent.status}${task}${turn}, last update:${lastSeen})`
+  }).join('\n')
 }
 
 export function formatInbox(messages: ProtocolMessage[], agentsById: Map<string, ProtocolAgent>): string {
@@ -844,6 +863,7 @@ export function buildLeadInterventionPreamble(params: {
   interventionsLeft: number
   requirePlanApproval?: boolean
   reviewingPlans?: boolean
+  supervisionUpdate?: boolean
 }): string {
   return [
     `You are the TEAM LEAD (protocol ${AGENT_PROTOCOL_VERSION}). Teammates need your help mid-run.`,
@@ -852,13 +872,15 @@ export function buildLeadInterventionPreamble(params: {
     'Your inbox:',
     formatInbox(params.inbox, params.agentsById),
     '',
-    'Team roster:',
-    formatRoster(params.roster),
+    'Live team status:',
+    formatLeadSupervisionRoster(params.roster),
     '',
     'Task board:',
     formatTaskBoard(params.tasks),
     '',
     'Resolve the situation THIS TURN — coordinate, do not implement:',
+    '- Review every teammate status and owned task. Leave healthy active work alone; unblock blocked agents, reassign abandoned work, and give idle agents newly claimable work.',
+    '- Treat each terminal task result as authoritative input. Acknowledge dependencies it unlocks and preserve important results for final synthesis.',
     ...(params.requirePlanApproval
       ? [
           '- For any `planned` task, approve the plan with `plan.approved` (taskId, summary) only if it has clear files, steps, verification, and avoids path conflicts.',
@@ -870,6 +892,8 @@ export function buildLeadInterventionPreamble(params: {
     '- If the work needs reshaping, emit `task.created` replacements (title, detail, paths, dependsOn).',
     params.reviewingPlans
       ? '- This turn is reviewing teammate plans; it does not consume the stuck-task intervention budget.'
+      : params.supervisionUpdate
+        ? '- This is a supervision checkpoint; it does not consume the stuck-task intervention budget. If the team is healthy, record no speculative changes and return to monitoring.'
       : `- You have ${params.interventionsLeft} intervention turn${params.interventionsLeft === 1 ? '' : 's'} left this run — after that, stuck tasks are auto-failed. Prefer decisive resolution over back-and-forth.`,
     '- End the turn with `agent.stop_work`.',
     '',

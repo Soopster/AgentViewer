@@ -33,6 +33,8 @@ const task: ProtocolTask = {
   ownerAgentId: agent.id,
   paths: ['lib/agentProtocol.ts'],
   blockedBy: [],
+  resultSummary: 'Verified the Coordinator guidance.',
+  resultDetail: 'The focused smoke passed.',
   createdAt: timestamp,
   updatedAt: timestamp,
 }
@@ -87,6 +89,7 @@ for (const prompt of sharedCheckoutPrompts) {
   assert.doesNotMatch(prompt, /worktree/i)
 }
 for (const prompt of prompts(true)) assert.match(prompt, /worktree/i)
+assert.match(sharedCheckoutPrompts[3]!, /result: Verified the Coordinator guidance.*The focused smoke passed/)
 
 const protocolPromptCard = formatTranscriptCard({
   role: 'user',

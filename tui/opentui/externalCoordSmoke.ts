@@ -225,9 +225,9 @@ await coordination.sendExternalProtocolMessage(teammate, {
 })
 assert.equal((await coordination.readExternalProtocolStatus(teammate)).actionable.replyRequiredCount, 0)
 const responseInbox = await coordination.readExternalProtocolInbox(lead)
-assert.equal(responseInbox.messages[0].kind, 'response')
-assert.equal(responseInbox.messages[0].inReplyTo, inbox.messages[0].id)
-assert.equal(responseInbox.messages[0].correlationId, 'plan-approval')
+const correlatedResponse = responseInbox.messages.find((message) => message.kind === 'response')
+assert.equal(correlatedResponse?.inReplyTo, inbox.messages[0].id)
+assert.equal(correlatedResponse?.correlationId, 'plan-approval')
 
 for (let index = 1; index <= 3; index += 1) {
   await coordination.sendExternalProtocolMessage(lead, {
@@ -309,6 +309,14 @@ await coordination.reportExternalProtocolProgress(teammate, {
   taskId: task.id,
   summary: 'Implementing the approved plan',
 })
+await coordination.runProtocolMaintenanceSweep()
+const supervisionInbox = await coordination.readExternalProtocolInbox(lead)
+assert.ok(supervisionInbox.messages.some((message) => (
+  message.kind === 'review_request'
+  && message.body.startsWith('Supervision checkpoint:')
+  && message.body.includes(teammate.name)
+  && message.body.includes(task.id)
+)))
 
 // Lock results are explicit: the holder re-requests and is granted; a
 // conflicting participant is denied with the holder named.
@@ -367,10 +375,21 @@ const completed = await coordination.runExternalProtocolIdempotent(
   () => coordination.completeExternalProtocolTask(teammate, {
     taskId: task.id,
     summary: 'Implemented and verified the shared change.',
+    detail: 'owned.txt contains the verified participant change.',
   }),
 )
 assert.equal(completed.accepted, true)
 assert.equal(completed.runStatus, 'running')
+const completedStatus = await coordination.readExternalProtocolStatus(lead)
+const completedTask = completedStatus.snapshot.tasks.find((entry) => entry.id === task.id)
+assert.equal(completedTask?.resultSummary, 'Implemented and verified the shared change.')
+assert.equal(completedTask?.resultDetail, 'owned.txt contains the verified participant change.')
+const resultInbox = await coordination.readExternalProtocolInbox(lead)
+assert.ok(resultInbox.messages.some((message) => (
+  message.kind === 'handoff'
+  && message.body.includes(`${task.id} completed`)
+  && message.body.includes('owned.txt contains the verified participant change.')
+)))
 
 // Claimed work can be handed back: the task requeues and its locks release.
 const leadClaim = await coordination.claimExternalProtocolTask(lead, followUp.id)

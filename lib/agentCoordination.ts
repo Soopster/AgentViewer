@@ -78,7 +78,7 @@ type Row = Record<string, unknown>
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
 const DB_FILE = path.join(DATA_DIR, 'coordination.sqlite')
 const LOCK_LEASE_MS = 20 * 60_000
-const SCHEMA_VERSION = 10
+const SCHEMA_VERSION = 11
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 const EXTERNAL_AGENT_STALE_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_STALE_MS) || 5 * 60_000)
@@ -86,6 +86,7 @@ const MAIL_SWEEP_INTERVAL_MS = 5_000
 const REPLY_ESCALATION_MS = 3 * 60_000
 const STATUS_BATCH_THRESHOLD = 3
 const STATUS_BATCH_MAX_WAIT_MS = 15_000
+const SUPERVISION_CHECKPOINT_MS = Math.max(30_000, Number(process.env.AGENT_VIEWER_COORD_SUPERVISION_MS) || 90_000)
 // One automatic re-dispatch when a teammate's turn ends mid-task; after that
 // the teammate is marked blocked and the lead is notified (doc: teammates may
 // stop on errors; the lead/user nudges or replaces them).
@@ -242,6 +243,8 @@ function initializeSchema(db: SqliteDatabase): void {
       paths_json TEXT NOT NULL,
       blocked_by_json TEXT NOT NULL,
       phase TEXT,
+      result_summary TEXT,
+      result_detail TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (run_id, id)
@@ -353,6 +356,8 @@ function initializeSchema(db: SqliteDatabase): void {
 // or intentionally share the run checkout.
 // v9 → v10: track when a stale reply-required message was escalated, so the
 // mailbox sweep nudges a silent recipient (and the lead) exactly once.
+// v10 → v11: persist each task's terminal result so supervision and final
+// synthesis do not depend on a bounded event-history window.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -408,6 +413,16 @@ function migrateSchema(db: SqliteDatabase): void {
     db.exec('ALTER TABLE protocol_messages ADD COLUMN escalated_at TEXT')
   } catch {
     // column already exists
+  }
+  for (const statement of [
+    'ALTER TABLE protocol_tasks ADD COLUMN result_summary TEXT',
+    'ALTER TABLE protocol_tasks ADD COLUMN result_detail TEXT',
+  ]) {
+    try {
+      db.exec(statement)
+    } catch {
+      // column already exists
+    }
   }
 }
 
@@ -619,6 +634,8 @@ function rowToTask(row: Row): ProtocolTask {
     paths: parseJsonArray(row.paths_json),
     blockedBy: parseJsonArray(row.blocked_by_json),
     phase: typeof row.phase === 'string' && row.phase ? row.phase : undefined,
+    resultSummary: typeof row.result_summary === 'string' && row.result_summary ? row.result_summary : undefined,
+    resultDetail: typeof row.result_detail === 'string' && row.result_detail ? row.result_detail : undefined,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
@@ -1335,7 +1352,7 @@ function recoverStaleExternalParticipantsSync(db: SqliteDatabase, runId: string)
     const ts = nowIso()
     if (agent.taskId) {
       db.prepare(`
-        UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, updated_at = ?
+        UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, result_summary = NULL, result_detail = NULL, updated_at = ?
         WHERE run_id = ? AND id = ? AND owner_agent_id = ?
       `).run(ts, runId, agent.taskId, agent.id)
     }
@@ -1987,7 +2004,7 @@ export async function releaseExternalProtocolTask(
     const ts = nowIso()
     db.exec('BEGIN IMMEDIATE')
     try {
-      db.prepare("UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, updated_at = ? WHERE run_id = ? AND id = ?")
+      db.prepare("UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, result_summary = NULL, result_detail = NULL, updated_at = ? WHERE run_id = ? AND id = ?")
         .run(ts, identity.runId, task.id)
       if (task.ownerAgentId) {
         db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'")
@@ -2048,7 +2065,7 @@ export async function handoffExternalProtocolTask(
     const ts = nowIso()
     db.exec('BEGIN IMMEDIATE')
     try {
-      db.prepare("UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, updated_at = ? WHERE run_id = ? AND id = ?")
+      db.prepare("UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, result_summary = NULL, result_detail = NULL, updated_at = ? WHERE run_id = ? AND id = ?")
         .run(ts, identity.runId, task.id)
       db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'")
         .run(ts, identity.runId, agent.id, task.id)
@@ -2575,6 +2592,9 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
     const ts = event.timestamp ?? nowIso()
     db.exec('BEGIN IMMEDIATE')
     try {
+      const priorActorRow = db.prepare('SELECT status FROM protocol_agents WHERE id = ? AND run_id = ?')
+        .get(event.agentId, event.runId) as Row | undefined
+      const priorActorStatus = typeof priorActorRow?.status === 'string' ? priorActorRow.status : undefined
       insertEventSync(db, { ...event, timestamp: ts })
       db.prepare('UPDATE protocol_agents SET last_seen_at = ?, updated_at = ? WHERE id = ? AND run_id = ?')
         .run(ts, ts, event.agentId, event.runId)
@@ -2585,8 +2605,25 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
         `).run(leaseIso(), ts, event.runId, event.agentId)
       }
       const newMessageIds: string[] = []
+      const queueLeadStatus = (body: string) => {
+        for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, 'lead')) {
+          newMessageIds.push(insertMessageSync(db, {
+            runId: event.runId,
+            fromAgentId: event.agentId,
+            toAgentId: recipient,
+            body,
+            ts,
+            kind: 'review_request',
+          }))
+        }
+      }
 
-      if (event.type === 'agent.ready') {
+      if (event.type === 'agent.heartbeat') {
+        if (event.summary || event.detail) {
+          queueLeadStatus([`Progress on ${event.taskId ?? 'current work'}: ${event.summary ?? 'heartbeat'}`, event.detail]
+            .filter(Boolean).join('\n\n'))
+        }
+      } else if (event.type === 'agent.ready') {
         setAgentStatusSync(db, event.runId, event.agentId, 'ready', ts)
       } else if (event.type === 'agent.start_work') {
         setAgentStatusSync(db, event.runId, event.agentId, 'working', ts)
@@ -2594,8 +2631,16 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
           db.prepare("UPDATE protocol_tasks SET status = 'in_progress', owner_agent_id = ?, updated_at = ? WHERE id = ? AND run_id = ?")
             .run(event.agentId, ts, event.taskId, event.runId)
         }
+        if (priorActorStatus !== 'working' || event.summary || event.detail) {
+          queueLeadStatus([`${event.taskId ?? 'Work'} started${event.summary ? `: ${event.summary}` : '.'}`, event.detail]
+            .filter(Boolean).join('\n\n'))
+        }
       } else if (event.type === 'agent.stop_work') {
         setAgentStatusSync(db, event.runId, event.agentId, 'idle', ts)
+        if (priorActorStatus !== 'idle' || event.summary || event.detail) {
+          queueLeadStatus([`${event.taskId ?? 'Work'} paused or stopped${event.summary ? `: ${event.summary}` : '.'}`, event.detail]
+            .filter(Boolean).join('\n\n'))
+        }
       } else if (event.type === 'agent.blocked') {
         setAgentStatusSync(db, event.runId, event.agentId, 'blocked', ts)
         if (event.taskId) {
@@ -2627,6 +2672,8 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
           db.prepare("UPDATE protocol_tasks SET status = 'in_progress', updated_at = ? WHERE id = ? AND run_id = ?")
             .run(ts, event.taskId, event.runId)
         }
+        queueLeadStatus([`${event.taskId ?? 'Work'} resumed${event.summary ? `: ${event.summary}` : '.'}`, event.detail]
+          .filter(Boolean).join('\n\n'))
       } else if (event.type === 'task.created') {
         insertTaskSync(db, event.runId, {
           title: event.title ?? event.summary ?? 'Untitled task',
@@ -2684,12 +2731,34 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
       } else if (event.type === 'task.completed') {
         setAgentStatusSync(db, event.runId, event.agentId, 'idle', ts)
         if (event.taskId) {
-          db.prepare("UPDATE protocol_tasks SET status = 'completed', updated_at = ? WHERE id = ? AND run_id = ?")
-            .run(ts, event.taskId, event.runId)
+          const resultSummary = event.summary?.trim() || `${event.taskId} completed`
+          const resultDetail = event.detail?.trim() || null
+          db.prepare("UPDATE protocol_tasks SET status = 'completed', result_summary = ?, result_detail = ?, updated_at = ? WHERE id = ? AND run_id = ?")
+            .run(resultSummary, resultDetail, ts, event.taskId, event.runId)
           db.prepare('UPDATE protocol_agents SET task_id = NULL, updated_at = ? WHERE id = ? AND run_id = ? AND task_id = ?')
             .run(ts, event.agentId, event.runId, event.taskId)
           db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'")
             .run(ts, event.runId, event.agentId, event.taskId)
+          const unfinished = Number((db.prepare(`
+            SELECT COUNT(*) AS n FROM protocol_tasks
+            WHERE run_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
+          `).get(event.runId) as Row | undefined)?.n) || 0
+          // Intermediate results are actionable supervision input. Wake the
+          // lead exactly once with the durable result while other work remains;
+          // the all-terminal path instead includes every persisted result in
+          // the synthesis prompt and avoids racing an intervention turn.
+          if (unfinished > 0) {
+            for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, 'lead')) {
+              newMessageIds.push(insertMessageSync(db, {
+                runId: event.runId,
+                fromAgentId: event.agentId,
+                toAgentId: recipient,
+                body: [`${event.taskId} completed: ${resultSummary}`, resultDetail].filter(Boolean).join('\n\n'),
+                ts,
+                kind: 'handoff',
+              }))
+            }
+          }
         }
       } else if (event.type === 'task.failed') {
         // A failed task must not pin its locks or its owner: release both so
@@ -2701,19 +2770,38 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
         const isExternal = String(agentRow?.session_id ?? '').startsWith('external:')
         setAgentStatusSync(db, event.runId, event.agentId, isExternal ? 'idle' : 'failed', ts)
         if (event.taskId) {
-          db.prepare("UPDATE protocol_tasks SET status = 'failed', updated_at = ? WHERE id = ? AND run_id = ?")
-            .run(ts, event.taskId, event.runId)
+          const resultSummary = event.summary?.trim() || `${event.taskId} failed`
+          const resultDetail = event.detail?.trim() || null
+          db.prepare("UPDATE protocol_tasks SET status = 'failed', result_summary = ?, result_detail = ?, updated_at = ? WHERE id = ? AND run_id = ?")
+            .run(resultSummary, resultDetail, ts, event.taskId, event.runId)
           db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'")
             .run(ts, event.runId, event.agentId, event.taskId)
           db.prepare('UPDATE protocol_agents SET task_id = NULL, updated_at = ? WHERE id = ? AND run_id = ? AND task_id = ?')
             .run(ts, event.agentId, event.runId, event.taskId)
+          const unfinished = Number((db.prepare(`
+            SELECT COUNT(*) AS n FROM protocol_tasks
+            WHERE run_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
+          `).get(event.runId) as Row | undefined)?.n) || 0
+          if (unfinished > 0) {
+            for (const recipient of resolveRecipientsSync(db, event.runId, event.agentId, 'lead')) {
+              newMessageIds.push(insertMessageSync(db, {
+                runId: event.runId,
+                fromAgentId: event.agentId,
+                toAgentId: recipient,
+                body: [`${event.taskId} failed: ${resultSummary}`, resultDetail, 'Review dependencies and reassign, replace, or accept the failure.'].filter(Boolean).join('\n\n'),
+                ts,
+                kind: 'handoff',
+                priority: 'urgent',
+              }))
+            }
+          }
         }
       } else if (event.type === 'task.released' && event.taskId) {
         const taskRow = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? AND id = ?')
           .get(event.runId, event.taskId) as Row | undefined
         const task = taskRow ? rowToTask(taskRow) : null
         if (task && !['completed', 'cancelled'].includes(task.status)) {
-          db.prepare("UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, updated_at = ? WHERE run_id = ? AND id = ?")
+          db.prepare("UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, result_summary = NULL, result_detail = NULL, updated_at = ? WHERE run_id = ? AND id = ?")
             .run(ts, event.runId, task.id)
           if (task.ownerAgentId) {
             db.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND task_id = ? AND status = 'active'")
@@ -2835,6 +2923,7 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
   const agentsById = new Map(agents.map((agent) => [agent.id, agent]))
   const controller = controllers.get(runId)
   const wake = new Set<string>()
+  const supervisionWake = new Set<string>()
   for (const id of messageIds) {
     // A new provider turn already contains this message in its preamble. Do
     // not also steer it into that turn while startup is awaiting acceptance.
@@ -2863,6 +2952,9 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
         })
       } else {
         wake.add(recipient.id)
+        if (message.kind === 'handoff' || message.kind === 'review_request' || message.kind === 'review_result') {
+          supervisionWake.add(recipient.id)
+        }
       }
     } finally {
       liveDeliveryInFlight.delete(id)
@@ -2879,7 +2971,7 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
     const recipient = agentsById.get(agentId)
     if (!recipient || recipient.status === 'stopped' || recipient.status === 'failed') continue
     if (recipient.role === 'lead') {
-      void dispatchLeadIntervention(controller)
+      void dispatchLeadIntervention(controller, { supervision: supervisionWake.has(agentId) })
     } else {
       // Fresh advice deserves fresh patience: reset the stall counter so the
       // woken teammate gets its continuation nudge again.
@@ -3022,6 +3114,7 @@ async function sweepIdleTeammates(runId: string): Promise<void> {
 
 const TEAM_IDLE_PING_PREFIX = 'Team idle:'
 const TEAM_IDLE_PING_COOLDOWN_MS = 2 * 60_000
+const SUPERVISION_PING_PREFIX = 'Supervision checkpoint:'
 
 /**
  * sweepIdleTeammates only reaches internal (in-process) teammates — it needs
@@ -3071,6 +3164,52 @@ async function pingLeadIfTeamIdle(runId: string): Promise<void> {
 }
 
 /**
+ * Keep a long-running lead informed even when every teammate is healthy and no
+ * blocker/mailbox event would otherwise wake it. The checkpoint is durable,
+ * rate-limited, and only exists while owned work is active. Internal leads get
+ * a budget-free supervision turn; external lead workers wake through the same
+ * event/inbox path and receive the latest authoritative snapshot.
+ */
+async function checkpointLeadSupervision(runId: string): Promise<void> {
+  const db = await getDatabase()
+  const agents = listAgentsSync(db, runId)
+  const lead = agents.find((agent) => agent.role === 'lead')
+  if (!lead) return
+  const teammates = agents.filter((agent) => agent.role === 'teammate')
+  const active = teammates.filter((agent) => (
+    Boolean(agent.taskId)
+    || agent.status === 'working'
+    || agent.status === 'blocked'
+    || controllers.get(runId)?.turnInFlight.has(agent.id) === true
+  ))
+  if (active.length === 0) return
+  const tasks = listTasksSync(db, runId)
+  if (!tasks.some((task) => !['completed', 'failed', 'cancelled'].includes(task.status))) return
+  const cutoff = new Date(Date.now() - SUPERVISION_CHECKPOINT_MS).toISOString()
+  const recent = db.prepare(`
+    SELECT 1 FROM protocol_messages
+    WHERE run_id = ? AND to_agent_id = ? AND from_agent_id = 'coordinator'
+      AND body LIKE ? AND created_at > ?
+    LIMIT 1
+  `).get(runId, lead.id, `${SUPERVISION_PING_PREFIX}%`, cutoff) as Row | undefined
+  if (recent) return
+  const summary = active.map((agent) => {
+    const task = agent.taskId ? ` on ${agent.taskId}` : ''
+    const turn = controllers.get(runId)?.turnInFlight.has(agent.id) ? ', turn active' : ''
+    return `${agent.name}: ${agent.status}${task}${turn}, last update ${agent.lastSeenAt ?? agent.updatedAt}`
+  }).join('; ')
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId,
+    agentId: 'coordinator',
+    type: 'message',
+    to: lead.id,
+    summary: `${SUPERVISION_PING_PREFIX} ${summary}. Review current status; leave healthy work running, and unblock or reassign only where the board requires it.`,
+    payload: { kind: 'review_request', priority: 'normal' },
+  })
+}
+
+/**
  * The mailbox's only durability guarantee: every active run gets retried
  * delivery attempts and reply-required escalation for its whole lifetime,
  * independent of whether the original insert's fire-and-forget delivery
@@ -3095,8 +3234,14 @@ async function sweepMailboxes(): Promise<void> {
     const escalated = await escalateStaleReplyRequiredMessages(runId).catch(() => [] as string[])
     if (escalated.length > 0) await deliverMessagesLive(runId, escalated).catch(() => {})
     await pingLeadIfTeamIdle(runId).catch(() => {})
+    await checkpointLeadSupervision(runId).catch(() => {})
     await sweepIdleTeammates(runId).catch(() => {})
   }
+}
+
+/** Run one maintenance pass immediately (used by diagnostics and smokes). */
+export async function runProtocolMaintenanceSweep(): Promise<void> {
+  await sweepMailboxes()
 }
 
 let mailSweepTimer: ReturnType<typeof setInterval> | null = null
@@ -3117,7 +3262,7 @@ ensureMailSweep()
  * whole-team stall isn't silently starved by unrelated stall/plan-review
  * spend earlier in the run.
  */
-async function dispatchLeadIntervention(controller: RunController, opts: { force?: boolean } = {}): Promise<void> {
+async function dispatchLeadIntervention(controller: RunController, opts: { force?: boolean; supervision?: boolean } = {}): Promise<void> {
   if (controller.stopped || controller.synthesisStarted) return
   const db = await getDatabase()
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
@@ -3127,7 +3272,10 @@ async function dispatchLeadIntervention(controller: RunController, opts: { force
   if (!lead || controller.turnInFlight.has(lead.id)) return
   const tasks = listTasksSync(db, controller.runId)
   const reviewingPlans = controller.requirePlanApproval && tasks.some((task) => task.status === 'planned')
-  if (opts.force) {
+  if (opts.supervision) {
+    // A finite, rate-limited status checkpoint/result handoff is not a stuck
+    // agent ping-pong and must not exhaust the actual intervention budget.
+  } else if (opts.force) {
     if (controller.forcedInterventionsUsed >= MAX_FORCED_INTERVENTIONS) return
     controller.forcedInterventionsUsed += 1
   } else {
@@ -3145,6 +3293,7 @@ async function dispatchLeadIntervention(controller: RunController, opts: { force
     interventionsLeft: MAX_LEAD_INTERVENTIONS - controller.interventionsUsed,
     requirePlanApproval: controller.requirePlanApproval,
     reviewingPlans,
+    supervisionUpdate: opts.supervision === true,
   })
   void dispatchAgentTurn(controller, lead.id, message, { inboxMessageIds: inbox.map((entry) => entry.id) })
 }
