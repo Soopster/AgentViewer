@@ -3207,6 +3207,81 @@ function parseProtocolEventsFromWire(text: string): AgentProtocolEvent[] {
 
 const SESSION_EVENT_RE = /event: session\s*\ndata: (\{[^\n]*\})/
 
+/**
+ * Bind a user-driven session turn back to its internal Coordinator agent.
+ *
+ * Controller-dispatched turns are drained below, but a user can also open the
+ * lead or teammate session in the web/TUI composer and send a follow-up. That
+ * stream used to bypass the protocol parser entirely: the model visibly
+ * emitted `message` blocks, while the ledger and recipients never saw them.
+ * Tee only active internal Coordinator sessions and consume the observation
+ * branch asynchronously so the caller's SSE stream remains unchanged.
+ */
+export async function observeCoordinatorSessionTurn(sessionId: string, response: Response): Promise<Response> {
+  if (!response.body) return response
+  const db = await getDatabase()
+  let row = db.prepare(`
+    SELECT a.* FROM protocol_agents a
+    JOIN protocol_runs r ON r.id = a.run_id
+    WHERE a.session_id = ?
+      AND a.session_id NOT LIKE 'external:%'
+      AND r.status IN ('planning', 'running', 'synthesizing', 'blocked')
+    ORDER BY r.updated_at DESC
+    LIMIT 1
+  `).get(sessionId) as Row | undefined
+
+  // A pending provider session can realize a new id before the durable agent
+  // row is updated. The live controller already owns that alias, so use it as
+  // the authoritative fallback during this narrow transition.
+  if (!row) {
+    for (const controller of controllers.values()) {
+      const agentId = [...controller.sessionIds].find(([, id]) => id === sessionId)?.[0]
+      if (!agentId) continue
+      row = db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? AND id = ?')
+        .get(controller.runId, agentId) as Row | undefined
+      if (row) break
+    }
+  }
+  if (!row) return response
+
+  const agent = rowToAgent(row)
+  const [clientBody, observerBody] = response.body.tee()
+  void (async () => {
+    const reader = observerBody.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    const seen = new Set<string>()
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        if (buffer.length > 250_000) buffer = buffer.slice(-120_000)
+        for (const event of parseProtocolEventsFromWire(buffer)) {
+          const key = JSON.stringify(event)
+          if (seen.has(key)) continue
+          seen.add(key)
+          if (event.runId !== agent.runId || event.agentId !== agent.id) continue
+          const controller = controllers.get(agent.runId)
+          if (controller) await applyAgentEvent(controller, agent, event)
+          else await appendProtocolEvent(event)
+        }
+      }
+    } catch {
+      // Observation is best-effort and must never break the provider stream.
+      await reader.cancel().catch(() => {})
+    } finally {
+      reader.releaseLock()
+    }
+  })()
+
+  return new Response(clientBody, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  })
+}
+
 /** Completion gate: reject a task.completed whose worktree changed paths outside the agent's locks. */
 async function completionGateFailure(
   runId: string,

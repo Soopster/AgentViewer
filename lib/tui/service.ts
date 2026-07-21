@@ -107,6 +107,7 @@ import {
   cleanupProtocolRunWorktrees,
   deleteProtocolRun,
   listProtocolRuns,
+  observeCoordinatorSessionTurn,
   readProtocolRun,
   startProtocolRun,
   stopProtocolRun,
@@ -385,12 +386,13 @@ export async function streamTuiSessionTurn(
       provider: session.provider,
     }, signal)
   }
-  return streamViewSessionTurn({
+  const response = await streamViewSessionTurn({
     sessionId: session.sessionId,
     signal: signal ?? new AbortController().signal,
     body,
     provider: session.provider as AgentProvider | undefined,
   })
+  return observeCoordinatorSessionTurn(session.sessionId, response)
 }
 
 /**

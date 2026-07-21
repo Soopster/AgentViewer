@@ -616,6 +616,73 @@ const fwd = await coordination.createExternalProtocolRun({
 })
 assert.deepEqual(fwd.snapshot.tasks[0].blockedBy, ['task-2'])
 
+// A user can open an internal Coordinator lead session and send a follow-up
+// from the normal web/TUI composer. Its provider stream must still feed the
+// in-band protocol parser; otherwise the lead visibly emits a message block
+// that never enters the ledger or reaches the teammate.
+const manualRunId = 'manual-session-run'
+const manualLeadSessionId = 'manual-lead-session'
+const manualTeammateSessionId = 'manual-teammate-session'
+const manualTs = new Date().toISOString()
+const manualDb = new Database(path.join(coordinationDir, 'coordination.sqlite'))
+manualDb.exec(`
+  INSERT INTO protocol_runs (
+    id, prompt, status, provider, base_cwd, max_agents, lead_agent_id,
+    use_worktrees, created_at, updated_at
+  ) VALUES (
+    '${manualRunId}', 'Manual lead follow-up', 'running', 'codex', '${testCwd}',
+    2, 'manual-lead', 0, '${manualTs}', '${manualTs}'
+  );
+  INSERT INTO protocol_agents (
+    id, run_id, name, role, provider, session_id, worktree_path, worktree_branch,
+    task_id, status, last_seen_at, created_at, updated_at
+  ) VALUES
+    ('manual-lead', '${manualRunId}', 'Manual lead', 'lead', 'codex', '${manualLeadSessionId}', '${testCwd}', '', NULL, 'working', NULL, '${manualTs}', '${manualTs}'),
+    ('manual-agent', '${manualRunId}', 'Manual teammate', 'teammate', 'codex', '${manualTeammateSessionId}', '${testCwd}', '', NULL, 'working', NULL, '${manualTs}', '${manualTs}');
+`)
+manualDb.close()
+
+const manualSteers: string[] = []
+sessionRuntime.setRunningSession(manualTeammateSessionId, {
+  provider: 'codex',
+  interrupt: async () => {},
+  steer: async (text) => { manualSteers.push(text) },
+})
+const manualEvent = {
+  version: 'AVP/2',
+  runId: manualRunId,
+  agentId: 'manual-lead',
+  type: 'message',
+  to: 'Manual teammate',
+  summary: 'Change priority now and keep working.',
+}
+const manualWire = `data: ${JSON.stringify({
+  type: 'item.completed',
+  item: {
+    type: 'agent_message',
+    text: `\`\`\`agent-protocol\n${JSON.stringify(manualEvent)}\n\`\`\``,
+  },
+})}\n\n`
+const observedResponse = await coordination.observeCoordinatorSessionTurn(
+  manualLeadSessionId,
+  new Response(manualWire, { headers: { 'Content-Type': 'text/event-stream' } }),
+)
+assert.equal(await observedResponse.text(), manualWire)
+const manualDeliveryDeadline = Date.now() + 2_000
+while (manualSteers.length === 0 && Date.now() < manualDeliveryDeadline) {
+  await new Promise((resolve) => setTimeout(resolve, 20))
+}
+sessionRuntime.clearRunningSession(manualTeammateSessionId)
+assert.equal(manualSteers.length, 1)
+assert.match(manualSteers[0]!, /Change priority now and keep working/)
+const manualDeliveryDb = new Database(path.join(coordinationDir, 'coordination.sqlite'))
+const manualDelivery = manualDeliveryDb.prepare(`
+  SELECT delivered_at FROM protocol_messages
+  WHERE run_id = ? AND from_agent_id = 'manual-lead' AND to_agent_id = 'manual-agent'
+`).get(manualRunId)
+manualDeliveryDb.close()
+assert.ok(manualDelivery?.delivered_at)
+
 // Live mailbox delivery must use the boolean inside steerRunningSession's
 // result. Treating `{ delivered: false }` itself as truthy acknowledged and
 // deleted messages that never reached a running subagent.

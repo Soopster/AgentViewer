@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { observeCoordinatorSessionTurn } from '@/lib/agentCoordination'
 import { isAgentProvider } from '@/lib/provider'
 import { listViewSessionMessageWindow, streamViewSessionTurn } from '@/lib/sessionBackend'
 
@@ -37,5 +38,6 @@ export async function POST(
   const { sessionId } = await params
   const body = await request.json().catch(() => ({}))
   const provider = isAgentProvider(body?.provider) ? body.provider : undefined
-  return streamViewSessionTurn({ sessionId, signal: request.signal, body, provider })
+  const response = await streamViewSessionTurn({ sessionId, signal: request.signal, body, provider })
+  return observeCoordinatorSessionTurn(sessionId, response)
 }
