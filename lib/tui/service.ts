@@ -525,30 +525,62 @@ export async function createTuiReviewPullRequest(cwd: string, title: string): Pr
 export type { TurnCheckpoint, CheckpointFileChange, WorkingDiffHunk }
 
 export async function startTuiProtocolRun(params: StartProtocolRunParams): Promise<StartProtocolRunResult> {
+  if (isRemoteAttached()) {
+    return remoteJson('/api/agent-protocol/runs', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    })
+  }
   return startProtocolRun(params)
 }
 
 export async function readTuiProtocolRun(runId: string): Promise<ProtocolRunSnapshot | null> {
+  if (isRemoteAttached()) {
+    return remoteJson(`/api/agent-protocol/runs/${encodeURIComponent(runId)}`)
+  }
   return readProtocolRun(runId)
 }
 
 export async function listTuiProtocolRuns(limit?: number): Promise<ProtocolRun[]> {
+  if (isRemoteAttached()) {
+    const query = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`
+    const { runs } = await remoteJson<{ runs: ProtocolRun[] }>(`/api/agent-protocol/runs${query}`)
+    return runs
+  }
   return listProtocolRuns(limit)
 }
 
 export async function stopTuiProtocolRun(runId: string): Promise<ProtocolRunSnapshot | null> {
+  if (isRemoteAttached()) {
+    return remoteJson(`/api/agent-protocol/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST' })
+  }
   return stopProtocolRun(runId)
 }
 
 export async function cleanupTuiProtocolRunWorktrees(runId: string, opts?: { force?: boolean }): Promise<Awaited<ReturnType<typeof cleanupProtocolRunWorktrees>>> {
+  if (isRemoteAttached()) {
+    return remoteJson(`/api/agent-protocol/runs/${encodeURIComponent(runId)}/cleanup`, {
+      method: 'POST',
+      body: JSON.stringify(opts ?? {}),
+    })
+  }
   return cleanupProtocolRunWorktrees(runId, opts)
 }
 
 export async function deleteTuiProtocolRun(runId: string): Promise<{ deleted: boolean; keptWorktrees: string[] }> {
+  if (isRemoteAttached()) {
+    return remoteJson(`/api/agent-protocol/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' })
+  }
   return deleteProtocolRun(runId)
 }
 
 export async function appendTuiProtocolEvent(event: AgentProtocolEvent): Promise<ProtocolRunSnapshot | null> {
+  if (isRemoteAttached()) {
+    return remoteJson(`/api/agent-protocol/runs/${encodeURIComponent(event.runId)}/events`, {
+      method: 'POST',
+      body: JSON.stringify(event),
+    })
+  }
   return appendProtocolEvent(event)
 }
 

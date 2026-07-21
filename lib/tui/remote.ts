@@ -5,11 +5,13 @@
 // and detaches, and the running-turn registry is shared with the web UI and
 // any other attached TUI.
 //
-// Only provider/session operations go remote. Terminal preferences
-// (lib/tuiState), bookmarks, prompts, and the git-based features (worktree
-// tasks, checkpoints, coordination ledger) stay local — the git features
-// operate on filesystem paths, so remote attach assumes the daemon shares the
-// machine (or the mounts) with the TUI.
+// Provider/session and Coordinator lifecycle operations go remote. Coordinator
+// controllers must live beside the provider sessions they steer so workflows,
+// inbox delivery, and task dispatch survive a TUI detach or restart. Terminal
+// preferences (lib/tuiState), bookmarks, prompts, and the remaining git-based
+// features (worktree tasks and checkpoints) stay local — those features operate
+// on filesystem paths, so remote attach assumes the daemon shares the machine
+// (or the mounts) with the TUI.
 
 export function getAttachBaseUrl(): string | null {
   const raw = process.env.AGENT_VIEWER_ATTACH
