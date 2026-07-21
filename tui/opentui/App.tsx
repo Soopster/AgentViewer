@@ -122,6 +122,7 @@ import {
   type TuiTranscriptWidth,
 } from '../../lib/tui/service'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
+import type { ProtocolAgent, ProtocolRun, ProtocolRunSnapshot } from '../../lib/agentProtocol'
 import {
   extractClaudeStreamToolInputDelta,
   extractClaudeStreamToolUse,
@@ -2531,6 +2532,38 @@ function buildSidebarEntries(sessions: Session[], sort: TuiSidebarSort): Sidebar
   return entries
 }
 
+type CoordinatorSidebarEntry =
+  | { type: 'run'; key: string; runId: string; run: ProtocolRun; agentCount: number }
+  | { type: 'agent'; key: string; runId: string; agent: ProtocolAgent; isLast: boolean; taskTitle: string | null }
+
+/** Sidebar analogue of buildSidebarEntries: one header per run, lead first
+ * then teammates in roster order — mirrors the topology tree already used
+ * in CoordinationControlCenter, flattened for a linear list like project
+ * groups flatten into session rows. */
+function buildCoordinatorEntries(runs: ProtocolRun[], snapshots: Map<string, ProtocolRunSnapshot>): CoordinatorSidebarEntry[] {
+  const entries: CoordinatorSidebarEntry[] = []
+  for (const run of runs) {
+    const snapshot = snapshots.get(run.id)
+    const agents = snapshot?.agents ?? []
+    const tasksById = new Map((snapshot?.tasks ?? []).map((task) => [task.id, task]))
+    const ordered = [
+      ...agents.filter((agent) => agent.role === 'lead'),
+      ...agents.filter((agent) => agent.role !== 'lead'),
+    ]
+    entries.push({ type: 'run', key: `run:${run.id}`, runId: run.id, run, agentCount: ordered.length })
+    ordered.forEach((agent, index) => {
+      entries.push({
+        type: 'agent',
+        key: `run-agent:${run.id}:${agent.id}`,
+        runId: run.id,
+        agent,
+        isLast: index === ordered.length - 1,
+        taskTitle: (agent.taskId ? tasksById.get(agent.taskId)?.title : undefined) ?? null,
+      })
+    })
+  }
+  return entries
+}
 
 function findCardIndex(cards: TuiTranscriptCard[], key: string | null): number {
   if (!key) return -1
@@ -5949,6 +5982,10 @@ export default function OpenTuiApp() {
   const [showToolCalls, setShowToolCalls] = useState(true)
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
   const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
+  const [sidebarView, setSidebarView] = useState<'sessions' | 'coordinator'>('sessions')
+  const [coordinatorRuns, setCoordinatorRuns] = useState<ProtocolRun[]>([])
+  const [coordinatorSnapshots, setCoordinatorSnapshots] = useState<Map<string, ProtocolRunSnapshot>>(new Map())
+  const [coordinatorSelectedKey, setCoordinatorSelectedKey] = useState<string | null>(null)
   const [sidebarWidthPreference, setSidebarWidthPreference] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [taskPanelWidth, setTaskPanelWidth] = useState(TASK_PANEL_DEFAULT_WIDTH)
   const [sessions, setSessions] = useState<Session[]>([])
@@ -7468,6 +7505,48 @@ export default function OpenTuiApp() {
     const idx = sidebarEntries.findIndex((e) => e.type === 'session' && e.absoluteIndex === selectedIndex)
     return idx >= 0 ? idx : 0
   }, [sidebarEntries, selectedIndex])
+
+  // Coordinator tab: only poll while it's the visible sidebar view, same
+  // cadence as CoordinationPopover's own POLL_MS, so the always-on sidebar
+  // doesn't pay this cost while showing the plain session list.
+  useEffect(() => {
+    if (sidebarView !== 'coordinator') return
+    let cancelled = false
+    const refresh = async () => {
+      const runs = await listTuiProtocolRuns(20).catch(() => [] as ProtocolRun[])
+      if (cancelled) return
+      setCoordinatorRuns(runs)
+      const snapshots = await Promise.all(runs.map((run) => readTuiProtocolRun(run.id).catch(() => null)))
+      if (cancelled) return
+      setCoordinatorSnapshots(new Map(snapshots.flatMap((snapshot) => snapshot ? [[snapshot.run.id, snapshot] as const] : [])))
+    }
+    void refresh()
+    const timer = setInterval(refresh, 2_000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [sidebarView])
+
+  const coordinatorEntries = useMemo(
+    () => buildCoordinatorEntries(coordinatorRuns, coordinatorSnapshots),
+    [coordinatorRuns, coordinatorSnapshots],
+  )
+  const coordinatorAgentEntries = useMemo(
+    () => coordinatorEntries.filter((entry): entry is Extract<CoordinatorSidebarEntry, { type: 'agent' }> => entry.type === 'agent'),
+    [coordinatorEntries],
+  )
+  const moveCoordinatorSelection = useEffectEvent((delta: number) => {
+    if (coordinatorAgentEntries.length === 0) return
+    const currentPos = coordinatorAgentEntries.findIndex((entry) => entry.key === coordinatorSelectedKey)
+    const nextPos = clamp((currentPos >= 0 ? currentPos : 0) + delta, 0, coordinatorAgentEntries.length - 1)
+    setCoordinatorSelectedKey(coordinatorAgentEntries[nextPos]?.key ?? null)
+  })
+  const jumpCoordinatorSelection = useEffectEvent((edge: 'first' | 'last') => {
+    const target = edge === 'first' ? coordinatorAgentEntries[0] : coordinatorAgentEntries.at(-1)
+    if (target) setCoordinatorSelectedKey(target.key)
+  })
+  const openSelectedCoordinatorAgent = useEffectEvent(() => {
+    const selected = coordinatorAgentEntries.find((entry) => entry.key === coordinatorSelectedKey)
+    if (selected) openCoordinationAgentSession(selected.agent)
+  })
   const composerHeight = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, (composerDraft.length === 0 ? 1 : composerDraft.split('\n').length) + COMPOSER_DOCK_CHROME_HEIGHT))
   const composerDockHeight = composerWindowOpen ? 0 : composerHeight
   const composerDockTextareaHeight = Math.max(2, composerDockHeight - COMPOSER_DOCK_CHROME_HEIGHT)
@@ -8371,11 +8450,20 @@ export default function OpenTuiApp() {
           : `SESSIONS ${Math.max(sessions.length, 0)}`,
         `sort ${sidebarSortLabel}`,
         normalizedSessionQuery ? `/${sessionSearchQuery}` : '/ search',
+        'a agents',
       ]),
       Math.max(sidebarInnerWidth - 2, 12),
     ),
     [sidebarInnerWidth, sidebarSortLabel, sessions.length, filteredSessionsForSidebar.length, normalizedSessionQuery, sessionSearchQuery],
   )
+  const coordinatorSidebarHeader = useMemo(
+    () => fitText(
+      joinMeta([`COORDINATOR ${coordinatorAgentEntries.length}`, `${coordinatorRuns.length} run${coordinatorRuns.length === 1 ? '' : 's'}`, 'a sessions']),
+      Math.max(sidebarInnerWidth - 2, 12),
+    ),
+    [sidebarInnerWidth, coordinatorAgentEntries.length, coordinatorRuns.length],
+  )
+  const sidebarHeaderText = sidebarView === 'coordinator' ? coordinatorSidebarHeader : sidebarSortHeader
 
   // Mounted-card window. Browsing (sidebar focused) caps to the most-recent
   // PREVIEW_CARD_CAP cards so scrubbing never pays for a giant session; the
@@ -10266,7 +10354,7 @@ export default function OpenTuiApp() {
   })
 
   // Jump from an Agent Operations row straight into that agent's transcript.
-  const openCoordinationAgentSession = useEffectEvent((agent: import('../../lib/agentProtocol').ProtocolAgent) => {
+  const openCoordinationAgentSession = useEffectEvent((agent: ProtocolAgent) => {
     const draft: Session = {
       sessionId: agent.sessionId,
       provider: agent.provider,
@@ -10591,6 +10679,60 @@ export default function OpenTuiApp() {
     )
   }, [theme, density, sidebarInnerWidth, renameSessionKey, renameDraft, commitRename, selectSidebarSession])
 
+  const buildCoordinatorRow = useCallback((entry: CoordinatorSidebarEntry, selected: boolean) => {
+    if (entry.type === 'run') {
+      const title = (entry.run.prompt.split('\n')[0]?.trim() || entry.run.id).toUpperCase()
+      const countLabel = `${entry.agentCount}`
+      const dashes = '─'.repeat(Math.max(sidebarInnerWidth - 2 - title.length - countLabel.length - 3, 1))
+      const tone = entry.run.status === 'failed' ? theme.red
+        : entry.run.status === 'blocked' ? theme.amber
+        : entry.run.status === 'running' || entry.run.status === 'synthesizing' ? theme.green
+        : entry.run.status === 'planning' ? theme.cyan
+        : theme.dim
+      return (
+        <box key={entry.key} id={`sidebar:${entry.key}`} paddingX={1} marginTop={1} backgroundColor={theme.surface2}>
+          <text fg={tone} wrapMode="none">{fitText(`${title} ${dashes} ${countLabel}`, sidebarInnerWidth - 2)}</text>
+        </box>
+      )
+    }
+
+    const accent = getProviderAccent(entry.agent.provider)
+    const glyph = entry.agent.role === 'lead' ? '◆' : entry.isLast ? '└─' : '├─'
+    const statusColor = entry.agent.turnActive || entry.agent.status === 'working' ? theme.green
+      : entry.agent.status === 'blocked' || entry.agent.status === 'failed' ? theme.amber
+      : theme.dim
+    const statusDot = entry.agent.turnActive || entry.agent.status === 'working' ? '●' : '○'
+    const detailLine = joinMeta([formatProviderLabel(entry.agent.provider), entry.taskTitle ?? 'unassigned'])
+    return (
+      <box
+        key={entry.key}
+        id={`sidebar:${entry.key}`}
+        flexDirection="column"
+        backgroundColor={selected ? theme.surface3 : theme.surface}
+        marginBottom={density === 'comfortable' ? 1 : 0}
+        onMouseDown={(event) => {
+          if (event.button !== 0) return
+          event.stopPropagation()
+          setCoordinatorSelectedKey(entry.key)
+        }}
+      >
+        <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
+          <text fg={selected ? accent : theme.dim} wrapMode="none">{selected ? '▎' : ' '}</text>
+          <text fg={selected ? accent : theme.muted} wrapMode="none">
+            {fitText(`${glyph} ${entry.agent.name} · ${entry.agent.role}`, sidebarInnerWidth - 3)}
+          </text>
+        </box>
+        <box paddingX={1} flexDirection="row" backgroundColor={selected ? theme.surface3 : theme.surface}>
+          <text fg={selected ? accent : theme.dim} wrapMode="none">{selected ? '▎' : ' '}</text>
+          <text fg={statusColor} wrapMode="none">{`${statusDot} `}</text>
+          <text fg={selected ? theme.text : theme.dim} wrapMode="none">
+            {fitText(detailLine, sidebarInnerWidth - 5)}
+          </text>
+        </box>
+      </box>
+    )
+  }, [theme, density, sidebarInnerWidth])
+
   // Per-row element cache. Moving the selection highlight only changes TWO rows
   // (the de-selected and newly-selected), but the memo re-runs on every
   // selectedIndex change. Rebuilding all N rows — each doing getProviderAccent /
@@ -10624,6 +10766,13 @@ export default function OpenTuiApp() {
     for (const key of cache.keys()) if (!live.has(key)) cache.delete(key)
     return rows
   }, [sidebarEntries, selectedIndex, buildSidebarRow])
+
+  // Coordinator tab is small (a handful of active runs at most) so it skips
+  // sidebarRowElements' scrub-optimized cache — a plain map is plenty here.
+  const coordinatorRowElements = useMemo(
+    () => coordinatorEntries.map((entry) => buildCoordinatorRow(entry, entry.type === 'agent' && entry.key === coordinatorSelectedKey)),
+    [coordinatorEntries, coordinatorSelectedKey, buildCoordinatorRow],
+  )
 
   // Stable scrollbar config objects so the two long-lived <scrollbox>
   // renderables don't see a fresh prop reference on every render.
@@ -14344,21 +14493,53 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'sessions' && (key.name === 'j' || key.name === 'down')) {
+    if (effectiveFocus === 'sessions' && key.name === 'a' && !key.ctrl && !key.shift && !key.meta) {
+      handled(() => {
+        setSidebarView((current) => current === 'sessions' ? 'coordinator' : 'sessions')
+      })
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && (key.name === 'j' || key.name === 'down')) {
+      handled(() => moveCoordinatorSelection(1))
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && (key.name === 'k' || key.name === 'up')) {
+      handled(() => moveCoordinatorSelection(-1))
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && key.name === 'g' && !key.shift) {
+      handled(() => jumpCoordinatorSelection('first'))
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && isShifted('G')) {
+      handled(() => jumpCoordinatorSelection('last'))
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && sidebarView === 'coordinator' && key.name === 'return') {
+      handled(() => openSelectedCoordinatorAgent())
+      return
+    }
+
+    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && (key.name === 'j' || key.name === 'down')) {
       handled(() => {
         moveSelection(1)
       })
       return
     }
 
-    if (effectiveFocus === 'sessions' && (key.name === 'k' || key.name === 'up')) {
+    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && (key.name === 'k' || key.name === 'up')) {
       handled(() => {
         moveSelection(-1)
       })
       return
     }
 
-    if (effectiveFocus === 'sessions' && key.name === 'g' && !key.shift) {
+    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && key.name === 'g' && !key.shift) {
       handled(() => {
         const first = sidebarEntries.find((e): e is Extract<SidebarEntry, { type: 'session' }> => e.type === 'session')
         if (first) setSelectedSessionKey(sessionKey(first.session))
@@ -14366,7 +14547,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'sessions' && isShifted('G')) {
+    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && isShifted('G')) {
       handled(() => {
         const last = [...sidebarEntries].reverse().find((e): e is Extract<SidebarEntry, { type: 'session' }> => e.type === 'session')
         if (last) setSelectedSessionKey(sessionKey(last.session))
@@ -14374,7 +14555,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'sessions' && isShifted('S')) {
+    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && isShifted('S')) {
       handled(() => {
         toggleSidebarSort()
       })
@@ -14407,7 +14588,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    if (effectiveFocus === 'sessions' && key.name === 'return') {
+    if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && key.name === 'return') {
       handled(() => {
         promotePreviewToTab()
         setFocusedPane('messages')
@@ -15400,20 +15581,34 @@ export default function OpenTuiApp() {
             borderColor={effectiveFocus === 'sessions' ? theme.cyan : theme.border}
             backgroundColor={theme.surface}
             flexDirection="column"
-            title={sidebarSortHeader}
+            title={sidebarHeaderText}
             titleColor={theme.cyan}
             onMouseDown={(event) => {
               if (event.button !== 0) return
               const box = sidebarBoxRef.current
               // Only the top border row (where the title is drawn) toggles sort —
               // a click on this box itself (not a child row) means the border/title.
-              if (box && event.target === box && event.y === box.y) {
+              if (box && event.target === box && event.y === box.y && sidebarView === 'sessions') {
                 toggleSidebarSort()
               }
             }}
           >
             <box flexGrow={1} paddingX={1}>
-              {loadingSessions && sessions.length === 0 ? (
+              {sidebarView === 'coordinator' ? (
+                coordinatorEntries.length === 0 ? (
+                  <text fg={theme.dim}>{fitText('No coordinator runs — ⌃⇧N to start one', sidebarInnerWidth)}</text>
+                ) : (
+                  <scrollbox
+                    style={{ height: sidebarRowBudget }}
+                    backgroundColor={theme.surface}
+                    scrollY
+                    viewportCulling
+                    scrollbarOptions={sidebarScrollbarOptions}
+                  >
+                    {coordinatorRowElements}
+                  </scrollbox>
+                )
+              ) : loadingSessions && sessions.length === 0 ? (
                 <Spinner label={fitText('Loading…', sidebarInnerWidth - 2)} fg={theme.dim} />
               ) : sidebarEntries.length === 0 ? (
                 <text fg={theme.dim}>{fitText('No sessions available', sidebarInnerWidth)}</text>
