@@ -20,7 +20,11 @@ writeFileSync(path.join(testCwd, 'README.md'), 'pre-existing dirty change\n')
 const coordinationDir = path.join(testCwd, '.agent-viewer-data', 'agent-coordination')
 mkdirSync(coordinationDir, { recursive: true })
 const { Database } = await (0, eval)('import("bun:sqlite")') as {
-  Database: new (file: string) => { exec(sql: string): void; close(): void }
+  Database: new (file: string) => {
+    exec(sql: string): void
+    prepare(sql: string): { get(...params: unknown[]): Record<string, unknown> | null }
+    close(): void
+  }
 }
 const legacyDb = new Database(path.join(coordinationDir, 'coordination.sqlite'))
 legacyDb.exec(`
@@ -46,6 +50,7 @@ legacyDb.exec(`
 legacyDb.close()
 
 const coordination = await import('../../lib/agentCoordination')
+const sessionRuntime = await import('../../lib/sessionRuntime')
 
 const leadResult = await coordination.createExternalProtocolRun({
   prompt: 'Let two external CLIs collaborate over MCP',
@@ -564,6 +569,59 @@ const fwd = await coordination.createExternalProtocolRun({
   }),
 })
 assert.deepEqual(fwd.snapshot.tasks[0].blockedBy, ['task-2'])
+
+// Live mailbox delivery must use the boolean inside steerRunningSession's
+// result. Treating `{ delivered: false }` itself as truthy acknowledged and
+// deleted messages that never reached a running subagent.
+const deliveryLead = await coordination.createExternalProtocolRun({
+  prompt: 'Exercise live message delivery',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Delivery lead',
+  maxAgents: 3,
+})
+const deliveryDbPath = path.join(coordinationDir, 'coordination.sqlite')
+const deliveryDb = new Database(deliveryDbPath)
+const deliveryTs = new Date().toISOString()
+deliveryDb.exec(`
+  INSERT INTO protocol_agents (
+    id, run_id, name, role, provider, session_id, worktree_path, worktree_branch,
+    task_id, status, last_seen_at, created_at, updated_at
+  ) VALUES
+    ('live-agent', '${deliveryLead.participant.runId}', 'live-agent', 'teammate', 'codex', 'live-session', '${testCwd}', '', NULL, 'working', NULL, '${deliveryTs}', '${deliveryTs}'),
+    ('queued-agent', '${deliveryLead.participant.runId}', 'queued-agent', 'teammate', 'codex', 'missing-session', '${testCwd}', '', NULL, 'working', NULL, '${deliveryTs}', '${deliveryTs}')
+`)
+deliveryDb.close()
+
+const steeredMessages: string[] = []
+sessionRuntime.setRunningSession('live-session', {
+  provider: 'codex',
+  interrupt: async () => {},
+  steer: async (text) => { steeredMessages.push(text) },
+})
+await coordination.sendExternalProtocolMessage(deliveryLead.participant, {
+  to: 'live-agent',
+  body: 'priority changed while you were working',
+})
+const steerDeadline = Date.now() + 2_000
+while (steeredMessages.length === 0 && Date.now() < steerDeadline) {
+  await new Promise((resolve) => setTimeout(resolve, 20))
+}
+sessionRuntime.clearRunningSession('live-session')
+assert.deepEqual(steeredMessages, ['[team message from Delivery lead] priority changed while you were working'])
+
+await coordination.sendExternalProtocolMessage(deliveryLead.participant, {
+  to: 'queued-agent',
+  body: 'retain this until steering becomes available',
+})
+await new Promise((resolve) => setTimeout(resolve, 100))
+const queuedDb = new Database(deliveryDbPath)
+const queuedRow = queuedDb.prepare(`
+  SELECT delivered_at FROM protocol_messages
+  WHERE run_id = ? AND to_agent_id = 'queued-agent' AND body = ?
+`).get(deliveryLead.participant.runId, 'retain this until steering becomes available')
+queuedDb.close()
+assert.equal(queuedRow?.delivered_at, null)
 
 // Whole-team-idle recovery: two teammates each finish their own task while a
 // third task sits unclaimed. Nobody messages the lead about it (that's model

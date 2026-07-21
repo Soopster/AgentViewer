@@ -2822,7 +2822,9 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
     // acknowledges it in that CLI's bridge process.
     const delivered = sessionId.startsWith('external:')
       ? false
-      : await steerRunningSession(sessionId, text).catch(() => false)
+      : await steerRunningSession(sessionId, text)
+        .then((result) => result.delivered)
+        .catch(() => false)
     if (delivered) {
       await enqueueWrite((tx) => {
         tx.prepare('UPDATE protocol_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL').run(nowIso(), id)
@@ -2851,6 +2853,18 @@ async function deliverMessagesLive(runId: string, messageIds: string[]): Promise
       }
       void dispatchTeammateWork(controller, agentId)
     }
+  }
+}
+
+async function deliverQueuedMessagesForAgent(runId: string, agentId: string): Promise<void> {
+  const db = await getDatabase()
+  const rows = db.prepare(`
+    SELECT id FROM protocol_messages
+    WHERE run_id = ? AND to_agent_id = ? AND delivered_at IS NULL
+    ORDER BY created_at ASC
+  `).all(runId, agentId) as Row[]
+  if (rows.length > 0) {
+    await deliverMessagesLive(runId, rows.map((row) => String(row.id)))
   }
 }
 
@@ -3230,6 +3244,12 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
                 db.prepare('UPDATE protocol_agents SET session_id = ?, updated_at = ? WHERE id = ? AND run_id = ?')
                   .run(sessionId, nowIso(), agent.id, controller.runId)
               })
+              // A lead message can land after the draft session starts but
+              // before the provider reports its realized id. The initial
+              // steer correctly fails against the draft id and stays queued;
+              // flush it now that the running-session registry and controller
+              // agree on the real target instead of waiting for the sweep.
+              await deliverQueuedMessagesForAgent(controller.runId, agent.id)
             }
           } catch {
             // malformed session frame — keep the draft id
