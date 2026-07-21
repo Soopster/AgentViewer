@@ -565,4 +565,49 @@ const fwd = await coordination.createExternalProtocolRun({
 })
 assert.deepEqual(fwd.snapshot.tasks[0].blockedBy, ['task-2'])
 
+// Whole-team-idle recovery: two teammates each finish their own task while a
+// third task sits unclaimed. Nobody messages the lead about it (that's model
+// discretion, not guaranteed) — the background mailbox sweep must notice the
+// team went idle with unfinished work and ping the lead itself so its next
+// coord_wait sees inboxCount > 0 instead of hanging forever.
+const idleLead = await coordination.createExternalProtocolRun({
+  prompt: 'Two teammates finish, a third task is left over',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Idle-sweep lead',
+  maxAgents: 3,
+})
+const idleTeammateA = (await coordination.joinExternalProtocolRun({
+  runId: idleLead.participant.runId,
+  provider: 'claude',
+  cwd: testCwd,
+  participantName: 'Idle-sweep A',
+})).participant
+const idleTeammateB = (await coordination.joinExternalProtocolRun({
+  runId: idleLead.participant.runId,
+  provider: 'codex',
+  cwd: testCwd,
+  participantName: 'Idle-sweep B',
+})).participant
+const idleTaskA = (await coordination.createExternalProtocolTask(idleLead.participant, {
+  title: 'Task for A', detail: 'a', paths: ['idle-a.txt'],
+})).task!
+const idleTaskB = (await coordination.createExternalProtocolTask(idleLead.participant, {
+  title: 'Task for B', detail: 'b', paths: ['idle-b.txt'],
+})).task!
+await coordination.createExternalProtocolTask(idleLead.participant, {
+  title: 'Leftover task nobody claims', detail: 'c', paths: ['idle-c.txt'],
+})
+await coordination.claimExternalProtocolTask(idleTeammateA, idleTaskA.id)
+await coordination.claimExternalProtocolTask(idleTeammateB, idleTaskB.id)
+await coordination.completeExternalProtocolTask(idleTeammateA, { taskId: idleTaskA.id, summary: 'A done.' })
+await coordination.completeExternalProtocolTask(idleTeammateB, { taskId: idleTaskB.id, summary: 'B done.' })
+
+await new Promise((resolve) => setTimeout(resolve, 6_500))
+const idleLeadInbox = await coordination.readExternalProtocolInbox(idleLead.participant)
+assert.ok(
+  idleLeadInbox.messages.some((message) => /Team idle:/.test(message.body) && message.body.includes('Leftover task nobody claims')),
+  `Expected the mailbox sweep to ping the lead about the leftover task, got: ${JSON.stringify(idleLeadInbox.messages)}`,
+)
+
 console.log('External Coordinator smoke passed')

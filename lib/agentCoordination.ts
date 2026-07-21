@@ -94,6 +94,13 @@ const MAX_TURN_NUDGES = 1
 // Bounded so a stuck teammate ↔ lead exchange can't ping-pong tokens forever;
 // once exhausted, stuck tasks are auto-failed so the run reaches synthesis.
 const MAX_LEAD_INTERVENTIONS = 3
+// The whole team going idle with unfinished work on the board (see
+// sweepIdleTeammates) is not a ping-pong risk — it happens at most once per
+// genuine stall, and resolving it is the entire point of having a lead — so
+// it draws from this small, separate budget instead of MAX_LEAD_INTERVENTIONS.
+// Once this is also exhausted, the sweep fails the remaining tasks itself so
+// the run always reaches synthesis instead of hanging forever.
+const MAX_FORCED_INTERVENTIONS = 2
 const TEAMMATE_NAMES = ['nova', 'orion', 'lyra', 'vega', 'atlas', 'rhea', 'iris', 'flint'] as const
 
 let database: SqliteDatabase | null = null
@@ -117,6 +124,8 @@ type RunController = {
   stopped: boolean
   synthesisStarted: boolean
   interventionsUsed: number
+  /** Separate, small budget for forced whole-team-idle wakes (see sweepIdleTeammates) — never blocked by unrelated stall/plan-review spend. */
+  forcedInterventionsUsed: number
   turnInFlight: Set<string>
   /** agentId → latest (realized) session id for steering/interrupting. */
   sessionIds: Map<string, string>
@@ -2908,11 +2917,120 @@ async function escalateStaleReplyRequiredMessages(runId: string): Promise<string
 }
 
 /**
+ * Self-healing task assignment: reunite an idle teammate with claimable work
+ * the moment there is any, independent of whether its own turn-end happened
+ * to run the self-claim check at the right moment. When NOBODY can claim
+ * anything and the whole team has gone idle with unfinished work on the
+ * board, force a bounded lead intervention — this is exactly the "lead
+ * should be coordinating as tasks complete" gap: `dispatchLeadIntervention`
+ * shares one small MAX_LEAD_INTERVENTIONS budget across every stall/plan
+ * wake in the run, so a run with a few earlier nudges could exhaust it long
+ * before the last teammate finishes, leaving the lead permanently unreachable
+ * even though real work remains. `force` draws from the separate
+ * MAX_FORCED_INTERVENTIONS budget so this can't happen; once that is also
+ * spent, the remaining tasks are auto-failed so the run still reaches
+ * synthesis instead of hanging forever with everyone idle.
+ */
+async function sweepIdleTeammates(runId: string): Promise<void> {
+  const controller = controllers.get(runId)
+  if (!controller || controller.stopped || controller.synthesisStarted) return
+  const db = await getDatabase()
+  const agents = listAgentsSync(db, runId)
+  let claimedAny = false
+  for (const agent of agents) {
+    if (agent.role !== 'teammate' || agent.taskId || controller.turnInFlight.has(agent.id)) continue
+    if (agent.status !== 'done' && agent.status !== 'idle' && agent.status !== 'ready') continue
+    const claimed = await enqueueWrite((tx) => claimTaskSync(tx, runId, agent.id))
+    if (claimed) {
+      claimedAny = true
+      void dispatchTeammateWork(controller, agent.id)
+    }
+  }
+  if (claimedAny) return
+
+  const tasks = listTasksSync(db, runId)
+  const unfinished = tasks.filter((task) => !['completed', 'failed', 'cancelled'].includes(task.status))
+  if (unfinished.length === 0) return
+  const teammatesActive = agents.some((agent) =>
+    agent.role === 'teammate' && (agent.status === 'working' || agent.status === 'blocked' || controller.turnInFlight.has(agent.id)))
+  if (teammatesActive) return
+
+  if (controller.forcedInterventionsUsed < MAX_FORCED_INTERVENTIONS) {
+    await dispatchLeadIntervention(controller, { force: true }).catch(() => {})
+    return
+  }
+  for (const task of unfinished) {
+    await appendProtocolEvent({
+      version: AGENT_PROTOCOL_VERSION,
+      runId,
+      agentId: task.ownerAgentId ?? 'coordinator',
+      type: 'task.failed',
+      taskId: task.id,
+      summary: `${task.id} auto-failed: the whole team went idle with unfinished work and the lead intervention budget is exhausted`,
+    }).catch(() => {})
+  }
+  await maybeStartSynthesis(controller).catch(() => {})
+}
+
+const TEAM_IDLE_PING_PREFIX = 'Team idle:'
+const TEAM_IDLE_PING_COOLDOWN_MS = 2 * 60_000
+
+/**
+ * sweepIdleTeammates only reaches internal (in-process) teammates — it needs
+ * a live RunController to dispatch a turn. External CLI participants are
+ * pull-based: their worker loop only wakes for a new provider tick when
+ * `coord_wait`'s actionable digest shows inbox mail, a claimable task, or a
+ * plan to review (`shouldTick` in bin/agent-viewer-coord-worker.mjs). If the
+ * whole external team finishes and nobody happens to message the lead about
+ * it (nothing in the protocol requires that — it's model discretion), the
+ * lead's own digest stays quiet forever and its worker never ticks again,
+ * even though the lead is the one who's supposed to notice, reassign, or
+ * finalize. This is the run-agnostic half of the fix: purely DB-driven (no
+ * controller needed), so it covers external and internal runs alike. A
+ * cooldown avoids re-pinging every sweep tick while the lead catches up.
+ */
+async function pingLeadIfTeamIdle(runId: string): Promise<void> {
+  const db = await getDatabase()
+  const agents = listAgentsSync(db, runId)
+  const lead = agents.find((agent) => agent.role === 'lead')
+  if (!lead) return
+  const teammates = agents.filter((agent) => agent.role === 'teammate')
+  if (teammates.length === 0) return
+  const anyActive = teammates.some((agent) => Boolean(agent.taskId) || agent.status === 'working' || agent.status === 'blocked')
+  if (anyActive) return
+  const tasks = listTasksSync(db, runId)
+  const unfinished = tasks.filter((task) => !['completed', 'failed', 'cancelled'].includes(task.status))
+  if (unfinished.length === 0) return
+  const cutoff = new Date(Date.now() - TEAM_IDLE_PING_COOLDOWN_MS).toISOString()
+  const recentPing = db.prepare(`
+    SELECT 1 FROM protocol_messages
+    WHERE run_id = ? AND to_agent_id = ? AND from_agent_id = 'coordinator' AND body LIKE ? AND created_at > ?
+    LIMIT 1
+  `).get(runId, lead.id, `${TEAM_IDLE_PING_PREFIX}%`, cutoff) as Row | undefined
+  if (recentPing) return
+  const summary = unfinished.map((task) => `${task.id} "${task.title}" (${task.status})`).join(', ')
+  const messageId = await enqueueWrite((tx) => insertMessageSync(tx, {
+    runId,
+    fromAgentId: 'coordinator',
+    toAgentId: lead.id,
+    body: `${TEAM_IDLE_PING_PREFIX} the whole team is idle with ${unfinished.length} task${unfinished.length === 1 ? '' : 's'} not yet complete (${summary}). Reassign, unblock, fail, or finalize.`,
+    ts: nowIso(),
+    kind: 'request',
+    priority: 'urgent',
+  }))
+  notifyRunChanged(runId)
+  await deliverMessagesLive(runId, [messageId]).catch(() => {})
+}
+
+/**
  * The mailbox's only durability guarantee: every active run gets retried
  * delivery attempts and reply-required escalation for its whole lifetime,
  * independent of whether the original insert's fire-and-forget delivery
  * succeeded. Cheap when idle (one indexed query per run, no active runs is
- * one query total) so it just runs for the life of the process.
+ * one query total) so it just runs for the life of the process. Also drives
+ * pingLeadIfTeamIdle and sweepIdleTeammates — same interval, same "keep
+ * trying for the run's whole lifetime" guarantee, for task assignment
+ * instead of message delivery.
  */
 async function sweepMailboxes(): Promise<void> {
   const db = await getDatabase()
@@ -2928,6 +3046,8 @@ async function sweepMailboxes(): Promise<void> {
     }
     const escalated = await escalateStaleReplyRequiredMessages(runId).catch(() => [] as string[])
     if (escalated.length > 0) await deliverMessagesLive(runId, escalated).catch(() => {})
+    await pingLeadIfTeamIdle(runId).catch(() => {})
+    await sweepIdleTeammates(runId).catch(() => {})
   }
 }
 
@@ -2944,9 +3064,12 @@ ensureMailSweep()
 /**
  * Wake the lead mid-run to unstick the team. Budgeted (MAX_LEAD_INTERVENTIONS)
  * so lead↔teammate loops terminate; past the budget, stuck tasks are
- * auto-failed by the work loop instead.
+ * auto-failed by the work loop instead. `force` draws from the separate
+ * MAX_FORCED_INTERVENTIONS budget instead (see sweepIdleTeammates) so a
+ * whole-team stall isn't silently starved by unrelated stall/plan-review
+ * spend earlier in the run.
  */
-async function dispatchLeadIntervention(controller: RunController): Promise<void> {
+async function dispatchLeadIntervention(controller: RunController, opts: { force?: boolean } = {}): Promise<void> {
   if (controller.stopped || controller.synthesisStarted) return
   const db = await getDatabase()
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
@@ -2956,8 +3079,13 @@ async function dispatchLeadIntervention(controller: RunController): Promise<void
   if (!lead || controller.turnInFlight.has(lead.id)) return
   const tasks = listTasksSync(db, controller.runId)
   const reviewingPlans = controller.requirePlanApproval && tasks.some((task) => task.status === 'planned')
-  if (!reviewingPlans && controller.interventionsUsed >= MAX_LEAD_INTERVENTIONS) return
-  if (!reviewingPlans) controller.interventionsUsed += 1
+  if (opts.force) {
+    if (controller.forcedInterventionsUsed >= MAX_FORCED_INTERVENTIONS) return
+    controller.forcedInterventionsUsed += 1
+  } else {
+    if (!reviewingPlans && controller.interventionsUsed >= MAX_LEAD_INTERVENTIONS) return
+    if (!reviewingPlans) controller.interventionsUsed += 1
+  }
   const inbox = await enqueueWrite((tx) => takeInboxSync(tx, controller.runId, lead.id))
   const message = buildLeadInterventionPreamble({
     runId: controller.runId,
@@ -3600,6 +3728,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     stopped: false,
     synthesisStarted: false,
     interventionsUsed: 0,
+    forcedInterventionsUsed: 0,
     turnInFlight: new Set(),
     sessionIds: new Map([['lead', leadSession.sessionId]]),
     pendingSessions: new Set(leadSession.isPending ? ['lead'] : []),
