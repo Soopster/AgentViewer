@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import {
+  buildLeadInterventionPreamble,
   buildLeadPlanPreamble,
   buildLeadSynthesisPreamble,
   buildTeammatePlanPreamble,
@@ -93,6 +94,18 @@ for (const prompt of sharedCheckoutPrompts) {
 }
 for (const prompt of prompts(true)) assert.match(prompt, /worktree/i)
 assert.match(sharedCheckoutPrompts[3]!, /result: Verified the Coordinator guidance.*The focused smoke passed/)
+assert.match(sharedCheckoutPrompts[0]!, /test needs new exports or dependency injection/i)
+
+const interventionPrompt = buildLeadInterventionPreamble({
+  runId: 'run-1',
+  agent: { id: 'lead', name: 'lead' },
+  roster: [agent],
+  tasks: [task],
+  inbox: [],
+  agentsById: new Map([[agent.id, agent]]),
+  interventionsLeft: 1,
+})
+assert.match(interventionPrompt, /path\/scope blocker needs a board change/i)
 
 const protocolPromptCard = formatTranscriptCard({
   role: 'user',

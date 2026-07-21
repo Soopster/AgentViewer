@@ -48,6 +48,7 @@ type PendingAction =
   | { kind: 'delete-run' }
   | { kind: 'merge'; agent: ProtocolAgent; worktree: WorktreeTask }
   | { kind: 'fail-task'; task: ProtocolTask }
+  | { kind: 'rerun-task'; task: ProtocolTask }
   | { kind: 'rerun-agent'; agent: ProtocolAgent; task: ProtocolTask | null }
 
 const POLL_MS = 2000
@@ -60,6 +61,7 @@ const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 const ACTIVE_TASK_STATUSES = new Set(['claimed', 'planning', 'planned', 'in_progress'])
 const ATTENTION_EVENT_TYPES = new Set(['agent.blocked', 'task.failed', 'lock.denied', 'plan.rejected', 'review.requested'])
 const STUCK_AGENT_STATUSES = new Set(['blocked', 'failed', 'stopped'])
+const RERUNNABLE_TASK_STATUSES = new Set(['blocked', 'failed'])
 const MESSAGE_EVENT_TYPES = new Set(['message', 'finding', 'learning', 'handoff'])
 const PROVIDERS = ['codex', 'claude', 'copilot', 'opencode', 'pi'] as const
 
@@ -230,6 +232,7 @@ export function CoordinationPopover({
   const selectedEventEntry = filteredEvents[clampedEvent] ?? null
   const selectedEvent = selectedEventEntry?.event ?? null
   const selectedOwner = selectedTask?.ownerAgentId ? agentsById.get(selectedTask.ownerAgentId) ?? null : null
+  const firstRerunnableTask = tasks.find((task) => RERUNNABLE_TASK_STATUSES.has(task.status)) ?? null
   const eventAgent = selectedEvent ? agentsById.get(selectedEvent.agentId) ?? null : null
   const defaultAgent = agents.find((agent) => agent.turnActive || agent.status === 'working') ?? selectedAgent
   const inspectedAgent = section === 'tasks' ? selectedOwner ?? defaultAgent : section === 'events' ? eventAgent ?? defaultAgent : section === 'team' ? selectedAgent : defaultAgent
@@ -359,6 +362,27 @@ export function CoordinationPopover({
         })
         if (next) setSnapshot(next)
         onNotice('info', `${action.task.id} marked failed`, 4000)
+      } else if (action.kind === 'rerun-task') {
+        const owner = snapshot?.agents.find((agent) => agent.id === action.task.ownerAgentId)
+        let next = await appendTuiProtocolEvent({
+          version: AGENT_PROTOCOL_VERSION,
+          runId,
+          agentId: owner?.id ?? 'user',
+          type: 'task.released',
+          taskId: action.task.id,
+          summary: `${action.task.id} requeued for rerun from Agent Operations`,
+        }) ?? snapshot
+        if (owner && STUCK_AGENT_STATUSES.has(owner.status)) {
+          next = await appendTuiProtocolEvent({
+            version: AGENT_PROTOCOL_VERSION,
+            runId,
+            agentId: owner.id,
+            type: 'agent.ready',
+            summary: `${owner.name} reset to rerun ${action.task.id} from Agent Operations`,
+          }) ?? next
+        }
+        if (next) setSnapshot(next)
+        onNotice('info', `${action.task.id} requeued and ready to rerun`, 4000)
       } else {
         let next = snapshot
         if (action.task) {
@@ -591,9 +615,28 @@ export function CoordinationPopover({
       void reviewPlan(selectedTask, false)
       return
     }
+    if (key.name === 'r' && key.shift && section === 'tasks' && selectedTask && RERUNNABLE_TASK_STATUSES.has(selectedTask.status)) {
+      if (!run || ['completed', 'failed', 'stopped'].includes(run.status)) {
+        onNotice('info', 'Only tasks in a live workflow can be rerun', 3000)
+      } else {
+        setPending({ kind: 'rerun-task', task: selectedTask })
+      }
+      return
+    }
     if (key.name === 'r' && key.shift && section === 'team' && selectedAgent) {
       if (!STUCK_AGENT_STATUSES.has(selectedAgent.status)) onNotice('info', `${selectedAgent.name} is not stuck`, 2500)
       else setPending({ kind: 'rerun-agent', agent: selectedAgent, task: stuckAgentTask(selectedAgent) })
+      return
+    }
+    if (key.name === 'r' && key.shift && firstRerunnableTask) {
+      if (!run || ['completed', 'failed', 'stopped'].includes(run.status)) {
+        onNotice('info', 'Only tasks in a live workflow can be rerun', 3000)
+      } else {
+        setSection('tasks')
+        if (!filteredTasks.some((task) => task.id === firstRerunnableTask.id)) setTaskFilter('attention')
+        setTaskCursorId(firstRerunnableTask.id)
+        setPending({ kind: 'rerun-task', task: firstRerunnableTask })
+      }
       return
     }
     if (key.name === 'f' && section === 'tasks' && selectedTask) {
@@ -605,7 +648,7 @@ export function CoordinationPopover({
     if (key.name === 'n') { onClose(); onNewRun(); return }
     if (key.name === 'g' && section === 'events') { setEventIndex(-1); return }
     if (key.name === 'r') { void refreshAll(); return }
-  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, eventAgent, filteredEvents.length, gitAgent, inspectedAgent, interruptAgentTurn, messageTarget, navigableTasks.length, onClose, onCopyJoinCommand, onNewRun, onNotice, onOpenSession, pending, planStates, refreshAll, reviewPlan, run, runId, runPendingAction, section, selectedAgent, selectedOwner, selectedTask, sendTeamMessage, snapshot, stuckAgentTask, switchRun, worktreeStats])
+  }, [agents.length, clampedEvent, clampedTask, clampedTeam, cleanupRun, eventAgent, filteredEvents.length, filteredTasks, firstRerunnableTask, gitAgent, inspectedAgent, interruptAgentTurn, messageTarget, navigableTasks.length, onClose, onCopyJoinCommand, onNewRun, onNotice, onOpenSession, pending, planStates, refreshAll, reviewPlan, run, runId, runPendingAction, section, selectedAgent, selectedOwner, selectedTask, sendTeamMessage, snapshot, stuckAgentTask, switchRun, worktreeStats])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -619,9 +662,11 @@ export function CoordinationPopover({
         ? `Squash-merge ${pending.agent.name}'s worktree into main checkout? y/Enter · n/Esc`
         : pending?.kind === 'fail-task'
           ? `Mark ${pending.task.id} failed? y/Enter · n/Esc`
-          : pending?.kind === 'rerun-agent'
-            ? `Rerun ${pending.agent.name}${pending.task ? ` — requeue ${pending.task.id} and reset the agent` : ' — reset the agent to ready'}? y/Enter · n/Esc`
-            : null
+          : pending?.kind === 'rerun-task'
+            ? `Rerun ${pending.task.id} — requeue it and reset its stuck owner? y/Enter · n/Esc`
+            : pending?.kind === 'rerun-agent'
+              ? `Rerun ${pending.agent.name}${pending.task ? ` — requeue ${pending.task.id} and reset the agent` : ' — reset the agent to ready'}? y/Enter · n/Esc`
+              : null
   const gitAgentUsesWorktree = Boolean(gitAgent?.worktreePath && run?.baseCwd && gitAgent.worktreePath !== run.baseCwd)
   return (
     <>

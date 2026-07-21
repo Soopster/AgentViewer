@@ -137,6 +137,8 @@ type RunController = {
   useWorktrees: boolean
   stopped: boolean
   synthesisStarted: boolean
+  /** Highest finding rowid visible when synthesis began; older findings are not final summaries. */
+  synthesisFindingFloorRowid: number
   interventionsUsed: number
   /** Separate, small budget for forced whole-team-idle wakes (see sweepIdleTeammates) — never blocked by unrelated stall/plan-review spend. */
   forcedInterventionsUsed: number
@@ -2936,12 +2938,34 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
         queueLeadStatus([`${event.taskId ?? 'Work'} resumed${event.summary ? `: ${event.summary}` : '.'}`, event.detail]
           .filter(Boolean).join('\n\n'))
       } else if (event.type === 'task.created') {
+        const runRow = db.prepare('SELECT status, lead_agent_id FROM protocol_runs WHERE id = ?')
+          .get(event.runId) as Row | undefined
+        const reopening = runRow?.status === 'synthesizing'
+          && String(runRow.lead_agent_id ?? 'lead') === event.agentId
         insertTaskSync(db, event.runId, {
           title: event.title ?? event.summary ?? 'Untitled task',
           prompt: event.detail ?? event.summary ?? 'No prompt provided.',
           paths: event.paths ?? [],
           blockedBy: event.dependsOn ?? [],
         })
+        // A lead may discover follow-up work during synthesis, or a terminal
+        // event from earlier in this same streamed turn may race ahead of the
+        // replacement task. In either case, task creation reopens the board;
+        // otherwise handleLeadTurnEnd can mistake this intervention for the
+        // synthesis turn and complete a run that still has pending work.
+        if (reopening) {
+          db.prepare("UPDATE protocol_runs SET status = 'running', updated_at = ? WHERE id = ?")
+            .run(ts, event.runId)
+          insertEventSync(db, {
+            version: AGENT_PROTOCOL_VERSION,
+            runId: event.runId,
+            agentId: event.agentId,
+            type: 'run.status',
+            summary: `Run reopened: the lead added ${event.taskId ?? 'follow-up work'} during synthesis`,
+            payload: { status: 'running' },
+            timestamp: ts,
+          })
+        }
       } else if (event.type === 'task.planned') {
         const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(event.runId) as Row | undefined
         const run = runRow ? rowToRun(runRow) : null
@@ -3070,6 +3094,20 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
             db.prepare("UPDATE protocol_agents SET task_id = NULL, status = CASE WHEN status IN ('working', 'blocked') THEN 'idle' ELSE status END, updated_at = ? WHERE run_id = ? AND id = ? AND task_id = ?")
               .run(ts, event.runId, task.ownerAgentId, task.id)
           }
+          const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(event.runId) as Row | undefined
+          if (runRow?.status === 'synthesizing') {
+            db.prepare("UPDATE protocol_runs SET status = 'running', updated_at = ? WHERE id = ?")
+              .run(ts, event.runId)
+            insertEventSync(db, {
+              version: AGENT_PROTOCOL_VERSION,
+              runId: event.runId,
+              agentId: event.agentId,
+              type: 'run.status',
+              summary: `Run reopened: ${task.id} was requeued for another attempt`,
+              payload: { status: 'running' },
+              timestamp: ts,
+            })
+          }
         }
       } else if (event.type === 'lock.requested' && event.paths && event.paths.length > 0) {
         for (const requested of event.paths) {
@@ -3152,6 +3190,16 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
   notifyRunChanged(event.runId)
   if (result.newMessageIds.length > 0) {
     void deliverMessagesLive(event.runId, result.newMessageIds).catch(() => {})
+  }
+  if ((event.type === 'task.created' || event.type === 'task.released') && result.snapshot?.run.status === 'running') {
+    const controller = controllers.get(event.runId)
+    if (controller?.synthesisStarted) {
+      controller.synthesisStarted = false
+      controller.synthesisFindingFloorRowid = 0
+    }
+  }
+  if (event.type === 'task.released') {
+    void sweepIdleTeammates(event.runId).catch(() => {})
   }
   // Terminal task events can arrive from outside the work loop (board's
   // manual task repair, API posts) — they may have just finished the board.
@@ -4245,15 +4293,23 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
 async function maybeStartSynthesis(controller: RunController): Promise<void> {
   if (controller.stopped || controller.synthesisStarted) return
   const db = await getDatabase()
+  const lead = listAgentsSync(db, controller.runId).find((agent) => agent.role === 'lead')
+  if (!lead) return
+  // A lead can fail obsolete tasks and create replacements in one streamed
+  // intervention. Starting synthesis between those events races the stream
+  // and turns the intervention itself into a bogus final synthesis turn.
+  if (controller.turnInFlight.has(lead.id)) return
   const tasks = listTasksSync(db, controller.runId)
   const unfinished = tasks.some((task) => task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled')
   if (tasks.length === 0 || unfinished) return
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(controller.runId) as Row | undefined
   if (!runRow) return
   const run = rowToRun(runRow)
-  const lead = listAgentsSync(db, controller.runId).find((agent) => agent.role === 'lead')
-  if (!lead) return
+  const findingFloor = Number((db.prepare(
+    "SELECT COALESCE(MAX(rowid), 0) AS rowid FROM protocol_events WHERE run_id = ? AND agent_id = ? AND type = 'finding'",
+  ).get(controller.runId, lead.id) as Row | undefined)?.rowid) || 0
   controller.synthesisStarted = true
+  controller.synthesisFindingFloorRowid = findingFloor
   await enqueueWrite((tx) => {
     tx.prepare('UPDATE protocol_runs SET status = ?, updated_at = ? WHERE id = ?').run('synthesizing', nowIso(), controller.runId)
   })
@@ -4301,10 +4357,37 @@ async function handleLeadTurnEnd(controller: RunController): Promise<void> {
   }
 
   if (run.status === 'synthesizing') {
+    const tasks = listTasksSync(db, controller.runId)
+    const unfinished = tasks.filter((task) => !['completed', 'failed', 'cancelled'].includes(task.status))
+    if (unfinished.length > 0) {
+      // Completion is a last-line invariant, not an assumption inherited from
+      // when synthesis was scheduled. Follow-up tasks may have landed while
+      // the lead turn was in flight, so reopen instead of completing them out
+      // from under their owners.
+      await enqueueWrite((tx) => {
+        const ts = nowIso()
+        tx.prepare("UPDATE protocol_runs SET status = 'running', updated_at = ? WHERE id = ?")
+          .run(ts, controller.runId)
+        setAgentStatusSync(tx, controller.runId, run.leadAgentId ?? 'lead', 'idle', ts)
+        insertEventSync(tx, {
+          version: AGENT_PROTOCOL_VERSION,
+          runId: controller.runId,
+          agentId: run.leadAgentId ?? 'lead',
+          type: 'run.status',
+          summary: `Run reopened: ${unfinished.length} task${unfinished.length === 1 ? '' : 's'} remain unfinished after synthesis`,
+          payload: { status: 'running' },
+          timestamp: ts,
+        })
+      })
+      controller.synthesisStarted = false
+      controller.synthesisFindingFloorRowid = 0
+      void sweepIdleTeammates(controller.runId).catch(() => {})
+      return
+    }
     // The lead's final `finding` is the run summary.
     const findingRow = db.prepare(
-      "SELECT * FROM protocol_events WHERE run_id = ? AND agent_id = ? AND type = 'finding' ORDER BY created_at DESC LIMIT 1",
-    ).get(controller.runId, run.leadAgentId ?? 'lead') as Row | undefined
+      "SELECT * FROM protocol_events WHERE run_id = ? AND agent_id = ? AND type = 'finding' AND rowid > ? ORDER BY rowid DESC LIMIT 1",
+    ).get(controller.runId, run.leadAgentId ?? 'lead', controller.synthesisFindingFloorRowid) as Row | undefined
     const summary = findingRow
       ? [findingRow.summary, findingRow.detail].filter((part) => typeof part === 'string' && part).join('\n\n')
       : undefined
@@ -4426,6 +4509,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     useWorktrees: params.useWorktrees !== false,
     stopped: false,
     synthesisStarted: false,
+    synthesisFindingFloorRowid: 0,
     interventionsUsed: 0,
     forcedInterventionsUsed: 0,
     turnInFlight: new Set(),

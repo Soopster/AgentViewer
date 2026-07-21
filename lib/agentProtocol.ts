@@ -1159,6 +1159,7 @@ export function buildLeadPlanPreamble(params: {
     '   - `detail`: the full prompt a teammate needs to do the work without your context',
     '   - `paths`: the file paths/globs the task will write (its lock claim). Non-overlapping paths across tasks — two agents editing the same file is the failure mode to design away.',
     '   - `dependsOn`: task ids that must complete first (use the ids you assign, task-1, task-2, …)',
+    '   - Make every task achievable using only its own paths and the public/test seams its dependencies are explicitly required to deliver. If a test needs new exports or dependency injection, put that production file and its tests in one task, or require the producer task to expose and verify the seam before creating a test-only dependent task.',
     '3. Emit `finding` blocks for anything you learned that every teammate should know.',
     '4. Finish with a single `plan.completed` block.',
     '',
@@ -1326,6 +1327,7 @@ export function buildLeadInterventionPreamble(params: {
         ]
       : []),
     '- `message` a blocked teammate (by name) with concrete unblocking guidance. Your message wakes them.',
+    '- A path/scope blocker needs a board change, not the unchanged task sent back again: create a replacement task with the required paths (and fail the superseded task), or direct the owner to request the precise additional lock. Do not burn intervention turns repeating a scope that the teammate already proved impossible.',
     '- If a task is genuinely unachievable or duplicated, emit `task.failed` (taskId, summary) so the run can finish without it.',
     '- If the work needs reshaping, emit `task.created` replacements (title, detail, paths, dependsOn).',
     params.reviewingPlans

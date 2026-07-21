@@ -419,6 +419,49 @@ assert.equal(followUpDone.runStatus, 'synthesizing')
 const leadInbox = await coordination.readExternalProtocolInbox(lead)
 assert.match(leadInbox.messages.at(-1)?.body ?? '', /coord_finalize_run/)
 
+// Internal A2A lead events use appendProtocolEvent rather than the external
+// task helper. A follow-up task emitted after an earlier terminal event raced
+// synthesis in a real run; it must reopen the board instead of being completed
+// underneath its owner.
+await coordination.appendProtocolEvent({
+  version: '1.0',
+  runId: lead.runId,
+  agentId: lead.agentId,
+  type: 'task.created',
+  taskId: 'task-3',
+  title: 'Internal synthesis follow-up',
+  detail: 'Exercise the internal A2A task-created reopening path.',
+})
+const internallyReopened = await coordination.readExternalProtocolStatus(lead)
+assert.equal(internallyReopened.actionable.runStatus, 'running')
+assert.equal(internallyReopened.snapshot.tasks.find((entry) => entry.id === 'task-3')?.status, 'pending')
+await coordination.claimExternalProtocolTask(lead, 'task-3')
+await coordination.failExternalProtocolTask(lead, {
+  taskId: 'task-3',
+  summary: 'Internal reopening regression covered',
+})
+assert.equal((await coordination.readExternalProtocolStatus(lead)).actionable.runStatus, 'synthesizing')
+
+// Agent Operations reruns blocked/failed work by emitting task.released. The
+// requeue must reopen synthesis and make the task claimable again.
+await coordination.appendProtocolEvent({
+  version: '1.0',
+  runId: lead.runId,
+  agentId: lead.agentId,
+  type: 'task.released',
+  taskId: 'task-3',
+  summary: 'Retry task-3 from Agent Operations',
+})
+const retriedTaskStatus = await coordination.readExternalProtocolStatus(lead)
+assert.equal(retriedTaskStatus.actionable.runStatus, 'running')
+assert.equal(retriedTaskStatus.snapshot.tasks.find((entry) => entry.id === 'task-3')?.status, 'pending')
+await coordination.claimExternalProtocolTask(lead, 'task-3')
+await coordination.failExternalProtocolTask(lead, {
+  taskId: 'task-3',
+  summary: 'Task rerun reopening regression covered',
+})
+assert.equal((await coordination.readExternalProtocolStatus(lead)).actionable.runStatus, 'synthesizing')
+
 // The lead reopens a synthesizing run by adding post-review work.
 const reopened = await coordination.createExternalProtocolTask(lead, {
   title: 'Post-review fix',

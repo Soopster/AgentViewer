@@ -26,7 +26,7 @@ writeFileSync(path.join(agentWorktreePath, 'agent-change.txt'), 'changed again b
 process.chdir(smokeRepo)
 
 const { CoordinationPopover } = await import('./CoordinationPopover')
-const { listTuiProtocolRuns } = await import('../../lib/tui/service')
+const { listTuiProtocolRuns, readTuiProtocolRun } = await import('../../lib/tui/service')
 const { LIGHT_THEME } = await import('../theme')
 
 // Force schema creation, then seed a run directly.
@@ -53,6 +53,8 @@ db.exec(`INSERT INTO protocol_tasks (id, run_id, title, prompt, status, owner_ag
   VALUES ('task-0', 'run-smoke', 'Queue dependencies', 'queue it', 'pending', 'lead', '[]', '[]', '${oldTs}', '${oldTs}')`)
 db.exec(`INSERT INTO protocol_tasks (id, run_id, title, prompt, status, owner_agent_id, paths_json, blocked_by_json, created_at, updated_at)
   VALUES ('task-2', 'run-smoke', 'Verify output', 'verify it', 'completed', 'lead', '[]', '[]', '${oldTs}', '${ts}')`)
+db.exec(`INSERT INTO protocol_tasks (id, run_id, title, prompt, status, owner_agent_id, paths_json, blocked_by_json, created_at, updated_at)
+  VALUES ('task-3', 'run-smoke', 'Retry failed task', 'rerun it', 'failed', NULL, '[]', '[]', '${ts}', '${ts}')`)
 db.exec(`INSERT INTO protocol_events (id, run_id, agent_id, type, summary, paths_json, timestamp, created_at)
   VALUES ('ev-1', 'run-smoke', 'agent-1', 'finding', 'widget lives in src/widget', '[]', '${ts}', '${ts}')`)
 db.exec(`INSERT INTO protocol_messages (id, run_id, from_agent_id, to_agent_id, body, kind, priority, reply_required, created_at)
@@ -111,7 +113,8 @@ const MARKERS = [
   'Queue dependen',
   'Build the widget',
   'Verify output',
-  'Message the current context',
+  'Retry failed task',
+  '[R] rerun failed/blocked',
   'G changes',
   ...(smokeWidth >= 160 ? ['STAGE    TASK', '└─ [ ]', 'THROUGHPUT (events/min)', 'RUN STATE', 'OWNERSHIP'] : []),
 ]
@@ -199,6 +202,58 @@ await act(async () => {
 })
 if (!captureCharFrame().includes('Agent:    lead')) {
   console.error('Up navigation did not return from the active task to the queued task')
+  process.exit(1)
+}
+
+// The global prompt row advertises rerun while Workflow pane 1 is focused,
+// and Shift+R from that exact state jumps to the failed task confirmation.
+await act(async () => {
+  handleKey?.({ name: '1', ctrl: false, shift: false, sequence: '1' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+await act(async () => {
+  handleKey?.({ name: 'r', ctrl: false, shift: true, sequence: 'R' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('Rerun task-3')) {
+  console.error('Global failed-task hint was visible but Shift+R did not open rerun confirmation')
+  process.exit(1)
+}
+await act(async () => {
+  handleKey?.({ name: 'escape', ctrl: false, shift: false, sequence: '' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+await act(async () => {
+  handleKey?.({ name: '2', ctrl: false, shift: false, sequence: '2' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+
+// Failed and blocked tasks can be rerun directly from the work board, even
+// when their previous owner is gone. Shift+R confirms, then task.released
+// returns the task to the pending claim queue.
+await act(async () => {
+  handleKey?.({ name: '/', ctrl: false, shift: false, sequence: '/' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('R rerun')) {
+  console.error(`Failed task selection did not expose the rerun hotkey hint in the footer\n${captureCharFrame()}`)
+  process.exit(1)
+}
+await act(async () => {
+  handleKey?.({ name: 'r', ctrl: false, shift: true, sequence: 'R' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('Rerun task-3')) {
+  console.error('Failed task rerun hotkey did not open confirmation')
+  process.exit(1)
+}
+await act(async () => {
+  handleKey?.({ name: 'return', ctrl: false, shift: false, sequence: '\r' })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+})
+const rerunSnapshot = await readTuiProtocolRun('run-smoke')
+if (rerunSnapshot?.tasks.find((entry) => entry.id === 'task-3')?.status !== 'pending') {
+  console.error('Confirmed task rerun did not return the failed task to pending')
   process.exit(1)
 }
 
@@ -301,7 +356,7 @@ await act(async () => {
   handleKey?.({ name: '4', ctrl: false, shift: false, sequence: '4' })
   await new Promise((resolve) => setTimeout(resolve, 50))
 })
-if (!captureCharFrame().includes('12/12')) {
+if (!captureCharFrame().includes('13/13')) {
   console.error('Activity pane did not start at the live tail')
   process.exit(1)
 }
@@ -345,7 +400,7 @@ await act(async () => {
   handleKey?.({ name: 'up', ctrl: false, shift: false, sequence: '' })
   await new Promise((resolve) => setTimeout(resolve, 50))
 })
-if (!captureCharFrame().includes('11/12')) {
+if (!captureCharFrame().includes('12/13')) {
   console.error('Activity up navigation did not keep the selected event in view')
   process.exit(1)
 }

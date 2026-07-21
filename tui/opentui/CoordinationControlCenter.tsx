@@ -262,6 +262,7 @@ export function CoordinationControlCenter({
   const eventsPerMinute = events.length > 0 ? (events.length / runSeconds) * 60 : 0
   const activeTasks = tasks.filter((task) => ACTIVE_TASKS.has(task.status)).length
   const blockedTasks = tasks.filter((task) => task.status === 'blocked' || task.status === 'failed').length
+  const canRerunTask = blockedTasks > 0 && run !== null && !['completed', 'failed', 'stopped'].includes(run.status)
   const assignedTasks = tasks.filter((task) => task.ownerAgentId).length
   const activeLocks = snapshot?.locks.filter((lock) => lock.status === 'active').length ?? 0
   const lastActivityAge = events.length > 0 ? age(events.at(-1)?.timestamp, now) : '—'
@@ -270,7 +271,7 @@ export function CoordinationControlCenter({
   const contextualKeys = section === 'overview'
     ? run ? 'j/k workflow · enter board · [/] switch run' : 'n create first workflow'
     : section === 'tasks'
-      ? `j/k task${selectedTask?.ownerAgentId ? ' · enter owner' : ''} · / filter${selectedTaskPlanState === 'awaiting' ? ' · a approve · R reject' : ''} · f fail · m ${selectedTask?.ownerAgentId ? 'owner' : 'lead'}`
+      ? `j/k task${selectedTask?.ownerAgentId ? ' · enter owner' : ''} · / filter${selectedTaskPlanState === 'awaiting' ? ' · a approve · R reject' : selectedTask && (selectedTask.status === 'blocked' || selectedTask.status === 'failed') ? ' · R rerun' : ''} · f fail · m ${selectedTask?.ownerAgentId ? 'owner' : 'lead'}`
       : section === 'team'
         ? `j/k agent${inspectedAgent ? ` · enter session · x interrupt${run?.useWorktrees === false ? '' : ' · w merge'} · m message${STUCK_AGENT_STATUSES.has(inspectedAgent.status) ? ' · R rerun' : ''}` : ''}`
         : `j/k event${selectedEventAgent ? ' · enter session' : ''} · g tail · / filter · m ${selectedEventAgent ? 'event agent' : 'lead'}`
@@ -278,6 +279,9 @@ export function CoordinationControlCenter({
     ? `1-4 focus · tab next · G agent changes · n new · M broadcast · s stop · D delete${run?.useWorktrees === false ? '' : ' · c cleanup'}${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
     : '1-4 focus · tab next · G changes · n new · M all · s stop · r refresh · q close'
   const footerText = `${contextualKeys}  │  ${globalKeys}`
+  const promptHint = canRerunTask
+    ? '[R] rerun failed/blocked  [M] broadcast  [m] message focused agent'
+    : 'Message the current context…  [M] broadcast  [m] message focused agent'
   const activityFooterText = rightW >= 40 ? '4 focus  ·  g tail  ·  / filter  ·  m message' : '4 focus  ·  g tail'
 
   return (
@@ -539,7 +543,7 @@ export function CoordinationControlCenter({
         ) : (
           <>
             <text fg={theme.cyan} wrapMode="none">{'>'}</text>
-            <text fg={pendingLabel ? theme.amber : theme.muted} wrapMode="none">{` ${fit(pendingLabel ?? 'Message the current context…  [M] broadcast  [m] message focused agent', innerW - 4)}`}</text>
+            <text fg={pendingLabel ? theme.amber : theme.muted} wrapMode="none">{` ${fit(pendingLabel ?? promptHint, innerW - 4)}`}</text>
             <text fg={theme.cyan} wrapMode="none">{' ▌'}</text>
           </>
         )}
