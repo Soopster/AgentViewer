@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { observeCoordinatorSessionTurn } from '@/lib/agentCoordination'
+import { drainCooperativeInbox, observeCoordinatorSessionTurn } from '@/lib/agentCoordination'
 import { isAgentProvider } from '@/lib/provider'
 import { listViewSessionMessageWindow, streamViewSessionTurn } from '@/lib/sessionBackend'
 
@@ -38,6 +38,14 @@ export async function POST(
   const { sessionId } = await params
   const body = await request.json().catch(() => ({}))
   const provider = isAgentProvider(body?.provider) ? body.provider : undefined
+  // Cooperative Coordinator join (see lib/agentCoordination.ts): if this
+  // session is bound to a run, fold in anything the room said since the
+  // user's last turn before the message goes out. No-ops instantly for the
+  // overwhelming majority of sessions that were never joined to a run.
+  if (typeof body?.message === 'string') {
+    const drained = await drainCooperativeInbox(sessionId).catch(() => '')
+    if (drained) body.message = `${body.message}\n${drained}`
+  }
   const response = await streamViewSessionTurn({ sessionId, signal: request.signal, body, provider })
   return observeCoordinatorSessionTurn(sessionId, response)
 }

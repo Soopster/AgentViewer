@@ -538,6 +538,28 @@ export type ExternalProtocolClaimResult = ExternalProtocolMutationResult & {
   task: ProtocolTask
 }
 
+export type ProtocolAgentLivenessStatus = 'fresh' | 'stale' | 'dead'
+
+export type ProtocolDeliveryHint = {
+  name: string
+  status: ProtocolAgentLivenessStatus
+  /** Seconds since the recipient's last heartbeat/turn; null if never seen. */
+  ageSeconds: number | null
+}
+
+/**
+ * coord_send_message's result: per-recipient liveness at send time, so the
+ * sender knows immediately whether an @mention landed on someone actively
+ * working, someone asleep, or someone gone — instead of finding out minutes
+ * later when nothing happens. Mirrors murmur's say() delivery hints
+ * (mentioned_active/stale/unknown), computed from data we already track
+ * (ProtocolAgent.lastSeenAt / turnActive) rather than free-text mention
+ * parsing, since our `to` field is an explicit recipient, not embedded text.
+ */
+export type ExternalProtocolMessageResult = ExternalProtocolMutationResult & {
+  delivery: ProtocolDeliveryHint[]
+}
+
 // ---------------------------------------------------------------------------
 // Run playbooks — the Claude Code dynamic-workflows model adapted to a
 // multi-CLI board: the plan lives in a reusable, parameterized artifact
@@ -1065,7 +1087,16 @@ export function formatInbox(messages: ProtocolMessage[], agentsById: Map<string,
   if (messages.length === 0) return '(empty)'
   return messages.map((message) => {
     const from = agentsById.get(message.fromAgentId)?.name ?? message.fromAgentId
-    return `- from ${from}: ${message.body}`
+    // Tag urgency/reply-obligation inline — dropping these left every inbox
+    // line looking identical, so an urgent reply-required request read the
+    // same as an FYI status ping and got the same (non-)priority.
+    const tags = [
+      message.priority === 'urgent' ? 'URGENT' : null,
+      message.replyRequired ? 'reply-required' : null,
+      message.kind !== 'request' && message.kind !== 'response' ? message.kind : null,
+    ].filter(Boolean)
+    const tag = tags.length > 0 ? ` [${tags.join(', ')}]` : ''
+    return `- from ${from}${tag}: ${message.body}`
   }).join('\n')
 }
 
@@ -1089,6 +1120,7 @@ function protocolGrammar(runId: string, agentId: string): string {
     '',
     `Set \`metadata["${A2A_COORDINATION_EXTENSION_URI}"].operation\` to one of these coordination operations:`,
     '- `agent.start_work` / `agent.stop_work` (include taskId) — bracket every work stint.',
+    '- `agent.heartbeat` (taskId, summary) — on a task running longer than ~2 minutes, emit one every ~2 minutes with a one-line status. The lead sees silence past that window as stalled, not just slow.',
     '- `agent.blocked` — you cannot proceed; summary = the blocker. `agent.unblocked` when cleared.',
     '- `task.claim` (taskId) — request the next pending task. The coordinator grants or denies it.',
     '- `task.created` (taskId, title, detail, paths, dependsOn) — add newly discovered work as an A2A Task in SUBMITTED state.',
@@ -1244,6 +1276,7 @@ export function buildTeammateTurnPreamble(params: {
     ...(params.gateCommand
       ? [`- Completions are gate-checked: \`${params.gateCommand}\` runs in ${params.useWorktrees ? 'your worktree' : 'the shared checkout'} and must exit 0, or the completion is rejected with its output. Run it yourself before completing.`]
       : []),
+    '- Inbox items tagged `[reply-required]` above need a `message` reply this turn, before other work — that reply is the sender\'s only signal their request landed. Silence reads as dropped, not busy.',
     '- Share what you find: `finding` for facts others need, `learning` for reusable context — teammates and the lead see them.',
     '- If blocked, emit `agent.blocked` with the exact blocker; this automatically alerts the lead. Also `message` the specific teammate best placed to unblock you, then read your inbox and resume with `agent.unblocked` when guidance clears it. Do not silently stop.',
     '- After completing, you may immediately `task.claim` the next pending unblocked task in this same turn, or end the turn — the coordinator will re-dispatch you.',
@@ -1283,6 +1316,7 @@ export function buildLeadInterventionPreamble(params: {
     formatTaskBoard(params.tasks),
     '',
     'Resolve the situation THIS TURN — coordinate, do not implement:',
+    '- Inbox items tagged `[reply-required]` above need a `message` reply before anything else — a teammate waiting on you reads silence as dropped, not busy.',
     '- Review every teammate status and owned task. Leave healthy active work alone; unblock blocked agents, reassign abandoned work, and give idle agents newly claimable work.',
     '- Treat each terminal task result as authoritative input. Acknowledge dependencies it unlocks and preserve important results for final synthesis.',
     ...(params.requirePlanApproval

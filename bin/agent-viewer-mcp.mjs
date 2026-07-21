@@ -201,6 +201,10 @@ const server = new McpServer(
       'Create or join a run, then read status and inbox; claim one task, lock paths before editing, report progress, and complete it or release unfinished work.',
       'Teammates run in other CLI processes and see only the board and mailbox — communicate deliberately: answer reply_required mail promptly, publish reusable discoveries with coord_publish_finding, and message teammates whose lanes your work affects.',
       'Use coord_wait instead of polling while idle, prefer coord worker for unattended runs, and never disclose participant capabilities or bypass completion gates.',
+      'Narrate every mailbox exchange to your own terminal, one line each: "<- <sender>: <message>" on receipt, "-> <recipient>: <message>" after sending. '
+        + 'Your human is watching this terminal, not the board — silence reads as dead, even mid-task.',
+      'If any coord_* call throws (network error, timeout, daemon unreachable), wait ~2s and retry the SAME call — do not ask the user whether to retry, the answer is always yes. '
+        + 'Keep your runId/agentId/token; do not re-create or re-join. If retries keep failing, coord_resume rebinds after the daemon or your own process comes back.',
     ].join(' '),
   },
 )
@@ -440,7 +444,8 @@ server.registerTool('coord_status', {
 }, async () => textResult(await coordinatorRequest('status')))
 
 server.registerTool('coord_wait', {
-  description: 'Block until another participant changes the run (your own writes do not wake you). Returns the events that occurred plus an `actionable` digest saying what you can do now. Prefer this over repeated status polling.',
+  description: 'Block until another participant changes the run (your own writes do not wake you). Returns the events that occurred plus an `actionable` digest saying what you can do now. Prefer this over repeated status polling. '
+    + 'An empty/timed-out result is normal — call it again. If it THROWS instead (network error, timeout), that is a real disconnect: wait ~2s and retry the same call rather than giving up or re-joining.',
   inputSchema: {
     cursor: z.string().min(1).optional().describe('Opaque cursor from the previous coord_wait; normally omit because this bridge remembers it'),
     timeout_ms: z.number().int().min(0).max(55_000).optional().describe('Defaults to 25000 milliseconds'),
@@ -492,7 +497,10 @@ server.registerTool('coord_release_task', {
 })))
 
 server.registerTool('coord_read_inbox', {
-  description: 'Read and acknowledge direct Coordinator mailbox messages for this participant.',
+  description: 'Read and acknowledge direct Coordinator mailbox messages for this participant. '
+    + 'Any message with replyRequired=true needs a coord_send_message reply before you do anything else — '
+    + 'the sender treats silence as dropped, not busy. Print one line per message to your own terminal, '
+    + '"<- <fromAgentId>: <body>" — the human watching this terminal cannot see the mailbox otherwise.',
   inputSchema: {
     after: z.string().min(1).optional().describe('Message cursor returned by the previous call'),
     limit: z.number().int().min(1).max(200).optional(),
@@ -505,7 +513,10 @@ server.registerTool('coord_read_inbox', {
 })))
 
 server.registerTool('coord_send_message', {
-  description: 'Send a typed direct message. Status messages are batched; reply-required requests remain actionable until answered with in_reply_to.',
+  description: 'Send a typed direct message. Status messages are batched; reply-required requests remain actionable until answered with in_reply_to. '
+    + 'The result includes `delivery`: each recipient\'s liveness (fresh/stale/dead) at send time. If stale or dead, do not assume silence means '
+    + 'ignored — escalate to the lead or route around them instead of waiting on a reply that may never come. '
+    + 'Print one line to your own terminal after sending, "-> <to>: <one-line summary>" — this is the only way the human watching this terminal sees you communicating.',
   inputSchema: {
     to: z.string().min(1),
     message: z.string().min(1).max(8000),
@@ -550,7 +561,9 @@ server.registerTool('coord_request_locks', {
 }, async ({ paths, request_id }) => textResult(await coordinatorRequest('request_locks', { paths, requestId: request_id })))
 
 server.registerTool('coord_progress', {
-  description: 'Report working, idle, blocked, ready, or heartbeat state for this participant.',
+  description: 'Report working, idle, blocked, ready, or heartbeat state for this participant. '
+    + 'On a task running longer than ~2 minutes, call with status="heartbeat" every ~2 minutes — silence past that window '
+    + 'reads to the lead as stalled, not just slow.',
   inputSchema: {
     status: z.enum(['ready', 'working', 'idle', 'blocked', 'heartbeat']),
     task_id: z.string().min(1).optional(),

@@ -106,6 +106,7 @@ import {
   appendProtocolEvent,
   cleanupProtocolRunWorktrees,
   deleteProtocolRun,
+  drainCooperativeInbox,
   listProtocolRuns,
   observeCoordinatorSessionTurn,
   readProtocolRun,
@@ -385,6 +386,12 @@ export async function streamTuiSessionTurn(
       ...body,
       provider: session.provider,
     }, signal)
+  }
+  // Cooperative Coordinator join (see lib/agentCoordination.ts): no-ops
+  // instantly unless this session was explicitly joined to a run.
+  if (typeof body.message === 'string') {
+    const drained = await drainCooperativeInbox(session.sessionId).catch(() => '')
+    if (drained) body.message = `${body.message}\n${drained}`
   }
   const response = await streamViewSessionTurn({
     sessionId: session.sessionId,

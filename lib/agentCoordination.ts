@@ -26,6 +26,7 @@ import {
   buildTeammatePlanPreamble,
   buildTeammateTurnPreamble,
   fallbackTaskTemplates,
+  formatInbox,
   interpolatePlaybookText,
   isValidPlaybookName,
   parseAgentProtocolEvents,
@@ -42,6 +43,7 @@ import {
   type ExternalProtocolIdentity,
   type ExternalProtocolInboxResult,
   type ExternalProtocolLockResult,
+  type ExternalProtocolMessageResult,
   type ExternalProtocolMutationResult,
   type ExternalProtocolParticipant,
   type ExternalProtocolParticipantResult,
@@ -51,7 +53,9 @@ import {
   type JoinExternalProtocolRunParams,
   type PlaybookSummary,
   type ProtocolAgent,
+  type ProtocolAgentLivenessStatus,
   type ProtocolAgentStatus,
+  type ProtocolDeliveryHint,
   type ProtocolLock,
   type ProtocolLockStatus,
   type ProtocolMessage,
@@ -86,6 +90,11 @@ const SCHEMA_VERSION = 12
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 const EXTERNAL_AGENT_STALE_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_STALE_MS) || 5 * 60_000)
+// Below this age (or an in-flight turn) an agent counts as "fresh" for
+// message delivery hints; above EXTERNAL_AGENT_STALE_MS it's "dead" — same
+// two-threshold shape as murmur's classify(), reusing the reap cutoff above
+// as the dead boundary so the two notions of staleness stay in lockstep.
+const DELIVERY_HINT_FRESH_MS = 90_000
 const MAIL_SWEEP_INTERVAL_MS = 5_000
 const REPLY_ESCALATION_MS = 3 * 60_000
 const STATUS_BATCH_THRESHOLD = 3
@@ -726,6 +735,26 @@ function annotateLiveTurns(runId: string, agents: ProtocolAgent[]): ProtocolAgen
   })
 }
 
+function classifyAgentLiveness(agent: ProtocolAgent): { status: ProtocolAgentLivenessStatus; ageSeconds: number | null } {
+  if (agent.turnActive) return { status: 'fresh', ageSeconds: 0 }
+  if (!agent.lastSeenAt) return { status: 'dead', ageSeconds: null }
+  const ageMs = Date.now() - new Date(agent.lastSeenAt).getTime()
+  const ageSeconds = Math.max(0, Math.round(ageMs / 1000))
+  if (ageMs <= DELIVERY_HINT_FRESH_MS) return { status: 'fresh', ageSeconds }
+  if (ageMs <= EXTERNAL_AGENT_STALE_MS) return { status: 'stale', ageSeconds }
+  return { status: 'dead', ageSeconds }
+}
+
+/** Delivery hints for coord_send_message: each resolved recipient's liveness at send time. */
+function deliveryHintsSync(db: SqliteDatabase, runId: string, recipientIds: string[]): ProtocolDeliveryHint[] {
+  if (recipientIds.length === 0) return []
+  const placeholders = recipientIds.map(() => '?').join(',')
+  const rows = db.prepare(`SELECT * FROM protocol_agents WHERE run_id = ? AND id IN (${placeholders})`)
+    .all(runId, ...recipientIds) as Row[]
+  const agents = annotateLiveTurns(runId, rows.map(rowToAgent))
+  return agents.map((agent) => ({ name: agent.name, ...classifyAgentLiveness(agent) }))
+}
+
 function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapshot | null {
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
   if (!runRow) return null
@@ -918,6 +947,9 @@ function externalParticipantInstructions(participant: ExternalProtocolParticipan
     `You are ${participant.name} (${participant.role}) in Coordinator run ${participant.runId}.`,
     'Read the board before acting. Claim one unblocked task, request locks before editing, and stay inside the returned task paths.',
     'Use Coordinator tools for plans, messages, findings, blocking, completion, and heartbeats. Read your inbox between work steps.',
+    'Reply to any reply-required inbox message before other work — silence reads as dropped, not busy — and call coord_progress(status="heartbeat") every ~2 minutes on tasks that run long.',
+    'Narrate every mailbox exchange to your own terminal: "<- <sender>: <message>" on receipt, "-> <recipient>: <message>" after sending — your human is watching this terminal, not the board.',
+    'If a Coordinator tool call throws (network error, timeout, daemon unreachable), wait ~2s and retry the same call — never give up after one failure, and keep this same identity rather than re-joining.',
     `Work from ${participant.cwd}. If another participant uses the same checkout, coordinate non-overlapping paths before editing.`,
   ].join(' ')
 }
@@ -1766,7 +1798,7 @@ export async function sendExternalProtocolMessage(
     correlationId?: string
     inReplyTo?: string
   },
-): Promise<ExternalProtocolMutationResult> {
+): Promise<ExternalProtocolMessageResult> {
   const db = await getDatabase()
   requireExternalParticipantSync(db, identity)
   const body = params.body.trim()
@@ -1778,6 +1810,10 @@ export async function sendExternalProtocolMessage(
   if (params.inReplyTo && recipients.length !== 1) {
     throw new Error('A correlated reply must address exactly one participant')
   }
+  // Computed before the send so a recipient's own delivered_at/last_seen
+  // bump (if they happen to be polling this exact instant) can't flatter
+  // its own liveness reading.
+  const delivery = deliveryHintsSync(db, identity.runId, recipients)
   await appendProtocolEvent({
     version: AGENT_PROTOCOL_VERSION,
     runId: identity.runId,
@@ -1793,7 +1829,8 @@ export async function sendExternalProtocolMessage(
       inReplyTo: params.inReplyTo,
     },
   })
-  return externalMutationResult(identity)
+  const result = await externalMutationResult(identity)
+  return { ...result, delivery }
 }
 
 export async function requestExternalProtocolLocks(
@@ -3585,6 +3622,26 @@ function parseProtocolEventsFromWire(text: string): AgentProtocolEvent[] {
 const SESSION_EVENT_RE = /event: session\s*\ndata: (\{[^\n]*\})/
 
 /**
+ * Shared lookup for "does this real (non-`external:`) session id belong to a
+ * live Coordinator agent right now" — used by observeCoordinatorSessionTurn
+ * (write-back: parse ```a2a blocks the model emits) and the cooperative-join
+ * functions below (read: drain the mailbox before the next send). Both need
+ * the same answer so a session's write-back and read-drain never disagree
+ * about which run currently governs it.
+ */
+function findActiveCoordinatorAgentBySessionSync(db: SqliteDatabase, sessionId: string): Row | undefined {
+  return db.prepare(`
+    SELECT a.* FROM protocol_agents a
+    JOIN protocol_runs r ON r.id = a.run_id
+    WHERE a.session_id = ?
+      AND a.session_id NOT LIKE 'external:%'
+      AND r.status IN ('planning', 'running', 'synthesizing', 'blocked')
+    ORDER BY r.updated_at DESC
+    LIMIT 1
+  `).get(sessionId) as Row | undefined
+}
+
+/**
  * Bind a user-driven session turn back to its internal Coordinator agent.
  *
  * Controller-dispatched turns are drained below, but a user can also open the
@@ -3597,15 +3654,7 @@ const SESSION_EVENT_RE = /event: session\s*\ndata: (\{[^\n]*\})/
 export async function observeCoordinatorSessionTurn(sessionId: string, response: Response): Promise<Response> {
   if (!response.body) return response
   const db = await getDatabase()
-  let row = db.prepare(`
-    SELECT a.* FROM protocol_agents a
-    JOIN protocol_runs r ON r.id = a.run_id
-    WHERE a.session_id = ?
-      AND a.session_id NOT LIKE 'external:%'
-      AND r.status IN ('planning', 'running', 'synthesizing', 'blocked')
-    ORDER BY r.updated_at DESC
-    LIMIT 1
-  `).get(sessionId) as Row | undefined
+  let row = findActiveCoordinatorAgentBySessionSync(db, sessionId)
 
   // A pending provider session can realize a new id before the durable agent
   // row is updated. The live controller already owns that alias, so use it as
@@ -3657,6 +3706,144 @@ export async function observeCoordinatorSessionTurn(sessionId: string, response:
     statusText: response.statusText,
     headers: response.headers,
   })
+}
+
+export type CooperativeJoinResult = {
+  runId: string
+  agentId: string
+  name: string
+}
+
+/**
+ * Murmur-inspired "hi murmur" cooperative join: binds an ALREADY-EXISTING,
+ * user-driven session (opened normally in the web/TUI composer, not spawned
+ * by startProtocolRun) to a Coordinator run as a teammate — no worktree, no
+ * capability token, no independent polling loop. The session keeps its real
+ * `session_id`, so observeCoordinatorSessionTurn (already wired into both
+ * message routes) picks up any ```a2a blocks the model emits in its normal
+ * replies, exactly as it does for run-spawned agents; drainCooperativeInbox
+ * below supplies the other half — injecting pending mail before the user's
+ * next send, mirroring murmur's non-blocking poll-then-handle sequence.
+ */
+export async function joinSessionToCoordinatorRun(params: {
+  runId: string
+  sessionId: string
+  provider: ProtocolRun['provider']
+  cwd: string
+  name: string
+}): Promise<CooperativeJoinResult> {
+  const result = await enqueueWrite((db) => {
+    const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(params.runId) as Row | undefined
+    if (!runRow) throw new Error('Coordinator run not found')
+    if (!['planning', 'running', 'synthesizing', 'blocked'].includes(String(runRow.status))) {
+      throw new Error('Coordinator run is not accepting new participants')
+    }
+    const existing = db.prepare('SELECT id, name FROM protocol_agents WHERE run_id = ? AND session_id = ?')
+      .get(params.runId, params.sessionId) as Row | undefined
+    if (existing) return { runId: params.runId, agentId: String(existing.id), name: String(existing.name) }
+    const requested = params.name.trim() || 'cooperative'
+    const taken = new Set((db.prepare('SELECT name FROM protocol_agents WHERE run_id = ?').all(params.runId) as Row[])
+      .map((row) => String(row.name).toLowerCase()))
+    let name = requested
+    for (let suffix = 2; taken.has(name.toLowerCase()); suffix += 1) name = `${requested}-${suffix}`
+    const agentId = `coop-${randomUUID()}`
+    const ts = nowIso()
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.prepare(`
+        INSERT INTO protocol_agents (
+          id, run_id, name, role, provider, session_id, worktree_path, worktree_branch,
+          task_id, status, last_seen_at, created_at, updated_at
+        ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, '', NULL, 'ready', ?, ?, ?)
+      `).run(agentId, params.runId, name, params.provider, params.sessionId, params.cwd, ts, ts, ts)
+      insertEventSync(db, {
+        version: AGENT_PROTOCOL_VERSION,
+        runId: params.runId,
+        agentId,
+        type: 'agent.ready',
+        summary: `${name} joined cooperatively from an existing ${params.provider} session`,
+        timestamp: ts,
+      })
+      db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(ts, params.runId)
+      db.exec('COMMIT')
+      return { runId: params.runId, agentId, name }
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  })
+  notifyRunChanged(params.runId)
+  return result
+}
+
+/** Leaves whatever Coordinator run this session is cooperatively bound to, if any (murmur's `leave murmur`). */
+export async function leaveCoordinatorSession(sessionId: string): Promise<{ left: boolean; runId?: string }> {
+  const db = await getDatabase()
+  const row = findActiveCoordinatorAgentBySessionSync(db, sessionId)
+  if (!row) return { left: false }
+  const agent = rowToAgent(row)
+  await enqueueWrite((tx) => {
+    const ts = nowIso()
+    tx.exec('BEGIN IMMEDIATE')
+    try {
+      if (agent.taskId) {
+        tx.prepare("UPDATE protocol_tasks SET status = 'pending', owner_agent_id = NULL, updated_at = ? WHERE run_id = ? AND id = ? AND owner_agent_id = ?")
+          .run(ts, agent.runId, agent.taskId, agent.id)
+      }
+      tx.prepare("UPDATE protocol_locks SET status = 'released', updated_at = ? WHERE run_id = ? AND agent_id = ? AND status = 'active'")
+        .run(ts, agent.runId, agent.id)
+      tx.prepare("UPDATE protocol_agents SET status = 'stopped', task_id = NULL, updated_at = ? WHERE run_id = ? AND id = ?")
+        .run(ts, agent.runId, agent.id)
+      insertEventSync(tx, {
+        version: AGENT_PROTOCOL_VERSION,
+        runId: agent.runId,
+        agentId: agent.id,
+        type: 'agent.stop_work',
+        summary: `${agent.name} left cooperatively`,
+        timestamp: ts,
+      })
+      tx.exec('COMMIT')
+    } catch (err) {
+      tx.exec('ROLLBACK')
+      throw err
+    }
+  })
+  notifyRunChanged(agent.runId)
+  return { left: true, runId: agent.runId }
+}
+
+/**
+ * Non-blocking mailbox drain for a cooperatively-joined session: returns a
+ * compact text block to prepend to the user's next outgoing message, or ''
+ * if the session isn't bound to a live run or has nothing pending — mirrors
+ * murmur's `poll(timeout_ms=0)` cooperative-mode drain, done here server-side
+ * since a normal chat session has no MCP tool access to poll the room itself.
+ */
+export async function drainCooperativeInbox(sessionId: string): Promise<string> {
+  const db = await getDatabase()
+  const row = findActiveCoordinatorAgentBySessionSync(db, sessionId)
+  if (!row) return ''
+  const agent = rowToAgent(row)
+  const inbox = await enqueueWrite((tx) => {
+    const messages = takeInboxSync(tx, agent.runId, agent.id)
+    if (messages.length > 0) {
+      acknowledgeInboxSync(tx, agent.runId, agent.id, messages.map((message) => message.id))
+      tx.prepare('UPDATE protocol_agents SET last_seen_at = ? WHERE run_id = ? AND id = ?').run(nowIso(), agent.runId, agent.id)
+    }
+    return messages
+  })
+  if (inbox.length === 0) return ''
+  const roster = listAgentsSync(db, agent.runId)
+  const agentsById = new Map(roster.map((entry) => [entry.id, entry]))
+  return [
+    '',
+    `--- Coordinator room (run ${agent.runId}, you are "${agent.name}") — messages since your last turn ---`,
+    formatInbox(inbox, agentsById),
+    'Reply here in chat as normal. If the room needs to hear something back, also emit a fenced ```a2a block '
+      + '(operation "message", to the sender or "all") in this same reply — same format teammates use; it is parsed automatically.',
+    '--- end Coordinator room ---',
+    '',
+  ].join('\n')
 }
 
 /** Completion gate: reject a task.completed whose worktree changed paths outside the agent's locks. */

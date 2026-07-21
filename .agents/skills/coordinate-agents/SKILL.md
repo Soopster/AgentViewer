@@ -27,6 +27,8 @@ Communication is part of the work, not overhead. Every other participant runs in
 4. Never print, message, commit, or otherwise disclose a participant capability token. Identity is persisted in a mode-0600 file; share only the run ID with people or other CLIs.
 5. Read `coord_status` and `coord_read_inbox` immediately after entering.
 6. If setup or recovery is unclear, run `agent-viewer coord doctor --json`; inspect persistent supervisors with `coord workers`, `coord logs`, and `coord restart` rather than creating a duplicate participant.
+7. Narrate every mailbox exchange to your own terminal, one line each: `← <sender>: <message>` on receipt, `→ <recipient>: <message>` after sending. Your user is watching this terminal, not the board — a silent stretch reads as dead even mid-task.
+8. If any `coord_*` call throws (network error, timeout, daemon unreachable), wait ~2s and retry the SAME call with the SAME identity — do not re-create or re-join, and do not ask the user whether to retry; the answer is always yes. An empty or timed-out `coord_wait` result is normal and not a failure; only a thrown error means the connection actually dropped.
 
 ## Multi-agent startup invariant
 
@@ -64,7 +66,7 @@ When the participant role is `lead`:
    - explicit dependencies when another task must finish first.
 3. Match the configured checkout mode. In isolated mode, keep each external CLI in its assigned clean checkout. In shared mode, keep every write lane disjoint and make ownership explicit before editing.
 4. Keep one integration or review task for the lead when useful; make it depend on teammate lanes so the lead cannot absorb their work before they participate.
-5. Send important context or changed priorities through `coord_send_message`; do not assume another CLI sees local terminal output. Use `priority: urgent` only when it should wake a worker, `priority: status` for batchable progress, and `reply_required` for a request that must stay actionable until answered.
+5. Send important context or changed priorities through `coord_send_message`; do not assume another CLI sees local terminal output. Use `priority: urgent` only when it should wake a worker, `priority: status` for batchable progress, and `reply_required` for a request that must stay actionable until answered. Check the returned `delivery` field for each recipient's liveness (`fresh`/`stale`/`dead` + age) — if `stale` or `dead`, do not wait on a reply that may never come; escalate directly, reassign the work, or route around them.
 6. Review submitted plans promptly when plan approval is enabled.
 7. Monitor status, inbox, findings, blocked tasks, and expired or conflicting locks. Respond to blockers with a message or a new task. Requeue a wedged or failed task with `coord_release_task` so another participant can claim it.
 8. When all tasks are terminal, inspect the board, verify the requested participation count using task/finding/message evidence, reconcile findings, run any final integration checks, and call `coord_finalize_run` with a concise synthesis. If participation is short or review uncovers follow-up work, call `coord_create_task` instead — during synthesis this reopens the run.
@@ -73,12 +75,12 @@ When the participant role is `lead`:
 
 When the participant role is `teammate`:
 
-1. Drain the inbox, then atomically claim one unblocked task with `coord_claim_task`.
+1. Drain the inbox, then atomically claim one unblocked task with `coord_claim_task`. Any message flagged `replyRequired` needs a `coord_send_message` reply before other new work — the sender treats silence as dropped, not busy, not a later-priority item.
 2. Read the task outcome, dependencies, paths, and run guardrails before editing.
 3. If plan approval is required, call `coord_submit_plan` and wait for approval before modifying files.
 4. Request any additional write paths with `coord_request_locks` before editing. Stay inside granted paths.
-5. Call `coord_progress` with `working`, perform the task, and run proportionate verification.
-6. Publish reusable discoveries with `coord_publish_finding`. Add newly discovered work to the board with `coord_create_task` (any participant may create tasks). Answer reply-required mail with a `response` carrying `in_reply_to`; use typed status messages for progress that can be batched.
+5. Call `coord_progress` with `working`, perform the task, and run proportionate verification. On anything running longer than ~2 minutes, call `coord_progress(status="heartbeat")` every ~2 minutes with a one-line summary — the lead reads silence past that window as stalled, not just slow.
+6. Publish reusable discoveries with `coord_publish_finding`. Add newly discovered work to the board with `coord_create_task` (any participant may create tasks). Answer reply-required mail with a `response` carrying `in_reply_to`; use typed status messages for progress that can be batched. Check `coord_send_message`'s `delivery` field the same way the lead does — a `stale`/`dead` recipient means route around them rather than waiting.
 7. Call `coord_complete_task` only after verification. If completion is rejected, address the stated gate failure and retry (the same `request_id` is safe — rejections are never replayed from cache); never bypass the gate or claim work that was not performed.
 8. If you cannot finish a claimed task but it remains achievable, hand it back with `coord_release_task` and a reason so someone else can claim it. Call `coord_fail_task` only when the task genuinely cannot be completed, with a useful reason and recovery detail.
 9. After a provider-level failure, checkpoint and return resumable work with `coord_handoff_task` plus the classified failure. This releases locks and alerts the lead without incorrectly marking the task failed.
@@ -90,8 +92,8 @@ Repeat while the run is `planning`, `running`, or `synthesizing`:
 1. Read and acknowledge the inbox.
 2. Read status and react to the `actionable` digest — it lists claimable tasks, actionable inbox batches, urgent/status counts, unresolved reply-required requests, plans awaiting review (lead), and your own task's state, so you rarely need to diff snapshots.
 3. Perform the next role-appropriate action.
-4. Report a heartbeat or meaningful progress during long work.
-5. When no immediate action exists, call `coord_wait` with the previous cursor. Do not shell-sleep or repeatedly poll status. Your own writes do not wake your wait; it returns when another participant changes the run, with the new `events` and a fresh `actionable` digest.
+4. Report a heartbeat (`coord_progress(status="heartbeat")`) at least every ~2 minutes during long work, not just at milestones.
+5. When no immediate action exists, call `coord_wait` with the previous cursor. Do not shell-sleep or repeatedly poll status. Your own writes do not wake your wait; it returns when another participant changes the run, with the new `events` and a fresh `actionable` digest. A timed-out (empty) result is normal — call it again. If it throws instead, that is a real disconnect: wait ~2s and retry the same call, same identity.
 6. After any wait, act on `actionable` and the returned events; the snapshot is authoritative if anything is unclear.
 
 Do not end merely because the board is temporarily idle. End when the run becomes `completed`, `failed`, or `stopped`; the user interrupts; or an external prerequisite cannot be resolved after notifying the lead.
@@ -103,6 +105,15 @@ Do not end merely because the board is temporarily idle. End when the run become
 - Keep all guidance in shared-checkout terms. Do not ask participants to create, merge, clean, remove, or inspect isolated checkouts as part of this run.
 - Treat mailbox delivery as at-least-once. Supply a stable `request_id` before retrying any mutation so the Coordinator can return the original result.
 - If a participant disappears, notify the lead. Do not silently take its owned task or paths until the board releases or reassigns them.
+
+## Cooperative participants
+
+A roster entry may be an ordinary interactive chat session a user is driving by hand (joined via the app's session-level join, not a `coord_*`-equipped worker), not an autonomous worker. Its owner responds at human pace between their own turns, not on a poll loop.
+
+- Do not apply the same idle/stale escalation timing you would to an autonomous worker — a longer gap before its `last_seen_at` moves is expected, not a sign it died.
+- Still message it normally with `coord_send_message` when work needs its attention; the room's mailbox is drained automatically before its owner's next turn, and any reply it sends back arrives through the same board and mailbox as anyone else's.
+- Treat its contributions and completions the same as any other teammate's — cooperative status only changes the expected response cadence, not its standing in the run.
+- You can invite an existing plain session into the run yourself, without it needing `coord_*` tools: `POST /api/sessions/<sessionId>/coord-join` with `{"runId": "<this run>", "name": "<label>"}` against the Coordinator's base URL. `DELETE` the same path to remove it. Only use this for a session the user actually wants pulled in — it starts receiving the run's mailbox on its very next turn.
 
 ## Handoff output
 
