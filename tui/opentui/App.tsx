@@ -6314,7 +6314,10 @@ function SplitTranscriptPaneInner({
   // The focused pane trades one body row for its key hint, so the scroll
   // viewport must shrink to match or the hint pushes past the bottom border.
   const statusRowCount = (liveText || (running && tailCards.length > 0)) ? 1 : 0
-  const bodyRows = Math.max(height - 3 - statusRowCount - (focused ? 1 : 0), 3)
+  // Exact row budget, or the frame shrinks: border (2) + meta row (1) + the
+  // body box's own paddingBottom (1) + the optional live and hint rows. Getting
+  // this one row wrong made the pane render ~3 rows short of the reader.
+  const bodyRows = Math.max(height - 4 - statusRowCount - (focused ? 1 : 0), 3)
   // Count against the PERSISTED window only — live cards are additions, not
   // part of the loaded history, and would otherwise undercount what's above.
   const hiddenCount = Math.max(cards.length - persistedTailCards.length, 0)
@@ -6843,6 +6846,12 @@ export default function OpenTuiApp() {
   const readerWindowGaugeRef = useRef({ start: 0, end: 0, total: 0 })
   const sidebarScrollRef = useRef<ScrollBoxRenderable>(null)
   const sidebarBoxRef = useRef<BoxRenderable>(null)
+  // The reader box is flex-sized (flexGrow inside a stretched row), so its real
+  // height is a few rows more than the mainContentHeight arithmetic implies.
+  // Split panes must match the frame the reader actually gets, so measure it
+  // once per commit and size panes from that instead of recomputing the budget.
+  const readerBoxRef = useRef<BoxRenderable>(null)
+  const [measuredReaderBoxHeight, setMeasuredReaderBoxHeight] = useState(0)
   const pausedTranscriptScrollTopRef = useRef<number | null>(null)
   const prevFollowTailRef = useRef(true)
   // Velocity scroll: ramps the per-tick cursor step up smoothly the longer j/k/↑/↓
@@ -9021,6 +9030,16 @@ export default function OpenTuiApp() {
   ), [isPreviewMode, openTabSessions, selectedSession])
   const showTabs = tabsEnabled && visibleTabSessions.length > 0
   const showPreviewBar = false
+  // Panes are siblings of the reader COLUMN, which puts the tab strip above the
+  // reader box. Without matching that offset a pane's top border shares the tab
+  // strip's row and the two frames read as different windows.
+  const splitPaneTopOffset = (showTabs || showPreviewBar) ? 1 : 0
+  // Fall back to the arithmetic budget for the first frame, then track the
+  // reader's measured frame so both sides always end on the same row.
+  const splitPaneBoxHeight = Math.max(
+    measuredReaderBoxHeight > 0 ? measuredReaderBoxHeight : mainContentHeight - 2 - splitPaneTopOffset,
+    8,
+  )
   const TAB_BAR_HEIGHT = 1
   const streamTurnFooterText = useMemo(() => {
     if (
@@ -9073,10 +9092,12 @@ export default function OpenTuiApp() {
     if (visibleTabSessions.length === 0) return 16
     // Fill available width proportionally so tabs look natural at any count,
     // capped to avoid very wide tabs when only a few sessions are open.
-    const available = Math.max(rightPaneWidth - 6, 20)
+    // The strip spans the reader area (reader box plus any split panes), so
+    // tabs get the full width instead of being squeezed into the reader column.
+    const available = Math.max(readerAreaWidth - 6, 20)
     const fill = Math.floor(available / visibleTabSessions.length)
     return Math.max(10, Math.min(fill, 24))
-  }, [rightPaneWidth, visibleTabSessions.length])
+  }, [readerAreaWidth, visibleTabSessions.length])
   const sidebarRowBudget = Math.max(mainContentHeight - 2, 4)
   const sidebarInnerWidth = Math.max(sidebarWidth - 5, 17)
   const sidebarSortHeader = useMemo(
@@ -13004,6 +13025,14 @@ export default function OpenTuiApp() {
     if (composerActive || splitFocusIndex >= visibleSplitPaneCount) setSplitFocusIndex(null)
   }, [composerActive, splitFocusIndex, visibleSplitPaneCount])
 
+  // Track the reader box's real height. Reads after every commit (cheap
+  // property read) and only setStates when it actually changed, so a resize
+  // settles in one extra frame and idle renders don't loop.
+  useLayoutEffect(() => {
+    const measured = readerBoxRef.current?.height ?? 0
+    if (measured > 0 && measured !== measuredReaderBoxHeight) setMeasuredReaderBoxHeight(measured)
+  })
+
   // A closed composer drops its pane target, so the next send goes to the
   // reader's session unless the user aims it again.
   useEffect(() => {
@@ -16670,7 +16699,7 @@ export default function OpenTuiApp() {
           </box>
         ) : null}
 
-        <box width={rightPaneWidth} flexDirection="column">
+        <box width={readerAreaWidth} flexDirection="column">
           {showTabs ? (
             <box
               paddingX={1}
@@ -16679,7 +16708,7 @@ export default function OpenTuiApp() {
               <tab-select
                 ref={tabSelectRef}
                 options={tabOptions}
-                width={rightPaneWidth - 2}
+                width={readerAreaWidth - 2}
                 tabWidth={tabWidth}
                 backgroundColor={theme.surface2}
                 focusedBackgroundColor={theme.surface3}
@@ -16714,7 +16743,9 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
+          <box flexDirection="row" flexGrow={1}>
           <box
+            ref={readerBoxRef}
             flexGrow={1}
             border
             borderStyle="single"
@@ -16929,10 +16960,17 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
           </box>
-        </box>
 
+        {/* Split panes live in the reader's row, under the shared tab strip, so
+            every frame in this area lines up top and bottom. */}
         {splitPaneSessions.map((splitSession, splitIndex) => (
-          <box key={`split:${sessionKey(splitSession)}`} width={splitPaneWidth} overflow="hidden" marginLeft={1}>
+          <box
+            key={`split:${sessionKey(splitSession)}`}
+            width={splitPaneWidth}
+            flexDirection="column"
+            overflow="hidden"
+            marginLeft={1}
+          >
             <SplitTranscriptPane
               session={splitSession}
               paneIndex={splitIndex}
@@ -16949,7 +16987,7 @@ export default function OpenTuiApp() {
               transcriptWidth={transcriptWidth}
               transcriptView={transcriptView}
               width={splitPaneWidth}
-              height={mainContentHeight - 2}
+              height={splitPaneBoxHeight}
               liveMessages={splitPaneLiveMessages.get(sessionKey(splitSession)) ?? SPLIT_PANE_EMPTY_LIVE}
               running={splitPaneRunningKeys.has(sessionKey(splitSession))}
               // Streaming text belongs to whichever session the composer is
@@ -16966,6 +17004,8 @@ export default function OpenTuiApp() {
             />
           </box>
         ))}
+          </box>
+        </box>
 
         {taskPanelOpen ? (
           <box width={taskPanelWidth} overflow="hidden" marginLeft={1}>
