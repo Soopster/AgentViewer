@@ -23,6 +23,10 @@ type Props = {
   onClose: () => void
   onKeyHandlerReady: (handler: (key: FileViewerKeyEvent) => void) => void
   onInsertPath?: (path: string) => void
+  // When provided the popover acts as a folder picker: Enter (or `o`) chooses a
+  // directory and closes instead of previewing files. Files stay browsable but
+  // are not selectable.
+  onSelectDirectory?: (path: string) => void
   onToggleVelocityScroll: () => void
 }
 
@@ -219,8 +223,10 @@ export function FileViewerPopover({
   onClose,
   onKeyHandlerReady,
   onInsertPath,
+  onSelectDirectory,
   onToggleVelocityScroll,
 }: Props) {
+  const directorySelect = typeof onSelectDirectory === 'function'
   const initialDirectory = resolve(cwd || process.cwd())
   const [directory, setDirectory] = useState(initialDirectory)
   const [entries, setEntries] = useState<FileEntry[]>([])
@@ -309,17 +315,31 @@ export function FileViewerPopover({
     }, 0)
   }, [directory, entries])
 
+  // Descend into the highlighted directory (browse without selecting).
+  const navigateInto = useCallback(() => {
+    if (!selectedEntry || selectedEntry.kind !== 'directory') return
+    setDirectory(selectedEntry.path)
+    setFilter('')
+    setPreviewFocused(false)
+  }, [selectedEntry])
+
   const enterSelected = useCallback(() => {
     if (!selectedEntry) return
+    if (directorySelect) {
+      // Folder-picker mode: Enter chooses the highlighted directory.
+      if (selectedEntry.kind === 'directory') {
+        onSelectDirectory?.(selectedEntry.path)
+        onClose()
+      }
+      return
+    }
     if (selectedEntry.kind === 'directory') {
-      setDirectory(selectedEntry.path)
-      setFilter('')
-      setPreviewFocused(false)
+      navigateInto()
     } else if (onInsertPath) {
       onInsertPath(selectedEntry.path)
       onClose()
     }
-  }, [onClose, onInsertPath, selectedEntry])
+  }, [directorySelect, navigateInto, onClose, onInsertPath, onSelectDirectory, selectedEntry])
 
   const velocityScrollStep = useCallback((direction: -1 | 1): number => {
     if (!velocityScrollEnabled) return 1
@@ -372,12 +392,21 @@ export function FileViewerPopover({
       return
     }
     if (key.sequence === 'r') { setRefreshVersion((value) => value + 1); return }
+    // Folder-picker mode: `o` chooses the directory currently being browsed.
+    if (directorySelect && key.sequence === 'o') { onSelectDirectory?.(directory); onClose(); return }
     if (key.name === 'left' || key.sequence === 'h' || key.name === 'backspace') {
       if (previewExpanded) setPreviewExpanded(false)
       else goParent()
       return
     }
-    if (key.name === 'right' || key.sequence === 'l' || key.name === 'return') { enterSelected(); return }
+    // In folder-picker mode l/→ still descends so subfolders stay reachable;
+    // Enter is reserved for choosing the highlighted directory.
+    if (key.name === 'right' || key.sequence === 'l') {
+      if (directorySelect) navigateInto()
+      else enterSelected()
+      return
+    }
+    if (key.name === 'return') { enterSelected(); return }
     const direction = key.name === 'up' || key.sequence === 'k' ? -1 : key.name === 'down' || key.sequence === 'j' ? 1 : 0
     if (direction !== 0) {
       if (previewFocused) previewScrollRef.current?.scrollBy(direction * velocityScrollStep(direction))
@@ -390,7 +419,7 @@ export function FileViewerPopover({
     if (key.sequence === 'G') previewFocused
       ? previewScrollRef.current?.scrollTo(Number.MAX_SAFE_INTEGER)
       : setCursor(Math.max(0, filteredEntries.length - 1))
-  }, [enterSelected, filterMode, filteredEntries.length, goParent, onClose, onToggleVelocityScroll, preview, previewExpanded, previewFocused, velocityScrollStep])
+  }, [directory, directorySelect, enterSelected, filterMode, filteredEntries.length, goParent, navigateInto, onClose, onSelectDirectory, onToggleVelocityScroll, preview, previewExpanded, previewFocused, velocityScrollStep])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
 
@@ -419,7 +448,7 @@ export function FileViewerPopover({
       borderColor={theme.cyan}
       backgroundColor={theme.surface}
       flexDirection="column"
-      title=" Files "
+      title={directorySelect ? ' Choose folder ' : ' Files '}
       titleColor={theme.cyan}
     >
       <box height={1} paddingX={1} backgroundColor={theme.surface2}>
@@ -527,7 +556,11 @@ export function FileViewerPopover({
       <box height={1} paddingX={1} backgroundColor={theme.surface2}>
         <text wrapMode="none">
           <span fg={filterMode ? theme.amber : theme.cyan}>{filterMode ? `/${filter}` : 'j/k'}</span>
-          <span fg={theme.muted}>{filterMode ? '  type to filter · enter accept · esc clear' : ` move  h/l open  / filter  . hidden  s sort  tab preview  e ${previewExpanded ? 'restore' : 'expand'}  V velocity  q close`}</span>
+          <span fg={theme.muted}>{filterMode
+            ? '  type to filter · enter accept · esc clear'
+            : directorySelect
+              ? ` move  l open  enter choose dir  o choose here  / filter  . hidden  q cancel`
+              : ` move  h/l open  / filter  . hidden  s sort  tab preview  e ${previewExpanded ? 'restore' : 'expand'}  V velocity  q close`}</span>
           {!filterMode ? <span fg={velocityScrollEnabled ? theme.green : theme.dim}>{`  [${sortMode} · vel ${velocityScrollEnabled ? 'on' : 'off'}]`}</span> : null}
         </text>
       </box>

@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { GitPopover } from './GitPopover'
 import { PullRequestPopover } from './PullRequestPopover'
 import { FileViewerPopover } from './FileViewerPopover'
+import { NewSessionModal, NEW_SESSION_PROVIDERS } from './NewSessionModal'
 import { AnalyticsPopover } from './AnalyticsPopover'
 import { HandoffBriefPopover } from './HandoffBriefPopover'
 import { PromptLibraryPopover } from './PromptLibraryPopover'
@@ -6574,6 +6575,14 @@ export default function OpenTuiApp() {
   const pullRequestKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   const [fileViewerOpen, setFileViewerOpen] = useState(false)
   const fileViewerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
+  // New agent session modal: pick a folder (via the file picker in folder-select
+  // mode) and provider before creating, instead of defaulting to the viewed cwd.
+  const [newSessionModalOpen, setNewSessionModalOpen] = useState(false)
+  const [newSessionProvider, setNewSessionProvider] = useState<AgentProvider>('claude')
+  const [newSessionCwd, setNewSessionCwd] = useState<string>('')
+  const [newSessionBusy, setNewSessionBusy] = useState(false)
+  const [folderPickerForNewSession, setFolderPickerForNewSession] = useState(false)
+  const newSessionKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const analyticsKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null>(null)
   const [handoffBriefOpen, setHandoffBriefOpen] = useState(false)
@@ -6965,6 +6974,7 @@ export default function OpenTuiApp() {
     || coordModalOpen
     || coordBoardOpen
     || renameSessionKey
+    || newSessionModalOpen
     || providerMenuOpen
     || modelPickerOpen
     || themeMenuOpen
@@ -11005,6 +11015,69 @@ export default function OpenTuiApp() {
     setCoordModalOpen(true)
   })
 
+  const openNewSessionModal = useEffectEvent(() => {
+    const defaultProvider: AgentProvider = provider === 'all'
+      ? (selectedSession?.provider ?? 'claude')
+      : provider
+    setNewSessionProvider(NEW_SESSION_PROVIDERS.includes(defaultProvider) ? defaultProvider : 'claude')
+    setNewSessionCwd(selectedSession?.cwd ?? process.cwd())
+    setNewSessionBusy(false)
+    setFolderPickerForNewSession(false)
+    setNewSessionModalOpen(true)
+  })
+
+  const cycleNewSessionProvider = useEffectEvent((direction: 1 | -1) => {
+    setNewSessionProvider((current) => {
+      const index = Math.max(0, NEW_SESSION_PROVIDERS.indexOf(current))
+      const next = (index + direction + NEW_SESSION_PROVIDERS.length) % NEW_SESSION_PROVIDERS.length
+      return NEW_SESSION_PROVIDERS[next]!
+    })
+  })
+
+  const openNewSessionFolderPicker = useEffectEvent(() => {
+    setFolderPickerForNewSession(true)
+    setFileViewerOpen(true)
+  })
+
+  const handleNewSessionFolderSelected = useEffectEvent((path: string) => {
+    setNewSessionCwd(path)
+    setFileViewerOpen(false)
+    setFolderPickerForNewSession(false)
+  })
+
+  const submitNewSession = useEffectEvent(() => {
+    if (newSessionBusy) return
+    const targetProvider = newSessionProvider
+    const cwd = newSessionCwd.trim() || process.cwd()
+    setNewSessionBusy(true)
+    void (async () => {
+      try {
+        const result = await createTuiSession({ provider: targetProvider, cwd })
+        const draft: Session = {
+          sessionId: result.sessionId,
+          provider: result.provider,
+          cwd: result.cwd,
+          createdAt: Date.now(),
+          lastModified: Date.now(),
+          summary: 'New session',
+          isPending: result.isPending,
+        }
+        setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
+        setSelectedSessionKey(sessionKey(draft))
+        await refreshSessions(provider, true, false)
+        setNewSessionModalOpen(false)
+        setComposerActive(true)
+        showNotice('info', result.isPending
+          ? `New ${formatProviderLabel(result.provider)} session ready — first message will create it.`
+          : 'New session created.')
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to create session')
+      } finally {
+        setNewSessionBusy(false)
+      }
+    })()
+  })
+
   const copyCoordinationJoinCommand = useEffectEvent((runId: string) => {
     const attachUrl = process.env.AGENT_VIEWER_ATTACH?.trim().replace(/\/+$/, '') || 'http://127.0.0.1:3000'
     const command = `agent-viewer coord worker --join ${runId} --name <name> --provider codex --attach ${attachUrl}`
@@ -14691,6 +14764,11 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (newSessionModalOpen) {
+      handled(() => { newSessionKeyHandlerRef.current?.(key) })
+      return
+    }
+
     if (analyticsOpen) {
       handled(() => { analyticsKeyHandlerRef.current?.(key) })
       return
@@ -16099,35 +16177,7 @@ export default function OpenTuiApp() {
     }
 
     if (sequence === 'N' && !composerActive && normalizedSearchQuery.length === 0) {
-      handled(() => {
-        const targetProvider = provider === 'all'
-          ? (selectedSession?.provider ?? 'claude')
-          : provider
-        const cwd = selectedSession?.cwd ?? process.cwd()
-        void (async () => {
-          try {
-            const result = await createTuiSession({ provider: targetProvider, cwd })
-            const draft: Session = {
-              sessionId: result.sessionId,
-              provider: result.provider,
-              cwd: result.cwd,
-              createdAt: Date.now(),
-              lastModified: Date.now(),
-              summary: 'New session',
-              isPending: result.isPending,
-            }
-            setOpenTabSessions((prev) => prev.some((s) => sessionKey(s) === sessionKey(draft)) ? prev : [...prev, draft])
-            setSelectedSessionKey(sessionKey(draft))
-            await refreshSessions(provider, true, false)
-            setComposerActive(true)
-            showNotice('info', result.isPending
-              ? `New ${formatProviderLabel(result.provider)} session ready — first message will create it.`
-              : 'New session created.')
-          } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to create session')
-          }
-        })()
-      })
+      handled(() => openNewSessionModal())
       return
     }
 
@@ -18031,13 +18081,16 @@ export default function OpenTuiApp() {
 
       {fileViewerOpen ? (
         <FileViewerPopover
-          cwd={gitRepoCwd}
+          cwd={folderPickerForNewSession ? (newSessionCwd || gitRepoCwd) : gitRepoCwd}
           theme={theme}
           width={width}
           height={height}
           syntaxStyle={handoffBriefSyntaxStyle}
           velocityScrollEnabled={velocityScrollEnabled}
-          onClose={() => setFileViewerOpen(false)}
+          onClose={() => {
+            setFileViewerOpen(false)
+            setFolderPickerForNewSession(false)
+          }}
           onKeyHandlerReady={(handler) => { fileViewerKeyHandlerRef.current = handler }}
           onToggleVelocityScroll={() => {
             setVelocityScrollEnabled((current) => {
@@ -18046,11 +18099,40 @@ export default function OpenTuiApp() {
               return next
             })
           }}
-          onInsertPath={(path) => {
+          onSelectDirectory={folderPickerForNewSession ? handleNewSessionFolderSelected : undefined}
+          onInsertPath={folderPickerForNewSession ? undefined : (path) => {
             insertComposerTextAtCursor(`@${path} `)
             setComposerActive(true)
             showNotice('info', 'File added to composer')
           }}
+        />
+      ) : null}
+
+      {newSessionModalOpen && !folderPickerForNewSession ? (
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width={width}
+          height={height}
+          backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+          zIndex={51}
+        />
+      ) : null}
+
+      {newSessionModalOpen && !folderPickerForNewSession ? (
+        <NewSessionModal
+          theme={theme}
+          width={width}
+          height={height}
+          provider={newSessionProvider}
+          cwd={newSessionCwd}
+          busy={newSessionBusy}
+          onCycleProvider={cycleNewSessionProvider}
+          onBrowseFolder={openNewSessionFolderPicker}
+          onCreate={submitNewSession}
+          onClose={() => setNewSessionModalOpen(false)}
+          onKeyHandlerReady={(handler) => { newSessionKeyHandlerRef.current = handler }}
         />
       ) : null}
 
