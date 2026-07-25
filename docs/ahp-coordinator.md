@@ -47,3 +47,15 @@ AHP is transport-agnostic. Agent Viewer supports newline-framed stdio, a
 newline-framed TCP stream (`--listen`), and standard WebSocket message frames
 (`--ws`). The protocol engine is independent of the transport, so every mode
 shares the same request and notification behavior.
+
+`agent-viewer web` starts a WebSocket host by default on the web port plus one.
+The MCP bridge and autonomous Coordinator worker keep one AHP connection open
+and send their `coord_*` operations through the namespaced
+`agent-viewer/coordinator` request method. Its payload is handled by the same
+capability, idempotency, and persistence dispatcher as the compatibility HTTP
+route. Generic AHP clients can ignore this extension and continue using the
+standard session projection.
+
+Set `AGENT_VIEWER_AHP_URL` when the AHP socket is not on the derived port. Set
+`AGENT_VIEWER_COORD_TRANSPORT=http` to opt into the legacy HTTP transport, or
+start the web daemon with `--no-ahp` when no Coordinator clients will use AHP.

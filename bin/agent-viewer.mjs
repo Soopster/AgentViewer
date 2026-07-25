@@ -14,12 +14,33 @@ function parseArgs(rawArgs) {
   let legacy = false
   let attach
   let identity
+  let ahpPort
+  let noAhp = false
 
   for (let i = 0; i < rawArgs.length; i += 1) {
     const arg = rawArgs[i]
 
     if (arg === '--legacy' || arg === '-l') {
       legacy = true
+      continue
+    }
+
+    if (arg === '--no-ahp') {
+      noAhp = true
+      continue
+    }
+
+    if (arg === '--ahp-port') {
+      const next = rawArgs[i + 1]
+      if (next && !next.startsWith('-')) {
+        ahpPort = next
+        i += 1
+        continue
+      }
+    }
+
+    if (arg.startsWith('--ahp-port=')) {
+      ahpPort = arg.slice('--ahp-port='.length)
       continue
     }
 
@@ -73,7 +94,7 @@ function parseArgs(rawArgs) {
     forwarded.push(arg)
   }
 
-  return { forwarded, port, legacy, attach, identity }
+  return { forwarded, port, legacy, attach, identity, ahpPort, noAhp }
 }
 
 function normalizeAttachUrl(attach) {
@@ -101,6 +122,8 @@ Modes:
 Options:
   -l, --legacy         Launch the legacy Ink terminal app
   -p, --port <port>    Use a custom port in web mode
+  --ahp-port <port>    AHP WebSocket port in web mode (default: web port + 1)
+  --no-ahp             Disable the default AHP Coordinator sidecar
   -a, --attach <url>   Connect the TUI or MCP bridge to an \`agent-viewer web\` daemon
                        (e.g. --attach 3000 or --attach http://127.0.0.1:3000).
                        Turns run in the daemon and survive TUI restarts.
@@ -134,6 +157,26 @@ function trackExit(child) {
   child.on('exit', (code, signal) => {
     process.exitCode = code ?? (signal ? 1 : 0)
   })
+}
+
+function superviseChildren(children) {
+  let stopping = false
+  const stop = (signal = 'SIGTERM') => {
+    if (stopping) return
+    stopping = true
+    for (const child of children) {
+      if (child.exitCode === null && child.signalCode === null) child.kill(signal)
+    }
+  }
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => stop(signal))
+  }
+  for (const child of children) {
+    child.on('exit', (code, signal) => {
+      process.exitCode ??= code ?? (signal ? 1 : 0)
+      stop()
+    })
+  }
 }
 
 function getCaseInsensitiveEnvValue(name) {
@@ -303,7 +346,7 @@ if (command === '-h' || command === '--help' || command === 'help') {
   forwardSignals(child)
   trackExit(child)
 } else if (command === 'web') {
-  const { forwarded, port, legacy } = parseArgs(args.slice(1))
+  const { forwarded, port, legacy, ahpPort, noAhp } = parseArgs(args.slice(1))
   if (legacy) {
     const entrypoint = fileURLToPath(new URL('../tui/main.tsx', import.meta.url))
     const child = spawn(process.execPath, ['--import', 'tsx', entrypoint, ...forwarded], {
@@ -332,8 +375,38 @@ if (command === '-h' || command === '--help' || command === 'help') {
       throw error
     })
 
-    forwardSignals(child)
-    trackExit(child)
+    if (noAhp || process.env.AGENT_VIEWER_COORD_TRANSPORT?.trim().toLowerCase() === 'http') {
+      forwardSignals(child)
+      trackExit(child)
+    } else {
+      const bunLauncher = resolveBunLauncher()
+      if (!bunLauncher.command) {
+        child.kill('SIGTERM')
+        failMissingBun()
+      } else {
+        const webPort = Number(port || process.env.PORT || 3000)
+        const resolvedAhpPort = Number(ahpPort || process.env.AGENT_VIEWER_AHP_PORT || webPort + 1)
+        if (!Number.isSafeInteger(resolvedAhpPort) || resolvedAhpPort < 1 || resolvedAhpPort > 65535) {
+          child.kill('SIGTERM')
+          throw new Error(`Invalid AHP port: ${ahpPort || process.env.AGENT_VIEWER_AHP_PORT}`)
+        }
+        const ahpEntrypoint = fileURLToPath(new URL('./agent-viewer-ahp.ts', import.meta.url))
+        const ahp = spawn(
+          bunLauncher.command,
+          [...bunLauncher.args, 'run', ahpEntrypoint, '--ws', `127.0.0.1:${resolvedAhpPort}`],
+          { stdio: 'inherit' },
+        )
+        ahp.on('error', (error) => {
+          child.kill('SIGTERM')
+          if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+            failMissingBun()
+            return
+          }
+          throw error
+        })
+        superviseChildren([child, ahp])
+      }
+    }
   }
 } else if (args.includes('--legacy') || args.includes('-l')) {
   const { forwarded } = parseArgs(args)

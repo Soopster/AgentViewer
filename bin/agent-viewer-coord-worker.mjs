@@ -10,6 +10,12 @@ import {
   workerLogPath,
   writeWorkerRecord,
 } from './agent-viewer-coord-state.mjs'
+import {
+  CoordinatorAhpClient,
+  coordinatorTransport,
+} from './agent-viewer-ahp-client.mjs'
+
+const ahpClients = new Map()
 
 function usage(message) {
   if (message) console.error(message)
@@ -54,6 +60,17 @@ function normalizeUrl(value) {
 }
 
 async function api(baseUrl, action, body, timeoutMs = 65_000) {
+  if (coordinatorTransport() === 'ahp') {
+    let client = ahpClients.get(baseUrl)
+    if (!client) {
+      client = new CoordinatorAhpClient({
+        attachUrl: baseUrl,
+        title: 'Agent Viewer Coordinator worker',
+      })
+      ahpClients.set(baseUrl, client)
+    }
+    return client.request(action, body, timeoutMs)
+  }
   const response = await fetch(`${baseUrl}/api/agent-protocol/external`, {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },

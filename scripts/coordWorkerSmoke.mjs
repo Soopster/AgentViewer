@@ -7,6 +7,8 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
+process.env.AGENT_VIEWER_COORD_TRANSPORT = 'http'
+
 const testDir = await mkdtemp(path.join(tmpdir(), 'agent-viewer-coord-worker-'))
 const fakeCodex = path.join(testDir, 'fake-codex.mjs')
 const failingCodex = path.join(testDir, 'failing-codex.mjs')

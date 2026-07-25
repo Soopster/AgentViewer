@@ -533,6 +533,28 @@ const websocketInitialized = await websocketClient.initialize({
 assert.equal(websocketInitialized.protocolVersion, '0.6.0')
 assert.equal(websocketInitialized.snapshots[0]?.resource, 'ahp-root://')
 await websocketClient.shutdown()
+
+// The MCP bridge and autonomous worker use this persistent AHP extension by
+// default for Coordinator commands. Exercise their shared client against the
+// real WebSocket host, including participant capability binding.
+const { CoordinatorAhpClient } = await import('../bin/agent-viewer-ahp-client.mjs')
+const coordinatorClient = new CoordinatorAhpClient({
+  attachUrl: `http://127.0.0.1:${websocketPort - 1}`,
+  clientId: 'default-coordinator-transport',
+  title: 'Default Coordinator transport smoke',
+})
+const transportRun = await coordinatorClient.request('create_run', {
+  prompt: 'Verify the default AHP Coordinator transport',
+  cwd: testCwd,
+  provider: 'codex',
+  name: 'transport-smoke',
+  client: { name: 'transport-smoke', protocolVersion: 2 },
+  capabilities: { sessionResume: true, tools: ['coord_*'] },
+})
+assert.equal(transportRun.participant.capabilities.ahpClientId, 'default-coordinator-transport')
+const transportStatus = await coordinatorClient.request('status', transportRun.participant)
+assert.equal(transportStatus.snapshot.run.id, transportRun.participant.runId)
+coordinatorClient.close()
 websocketHost.kill('SIGTERM')
 assert.equal(await new Promise<number | null>((resolve) => websocketHost.once('exit', resolve)), 0)
 

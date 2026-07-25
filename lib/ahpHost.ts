@@ -24,6 +24,7 @@ import {
   readProtocolRun,
   resumeExternalProtocolParticipant,
 } from './agentCoordination'
+import { executeExternalCoordinatorAction } from './agentCoordinationExternal'
 import {
   AHP_COORDINATOR_META_KEY,
   AHP_ROOT_CHANNEL,
@@ -49,6 +50,7 @@ import {
 import { AhpTerminalError, AhpTerminalManager } from './ahpTerminals'
 
 export const AHP_PROTOCOL_VERSIONS = ['0.7.0', '0.6.0'] as const
+export const AHP_COORDINATOR_REQUEST_METHOD = 'agent-viewer/coordinator'
 const REPLAY_LIMIT = 1_000
 const AHP_STATE_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
 const AHP_CLIENTS_FILE = path.join(AHP_STATE_DIR, 'ahp-clients.json')
@@ -608,6 +610,7 @@ export class CoordinatorAhpConnection {
     await this.host.refresh()
 
     if (method === 'subscribe') return this.subscribe(params)
+    if (method === AHP_COORDINATOR_REQUEST_METHOD) return this.coordinatorRequest(params)
     if (method === 'listSessions') return this.listSessions(params)
     if (method === 'createSession') return this.createSession(params)
     if (method === 'disposeSession') return this.disposeSession(params)
@@ -704,6 +707,51 @@ export class CoordinatorAhpConnection {
       defaultDirectory: pathToFileURL(process.cwd()).href,
       snapshots,
     }
+  }
+
+  private async coordinatorRequest(params: Record<string, unknown>): Promise<unknown> {
+    requireRootChannel(params)
+    const action = text(params.action)
+    const payload = params.payload && typeof params.payload === 'object' && !Array.isArray(params.payload)
+      ? params.payload as Record<string, unknown>
+      : {}
+    const client = payload.client && typeof payload.client === 'object' && !Array.isArray(payload.client)
+      ? payload.client as Record<string, unknown>
+      : {}
+    const capabilities = payload.capabilities && typeof payload.capabilities === 'object' && !Array.isArray(payload.capabilities)
+      ? payload.capabilities as Record<string, unknown>
+      : {}
+    const result = await executeExternalCoordinatorAction({
+      ...payload,
+      action,
+      client: {
+        ...client,
+        name: text(client.name) || this.clientName,
+        protocolVersion: Number(client.protocolVersion) || 2,
+      },
+      capabilities: {
+        ...capabilities,
+        ahpClientId: this.clientId,
+        sessionResume: capabilities.sessionResume !== false,
+      },
+    })
+    if (['create_run', 'join_run', 'resume'].includes(action)) {
+      const participant = result && typeof result === 'object' && !Array.isArray(result)
+        ? (result as Record<string, unknown>).participant
+        : null
+      if (participant && typeof participant === 'object' && !Array.isArray(participant)) {
+        const candidate = participant as Record<string, unknown>
+        const runId = text(candidate.runId)
+        const agentId = text(candidate.agentId)
+        const token = text(candidate.token)
+        if (runId && agentId && token) {
+          this.identities.set(runId, { runId, agentId, token })
+          await this.remember()
+        }
+      }
+    }
+    await this.host.refresh()
+    return result
   }
 
   private async reconnect(params: Record<string, unknown>): Promise<unknown> {

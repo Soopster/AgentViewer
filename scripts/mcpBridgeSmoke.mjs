@@ -136,7 +136,11 @@ const transport = new StdioClientTransport({
   command: process.execPath,
   args: [launcher, 'mcp', '--attach', String(address.port)],
   stderr: 'pipe',
-  env: { ...process.env, AGENT_VIEWER_COORD_IDENTITY_FILE: leadIdentityFile },
+  env: {
+    ...process.env,
+    AGENT_VIEWER_COORD_IDENTITY_FILE: leadIdentityFile,
+    AGENT_VIEWER_COORD_TRANSPORT: 'http',
+  },
 })
 const client = new Client({ name: 'agent-viewer-mcp-smoke', version: '1.0.0' })
 
@@ -230,7 +234,11 @@ try {
     command: process.execPath,
     args: [launcher, 'mcp', '--attach', String(address.port)],
     stderr: 'pipe',
-    env: { ...process.env, AGENT_VIEWER_COORD_IDENTITY_FILE: teammateIdentityFile },
+    env: {
+      ...process.env,
+      AGENT_VIEWER_COORD_IDENTITY_FILE: teammateIdentityFile,
+      AGENT_VIEWER_COORD_TRANSPORT: 'http',
+    },
   })
   const secondClient = new Client({ name: 'agent-viewer-mcp-smoke-claude', version: '1.0.0' })
   try {

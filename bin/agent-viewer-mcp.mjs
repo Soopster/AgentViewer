@@ -6,6 +6,10 @@ import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
+import {
+  CoordinatorAhpClient,
+  coordinatorTransport,
+} from './agent-viewer-ahp-client.mjs'
 
 const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 const EXTERNAL_COORD_PROTOCOL_VERSION = 2
@@ -16,6 +20,10 @@ const baseUrl = normalizeBaseUrl(
     ?? 'http://127.0.0.1:3000',
 )
 const bridgeCwd = process.env.CLAUDE_PROJECT_DIR?.trim() || process.cwd()
+const ahpClient = new CoordinatorAhpClient({
+  attachUrl: baseUrl,
+  title: 'Agent Viewer MCP bridge',
+})
 let coordinatorCursor = null
 let coordinatorIdentityFile = process.env.AGENT_VIEWER_COORD_IDENTITY_FILE?.trim() || null
 let coordinatorIdentity = (() => {
@@ -177,14 +185,16 @@ async function coordinatorRequest(action, payload = {}, requireIdentity = true) 
   if (requireIdentity && !coordinatorIdentity) {
     throw new Error('Join, create, or resume a Coordinator run before using participant tools')
   }
-  const result = await requestJson('/api/agent-protocol/external', {
-    method: 'POST',
-    body: JSON.stringify({
-      action,
-      ...(coordinatorIdentity ?? {}),
-      ...payload,
-    }),
-  }, action === 'wait' ? 65_000 : 10_000)
+  const body = {
+    ...(coordinatorIdentity ?? {}),
+    ...payload,
+  }
+  const result = coordinatorTransport() === 'http'
+    ? await requestJson('/api/agent-protocol/external', {
+        method: 'POST',
+        body: JSON.stringify({ action, ...body }),
+      }, action === 'wait' ? 65_000 : 10_000)
+    : await ahpClient.request(action, body, action === 'wait' ? 65_000 : 10_000)
   // status/wait return the latest event cursor; remembering it here keeps the
   // next coord_wait from waking on state this bridge has already seen.
   if (result && typeof result.cursor === 'string' && result.cursor) {
