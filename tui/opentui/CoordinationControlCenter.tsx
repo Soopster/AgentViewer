@@ -62,6 +62,7 @@ const ATTENTION_EVENTS = new Set(['agent.blocked', 'task.failed', 'lock.denied',
 const STUCK_AGENT_STATUSES = new Set(['blocked', 'failed', 'stopped'])
 const ERROR_EVENT_TYPES = new Set(['task.failed', 'agent.blocked'])
 const LIVE_AGENT_STATUSES = new Set(['ready', 'idle', 'working', 'blocked'])
+const DETAIL_BODY_ROWS = 2
 const AGENT_FRESH_MS = 90_000
 const AGENT_DEAD_MS = 5 * 60_000
 
@@ -109,6 +110,9 @@ function wrapPadded(text: string, width: number, maxLines: number): string[] {
       clipped[maxLines - 1] = `${last.slice(0, Math.max(width - 1, 0))}…`
     }
   }
+  // Always return exactly `maxLines`: a shorter body must still write the rows a
+  // longer one occupied last frame, otherwise the old text stays on screen.
+  while (clipped.length < maxLines) clipped.push('')
   return clipped.map((line) => line.padEnd(width, ' '))
 }
 
@@ -355,7 +359,11 @@ export function CoordinationControlCenter({
     verify: filteredTasks.filter((task) => taskStage(task) === 'verify'),
   }), [filteredTasks])
   const activityFooterH = 2
-  const activityDetailH = 3
+  // border-top (1) + the DETAIL header (1) + DETAIL_BODY_ROWS. Sized so the
+  // header and a two-line body both fit: at 3 the body's second line had no row
+  // to live in, so it overlapped the header — the header vanished and its
+  // coloured glyphs bled through the body text ("SupervisionGcheckpoint").
+  const activityDetailH = 2 + DETAIL_BODY_ROWS
   const eventRows = Math.max(bodyH - inspectorH - activityDetailH - 7, 3)
   const selectedEventIndex = selectedEvent ? filteredEvents.indexOf(selectedEvent) : filteredEvents.length - 1
   const visibleEvents = visibleWindow(filteredEvents, selectedEventIndex, eventRows)
@@ -490,6 +498,8 @@ export function CoordinationControlCenter({
   const selectedEventAgent = selectedEvent ? agentsById.get(selectedEvent.agentId) : undefined
   const selectedEventMessage = selectedEvent ? messageMetaByEvent.get(selectedEvent) : undefined
   const selectedEventBody = selectedEventMessage?.body ?? selectedEvent?.detail ?? selectedEvent?.summary ?? 'No detail'
+  const detailWidth = Math.max(rightW - 4, 8)
+  const detailBodyLines = wrapPadded(selectedEventBody, detailWidth, DETAIL_BODY_ROWS)
   const contextualKeys = section === 'overview'
     ? run ? 'j/k workflow · enter board · [/] switch run' : 'n create first workflow'
     : section === 'tasks'
@@ -837,10 +847,13 @@ export function CoordinationControlCenter({
             <box height={activityDetailH} paddingX={1} border={['top']} borderStyle="single" borderColor={selectedEvent ? eventTone(selectedEvent, theme) : theme.border} flexDirection="column" overflow="hidden">
               {selectedEvent ? (
                 <>
+                  {/* Both the header and every body row are padded to the same
+                      width: a shorter line must overwrite the cells the previous
+                      frame's longer line left behind, or leftovers show through. */}
                   <text fg={selectedEventMessage?.unanswered ? theme.amber : eventTone(selectedEvent, theme)} wrapMode="none">
-                    {fit(`DETAIL · ${eventClassLabel(eventClass(selectedEvent))} · ${selectedEvent.type}${selectedEventMessage?.replyRequired ? selectedEventMessage.unanswered ? ' · REPLY REQUIRED · UNANSWERED' : ' · REPLY REQUIRED · ANSWERED' : ''}`, Math.max(rightW - 4, 8))}
+                    {fit(`DETAIL · ${eventClassLabel(eventClass(selectedEvent))} · ${selectedEvent.type}${selectedEventMessage?.replyRequired ? selectedEventMessage.unanswered ? ' · REPLY REQUIRED · UNANSWERED' : ' · REPLY REQUIRED · ANSWERED' : ''}`, detailWidth).padEnd(detailWidth, ' ')}
                   </text>
-                  {wrapPadded(selectedEventBody, Math.max(rightW - 4, 8), Math.max(activityDetailH - 1, 1)).map((line, index) => (
+                  {detailBodyLines.map((line, index) => (
                     <text key={index} fg={theme.text} wrapMode="none">{line}</text>
                   ))}
                 </>

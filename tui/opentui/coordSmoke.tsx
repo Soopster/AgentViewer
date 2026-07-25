@@ -58,14 +58,20 @@ db.exec(`INSERT INTO protocol_tasks (id, run_id, title, prompt, status, owner_ag
 db.exec(`INSERT INTO protocol_events (id, run_id, agent_id, type, summary, paths_json, timestamp, created_at)
   VALUES ('ev-1', 'run-smoke', 'agent-1', 'finding', 'widget lives in src/widget', '[]', '${ts}', '${ts}')`)
 db.exec(`INSERT INTO protocol_messages (id, run_id, from_agent_id, to_agent_id, body, kind, priority, reply_required, created_at)
-  VALUES ('msg-1', 'run-smoke', 'agent-1', 'lead', 'activity event 12', 'request', 'urgent', 1, '${ts}')`)
+  VALUES ('msg-1', 'run-smoke', 'agent-1', 'lead', 'Supervision checkpoint: cc-transcript blocked, last update 2026-07-25T04:20:02Z. Review current status; leave healthy work running.', 'request', 'urgent', 1, '${ts}')`)
 db.exec(`INSERT INTO protocol_messages (id, run_id, from_agent_id, to_agent_id, body, kind, priority, reply_required, created_at, delivered_at)
   VALUES ('msg-2', 'run-smoke', 'lead', 'agent-1', 'review approved', 'response', 'normal', 0, '${ts}', '${ts}')`)
 for (let index = 2; index <= 12; index += 1) {
   const eventTs = new Date(Date.now() + index * 1000).toISOString()
   const eventType = index >= 11 ? 'message' : 'finding'
   const eventAgent = index === 11 ? 'lead' : 'agent-1'
-  const summary = index === 11 ? 'review approved' : `activity event ${index}`
+  // ev-12 carries a long summary so the DETAIL body must wrap: at the old
+  // height the second line overlapped the header and its glyphs bled through.
+  const summary = index === 11
+    ? 'review approved'
+    : index === 12
+      ? 'Supervision checkpoint: cc-transcript blocked, last update 2026-07-25T04:20:02Z. Review current status; leave healthy work running.'
+      : `activity event ${index}`
   db.exec(`INSERT INTO protocol_events (id, run_id, agent_id, type, summary, paths_json, timestamp, created_at)
     VALUES ('ev-${index}', 'run-smoke', '${eventAgent}', '${eventType}', '${summary}', '[]', '${eventTs}', '${eventTs}')`)
 }
@@ -137,6 +143,22 @@ if (missing.length > 0) {
   // process alive long after the failure.
   console.error(`Coordination board frame missing: ${missing.join(', ')}\n${captureCharFrame()}`)
   process.exit(1)
+}
+
+// A DETAIL body long enough to wrap must not evict or overlap its header. When
+// the region was one row too short the header disappeared and its coloured
+// glyphs bled through the body ("SupervisionGcheckpoint"), so assert the header
+// survives AND both wrapped lines render with their spaces intact.
+{
+  const frame = captureCharFrame()
+  if (!frame.includes('DETAIL · MSG')) {
+    console.error(`DETAIL header was evicted by a wrapping body:\n${frame}`)
+    process.exit(1)
+  }
+  if (!frame.includes('Supervision checkpoint:') || !frame.includes('cc-transcript blocked, last')) {
+    console.error(`DETAIL body did not wrap cleanly across its rows:\n${frame}`)
+    process.exit(1)
+  }
 }
 
 const frame = captureCharFrame()
