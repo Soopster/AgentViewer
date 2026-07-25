@@ -5963,6 +5963,7 @@ const SPLIT_PANE_CARD_WINDOW = 30
 const SPLIT_PANE_POLL_MS = 2500
 const SPLIT_PANE_EMPTY_NOTES: Map<string, TranscriptDiffNote> = new Map()
 const SPLIT_PANE_EMPTY_NUMBERS: Readonly<Record<string, number>> = {}
+const SPLIT_PANE_EMPTY_LIVE: ThreadedMessage[] = []
 const noopSelectCard = () => {}
 const noopSelectAgentTool = () => {}
 const noopDiffHover = () => {}
@@ -5978,6 +5979,16 @@ type SplitPaneHandle = {
   scrollByRows: (rows: number) => void
   scrollToTop: () => void
   scrollToBottom: () => void
+  // Card-level reader controls. The root dispatcher owns the keymap; the pane
+  // owns the state, so both readers behave identically without the pane having
+  // to re-implement clipboard, bookmarks or the composer.
+  moveCursor: (delta: number) => void
+  cursorToEdge: (edge: 'first' | 'last') => void
+  toggleExpandedAtCursor: () => void
+  collapseAll: () => void
+  getCursorCard: () => TuiTranscriptCard | null
+  getSession: () => Session
+  toggleBookmarkAtCursor: () => Promise<boolean>
 }
 
 type SplitTranscriptPaneProps = {
@@ -5996,6 +6007,10 @@ type SplitTranscriptPaneProps = {
   height: number
   paneIndex: number
   focused: boolean
+  // Live overlay for THIS pane's session, sliced from the app-wide live stream.
+  liveMessages: ThreadedMessage[]
+  running: boolean
+  liveText: string | null
   registerHandle: (paneIndex: number, handle: SplitPaneHandle | null) => void
   onActivate: (paneIndex: number) => void
 }
@@ -6016,6 +6031,9 @@ function SplitTranscriptPaneInner({
   height,
   paneIndex,
   focused,
+  liveMessages,
+  running,
+  liveText,
   registerHandle,
   onActivate,
 }: SplitTranscriptPaneProps) {
@@ -6026,33 +6044,6 @@ function SplitTranscriptPaneInner({
   const scrollRef = useRef<ScrollBoxRenderable>(null)
   const key = sessionKey(session)
 
-  useEffect(() => {
-    const maxScroll = (sb: ScrollBoxRenderable): number => Math.max(sb.scrollHeight - sb.viewport.height, 0)
-    const handle: SplitPaneHandle = {
-      scrollByRows: (rows) => {
-        const sb = scrollRef.current
-        if (!sb) return
-        const limit = maxScroll(sb)
-        const next = clamp(sb.scrollTop + rows, 0, limit)
-        sb.scrollTop = next
-        setFollowTail(next >= limit)
-      },
-      scrollToTop: () => {
-        const sb = scrollRef.current
-        if (!sb) return
-        sb.scrollTop = 0
-        setFollowTail(maxScroll(sb) === 0)
-      },
-      scrollToBottom: () => {
-        const sb = scrollRef.current
-        if (!sb) return
-        sb.scrollTop = maxScroll(sb)
-        setFollowTail(true)
-      },
-    }
-    registerHandle(paneIndex, handle)
-    return () => registerHandle(paneIndex, null)
-  }, [paneIndex, registerHandle])
 
   useEffect(() => {
     let cancelled = false
@@ -6092,31 +6083,226 @@ function SplitTranscriptPaneInner({
     }
   }, [key, session, density, showToolCalls])
 
-  const tailCards = useMemo(
-    () => (cards.length > SPLIT_PANE_CARD_WINDOW ? cards.slice(-SPLIT_PANE_CARD_WINDOW) : cards),
-    [cards],
+  // Tail window. A pane starts at the last SPLIT_PANE_CARD_WINDOW cards (the
+  // mount budget that keeps a pane cheap) and grows a page at a time as the
+  // reader walks back, so the whole transcript is reachable without paying for
+  // it up front.
+  const [windowSize, setWindowSize] = useState(SPLIT_PANE_CARD_WINDOW)
+  useEffect(() => { setWindowSize(SPLIT_PANE_CARD_WINDOW) }, [key])
+  const persistedTailCards = useMemo(
+    () => (cards.length > windowSize ? cards.slice(-windowSize) : cards),
+    [cards, windowSize],
   )
+  const cardCountRef = useRef(0)
+  cardCountRef.current = cards.length
 
-  // Collapsed-only display data. Bodies are truncated to the density budget and
-  // no card is ever expanded here, so this stays bounded regardless of how much
-  // markdown the transcript holds.
+  // Live overlay: the pane polls persisted state every few seconds, but a
+  // running turn streams through the app-wide live list — formatting that here
+  // is what makes a pane a real-time window instead of a stale snapshot. Live
+  // cards win over persisted ones with the same key, so the poll that finally
+  // lands the message doesn't render it twice.
+  const liveCards = useMemo(
+    () => liveMessages.map((message) => formatTranscriptCard(message, density)),
+    [liveMessages, density],
+  )
+  const tailCards = useMemo(() => {
+    if (liveCards.length === 0) return persistedTailCards
+    const liveKeys = new Set(liveCards.map((card) => card.key))
+    return [...persistedTailCards.filter((card) => !liveKeys.has(card.key)), ...liveCards]
+  }, [persistedTailCards, liveCards])
+
+  // Cursor: null means "following the tail". Set once the reader focuses this
+  // pane and moves, which is also what detaches tail-follow.
+  const [cursorKey, setCursorKey] = useState<string | null>(null)
+  const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(EMPTY_EXPANDED_KEYS)
+  const tailCardsRef = useRef<TuiTranscriptCard[]>(tailCards)
+  tailCardsRef.current = tailCards
+  const cursorKeyRef = useRef<string | null>(cursorKey)
+  cursorKeyRef.current = cursorKey
+
+  // Display data mirrors the reader's, minus search/landmarks: expansion is
+  // per-pane, so an expanded card in a pane costs only that pane's body.
   const displayData = useMemo((): CardDisplayData[] => tailCards.map((card, index) => {
-    const bodyLines = renderedBodyLines(card, false, densityState.bodyLines, false, false, false)
+    const isExpanded = expandedKeys.has(card.key)
+    const bodyLines = renderedBodyLines(card, isExpanded, densityState.bodyLines, false, false, false)
     const providerKey = card.provider ?? session.provider ?? undefined
     const isInsight = card.category === 'insight'
     return {
       landmarks: EMPTY_LANDMARKS,
       bodyLines,
-      diffView: cardDiffView(card, false),
-      codeBlockLineCounts: [],
-      headerMeta: joinMeta([card.timestamp ?? null, index === tailCards.length - 1 ? 'latest' : null]),
+      diffView: cardDiffView(card, isExpanded),
+      codeBlockLineCounts: (isExpanded && card.codeBlocks)
+        ? card.codeBlocks.map((block) => countCodeBlockLines(block.content))
+        : [],
+      headerMeta: joinMeta([
+        card.timestamp ?? null,
+        index === tailCards.length - 1 ? 'latest' : null,
+        isExpanded ? 'e collapse' : null,
+      ]),
       accent: transcriptAccent(card.role, providerKey),
       isThinkingCard: card.lines.some((line) => line.tone === 'thinking'),
       categoryEmoji: isInsight ? '✦ ' : card.category === 'technical' ? '⚒ ' : card.category === 'diff' ? '✎ ' : card.category === 'system' ? '⚙ ' : '',
       isInsight,
       markdownFallbackLines: null,
     }
-  }), [tailCards, densityState.bodyLines, session.provider])
+  }), [tailCards, expandedKeys, densityState.bodyLines, session.provider])
+
+  const sessionRef = useRef(session)
+  sessionRef.current = session
+
+  // Bookmarks are per session, so a pane loads its own set rather than
+  // borrowing the reader's — and owns the toggle so the state stays local.
+  const [bookmarkedKeys, setBookmarkedKeys] = useState<ReadonlySet<string>>(EMPTY_EXPANDED_KEYS)
+  const bookmarkedKeysRef = useRef<ReadonlySet<string>>(bookmarkedKeys)
+  bookmarkedKeysRef.current = bookmarkedKeys
+  useEffect(() => {
+    let cancelled = false
+    void readTuiSessionBookmarkIds({ sessionId: session.sessionId, provider: session.provider } as Session)
+      .then((ids) => { if (!cancelled) setBookmarkedKeys(new Set(ids)) })
+      .catch(() => { if (!cancelled) setBookmarkedKeys(EMPTY_EXPANDED_KEYS) })
+    return () => { cancelled = true }
+  }, [key, session.provider, session.sessionId])
+
+  const selectPaneCard = useCallback((cardKey: string) => {
+    setCursorKey(cardKey)
+    onActivate(paneIndex)
+  }, [onActivate, paneIndex])
+
+  // The handle is registered once per pane index; every method reads through a
+  // ref so it never goes stale as cards stream in.
+  useEffect(() => {
+    const maxScroll = (sb: ScrollBoxRenderable): number => Math.max(sb.scrollHeight - sb.viewport.height, 0)
+    const scrollTo = (position: number, follow: boolean) => {
+      const sb = scrollRef.current
+      if (!sb) return
+      sb.scrollTop = position
+      setFollowTail(follow)
+    }
+    const growWindow = () => {
+      setWindowSize((current) => (current >= cardCountRef.current ? current : current + SPLIT_PANE_CARD_WINDOW))
+    }
+    const cursorIndexNow = (): number => {
+      const list = tailCardsRef.current
+      const current = cursorKeyRef.current
+      if (!current) return list.length - 1
+      const found = list.findIndex((card) => card.key === current)
+      return found >= 0 ? found : list.length - 1
+    }
+    const handle: SplitPaneHandle = {
+      scrollByRows: (rows) => {
+        const sb = scrollRef.current
+        if (!sb) return
+        const limit = maxScroll(sb)
+        const next = clamp(sb.scrollTop + rows, 0, limit)
+        scrollTo(next, next >= limit)
+      },
+      scrollToTop: () => {
+        const sb = scrollRef.current
+        if (!sb) return
+        scrollTo(0, maxScroll(sb) === 0)
+      },
+      scrollToBottom: () => {
+        const sb = scrollRef.current
+        if (!sb) return
+        scrollTo(maxScroll(sb), true)
+      },
+      moveCursor: (delta) => {
+        const list = tailCardsRef.current
+        if (list.length === 0) return
+        const next = clamp(cursorIndexNow() + delta, 0, list.length - 1)
+        const nextCard = list[next]
+        if (!nextCard) return
+        setCursorKey(nextCard.key)
+        // Cursor at the last card means the reader is watching the tail again.
+        setFollowTail(next === list.length - 1)
+        // Walking off the top loads the previous page; the cursor is a key, so
+        // it stays on the same card while older ones appear above it.
+        if (next === 0) growWindow()
+      },
+      cursorToEdge: (edge) => {
+        const list = tailCardsRef.current
+        if (list.length === 0) return
+        const target = edge === 'first' ? list[0] : list[list.length - 1]
+        if (!target) return
+        setCursorKey(target.key)
+        setFollowTail(edge === 'last')
+        const sb = scrollRef.current
+        if (sb) scrollTo(edge === 'first' ? 0 : maxScroll(sb), edge === 'last')
+        if (edge === 'first') growWindow()
+      },
+      toggleExpandedAtCursor: () => {
+        const list = tailCardsRef.current
+        const card = list[cursorIndexNow()]
+        if (!card) return
+        setCursorKey(card.key)
+        setExpandedKeys((current) => {
+          const next = new Set(current)
+          if (next.has(card.key)) next.delete(card.key)
+          else next.add(card.key)
+          return next
+        })
+      },
+      collapseAll: () => setExpandedKeys(EMPTY_EXPANDED_KEYS),
+      getCursorCard: () => tailCardsRef.current[cursorIndexNow()] ?? null,
+      getSession: () => sessionRef.current,
+      toggleBookmarkAtCursor: async () => {
+        const card = tailCardsRef.current[cursorIndexNow()]
+        if (!card) throw new Error('No message selected')
+        if (card.key.startsWith('live-')) throw new Error('Cannot bookmark a streaming message')
+        const target = sessionRef.current
+        const adding = !bookmarkedKeysRef.current.has(card.key)
+        setBookmarkedKeys((current) => {
+          const next = new Set(current)
+          if (adding) next.add(card.key)
+          else next.delete(card.key)
+          return next
+        })
+        try {
+          const ids = await toggleTuiSessionBookmark(
+            { sessionId: target.sessionId, provider: target.provider } as Session,
+            card.key,
+            adding,
+            adding
+              ? {
+                  role: card.role,
+                  label: card.role === 'user' ? 'user' : 'assistant',
+                  preview: (card.compactSummary || card.searchText || '').replace(/\s+/g, ' ').trim().slice(0, 200) || undefined,
+                  sessionTitle: formatSessionTitle(target) || undefined,
+                  messageTimestamp: card.timestamp,
+                }
+              : undefined,
+          )
+          setBookmarkedKeys(new Set(ids))
+        } catch (err) {
+          // Roll the optimistic flip back so the gutter never lies.
+          setBookmarkedKeys((current) => {
+            const next = new Set(current)
+            if (adding) next.delete(card.key)
+            else next.add(card.key)
+            return next
+          })
+          throw err
+        }
+        return adding
+      },
+    }
+    registerHandle(paneIndex, handle)
+    return () => registerHandle(paneIndex, null)
+  }, [paneIndex, registerHandle])
+
+  // Keep the cursor card in view as the cursor moves or new cards arrive.
+  useEffect(() => {
+    if (!cursorKey) return
+    scrollRef.current?.scrollChildIntoView(`card:${cursorKey}`)
+  }, [cursorKey, tailCards])
+
+  // Losing focus hands the pane back to the live tail — a stale cursor left
+  // behind would freeze an unfocused pane's view.
+  useEffect(() => {
+    if (focused) return
+    setCursorKey(null)
+    setFollowTail(true)
+  }, [focused])
 
   const scrollbarOptions = useMemo(
     () => ({ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }),
@@ -6127,8 +6313,11 @@ function SplitTranscriptPaneInner({
   const innerWidth = Math.max(width - 4, 12)
   // The focused pane trades one body row for its key hint, so the scroll
   // viewport must shrink to match or the hint pushes past the bottom border.
-  const bodyRows = Math.max(height - (focused ? 4 : 3), 3)
-  const hiddenCount = cards.length - tailCards.length
+  const statusRowCount = (liveText || (running && tailCards.length > 0)) ? 1 : 0
+  const bodyRows = Math.max(height - 3 - statusRowCount - (focused ? 1 : 0), 3)
+  // Count against the PERSISTED window only — live cards are additions, not
+  // part of the loaded history, and would otherwise undercount what's above.
+  const hiddenCount = Math.max(cards.length - persistedTailCards.length, 0)
 
   return (
     <box
@@ -6148,10 +6337,16 @@ function SplitTranscriptPaneInner({
       }}
     >
       <box paddingX={1} flexDirection="row">
-        <text fg={accent} wrapMode="none">{focused ? '▶ ' : '● '}</text>
+        <text fg={running ? theme.green : accent} wrapMode="none">{focused ? '▶ ' : running ? '◐ ' : '● '}</text>
         <text fg={theme.dim} wrapMode="none">
           {fitText(
-            `${formatSessionProject(session)}  ·  ${cards.length} card${cards.length === 1 ? '' : 's'}${hiddenCount > 0 ? `  ·  tail ${tailCards.length}` : ''}${followTail ? '' : '  ·  paused'}`,
+            [
+              formatSessionProject(session),
+              running ? 'running' : null,
+              `${cards.length} card${cards.length === 1 ? '' : 's'}`,
+              hiddenCount > 0 ? `tail ${tailCards.length}` : null,
+              followTail ? null : 'paused',
+            ].filter(Boolean).join('  ·  '),
             Math.max(innerWidth - 2, 8),
           )}
         </text>
@@ -6178,6 +6373,13 @@ function SplitTranscriptPaneInner({
             scrollbarOptions={scrollbarOptions}
           >
             <TuiErrorBoundary>
+              {hiddenCount > 0 ? (
+                <box key="split-earlier-hint" paddingX={1}>
+                  <text fg={theme.dim} wrapMode="none">
+                    {fitText(`↑ ${hiddenCount} earlier message${hiddenCount === 1 ? '' : 's'} — k/g to load`, Math.max(innerWidth - 2, 8))}
+                  </text>
+                </box>
+              ) : null}
               {tailCards.map((card, i) => {
                 const display = displayData[i]
                 if (!display) return null
@@ -6190,13 +6392,13 @@ function SplitTranscriptPaneInner({
                     densityState={densityState}
                     syntaxStyle={syntaxStyle}
                     rightPaneWidth={width}
-                    isExpanded={false}
-                    hasCursor={false}
-                    isSelected={false}
+                    isExpanded={expandedKeys.has(card.key)}
+                    hasCursor={focused && card.key === cursorKey}
+                    isSelected={card.key === cursorKey}
                     isSearchHit={false}
                     isActiveMatch={false}
-                    bookmarked={false}
-                    onSelectCard={noopSelectCard}
+                    bookmarked={bookmarkedKeys.has(card.key)}
+                    onSelectCard={selectPaneCard}
                     thinkingMode={thinkingMode}
                     diffLayout={diffLayout}
                     imessageStyle={imessageStyle}
@@ -6233,10 +6435,19 @@ function SplitTranscriptPaneInner({
           </scrollbox>
         )}
       </box>
+      {liveText ? (
+        <box paddingX={1} height={1}>
+          <text fg={accent} wrapMode="none">{fitText(`● ${liveText.replace(/\s+/g, ' ')}`, innerWidth)}</text>
+        </box>
+      ) : running && tailCards.length > 0 ? (
+        <box paddingX={1} height={1}>
+          <Spinner label={fitText('working…', Math.max(innerWidth - 2, 8))} fg={theme.dim} />
+        </box>
+      ) : null}
       {focused ? (
         <box paddingX={1} height={1}>
           <text fg={theme.dim} wrapMode="none">
-            {fitText('j/k scroll  ⌃u/d page  g/G ends  ↵ open  esc reader', innerWidth)}
+            {fitText(running ? 'j/k card  e fold  y copy  b mark  c send  ⌃C stop  ↵ open  esc reader' : 'j/k card  e fold  y copy  b mark  Q reply  c send  ↵ open  esc reader', innerWidth)}
           </text>
         </box>
       ) : null}
@@ -6301,6 +6512,11 @@ export default function OpenTuiApp() {
   // an imperative scroll handle here so the root dispatcher can drive the
   // focused one without every pane subscribing to the key stream.
   const [splitFocusIndex, setSplitFocusIndex] = useState<number | null>(null)
+  // When the composer is opened from a focused pane it talks to THAT session:
+  // typing while looking at a pane should reach the agent you're looking at.
+  // Declared here (not derived from splitPaneSessions, which the layout
+  // computes much later) so the composer target memo can read it.
+  const [composerPaneTargetKey, setComposerPaneTargetKey] = useState<string | null>(null)
   const splitPaneHandlesRef = useRef(new Map<number, SplitPaneHandle>())
   const registerSplitPaneHandle = useEffectEvent((paneIndex: number, handle: SplitPaneHandle | null) => {
     if (handle) splitPaneHandlesRef.current.set(paneIndex, handle)
@@ -7016,7 +7232,23 @@ export default function OpenTuiApp() {
   const providerRunningSessions = useMemo(() => (
     runningSessions.filter((running) => provider === 'all' || running.provider === provider)
   ), [provider, runningSessions])
+  // The session behind the focused pane, resolved from the pins rather than the
+  // rendered pane list (which the layout computes much later). Session-scoped
+  // features read this so they follow the pane you are looking at.
+  const focusedSplitPaneSession = useMemo<Session | null>(() => {
+    if (splitFocusIndex === null) return null
+    const pinnedKey = splitPinnedKeys[splitFocusIndex]
+    if (!pinnedKey) return null
+    return openTabSessions.find((tab) => sessionKey(tab) === pinnedKey) ?? null
+  }, [splitFocusIndex, splitPinnedKeys, openTabSessions])
+
   const composerTargetSession = useMemo<Session | null>(() => {
+    // An explicit pane target wins over both the selection and running-session
+    // auto-targeting — the user aimed it at a specific pane.
+    if (composerPaneTargetKey) {
+      const pinned = openTabSessions.find((tab) => sessionKey(tab) === composerPaneTargetKey)
+      if (pinned) return pinned
+    }
     if (selectedSession) {
       const selectedIsRunning = providerRunningSessions.some((running) =>
         running.sessionId === selectedSession.sessionId && running.provider === selectedSession.provider,
@@ -7036,7 +7268,7 @@ export default function OpenTuiApp() {
     }
 
     return selectedSession
-  }, [providerRunningSessions, selectedSession, sessions])
+  }, [providerRunningSessions, selectedSession, sessions, composerPaneTargetKey, openTabSessions])
   const composerTargetSessionRef = useRef<Session | null>(null)
   useEffect(() => { composerTargetSessionRef.current = composerTargetSession }, [composerTargetSession])
   const canUseChannelBridge = Boolean(
@@ -7766,7 +7998,9 @@ export default function OpenTuiApp() {
   // null (not 'unknown') so joinMeta drops it — a session whose model we can't
   // resolve shows just its project, never a dangling "· unknown".
   const readerModel = sessionDetail?.info?.currentModel ?? null
-  const gitRepoCwd = sessionDetail?.info?.cwd ?? selectedSession?.cwd ?? null
+  // Git follows the focused split pane when there is one: the popover is
+  // cwd-scoped, and the pane you are looking at is the repo you mean.
+  const gitRepoCwd = focusedSplitPaneSession?.cwd ?? sessionDetail?.info?.cwd ?? selectedSession?.cwd ?? null
   const projectCount = useMemo(
     () => new Set(sessions.map((session) => formatSessionProject(session))).size,
     [sessions],
@@ -8693,6 +8927,41 @@ export default function OpenTuiApp() {
     ? splitPinnedSessions.slice(0, visibleSplitPaneCount)
     : []
   const rightPaneWidth = Math.max(readerAreaWidth - visibleSplitPaneCount * (splitPaneWidth + 1), 40)
+  const splitPaneKeys = splitPaneSessions.map((pane) => sessionKey(pane))
+  const splitPaneKeysSignature = splitPaneKeys.join(' ')
+  // Live slices for the split panes. The app-wide live list is already tagged
+  // by session, so a pane needs no second subscription — but each slice keeps
+  // its array identity across polls (the same trick the reader uses) so an idle
+  // pane's card pipeline bails out instead of reformatting every 2s.
+  const splitPaneLiveCacheRef = useRef(new Map<string, ThreadedMessage[]>())
+  const splitPaneLiveMessages = useMemo(() => {
+    const cache = splitPaneLiveCacheRef.current
+    const next = new Map<string, ThreadedMessage[]>()
+    for (const paneKey of splitPaneKeysSignature.split(' ')) {
+      if (!paneKey) continue
+      const filtered = liveTranscriptMessages.filter((message) => liveMessageSessionKey(message) === paneKey)
+      const prev = cache.get(paneKey)
+      if (prev && prev.length === filtered.length && prev.every((message, i) => message === filtered[i])) {
+        next.set(paneKey, prev)
+        continue
+      }
+      next.set(paneKey, filtered)
+    }
+    splitPaneLiveCacheRef.current = next
+    return next
+  }, [liveTranscriptMessages, splitPaneKeysSignature])
+
+  // Which pane sessions have a turn in flight — drives the ◐ running glyph and
+  // the working spinner, so a background agent's activity is visible without
+  // switching to its tab.
+  const splitPaneRunningKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const running of runningSessions) {
+      keys.add(`${running.provider ?? 'claude'}:${running.sessionId}`)
+    }
+    return keys
+  }, [runningSessions])
+
   const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10)
   const composerDockTextareaWidth = Math.max(width - 4, 20)
   const composerVisualLineCount = composerDraft.length === 0
@@ -8779,16 +9048,26 @@ export default function OpenTuiApp() {
   }, [selectedSessionKey, visibleTabSessions])
 
   const tabOptions = useMemo((): TabSelectOption[] => (
-    visibleTabSessions.map((s) => ({
-      name: isPreviewMode && selectedSessionKey === sessionKey(s)
-        ? `PREVIEW · ${formatSessionTitle(s)}`
-        : formatSessionTitle(s),
-      description: isPreviewMode && selectedSessionKey === sessionKey(s)
-        ? 'Preview tab'
-        : formatProviderLabel(s.provider ?? 'claude'),
-      value: sessionKey(s),
-    }))
-  ), [isPreviewMode, selectedSessionKey, visibleTabSessions])
+    visibleTabSessions.map((s) => {
+      // A tab already mounted in a split pane is marked, so the strip explains
+      // why selecting it swaps rather than opening a second copy.
+      const splitPosition = splitPinnedKeys.indexOf(sessionKey(s))
+      const inSplit = splitPosition >= 0 && splitPosition < splitPaneCount
+      return {
+        name: isPreviewMode && selectedSessionKey === sessionKey(s)
+          ? `PREVIEW · ${formatSessionTitle(s)}`
+          : inSplit
+            ? `▏${formatSessionTitle(s)}`
+            : formatSessionTitle(s),
+        description: isPreviewMode && selectedSessionKey === sessionKey(s)
+          ? 'Preview tab'
+          : inSplit
+            ? `in split pane ${splitPosition + 1}`
+            : formatProviderLabel(s.provider ?? 'claude'),
+        value: sessionKey(s),
+      }
+    })
+  ), [isPreviewMode, selectedSessionKey, visibleTabSessions, splitPinnedKeys, splitPaneCount])
 
   const tabWidth = useMemo(() => {
     if (visibleTabSessions.length === 0) return 16
@@ -10166,12 +10445,13 @@ export default function OpenTuiApp() {
     setSelectedSessionKey(sessionKey(session))
   })
 
-  const refreshDiagnostics = useEffectEvent(async () => {
-    if (!selectedSession) return
+  const refreshDiagnostics = useEffectEvent(async (sessionOverride?: Session) => {
+    const target = sessionOverride ?? selectedSession
+    if (!target) return
     setDiagnosticsLoading(true)
     setDiagnosticsError(null)
     try {
-      const data = await readTuiSessionDiagnostics(selectedSession)
+      const data = await readTuiSessionDiagnostics(target)
       setDiagnosticsSections(data.sections ?? [])
     } catch (err) {
       setDiagnosticsError(err instanceof Error ? err.message : 'Failed to load diagnostics')
@@ -10180,10 +10460,10 @@ export default function OpenTuiApp() {
     }
   })
 
-  const openDiagnostics = useEffectEvent(() => {
+  const openDiagnostics = useEffectEvent((sessionOverride?: Session) => {
     setDiagnosticsOpen(true)
     setDiagnosticsMcpIndex(0)
-    void refreshDiagnostics()
+    void refreshDiagnostics(sessionOverride)
   })
 
   const closeDiagnostics = useCallback(() => {
@@ -12724,6 +13004,12 @@ export default function OpenTuiApp() {
     if (composerActive || splitFocusIndex >= visibleSplitPaneCount) setSplitFocusIndex(null)
   }, [composerActive, splitFocusIndex, visibleSplitPaneCount])
 
+  // A closed composer drops its pane target, so the next send goes to the
+  // reader's session unless the user aims it again.
+  useEffect(() => {
+    if (!composerActive && composerPaneTargetKey !== null) setComposerPaneTargetKey(null)
+  }, [composerActive, composerPaneTargetKey])
+
   // Reconcile split-pane pins against the open tabs. This is the ONLY writer of
   // splitPinnedKeys besides the explicit \ and | commands, and it holds three
   // rules:
@@ -13054,7 +13340,7 @@ export default function OpenTuiApp() {
     if (splitFocusIndex !== null) {
       return [
         { text: `split pane ${splitFocusIndex + 1}`, fg: theme.amber },
-        { text: '  j/k scroll   ⌃u/d page   g/G ends   ↵ open as tab   ⌃B o next pane   esc reader', fg: theme.muted },
+        { text: '  j/k card   e fold   y copy   b mark   Q reply   c send   ⌃G git   D diag   ↵ open   ⌃B o next   esc reader', fg: theme.muted },
       ]
     }
     // Attention badge leads the bar whenever an agent is blocked on a human —
@@ -13099,9 +13385,13 @@ export default function OpenTuiApp() {
           // Plain reattached state renders as its own banner row (counted in
           // composerStatusBlockHeight), not through this message slot.
           : null
-  const composerTargetMessage = composerAutoTargetingRunning && composerTargetSession
-    ? `Auto-targeting running ${String(composerTargetSession.provider ?? 'claude').toUpperCase()} session ${composerTargetSession.sessionId.slice(-8)}`
-    : null
+  // An explicit pane target outranks the auto-targeting note: the user aimed
+  // this composer at a split pane and must be able to see that before sending.
+  const composerTargetMessage = composerPaneTargetKey && composerTargetSession
+    ? `Sending to split pane: ${formatSessionTitle(composerTargetSession)}`
+    : composerAutoTargetingRunning && composerTargetSession
+      ? `Auto-targeting running ${String(composerTargetSession.provider ?? 'claude').toUpperCase()} session ${composerTargetSession.sessionId.slice(-8)}`
+      : null
   const composerIdleFooterHint = useMemo(
     () => formatTuiComposerIdleHint(composerConfig.footerHintIdle, sentHistory.length),
     [composerConfig.footerHintIdle, sentHistory.length],
@@ -13410,7 +13700,7 @@ export default function OpenTuiApp() {
     void pasteTextToComposer(text)
   })
 
-  const copySelectedMessage = useEffectEvent(async () => {
+  const copySelectedMessage = useEffectEvent(async (cardOverride?: TuiTranscriptCard) => {
     const terminalSelection = terminalSelectionRef.current
     if (
       terminalSelection
@@ -13427,7 +13717,7 @@ export default function OpenTuiApp() {
       return
     }
 
-    const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
+    const card = cardOverride ?? (cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null)
     if (!card) {
       showNotice('error', 'No message selected')
       return
@@ -13445,8 +13735,8 @@ export default function OpenTuiApp() {
     }
   })
 
-  const replySelectedMessage = useEffectEvent(() => {
-    const card = cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null
+  const replySelectedMessage = useEffectEvent((cardOverride?: TuiTranscriptCard) => {
+    const card = cardOverride ?? (cursorIndex >= 0 ? visibleTranscriptCards[cursorIndex] : null)
     if (!card) {
       showNotice('error', 'No message selected')
       return
@@ -13750,6 +14040,26 @@ export default function OpenTuiApp() {
       return
     }
     focusSplitPane(Math.min(lastFocusedSplitPaneRef.current, visibleSplitPaneCount - 1))
+  })
+
+  // Aim the composer at a pane's session. The override is explicit (not implied
+  // by focus) so a send can never be misdirected by where the cursor happens to
+  // be; it clears when the composer closes.
+  const composeToSplitPaneSession = useEffectEvent((target: Session) => {
+    setComposerPaneTargetKey(sessionKey(target))
+    setComposerActive(true)
+    showNotice('info', `Composer → ${formatSessionTitle(target)}`)
+  })
+
+  // Session-scoped overlays, opened for a pane. Git is cwd-scoped and
+  // diagnostics takes a target, so both are honest here; analytics renders the
+  // reader's loaded detail, so it says so rather than showing another session's
+  // numbers under this pane's title.
+  const openSplitPaneOverlay = useEffectEvent((kind: 'git' | 'diagnostics' | 'analytics', target: Session | null) => {
+    if (!target) return
+    if (kind === 'git') { setGitOpen(true); return }
+    if (kind === 'diagnostics') { openDiagnostics(target); return }
+    showNotice('info', 'Analytics follows the reader — press ↵ to open this pane first')
   })
 
   // Promote the focused pane's session to the active tab. The pin reconciler
@@ -14962,19 +15272,77 @@ export default function OpenTuiApp() {
     // reader's cursor behind it.
     if (splitFocusIndex !== null) {
       const paneHandle = splitPaneHandlesRef.current.get(splitFocusIndex)
+      const paneSession = paneHandle?.getSession() ?? null
       const pageRows = Math.max(Math.floor(transcriptViewportRows * 0.8), 1)
       if (key.name === 'escape') { handled(focusReaderFromSplit); return }
-      if (sequence === 'j' || key.name === 'down') { handled(() => paneHandle?.scrollByRows(2)); return }
-      if (sequence === 'k' || key.name === 'up') { handled(() => paneHandle?.scrollByRows(-2)); return }
-      if (isCtrl('d')) { handled(() => paneHandle?.scrollByRows(pageRows)); return }
-      if (isCtrl('u')) { handled(() => paneHandle?.scrollByRows(-pageRows)); return }
-      if (sequence === 'G') { handled(() => paneHandle?.scrollToBottom()); return }
-      if (sequence === 'g') { handled(() => paneHandle?.scrollToTop()); return }
+      // Card navigation, not raw scrolling: the pane has a cursor, so j/k move
+      // between messages exactly like the reader.
+      if (sequence === 'j' || key.name === 'down') { handled(() => paneHandle?.moveCursor(1)); return }
+      if (sequence === 'k' || key.name === 'up') { handled(() => paneHandle?.moveCursor(-1)); return }
+      if (isCtrl('d')) { handled(() => paneHandle?.moveCursor(pageRows)); return }
+      if (isCtrl('u')) { handled(() => paneHandle?.moveCursor(-pageRows)); return }
+      if (sequence === 'G') { handled(() => paneHandle?.cursorToEdge('last')); return }
+      if (sequence === 'g') { handled(() => paneHandle?.cursorToEdge('first')); return }
+      if (sequence === 'e') { handled(() => paneHandle?.toggleExpandedAtCursor()); return }
+      if (sequence === 'f') { handled(() => paneHandle?.cursorToEdge('last')); return }
+      // Card actions reuse the reader's implementations with the pane's own
+      // card, so clipboard/bookmark/reply behave identically in both readers.
+      if (sequence === 'y') {
+        handled(() => { void copySelectedMessage(paneHandle?.getCursorCard() ?? undefined) })
+        return
+      }
+      if (sequence === 'b') {
+        handled(() => {
+          void (async () => {
+            try {
+              const added = await paneHandle?.toggleBookmarkAtCursor()
+              showNotice('info', added ? 'Bookmarked message' : 'Removed bookmark')
+            } catch (err) {
+              showNotice('error', err instanceof Error ? err.message : 'Failed to update bookmark')
+            }
+          })()
+        })
+        return
+      }
+      if (isShifted('q')) {
+        handled(() => {
+          if (paneSession) composeToSplitPaneSession(paneSession)
+          replySelectedMessage(paneHandle?.getCursorCard() ?? undefined)
+        })
+        return
+      }
+      // Composer aimed at THIS pane's agent — the point of a live split view.
+      if (sequence === 'c') {
+        handled(() => { if (paneSession) composeToSplitPaneSession(paneSession) })
+        return
+      }
+      if (sequence === 'i') { handled(() => setThinkingMode((current) => !current)); return }
       if (key.name === 'return') { handled(openFocusedSplitPane); return }
       if (key.name === 'tab') { handled(() => cycleSplitFocus(1)); return }
+      // Session-scoped overlays follow focus, so ⌃G/D/⌃A inspect the pane you
+      // are looking at rather than the reader's session.
+      if (isCtrl('g')) { handled(() => openSplitPaneOverlay('git', paneSession)); return }
+      if (sequence === 'D') { handled(() => openSplitPaneOverlay('diagnostics', paneSession)); return }
+      if (isCtrlShift('a')) { handled(openCoordinationBoard); return }
+      if (isCtrl('a')) { handled(() => openSplitPaneOverlay('analytics', paneSession)); return }
+      // ⌃C means "stop what I'm watching" when the pane's agent is mid-turn —
+      // the same key that quits an idle app must not kill the whole TUI when
+      // the obvious intent is to interrupt this run.
+      if (isCtrl('c')) {
+        handled(() => {
+          if (paneSession && splitPaneRunningKeys.has(sessionKey(paneSession)) && !paneSession.isPending) {
+            void interruptTuiSessionTurn({ sessionId: paneSession.sessionId, provider: paneSession.provider })
+              .then(() => showNotice('info', `Interrupted ${formatSessionTitle(paneSession)}`))
+              .catch((err) => showNotice('error', err instanceof Error ? err.message : 'Failed to interrupt'))
+            return
+          }
+          requestExit()
+        })
+        return
+      }
       // Quit and the help palette stay reachable; the rest is inert while a
       // pane holds focus, so no reader state changes invisibly behind it.
-      if ((key.name === 'q' && !key.shift) || isCtrl('c')) { handled(requestExit); return }
+      if (key.name === 'q' && !key.shift) { handled(requestExit); return }
       if (sequence === '?') {
         handled(() => {
           setCommandPaletteIndex(0)
@@ -16582,6 +16950,18 @@ export default function OpenTuiApp() {
               transcriptView={transcriptView}
               width={splitPaneWidth}
               height={mainContentHeight - 2}
+              liveMessages={splitPaneLiveMessages.get(sessionKey(splitSession)) ?? SPLIT_PANE_EMPTY_LIVE}
+              running={splitPaneRunningKeys.has(sessionKey(splitSession))}
+              // Streaming text belongs to whichever session the composer is
+              // sending to; show it in the pane when that's this pane.
+              liveText={
+                composerSendState === 'sending'
+                && composerLiveText
+                && composerTargetSession
+                && sessionKey(composerTargetSession) === sessionKey(splitSession)
+                  ? composerLiveText
+                  : null
+              }
               onActivate={focusSplitPane}
             />
           </box>
