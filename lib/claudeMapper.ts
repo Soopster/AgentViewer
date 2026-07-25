@@ -41,11 +41,15 @@ function messageUsage(value: unknown): ApiMessage['usage'] | undefined {
   }
 }
 
-function toolResultBlock(value: unknown): ToolResultBlock | null {
+function toolResultBlock(value: unknown, toolResultMeta?: unknown): ToolResultBlock | null {
   const record = asObject(value)
   if (typeof record.tool_use_id !== 'string') return null
 
   const content = record.content
+  const meta = {
+    ...asObject(toolResultMeta),
+    ...(record.background === true ? { background: true } : {}),
+  }
   return {
     type: 'tool_result',
     tool_use_id: record.tool_use_id,
@@ -53,17 +57,18 @@ function toolResultBlock(value: unknown): ToolResultBlock | null {
       ? content as string | ContentBlock[]
       : stringify(content),
     is_error: record.is_error === true || record.isError === true || undefined,
+    tool_result_meta: Object.keys(meta).length > 0 ? meta : undefined,
   }
 }
 
-function toolResultBlocks(value: unknown): ToolResultBlock[] {
+function toolResultBlocks(value: unknown, toolResultMeta?: unknown): ToolResultBlock[] {
   if (Array.isArray(value)) {
     return value
-      .map(toolResultBlock)
+      .map((block) => toolResultBlock(block, toolResultMeta))
       .filter((block): block is ToolResultBlock => Boolean(block))
   }
 
-  const single = toolResultBlock(value)
+  const single = toolResultBlock(value, toolResultMeta)
   return single ? [single] : []
 }
 
@@ -81,14 +86,26 @@ function appendToolResults(content: ApiMessage['content'], results: ToolResultBl
   return [...content, ...results]
 }
 
-function normalizeApiMessage(type: 'user' | 'assistant', value: unknown, toolUseResult?: unknown): ApiMessage {
+function normalizeApiMessage(
+  type: 'user' | 'assistant',
+  value: unknown,
+  toolUseResult?: unknown,
+  toolResultMeta?: unknown,
+  envelope?: Record<string, unknown>,
+): ApiMessage {
   const record = asObject(value)
-  const content = appendToolResults(messageContent(record.content), toolResultBlocks(toolUseResult))
-  return {
+  const content = appendToolResults(messageContent(record.content), toolResultBlocks(toolUseResult, toolResultMeta))
+  const message: ApiMessage = {
     role: type,
     content,
     usage: type === 'assistant' ? messageUsage(record.usage) : undefined,
   }
+  if (envelope?.aborted === true) message.aborted = true
+  if (typeof envelope?.subagent_type === 'string') message.subagent_type = envelope.subagent_type
+  if (envelope?.subagent_retry && typeof envelope.subagent_retry === 'object' && !Array.isArray(envelope.subagent_retry)) {
+    message.subagent_retry = envelope.subagent_retry as Record<string, unknown>
+  }
+  return message
 }
 
 function normalizeSystemMessage(value: unknown, fallbackSubtype: string): SystemMessagePayload {
@@ -102,6 +119,25 @@ function normalizeSystemMessage(value: unknown, fallbackSubtype: string): System
 }
 
 function normalizeClaudeEventAsSystem(record: Record<string, unknown>): SystemMessagePayload | null {
+  if (record.type === 'result' && (
+    record.subtype !== 'success'
+    || record.api_error_status != null
+    || record.is_error === true
+    || record.terminal_reason === 'api_error'
+  )) {
+    const errors = Array.isArray(record.errors)
+      ? record.errors.filter((entry): entry is string => typeof entry === 'string').join('\n')
+      : ''
+    return {
+      type: 'system',
+      ...record,
+      subtype: 'result',
+      result_subtype: record.subtype,
+      content: errors || (record.api_error_status != null ? `Claude API error (HTTP ${record.api_error_status})` : 'Claude run ended with an error'),
+      level: 'warning',
+    }
+  }
+
   if (record.type === 'rate_limit_event') {
     const info = asObject(record.rate_limit_info)
     const status = typeof info.status === 'string' ? info.status : 'unknown'
@@ -194,7 +230,7 @@ function normalizeClaudeHistoryMessage(value: unknown): SessionMessage | null {
     requestId,
     message: type === 'system'
       ? normalizeSystemMessage(record.message, typeof payload.subtype === 'string' ? payload.subtype : 'system')
-      : normalizeApiMessage(type, record.message, record.tool_use_result),
+      : normalizeApiMessage(type, record.message, record.tool_use_result, record.tool_result_meta, record),
   }
 }
 
@@ -267,7 +303,12 @@ function normalizeClaudeStreamMessage(value: unknown): SessionMessage | null {
     }
   }
 
-  if (record.type === 'result' && record.subtype !== 'success') {
+  if (record.type === 'result' && (
+    record.subtype !== 'success'
+    || record.api_error_status != null
+    || record.is_error === true
+    || record.terminal_reason === 'api_error'
+  )) {
     return {
       type: 'system',
       uuid: record.uuid,
@@ -277,8 +318,9 @@ function normalizeClaudeStreamMessage(value: unknown): SessionMessage | null {
       timestamp: new Date().toISOString(),
       message: {
         type: 'system',
-        subtype: 'result',
         ...record,
+        subtype: 'result',
+        result_subtype: record.subtype,
         content: Array.isArray(record.errors) ? record.errors.join('\n') : 'Claude run ended with an error',
         level: 'warning',
       },

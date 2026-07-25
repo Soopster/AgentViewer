@@ -334,15 +334,25 @@ export function currentPiModelValue(model?: Model<any> | null, fallbackModel?: s
   return fallbackModel ?? null
 }
 
-export function mapPiModelsToSessionModels(models: Model<any>[], currentModel?: string): SessionModelInfo[] {
+const PI_EFFORT_LEVELS: ReasoningEffortLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+function supportedPiEffortLevels(model: Model<any>): ReasoningEffortLevel[] | undefined {
+  if (!model.reasoning) return undefined
+  return PI_EFFORT_LEVELS.filter((level) => {
+    const mapped = model.thinkingLevelMap?.[level]
+    if (mapped === null) return false
+    // Pi only exposes xhigh/max when the model catalog explicitly maps them.
+    return level !== 'xhigh' && level !== 'max' || mapped !== undefined
+  })
+}
+
+export function mapPiModelsToSessionModels(models: readonly Model<any>[], currentModel?: string): SessionModelInfo[] {
   const mapped = models.map((model) => ({
     value: encodePiModelValue({ providerID: model.provider, modelID: model.id }),
     displayName: `${model.provider} · ${model.name}`,
     description: `${model.provider}/${model.id}`,
     supportsEffort: model.reasoning,
-    supportedEffortLevels: model.reasoning
-      ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] satisfies ReasoningEffortLevel[]
-      : undefined,
+    supportedEffortLevels: supportedPiEffortLevels(model),
   }))
 
   if (mapped.length > 0) return mapped

@@ -43,6 +43,7 @@ import {
   CLAUDE_QUERY_ENV,
   createInputStream,
   effortToSdk,
+  interruptClaudeQuery,
   logClaudeSubprocessStderr,
   peekClaudeSession,
   queueClaudeReadStateSeeds,
@@ -98,7 +99,7 @@ import type {
 type CopilotReasoningEffort = Extract<ReasoningEffortLevel, 'low' | 'medium' | 'high' | 'xhigh'>
 
 import { consumeReadModelsWarmQuery, createSessionControlQuery, openPrompt } from './sdkControlQuery'
-import { acquireCopilotSession, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, setCopilotPermissionHandler } from './copilotClient'
+import { acquireCopilotSession, copilotIntegrationDiagnostics, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, setCopilotPermissionHandler } from './copilotClient'
 import { timeAsync } from './perfLog'
 import { registerDiagnosticsReporter } from './runtimeDiagnostics'
 import {
@@ -545,6 +546,44 @@ async function readClaudeSessionMessages(sessionId: string): Promise<SessionMess
   return writeMappedMessagesCache(`claude:${sessionId}`, signature, messages)
 }
 
+function claudeLatencyDiagnosticItems(rawMessages: unknown[]): string[] {
+  const results = rawMessages
+    .filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object'))
+    .filter((value) => value.type === 'result' && value.subtype === 'success')
+    .slice(-20)
+  if (results.length === 0) return ['No Claude result timing samples']
+  const samples = (key: string) => results
+    .map((result) => result[key])
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  const median = (values: number[]) => {
+    if (values.length === 0) return null
+    const sorted = [...values].sort((a, b) => a - b)
+    return sorted[Math.floor(sorted.length / 2)]
+  }
+  const formatMs = (value: number | null) => value == null ? null : `${Math.round(value)}ms`
+  const items = [`${results.length} recent result sample${results.length === 1 ? '' : 's'}`]
+  const timing: Array<[string, number]> = []
+  for (const [label, key] of [['TTFT', 'ttft_ms'], ['API', 'duration_api_ms'], ['Request', 'time_to_request_ms']] as const) {
+    const value = median(samples(key))
+    if (value != null) timing.push([label, value])
+  }
+  if (timing.length > 0) items.push(...timing.map(([label, value]) => `${label} median ${formatMs(value)}`))
+  const latest = results.at(-1)
+  if (typeof latest?.api_error_status === 'number') items.push(`Latest API status HTTP ${latest.api_error_status}`)
+  const modelUsage = latest?.modelUsage && typeof latest.modelUsage === 'object' ? latest.modelUsage as Record<string, unknown> : null
+  if (modelUsage) {
+    const models = Object.values(modelUsage).flatMap((value) => {
+      if (!value || typeof value !== 'object') return []
+      const entry = value as Record<string, unknown>
+      const model = typeof entry.canonicalModel === 'string' ? entry.canonicalModel : typeof entry.model === 'string' ? entry.model : null
+      const provider = typeof entry.provider === 'string' ? entry.provider : null
+      return model ? [provider ? `${provider}/${model}` : model] : []
+    })
+    if (models.length > 0) items.push(`Models ${[...new Set(models)].join(', ')}`)
+  }
+  return items
+}
+
 /**
  * Absolute paths the session has authoritatively observed through Claude's
  * native Read tool. Restore flows use this set to repair the resumed Query's
@@ -919,7 +958,7 @@ function parsePiDirectShell(message: string): { command: string; excludeFromCont
 
 function findPiModelByReference(
   modelReference: string,
-  models: Array<{ provider: string; id: string }>,
+  models: readonly { provider: string; id: string }[],
 ): { provider: string; id: string } | undefined {
   const trimmed = modelReference.trim()
   if (!trimmed) return undefined
@@ -3468,14 +3507,14 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
       // While a bash-mode command runs locally, interrupt kills the child
       // process instead of poking the (idle) query.
       let killBangShell: (() => void) | null = null
-      const interruptTurn = async () => {
+      const interruptTurn = async (cancelQueued = false) => {
         if (killBangShell) {
           killBangShell()
           return undefined
         }
         // On interrupt_receipt_v1 CLIs this resolves to { still_queued }: uuids
         // of queued async messages that WILL still run unless cancelled.
-        return await q.interrupt()
+        return await interruptClaudeQuery(q, cancelQueued)
       }
 
       setRunningSession(sessionId, {
@@ -3792,12 +3831,12 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
             requestId: turnRequestId,
             // While a bash-mode command runs locally, interrupt kills the child
             // process instead of poking the (idle) query.
-            interrupt: async () => {
+            interrupt: async (cancelQueued = false) => {
               if (killBangShell) {
                 killBangShell()
                 return undefined
               }
-              return await activeEntry.query.interrupt()
+              return await interruptClaudeQuery(activeEntry.query, cancelQueued)
             },
             background: () => activeEntry.query.backgroundTasks(),
             // Mid-turn user input rides the warm query's persistent input stream —
@@ -5515,7 +5554,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           throw new Error('Pi is still finishing the previous message. Wait for it to complete before sending another.')
         }
         if (selectedModel) {
-          const model = agentSession.modelRegistry.find(selectedModel.providerID, selectedModel.modelID)
+          const model = agentSession.modelRuntime.getModel(selectedModel.providerID, selectedModel.modelID)
           if (!model) {
             throw new Error(`Pi model not found: ${selectedModel.providerID}/${selectedModel.modelID}`)
           }
@@ -5556,13 +5595,13 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           const scopedModels = agentSession.scopedModels.map((entry) => entry.model)
           const availableModels = scopedModels.length > 0
             ? scopedModels
-            : agentSession.modelRegistry.getAvailable()
+            : await agentSession.modelRuntime.getAvailable()
           const modelRef = findPiModelByReference(requestedModel, availableModels)
           if (!modelRef) {
             finishPiCommand(`Pi model not found or ambiguous: ${requestedModel}.`)
             return
           }
-          const model = agentSession.modelRegistry.find(modelRef.provider, modelRef.id)
+          const model = agentSession.modelRuntime.getModel(modelRef.provider, modelRef.id)
           if (!model) {
             finishPiCommand(`Pi model not found: ${modelRef.provider}/${modelRef.id}.`)
             return
@@ -5729,6 +5768,14 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
               return
             case 'auto_retry_end':
               safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'retry_end', success: event.success, attempt: event.attempt })}\n\n`)
+              return
+            case 'summarization_retry_scheduled':
+              safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'summarization_retry_start', attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, message: event.errorMessage })}\n\n`)
+              return
+            case 'summarization_retry_attempt_start':
+              return
+            case 'summarization_retry_finished':
+              safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'summarization_retry_end' })}\n\n`)
               return
             case 'compaction_start':
               safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'compaction_start', reason: event.reason })}\n\n`)
@@ -6052,8 +6099,8 @@ export async function createNewViewSession({
  * messages that survive the interrupt (Claude interrupt_receipt_v1), or
  * undefined when the provider has no receipt.
  */
-export async function interruptViewSession(sessionId: string, turnRequestId?: string): Promise<string[] | undefined> {
-  const receipt = await interruptRunningSession(sessionId, turnRequestId)
+export async function interruptViewSession(sessionId: string, turnRequestId?: string, cancelQueued = false): Promise<string[] | undefined> {
+  const receipt = await interruptRunningSession(sessionId, turnRequestId, cancelQueued)
   const stillQueued = (receipt as { still_queued?: unknown } | undefined)?.still_queued
   return Array.isArray(stillQueued)
     ? stillQueued.filter((uuid): uuid is string => typeof uuid === 'string')
@@ -6150,7 +6197,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
       }
     }
     const agentSession = await openPiAgentSession(sessionId)
-    const availableModels = agentSession.modelRegistry.getAvailable()
+    const availableModels = await agentSession.modelRuntime.getAvailable()
     const currentModelValue = currentPiModelValue(agentSession.model, currentModel)
     const piContextUsage = agentSession.getContextUsage()
     return {
@@ -6449,6 +6496,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
         tools: tools.tools,
         currentTools: currentTools.tools ?? [],
         quotaItems,
+        integrationItems: copilotIntegrationDiagnostics(),
         metadata,
         events,
         workspacePath: session.workspacePath,
@@ -6499,12 +6547,13 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
   const q = createSessionControlQuery(sessionId)
   try {
     const init = await q.initializationResult()
-    const [commands, agents, mcpServers, contextUsage, subagents] = await Promise.all([
+    const [commands, agents, mcpServers, contextUsage, subagents, rawMessages] = await Promise.all([
       q.supportedCommands(),
       q.supportedAgents(),
       q.mcpServerStatus(),
       q.getContextUsage().catch(() => null),
       listSubagents(sessionId).catch(() => [] as string[]),
+      getSessionMessages(sessionId, { includeSystemMessages: true }).catch(() => [] as unknown[]),
     ])
     const accountItems: string[] = []
     if (init.account?.email) accountItems.push(init.account.email)
@@ -6543,6 +6592,11 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
           id: 'account',
           title: 'ACCOUNT',
           items: accountItems.length > 0 ? accountItems : ['Unknown'],
+        },
+        {
+          id: 'latency',
+          title: 'LATENCY & MODEL USAGE',
+          items: claudeLatencyDiagnosticItems(rawMessages),
         },
       ],
     }

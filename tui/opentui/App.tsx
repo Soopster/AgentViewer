@@ -11938,8 +11938,8 @@ export default function OpenTuiApp() {
         // turn doesn't look hung while it recovers (mirrors native Pi).
         if (parsedRecord.type === 'pi_status') {
           if (parsedRecord.status === 'retry_start') setLiveStatus('retrying')
-          else if (parsedRecord.status === 'compaction_start') setLiveStatus('compacting')
-          else if (parsedRecord.status === 'retry_end' || parsedRecord.status === 'compaction_end') setLiveStatus(null)
+          else if (parsedRecord.status === 'compaction_start' || parsedRecord.status === 'summarization_retry_start') setLiveStatus('compacting')
+          else if (parsedRecord.status === 'retry_end' || parsedRecord.status === 'compaction_end' || parsedRecord.status === 'summarization_retry_end') setLiveStatus(null)
           else if (parsedRecord.status === 'title_changed' && typeof parsedRecord.name === 'string') {
             const name = parsedRecord.name
             setSessionDetail((prev) => prev ? { ...prev, info: prev.info ? { ...prev.info, customTitle: name } : prev.info } : prev)

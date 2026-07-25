@@ -24,6 +24,29 @@ export type ClaudeElicitationHandler = (
 // entry (so an adopted cold Query keeps routing through it). `fn` handles tool
 // permissions; `elicit` handles MCP elicitation. Both are swapped per turn.
 export type ClaudeBridgeBox = { fn: CanUseTool | null; elicit: ClaudeElicitationHandler | null }
+
+/**
+ * Interrupt a Claude query, cancelling queued async user messages when the
+ * current CLI advertises the v1 cancellation control request. Older SDK/CLI
+ * combinations expose only Query.interrupt(), so retain that fallback.
+ */
+export async function interruptClaudeQuery(query: Query, cancelQueued = false): Promise<unknown> {
+  if (!cancelQueued) return query.interrupt()
+  const controlQuery = query as Query & {
+    request?: (request: { subtype: 'interrupt'; cancel_queued?: boolean }) => Promise<{
+      response?: { still_queued?: unknown; cancelled?: unknown }
+    }>
+  }
+  if (typeof controlQuery.request === 'function') {
+    try {
+      const response = await controlQuery.request({ subtype: 'interrupt', cancel_queued: true })
+      return response.response ?? response
+    } catch {
+      // The public method is the compatibility path for older runtimes.
+    }
+  }
+  return query.interrupt()
+}
 import type { ReasoningEffortLevel } from './types'
 import {
   broadcastClaudeMessage,

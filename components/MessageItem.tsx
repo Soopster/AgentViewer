@@ -3630,6 +3630,13 @@ function explainToolResult(result: ToolResultBlock, toolName: string, raw: strin
     : raw.trim()
       ? `${countLines(raw)} text line${countLines(raw) === 1 ? '' : 's'}`
       : 'no text output'
+  const toolMeta = result.tool_result_meta
+  const metaDetails = toolMeta && Object.keys(toolMeta).length > 0
+    ? [`Claude classified this tool result as ${Object.entries(toolMeta)
+      .filter(([, value]) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
+      .map(([key, value]) => `${key.replace(/_/g, ' ')}: ${String(value)}`)
+      .join(' · ') || 'having additional execution metadata'}.`]
+    : []
 
   if (result.is_error) {
     return {
@@ -3637,6 +3644,7 @@ function explainToolResult(result: ToolResultBlock, toolName: string, raw: strin
       details: [
         `The provider paired this result with ${resultId} and marked it with is_error.`,
         raw.trim() ? 'The visible output is the error payload returned by the tool runtime.' : 'No additional error text was returned by the tool runtime.',
+        ...metaDetails,
       ],
     }
   }
@@ -3647,6 +3655,7 @@ function explainToolResult(result: ToolResultBlock, toolName: string, raw: strin
       details: [
         `The result matched ${resultId} and contains ${outputShape}.`,
         `Read metadata identified ${formatClaudeReadKind(readSummary)} content, so the viewer renders it with file-oriented formatting instead of a generic log block.`,
+        ...metaDetails,
       ],
     }
   }
@@ -3656,6 +3665,7 @@ function explainToolResult(result: ToolResultBlock, toolName: string, raw: strin
     details: [
       `The result matched ${resultId} and was not marked as an error.`,
       hasImage ? 'The payload includes an image content block, so the viewer renders media instead of text.' : `The payload contains ${outputShape}.`,
+      ...metaDetails,
     ],
   }
 }
@@ -4548,7 +4558,13 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     }
     if (subtype === 'task_notification' && typeof payload.summary === 'string') return withRuntime(payload.summary)
     if (subtype === 'tool_progress' && typeof payload.tool_name === 'string') {
-      return withRuntime(`${payload.tool_name} · ${typeof payload.elapsed_time_seconds === 'number' ? `${payload.elapsed_time_seconds}s` : 'running'}`)
+      const retry = payload.subagent_retry && typeof payload.subagent_retry === 'object'
+        ? payload.subagent_retry as Record<string, unknown>
+        : null
+      const retryText = retry && typeof retry.attempt === 'number' && typeof retry.max_retries === 'number'
+        ? ` · retry ${retry.attempt}/${retry.max_retries}`
+        : ''
+      return withRuntime(`${payload.tool_name} · ${typeof payload.elapsed_time_seconds === 'number' ? `${payload.elapsed_time_seconds}s` : 'running'}${retryText}`)
     }
     if (subtype === 'tool_use_summary' && typeof payload.summary === 'string') return withRuntime(payload.summary)
     if (subtype === 'status' && typeof payload.status === 'string') return withRuntime(payload.status)
@@ -4705,6 +4721,12 @@ function ClaudeSystemCard({ block }: { block: ClaudeSystemBlock }) {
     if (stopReason) nextBadges.push(`stop ${stopReason}`)
     if (typeof payload.mcp_server_name === 'string') nextBadges.push(payload.mcp_server_name)
     if (typeof payload.subagent_type === 'string') nextBadges.push(payload.subagent_type)
+    if (payload.subagent_retry && typeof payload.subagent_retry === 'object') {
+      const retry = payload.subagent_retry as Record<string, unknown>
+      if (typeof retry.attempt === 'number' && typeof retry.max_retries === 'number') nextBadges.push(`retry ${retry.attempt}/${retry.max_retries}`)
+      if (typeof retry.error_status === 'number') nextBadges.push(`HTTP ${retry.error_status}`)
+      if (typeof retry.error_category === 'string') nextBadges.push(retry.error_category)
+    }
     if (typeof payload.task_type === 'string' && payload.task_type !== payload.subagent_type) nextBadges.push(payload.task_type)
     if (subtype === 'rate_limit_event' && payload.rate_limit_info && typeof payload.rate_limit_info === 'object') {
       const info = payload.rate_limit_info as Record<string, unknown>
@@ -6273,6 +6295,22 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
           >
             {roleLabel}
           </span>
+          {message.aborted && (
+            <span
+              title="Claude interrupted this assistant turn before the stream completed."
+              style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: 'var(--yellow)', background: 'rgba(234,179,8,0.1)', border: '1px solid rgba(234,179,8,0.25)', borderRadius: 3, padding: '1px 5px', letterSpacing: '0.04em' }}
+            >
+              ABORTED PARTIAL
+            </span>
+          )}
+          {message.subagentRetry && (
+            <span
+              title="Claude reported a retry for this subagent tool call."
+              style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: 'var(--yellow)', background: 'rgba(234,179,8,0.1)', border: '1px solid rgba(234,179,8,0.25)', borderRadius: 3, padding: '1px 5px', letterSpacing: '0.04em' }}
+            >
+              SUBAGENT RETRY
+            </span>
+          )}
           {message.timestamp && (
             <span
               style={{

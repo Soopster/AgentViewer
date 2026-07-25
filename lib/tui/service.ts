@@ -424,6 +424,7 @@ export async function interruptTuiSessionTurn(session: { sessionId: string; prov
       body: JSON.stringify({
         provider: session.provider,
         turnRequestId: session.turnRequestId,
+        cancelQueued: true,
       }),
     })
     return Array.isArray(response?.stillQueued)

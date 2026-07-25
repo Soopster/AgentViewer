@@ -24,7 +24,7 @@ export type WaitingSession = {
 
 type RunningSession = {
   provider: AgentProvider
-  interrupt: () => Promise<unknown>
+  interrupt: (cancelQueued?: boolean) => Promise<unknown>
   background?: () => Promise<unknown>
   /**
    * Deliver an additional user message INTO the running turn, the way the
@@ -83,11 +83,11 @@ export function clearRunningSession(sessionId: string): void {
  * when it produces one (Claude interrupt_receipt_v1: `{ still_queued }` uuids
  * of queued async messages that survive the interrupt), undefined otherwise.
  */
-export async function interruptRunningSession(sessionId: string, requestId?: string): Promise<unknown> {
+export async function interruptRunningSession(sessionId: string, requestId?: string, cancelQueued = false): Promise<unknown> {
   const running = runningSessions.get(sessionId)
   if (running) {
     if (requestId && running.requestId && running.requestId !== requestId) return undefined
-    return await running.interrupt()
+    return await running.interrupt(cancelQueued)
   }
 
   if (!requestId) {

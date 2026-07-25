@@ -12,9 +12,10 @@ export async function POST(
   const turnRequestId = typeof body?.turnRequestId === 'string' && body.turnRequestId.trim()
     ? body.turnRequestId.trim()
     : undefined
+  const cancelQueued = body?.cancelQueued === true
   try {
     void provider
-    const stillQueued = await interruptViewSession(sessionId, turnRequestId)
+    const stillQueued = await interruptViewSession(sessionId, turnRequestId, cancelQueued)
     return NextResponse.json({ ok: true, ...(stillQueued !== undefined ? { stillQueued } : {}) })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

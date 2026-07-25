@@ -224,6 +224,7 @@ function summarizeCopilotUiCompletion(
       return lines.join('\n')
     }
   }
+  return 'Interaction completed.'
 }
 
 function mapCopilotUiCompletionEvent(
@@ -567,6 +568,7 @@ export function mapCopilotDiagnosticsToSections(params: {
     deferLoading?: boolean
   }>
   quotaItems: string[]
+  integrationItems?: string[]
   metadata?: SessionMetadata | null
   events: SessionEvent[]
   workspacePath?: string
@@ -632,6 +634,11 @@ export function mapCopilotDiagnosticsToSections(params: {
       id: 'quota',
       title: 'QUOTA',
       items: params.quotaItems.length > 0 ? params.quotaItems : ['Unavailable'],
+    },
+    {
+      id: 'integrations',
+      title: 'SDK INTEGRATIONS',
+      items: params.integrationItems && params.integrationItems.length > 0 ? params.integrationItems : ['Unavailable'],
     },
   ]
 }

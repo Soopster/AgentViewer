@@ -5,6 +5,8 @@ export type ToolResultBlock = {
   tool_use_id: string
   content: string | ContentBlock[]
   is_error?: boolean
+  /** Claude SDK sidecar metadata classifying denied/interrupted/cancelled results. */
+  tool_result_meta?: Record<string, unknown>
 }
 export type ThinkingBlock = { type: 'thinking'; thinking: string; signature?: string }
 export type ImageBlock = {
@@ -37,6 +39,10 @@ export type ApiMessage = {
     cache_read_input_tokens?: number | null
     cache_creation_input_tokens?: number | null
   }
+  /** Claude SDK envelope metadata retained for transcript diagnostics. */
+  aborted?: boolean
+  subagent_type?: string
+  subagent_retry?: Record<string, unknown>
 }
 
 export type SystemMessagePayload = {

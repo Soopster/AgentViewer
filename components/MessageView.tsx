@@ -4011,6 +4011,7 @@ export default function MessageView({
         body: JSON.stringify({
           provider: session.provider,
           turnRequestId: activeTurnRequestIdRef.current ?? undefined,
+          cancelQueued: true,
         }),
       }).then(async (res) => {
         // interrupt_receipt_v1: uuids of queued async messages that survive
@@ -4493,8 +4494,8 @@ export default function MessageView({
             // turn doesn't look hung while it recovers (mirrors native Pi).
             if (parsed?.type === 'pi_status') {
               if (parsed.status === 'retry_start') setLiveStatus('retrying')
-              else if (parsed.status === 'compaction_start') setLiveStatus('compacting')
-              else if (parsed.status === 'retry_end' || parsed.status === 'compaction_end') setLiveStatus(null)
+              else if (parsed.status === 'compaction_start' || parsed.status === 'summarization_retry_start') setLiveStatus('compacting')
+              else if (parsed.status === 'retry_end' || parsed.status === 'compaction_end' || parsed.status === 'summarization_retry_end') setLiveStatus(null)
               else if (parsed.status === 'title_changed' && typeof parsed.name === 'string') {
                 setSessionInfo((prev) => prev ? { ...prev, customTitle: parsed.name } : prev)
               }

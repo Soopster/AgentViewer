@@ -9,13 +9,14 @@ const nextConfig: NextConfig = {
     browserToTerminal: 'warn',
   },
   devIndicators: false,
-  // Keep the Agent SDK as a server-side external — it uses Node.js APIs
-  // (filesystem, process spawning) that can't be bundled for the browser
+  // Keep agent SDKs as server-side externals — they use Node.js APIs and native
+  // modules (filesystem, process spawning, Koffi) that Turbopack cannot bundle.
   serverExternalPackages: [
     '@anthropic-ai/claude-agent-sdk',
     '@earendil-works/pi-coding-agent',
     '@earendil-works/pi-agent-core',
     '@earendil-works/pi-ai',
+    '@github/copilot-sdk',
   ],
 }
 

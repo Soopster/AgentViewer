@@ -7,6 +7,8 @@ import {
   type PermissionHandler,
   type ResumeSessionConfig,
   type SessionConfigBase,
+  type TelemetryConfig,
+  type CustomAgentConfig,
 } from '@github/copilot-sdk'
 
 function normalizedEnv(value: string | undefined): string | undefined {
@@ -34,6 +36,35 @@ function isEnvFlagEnabled(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
 }
 
+function readCustomAgents(): CustomAgentConfig[] | undefined {
+  const raw = normalizedEnv(process.env.COPILOT_CUSTOM_AGENTS)
+  if (!raw) return undefined
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return undefined
+    const agents = parsed.filter((entry): entry is CustomAgentConfig => {
+      if (!entry || typeof entry !== 'object') return false
+      const value = entry as Record<string, unknown>
+      return typeof value.name === 'string' && value.name.trim().length > 0 && typeof value.prompt === 'string'
+    })
+    return agents.length > 0 ? agents : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function readCopilotTelemetry(): TelemetryConfig | undefined {
+  const filePath = normalizedEnv(process.env.COPILOT_OTEL_FILE)
+  const otlpEndpoint = normalizedEnv(process.env.COPILOT_OTEL_ENDPOINT)
+  if (!filePath && !otlpEndpoint) return undefined
+  return {
+    ...(filePath ? { filePath, exporterType: 'file' } : {}),
+    ...(otlpEndpoint ? { otlpEndpoint, exporterType: 'otlp-http' } : {}),
+    sourceName: 'agent-viewer.copilot',
+    captureContent: isEnvFlagEnabled(process.env.COPILOT_OTEL_CAPTURE_CONTENT),
+  }
+}
+
 function createClientOptions(): CopilotClientOptions {
   const cliUrl = normalizedEnv(process.env.COPILOT_CLI_URL)
   const cliPath = normalizedEnv(process.env.COPILOT_CLI_PATH)
@@ -43,6 +74,8 @@ function createClientOptions(): CopilotClientOptions {
       : RuntimeConnection.forStdio(cliPath ? { path: cliPath } : undefined),
     logLevel: 'error',
   }
+  const telemetry = readCopilotTelemetry()
+  if (telemetry) options.telemetry = telemetry
 
   // Opt in to Mission Control via env. Default off because agent-viewer is a
   // local observer; remote sessions would surface in GitHub web/mobile.
@@ -62,6 +95,20 @@ function createClientOptions(): CopilotClientOptions {
 export function copilotSessionConfigOverrides(): Partial<SessionConfigBase> {
   const overrides: Partial<SessionConfigBase> = {
     enableCitations: true,
+    enableConfigDiscovery: true,
+  }
+
+  const customAgents = readCustomAgents()
+  if (customAgents) overrides.customAgents = customAgents
+
+  if (isEnvFlagEnabled(process.env.COPILOT_AUTO_APPROVE_PLAN)) {
+    overrides.onExitPlanModeRequest = (request) => ({
+      approved: true,
+      selectedAction: request.recommendedAction,
+    })
+  }
+  if (isEnvFlagEnabled(process.env.COPILOT_AUTO_MODE_SWITCH)) {
+    overrides.onAutoModeSwitchRequest = () => 'yes'
   }
 
   const excludedAgents = normalizedEnv(process.env.COPILOT_EXCLUDED_AGENTS)
@@ -75,6 +122,16 @@ export function copilotSessionConfigOverrides(): Partial<SessionConfigBase> {
   }
 
   return overrides
+}
+
+export function copilotIntegrationDiagnostics(): string[] {
+  const items = ['Config discovery enabled']
+  if (readCustomAgents()) items.push('Custom agents configured')
+  if (readCopilotTelemetry()) items.push('OpenTelemetry tracing enabled')
+  else items.push('OpenTelemetry tracing disabled (set COPILOT_OTEL_FILE or COPILOT_OTEL_ENDPOINT)')
+  if (isEnvFlagEnabled(process.env.COPILOT_AUTO_APPROVE_PLAN)) items.push('Plan exit auto-approval enabled')
+  if (isEnvFlagEnabled(process.env.COPILOT_AUTO_MODE_SWITCH)) items.push('Rate-limit auto-mode switching enabled')
+  return items
 }
 
 // The Copilot SDK only accepts a permission handler at resume time, but our

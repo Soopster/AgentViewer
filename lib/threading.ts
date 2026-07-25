@@ -79,6 +79,9 @@ export type ThreadedMessage = {
   provider?: AgentProvider
   taskDescription?: string
   requestId?: string
+  aborted?: boolean
+  subagentType?: string
+  subagentRetry?: Record<string, unknown>
   blocks: ThreadedBlock[]
 }
 
@@ -303,6 +306,16 @@ function messageUsage(msg: SessionMessage): ApiMessage['usage'] | undefined {
   return (msg.message as ApiMessage).usage
 }
 
+function messageTranscriptMetadata(msg: SessionMessage): Pick<ThreadedMessage, 'aborted' | 'subagentType' | 'subagentRetry'> {
+  if (msg.type === 'system') return {}
+  const message = msg.message as ApiMessage
+  return {
+    aborted: message.aborted,
+    subagentType: message.subagent_type,
+    subagentRetry: message.subagent_retry,
+  }
+}
+
 function isPlumbingTurn(msg: SessionMessage): boolean {
   if (msg.type !== 'user') return false
   const blocks = toBlocks(msg)
@@ -422,6 +435,7 @@ export function buildThreadedMessages(messages: SessionMessage[]): ThreadedMessa
         provider: msg.provider,
         taskDescription: msg.taskDescription,
         requestId: msg.requestId,
+        ...messageTranscriptMetadata(msg),
         blocks: threadedBlocks,
       })
     }
