@@ -5,20 +5,21 @@
     "": {
       "name": "agent-viewer",
       "dependencies": {
-        "@anthropic-ai/claude-agent-sdk": "^0.3.201",
+        "@anthropic-ai/claude-agent-sdk": "^0.3.210",
         "@anthropic-ai/sdk": "^0.111.0",
-        "@earendil-works/pi-agent-core": "^0.80.3",
-        "@earendil-works/pi-ai": "^0.80.3",
-        "@earendil-works/pi-coding-agent": "^0.80.3",
-        "@github/copilot-sdk": "^1.0.5",
+        "@earendil-works/pi-agent-core": "^0.80.7",
+        "@earendil-works/pi-ai": "^0.80.7",
+        "@earendil-works/pi-coding-agent": "^0.80.7",
+        "@github/copilot-sdk": "^1.0.6",
         "@inkjs/ui": "^2.0.0",
+        "@microsoft/agent-host-protocol": "^0.6.0",
         "@modelcontextprotocol/sdk": "^1.29.0",
-        "@opencode-ai/sdk": "^1.17.13",
+        "@opencode-ai/sdk": "^1.18.1",
         "@opentui/core": "^0.4.3",
         "@opentui/react": "^0.4.3",
         "@pierre/diffs": "^1.2.12",
         "@pierre/trees": "^1.0.0-beta.5",
-        "@radix-ui/react-checkbox": "^1.3.6",
+        "@radix-ui/react-checkbox": "^1.3.7",
         "@radix-ui/react-label": "^2.1.11",
         "@radix-ui/react-slot": "^1.3.0",
         "@types/react-syntax-highlighter": "^15.5.13",
@@ -27,15 +28,15 @@
         "clsx": "^2.1.1",
         "gray-matter": "^4.0.3",
         "ink": "^7.1.0",
-        "lucide-react": "^1.23.0",
-        "marked": "^18.0.5",
+        "lucide-react": "^1.24.0",
+        "marked": "^18.0.6",
         "next": "^16.2.10",
-        "radix-ui": "^1.6.1",
+        "radix-ui": "^1.6.2",
         "react": "^19.2.7",
         "react-dom": "^19.2.7",
         "react-markdown": "^10.1.0",
         "react-syntax-highlighter": "^16.1.1",
-        "recharts": "^3.9.1",
+        "recharts": "^3.9.2",
         "remark-gfm": "^4.0.1",
         "tailwind-merge": "^3.6.0",
         "tw-animate-css": "^1.4.0",
@@ -43,21 +44,21 @@
       },
       "devDependencies": {
         "@tailwindcss/postcss": "^4.3.2",
-        "@types/node": "^26.1.0",
+        "@types/node": "^26.1.1",
         "@types/react": "^19.2.17",
         "@types/react-dom": "^19.2.3",
         "@typescript/native-preview": "7.0.0-dev.20260707.2",
-        "postcss": "^8.5.16",
+        "postcss": "^8.5.19",
         "react-doctor": "^0.7.8",
         "shadcn": "^4.13.0",
         "tailwindcss": "^4.3.2",
-        "tsx": "^4.23.0",
+        "tsx": "^4.23.1",
         "typescript": "^7.0.2",
       },
     },
   },
   "overrides": {
-    "postcss": "^8.5.16",
+    "postcss": "^8.5.19",
     "protobufjs": "^8.6.6",
     "ws": "^8.21.0",
   },
@@ -405,6 +406,8 @@
     "@mariozechner/clipboard-win32-arm64-msvc": ["@mariozechner/clipboard-win32-arm64-msvc@0.3.9", "", { "os": "win32", "cpu": "arm64" }, "sha512-O5FHD3ErkMwMhNzAfu3ggy0ug4z7btZuoQgwwxlzPrwV2bxlD6WDpqBY4NCgICAgZdDKdp+loUEKVAVt8aYnhQ=="],
 
     "@mariozechner/clipboard-win32-x64-msvc": ["@mariozechner/clipboard-win32-x64-msvc@0.3.9", "", { "os": "win32", "cpu": "x64" }, "sha512-ihQC3EufqEY81vhXBgVBtK4prL+wc62zJsSvxrgz7K1hsdt6OObz6v9p3Rn1OG3GJksTTKMJF0u/guMISHPhSA=="],
+
+    "@microsoft/agent-host-protocol": ["@microsoft/agent-host-protocol@0.6.0", "", {}, "sha512-ckr9XLadXmUfF2lWSwTMu+VoJH0l8qbLfsWuoL7riIOGFCBml4JWIZYeIrPl18xrfbdeM4u2Jlu/OVjz8qbUpQ=="],
 
     "@mistralai/mistralai": ["@mistralai/mistralai@2.2.6", "", { "dependencies": { "@opentelemetry/semantic-conventions": "^1.40.0", "ws": "^8.18.0", "zod": "^3.25.0 || ^4.0.0", "zod-to-json-schema": "^3.25.0" }, "peerDependencies": { "@opentelemetry/api": "^1.9.0" }, "optionalPeers": ["@opentelemetry/api"] }, "sha512-W8pX7zHxjJvMIpw8JMxeJEleapXX0Q9NPszdNzqkM3MIEoIGPObdodujj+WHteXEvGfaP/AMwlNyRfEzSY6dQQ=="],
 
@@ -2026,8 +2029,6 @@
 
     "zwitch": ["zwitch@2.0.4", "", {}, "sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A=="],
 
-    "@anthropic-ai/claude-agent-sdk/zod": ["zod@4.3.6", "", {}, "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="],
-
     "@aws-crypto/crc32/@aws-sdk/types": ["@aws-sdk/types@3.973.6", "", { "dependencies": { "@smithy/types": "^4.13.1", "tslib": "^2.6.2" } }, "sha512-Atfcy4E++beKtwJHiDln2Nby8W/mam64opFPTiHEqgsthqeydFS1pY+OUlN1ouNOmf8ArPU/6cDS65anOP3KQw=="],
 
     "@aws-crypto/sha256-browser/@aws-sdk/types": ["@aws-sdk/types@3.973.6", "", { "dependencies": { "@smithy/types": "^4.13.1", "tslib": "^2.6.2" } }, "sha512-Atfcy4E++beKtwJHiDln2Nby8W/mam64opFPTiHEqgsthqeydFS1pY+OUlN1ouNOmf8ArPU/6cDS65anOP3KQw=="],
@@ -2184,8 +2185,6 @@
 
     "@tailwindcss/oxide-wasm32-wasi/tslib": ["tslib@2.8.1", "", { "bundled": true }, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
 
-    "@tailwindcss/postcss/postcss": ["postcss@8.5.16", "", { "dependencies": { "nanoid": "^3.3.12", "picocolors": "^1.1.1", "source-map-js": "^1.2.1" } }, "sha512-vuwillviilfKZsg0VGj5R/YwwcHx4SLsIOI/7K6mQkWx+l5cUHTjj5g0AasTBcyXsbfTgrwsUNmVUb5xVwyPwg=="],
-
     "@types/react-syntax-highlighter/@types/react": ["@types/react@19.2.14", "", { "dependencies": { "csstype": "^3.2.2" } }, "sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w=="],
 
     "cli-truncate/string-width": ["string-width@8.2.0", "", { "dependencies": { "get-east-asian-width": "^1.5.0", "strip-ansi": "^7.1.2" } }, "sha512-6hJPQ8N0V0P3SNmP6h2J99RLuzrWz2gvT7VnK5tKvrNqJoyS9W4/Fb8mo31UiPvy00z7DQXkP2hnKBVav76thw=="],
@@ -2224,8 +2223,6 @@
 
     "micromatch/picomatch": ["picomatch@2.3.2", "", {}, "sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA=="],
 
-    "next/postcss": ["postcss@8.5.16", "", { "dependencies": { "nanoid": "^3.3.12", "picocolors": "^1.1.1", "source-map-js": "^1.2.1" } }, "sha512-vuwillviilfKZsg0VGj5R/YwwcHx4SLsIOI/7K6mQkWx+l5cUHTjj5g0AasTBcyXsbfTgrwsUNmVUb5xVwyPwg=="],
-
     "npm-run-path/path-key": ["path-key@4.0.0", "", {}, "sha512-haREypq7xkM7ErfgIyA0z+Bj4AGKlMSdlQE2jvJo6huWD1EdkKYV+G/T4nq0YEF2vgTT8kqMFKo1uHn950r4SQ=="],
 
     "ora/cli-cursor": ["cli-cursor@5.0.0", "", { "dependencies": { "restore-cursor": "^5.0.0" } }, "sha512-aCj4O5wKyszjMmDT4tZj93kxyydN/K5zPWSCe6/0AV/AA1pqe5ZBIw0a2ZfPQV7lL5/yb5HsUreJ6UFAF1tEQw=="],
@@ -2241,8 +2238,6 @@
     "prompts/kleur": ["kleur@3.0.3", "", {}, "sha512-eTIzlVOSUR+JxdDFepEYcBMtZ9Qqdef+rnzWdRZuMbOywu5tO2w2N7rqjoANZ5k9vywhL6Br1VRjUIgTQx4E8w=="],
 
     "react-doctor/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
-
-    "shadcn/postcss": ["postcss@8.5.16", "", { "dependencies": { "nanoid": "^3.3.12", "picocolors": "^1.1.1", "source-map-js": "^1.2.1" } }, "sha512-vuwillviilfKZsg0VGj5R/YwwcHx4SLsIOI/7K6mQkWx+l5cUHTjj5g0AasTBcyXsbfTgrwsUNmVUb5xVwyPwg=="],
 
     "shadcn/zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 

@@ -91,6 +91,7 @@ Modes:
   (default)  Launch the OpenTUI terminal app via Bun
   web        Launch the Next.js web app
   mcp        Run the Claude/Codex stdio MCP bridge
+  ahp        Run the AHP 0.7/0.6 JSON-RPC host over stdio, TCP, or WebSocket
   coord worker  Run an autonomous bounded Codex/Claude Coordinator worker
   coord doctor  Diagnose daemon, CLI, identity, protocol, and worker health
   coord workers List persistent Coordinator worker registrations
@@ -107,6 +108,11 @@ Options:
 CLI MCP:
   claude mcp add agent-viewer -- npx -y agent-viewer mcp --attach 3000
   codex mcp add agent-viewer --env AGENT_VIEWER_ATTACH=http://127.0.0.1:3000 -- npx -y agent-viewer mcp
+
+AHP host:
+  agent-viewer ahp
+  agent-viewer ahp --listen 127.0.0.1:8765
+  agent-viewer ahp --ws 127.0.0.1:8765
 
 Autonomous Coordinator:
   agent-viewer coord worker --start "goal" --name lead --provider codex --attach 3000
@@ -265,6 +271,25 @@ if (command === '-h' || command === '--help' || command === 'help') {
 
   forwardSignals(child)
   trackExit(child)
+} else if (command === 'ahp') {
+  const entrypoint = fileURLToPath(new URL('./agent-viewer-ahp.ts', import.meta.url))
+  const bunLauncher = resolveBunLauncher()
+  if (!bunLauncher.command) {
+    failMissingBun()
+  } else {
+    const child = spawn(bunLauncher.command, [...bunLauncher.args, 'run', entrypoint, ...args.slice(1)], {
+      stdio: 'inherit',
+    })
+    child.on('error', (error) => {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+        failMissingBun()
+        return
+      }
+      throw error
+    })
+    forwardSignals(child)
+    trackExit(child)
+  }
 } else if (command === 'coord' && args[1] === 'worker') {
   const entrypoint = fileURLToPath(new URL('./agent-viewer-coord-worker.mjs', import.meta.url))
   const child = spawn(process.execPath, [entrypoint, ...args.slice(2)], { stdio: 'inherit' })

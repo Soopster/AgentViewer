@@ -47,6 +47,9 @@ allowBuilds:
   protobufjs: set this to true or false
   sharp: set this to true or false
 minimumReleaseAgeExclude:
+  # 2026-07-25 AHP integration: official Microsoft protocol client/types.
+  # Version-pinned so later releases remain behind the seven-day quarantine.
+  - '@microsoft/agent-host-protocol@0.6.0'
   # 2026-07-11 TypeScript 7 upgrade (user-approved): official compiler and
   # platform binaries, pinned so later releases remain quarantined.
   - 'typescript@7.0.2'

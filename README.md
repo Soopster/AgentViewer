@@ -133,6 +133,21 @@ External clients negotiate the Coordinator protocol when they create, join, or r
 
 Coordinator mail is typed and durable. `coord_send_message` accepts `kind` (`request`, `response`, `status`, `finding`, `handoff`, `review_request`, or `review_result`), `priority` (`urgent`, `normal`, or `status`), `reply_required`, `correlation_id`, and `in_reply_to`. Status messages are held until three updates accumulate or 15 seconds elapse, then delivered as one summary. Reply-required requests stay in the recipient's actionable digest until a correlated response resolves them.
 
+Agent Viewer also exposes Coordinator runs through the Microsoft Agent Host Protocol:
+
+```bash
+# Reliable ordered JSON-RPC frames on stdin/stdout
+agent-viewer ahp
+
+# The same newline-framed protocol on a local TCP socket
+agent-viewer ahp --listen 127.0.0.1:8765
+
+# WebSocket transport used by the official AHP clients
+agent-viewer ahp --ws 127.0.0.1:8765
+```
+
+The host negotiates AHP `0.7.0` or `0.6.0`. A Coordinator run is an `ahp-session:` channel, its lead and teammates are `ahp-chat:` channels, and external participants appear as session `activeClients`. The task board, path locks, durable mailbox, plan approvals, and completion gates are preserved under the namespaced `dev.agent-viewer.coordinator` session metadata key. Standard snapshots, ordered `action` envelopes, write-ahead rejection reconciliation, and reconnect replay/snapshot fallback keep multiple AHP clients converged. See `docs/ahp-coordinator.md` for the mapping.
+
 For unattended work, use the bounded supervisor. It resumes the same provider session for one useful tick, heartbeats while the CLI works, waits for the next Coordinator event, retries crashes with backoff, and exits when the run is terminal:
 
 ```bash

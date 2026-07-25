@@ -786,6 +786,22 @@ export async function listProtocolRuns(limit = 20): Promise<ProtocolRun[]> {
   return rows.map(rowToRun)
 }
 
+export async function listProtocolRunsPage(offset: number, limit: number): Promise<ProtocolRun[]> {
+  const db = await getDatabase()
+  const safeOffset = Math.max(0, Math.trunc(offset))
+  const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 101))
+  const rows = db.prepare(
+    'SELECT * FROM protocol_runs ORDER BY created_at DESC LIMIT ? OFFSET ?',
+  ).all(safeLimit, safeOffset) as Row[]
+  return rows.map(rowToRun)
+}
+
+export async function countProtocolRuns(): Promise<number> {
+  const db = await getDatabase()
+  const row = db.prepare('SELECT COUNT(*) AS count FROM protocol_runs').get() as Row | undefined
+  return Number(row?.count) || 0
+}
+
 // ---------------------------------------------------------------------------
 // External CLI participants
 
@@ -815,22 +831,24 @@ function negotiateExternalClient(
   const maxParallelTasks = capabilities?.maxParallelTasks === undefined
     ? undefined
     : Math.max(1, Math.min(32, Math.trunc(capabilities.maxParallelTasks)))
+  const ahpClientId = capabilities?.ahpClientId?.trim().slice(0, 200) || undefined
   return {
     client: {
       name: client?.name.trim().slice(0, 80) || 'legacy-mcp-client',
       version: client?.version?.trim().slice(0, 80) || undefined,
       protocolVersion,
     },
-    capabilities: JSON.parse(JSON.stringify({
-      unattended: capabilities?.unattended === true || undefined,
-      sessionResume: capabilities?.sessionResume === true || undefined,
-      midTurnSteer: capabilities?.midTurnSteer === true || undefined,
-      filesystemWrite: capabilities?.filesystemWrite === true || undefined,
-      git: capabilities?.git === true || undefined,
-      browser: capabilities?.browser === true || undefined,
-      maxParallelTasks,
-      tools,
-    })) as ExternalProtocolCapabilities,
+    capabilities: {
+      ...(ahpClientId === undefined ? {} : { ahpClientId }),
+      ...(capabilities?.unattended === true ? { unattended: true } : {}),
+      ...(capabilities?.sessionResume === true ? { sessionResume: true } : {}),
+      ...(capabilities?.midTurnSteer === true ? { midTurnSteer: true } : {}),
+      ...(capabilities?.filesystemWrite === true ? { filesystemWrite: true } : {}),
+      ...(capabilities?.git === true ? { git: true } : {}),
+      ...(capabilities?.browser === true ? { browser: true } : {}),
+      ...(maxParallelTasks === undefined ? {} : { maxParallelTasks }),
+      ...(tools === undefined ? {} : { tools }),
+    },
   }
 }
 
@@ -1101,7 +1119,10 @@ export async function createExternalProtocolRun(
       `Playbook "${playbook.name}" expects args (${playbook.argsHint ?? 'see the {{args}} placeholders in its task text'}) — pass args when creating the run`,
     )
   }
-  const runId = randomUUID()
+  const runId = params.runId?.trim() || randomUUID()
+  if (!/^[A-Za-z0-9._~-]{1,200}$/.test(runId)) {
+    throw new Error('run id must be a URI-safe identifier of 200 characters or fewer')
+  }
   const ts = nowIso()
   const result = await enqueueWrite((db) => {
     db.exec('BEGIN IMMEDIATE')

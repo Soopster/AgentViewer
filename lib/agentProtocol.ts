@@ -191,6 +191,8 @@ export type ExternalProtocolClient = {
 }
 
 export type ExternalProtocolCapabilities = {
+  /** AHP connection identity when this participant was joined through AHP. */
+  ahpClientId?: string
   unattended?: boolean
   sessionResume?: boolean
   midTurnSteer?: boolean
@@ -430,6 +432,8 @@ export type ExternalProtocolParticipant = ExternalProtocolIdentity & {
 }
 
 export type CreateExternalProtocolRunParams = {
+  /** Optional caller-selected id (used by AHP's client-selected session URI). */
+  runId?: string
   prompt: string
   baseCwd: string
   provider: AgentProvider
