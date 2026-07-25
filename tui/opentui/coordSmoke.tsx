@@ -77,7 +77,7 @@ let newRunRequests = 0
 let handleKey: ((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => void) | null = null
 const smokeWidth = Number.parseInt(process.env.AGENT_VIEWER_COORD_SMOKE_WIDTH ?? '120', 10)
 const smokeHeight = Number.parseInt(process.env.AGENT_VIEWER_COORD_SMOKE_HEIGHT ?? '40', 10)
-const { captureCharFrame, captureSpans } = await testRender(
+const { captureCharFrame, captureSpans, mockMouse } = await testRender(
   <CoordinationPopover
     theme={LIGHT_THEME}
     width={smokeWidth}
@@ -423,6 +423,44 @@ await act(async () => {
 })
 if (newRunRequests !== 1) {
   console.error('N did not open the new workflow launcher from Agent Operations')
+  process.exit(1)
+}
+
+// Mouse navigation: the panes are reachable with a pointer, not only 1-4/tab.
+// Locate a pane by its header row in the rendered frame so the assertion does
+// not hard-code a layout that shifts whenever a pane is resized.
+function findCell(needle: string): { x: number; y: number } | null {
+  const lines = captureCharFrame().split('\n')
+  for (let y = 0; y < lines.length; y += 1) {
+    const x = lines[y]?.indexOf(needle) ?? -1
+    if (x >= 0) return { x, y }
+  }
+  return null
+}
+
+const workBoardHeader = findCell('[2] WORK BOARD')
+const inspectorHeader = findCell('[3] AGENT INSPECTOR')
+if (!workBoardHeader || !inspectorHeader) {
+  console.error('Could not locate pane headers for the mouse navigation check')
+  process.exit(1)
+}
+
+// Focus starts on the activity pane (the keyboard walk above left it there).
+await act(async () => {
+  await mockMouse.click(workBoardHeader.x + 2, workBoardHeader.y)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('j/k task')) {
+  console.error(`Clicking the work board did not focus it:\n${captureCharFrame()}`)
+  process.exit(1)
+}
+
+await act(async () => {
+  await mockMouse.click(inspectorHeader.x + 2, inspectorHeader.y)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
+if (!captureCharFrame().includes('j/k agent')) {
+  console.error(`Clicking the agent inspector did not focus it:\n${captureCharFrame()}`)
   process.exit(1)
 }
 

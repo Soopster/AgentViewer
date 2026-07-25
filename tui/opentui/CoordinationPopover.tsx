@@ -699,6 +699,36 @@ export function CoordinationPopover({
         pendingLabel={pendingLabel}
         onMessageDraft={setMessageDraft}
         onSubmitMessage={() => { void sendTeamMessage() }}
+        onFocusSection={setSection}
+        onSelectRun={(nextRunId) => {
+          if (nextRunId === runId) return
+          setRunId(nextRunId)
+          setSnapshot(null)
+          setTeamIndex(0)
+          setTaskCursorId(null)
+          setEventIndex(-1)
+        }}
+        onSelectTask={setTaskCursorId}
+        onSelectAgent={(agentId) => {
+          const index = agents.findIndex((agent) => agent.id === agentId)
+          if (index >= 0) setTeamIndex(index)
+        }}
+        onSelectEvent={setEventIndex}
+        onScrollSection={(target, delta) => {
+          if (target === 'overview') switchRun(delta as 1 | -1)
+          else if (target === 'team') setTeamIndex(Math.max(0, Math.min(clampedTeam + delta, agents.length - 1)))
+          else if (target === 'tasks') {
+            const nextTaskIndex = Math.max(0, Math.min(clampedTask + delta, navigableTasks.length - 1))
+            setTaskCursorId(navigableTasks[nextTaskIndex]?.id ?? null)
+          }
+          else if (target === 'events') setEventIndex(Math.max(0, Math.min(clampedEvent + delta, filteredEvents.length - 1)))
+        }}
+        onActivateSelection={(target) => {
+          // Clicking an already-selected row activates it, mirroring Enter.
+          if (target === 'team' && selectedAgent) { onOpenSession(selectedAgent); onClose() }
+          else if (target === 'tasks' && selectedOwner) { onOpenSession(selectedOwner); onClose() }
+          else if (target === 'events' && eventAgent) { onOpenSession(eventAgent); onClose() }
+        }}
       />
       {gitAgent ? (
         <box

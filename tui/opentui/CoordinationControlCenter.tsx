@@ -43,6 +43,16 @@ type Props = {
   pendingLabel: string | null
   onMessageDraft: (value: string) => void
   onSubmitMessage: () => void
+  // Mouse navigation. Clicking a pane focuses it, clicking a row selects that
+  // row, and the wheel moves the selection within a pane — the same operations
+  // the keyboard offers, so neither input mode is second-class.
+  onFocusSection?: (section: ControlCenterSection) => void
+  onSelectRun?: (runId: string) => void
+  onSelectTask?: (taskId: string) => void
+  onSelectAgent?: (agentId: string) => void
+  onSelectEvent?: (eventIndex: number) => void
+  onScrollSection?: (section: ControlCenterSection, delta: number) => void
+  onActivateSelection?: (section: ControlCenterSection) => void
 }
 
 const PROVIDERS = ['codex', 'claude', 'copilot', 'opencode', 'pi'] as const
@@ -65,6 +75,41 @@ function paneNumber(section: ControlCenterSection): number {
 function fit(text: string, max: number): string {
   if (max <= 0) return ''
   return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`
+}
+
+/**
+ * Word-wrap into exactly `maxLines` cells-wide lines, each padded to `width`.
+ *
+ * The detail body used a single `<text wrapMode="word">`, whose wrap path does
+ * not write the cell a space occupies — so wherever a space fell, the previous
+ * frame's glyph survived and the summary rendered as
+ * "ReclaimedTtask-3aafterhcc-transcript's", stitched together with leftovers
+ * from the coloured agent names drawn above. Emitting pre-wrapped, space-padded
+ * lines writes every cell every frame, and also keeps the body inside the
+ * region's fixed height instead of silently overflowing it.
+ */
+function wrapPadded(text: string, width: number, maxLines: number): string[] {
+  if (width <= 0 || maxLines <= 0) return []
+  const words = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean)
+  const lines: string[] = []
+  let current = ''
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word
+    if (candidate.length <= width) { current = candidate; continue }
+    if (current) lines.push(current)
+    if (lines.length >= maxLines) break
+    // A single word longer than the region: hard-split rather than drop it.
+    current = word.length <= width ? word : word.slice(0, width)
+  }
+  if (current && lines.length < maxLines) lines.push(current)
+  const clipped = lines.slice(0, maxLines)
+  if (lines.length > maxLines || (clipped.length === maxLines && words.length > 0)) {
+    const last = clipped[maxLines - 1]
+    if (last && last.length === width && text.replace(/\s+/g, ' ').trim().length > clipped.join(' ').length) {
+      clipped[maxLines - 1] = `${last.slice(0, Math.max(width - 1, 0))}…`
+    }
+  }
+  return clipped.map((line) => line.padEnd(width, ' '))
 }
 
 function age(iso: string | undefined, now: number): string {
@@ -224,6 +269,13 @@ export function CoordinationControlCenter({
   pendingLabel,
   onMessageDraft,
   onSubmitMessage,
+  onFocusSection,
+  onSelectRun,
+  onSelectTask,
+  onSelectAgent,
+  onSelectEvent,
+  onScrollSection,
+  onActivateSelection,
 }: Props) {
   const popW = Math.max(width - 2, 1)
   const popH = Math.max(height - 2, 1)
@@ -446,8 +498,8 @@ export function CoordinationControlCenter({
         ? `j/k agent${inspectedAgent ? ` · ↵ transcript · x interrupt${run?.useWorktrees === false ? '' : ' · w merge'} · m message${STUCK_AGENT_STATUSES.has(inspectedAgent.status) ? ' · R rerun' : ''}` : ''}`
         : `j/k event${selectedEventAgent ? ' · ↵ transcript' : ''} · g tail · / filter · m ${selectedEventAgent ? 'event agent' : 'lead'}`
   const globalKeys = innerW >= 154
-    ? `1-4 focus · tab next · G agent changes · n new · M broadcast · s stop · D delete${run?.useWorktrees === false ? '' : ' · c cleanup'}${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
-    : '1-4 focus · tab next · G changes · n new · M all · s stop · r refresh · q close'
+    ? `1-4 focus · tab next · click/wheel · G agent changes · n new · M broadcast · s stop · D delete${run?.useWorktrees === false ? '' : ' · c cleanup'}${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
+    : '1-4 focus · tab next · click/wheel · G changes · n new · M all · s stop · r refresh · q close'
   const footerText = `${contextualKeys}  │  ${globalKeys}`
   const promptHint = canRerunTask
     ? '[R] rerun failed/blocked  [M] broadcast  [m] message focused agent'
@@ -504,7 +556,10 @@ export function CoordinationControlCenter({
       </box>
 
       <box height={bodyH} minHeight={0} flexDirection="row" overflow="hidden">
-        <box width={leftW} height={bodyH} marginRight={1} paddingX={1} border borderStyle="single" borderColor={section === 'overview' ? theme.cyan : theme.muted} flexDirection="column" overflow="hidden">
+        <box width={leftW} height={bodyH} marginRight={1} paddingX={1} border borderStyle="single" borderColor={section === 'overview' ? theme.cyan : theme.muted} flexDirection="column" overflow="hidden"
+          onMouseUp={() => onFocusSection?.('overview')}
+          onMouseScroll={(event) => onScrollSection?.('overview', event.scroll?.direction === 'up' ? -1 : 1)}
+        >
           <box height={2} border={['bottom']} borderStyle="single" borderColor={section === 'overview' ? theme.cyan : theme.border} backgroundColor={section === 'overview' ? theme.surface3 : theme.surface} flexDirection="row" alignItems="center">
             <text fg={section === 'overview' ? theme.cyan : theme.text} wrapMode="none">{`[1] WORKFLOWS  ${runs.length}`}</text>
             <box flexGrow={1} />
@@ -523,7 +578,9 @@ export function CoordinationControlCenter({
                 const entryDone = entryTasks.filter((task) => task.status === 'completed').length
                 const providerNames = entrySnapshot?.agents.map((agent) => agent.provider.toUpperCase()) ?? [entry.provider.toUpperCase()]
                 return (
-                  <box key={entry.id} height={2} paddingX={1} backgroundColor={selected && section === 'overview' ? theme.cyan : selected ? theme.surface3 : theme.surface} flexDirection="column">
+                  <box key={entry.id} height={2} paddingX={1} backgroundColor={selected && section === 'overview' ? theme.cyan : selected ? theme.surface3 : theme.surface} flexDirection="column"
+                    onMouseUp={() => { onFocusSection?.('overview'); onSelectRun?.(entry.id) }}
+                  >
                     <box height={1} flexDirection="row">
                       <text fg={selected && section === 'overview' ? theme.surface : workflowTone(entry, theme)} wrapMode="none">{selected ? '▶ ' : '● '}</text>
                       <text fg={selected && section === 'overview' ? theme.surface : theme.muted} wrapMode="none">{fit(runTitle(entry), Math.max(leftW - 14, 8))}</text>
@@ -543,7 +600,10 @@ export function CoordinationControlCenter({
           </box>
         </box>
 
-        <box width={centerW} height={bodyH} marginRight={1} paddingX={1} border borderStyle="single" borderColor={section === 'tasks' ? theme.cyan : theme.muted} flexDirection="column" overflow="hidden">
+        <box width={centerW} height={bodyH} marginRight={1} paddingX={1} border borderStyle="single" borderColor={section === 'tasks' ? theme.cyan : theme.muted} flexDirection="column" overflow="hidden"
+          onMouseUp={() => onFocusSection?.('tasks')}
+          onMouseScroll={(event) => onScrollSection?.('tasks', event.scroll?.direction === 'up' ? -1 : 1)}
+        >
           <box height={2} border={['bottom']} borderStyle="single" borderColor={section === 'tasks' ? theme.cyan : theme.border} backgroundColor={section === 'tasks' ? theme.surface3 : theme.surface} flexDirection="row" alignItems="center">
             <text fg={section === 'tasks' ? theme.cyan : theme.text} wrapMode="none">{`[2] WORK BOARD  ${run ? fit(runTitle(run), Math.max(centerW - 34, 12)) : '—'}`}</text>
             <box flexGrow={1} />
@@ -583,7 +643,9 @@ export function CoordinationControlCenter({
                   lockContention.length > 0 ? `locks: ${lockContention.join(',')}` : '',
                 ].filter(Boolean).join(' · ')
                 return (
-                  <box key={task.id} height={2} paddingX={1} backgroundColor={selected && section === 'tasks' ? theme.cyan : selected ? theme.surface3 : theme.surface} flexDirection="column">
+                  <box key={task.id} height={2} paddingX={1} backgroundColor={selected && section === 'tasks' ? theme.cyan : selected ? theme.surface3 : theme.surface} flexDirection="column"
+                    onMouseUp={() => { onFocusSection?.('tasks'); if (selected && section === 'tasks') onActivateSelection?.('tasks'); else onSelectTask?.(task.id) }}
+                  >
                     <box height={1} flexDirection="row" overflow="hidden">
                       <text fg={selected && section === 'tasks' ? theme.surface : theme.dim} wrapMode="none">{`${branch} `}</text>
                       <text fg={selected && section === 'tasks' ? theme.surface : taskTone(task, theme)} wrapMode="none">{`${taskMarker(task)} `}</text>
@@ -638,7 +700,10 @@ export function CoordinationControlCenter({
         </box>
 
         <box width={rightW} height={bodyH} flexDirection="column" overflow="hidden">
-          <box height={inspectorH} paddingX={1} border borderStyle="single" borderColor={section === 'team' ? theme.cyan : theme.muted} flexDirection="column" overflow="hidden">
+          <box height={inspectorH} paddingX={1} border borderStyle="single" borderColor={section === 'team' ? theme.cyan : theme.muted} flexDirection="column" overflow="hidden"
+            onMouseUp={() => onFocusSection?.('team')}
+            onMouseScroll={(event) => onScrollSection?.('team', event.scroll?.direction === 'up' ? -1 : 1)}
+          >
             <box height={2} border={['bottom']} borderStyle="single" borderColor={section === 'team' ? theme.cyan : theme.border} backgroundColor={section === 'team' ? theme.surface3 : theme.surface} flexDirection="row" alignItems="center">
               <text fg={section === 'team' ? theme.cyan : theme.text} wrapMode="none">[3] AGENT INSPECTOR</text>
               <box flexGrow={1} />
@@ -697,7 +762,9 @@ export function CoordinationControlCenter({
                     ? `${agentTask.id}${dependencies.length > 0 ? ` ←${dependencies.join(',')}` : ''}${dependents.length > 0 ? ` →${dependents.join(',')}` : ''}`
                     : agent.role === 'lead' ? run ? runTitle(run) : 'workflow' : 'unassigned'
                   return (
-                    <box key={agent.id} height={1} flexDirection="row" overflow="hidden">
+                    <box key={agent.id} height={1} flexDirection="row" overflow="hidden"
+                      onMouseUp={() => { onFocusSection?.('team'); if (agent.id === inspectedAgent.id && section === 'team') onActivateSelection?.('team'); else onSelectAgent?.(agent.id) }}
+                    >
                       <text fg={agent.id === inspectedAgent.id ? theme.cyan : theme.dim} wrapMode="none">{`${agent.id === inspectedAgent.id ? '▶' : ' '} ${branchGlyph} `}</text>
                       <text fg={getProviderAccent(agent.provider)} wrapMode="none">{fit(agent.name, 10)}</text>
                       <text fg={agent.status === 'blocked' || agent.status === 'failed' ? theme.amber : agent.turnActive || agent.status === 'working' ? theme.green : theme.dim} wrapMode="none">{` ${agent.turnActive || agent.status === 'working' ? '●' : '○'} `}</text>
@@ -710,7 +777,10 @@ export function CoordinationControlCenter({
             ) : <text fg={theme.dim} wrapMode="none">No agent selected</text>}
           </box>
 
-          <box flexGrow={1} minHeight={0} marginTop={1} paddingX={1} border borderStyle="single" borderColor={section === 'events' ? theme.cyan : theme.muted} flexDirection="column" overflow="hidden">
+          <box flexGrow={1} minHeight={0} marginTop={1} paddingX={1} border borderStyle="single" borderColor={section === 'events' ? theme.cyan : theme.muted} flexDirection="column" overflow="hidden"
+            onMouseUp={() => onFocusSection?.('events')}
+            onMouseScroll={(event) => onScrollSection?.('events', event.scroll?.direction === 'up' ? -1 : 1)}
+          >
             <box height={2} border={['bottom']} borderStyle="single" borderColor={section === 'events' ? theme.cyan : theme.border} backgroundColor={section === 'events' ? theme.surface3 : theme.surface} flexDirection="row" alignItems="center">
               <text fg={section === 'events' ? theme.cyan : theme.text} wrapMode="none">[4] LIVE ACTIVITY</text>
               <box flexGrow={1} />
@@ -742,7 +812,17 @@ export function CoordinationControlCenter({
                 const selected = selectedEvent === event
                 const focused = selected && section === 'events'
                 return (
-                  <box key={`${event.timestamp ?? index}:${index}`} height={1} backgroundColor={focused ? theme.surface3 : theme.surface} flexDirection="row" overflow="hidden">
+                  <box key={`${event.timestamp ?? index}:${index}`} height={1} backgroundColor={focused ? theme.surface3 : theme.surface} flexDirection="row" overflow="hidden"
+                    // The feed is windowed, so the row index is not the index
+                    // into filteredEvents — map back or clicks select the wrong
+                    // event as soon as the list scrolls.
+                    onMouseUp={() => {
+                      onFocusSection?.('events')
+                      if (selected && section === 'events') { onActivateSelection?.('events'); return }
+                      const actualIndex = filteredEvents.indexOf(event)
+                      if (actualIndex >= 0) onSelectEvent?.(actualIndex)
+                    }}
+                  >
                     <box width={showActivityColumns ? 9 : 6} overflow="hidden"><text fg={theme.dim} wrapMode="none">{`${showActivityColumns ? clock(event.timestamp) : clock(event.timestamp).slice(3)} `}</text></box>
                     <box width={showActivityColumns ? 18 : 10} paddingLeft={1} overflow="hidden"><text fg={message ? theme.violet : eventTone(event, theme)} wrapMode="none">{fit(who, showActivityColumns ? 16 : 9)}</text></box>
                     {/* paddingLeft must stay on both widths: without it a full-width
@@ -760,7 +840,9 @@ export function CoordinationControlCenter({
                   <text fg={selectedEventMessage?.unanswered ? theme.amber : eventTone(selectedEvent, theme)} wrapMode="none">
                     {fit(`DETAIL · ${eventClassLabel(eventClass(selectedEvent))} · ${selectedEvent.type}${selectedEventMessage?.replyRequired ? selectedEventMessage.unanswered ? ' · REPLY REQUIRED · UNANSWERED' : ' · REPLY REQUIRED · ANSWERED' : ''}`, Math.max(rightW - 4, 8))}
                   </text>
-                  <text fg={theme.text} width={Math.max(rightW - 4, 8)} wrapMode="word">{selectedEventBody}</text>
+                  {wrapPadded(selectedEventBody, Math.max(rightW - 4, 8), Math.max(activityDetailH - 1, 1)).map((line, index) => (
+                    <text key={index} fg={theme.text} wrapMode="none">{line}</text>
+                  ))}
                 </>
               ) : <text fg={theme.dim} wrapMode="none">Select an event to inspect its full detail</text>}
             </box>
