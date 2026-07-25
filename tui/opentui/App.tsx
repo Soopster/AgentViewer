@@ -70,6 +70,7 @@ import {
   readTuiSidebarWidth,
   readTuiShowToolCalls,
   readTuiTabsEnabled,
+  readTuiSplitPanes,
   readTuiTheme,
   readTuiTranscriptView,
   readTuiTranscriptWidth,
@@ -111,6 +112,7 @@ import {
   writeTuiSidebarSort,
   writeTuiSidebarWidth,
   writeTuiTabsEnabled,
+  writeTuiSplitPanes,
   writeTuiTheme,
   writeTuiThemeSync,
   writeTuiTranscriptView,
@@ -4455,6 +4457,12 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'diff-layout', label: 'Toggle diff layout',    key: 's',  category: 'View'       },
   { id: 'view',       label: 'Switch transcript view', key: 'v',  category: 'View'       },
   { id: 'width',      label: 'Toggle transcript width', key: '⇧W', category: 'View'       },
+  { id: 'split-add',    label: 'Split transcript pane',    key: '⌃B %', category: 'View'  },
+  { id: 'split-close',  label: 'Close split pane',         key: '⌃B x', category: 'View'  },
+  { id: 'split-focus',  label: 'Focus next split pane',    key: '⌃B o', category: 'View'  },
+  { id: 'split-focus-back', label: 'Focus reader (leave split pane)', key: 'esc', category: 'View' },
+  { id: 'split-cycle',  label: 'Next session in split pane', key: '⌃B n', category: 'View' },
+  { id: 'split-toggle', label: 'Toggle split panes',       key: '⌃B z', category: 'View'  },
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
   { id: 'tools',      label: 'Toggle tool calls',      key: 'X',  category: 'View'       },
@@ -5939,6 +5947,305 @@ function TranscriptCardInner({
 
 const TranscriptCard = React.memo(TranscriptCardInner)
 
+// ── Split transcript panes ───────────────────────────────────────────────────
+// A split pane is a read-only tail view of another open tab, mounted beside the
+// primary reader so two (or three) sessions can be watched at once. It owns its
+// own detail read + card format — deliberately NOT the primary reader's
+// pipeline, which is entangled with the cursor, search, live overlay and
+// composer. Panes stay collapsed and tail-anchored: they answer "what is that
+// agent doing right now", not "let me read that transcript".
+const SPLIT_PANE_MIN_WIDTH = 46
+const SPLIT_PANE_MAX = 2
+// Tail-only mount budget. OpenTUI's scrollbox lays out every mounted child, so
+// a pane that mounted the whole transcript would cost the same as a second
+// reader; 30 collapsed cards is a screenful with headroom for scroll-back.
+const SPLIT_PANE_CARD_WINDOW = 30
+const SPLIT_PANE_POLL_MS = 2500
+const SPLIT_PANE_EMPTY_NOTES: Map<string, TranscriptDiffNote> = new Map()
+const SPLIT_PANE_EMPTY_NUMBERS: Readonly<Record<string, number>> = {}
+const noopSelectCard = () => {}
+const noopSelectAgentTool = () => {}
+const noopDiffHover = () => {}
+const noopOpenDiffNote = () => {}
+const noopSendDiffNote = () => {}
+const noopSetDiffRow = () => {}
+const noopSetDiffAnchor = () => {}
+
+// Imperative scroll surface a focused pane hands to the root key dispatcher.
+// The pane keeps its own tail-follow flag inside these methods, so scrolling up
+// detaches from the live tail and G re-attaches — the root never has to know.
+type SplitPaneHandle = {
+  scrollByRows: (rows: number) => void
+  scrollToTop: () => void
+  scrollToBottom: () => void
+}
+
+type SplitTranscriptPaneProps = {
+  session: Session
+  theme: TuiThemePalette
+  densityState: DensityState
+  density: TuiDensity
+  showToolCalls: boolean
+  syntaxStyle: SyntaxStyle | null
+  thinkingMode: boolean
+  diffLayout: TuiDiffLayout
+  imessageStyle: boolean
+  transcriptWidth: TuiTranscriptWidth
+  transcriptView: TuiTranscriptView
+  width: number
+  height: number
+  paneIndex: number
+  focused: boolean
+  registerHandle: (paneIndex: number, handle: SplitPaneHandle | null) => void
+  onActivate: (paneIndex: number) => void
+}
+
+function SplitTranscriptPaneInner({
+  session,
+  theme,
+  densityState,
+  density,
+  showToolCalls,
+  syntaxStyle,
+  thinkingMode,
+  diffLayout,
+  imessageStyle,
+  transcriptWidth,
+  transcriptView,
+  width,
+  height,
+  paneIndex,
+  focused,
+  registerHandle,
+  onActivate,
+}: SplitTranscriptPaneProps) {
+  const [cards, setCards] = useState<TuiTranscriptCard[]>([])
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [error, setError] = useState<string | null>(null)
+  const [followTail, setFollowTail] = useState(true)
+  const scrollRef = useRef<ScrollBoxRenderable>(null)
+  const key = sessionKey(session)
+
+  useEffect(() => {
+    const maxScroll = (sb: ScrollBoxRenderable): number => Math.max(sb.scrollHeight - sb.viewport.height, 0)
+    const handle: SplitPaneHandle = {
+      scrollByRows: (rows) => {
+        const sb = scrollRef.current
+        if (!sb) return
+        const limit = maxScroll(sb)
+        const next = clamp(sb.scrollTop + rows, 0, limit)
+        sb.scrollTop = next
+        setFollowTail(next >= limit)
+      },
+      scrollToTop: () => {
+        const sb = scrollRef.current
+        if (!sb) return
+        sb.scrollTop = 0
+        setFollowTail(maxScroll(sb) === 0)
+      },
+      scrollToBottom: () => {
+        const sb = scrollRef.current
+        if (!sb) return
+        sb.scrollTop = maxScroll(sb)
+        setFollowTail(true)
+      },
+    }
+    registerHandle(paneIndex, handle)
+    return () => registerHandle(paneIndex, null)
+  }, [paneIndex, registerHandle])
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const load = async () => {
+      try {
+        const detail = await readTuiSessionDetailAsync(session, density, showToolCalls)
+        if (cancelled) return
+        const cached = getTranscriptCardsSync(session, detail.threadedMessages, density, showToolCalls)
+        const next = cached ?? await formatTranscriptCardsAsync(session, detail.threadedMessages, density, showToolCalls)
+        if (cancelled) return
+        setCards((prev) => {
+          // Identity bail-out: an idle session re-reads to the same cached card
+          // array every poll, and keeping the reference skips the whole
+          // display-data + card subtree rebuild below.
+          if (prev === next) return prev
+          if (prev.length === next.length && prev[prev.length - 1]?.key === next[next.length - 1]?.key) return prev
+          return next
+        })
+        setStatus('ready')
+        setError(null)
+      } catch (err) {
+        if (cancelled) return
+        setStatus('error')
+        setError(err instanceof Error ? err.message : 'Failed to load transcript')
+      } finally {
+        if (!cancelled) timer = setTimeout(() => { void load() }, SPLIT_PANE_POLL_MS)
+      }
+    }
+
+    setStatus('loading')
+    void load()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [key, session, density, showToolCalls])
+
+  const tailCards = useMemo(
+    () => (cards.length > SPLIT_PANE_CARD_WINDOW ? cards.slice(-SPLIT_PANE_CARD_WINDOW) : cards),
+    [cards],
+  )
+
+  // Collapsed-only display data. Bodies are truncated to the density budget and
+  // no card is ever expanded here, so this stays bounded regardless of how much
+  // markdown the transcript holds.
+  const displayData = useMemo((): CardDisplayData[] => tailCards.map((card, index) => {
+    const bodyLines = renderedBodyLines(card, false, densityState.bodyLines, false, false, false)
+    const providerKey = card.provider ?? session.provider ?? undefined
+    const isInsight = card.category === 'insight'
+    return {
+      landmarks: EMPTY_LANDMARKS,
+      bodyLines,
+      diffView: cardDiffView(card, false),
+      codeBlockLineCounts: [],
+      headerMeta: joinMeta([card.timestamp ?? null, index === tailCards.length - 1 ? 'latest' : null]),
+      accent: transcriptAccent(card.role, providerKey),
+      isThinkingCard: card.lines.some((line) => line.tone === 'thinking'),
+      categoryEmoji: isInsight ? '✦ ' : card.category === 'technical' ? '⚒ ' : card.category === 'diff' ? '✎ ' : card.category === 'system' ? '⚙ ' : '',
+      isInsight,
+      markdownFallbackLines: null,
+    }
+  }), [tailCards, densityState.bodyLines, session.provider])
+
+  const scrollbarOptions = useMemo(
+    () => ({ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }),
+    [theme.muted, theme.surface2],
+  )
+
+  const accent = transcriptAccent('assistant', session.provider ?? undefined)
+  const innerWidth = Math.max(width - 4, 12)
+  // The focused pane trades one body row for its key hint, so the scroll
+  // viewport must shrink to match or the hint pushes past the bottom border.
+  const bodyRows = Math.max(height - (focused ? 4 : 3), 3)
+  const hiddenCount = cards.length - tailCards.length
+
+  return (
+    <box
+      width={width}
+      height={height}
+      border
+      borderStyle="single"
+      // Focused frame lights in the provider accent, exactly like the reader
+      // and sidebar — one visual language for "this pane has the keyboard".
+      borderColor={focused ? accent : theme.border}
+      backgroundColor={theme.surface}
+      flexDirection="column"
+      title={fitText(formatSessionTitle(session), Math.max(width - 4, 8))}
+      titleColor={accent}
+      onMouseDown={(event) => {
+        if (event.button === 0) onActivate(paneIndex)
+      }}
+    >
+      <box paddingX={1} flexDirection="row">
+        <text fg={accent} wrapMode="none">{focused ? '▶ ' : '● '}</text>
+        <text fg={theme.dim} wrapMode="none">
+          {fitText(
+            `${formatSessionProject(session)}  ·  ${cards.length} card${cards.length === 1 ? '' : 's'}${hiddenCount > 0 ? `  ·  tail ${tailCards.length}` : ''}${followTail ? '' : '  ·  paused'}`,
+            Math.max(innerWidth - 2, 8),
+          )}
+        </text>
+      </box>
+      <box flexGrow={1} paddingX={1} paddingBottom={1} overflow="hidden">
+        {status === 'error' ? (
+          <text fg={theme.red} wrapMode="none">{fitText(error ?? 'Failed to load transcript', innerWidth)}</text>
+        ) : status === 'loading' && tailCards.length === 0 ? (
+          <Spinner label={fitText('Loading…', innerWidth)} fg={theme.dim} />
+        ) : tailCards.length === 0 ? (
+          <text fg={theme.dim} wrapMode="none">{fitText('No messages yet', innerWidth)}</text>
+        ) : (
+          <scrollbox
+            ref={scrollRef}
+            style={{ height: bodyRows }}
+            backgroundColor={theme.surface}
+            // Sticky only while the pane is still following: once the reader
+            // scrolls it up, new cards must not yank the view back down.
+            stickyScroll={followTail}
+            stickyStart="bottom"
+            scrollY
+            scrollAcceleration={MESSAGE_SCROLL_ACCEL}
+            viewportCulling
+            scrollbarOptions={scrollbarOptions}
+          >
+            <TuiErrorBoundary>
+              {tailCards.map((card, i) => {
+                const display = displayData[i]
+                if (!display) return null
+                return (
+                  <TranscriptCard
+                    key={card.key}
+                    card={card}
+                    display={display}
+                    theme={theme}
+                    densityState={densityState}
+                    syntaxStyle={syntaxStyle}
+                    rightPaneWidth={width}
+                    isExpanded={false}
+                    hasCursor={false}
+                    isSelected={false}
+                    isSearchHit={false}
+                    isActiveMatch={false}
+                    bookmarked={false}
+                    onSelectCard={noopSelectCard}
+                    thinkingMode={thinkingMode}
+                    diffLayout={diffLayout}
+                    imessageStyle={imessageStyle}
+                    transcriptWidth={transcriptWidth}
+                    streamMode={transcriptView === 'stream'}
+                    agentsMode={false}
+                    agentToolCursorKey={null}
+                    agentToolExpandedKeys={EMPTY_EXPANDED_KEYS}
+                    agentToolCollapsedKeys={EMPTY_EXPANDED_KEYS}
+                    onSelectAgentTool={noopSelectAgentTool}
+                    noteNamespace={`split:${key}`}
+                    diffNotes={SPLIT_PANE_EMPTY_NOTES}
+                    diffDraft={null}
+                    hoveredDiffAnchor={null}
+                    activateDiffHover={noopDiffHover}
+                    openDiffNote={noopOpenDiffNote}
+                    sendDiffNoteToComposer={noopSendDiffNote}
+                    diffPlain={false}
+                    diffShowLineNumbers
+                    diffShowHunkHeaders
+                    diffRowCursor={0}
+                    diffSelectionAnchor={null}
+                    diffPlainCardKeys={EMPTY_EXPANDED_KEYS}
+                    diffHiddenLineNumberCardKeys={EMPTY_EXPANDED_KEYS}
+                    diffHiddenHunkHeaderCardKeys={EMPTY_EXPANDED_KEYS}
+                    diffRowCursorByCardKey={SPLIT_PANE_EMPTY_NUMBERS}
+                    diffSelectionAnchorByCardKey={SPLIT_PANE_EMPTY_NUMBERS}
+                    setDiffRowCursor={noopSetDiffRow}
+                    setDiffSelectionAnchor={noopSetDiffAnchor}
+                  />
+                )
+              })}
+            </TuiErrorBoundary>
+          </scrollbox>
+        )}
+      </box>
+      {focused ? (
+        <box paddingX={1} height={1}>
+          <text fg={theme.dim} wrapMode="none">
+            {fitText('j/k scroll  ⌃u/d page  g/G ends  ↵ open  esc reader', innerWidth)}
+          </text>
+        </box>
+      ) : null}
+    </box>
+  )
+}
+
+const SplitTranscriptPane = React.memo(SplitTranscriptPaneInner)
+
 export default function OpenTuiApp() {
   const renderer = useRenderer()
   const { width, height } = useTerminalDimensions()
@@ -5979,6 +6286,26 @@ export default function OpenTuiApp() {
   const [focusMode, setFocusMode] = useState(false)
   const [railVisible, setRailVisible] = useState(true)
   const [tabsEnabled, setTabsEnabled] = useState(true)
+  // Number of read-only split panes mounted beside the reader (0 = off), and
+  // which of the other open tabs they start from.
+  const [splitPaneCount, setSplitPaneCount] = useState(0)
+  // Panes are PINNED to explicit session keys, never derived positionally from
+  // "the tabs that aren't active". A positional derivation reshuffles every
+  // pane the moment the active tab changes (the candidate list reindexes), which
+  // reads as panes randomly swapping while you navigate. The reconcile effect
+  // below is the only thing that rewrites these keys.
+  const [splitPinnedKeys, setSplitPinnedKeys] = useState<string[]>([])
+  // tmux-style prefix state: true between ⌃B and the command key that follows.
+  const [splitChordPending, setSplitChordPending] = useState(false)
+  // Which split pane owns the keyboard (null = the reader does). Panes register
+  // an imperative scroll handle here so the root dispatcher can drive the
+  // focused one without every pane subscribing to the key stream.
+  const [splitFocusIndex, setSplitFocusIndex] = useState<number | null>(null)
+  const splitPaneHandlesRef = useRef(new Map<number, SplitPaneHandle>())
+  const registerSplitPaneHandle = useEffectEvent((paneIndex: number, handle: SplitPaneHandle | null) => {
+    if (handle) splitPaneHandlesRef.current.set(paneIndex, handle)
+    else splitPaneHandlesRef.current.delete(paneIndex)
+  })
   const [showToolCalls, setShowToolCalls] = useState(true)
   const [velocityScrollEnabled, setVelocityScrollEnabled] = useState(false)
   const [sidebarSort, setSidebarSort] = useState<TuiSidebarSort>('project')
@@ -8334,7 +8661,38 @@ export default function OpenTuiApp() {
   const effectiveTaskPanelWidth = taskPanelOpen ? taskPanelWidth : 0
   const maxSidebarWidth = Math.max(MIN_SIDEBAR_WIDTH, width - 4 - 1 - MIN_READER_WIDTH - effectiveTaskPanelWidth - (taskPanelOpen ? 1 : 0))
   const sidebarWidth = showRail ? clamp(sidebarWidthPreference, MIN_SIDEBAR_WIDTH, maxSidebarWidth) : 0
-  const rightPaneWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0) - effectiveTaskPanelWidth - (taskPanelOpen ? 1 : 0), 40)
+  const readerAreaWidth = Math.max(width - 4 - sidebarWidth - (showRail ? 1 : 0) - effectiveTaskPanelWidth - (taskPanelOpen ? 1 : 0), 40)
+  // Split panes take their width out of the reader area, so `rightPaneWidth`
+  // (the primary transcript's layout width, threaded through every card) keeps
+  // being the single source of truth for the reader. Panes are dropped one at a
+  // time until both they and the reader clear their minimum widths, so shrinking
+  // the terminal degrades to fewer panes instead of unreadable ones.
+  const splitCandidateSessions = openTabSessions.filter((tab) => sessionKey(tab) !== selectedSessionKey)
+  // Resolve pins to live tab objects. A pin whose tab closed, or that the user
+  // navigated into (it is now the reader), resolves to nothing and its pane
+  // simply doesn't mount this frame — the reconcile effect repairs the list.
+  const splitPinnedSessions = splitPinnedKeys.flatMap((pinnedKey) => {
+    if (pinnedKey === selectedSessionKey) return []
+    const tab = openTabSessions.find((candidate) => sessionKey(candidate) === pinnedKey)
+    return tab ? [tab] : []
+  })
+  let visibleSplitPaneCount = Math.min(splitPaneCount, SPLIT_PANE_MAX, splitPinnedSessions.length)
+  let splitPaneWidth = 0
+  while (visibleSplitPaneCount > 0) {
+    const candidateWidth = Math.floor((readerAreaWidth - visibleSplitPaneCount) / (visibleSplitPaneCount + 1))
+    if (
+      candidateWidth >= SPLIT_PANE_MIN_WIDTH
+      && readerAreaWidth - visibleSplitPaneCount * (candidateWidth + 1) >= MIN_READER_WIDTH
+    ) {
+      splitPaneWidth = candidateWidth
+      break
+    }
+    visibleSplitPaneCount -= 1
+  }
+  const splitPaneSessions = visibleSplitPaneCount > 0
+    ? splitPinnedSessions.slice(0, visibleSplitPaneCount)
+    : []
+  const rightPaneWidth = Math.max(readerAreaWidth - visibleSplitPaneCount * (splitPaneWidth + 1), 40)
   const textareaInnerWidth = Math.max(rightPaneWidth - 4, 10)
   const composerDockTextareaWidth = Math.max(width - 4, 20)
   const composerVisualLineCount = composerDraft.length === 0
@@ -11895,6 +12253,7 @@ export default function OpenTuiApp() {
           configuredSidebarWidth,
           configuredShowToolCalls,
           configuredVelocityScroll,
+          configuredSplitPanes,
         ] = await Promise.all([
           readTuiTheme(),
           readTuiProvider(),
@@ -11909,6 +12268,7 @@ export default function OpenTuiApp() {
           readTuiSidebarWidth(),
           readTuiShowToolCalls(),
           readTuiVelocityScroll(),
+          readTuiSplitPanes(),
         ])
         if (cancelled) return
         setThemeMode(configuredTheme)
@@ -11925,6 +12285,7 @@ export default function OpenTuiApp() {
         setSidebarWidthPreference(configuredSidebarWidth)
         setShowToolCalls(configuredShowToolCalls)
         setVelocityScrollEnabled(configuredVelocityScroll)
+        setSplitPaneCount(configuredSplitPanes)
         if (!configuredRailVisible || configuredFocusMode) setFocusedPane('messages')
         await refreshSessions(configuredProvider, false, true)
       } catch (err) {
@@ -12347,6 +12708,68 @@ export default function OpenTuiApp() {
     })
   })
 
+  // A pending prefix must not survive into the composer: overlay and composer
+  // key handlers run before the chord branch, so a chord left dangling there
+  // would swallow the next reader keystroke long after the user moved on.
+  useEffect(() => {
+    if (composerActive && splitChordPending) setSplitChordPending(false)
+  }, [composerActive, splitChordPending])
+
+  // Focus can outlive the pane that held it: closing a pane, a narrower
+  // terminal, or a closed tab all shrink visibleSplitPaneCount. Opening the
+  // composer also hands the keys back — the composer branch runs first, so a
+  // pane left "focused" would only be a lie in the frame.
+  useEffect(() => {
+    if (splitFocusIndex === null) return
+    if (composerActive || splitFocusIndex >= visibleSplitPaneCount) setSplitFocusIndex(null)
+  }, [composerActive, splitFocusIndex, visibleSplitPaneCount])
+
+  // Reconcile split-pane pins against the open tabs. This is the ONLY writer of
+  // splitPinnedKeys besides the explicit \ and | commands, and it holds three
+  // rules:
+  //   · a pin whose tab was closed is dropped
+  //   · navigating INTO a pinned session hands that pane the session the reader
+  //     just left, so the set of visible transcripts stays put instead of every
+  //     pane reshuffling around the new active tab
+  //   · short lists fill from the remaining tabs in tab order
+  const previousSelectedSessionKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    const previousSelected = previousSelectedSessionKeyRef.current
+    if (previousSelected !== selectedSessionKey) previousSelectedSessionKeyRef.current = selectedSessionKey
+    if (splitPaneCount === 0) {
+      setSplitPinnedKeys((current) => (current.length === 0 ? current : []))
+      return
+    }
+    setSplitPinnedKeys((current) => {
+      const candidateKeys = openTabSessions
+        .map((tab) => sessionKey(tab))
+        .filter((tabKey) => tabKey !== selectedSessionKey)
+      const next: string[] = []
+      for (const pinnedKey of current) {
+        if (next.includes(pinnedKey)) continue
+        if (candidateKeys.includes(pinnedKey)) {
+          next.push(pinnedKey)
+        } else if (
+          pinnedKey === selectedSessionKey
+          && previousSelected
+          && candidateKeys.includes(previousSelected)
+          && !current.includes(previousSelected)
+          && !next.includes(previousSelected)
+        ) {
+          next.push(previousSelected)
+        }
+      }
+      for (const candidateKey of candidateKeys) {
+        if (next.length >= splitPaneCount) break
+        if (!next.includes(candidateKey)) next.push(candidateKey)
+      }
+      const trimmed = next.slice(0, splitPaneCount)
+      const unchanged = trimmed.length === current.length
+        && trimmed.every((pinnedKey, i) => pinnedKey === current[i])
+      return unchanged ? current : trimmed
+    })
+  }, [openTabSessions, selectedSessionKey, splitPaneCount])
+
   // Keep open-tab metadata in sync when the current provider's sessions list
   // refreshes (e.g. title updates from polling). Tabs for *other* providers
   // are left untouched — they retain whatever snapshot was captured when the
@@ -12613,11 +13036,27 @@ export default function OpenTuiApp() {
           [['/', 'search'], ['n/N', 'hits'], ['u', 'unread'], ['f', 'live']],
           [['m', 'mark'], ['[ ]', 'jump'], ['⇧B', 'all'], ['b', effectiveFocus === 'sessions' ? 'tabs' : 'bookmark']],
           [['()', 'convo'], ['{}', 'tech'], ['e', 'fold'], ['v', transcriptView], ['s', `diff:${diffLayout}`], ['d', density], ['⇧W', transcriptWidth], ['i', 'think'], ['X', showToolCalls ? 'hide tools' : 'tools']],
-          [['h', 'rail'], ['⇧T', 'tasks'], ['z', 'focus'], ['V', velocityScrollEnabled ? 'vel off' : 'vel on']],
+          [['h', 'rail'], ['⇧T', 'tasks'], ['z', 'focus'], ['⌃B', visibleSplitPaneCount > 0 ? `split ${visibleSplitPaneCount}` : 'split'], ['V', velocityScrollEnabled ? 'vel off' : 'vel on']],
           [['⌃O', 'composer'], ['p', 'provider'], ['y', 'copy'], ['Q', 'reply'], ['r', 'refresh']],
           [['?', 'help'], ['q', 'quit']],
         ]
     const segs: InlineTextSegment[] = []
+    // A pending prefix takes over the bar: the chord is modal, so the only keys
+    // that matter right now are its own.
+    if (splitChordPending) {
+      return [
+        { text: '⌃B', fg: theme.amber },
+        { text: '  % split   x close   o focus   ; flip   1-2 pane   n next session   z toggle   esc cancel', fg: theme.muted },
+      ]
+    }
+    // A focused pane owns the keys, so the bar advertises its keys, not the
+    // reader's — otherwise it lists bindings that are inert right now.
+    if (splitFocusIndex !== null) {
+      return [
+        { text: `split pane ${splitFocusIndex + 1}`, fg: theme.amber },
+        { text: '  j/k scroll   ⌃u/d page   g/G ends   ↵ open as tab   ⌃B o next pane   esc reader', fg: theme.muted },
+      ]
+    }
     // Attention badge leads the bar whenever an agent is blocked on a human —
     // it must be visible regardless of which pane or mode has focus.
     if (attentionNeedsInputCount > 0) {
@@ -12638,7 +13077,7 @@ export default function OpenTuiApp() {
       segs.push({ text: `⇌ ${ATTACHED_DAEMON_HOST}`, fg: theme.cyan })
     }
     return segs
-  }, [attentionNeedsInputCount, composerActive, composerSendState, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, effectiveFocus, theme])
+  }, [attentionNeedsInputCount, composerActive, composerSendState, diffLayout, transcriptView, density, transcriptWidth, showToolCalls, velocityScrollEnabled, visibleSplitPaneCount, splitChordPending, splitFocusIndex, effectiveFocus, theme])
 
   const turnRunningForComposer = composerSendState === 'sending' || reattachedRunning
   const composerStatusMessage = composerError
@@ -13209,6 +13648,152 @@ export default function OpenTuiApp() {
     }
   })
 
+  // Split panes are driven by a tmux-style prefix chord (⌃B then a command key),
+  // so the reader's single-key namespace stays free. applySplitPaneCount is the
+  // one writer of the count — it persists and narrates every change.
+  const applySplitPaneCount = useEffectEvent((next: number, label?: string) => {
+    setSplitPaneCount(next)
+    void writeTuiSplitPanes(next).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to store split view setting')
+    })
+    if (next === 0) {
+      showNotice('info', label ?? 'Split transcript view off')
+      return
+    }
+    // splitPaneWidth is 0 when the width budget refused every pane, so say so
+    // instead of leaving the user staring at an unchanged layout.
+    if (splitPaneWidth === 0) {
+      showNotice('info', `Split panes: ${next} (terminal too narrow — widen it or hide the rail with h)`)
+      return
+    }
+    showNotice('info', label ?? `Split panes: ${next} · ⌃B o next session · ⌃B x close`)
+  })
+
+  const addSplitPane = useEffectEvent(() => {
+    if (splitCandidateSessions.length === 0) {
+      showNotice('error', 'Open another tab to split the transcript view')
+      return
+    }
+    const maxPanes = Math.min(SPLIT_PANE_MAX, splitCandidateSessions.length)
+    if (splitPaneCount >= maxPanes) {
+      showNotice('info', `Already showing ${splitPaneCount} split pane${splitPaneCount === 1 ? '' : 's'} (max ${maxPanes})`)
+      return
+    }
+    applySplitPaneCount(splitPaneCount + 1)
+  })
+
+  const closeSplitPane = useEffectEvent(() => {
+    if (splitPaneCount === 0) {
+      showNotice('info', 'No split panes open')
+      return
+    }
+    applySplitPaneCount(splitPaneCount - 1)
+  })
+
+  // ⌃B z is the quick on/off: it restores the pane count you last had open
+  // rather than always coming back with a single pane.
+  const lastSplitPaneCountRef = useRef(1)
+  const toggleSplitPanes = useEffectEvent(() => {
+    if (splitPaneCount > 0) {
+      lastSplitPaneCountRef.current = splitPaneCount
+      applySplitPaneCount(0)
+      return
+    }
+    if (splitCandidateSessions.length === 0) {
+      showNotice('error', 'Open another tab to split the transcript view')
+      return
+    }
+    const maxPanes = Math.min(SPLIT_PANE_MAX, splitCandidateSessions.length)
+    applySplitPaneCount(Math.min(lastSplitPaneCountRef.current, maxPanes))
+  })
+
+  // ── Split pane focus ───────────────────────────────────────────────────────
+  // Focus is a third keyboard owner alongside the sidebar and the reader. It is
+  // an index rather than a session key so a pane keeps focus when its pinned
+  // session changes under it (⌃B n).
+  const lastFocusedSplitPaneRef = useRef(0)
+  const focusSplitPane = useEffectEvent((paneIndex: number) => {
+    if (paneIndex < 0 || paneIndex >= visibleSplitPaneCount) return
+    lastFocusedSplitPaneRef.current = paneIndex
+    setSplitFocusIndex(paneIndex)
+    // The reader keeps its own cursor, but the sidebar must not look focused
+    // while a pane owns the keys.
+    setFocusedPane('messages')
+  })
+
+  const focusReaderFromSplit = useEffectEvent(() => {
+    setSplitFocusIndex(null)
+  })
+
+  // ⌃B o / ⌃B ←→ walk reader → pane 1 → pane 2 → reader, so repeated presses
+  // always come back around instead of dead-ending in the last pane.
+  const cycleSplitFocus = useEffectEvent((direction: 1 | -1) => {
+    if (visibleSplitPaneCount === 0) {
+      showNotice('error', 'No split panes open (⌃B % to split)')
+      return
+    }
+    const stops = visibleSplitPaneCount + 1
+    const current = splitFocusIndex === null ? 0 : splitFocusIndex + 1
+    const next = (current + direction + stops) % stops
+    if (next === 0) focusReaderFromSplit()
+    else focusSplitPane(next - 1)
+  })
+
+  // ⌃B ; — flip between the reader and the pane you were last in.
+  const toggleSplitFocus = useEffectEvent(() => {
+    if (splitFocusIndex !== null) {
+      focusReaderFromSplit()
+      return
+    }
+    if (visibleSplitPaneCount === 0) {
+      showNotice('error', 'No split panes open (⌃B % to split)')
+      return
+    }
+    focusSplitPane(Math.min(lastFocusedSplitPaneRef.current, visibleSplitPaneCount - 1))
+  })
+
+  // Promote the focused pane's session to the active tab. The pin reconciler
+  // then hands that pane the session the reader just left, so the pair swaps
+  // rather than both showing the same transcript.
+  const openFocusedSplitPane = useEffectEvent(() => {
+    if (splitFocusIndex === null) return
+    const target = splitPaneSessions[splitFocusIndex]
+    if (!target) return
+    selectTabSession(target)
+    focusReaderFromSplit()
+  })
+
+  // Advance the FOCUSED pane (or the first, from the reader) to the next tab no
+  // pane is already showing. Only that pane moves — the others keep their
+  // pinned sessions, so cycling reads as "flip through the rest" instead of
+  // scrambling every pane.
+  const cycleSplitPaneSession = useEffectEvent(() => {
+    if (splitPaneCount === 0) {
+      showNotice('error', 'Split transcript view is off (⌃B % to split)')
+      return
+    }
+    const candidateKeys = splitCandidateSessions.map((tab) => sessionKey(tab))
+    if (candidateKeys.length <= splitPaneCount) {
+      showNotice('info', 'No other open tab to swap into the split pane')
+      return
+    }
+    const target = splitFocusIndex ?? 0
+    setSplitPinnedKeys((current) => {
+      if (target >= current.length) return current
+      const heldByOtherPanes = new Set(current.filter((_, i) => i !== target))
+      const from = candidateKeys.indexOf(current[target]!)
+      for (let step = 1; step <= candidateKeys.length; step += 1) {
+        const nextKey = candidateKeys[(from + step) % candidateKeys.length]!
+        if (nextKey !== current[target] && !heldByOtherPanes.has(nextKey)) {
+          const next = [...current]
+          next[target] = nextKey
+          return next
+        }
+      }
+      return current
+    })
+  })
+
   const executeCommandPalette = useEffectEvent((id: string) => {
     closeCommandPalette()
     switch (id) {
@@ -13389,6 +13974,24 @@ export default function OpenTuiApp() {
         void writeTuiTabsEnabled(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tab setting'))
         break
       }
+      case 'split-add':
+        addSplitPane()
+        break
+      case 'split-close':
+        closeSplitPane()
+        break
+      case 'split-toggle':
+        toggleSplitPanes()
+        break
+      case 'split-focus':
+        cycleSplitFocus(1)
+        break
+      case 'split-focus-back':
+        focusReaderFromSplit()
+        break
+      case 'split-cycle':
+        cycleSplitPaneSession()
+        break
       case 'tab-prev': {
         setFocusedPane('messages')
         const prevIdx = Math.max(activeTabIndex - 1, 0)
@@ -14310,6 +14913,77 @@ export default function OpenTuiApp() {
         handled(() => moveComposerHistory(-1))
         return
       }
+      return
+    }
+
+    // ── tmux-style split chord ────────────────────────────────────────────────
+    // Must sit at the very top of the non-composer path: the pending-chord
+    // branch swallows the command key, and anything above it (notably the
+    // q/Esc quit handler) would otherwise steal `x`, `o` or a cancelling Esc.
+    if (splitChordPending) {
+      handled(() => {
+        setSplitChordPending(false)
+        if (key.name === 'escape' || isCtrl('c') || isCtrl('g')) {
+          showNotice('info', 'Split chord cancelled')
+          return
+        }
+        // % and " are tmux's split keys; v/s are the vim-shaped aliases.
+        if (sequence === '%' || sequence === '"' || sequence === 'v' || sequence === 's') {
+          addSplitPane()
+          return
+        }
+        if (sequence === 'x') { closeSplitPane(); return }
+        if (sequence === 'z') { toggleSplitPanes(); return }
+        // Focus movement, tmux-shaped: o/→/tab walk forward, ← walks back,
+        // ; flips reader↔last pane, digits jump straight to a pane.
+        if (sequence === 'o' || key.name === 'right' || key.name === 'tab') { cycleSplitFocus(1); return }
+        if (key.name === 'left') { cycleSplitFocus(-1); return }
+        if (sequence === ';') { toggleSplitFocus(); return }
+        if (/^[1-9]$/.test(sequence)) { focusSplitPane(Number(sequence) - 1); return }
+        if (sequence === 'n') { cycleSplitPaneSession(); return }
+        if (sequence === '?') {
+          showNotice('info', '⌃B: % split · x close · o focus next · ; flip · 1-2 pane · n next session · z toggle')
+          return
+        }
+        showNotice('info', `⌃B ${sequence || key.name} is not a split chord — % split · x close · o focus · n next session · z toggle`)
+      })
+      return
+    }
+
+    if (isCtrl('b')) {
+      handled(() => setSplitChordPending(true))
+      return
+    }
+
+    // ── Focused split pane owns the keys ──────────────────────────────────────
+    // A focused pane is a reader, not an editor: it scrolls, it opens, it hands
+    // focus back. Everything else is swallowed rather than falling through to
+    // the primary reader — a j that scrolled the pane must not also move the
+    // reader's cursor behind it.
+    if (splitFocusIndex !== null) {
+      const paneHandle = splitPaneHandlesRef.current.get(splitFocusIndex)
+      const pageRows = Math.max(Math.floor(transcriptViewportRows * 0.8), 1)
+      if (key.name === 'escape') { handled(focusReaderFromSplit); return }
+      if (sequence === 'j' || key.name === 'down') { handled(() => paneHandle?.scrollByRows(2)); return }
+      if (sequence === 'k' || key.name === 'up') { handled(() => paneHandle?.scrollByRows(-2)); return }
+      if (isCtrl('d')) { handled(() => paneHandle?.scrollByRows(pageRows)); return }
+      if (isCtrl('u')) { handled(() => paneHandle?.scrollByRows(-pageRows)); return }
+      if (sequence === 'G') { handled(() => paneHandle?.scrollToBottom()); return }
+      if (sequence === 'g') { handled(() => paneHandle?.scrollToTop()); return }
+      if (key.name === 'return') { handled(openFocusedSplitPane); return }
+      if (key.name === 'tab') { handled(() => cycleSplitFocus(1)); return }
+      // Quit and the help palette stay reachable; the rest is inert while a
+      // pane holds focus, so no reader state changes invisibly behind it.
+      if ((key.name === 'q' && !key.shift) || isCtrl('c')) { handled(requestExit); return }
+      if (sequence === '?') {
+        handled(() => {
+          setCommandPaletteIndex(0)
+          setCommandPaletteQuery('')
+          setCommandPaletteOpen(true)
+        })
+        return
+      }
+      handled(() => {})
       return
     }
 
@@ -15679,7 +16353,7 @@ export default function OpenTuiApp() {
             // Focused pane lights its frame in its own title color (transcript →
             // provider accent, like the sidebar → cyan) so it's obvious which
             // side has focus instead of the frame staying uniformly dim.
-            borderColor={effectiveFocus === 'messages'
+            borderColor={effectiveFocus === 'messages' && splitFocusIndex === null
               ? providerAccent
               : transcriptView === 'stream'
                 ? theme.surface
@@ -15802,7 +16476,7 @@ export default function OpenTuiApp() {
               <scrollbox
                 ref={transcriptScrollRef}
                 style={{ height: transcriptViewportRows }}
-                focused={effectiveFocus === 'messages'}
+                focused={effectiveFocus === 'messages' && splitFocusIndex === null}
                 // Match the card surface, not theme.bg: cards render on `surface`,
                 // so when bg is darker than surface (e.g. SENTRY #150f23 vs
                 // #1f1633) the cardGap rows between cards revealed bg as dark
@@ -15888,6 +16562,30 @@ export default function OpenTuiApp() {
           ) : null}
           </box>
         </box>
+
+        {splitPaneSessions.map((splitSession, splitIndex) => (
+          <box key={`split:${sessionKey(splitSession)}`} width={splitPaneWidth} overflow="hidden" marginLeft={1}>
+            <SplitTranscriptPane
+              session={splitSession}
+              paneIndex={splitIndex}
+              focused={splitFocusIndex === splitIndex}
+              registerHandle={registerSplitPaneHandle}
+              theme={theme}
+              densityState={densityState}
+              density={density}
+              showToolCalls={showToolCalls}
+              syntaxStyle={syntaxStyle}
+              thinkingMode={thinkingMode}
+              diffLayout={diffLayout}
+              imessageStyle={imessageStyle}
+              transcriptWidth={transcriptWidth}
+              transcriptView={transcriptView}
+              width={splitPaneWidth}
+              height={mainContentHeight - 2}
+              onActivate={focusSplitPane}
+            />
+          </box>
+        ))}
 
         {taskPanelOpen ? (
           <box width={taskPanelWidth} overflow="hidden" marginLeft={1}>

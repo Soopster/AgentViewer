@@ -15,6 +15,7 @@ import {
   getConfiguredTuiSidebarWidth,
   getConfiguredTuiShowToolCalls,
   getConfiguredTuiTabsEnabled,
+  getConfiguredTuiSplitPanes,
   getConfiguredTuiTheme,
   getConfiguredTuiTranscriptView,
   getConfiguredTuiTranscriptWidth,
@@ -28,6 +29,7 @@ import {
   setConfiguredTuiShowToolCalls,
   setConfiguredTuiSidebarWidth,
   setConfiguredTuiTabsEnabled,
+  setConfiguredTuiSplitPanes,
   setConfiguredTuiTheme,
   setConfiguredTuiThemeSync,
   setConfiguredTuiTranscriptView,
@@ -226,6 +228,14 @@ export async function readTuiTabsEnabled(): Promise<boolean> {
 
 export async function writeTuiTabsEnabled(tabsEnabled: boolean): Promise<void> {
   await setConfiguredTuiTabsEnabled(tabsEnabled)
+}
+
+export async function readTuiSplitPanes(): Promise<number> {
+  return getConfiguredTuiSplitPanes()
+}
+
+export async function writeTuiSplitPanes(splitPanes: number): Promise<void> {
+  await setConfiguredTuiSplitPanes(splitPanes)
 }
 
 export async function readTuiShowToolCalls(): Promise<boolean> {

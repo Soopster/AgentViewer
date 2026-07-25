@@ -36,6 +36,33 @@ if (!frame.includes('COMPOSER')) {
   throw new Error('Full app frame missing the composer dock')
 }
 
+// Split transcript panes ride a tmux-style prefix: ⌃B arms the chord (the
+// status bar becomes the chord legend), then `%` runs the split — which must
+// refuse here rather than mount an empty pane, since no second tab is open.
+act(() => {
+  setup.mockInput.pressKey('b', { ctrl: true })
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 100))
+})
+const chordFrame = captureCharFrame()
+if (!chordFrame.includes('% split')) {
+  throw new Error(`Ctrl+B did not arm the split chord:\n${chordFrame}`)
+}
+
+act(() => {
+  setup.mockInput.pressKey('%')
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 200))
+})
+const splitFrame = captureCharFrame()
+if (!splitFrame.includes('Open another tab to split')) {
+  throw new Error(`Ctrl+B % did not run the split transcript command:\n${splitFrame}`)
+}
+
 // Exercise the real root keyboard dispatcher and overlay hand-off. This is
 // intentionally App-level: the CoordinationPopover smoke also covers `n`, but
 // it cannot prove the board closes and the New Workflow launcher replaces it.
@@ -66,7 +93,7 @@ if (!coordinationFrame.includes('Use separate teammate checkouts')) {
   throw new Error(`New Workflow is missing the optional worktree control:\n${coordinationFrame}`)
 }
 
-console.log('Full App smoke render and Agent Operations N launch passed')
+console.log('Full App smoke render, Agent Operations N launch, and split chord passed')
 // Boot effects leave live timers (session polls, registry reconcile) — exit
 // explicitly instead of waiting for them.
 process.exit(0)

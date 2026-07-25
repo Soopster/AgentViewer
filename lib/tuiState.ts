@@ -112,11 +112,16 @@ type TuiState = {
   transcriptView?: unknown
   transcriptWidth?: unknown
   tabsEnabled?: unknown
+  splitPanes?: unknown
   showToolCalls?: unknown
   velocityScroll?: unknown
   sidebarSort?: unknown
   sessionReaderState?: unknown
 }
+
+// Mirrors SPLIT_PANE_MAX in the OpenTUI reader — the persisted value is clamped
+// here so a hand-edited tui.json can't ask for panes the layout won't mount.
+export const MAX_TUI_SPLIT_PANES = 2
 
 export type TuiSidebarSort = 'project' | 'time'
 export type TuiDiffLayout = 'stack' | 'split'
@@ -263,6 +268,16 @@ export async function getConfiguredTuiTabsEnabled(): Promise<boolean> {
 
 export async function setConfiguredTuiTabsEnabled(tabsEnabled: boolean): Promise<void> {
   await writeTuiState({ tabsEnabled })
+}
+
+export async function getConfiguredTuiSplitPanes(): Promise<number> {
+  const parsed = await readTuiState()
+  const value = typeof parsed.splitPanes === 'number' ? Math.floor(parsed.splitPanes) : 0
+  return Math.min(Math.max(value, 0), MAX_TUI_SPLIT_PANES)
+}
+
+export async function setConfiguredTuiSplitPanes(splitPanes: number): Promise<void> {
+  await writeTuiState({ splitPanes: Math.min(Math.max(Math.floor(splitPanes), 0), MAX_TUI_SPLIT_PANES) })
 }
 
 export async function getConfiguredTuiShowToolCalls(): Promise<boolean> {
