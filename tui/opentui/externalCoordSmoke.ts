@@ -981,4 +981,70 @@ assert.ok(
   `Expected the mailbox sweep to ping the lead about the leftover task, got: ${JSON.stringify(idleLeadInbox.messages)}`,
 )
 
+// Shared-checkout completion gate must not deadlock. Two teammates editing
+// DISJOINT files out of one checkout used to block each other forever: the gate
+// blamed every dirty file on whoever completed first, so each lane's work was
+// reported as the other's "changes outside granted paths" and neither could
+// ever finish without destroying the other's files.
+const deadlockRun = await coordination.createExternalProtocolRun({
+  prompt: 'Two lanes editing disjoint files in one shared checkout',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Deadlock lead',
+  maxAgents: 3,
+})
+const deadlockLead = deadlockRun.participant
+const laneA = (await coordination.joinExternalProtocolRun({
+  runId: deadlockLead.runId,
+  provider: 'codex',
+  cwd: testCwd,
+  participantName: 'Lane A',
+  capabilities: { unattended: true },
+})).participant
+const laneB = (await coordination.joinExternalProtocolRun({
+  runId: deadlockLead.runId,
+  provider: 'claude',
+  cwd: testCwd,
+  participantName: 'Lane B',
+  capabilities: { unattended: true },
+})).participant
+
+const taskA = (await coordination.createExternalProtocolTask(deadlockLead, {
+  title: 'Lane A edits its own file',
+  detail: 'Write lane-a.txt only.',
+  paths: ['lane-a.txt'],
+})).task
+const taskB = (await coordination.createExternalProtocolTask(deadlockLead, {
+  title: 'Lane B edits its own file',
+  detail: 'Write lane-b.txt only.',
+  paths: ['lane-b.txt'],
+})).task
+assert.ok(taskA && taskB, 'expected both deadlock-regression tasks to be created')
+
+await coordination.claimExternalProtocolTask(laneA, taskA.id)
+await coordination.claimExternalProtocolTask(laneB, taskB.id)
+// Both lanes go dirty BEFORE either completes — the exact interleaving that
+// used to wedge the board.
+writeFileSync(path.join(testCwd, 'lane-a.txt'), 'lane A work\n')
+writeFileSync(path.join(testCwd, 'lane-b.txt'), 'lane B work\n')
+
+const laneAResult = await coordination.completeExternalProtocolTask(laneA, {
+  taskId: taskA.id,
+  summary: 'Lane A finished its own file.',
+})
+assert.equal(
+  laneAResult.accepted,
+  true,
+  `Lane A blocked by lane B's disjoint edits: ${laneAResult.reason ?? ''}`,
+)
+const laneBResult = await coordination.completeExternalProtocolTask(laneB, {
+  taskId: taskB.id,
+  summary: 'Lane B finished its own file.',
+})
+assert.equal(
+  laneBResult.accepted,
+  true,
+  `Lane B blocked by lane A's edits: ${laneBResult.reason ?? ''}`,
+)
+
 console.log('External Coordinator smoke passed')

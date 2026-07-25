@@ -880,13 +880,11 @@ export default function CommandPalette({
       setActiveId(null)
       return
     }
-    setActiveId((current) => {
-      if (current && visibleItems.some((item) => item.id === current)) return current
-      const nextId = visibleItems[0]?.id ?? null
-      activeIdRef.current = nextId
-      return nextId
-    })
-  }, [open, visibleItems])
+    if (activeId && visibleItems.some((item) => item.id === activeId)) return
+    const nextId = visibleItems[0]?.id ?? null
+    activeIdRef.current = nextId
+    setActiveId(nextId)
+  }, [activeId, open, visibleItems])
 
   const activeIndex = visibleItems.findIndex((item) => item.id === activeId)
   const activeItem = activeIndex >= 0 ? visibleItems[activeIndex] : null

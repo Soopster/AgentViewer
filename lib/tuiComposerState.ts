@@ -53,6 +53,8 @@ export function scheduleWriteComposerDraft(storageKey: string, text: string): vo
 }
 
 export function readComposerDraft(storageKey: string): string {
+  const pending = pendingDrafts.get(storageKey)
+  if (pending) return pending.text
   const store = readStoreSync()
   return store[storageKey]?.text ?? ''
 }

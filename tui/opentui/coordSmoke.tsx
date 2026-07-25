@@ -104,7 +104,11 @@ const MARKERS = [
   'TOPOLOGY',
   'nova→le',
   'lead→no',
-  'request!',
+  // Inspector mail rows are column-aligned, so the counterparty is padded out to
+  // a fixed width before the kind — assert the parts, not one spacing-sensitive
+  // string that breaks on every column tweak.
+  '→ lead',
+  'request ?',
   '2 workflows',
   '3 agents',
   'finished provide',

@@ -423,6 +423,7 @@ export default function FileViewer({ open, cwd, canInsert, onOpenChange, onInser
       onOpenChange={onOpenChange}
       centered
       insetPadding={8}
+      ariaLabel="File browser"
       className="flex-col rounded-2xl"
       style={{
         width: 'min(calc(100vw - 16px), 2000px)',

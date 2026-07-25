@@ -91,7 +91,10 @@ export function useChannelBridge({ open, available }: { open: boolean; available
 
   const lastChatIdRef = useRef<string | undefined>(undefined)
   const openRef = useRef(open)
-  openRef.current = open
+
+  useEffect(() => {
+    openRef.current = open
+  }, [open])
 
   const config = useMemo<ChannelBridgeConfig>(() => ({ baseUrl, token: token || undefined }), [baseUrl, token])
   const routeComposer = available && routeComposerState

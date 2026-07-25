@@ -279,6 +279,8 @@ npm run doctor     # React diagnostics helper
 
 OpenTUI is the default terminal runtime. It supports provider selection, session navigation, transcript reading, tabs, search, folding, density and focus controls, theme selection, analytics, Git status, clipboard copy, refresh, and provider-backed sends where wired through the shared TUI service.
 
+Transcript splits use a tmux-style `Ctrl+B` prefix (`Ctrl+B %` to add, `Ctrl+B o` to focus, and `Ctrl+B x` to close the focused pane). Inside tmux, tmux consumes `Ctrl+B`; use the `?` command palette for split actions, or send tmux's prefix through before the Agent Viewer chord.
+
 ### Agent Teams
 
 Press `Ctrl+Shift+N` anywhere in the OpenTUI app to launch a coordinated workflow directly, or `Ctrl+Shift+A` to open Agent Operations first and press `n` from there. The launcher creates a lead that decomposes the request, a shared task board, direct teammate messages, path locks, optional completion gates, and an optional plan-approval guard. Teammates use isolated git worktrees by default; turn off **Isolate teammates in git worktrees** in the launcher only when they should deliberately share the current checkout.

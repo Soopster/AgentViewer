@@ -51,6 +51,12 @@ const TERMINAL_TASKS = new Set(['completed', 'failed', 'cancelled'])
 const ATTENTION_EVENTS = new Set(['agent.blocked', 'task.failed', 'lock.denied', 'plan.rejected', 'review.requested'])
 const STUCK_AGENT_STATUSES = new Set(['blocked', 'failed', 'stopped'])
 const ERROR_EVENT_TYPES = new Set(['task.failed', 'agent.blocked'])
+const LIVE_AGENT_STATUSES = new Set(['ready', 'idle', 'working', 'blocked'])
+const AGENT_FRESH_MS = 90_000
+const AGENT_DEAD_MS = 5 * 60_000
+
+type AgentLiveness = 'fresh' | 'stale' | 'dead'
+type EventClass = 'message' | 'finding' | 'task' | 'lock' | 'plan' | 'run'
 
 function paneNumber(section: ControlCenterSection): number {
   return section === 'overview' ? 1 : section === 'tasks' ? 2 : section === 'team' ? 3 : 4
@@ -149,11 +155,44 @@ function taskTone(task: ProtocolTask, theme: TuiThemePalette): string {
   return theme.dim
 }
 
+function agentLiveness(agent: ProtocolAgent, now: number): AgentLiveness {
+  if (agent.turnActive) return 'fresh'
+  if (!agent.lastSeenAt) return 'dead'
+  const heartbeatAge = Math.max(0, now - new Date(agent.lastSeenAt).getTime())
+  if (heartbeatAge <= AGENT_FRESH_MS) return 'fresh'
+  return heartbeatAge <= AGENT_DEAD_MS ? 'stale' : 'dead'
+}
+
+function eventClass(event: AgentProtocolEvent): EventClass {
+  if (event.type === 'message' || event.type === 'handoff') return 'message'
+  if (event.type === 'finding' || event.type === 'learning') return 'finding'
+  if (event.type.startsWith('task.') || event.type.startsWith('agent.') || event.type === 'review.requested' || event.type === 'shutdown.requested') return 'task'
+  if (event.type.startsWith('lock.')) return 'lock'
+  if (event.type.startsWith('plan.')) return 'plan'
+  return 'run'
+}
+
+function eventClassLabel(category: EventClass): string {
+  return category === 'message' ? 'MSG' : category === 'finding' ? 'FIND' : category.toUpperCase()
+}
+
 function eventTone(event: AgentProtocolEvent, theme: TuiThemePalette): string {
+  if (event.type === 'task.failed' || event.type === 'plan.rejected') return theme.red
   if (ATTENTION_EVENTS.has(event.type)) return theme.amber
-  if (event.type === 'task.completed' || event.type === 'plan.approved' || event.type === 'finding') return theme.green
-  if (event.type === 'message' || event.type === 'handoff') return theme.violet
+  const category = eventClass(event)
+  if (category === 'message') return theme.violet
+  if (category === 'finding' || event.type === 'task.completed' || event.type === 'plan.approved') return theme.green
+  if (category === 'lock' || category === 'plan') return theme.amber
+  if (category === 'run') return theme.pink
   return theme.cyan
+}
+
+function lockPathsOverlap(left: string, right: string): boolean {
+  if (left === '**' || right === '**') return true
+  const normalize = (value: string) => value.replace(/\/\*\*?$/, '').replace(/\/+$/, '')
+  const a = normalize(left)
+  const b = normalize(right)
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
 }
 
 export function CoordinationControlCenter({
@@ -198,7 +237,7 @@ export function CoordinationControlCenter({
   const leftW = Math.max(24, Math.floor(innerW * 0.27))
   const rightW = Math.max(31, Math.floor(innerW * 0.29))
   const centerW = Math.max(innerW - leftW - rightW - 2, 20)
-  const inspectorH = Math.min(24, Math.max(18, Math.floor(bodyH * 0.48)))
+  const inspectorH = Math.min(22, Math.max(15, Math.floor(bodyH * 0.46)))
   const showProviderHealth = innerW >= 165
   const showTaskColumns = centerW >= 58
   const showInspectorDetails = rightW >= 40 && inspectorH >= 20
@@ -206,9 +245,48 @@ export function CoordinationControlCenter({
   const run = snapshot?.run ?? null
   const agents = snapshot?.agents ?? []
   const tasks = snapshot?.tasks ?? []
+  const locks = snapshot?.locks ?? []
+  const messages = snapshot?.messages ?? []
   const events = snapshot?.events ?? []
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents])
   const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks])
+  const taskDependentsById = useMemo(() => {
+    const dependents = new Map<string, string[]>()
+    for (const task of tasks) {
+      for (const dependencyId of task.blockedBy) {
+        const current = dependents.get(dependencyId)
+        if (current) current.push(task.id)
+        else dependents.set(dependencyId, [task.id])
+      }
+    }
+    return dependents
+  }, [tasks])
+  const taskBlockReasonById = useMemo(() => {
+    const reasons = new Map<string, string>()
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index]
+      if (!event.taskId || reasons.has(event.taskId)) continue
+      if (event.type === 'agent.blocked' || event.type === 'task.failed' || event.type === 'plan.rejected' || event.type === 'lock.denied') {
+        reasons.set(event.taskId, event.detail ?? event.summary ?? event.type)
+      }
+    }
+    return reasons
+  }, [events])
+  const taskLockContentionById = useMemo(() => {
+    const contention = new Map<string, string[]>()
+    const active = locks.filter((lock) => lock.status === 'active')
+    for (const denied of locks) {
+      if (denied.status !== 'denied' || !denied.taskId) continue
+      const holders = active.filter((lock) => lock.agentId !== denied.agentId && lockPathsOverlap(lock.path, denied.path))
+      const labels = holders.length > 0
+        ? holders.map((lock) => `${lock.path}:${agentsById.get(lock.agentId)?.name ?? lock.agentId}`)
+        : [`${denied.path}:denied`]
+      const current = contention.get(denied.taskId)
+      if (current) current.push(...labels)
+      else contention.set(denied.taskId, labels)
+    }
+    return contention
+  }, [agentsById, locks])
   const snapshotsById = useMemo(() => {
     const combined = new Map(fleetSnapshots)
     if (run && snapshot) combined.set(run.id, snapshot)
@@ -225,7 +303,8 @@ export function CoordinationControlCenter({
     verify: filteredTasks.filter((task) => taskStage(task) === 'verify'),
   }), [filteredTasks])
   const activityFooterH = 2
-  const eventRows = Math.max(bodyH - inspectorH - 7, 4)
+  const activityDetailH = 3
+  const eventRows = Math.max(bodyH - inspectorH - activityDetailH - 7, 3)
   const selectedEventIndex = selectedEvent ? filteredEvents.indexOf(selectedEvent) : filteredEvents.length - 1
   const visibleEvents = visibleWindow(filteredEvents, selectedEventIndex, eventRows)
   const latestAgentEvent = inspectedAgent ? [...events].reverse().find((event) => event.agentId === inspectedAgent.id) : undefined
@@ -241,20 +320,101 @@ export function CoordinationControlCenter({
     ...agents.filter((agent) => agent.role === 'lead'),
     ...agents.filter((agent) => agent.role !== 'lead'),
   ], [agents])
-  const messageByEventKey = useMemo(() => {
-    const byKey = new Map<string, ProtocolRunSnapshot['messages'][number]>()
-    for (const message of snapshot?.messages ?? []) {
-      byKey.set(`${message.fromAgentId}\u0000${message.body}`, message)
+  const messageMetaByEvent = useMemo(() => {
+    const buckets = new Map<string, ProtocolRunSnapshot['messages']>()
+    for (const message of messages) {
+      const key = `${message.fromAgentId}\u0000${message.body}`
+      const current = buckets.get(key)
+      if (current) current.push(message)
+      else buckets.set(key, [message])
     }
-    return byKey
-  }, [snapshot?.messages])
+    const byEvent = new Map<AgentProtocolEvent, {
+      kind: ProtocolRunSnapshot['messages'][number]['kind']
+      replyRequired: boolean
+      unanswered: boolean
+      recipient: string
+      body: string
+    }>()
+    for (const event of events) {
+      if (event.type !== 'message') continue
+      const candidates = buckets.get(`${event.agentId}\u0000${event.summary ?? ''}`) ?? []
+      const exact = candidates.filter((message) => message.createdAt === event.timestamp)
+      const matching = exact.length > 0 ? exact : candidates
+      if (matching.length === 0) continue
+      const target = event.to && ['all', 'lead'].includes(event.to)
+        ? event.to
+        : [...new Set(matching.map((message) => agentsById.get(message.toAgentId)?.name ?? message.toAgentId))].join(',')
+      byEvent.set(event, {
+        kind: matching[0].kind,
+        replyRequired: matching.some((message) => message.replyRequired),
+        unanswered: matching.some((message) => message.replyRequired && !message.resolvedAt),
+        recipient: target,
+        body: matching[0].body,
+      })
+    }
+    return byEvent
+  }, [agentsById, events, messages])
+  const inspectedMessages = useMemo(() => inspectedAgent
+    ? messages.filter((message) => message.fromAgentId === inspectedAgent.id || message.toAgentId === inspectedAgent.id)
+    : [], [inspectedAgent, messages])
+  const inspectedTasks = useMemo(() => inspectedAgent
+    ? tasks.filter((task) => task.ownerAgentId === inspectedAgent.id)
+    : [], [inspectedAgent, tasks])
+  const inspectedDeniedLocks = useMemo(() => inspectedAgent
+    ? locks.filter((lock) => lock.agentId === inspectedAgent.id && lock.status === 'denied')
+    : [], [inspectedAgent, locks])
+  const agentMailCounts = useMemo(() => {
+    const counts = new Map<string, { sent: number; received: number }>()
+    for (const agent of agents) counts.set(agent.id, { sent: 0, received: 0 })
+    for (const message of messages) {
+      const sent = counts.get(message.fromAgentId)
+      if (sent) sent.sent += 1
+      const received = counts.get(message.toAgentId)
+      if (received) received.received += 1
+    }
+    return counts
+  }, [agents, messages])
   const worktree = inspectedAgent?.worktreeBranch && inspectedAgent.worktreePath !== run?.baseCwd
     ? worktreeStats.get(inspectedAgent.worktreePath)
     : undefined
   const completed = tasks.filter((task) => task.status === 'completed').length
-  const undelivered = snapshot?.messages.filter((message) => !message.deliveredAt).length ?? 0
+  const undelivered = messages.filter((message) => !message.deliveredAt).length
+  const unansweredReplies = messages.filter((message) => message.replyRequired && !message.resolvedAt)
+  const staleAgents = agents.filter((agent) => LIVE_AGENT_STATUSES.has(agent.status) && agentLiveness(agent, now) !== 'fresh')
+  const deniedLocks = locks.filter((lock) => lock.status === 'denied')
+  const failedTasks = tasks.filter((task) => task.status === 'failed')
+  const hasRunAttention = unansweredReplies.length > 0 || staleAgents.length > 0 || deniedLocks.length > 0 || failedTasks.length > 0
   const providerSummary = PROVIDERS.map((provider) => ({ provider, count: fleet.providers.get(provider) ?? 0 }))
   const inspectedAgentIndex = inspectedAgent ? agents.findIndex((agent) => agent.id === inspectedAgent.id) : -1
+  const topologyAgentIndex = inspectedAgent ? topologyAgents.findIndex((agent) => agent.id === inspectedAgent.id) : -1
+  const inspectedLiveness = inspectedAgent ? agentLiveness(inspectedAgent, now) : 'dead'
+  // "external:<agentId>" is a synthetic id with no transcript behind it. Saying
+  // so once is the useful part; echoing the raw id only pushed the line past the
+  // pane width so it truncated mid-token ("external:external-").
+  const inspectedSessionIdentity = inspectedAgent?.sessionId.startsWith('external:')
+    ? 'no readable transcript · external MCP participant'
+    : inspectedAgent?.sessionId ?? 'no session'
+  const inspectedMailSent = inspectedAgent ? inspectedMessages.filter((message) => message.fromAgentId === inspectedAgent.id).length : 0
+  const inspectedMailReceived = inspectedMessages.length - inspectedMailSent
+  const inspectedCompletedTasks = inspectedTasks.filter((task) => task.status === 'completed')
+  const inspectedActiveTasks = inspectedTasks.filter((task) => task.status !== 'completed' && task.status !== 'cancelled')
+  const inspectedBlockedReason = agentErrorEvent?.detail ?? agentErrorEvent?.summary
+    ?? (inspectedTask ? taskBlockReasonById.get(inspectedTask.id) : undefined)
+  const recentInspectedMessages = inspectedMessages.slice(-6).reverse()
+  // Report where agents ACTUALLY work, not just the run flag: a run created
+  // with worktrees enabled can still be staffed by `--shared` workers that all
+  // sit in one checkout, and labelling that "isolated checkouts" sends an
+  // engineer debugging a cross-lane conflict down the wrong path.
+  const checkoutIsShared = run?.useWorktrees === false || (() => {
+    const seen = new Set<string>()
+    return agents.some((agent) => {
+      const dir = agent.worktreePath.replace(/\/+$/, '')
+      if (!dir) return false
+      if (seen.has(dir)) return true
+      seen.add(dir)
+      return false
+    })
+  })()
   const workspace = run?.baseCwd.split('/').filter(Boolean).at(-1) ?? '—'
   const branch = agents.find((agent) => agent.role === 'lead')?.worktreeBranch || 'main'
   const runElapsed = run ? elapsed(run.createdAt, ['completed', 'failed', 'stopped'].includes(run.status) ? run.updatedAt : now) : '—'
@@ -264,17 +424,27 @@ export function CoordinationControlCenter({
   const blockedTasks = tasks.filter((task) => task.status === 'blocked' || task.status === 'failed').length
   const canRerunTask = blockedTasks > 0 && run !== null && !['completed', 'failed', 'stopped'].includes(run.status)
   const assignedTasks = tasks.filter((task) => task.ownerAgentId).length
-  const activeLocks = snapshot?.locks.filter((lock) => lock.status === 'active').length ?? 0
+  const activeLocks = locks.filter((lock) => lock.status === 'active').length
   const lastActivityAge = events.length > 0 ? age(events.at(-1)?.timestamp, now) : '—'
   const topologyLabel = ` TOPOLOGY · ${agents.length} agents · ${snapshot?.messages.length ?? 0} messages `
+  // Split the inspector's remaining rows between the mail log and the topology
+  // tree instead of hard-coding both. The topology only needs one row per agent,
+  // so on a small roster the leftover rows go to mail exchanges — previously
+  // they were left blank while the mail log was clipped to a single line.
+  const inspectorFixedRows = (showInspectorDetails ? 9 : 8) + (inspectedBlockedReason ? 1 : 0)
+  const inspectorFreeRows = Math.max(inspectorH - inspectorFixedRows, 3)
+  const topologyRows = Math.max(Math.min(topologyAgents.length, inspectorFreeRows - 1), 2)
+  const inspectorMailRows = Math.max(Math.min(inspectorFreeRows - topologyRows, recentInspectedMessages.length), 1)
   const selectedEventAgent = selectedEvent ? agentsById.get(selectedEvent.agentId) : undefined
+  const selectedEventMessage = selectedEvent ? messageMetaByEvent.get(selectedEvent) : undefined
+  const selectedEventBody = selectedEventMessage?.body ?? selectedEvent?.detail ?? selectedEvent?.summary ?? 'No detail'
   const contextualKeys = section === 'overview'
     ? run ? 'j/k workflow · enter board · [/] switch run' : 'n create first workflow'
     : section === 'tasks'
-      ? `j/k task${selectedTask?.ownerAgentId ? ' · enter owner' : ''} · / filter${selectedTaskPlanState === 'awaiting' ? ' · a approve · R reject' : selectedTask && (selectedTask.status === 'blocked' || selectedTask.status === 'failed') ? ' · R rerun' : ''} · f fail · m ${selectedTask?.ownerAgentId ? 'owner' : 'lead'}`
+      ? `j/k task${selectedTask?.ownerAgentId ? ' · ↵ transcript' : ''} · / filter${selectedTaskPlanState === 'awaiting' ? ' · a approve · R reject' : selectedTask && (selectedTask.status === 'blocked' || selectedTask.status === 'failed') ? ' · R rerun' : ''} · f fail · m ${selectedTask?.ownerAgentId ? 'owner' : 'lead'}`
       : section === 'team'
-        ? `j/k agent${inspectedAgent ? ` · enter session · x interrupt${run?.useWorktrees === false ? '' : ' · w merge'} · m message${STUCK_AGENT_STATUSES.has(inspectedAgent.status) ? ' · R rerun' : ''}` : ''}`
-        : `j/k event${selectedEventAgent ? ' · enter session' : ''} · g tail · / filter · m ${selectedEventAgent ? 'event agent' : 'lead'}`
+        ? `j/k agent${inspectedAgent ? ` · ↵ transcript · x interrupt${run?.useWorktrees === false ? '' : ' · w merge'} · m message${STUCK_AGENT_STATUSES.has(inspectedAgent.status) ? ' · R rerun' : ''}` : ''}`
+        : `j/k event${selectedEventAgent ? ' · ↵ transcript' : ''} · g tail · / filter · m ${selectedEventAgent ? 'event agent' : 'lead'}`
   const globalKeys = innerW >= 154
     ? `1-4 focus · tab next · G agent changes · n new · M broadcast · s stop · D delete${run?.useWorktrees === false ? '' : ' · c cleanup'}${canCopyJoinCommand ? ' · i join cmd' : ''} · r refresh · q close`
     : '1-4 focus · tab next · G changes · n new · M all · s stop · r refresh · q close'
@@ -308,7 +478,7 @@ export function CoordinationControlCenter({
           <text fg={theme.dim} wrapMode="none">{'  |  Elapsed: '}</text>
           <text fg={theme.text} wrapMode="none">{runElapsed}</text>
           <text fg={theme.dim} wrapMode="none">{'  |  System: '}</text>
-          <text fg={fleet.attention > 0 ? theme.amber : theme.green} wrapMode="none">{fleet.attention > 0 ? 'ATTENTION' : 'HEALTHY'}</text>
+          <text fg={fleet.attention > 0 || hasRunAttention ? theme.amber : theme.green} wrapMode="none">{fleet.attention > 0 || hasRunAttention ? 'ATTENTION' : 'HEALTHY'}</text>
           <box flexGrow={1} />
           {showProviderHealth ? providerSummary.map(({ provider, count }) => (
             <box key={provider} marginLeft={1} height={1} flexDirection="row">
@@ -318,12 +488,17 @@ export function CoordinationControlCenter({
             </box>
           )) : null}
         </box>
-        <box height={1} flexDirection="row" alignItems="center" justifyContent="center" overflow="hidden">
-          <text fg={theme.text} wrapMode="none">{`${runs.length} workflows  ·  ${fleet.agents} agents  ·  `}</text>
-          <text fg={theme.green} wrapMode="none">{`${fleet.working} working`}</text>
-          <text fg={theme.text} wrapMode="none">{`  ·  ${fleet.queued} queued  ·  `}</text>
-          <text fg={fleet.attention > 0 ? theme.amber : theme.green} wrapMode="none">{`${fleet.attention} attention`}</text>
-          {run ? <text fg={run.useWorktrees === false ? theme.amber : theme.green} wrapMode="none">{`  ·  ${run.useWorktrees === false ? 'shared checkout' : 'isolated checkouts'}`}</text> : null}
+        <box height={1} flexDirection="row" alignItems="center" overflow="hidden">
+          <text fg={hasRunAttention ? theme.amber : theme.green} wrapMode="none">{hasRunAttention ? `ATTENTION · ${fleet.agents} agents` : `ATTENTION · clear · ${fleet.agents} agents`}</text>
+          {/* Compact labels: at 120 cols the long form overran the row, and the
+              flexGrow spacer collapsed to 0 so the last counter's VALUE was
+              clipped — an attention row that hides the number it exists to show. */}
+          <text flexShrink={0} fg={unansweredReplies.length > 0 ? theme.amber : theme.dim} wrapMode="none">{`  replies ${unansweredReplies.length}`}</text>
+          <text flexShrink={0} fg={staleAgents.length > 0 ? theme.amber : theme.dim} wrapMode="none">{`  · stale ${staleAgents.length}`}</text>
+          <text flexShrink={0} fg={deniedLocks.length > 0 ? theme.amber : theme.dim} wrapMode="none">{`  · denied locks ${deniedLocks.length}`}</text>
+          <text flexShrink={0} fg={failedTasks.length > 0 ? theme.red : theme.dim} wrapMode="none">{`  · failed ${failedTasks.length}`}</text>
+          <box flexGrow={1} minWidth={2} />
+          {run ? <text flexShrink={1} fg={checkoutIsShared ? theme.amber : theme.green} wrapMode="none">{checkoutIsShared ? 'shared checkout' : 'isolated checkouts'}</text> : null}
           {busy ? <text fg={theme.amber} wrapMode="none">{'  ·  refreshing'}</text> : null}
         </box>
       </box>
@@ -395,6 +570,18 @@ export function CoordinationControlCenter({
                 const isLast = taskIndex === visibleStageTasks.length - 1
                 const branch = isLast ? '└─' : '├─'
                 const continuation = isLast ? '  ' : '│ '
+                const dependencies = task.blockedBy.map((id) => `${id}:${taskById.get(id)?.status ?? 'missing'}`)
+                const dependents = taskDependentsById.get(task.id) ?? []
+                const blockReason = taskBlockReasonById.get(task.id)
+                const lockContention = taskLockContentionById.get(task.id) ?? []
+                const taskDetail = [
+                  task.id,
+                  task.paths[0] ?? task.status,
+                  dependencies.length > 0 ? `← ${dependencies.join(',')}` : '',
+                  dependents.length > 0 ? `→ ${dependents.join(',')}` : '',
+                  blockReason ? `blocked: ${blockReason}` : '',
+                  lockContention.length > 0 ? `locks: ${lockContention.join(',')}` : '',
+                ].filter(Boolean).join(' · ')
                 return (
                   <box key={task.id} height={2} paddingX={1} backgroundColor={selected && section === 'tasks' ? theme.cyan : selected ? theme.surface3 : theme.surface} flexDirection="column">
                     <box height={1} flexDirection="row" overflow="hidden">
@@ -406,7 +593,7 @@ export function CoordinationControlCenter({
                       <text fg={selected && section === 'tasks' ? theme.surface : theme.dim} wrapMode="none">{` ${elapsed(task.createdAt, TERMINAL_TASKS.has(task.status) ? task.updatedAt : now).padStart(showTaskColumns ? 7 : 4)}${showTaskColumns ? '  ' : ''}`}</text>
                       {showTaskColumns ? <text fg={selected && section === 'tasks' ? theme.surface : taskTone(task, theme)} wrapMode="none">{fit(task.status === 'in_progress' ? 'working' : task.status, 9).padEnd(9)}</text> : null}
                     </box>
-                    <text fg={selected && section === 'tasks' ? theme.surface : theme.dim} wrapMode="none">{fit(`${continuation}    ${task.id} · ${task.paths[0] ?? task.status}${task.blockedBy.length > 0 ? `  ← waits for ${task.blockedBy.join(', ')}` : ''}${tasks.some((candidate) => candidate.blockedBy.includes(task.id)) ? `  → unlocks ${tasks.filter((candidate) => candidate.blockedBy.includes(task.id)).map((candidate) => candidate.id).join(', ')}` : ''}`, centerW - 4)}</text>
+                    <text fg={selected && section === 'tasks' ? theme.surface : blockReason || lockContention.length > 0 ? theme.amber : theme.dim} wrapMode="none">{fit(`${continuation}    ${taskDetail}`, centerW - 4)}</text>
                   </box>
                 )
               })}
@@ -459,38 +646,63 @@ export function CoordinationControlCenter({
             </box>
             {inspectedAgent ? (
               <>
-                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Agent:    </text><text fg={getProviderAccent(inspectedAgent.provider)} wrapMode="none">{inspectedAgent.name}</text></box>
-                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Provider: </text><text fg={getProviderAccent(inspectedAgent.provider)} wrapMode="none">{String(inspectedAgent.provider).toUpperCase()}</text></box>
-                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Status:   </text><text fg={inspectedAgent.status === 'blocked' || inspectedAgent.status === 'failed' ? theme.amber : inspectedAgent.turnActive ? theme.green : theme.cyan} wrapMode="none">{`${inspectedAgent.status}${inspectedAgent.turnActive ? ' · streaming' : ''}`}</text></box>
-                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Role:     </text><text fg={theme.muted} wrapMode="none">{inspectedAgent.role}</text></box>
-                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Task:     </text><text fg={theme.text} wrapMode="none">{fit(inspectedTask?.title ?? inspectedAgent.taskId ?? 'unassigned', rightW - 12)}</text></box>
-                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">CWD:      </text><text fg={theme.muted} wrapMode="none">{fit(inspectedAgent.worktreePath, rightW - 12)}</text></box>
-                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Current:  </text><text fg={latestAgentEvent ? eventTone(latestAgentEvent, theme) : theme.dim} wrapMode="none">{fit(latestAgentEvent?.summary ?? latestAgentEvent?.type ?? 'waiting for activity', rightW - 12)}</text></box>
-                {agentErrorEvent ? (
-                  <box flexDirection="row"><text fg={theme.red} wrapMode="none">Error:    </text><text fg={theme.red} wrapMode="none">{fit(agentErrorEvent.detail ?? agentErrorEvent.summary ?? agentErrorEvent.type, rightW - 12)}</text></box>
+                <box flexDirection="row"><box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">Agent:    </text></box><text fg={getProviderAccent(inspectedAgent.provider)} wrapMode="none">{fit(`${inspectedAgent.name} · ${String(inspectedAgent.provider).toUpperCase()} · ${inspectedAgent.role}`, rightW - 14)}</text></box>
+                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Session:  </text><text fg={inspectedAgent.sessionId.startsWith('external:') ? theme.amber : theme.muted} wrapMode="none">{fit(`${inspectedSessionIdentity} · ${inspectedAgent.client?.name ?? 'managed'}`, rightW - 12)}</text></box>
+                <box flexDirection="row">
+                  <text fg={theme.dim} wrapMode="none">State:    </text>
+                  <text fg={inspectedLiveness === 'dead' ? theme.red : inspectedLiveness === 'stale' ? theme.amber : inspectedAgent.turnActive ? theme.green : theme.cyan} wrapMode="none">
+                    {fit(`${inspectedAgent.status}${inspectedAgent.turnActive ? ' · streaming' : ''} · heartbeat ${age(inspectedAgent.lastSeenAt, now)} ago · ${inspectedLiveness}`, rightW - 12)}
+                  </text>
+                </box>
+                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Tasks:    </text><text fg={theme.text} wrapMode="none">{fit(`claimed ${inspectedActiveTasks.map((task) => task.id).join(',') || '—'} · completed ${inspectedCompletedTasks.map((task) => task.id).join(',') || '—'}`, rightW - 12)}</text></box>
+                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Locks:    </text><text fg={inspectedDeniedLocks.length > 0 ? theme.amber : selectedLocks.length > 0 ? theme.cyan : theme.muted} wrapMode="none">{fit(`held ${selectedLocks.map((lock) => lock.path).join(',') || '—'} · denied ${inspectedDeniedLocks.map((lock) => lock.path).join(',') || '—'}`, rightW - 12)}</text></box>
+                {inspectedBlockedReason ? (
+                  <box flexDirection="row"><text fg={theme.red} wrapMode="none">Blocker:  </text><text fg={theme.red} wrapMode="none">{fit(inspectedBlockedReason, rightW - 12)}</text></box>
                 ) : null}
                 {showInspectorDetails ? (
-                  <>
-                    <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Branch:   </text><text fg={theme.muted} wrapMode="none">{fit(`${inspectedAgent.worktreeBranch || 'main'} · ${worktree ? `${worktree.dirtyFiles} dirty, ${worktree.aheadCommits} ahead` : 'shared checkout'}`, rightW - 12)}</text></box>
-                    <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Control:  </text><text fg={selectedLocks.length > 0 ? theme.amber : theme.muted} wrapMode="none">{fit(`${selectedLocks.length} locks · seen ${age(inspectedAgent.lastSeenAt ?? inspectedAgent.updatedAt, now)} ago`, rightW - 12)}</text></box>
-                  </>
+                  <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Checkout: </text><text fg={theme.muted} wrapMode="none">{fit(`${inspectedAgent.worktreeBranch || 'main'} · ${worktree ? `${worktree.dirtyFiles} dirty, ${worktree.aheadCommits} ahead` : 'shared'} · ${latestAgentEvent?.type ?? 'idle'}`, rightW - 12)}</text></box>
                 ) : null}
+                <box flexDirection="row"><text fg={theme.violet} wrapMode="none">MAIL      </text><text fg={theme.muted} wrapMode="none">{fit(`sent ${inspectedMailSent} · received ${inspectedMailReceived} · latest exchanges`, rightW - 12)}</text></box>
+                {recentInspectedMessages.slice(0, inspectorMailRows).map((message) => {
+                  const outbound = message.fromAgentId === inspectedAgent.id
+                  const counterpartyId = outbound ? message.toAgentId : message.fromAgentId
+                  const counterparty = agentsById.get(counterpartyId)?.name ?? counterpartyId
+                  return (
+                    // Fixed-width columns with flexShrink={0}: inline spaces in a
+                    // shrinking flex row get squeezed out once the content
+                    // overflows, which ran the columns together as one word
+                    // ("→control-ce…review_requestWork paused").
+                    <box key={message.id} height={1} flexDirection="row" overflow="hidden">
+                      <text flexShrink={0} fg={outbound ? theme.violet : theme.cyan} wrapMode="none">{outbound ? '  → ' : '  ← '}</text>
+                      <box width={12} flexShrink={0} overflow="hidden"><text fg={theme.text} wrapMode="none">{fit(counterparty, 11)}</text></box>
+                      <box width={16} flexShrink={0} overflow="hidden"><text fg={message.replyRequired && !message.resolvedAt ? theme.amber : theme.dim} wrapMode="none">{fit(`${message.kind}${message.replyRequired ? message.resolvedAt ? ' ✓' : ' ?' : ''}`, 15)}</text></box>
+                      <box flexGrow={1} minWidth={0} overflow="hidden"><text fg={theme.muted} wrapMode="none">{fit(message.body.replace(/\s+/g, ' ').trim(), Math.max(rightW - 36, 6))}</text></box>
+                    </box>
+                  )
+                })}
                 <box height={1} flexDirection="row">
                   <text fg={theme.border} wrapMode="none">{'─'}</text>
                   <text fg={theme.cyan} wrapMode="none">{topologyLabel}</text>
                   <text fg={theme.border} wrapMode="none">{'─'.repeat(Math.max(rightW - topologyLabel.length - 3, 1))}</text>
                 </box>
-                {visibleWindow(topologyAgents, Math.max(inspectedAgentIndex, 0), Math.max(inspectorH - (showInspectorDetails ? 14 : 12), 2)).map((agent, index, visible) => {
+                {visibleWindow(topologyAgents, Math.max(topologyAgentIndex, 0), Math.max(topologyRows, 2)).map((agent, index, visible) => {
                   const agentTask = (agent.taskId ? taskById.get(agent.taskId) : undefined)
                     ?? tasks.find((task) => task.ownerAgentId === agent.id && ACTIVE_TASKS.has(task.status))
                     ?? tasks.find((task) => task.ownerAgentId === agent.id)
+                  const mail = agentMailCounts.get(agent.id) ?? { sent: 0, received: 0 }
+                  const dependencies = agentTask?.blockedBy ?? []
+                  const dependents = agentTask ? taskDependentsById.get(agentTask.id) ?? [] : []
                   const branchGlyph = agent.role === 'lead' ? '◆' : index === visible.length - 1 ? '└─' : '├─'
+                  const edge = agentTask
+                    ? `${agentTask.id}${dependencies.length > 0 ? ` ←${dependencies.join(',')}` : ''}${dependents.length > 0 ? ` →${dependents.join(',')}` : ''}`
+                    : agent.role === 'lead' ? run ? runTitle(run) : 'workflow' : 'unassigned'
                   return (
                     <box key={agent.id} height={1} flexDirection="row" overflow="hidden">
                       <text fg={agent.id === inspectedAgent.id ? theme.cyan : theme.dim} wrapMode="none">{`${agent.id === inspectedAgent.id ? '▶' : ' '} ${branchGlyph} `}</text>
-                      <text fg={getProviderAccent(agent.provider)} wrapMode="none">{fit(agent.name, 11)}</text>
+                      <text fg={getProviderAccent(agent.provider)} wrapMode="none">{fit(agent.name, 10)}</text>
                       <text fg={agent.status === 'blocked' || agent.status === 'failed' ? theme.amber : agent.turnActive || agent.status === 'working' ? theme.green : theme.dim} wrapMode="none">{` ${agent.turnActive || agent.status === 'working' ? '●' : '○'} `}</text>
-                      <text fg={theme.muted} wrapMode="none">{fit(agentTask ? `→ ${agentTask.id} ${agentTask.title}` : agent.role === 'lead' ? `→ ${run ? runTitle(run) : 'workflow'}` : '→ unassigned', Math.max(rightW - 24, 8))}</text>
+                      <text fg={theme.violet} wrapMode="none">{`m→${mail.sent}←${mail.received} `}</text>
+                      <text fg={theme.muted} wrapMode="none">{fit(edge, Math.max(rightW - 29, 8))}</text>
                     </box>
                   )
                 })}
@@ -506,22 +718,51 @@ export function CoordinationControlCenter({
             </box>
             <box flexGrow={1} minHeight={0} flexDirection="column" overflow="hidden">
               {visibleEvents.length === 0 ? <text fg={theme.dim} wrapMode="none">No activity yet</text> : visibleEvents.map((event, index) => {
-                const message = messageByEventKey.get(`${event.agentId}\u0000${event.summary ?? ''}`)
+                const message = messageMetaByEvent.get(event)
                 const sender = agentsById.get(event.agentId)?.name ?? event.agentId
-                const recipient = message ? (agentsById.get(message.toAgentId)?.name ?? message.toAgentId) : event.to
-                const who = recipient ? `${sender}→${recipient}` : sender
-                const activityType = message ? `${message.kind}${message.replyRequired ? '!' : ''}` : event.type
+                const recipient = message?.recipient ?? event.to
+                const pair = recipient ? `${sender}→${recipient}` : sender
+                const previousEvent = visibleEvents[index - 1]
+                const previousMessage = previousEvent ? messageMetaByEvent.get(previousEvent) : undefined
+                const previousSender = previousEvent ? agentsById.get(previousEvent.agentId)?.name ?? previousEvent.agentId : ''
+                const previousRecipient = previousMessage?.recipient ?? previousEvent?.to
+                const previousPair = previousEvent ? `${previousSender}${previousRecipient ? `→${previousRecipient}` : ''}` : ''
+                const who = message && showActivityColumns ? `${pair === previousPair ? '│' : '┌'} ${pair}` : pair
+                // The reply marker outranks the kind: truncate the kind to keep
+                // "!?" (unanswered) visible, never `request…` which hides it.
+                const activityMarker = message?.replyRequired ? message.unanswered ? '!?' : '!✓' : ''
+                const activityKind = message ? message.kind : event.type
+                const activityWidth = showActivityColumns ? 14 : 8
+                const activityType = `${fit(activityKind, Math.max(activityWidth - activityMarker.length, 3))}${activityMarker}`
+                // The kind column already names the event, so repeating it here
+                // spent the widest column restating "agent.heartbeat" instead of
+                // showing what happened. Summary only — and when there is none,
+                // leave the cell empty rather than printing a dangling "·".
+                const activityDetail = (event.summary ?? event.detail ?? '').replace(/\s+/g, ' ').trim()
                 const selected = selectedEvent === event
                 const focused = selected && section === 'events'
                 return (
                   <box key={`${event.timestamp ?? index}:${index}`} height={1} backgroundColor={focused ? theme.surface3 : theme.surface} flexDirection="row" overflow="hidden">
                     <box width={showActivityColumns ? 9 : 6} overflow="hidden"><text fg={theme.dim} wrapMode="none">{`${showActivityColumns ? clock(event.timestamp) : clock(event.timestamp).slice(3)} `}</text></box>
                     <box width={showActivityColumns ? 18 : 10} paddingLeft={1} overflow="hidden"><text fg={message ? theme.violet : eventTone(event, theme)} wrapMode="none">{fit(who, showActivityColumns ? 16 : 9)}</text></box>
-                    <box width={showActivityColumns ? 11 : 9} paddingLeft={1} overflow="hidden"><text fg={focused ? theme.text : eventTone(event, theme)} wrapMode="none">{fit(activityType, showActivityColumns ? 9 : 8)}</text></box>
-                    <box flexGrow={1} minWidth={0} paddingLeft={1} overflow="hidden"><text fg={focused ? theme.text : theme.muted} wrapMode="none">{fit(event.summary ?? event.detail ?? '', Math.max(rightW - (showActivityColumns ? 38 : 24), 6))}</text></box>
+                    {/* paddingLeft must stay on both widths: without it a full-width
+                        pair ("lead→nova") butts straight against the kind column
+                        and reads as one word ("lead→novaresponse"). */}
+                    <box width={showActivityColumns ? 16 : 10} paddingLeft={1} overflow="hidden"><text fg={focused ? theme.text : eventTone(event, theme)} wrapMode="none">{activityType}</text></box>
+                    <box flexGrow={1} minWidth={0} paddingLeft={1} overflow="hidden"><text fg={focused ? theme.text : theme.muted} wrapMode="none">{fit(activityDetail, Math.max(rightW - (showActivityColumns ? 43 : 24), 6))}</text></box>
                   </box>
                 )
               })}
+            </box>
+            <box height={activityDetailH} paddingX={1} border={['top']} borderStyle="single" borderColor={selectedEvent ? eventTone(selectedEvent, theme) : theme.border} flexDirection="column" overflow="hidden">
+              {selectedEvent ? (
+                <>
+                  <text fg={selectedEventMessage?.unanswered ? theme.amber : eventTone(selectedEvent, theme)} wrapMode="none">
+                    {fit(`DETAIL · ${eventClassLabel(eventClass(selectedEvent))} · ${selectedEvent.type}${selectedEventMessage?.replyRequired ? selectedEventMessage.unanswered ? ' · REPLY REQUIRED · UNANSWERED' : ' · REPLY REQUIRED · ANSWERED' : ''}`, Math.max(rightW - 4, 8))}
+                  </text>
+                  <text fg={theme.text} width={Math.max(rightW - 4, 8)} wrapMode="word">{selectedEventBody}</text>
+                </>
+              ) : <text fg={theme.dim} wrapMode="none">Select an event to inspect its full detail</text>}
             </box>
             <box height={activityFooterH} border={['top']} borderStyle="single" borderColor={theme.border} flexDirection="row" alignItems="center">
               <text fg={theme.dim} wrapMode="none">{activityFooterText}</text>

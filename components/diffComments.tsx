@@ -126,13 +126,10 @@ export function useDiffComments(
 
   const openDraftForRange = useCallback((range: SelectedLineRange) => {
     setSelectedLines(range)
-    setComments((current) => {
-      const key = buildDiffCommentKey(filePath, range)
-      const existing = current.get(key)
-      setDraft({ key, filePath, range, text: existing?.text ?? '', replyToKey: null })
-      return current
-    })
-  }, [filePath])
+    const key = buildDiffCommentKey(filePath, range)
+    const existing = comments.get(key)
+    setDraft({ key, filePath, range, text: existing?.text ?? '', replyToKey: null })
+  }, [comments, filePath])
 
   function openReplyDraft(comment: DiffComment) {
     const threadKey = buildDiffCommentKey(comment.filePath, comment.range)

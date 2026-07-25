@@ -64,10 +64,10 @@ declare const self: {
 }
 
 // Each entry pins a full threaded transcript + per-message card cache; for the
-// largest sessions that is multiple MB. Two entries (the active session plus
-// one most-recently-visited) covers the common back-and-forth pattern without
-// holding 33% more memory than necessary.
-const THREADING_CACHE_LIMIT = 2
+// largest sessions that is multiple MB. The visible working set can be the
+// primary reader plus two split panes, so retaining fewer than three entries
+// makes their independent polls evict one another and repeatedly rebuild.
+const THREADING_CACHE_LIMIT = 3
 const CARD_DENSITY_CACHE_LIMIT = 1
 const threadingCacheByKey = new Map<string, IncrementalThreadingCache>()
 

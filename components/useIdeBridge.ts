@@ -119,7 +119,10 @@ export function useIdeBridge({ open, available }: { open: boolean; available: bo
   const [unread, setUnread] = useState(0)
 
   const openRef = useRef(open)
-  openRef.current = open
+
+  useEffect(() => {
+    openRef.current = open
+  }, [open])
 
   const config = useMemo<IdeBridgeConfig>(() => ({ baseUrl, token: token || undefined }), [baseUrl, token])
   const routeComposer = available && routeComposerState

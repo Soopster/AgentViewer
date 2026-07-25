@@ -62,8 +62,11 @@ const StreamHistoryRail = memo(function StreamHistoryRail({ items, scrollRef, an
   const [hovered, setHovered] = useState<HoveredItem | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
   const visibleItems = useMemo(() => sampledItems(items, activeIndex), [activeIndex, items])
-  itemsRef.current = items
-  anchorOffsetRef.current = anchorOffset
+
+  useEffect(() => {
+    itemsRef.current = items
+    anchorOffsetRef.current = anchorOffset
+  }, [anchorOffset, items])
 
   useEffect(() => {
     const node = scrollRef.current

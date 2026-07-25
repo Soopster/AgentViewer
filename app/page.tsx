@@ -47,6 +47,11 @@ type ComposerInsertRequest = {
   text: string
 }
 
+type SessionPlan = {
+  plan: CodexPlanStep[]
+  explanation: string | null
+}
+
 type ProjectMessageBatch = {
   key: string
   sessionId: string
@@ -310,7 +315,6 @@ export default function Home() {
   const [targetMessage, setTargetMessage] = useState<MessageTarget | null>(null)
   const [sessionListScrollRequest, setSessionListScrollRequest] = useState<SessionListScrollRequest | null>(null)
   const [messages, setMessages] = useState<SessionMessage[]>([])
-  const selectedTabKeyRef = useRef<string | null>(null)
   // OpenCode `todo.updated` events arrive via the messages SSE stream and
   // are surfaced as a pinned card in MessageView. Keyed by sessionId so a
   // tab swap doesn't show another session's todos.
@@ -318,7 +322,7 @@ export default function Home() {
   const [todosForSessionId, setTodosForSessionId] = useState<string | null>(null)
   // Codex `turn/plan/updated` mirrors OpenCode todos — structured plan
   // steps surface in the Tasks panel.
-  const [sessionPlan, setSessionPlan] = useState<{ plan: CodexPlanStep[]; explanation: string | null }>({ plan: [], explanation: null })
+  const [sessionPlan, setSessionPlan] = useState<SessionPlan>({ plan: [], explanation: null })
   const [planForSessionId, setPlanForSessionId] = useState<string | null>(null)
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -379,7 +383,6 @@ export default function Home() {
       null,
     [dashboardContextSession, openTabSessions, sessions, selectedTabKey],
   )
-  selectedTabKeyRef.current = selectedTabKey
   const activeProjectDir = selectedProject?.dir ?? selectedSession?.cwd ?? null
   const activeProjectName = selectedProject?.key ?? (pathBasename(activeProjectDir) || null)
   const dashboardSelected = selectedTabKey === RUN_DASHBOARD_KEY && !selectedProject
@@ -405,12 +408,10 @@ export default function Home() {
   const canUseIdeBridge = canUseChannelBridge
 
   const toggleMessagePane = useCallback(() => {
-    setMessagePaneCollapsed((prev) => {
-      const next = !prev
-      try { window.localStorage.setItem('agentViewer:messagePaneCollapsed', next ? '1' : '0') } catch { /* ignore */ }
-      return next
-    })
-  }, [])
+    const next = !messagePaneCollapsed
+    setMessagePaneCollapsed(next)
+    try { window.localStorage.setItem('agentViewer:messagePaneCollapsed', next ? '1' : '0') } catch { /* ignore */ }
+  }, [messagePaneCollapsed])
 
   const openGitPopover = useCallback(() => {
     if (!activeProjectDir) return
@@ -566,7 +567,7 @@ export default function Home() {
   }, [])
 
   const applySessionMessagePayload = useCallback((payload: MessageStreamPayload, expectedSession: Session) => {
-    if (selectedTabKeyRef.current !== projectSessionKey(expectedSession)) return
+    if (selectedTabKey !== projectSessionKey(expectedSession)) return
     if (payload.sessionId && payload.sessionId !== expectedSession.sessionId) return
     if (payload.provider && payload.provider !== (expectedSession.provider ?? 'claude')) return
 
@@ -596,7 +597,7 @@ export default function Home() {
       if (fullTranscriptLoadedRef.current || merged.length <= SINGLE_SESSION_MESSAGE_MEMORY_LIMIT) return merged
       return merged.slice(merged.length - SINGLE_SESSION_MESSAGE_MEMORY_LIMIT)
     })
-  }, [])
+  }, [selectedTabKey])
 
   const pollSelectedSessionMessages = useCallback(async (session: Session) => {
     if (pollInFlightRef.current) return

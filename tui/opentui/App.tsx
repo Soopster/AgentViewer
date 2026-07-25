@@ -164,6 +164,16 @@ import { readFile, rm, stat } from 'node:fs/promises'
 import { release, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  calculateSplitPaneLayout,
+  groupItemsBySplitPaneKey,
+  preserveArrayIdentity,
+  removeSplitPaneKey,
+  resolveCoordinationTranscriptTarget,
+  resolveSelectedSession,
+  resolveSelectedSessionIndex,
+  splitCommandKey,
+} from './splitPaneState'
 
 // Stable-reference event handler — reads the latest closure on every call
 // without appearing in any deps array. Mirrors React's upcoming useEffectEvent
@@ -4397,6 +4407,8 @@ type PaletteRow =
   | { kind: 'header'; label: string }
   | { kind: 'cmd'; cmd: PaletteCommand; cmdIndex: number }
 
+const RUNNING_INSIDE_TMUX = Boolean(process.env.TMUX)
+
 const COMMANDS: PaletteCommand[] = [
   // Navigation
   { id: 'live',       label: 'Jump to live tail',      key: 'f',  category: 'Navigation' },
@@ -4457,12 +4469,12 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'diff-layout', label: 'Toggle diff layout',    key: 's',  category: 'View'       },
   { id: 'view',       label: 'Switch transcript view', key: 'v',  category: 'View'       },
   { id: 'width',      label: 'Toggle transcript width', key: '⇧W', category: 'View'       },
-  { id: 'split-add',    label: 'Split transcript pane',    key: '⌃B %', category: 'View'  },
-  { id: 'split-close',  label: 'Close split pane',         key: '⌃B x', category: 'View'  },
-  { id: 'split-focus',  label: 'Focus next split pane',    key: '⌃B o', category: 'View'  },
+  { id: 'split-add',    label: 'Split transcript pane',    key: splitCommandKey('%', RUNNING_INSIDE_TMUX), category: 'View'  },
+  { id: 'split-close',  label: 'Close split pane',         key: splitCommandKey('x', RUNNING_INSIDE_TMUX), category: 'View'  },
+  { id: 'split-focus',  label: 'Focus next split pane',    key: splitCommandKey('o', RUNNING_INSIDE_TMUX), category: 'View'  },
   { id: 'split-focus-back', label: 'Focus reader (leave split pane)', key: 'esc', category: 'View' },
-  { id: 'split-cycle',  label: 'Next session in split pane', key: '⌃B n', category: 'View' },
-  { id: 'split-toggle', label: 'Toggle split panes',       key: '⌃B z', category: 'View'  },
+  { id: 'split-cycle',  label: 'Next session in split pane', key: splitCommandKey('n', RUNNING_INSIDE_TMUX), category: 'View' },
+  { id: 'split-toggle', label: 'Toggle split panes',       key: splitCommandKey('z', RUNNING_INSIDE_TMUX), category: 'View'  },
   { id: 'rail',       label: 'Toggle session rail',    key: 'h',  category: 'View'       },
   { id: 'focus',      label: 'Toggle focus mode',      key: 'z',  category: 'View'       },
   { id: 'tools',      label: 'Toggle tool calls',      key: 'X',  category: 'View'       },
@@ -6060,9 +6072,7 @@ function SplitTranscriptPaneInner({
           // Identity bail-out: an idle session re-reads to the same cached card
           // array every poll, and keeping the reference skips the whole
           // display-data + card subtree rebuild below.
-          if (prev === next) return prev
-          if (prev.length === next.length && prev[prev.length - 1]?.key === next[next.length - 1]?.key) return prev
-          return next
+          return preserveArrayIdentity(prev, next)
         })
         setStatus('ready')
         setError(null)
@@ -7074,11 +7084,10 @@ export default function OpenTuiApp() {
   const densityState = useMemo(() => densityConfig(density), [density])
   const showRail = railVisible
   const effectiveFocus: PaneFocus = showRail ? focusedPane : 'messages'
-  const selectedIndex = useMemo(() => {
-    if (sessions.length === 0) return -1
-    if (!selectedSessionKey) return 0
-    return sessions.findIndex((session) => sessionKey(session) === selectedSessionKey)
-  }, [selectedSessionKey, sessions])
+  const selectedIndex = useMemo(
+    () => resolveSelectedSessionIndex(selectedSessionKey, sessions, sessionKey),
+    [selectedSessionKey, sessions],
+  )
   // Latest sessions list keyed for ref-time lookups. refreshSelectedSessionDetail
   // receives identity-stable SKELETON sessions ({sessionId, provider} — see
   // selectedSessionTarget), so it must resolve list-level metadata like
@@ -7095,18 +7104,17 @@ export default function OpenTuiApp() {
   // `sessions` — that's the case for freshly created pending provider sessions
   // (added to openTabSessions immediately, but only appears in `sessions` once
   // the SDK materialises it on first send).
-  const selectedSession = useMemo<Session | null>(() => {
-    if (selectedSessionKey) {
-      const fromTab = openTabSessions.find((session) => sessionKey(session) === selectedSessionKey)
-      if (fromTab?.isPending) return fromTab
-    }
-    if (selectedIndex >= 0) return sessions[selectedIndex] ?? null
-    if (selectedSessionKey) {
-      const fromTab = openTabSessions.find((session) => sessionKey(session) === selectedSessionKey)
-      if (fromTab) return fromTab
-    }
-    return sessions[0] ?? null
-  }, [openTabSessions, selectedIndex, selectedSessionKey, sessions])
+  const selectedSession = useMemo<Session | null>(
+    () => resolveSelectedSession(
+      selectedSessionKey,
+      selectedIndex,
+      sessions,
+      openTabSessions,
+      sessionKey,
+      (session) => Boolean(session.isPending),
+    ),
+    [openTabSessions, selectedIndex, selectedSessionKey, sessions],
+  )
   const selectedSessionIdentity = selectedSession ? sessionKey(selectedSession) : null
   useEffect(() => {
     setTranscriptDiffDraft(null)
@@ -7278,6 +7286,9 @@ export default function OpenTuiApp() {
 
     return selectedSession
   }, [providerRunningSessions, selectedSession, sessions, composerPaneTargetKey, openTabSessions])
+  const composerTargetSessionIdentity = composerTargetSession
+    ? sessionKey(composerTargetSession)
+    : null
   const composerTargetSessionRef = useRef<Session | null>(null)
   useEffect(() => { composerTargetSessionRef.current = composerTargetSession }, [composerTargetSession])
   const canUseChannelBridge = Boolean(
@@ -8919,25 +8930,22 @@ export default function OpenTuiApp() {
     const tab = openTabSessions.find((candidate) => sessionKey(candidate) === pinnedKey)
     return tab ? [tab] : []
   })
-  let visibleSplitPaneCount = Math.min(splitPaneCount, SPLIT_PANE_MAX, splitPinnedSessions.length)
-  let splitPaneWidth = 0
-  while (visibleSplitPaneCount > 0) {
-    const candidateWidth = Math.floor((readerAreaWidth - visibleSplitPaneCount) / (visibleSplitPaneCount + 1))
-    if (
-      candidateWidth >= SPLIT_PANE_MIN_WIDTH
-      && readerAreaWidth - visibleSplitPaneCount * (candidateWidth + 1) >= MIN_READER_WIDTH
-    ) {
-      splitPaneWidth = candidateWidth
-      break
-    }
-    visibleSplitPaneCount -= 1
-  }
+  const splitLayout = calculateSplitPaneLayout({
+    readerAreaWidth,
+    requestedCount: splitPaneCount,
+    availableCount: splitPinnedSessions.length,
+    maxPanes: SPLIT_PANE_MAX,
+    minPaneWidth: SPLIT_PANE_MIN_WIDTH,
+    minReaderWidth: MIN_READER_WIDTH,
+  })
+  const visibleSplitPaneCount = splitLayout.visibleCount
+  const splitPaneWidth = splitLayout.paneWidth
   const splitPaneSessions = visibleSplitPaneCount > 0
     ? splitPinnedSessions.slice(0, visibleSplitPaneCount)
     : []
-  const rightPaneWidth = Math.max(readerAreaWidth - visibleSplitPaneCount * (splitPaneWidth + 1), 40)
+  const rightPaneWidth = splitLayout.readerWidth
   const splitPaneKeys = splitPaneSessions.map((pane) => sessionKey(pane))
-  const splitPaneKeysSignature = splitPaneKeys.join(' ')
+  const splitPaneKeysSignature = splitPaneKeys.join('\u0000')
   // Live slices for the split panes. The app-wide live list is already tagged
   // by session, so a pane needs no second subscription — but each slice keeps
   // its array identity across polls (the same trick the reader uses) so an idle
@@ -8945,20 +8953,16 @@ export default function OpenTuiApp() {
   const splitPaneLiveCacheRef = useRef(new Map<string, ThreadedMessage[]>())
   const splitPaneLiveMessages = useMemo(() => {
     const cache = splitPaneLiveCacheRef.current
-    const next = new Map<string, ThreadedMessage[]>()
-    for (const paneKey of splitPaneKeysSignature.split(' ')) {
-      if (!paneKey) continue
-      const filtered = liveTranscriptMessages.filter((message) => liveMessageSessionKey(message) === paneKey)
-      const prev = cache.get(paneKey)
-      if (prev && prev.length === filtered.length && prev.every((message, i) => message === filtered[i])) {
-        next.set(paneKey, prev)
-        continue
-      }
-      next.set(paneKey, filtered)
-    }
-    splitPaneLiveCacheRef.current = next
-    return next
+    return groupItemsBySplitPaneKey(
+      splitPaneKeys,
+      liveTranscriptMessages,
+      liveMessageSessionKey,
+      cache,
+    )
   }, [liveTranscriptMessages, splitPaneKeysSignature])
+  useEffect(() => {
+    splitPaneLiveCacheRef.current = splitPaneLiveMessages
+  }, [splitPaneLiveMessages])
 
   // Which pane sessions have a turn in flight — drives the ◐ running glyph and
   // the working spinner, so a background agent's activity is visible without
@@ -11013,16 +11017,24 @@ export default function OpenTuiApp() {
   })
 
   // Jump from an Agent Operations row straight into that agent's transcript.
+  // External MCP participants carry a synthetic `external:` session id with no
+  // transcript behind it — refuse those with an honest notice instead of
+  // letting the reader fall back to an unrelated session. Sessions the
+  // sidebar has not indexed yet (other provider, or not materialised) are
+  // pinned as open tabs BEFORE selecting, so resolveSelectedSession can never
+  // fall through to sessions[0] and open the wrong agent's transcript.
   const openCoordinationAgentSession = useEffectEvent((agent: ProtocolAgent) => {
-    const draft: Session = {
-      sessionId: agent.sessionId,
-      provider: agent.provider,
-      cwd: agent.worktreePath || undefined,
-      createdAt: Date.now(),
-      lastModified: Date.now(),
-      summary: `${agent.name} · ${agent.role}`,
+    const target = resolveCoordinationTranscriptTarget(agent, sessionsByKeyRef.current, Date.now())
+    if (target.kind === 'unreadable') {
+      showNotice('info', target.reason, 5000)
+      return
     }
-    selectTabSession(sessionsByKeyRef.current.get(sessionKey(draft)) ?? draft)
+    if (!target.indexed) {
+      setOpenTabSessions((prev) => prev.some((tab) => sessionKey(tab) === target.sessionKey)
+        ? prev
+        : [...prev, target.session])
+    }
+    selectTabSession(target.session)
     setFocusedPane('messages')
   })
 
@@ -12673,17 +12685,30 @@ export default function OpenTuiApp() {
     setComposerLiveTodos([])
   }, [selectedSessionIdentity])
 
-  // Restore persisted composer draft on session switch
+  // Drafts follow the effective send target, not merely the primary reader.
+  // A pane-targeted composer must never inherit or clear another session's
+  // draft just because that session remains selected behind the overlay.
   useEffect(() => {
-    if (!selectedSession) return
-    const key = `${selectedSession.provider ?? 'claude'}:${selectedSession.sessionId}`
+    if (!composerTargetSessionIdentity) return
+    const key = composerTargetSessionIdentity
+    const previousKey = composerDraftStorageKeyRef.current
+    if (previousKey && previousKey !== key) {
+      const outgoingDraft = composerTextareaRef.current?.plainText ?? composerDraftRef.current
+      scheduleWriteComposerDraft(previousKey, outgoingDraft)
+      // Attachments and structured prompt parts are not persisted, so clear
+      // them rather than leaking them into a different session's composer.
+      setComposerMentionAttachments([])
+      setComposerPromptParts([])
+      composerTextareaRef.current?.extmarks.clear()
+    }
     composerDraftStorageKeyRef.current = key
     const saved = readComposerDraft(key)
-    if (saved && saved !== composerDraft) {
+    if (saved !== composerDraftRef.current) {
+      composerDraftRef.current = saved
       setComposerDraft(saved)
       composerTextareaRef.current?.setText(saved)
     }
-  }, [selectedSessionIdentity])
+  }, [composerTargetSessionIdentity])
 
   useEffect(() => {
     if (selectedSession || sessions.length === 0) return
@@ -13351,7 +13376,12 @@ export default function OpenTuiApp() {
           [['/', 'search'], ['n/N', 'hits'], ['u', 'unread'], ['f', 'live']],
           [['m', 'mark'], ['[ ]', 'jump'], ['⇧B', 'all'], ['b', effectiveFocus === 'sessions' ? 'tabs' : 'bookmark']],
           [['()', 'convo'], ['{}', 'tech'], ['e', 'fold'], ['v', transcriptView], ['s', `diff:${diffLayout}`], ['d', density], ['⇧W', transcriptWidth], ['i', 'think'], ['X', showToolCalls ? 'hide tools' : 'tools']],
-          [['h', 'rail'], ['⇧T', 'tasks'], ['z', 'focus'], ['⌃B', visibleSplitPaneCount > 0 ? `split ${visibleSplitPaneCount}` : 'split'], ['V', velocityScrollEnabled ? 'vel off' : 'vel on']],
+          [['h', 'rail'], ['⇧T', 'tasks'], ['z', 'focus'], [
+            RUNNING_INSIDE_TMUX ? '?' : '⌃B',
+            RUNNING_INSIDE_TMUX
+              ? `split palette · tmux captures ⌃B`
+              : visibleSplitPaneCount > 0 ? `split ${visibleSplitPaneCount}` : 'split',
+          ], ['V', velocityScrollEnabled ? 'vel off' : 'vel on']],
           [['⌃O', 'composer'], ['p', 'provider'], ['y', 'copy'], ['Q', 'reply'], ['r', 'refresh']],
           [['?', 'help'], ['q', 'quit']],
         ]
@@ -13369,7 +13399,10 @@ export default function OpenTuiApp() {
     if (splitFocusIndex !== null) {
       return [
         { text: `split pane ${splitFocusIndex + 1}`, fg: theme.amber },
-        { text: '  j/k card   e fold   y copy   b mark   Q reply   c send   ⌃G git   D diag   ↵ open   ⌃B o next   esc reader', fg: theme.muted },
+        {
+          text: `  j/k card   e fold   y copy   b mark   Q reply   c send   ⌃G git   D diag   ↵ open   ${RUNNING_INSIDE_TMUX ? '? palette' : '⌃B o next'}   esc reader`,
+          fg: theme.muted,
+        },
       ]
     }
     // Attention badge leads the bar whenever an agent is blocked on a human —
@@ -13979,13 +14012,26 @@ export default function OpenTuiApp() {
       showNotice('info', label ?? 'Split transcript view off')
       return
     }
-    // splitPaneWidth is 0 when the width budget refused every pane, so say so
-    // instead of leaving the user staring at an unchanged layout.
-    if (splitPaneWidth === 0) {
-      showNotice('info', `Split panes: ${next} (terminal too narrow — widen it or hide the rail with h)`)
+    // Narrate the requested NEXT layout. Reading splitPaneWidth here would use
+    // the previous render, which made the first successful split falsely claim
+    // that even wide terminals were too narrow.
+    const nextLayout = calculateSplitPaneLayout({
+      readerAreaWidth,
+      requestedCount: next,
+      availableCount: Math.min(next, splitCandidateSessions.length),
+      maxPanes: SPLIT_PANE_MAX,
+      minPaneWidth: SPLIT_PANE_MIN_WIDTH,
+      minReaderWidth: MIN_READER_WIDTH,
+    })
+    if (nextLayout.visibleCount < next) {
+      showNotice('info', `Split panes: ${nextLayout.visibleCount}/${next} visible (widen the terminal or hide the rail with h)`)
       return
     }
-    showNotice('info', label ?? `Split panes: ${next} · ⌃B o next session · ⌃B x close`)
+    showNotice('info', label ?? (
+      RUNNING_INSIDE_TMUX
+        ? `Split panes: ${next} · use ? palette (tmux captures ⌃B)`
+        : `Split panes: ${next} · ⌃B o next pane · ⌃B x close`
+    ))
   })
 
   const addSplitPane = useEffectEvent(() => {
@@ -14006,7 +14052,15 @@ export default function OpenTuiApp() {
       showNotice('info', 'No split panes open')
       return
     }
-    applySplitPaneCount(splitPaneCount - 1)
+    const nextCount = splitPaneCount - 1
+    const closeIndex = splitFocusIndex ?? Math.max(splitPaneCount - 1, 0)
+    setSplitPinnedKeys((current) => removeSplitPaneKey(current, closeIndex))
+    if (splitFocusIndex !== null) {
+      const nextFocus = nextCount > 0 ? Math.min(closeIndex, nextCount - 1) : null
+      setSplitFocusIndex(nextFocus)
+      if (nextFocus !== null) lastFocusedSplitPaneRef.current = nextFocus
+    }
+    applySplitPaneCount(nextCount)
   })
 
   // ⌃B z is the quick on/off: it restores the pane count you last had open

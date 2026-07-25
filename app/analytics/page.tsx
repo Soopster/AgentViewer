@@ -40,6 +40,18 @@ const PRESETS: Array<{ id: Preset; label: string }> = [
 ]
 
 const FONT_MONO = "'IBM Plex Mono', monospace"
+const ANALYTICS_BACKFILL_KEY = 'analytics:backfilled:v3'
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const CONTRIBUTION_DAY_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', '']
+const ROLE_MIX_SEGMENTS: Array<{
+  key: keyof CrossSessionAnalytics['roleMix']
+  label: string
+  color: string
+}> = [
+  { key: 'user', label: 'user', color: 'var(--cyan, #5eead4)' },
+  { key: 'assistant', label: 'assistant', color: 'var(--violet, #a78bfa)' },
+  { key: 'system', label: 'system', color: 'var(--text-3)' },
+]
 
 const LABEL_STYLE: React.CSSProperties = {
   fontSize: 10,
@@ -209,7 +221,6 @@ function HourHeatmap({ cells }: { cells: CrossSessionAnalytics['hourHeatmap'] })
       if (c.messages > max) max = c.messages
     }
   }
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   if (max === 0) return <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no data)</div>
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '40px repeat(24, 1fr)', gap: 2, fontFamily: FONT_MONO, fontSize: 9 }}>
@@ -219,7 +230,7 @@ function HourHeatmap({ cells }: { cells: CrossSessionAnalytics['hourHeatmap'] })
           {h % 3 === 0 ? h : ''}
         </div>
       ))}
-      {days.map((day, dow) => (
+      {WEEKDAY_LABELS.map((day, dow) => (
         <Row key={day} day={day} cells={grid[dow]} max={max} />
       ))}
     </div>
@@ -597,15 +608,10 @@ function SubHeader({ label }: { label: string }) {
 function RoleMixBar({ mix }: { mix: CrossSessionAnalytics['roleMix'] }) {
   const total = mix.user + mix.assistant + mix.system
   if (total === 0) return <div style={{ color: 'var(--text-3)', fontSize: 11 }}>(no data)</div>
-  const segments: Array<{ key: keyof CrossSessionAnalytics['roleMix']; label: string; color: string }> = [
-    { key: 'user', label: 'user', color: 'var(--cyan, #5eead4)' },
-    { key: 'assistant', label: 'assistant', color: 'var(--violet, #a78bfa)' },
-    { key: 'system', label: 'system', color: 'var(--text-3)' },
-  ]
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', height: 18, borderRadius: 4, overflow: 'hidden', border: '1px solid var(--border)' }}>
-        {segments.map((s) => {
+        {ROLE_MIX_SEGMENTS.map((s) => {
           const pct = (mix[s.key] / total) * 100
           if (pct <= 0) return null
           return (
@@ -618,7 +624,7 @@ function RoleMixBar({ mix }: { mix: CrossSessionAnalytics['roleMix'] }) {
         })}
       </div>
       <div style={{ display: 'flex', gap: 12, fontSize: 10, color: 'var(--text-3)', flexWrap: 'wrap' }}>
-        {segments.map((s) => (
+        {ROLE_MIX_SEGMENTS.map((s) => (
           <span key={s.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <span style={{ width: 8, height: 8, background: s.color, borderRadius: 2 }} />
             {s.label} · {fmtNum(mix[s.key])} ({total > 0 ? ((mix[s.key] / total) * 100).toFixed(1) : '0'}%)
@@ -678,7 +684,6 @@ function ContributionCalendar({
     }
   })
 
-  const dayLabels = ['', 'Mon', '', 'Wed', '', 'Fri', '']
   const cellSize = 11
   const gap = 2
 
@@ -702,7 +707,7 @@ function ContributionCalendar({
             </div>
           )
         })}
-        {dayLabels.map((label, dow) => (
+        {CONTRIBUTION_DAY_LABELS.map((label, dow) => (
           <Fragment key={`row-${dow}`}>
             <div style={{ color: 'var(--text-3)', alignSelf: 'center', textAlign: 'right', paddingRight: 4, height: cellSize }}>{label}</div>
             {cols.map((col, ci) => {
@@ -734,10 +739,10 @@ export default function AnalyticsPage() {
   const [provider, setProvider] = useState<ProviderSelection>('all')
   const [dir, setDir] = useState<string>('all')
   const [preset, setPreset] = useState<Preset>('30d')
-  const [customFrom, setCustomFrom] = useState<string>('')
-  const [customTo, setCustomTo] = useState<string>('')
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
   const [data, setData] = useState<CrossSessionAnalytics | null>(null)
-  const [loading, setLoading] = useState<boolean>(true)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [backfillState, setBackfillState] = useState<'idle' | 'running' | 'done'>('idle')
 
@@ -783,13 +788,12 @@ export default function AnalyticsPage() {
   // schema bump retriggers a single rebuild per browser.
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const BACKFILL_KEY = 'analytics:backfilled:v3'
-    if (window.localStorage.getItem(BACKFILL_KEY) === '1') return
+    if (window.localStorage.getItem(ANALYTICS_BACKFILL_KEY) === '1') return
     if (backfillState !== 'idle') return
     setBackfillState('running')
     fetch('/api/session-index/rebuild', { method: 'POST' })
       .then(() => {
-        window.localStorage.setItem(BACKFILL_KEY, '1')
+        window.localStorage.setItem(ANALYTICS_BACKFILL_KEY, '1')
         setBackfillState('done')
         void fetchData()
       })

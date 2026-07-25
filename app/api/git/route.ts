@@ -1,19 +1,21 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse, type NextRequest } from 'next/server'
 import { fetchGitData, fetchGitPaneContent, fetchGitReviewData, isAllowedGitCommand, type GitData, type GitPaneId } from '@/lib/gitProvider'
 import { runGitCommand } from '@/lib/gitNodeProvider'
 
-export async function POST(req: NextRequest) {
+type GitRequestBody = {
+  cwd?: string
+  args?: unknown
+  action?: 'data' | 'content' | 'review'
+  data?: GitData
+  pane?: GitPaneId
+  selectedFilePath?: string | null
+  branchIndex?: number
+  commitIndex?: number
+}
+
+export async function POST(request: NextRequest) {
   try {
-    const body = await req.json() as {
-      cwd?: string
-      args?: unknown
-      action?: 'data' | 'content' | 'review'
-      data?: GitData
-      pane?: GitPaneId
-      selectedFilePath?: string | null
-      branchIndex?: number
-      commitIndex?: number
-    }
+    const body = await request.json() as GitRequestBody
 
     if (!body.cwd) {
       return NextResponse.json({ error: 'invalid' }, { status: 400 })
@@ -50,7 +52,7 @@ export async function POST(req: NextRequest) {
     }
     const stdout = await runGitCommand(body.cwd, body.args)
     return NextResponse.json({ stdout })
-  } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+  } catch (error) {
+    return NextResponse.json({ error: String(error) }, { status: 500 })
   }
 }

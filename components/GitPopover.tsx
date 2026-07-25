@@ -661,12 +661,9 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
 
       if (e.key === '[' || e.key === ']') {
         e.preventDefault()
-        if (leftPaneHidden) setLeftPaneMode('normal')
-        setLeftPaneWidth((current) => {
-          const nextWidth = clampLeftPaneWidth(current + (e.key === ']' ? LEFT_PANE_RESIZE_STEP : -LEFT_PANE_RESIZE_STEP))
-          setLeftPaneMode(nextWidth >= LEFT_PANE_EXPANDED_WIDTH - 24 ? 'expanded' : 'normal')
-          return nextWidth
-        })
+        const nextWidth = clampLeftPaneWidth(leftPaneWidth + (e.key === ']' ? LEFT_PANE_RESIZE_STEP : -LEFT_PANE_RESIZE_STEP))
+        setLeftPaneWidth(nextWidth)
+        setLeftPaneMode(nextWidth >= LEFT_PANE_EXPANDED_WIDTH - 24 ? 'expanded' : 'normal')
         return
       }
 
@@ -707,7 +704,7 @@ export default function GitPopover({ open, onClose, cwd }: Props) {
         return
       }
     },
-    [cwd, data, focusSide, leftPaneHidden, onClose, pane],
+    [cwd, data, focusSide, leftPaneHidden, leftPaneWidth, onClose, pane],
   )
 
   useEffect(() => {

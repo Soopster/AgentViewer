@@ -12,10 +12,11 @@ type CommandDialogProps = React.PropsWithChildren<{
   centered?: boolean
   insetPadding?: string | number
   style?: React.CSSProperties
+  ariaLabel?: string
   ref?: React.Ref<HTMLDivElement>
 }>
 
-function CommandDialog({ ref, open, onOpenChange, className, centered = false, insetPadding = '28px 32px 32px', style, children }: CommandDialogProps) {
+function CommandDialog({ ref, open, onOpenChange, className, centered = false, insetPadding = '28px 32px 32px', style, ariaLabel = 'Command palette', children }: CommandDialogProps) {
   const isOpenRef = React.useRef(open)
 
   React.useEffect(() => {
@@ -57,6 +58,7 @@ function CommandDialog({ ref, open, onOpenChange, className, centered = false, i
         ref={ref}
         role="dialog"
         aria-modal="true"
+        aria-label={ariaLabel}
         className={cn(
           'flex w-full max-w-[760px] overflow-hidden rounded-[18px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[0_24px_80px_var(--shadow,rgba(0,0,0,0.24))]',
           className,

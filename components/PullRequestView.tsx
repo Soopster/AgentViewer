@@ -259,7 +259,7 @@ function formatCommentTime(iso: string): string {
   if (!iso) return ''
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
 function timeAgo(iso: string): string {
@@ -275,6 +275,18 @@ function timeAgo(iso: string): string {
   const days = Math.floor(hours / 24)
   if (days < 30) return `${days}d ago`
   return formatCommentTime(iso)
+}
+
+function countBadge(value: number, tone?: string) {
+  return (
+    <span style={{
+      minWidth: 20, padding: '1px 6px', borderRadius: 999,
+      background: 'var(--surface-2)', color: tone ?? 'var(--text-3)',
+      fontFamily: MONO, fontSize: 10,
+    }}>
+      {value}
+    </span>
+  )
 }
 
 function reviewStateMeta(state: string): { label: string; color: string; icon: ReactNode } {
@@ -448,9 +460,15 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
   const items = useMemo(() => (pr ? buildReviewItems(pr, pending) : []), [pr]) // eslint-disable-line react-hooks/exhaustive-deps -- pending is injected imperatively after mount; items only seed the uncontrolled CodeView
   const itemIds = useMemo(() => items.map((item) => item.id), [items])
   const itemIdsRef = useRef(itemIds)
-  itemIdsRef.current = itemIds
   const activePathRef = useRef(activePath)
-  activePathRef.current = activePath
+
+  useEffect(() => {
+    itemIdsRef.current = itemIds
+  }, [itemIds])
+
+  useEffect(() => {
+    activePathRef.current = activePath
+  }, [activePath])
 
   const filteredFiles = useMemo(() => {
     if (!pr) return []
@@ -868,16 +886,6 @@ export default function PullRequestView({ open, cwd, onClose, onAskAgent }: Prop
       {label}
       {badge}
     </button>
-  )
-
-  const countBadge = (value: number, tone?: string) => (
-    <span style={{
-      minWidth: 20, padding: '1px 6px', borderRadius: 999,
-      background: 'var(--surface-2)', color: tone ?? 'var(--text-3)',
-      fontFamily: MONO, fontSize: 10,
-    }}>
-      {value}
-    </span>
   )
 
   return (

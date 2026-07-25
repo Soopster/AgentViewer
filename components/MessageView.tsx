@@ -45,11 +45,11 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import dynamic from 'next/dynamic'
 import { BookOpen, ChartNetwork, FileCode2, Filter, Minimize2, Plug, Radio, RotateCcw, Search, SendHorizontal, Square, X } from 'lucide-react'
-import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, streamMessageHasContent, type MessageDensity, type WebViewMode } from './MessageItem'
+import MessageItem, { MessageDensityProvider, ViewModeProvider, DiffStyleProvider, DiffOptionsProvider, type MessageDensity, type WebViewMode } from './MessageItem'
 import { useChannelBridge } from './useChannelBridge'
 import { useIdeBridge } from './useIdeBridge'
 import type { PierreDiffStyle } from './PierreDiffView'
-import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb, type DiffOptions } from './messageItemShared'
+import { DEFAULT_DIFF_OPTIONS, DiffCommentComposerContext, LiveSubagentTextContext, TaskActiveFormsContext, buildTaskActiveFormsForWeb, streamMessageHasContent, type DiffOptions } from './messageItemShared'
 import { TaskRail } from './TaskRail'
 import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFromTodos, type CodexPlanStep } from '@/lib/taskRegistry'
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
@@ -2799,7 +2799,9 @@ export default function MessageView({
   // stable without re-creating it on every bookmark change.
   const [bookmarkIds, setBookmarkIds] = useState<Set<string>>(() => new Set())
   const bookmarkIdsRef = useRef<Set<string>>(bookmarkIds)
-  bookmarkIdsRef.current = bookmarkIds
+  useLayoutEffect(() => {
+    bookmarkIdsRef.current = bookmarkIds
+  }, [bookmarkIds])
   const [bookmarksOnly, setBookmarksOnly] = useState(false)
   const [viewMode, setViewMode] = useState<WebViewMode>(() => {
     if (typeof window === 'undefined') return 'conversation'
@@ -2999,7 +3001,9 @@ export default function MessageView({
   // Read the latest bridge controller from inside sendMessage without widening
   // its (already large) dependency array.
   const channelBridgeRef = useRef(channelBridge)
-  channelBridgeRef.current = channelBridge
+  useLayoutEffect(() => {
+    channelBridgeRef.current = channelBridge
+  }, [channelBridge])
   // IDE bridge — the third Claude composer flow (agentViewer hosts an IDE
   // endpoint an external `claude` connects to; see channels/agentviewer-ide.ts).
   // Shares the Claude-only availability gate with the channel bridge.
@@ -3009,7 +3013,9 @@ export default function MessageView({
   const handledIdeBridgeOpenRequestRef = useRef(ideBridgeOpenRequest)
   const handledIdeBridgeRouteRequestRef = useRef(ideBridgeRouteToggleRequest)
   const ideBridgeRef = useRef(ideBridge)
-  ideBridgeRef.current = ideBridge
+  useLayoutEffect(() => {
+    ideBridgeRef.current = ideBridge
+  }, [ideBridge])
   // Track bridge entries (sent + replies) with timestamps for inline transcript display
   const [bridgeTranscriptEntries, setBridgeTranscriptEntries] = useState<
     Array<{ kind: 'sent' | 'reply'; text: string; timestamp: string }>
@@ -3790,14 +3796,12 @@ export default function MessageView({
   }, [commitTimelineScrollTop, markProgrammaticTimelineScroll])
 
   const toggleLiveFollow = useCallback(() => {
-    setAutoFollow((current) => {
-      const next = !current
-      if (next) {
-        window.requestAnimationFrame(() => scrollTimelineToBottom())
-      }
-      return next
-    })
-  }, [scrollTimelineToBottom])
+    const next = !autoFollow
+    setAutoFollow(next)
+    if (next) {
+      window.requestAnimationFrame(() => scrollTimelineToBottom())
+    }
+  }, [autoFollow, scrollTimelineToBottom])
 
   const alignLastTimelineRowToViewportBottom = useCallback(() => {
     const node = timelineRef.current
@@ -4064,12 +4068,10 @@ export default function MessageView({
     const interruptQueuedTexts = queuedSendsRef.current.map((entry) => entry.text).filter(Boolean)
     if (interruptQueuedTexts.length > 0) {
       setQueuedSends([])
-      setInputText((current) => {
-        const restored = [current.trim(), ...interruptQueuedTexts].filter(Boolean).join('\n\n')
-        inputTextRef.current = restored
-        if (textareaRef.current) textareaRef.current.value = restored
-        return restored
-      })
+      const restored = [inputTextRef.current.trim(), ...interruptQueuedTexts].filter(Boolean).join('\n\n')
+      inputTextRef.current = restored
+      if (textareaRef.current) textareaRef.current.value = restored
+      setInputText(restored)
       window.requestAnimationFrame(resizeComposer)
     }
     if (pendingMessageBaselineRef.current) {
@@ -4777,13 +4779,12 @@ export default function MessageView({
       // into composer state; their text still restores.)
       const queuedTexts = queuedSendsRef.current.map((entry) => entry.text).filter(Boolean)
       setQueuedSends([])
-      setInputText((current) => {
-        const base = current.trim() ? current : text
-        const restored = [base, ...queuedTexts].filter(Boolean).join('\n\n')
-        inputTextRef.current = restored
-        if (textareaRef.current) textareaRef.current.value = restored
-        return restored
-      })
+      const currentText = inputTextRef.current
+      const base = currentText.trim() ? currentText : text
+      const restored = [base, ...queuedTexts].filter(Boolean).join('\n\n')
+      inputTextRef.current = restored
+      if (textareaRef.current) textareaRef.current.value = restored
+      setInputText(restored)
       setOptimisticUserText(null)
       setSteeredUserTexts([])
       clearLiveAssistantText()
@@ -4859,19 +4860,19 @@ export default function MessageView({
 
   const updateComposerHints = useCallback((text: string, cursor: number) => {
     const mention = detectMentionAtCursor(text, cursor)
-    setMentionQuery((prev) => {
-      if (!mention) return prev ? null : prev
-      if (prev && prev.start === mention.start && prev.query === mention.query) return prev
+    const mentionChanged = mention
+      ? !mentionQuery || mentionQuery.start !== mention.start || mentionQuery.query !== mention.query
+      : mentionQuery !== null
+    if (mentionChanged) {
       setMentionActiveIndex(0)
-      return mention
-    })
+      setMentionQuery(mention)
+    }
     const isSlash = text.startsWith('/') && !/\s/.test(text.split('\n')[0] ?? '')
-    setSlashOpen((prev) => {
-      if (isSlash === prev) return prev
+    if (isSlash !== slashOpen) {
       if (isSlash) setSlashActiveIndex(0)
-      return isSlash
-    })
-  }, [])
+      setSlashOpen(isSlash)
+    }
+  }, [mentionQuery, slashOpen])
 
   const slashCommands = useMemo(() => {
     const baseline = getSlashCommandSuggestions(session?.provider)
@@ -6252,7 +6253,9 @@ export default function MessageView({
   )
   const hasLiveTimeline = timelineRows.length > 0
   const hasTranscriptTimeline = renderedTimelineRows.length > 0
-  timelineRowsRef.current = renderedTimelineRows
+  useLayoutEffect(() => {
+    timelineRowsRef.current = renderedTimelineRows
+  }, [renderedTimelineRows])
 
   // On the first completed load for a session, wait for rows to exist and then force the
   // viewport to the live edge so initial virtualization and measurement do not leave us at the top.
@@ -6426,7 +6429,9 @@ export default function MessageView({
     if (pendingRowMeasurementsRef.current.size === 0 || measurementFrameRef.current != null) return
     flushTimelineRowMeasurements()
   }, [flushTimelineRowMeasurements])
-  scheduleTimelineMeasurementFlushRef.current = scheduleTimelineMeasurementFlush
+  useLayoutEffect(() => {
+    scheduleTimelineMeasurementFlushRef.current = scheduleTimelineMeasurementFlush
+  }, [scheduleTimelineMeasurementFlush])
 
   const handleTimelineRowMeasure = useCallback((key: string, height: number) => {
     pendingRowMeasurementsRef.current.set(key, Math.max(1, Math.ceil(height)))

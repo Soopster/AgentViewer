@@ -90,6 +90,15 @@ const SCHEMA_VERSION = 12
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 const EXTERNAL_AGENT_STALE_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_STALE_MS) || 5 * 60_000)
+// Interactive CLI participants (an MCP-bridged chat session, not a `coord
+// worker`) only reach the board between their own turns, so a single long tool
+// call — a full typecheck or test suite — can outlast the worker reap window
+// while the agent is very much alive and mid-task. Reaping on the worker timer
+// releases its claimed task underneath running work; hold them to a longer one.
+const INTERACTIVE_AGENT_STALE_MS = Math.max(
+  EXTERNAL_AGENT_STALE_MS,
+  Number(process.env.AGENT_VIEWER_COORD_INTERACTIVE_STALE_MS) || 20 * 60_000,
+)
 // Below this age (or an in-flight turn) an agent counts as "fresh" for
 // message delivery hints; above EXTERNAL_AGENT_STALE_MS it's "dead" — same
 // two-threshold shape as murmur's classify(), reusing the reap cutoff above
@@ -1412,14 +1421,25 @@ function eventsAfterCursorSync(
 
 function recoverStaleExternalParticipantsSync(db: SqliteDatabase, runId: string): void {
   const cutoff = new Date(Date.now() - EXTERNAL_AGENT_STALE_MS).toISOString()
+  const interactiveCutoff = new Date(Date.now() - INTERACTIVE_AGENT_STALE_MS).toISOString()
   const stale = db.prepare(`
     SELECT * FROM protocol_agents
     WHERE run_id = ? AND session_id LIKE 'external:%'
       AND status IN ('ready', 'idle', 'working', 'blocked')
       AND COALESCE(last_seen_at, updated_at) < ?
-  `).all(runId, cutoff) as Row[]
+  `).all(runId, interactiveCutoff < cutoff ? interactiveCutoff : cutoff) as Row[]
   for (const row of stale) {
     const agent = rowToAgent(row)
+    // An unattended worker polls constantly, so silence really means dead. An
+    // interactive CLI participant only touches the board between its own turns
+    // and can legitimately go quiet through one long tool call (a typecheck or
+    // full test suite), so reaping it on the worker timer yanks a task out from
+    // under work that is actively running. Give it a longer rope.
+    const staleAfter = agent.capabilities?.unattended === true
+      ? EXTERNAL_AGENT_STALE_MS
+      : INTERACTIVE_AGENT_STALE_MS
+    const lastSeen = Date.parse(agent.lastSeenAt ?? agent.updatedAt)
+    if (Number.isFinite(lastSeen) && Date.now() - lastSeen < staleAfter) continue
     const ts = nowIso()
     if (agent.taskId) {
       db.prepare(`
@@ -3928,10 +3948,23 @@ async function completionGateFailure(
   // specific participant. Task path locks still prevent conflicting claims,
   // while the configured gate command validates the combined checkout.
   if (runRow && !Boolean(Number(runRow.use_worktrees ?? 1))) return null
-  const locks = (db.prepare(`
+  // The run flag is not authoritative about where participants actually WORK:
+  // a run created with worktrees enabled can still be staffed by workers that
+  // joined with --shared, so every agent sits in one checkout. Detect that from
+  // the roster and apply the same reasoning as an explicitly shared run —
+  // otherwise each lane's dirt is blamed on whoever completes, which with two
+  // concurrently dirty lanes deadlocks the board: neither can ever complete.
+  if (sharesCheckoutWithAnotherAgentSync(db, runId, agentId, worktreePath)) return null
+  const activeLocks = (db.prepare(`
     SELECT * FROM protocol_locks
-    WHERE run_id = ? AND agent_id = ? AND status = 'active' AND lease_expires_at > ?
-  `).all(runId, agentId, nowIso()) as Row[]).map(rowToLock)
+    WHERE run_id = ? AND status = 'active' AND lease_expires_at > ?
+  `).all(runId, nowIso()) as Row[]).map(rowToLock)
+  const locks = activeLocks.filter((lock) => lock.agentId === agentId)
+  // Files under another participant's active write lock are demonstrably their
+  // lane, not unattributed drift by this agent. Excluding them keeps the gate
+  // honest about THIS agent's footprint instead of forcing it to either cover
+  // a teammate's paths or destroy their work to pass.
+  const foreignLocks = activeLocks.filter((lock) => lock.agentId !== agentId && lock.mode === 'write')
   if (locks.some((lock) => lock.path === '**' && lock.mode === 'write')) return null
   let files = await changedPaths(worktreePath).catch(() => [] as string[])
   if (taskId) {
@@ -3957,8 +3990,31 @@ async function completionGateFailure(
       files = [...new Set(changedSinceClaim)]
     }
   }
-  const uncovered = files.filter((file) => !locks.some((lock) => lock.mode === 'write' && lockPathsOverlap(lock.path, file)))
+  const uncovered = files.filter((file) => (
+    !locks.some((lock) => lock.mode === 'write' && lockPathsOverlap(lock.path, file))
+    && !foreignLocks.some((lock) => lockPathsOverlap(lock.path, file))
+  ))
   return uncovered.length > 0 ? uncovered : null
+}
+
+/**
+ * True when another live participant in this run works out of the same checkout
+ * directory. Concurrent edits there cannot be attributed to one agent by git
+ * status alone, so path-based completion gating would reject honest work.
+ */
+function sharesCheckoutWithAnotherAgentSync(
+  db: SqliteDatabase,
+  runId: string,
+  agentId: string,
+  worktreePath: string,
+): boolean {
+  const normalize = (value: string): string => value.replace(/\/+$/, '')
+  const mine = normalize(worktreePath)
+  if (!mine) return false
+  const rows = db.prepare(
+    'SELECT worktree_path FROM protocol_agents WHERE run_id = ? AND id != ?',
+  ).all(runId, agentId) as Row[]
+  return rows.some((row) => normalize(String(row.worktree_path ?? '')) === mine)
 }
 
 async function drainAgentStream(controller: RunController, agent: ProtocolAgent, response: Response): Promise<void> {

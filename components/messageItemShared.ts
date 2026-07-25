@@ -27,6 +27,15 @@ export type DiffCommentComposerSend = (prompt: string) => void
 
 export const DiffCommentComposerContext = createContext<DiffCommentComposerSend | null>(null)
 
+// Mirrors StreamMessageItem's render guard. MessageView uses this to remove
+// empty virtual rows before they can contribute padding or selection geometry.
+export function streamMessageHasContent(message: ThreadedMessage): boolean {
+  return message.blocks.some((block) => (
+    block.type === 'tool_thread'
+    || (block.type === 'text' && block.text.trim().length > 0)
+  ))
+}
+
 /**
  * Scan threaded messages for TaskCreate/TaskUpdate calls and build a
  * taskId → activeForm map reflecting the most recent activeForm set for each

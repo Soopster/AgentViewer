@@ -36,7 +36,10 @@ export default function BookmarksPanel({ open, onClose, onSelect }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [cursor, setCursor] = useState(0)
   const cursorRef = useRef(0)
-  cursorRef.current = cursor
+
+  useEffect(() => {
+    cursorRef.current = cursor
+  }, [cursor])
 
   const load = useCallback(() => {
     setLoading(true)
