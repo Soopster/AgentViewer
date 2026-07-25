@@ -4417,6 +4417,8 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'mark',       label: 'Mark position',          key: 'm',  category: 'Navigation' },
   // Transcript
   { id: 'search',     label: 'Search messages',        key: '/',  category: 'Transcript' },
+  { id: 'session-search', label: 'Search sessions',    key: '/',  category: 'Session'    },
+  { id: 'next-attention', label: 'Jump to next attention item', key: '⌃N', category: 'Session' },
   { id: 'fold',       label: 'Fold/expand card',       key: 'e',  category: 'Transcript' },
   { id: 'copy',       label: 'Copy selected message',  key: 'y',  category: 'Transcript' },
   { id: 'reply',      label: 'Reply to selected message', key: '⇧Q', category: 'Transcript' },
@@ -4458,6 +4460,7 @@ const COMMANDS: PaletteCommand[] = [
   { id: 'diagnostics', label: 'Session diagnostics',   key: 'D',  category: 'Session'    },
   { id: 'provider',   label: 'Switch provider',        key: 'p',  category: 'Session'    },
   { id: 'sort',       label: 'Toggle sidebar sort',    key: 'S',  category: 'Session'    },
+  { id: 'sidebar-view', label: 'Switch sidebar view',  key: 'a',  category: 'Session'    },
   // Tabs
   { id: 'tab-toggle', label: 'Toggle tab bar',         key: 'b',  category: 'Tabs'       },
   { id: 'tab-prev',   label: 'Previous tab',           key: '←',  category: 'Tabs'       },
@@ -10550,6 +10553,7 @@ export default function OpenTuiApp() {
     const current = tuiPermissionModeByKeyRef.current[sessionKey(target)] ?? 'default'
     const currentIndex = CLAUDE_PERMISSION_MODE_ORDER.indexOf(current)
     const next = CLAUDE_PERMISSION_MODE_ORDER[(currentIndex + 1) % CLAUDE_PERMISSION_MODE_ORDER.length]!
+    showToggleOutcome('Claude permission mode:', next)
     setClaudeComposerPermissionMode(target, next)
   })
 
@@ -10882,6 +10886,32 @@ export default function OpenTuiApp() {
     }
     const target = pool.find((item) => item.sessionKey !== selectedSessionKeyRef.current) ?? pool[0]!
     openAttentionSession(target)
+  })
+
+  const reuseLastPrompt = useEffectEvent(() => {
+    const messages = sessionDetail?.threadedMessages
+    if (!messages || messages.length === 0) return
+    let lastUserText = ''
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i]
+      if (msg.role !== 'user') continue
+      const text = msg.blocks
+        .map((block) => {
+          if (block.type === 'text') return block.text ?? ''
+          if (block.type === 'local_command_stdout' && 'stdout' in block && typeof block.stdout === 'string') return block.stdout
+          return ''
+        })
+        .join('\n')
+        .trim()
+      if (text.length > 0) {
+        lastUserText = text
+        break
+      }
+    }
+    if (!lastUserText) return
+    setComposerActive(true)
+    composerTextareaRef.current?.setText(lastUserText)
+    setComposerDraft(lastUserText)
   })
 
   // Digits 1-9 jump straight to a fleet cell while the strip is visible.
@@ -13560,6 +13590,11 @@ export default function OpenTuiApp() {
     else toast.info(text, options)
   }, [])
 
+  const showToggleOutcome = useEffectEvent((label: string, outcome: string | boolean) => {
+    const state = typeof outcome === 'boolean' ? (outcome ? 'enabled' : 'disabled') : outcome
+    showNotice('info', `${label} ${state}`)
+  })
+
   const rememberComposerCursor = useCallback(() => {
     composerCursorOffsetRef.current = composerTextareaRef.current?.cursorOffset ?? null
   }, [])
@@ -14263,12 +14298,25 @@ export default function OpenTuiApp() {
   const executeCommandPalette = useEffectEvent((id: string) => {
     closeCommandPalette()
     switch (id) {
+      case 'new':
+        openNewSessionModal()
+        break
+      case 'reuse':
+        reuseLastPrompt()
+        break
       case 'provider':
         setProviderMenuIndex(Math.max(PROVIDERS.indexOf(provider), 0))
         setProviderMenuOpen(true)
         break
       case 'attention':
         setAttentionOpen(true)
+        break
+      case 'next-attention':
+        jumpToNextAttention()
+        break
+      case 'session-search':
+        setFocusedPane('sessions')
+        setSessionSearchMode(true)
         break
       case 'worktree-new':
         setWorktreeDraft('')
@@ -14295,7 +14343,11 @@ export default function OpenTuiApp() {
         void stopActiveCoordinatedRun()
         break
       case 'fleet':
-        setFleetStripEnabled((prev) => !prev)
+        setFleetStripEnabled((prev) => {
+          const next = !prev
+          showToggleOutcome('Fleet strip', next)
+          return next
+        })
         break
       case 'checkpoints':
         if (gitRepoCwd) setCheckpointOpen(true)
@@ -14308,18 +14360,21 @@ export default function OpenTuiApp() {
       case 'density': {
         const next = cycleDensityValue(density)
         setDensity(next)
+        showToggleOutcome('Density:', next)
         void writeTuiDensity(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store density'))
         break
       }
       case 'diff-layout': {
         const next: TuiDiffLayout = diffLayout === 'stack' ? 'split' : 'stack'
         setDiffLayout(next)
+        showToggleOutcome('Diff layout:', next)
         void writeTuiDiffLayout(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store diff layout'))
         break
       }
       case 'rail': {
         const nextVisible = !railVisible
         setRailVisible(nextVisible)
+        showToggleOutcome('Session rail', nextVisible)
         if (!nextVisible && focusedPane === 'sessions') setFocusedPane('messages')
         void writeTuiRailVisible(nextVisible).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store rail'))
         break
@@ -14327,6 +14382,7 @@ export default function OpenTuiApp() {
       case 'focus': {
         const next = !focusMode
         setFocusMode(next)
+        showToggleOutcome('Focus mode', next)
         if (next) setFocusedPane('messages')
         void writeTuiFocusMode(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store focus mode'))
         break
@@ -14334,6 +14390,7 @@ export default function OpenTuiApp() {
       case 'tools': {
         setShowToolCalls((v) => {
           const next = !v
+          showToggleOutcome('Tool calls', next ? 'shown' : 'hidden')
           void writeTuiShowToolCalls(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
           return next
         })
@@ -14342,6 +14399,7 @@ export default function OpenTuiApp() {
       case 'velocity-scroll': {
         setVelocityScrollEnabled((v) => {
           const next = !v
+          showToggleOutcome('Velocity scroll', next)
           void writeTuiVelocityScroll(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store velocity scroll'))
           return next
         })
@@ -14353,7 +14411,9 @@ export default function OpenTuiApp() {
           if (composerAgentOptions.length === 0) break
           setTuiOpenCodeAgent((current) => {
             const index = Math.max(0, composerAgentOptions.findIndex((agent) => agent.value === current))
-            return composerAgentOptions[(index + 1) % composerAgentOptions.length]?.value ?? current
+            const next = composerAgentOptions[(index + 1) % composerAgentOptions.length]?.value ?? current
+            showToggleOutcome('OpenCode mode:', next)
+            return next
           })
           break
         }
@@ -14361,6 +14421,7 @@ export default function OpenTuiApp() {
           const order = ['interactive', 'plan', 'autopilot', 'shell'] as const
           setTuiCopilotMode((current) => {
             const next = order[(order.indexOf(current) + 1) % order.length]!
+            showToggleOutcome('Copilot mode:', next)
             void runTuiSessionAction(target, {
               action: 'setMode',
               mode: next,
@@ -14385,6 +14446,7 @@ export default function OpenTuiApp() {
       case 'width': {
         const next: TuiTranscriptWidth = transcriptWidth === 'centered' ? 'full' : 'centered'
         setTranscriptWidth(next)
+        showToggleOutcome('Transcript width:', next)
         void writeTuiTranscriptWidth(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store transcript width'))
         break
       }
@@ -14437,6 +14499,7 @@ export default function OpenTuiApp() {
       case 'tab-toggle': {
         const next = !tabsEnabled
         setTabsEnabled(next)
+        showToggleOutcome('Tab bar', next)
         void writeTuiTabsEnabled(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tab setting'))
         break
       }
@@ -14503,7 +14566,11 @@ export default function OpenTuiApp() {
         openComposerStashList()
         break
       case 'thinking':
-        setThinkingMode((current) => !current)
+        setThinkingMode((current) => {
+          const next = !current
+          showToggleOutcome('Thinking mode', next)
+          return next
+        })
         break
       case 'git':
         setGitOpen(true)
@@ -14549,6 +14616,14 @@ export default function OpenTuiApp() {
         break
       case 'sort':
         toggleSidebarSort()
+        showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project')
+        break
+      case 'sidebar-view':
+        setSidebarView((current) => {
+          const next = current === 'sessions' ? 'coordinator' : 'sessions'
+          showToggleOutcome('Sidebar view:', next)
+          return next
+        })
         break
       case 'refresh':
         void refreshSessions(provider)
@@ -14677,7 +14752,11 @@ export default function OpenTuiApp() {
       } else if (isCtrl('t')) {
         handled(() => setCoordMaxAgents((current) => (current >= 6 ? 2 : current + 1)))
       } else if (isCtrl('p')) {
-        handled(() => setCoordRequirePlanApproval((current) => !current))
+        handled(() => setCoordRequirePlanApproval((current) => {
+          const next = !current
+          showToggleOutcome('Plan approval', next)
+          return next
+        }))
       } else if ((key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down') && coordModalFocus === 'provider') {
         const direction = key.name === 'left' || key.name === 'up' ? -1 : 1
         handled(() => {
@@ -14703,9 +14782,17 @@ export default function OpenTuiApp() {
         const direction = key.name === 'left' || key.name === 'down' ? -1 : 1
         handled(() => setCoordMaxAgents((current) => Math.min(6, Math.max(2, current + direction))))
       } else if ((key.name === 'return' || key.name === 'space' || key.sequence === ' ') && coordModalFocus === 'worktrees') {
-        handled(() => setCoordUseWorktrees((current) => !current))
+        handled(() => setCoordUseWorktrees((current) => {
+          const next = !current
+          showToggleOutcome('Coordinator worktrees', next)
+          return next
+        }))
       } else if ((key.name === 'return' || key.name === 'space' || key.sequence === ' ') && coordModalFocus === 'plans') {
-        handled(() => setCoordRequirePlanApproval((current) => !current))
+        handled(() => setCoordRequirePlanApproval((current) => {
+          const next = !current
+          showToggleOutcome('Plan approval', next)
+          return next
+        }))
       } else if (key.name === 'return' && coordModalFocus === 'launch') {
         handled(() => { void submitCoordinatedRun() })
       } else if (key.name === 'return' && coordModalFocus !== 'prompt') {
@@ -15477,7 +15564,14 @@ export default function OpenTuiApp() {
         handled(() => { if (paneSession) composeToSplitPaneSession(paneSession) })
         return
       }
-      if (sequence === 'i') { handled(() => setThinkingMode((current) => !current)); return }
+      if (sequence === 'i') {
+        handled(() => setThinkingMode((current) => {
+          const next = !current
+          showToggleOutcome('Thinking mode', next)
+          return next
+        }))
+        return
+      }
       if (key.name === 'return') { handled(openFocusedSplitPane); return }
       if (key.name === 'tab') { handled(() => cycleSplitFocus(1)); return }
       // Session-scoped overlays follow focus, so ⌃G/D/⌃A inspect the pane you
@@ -15594,7 +15688,11 @@ export default function OpenTuiApp() {
 
     // Fleet strip: ⇧A toggles, digits 1-9 jump to a cell
     if (isShifted('A')) {
-      handled(() => setFleetStripEnabled((prev) => !prev))
+      handled(() => setFleetStripEnabled((prev) => {
+        const next = !prev
+        showToggleOutcome('Fleet strip', next)
+        return next
+      }))
       return
     }
     if (fleetStripVisible && /^[1-9]$/.test(sequence) && !key.ctrl && !key.meta && !key.option) {
@@ -15698,7 +15796,11 @@ export default function OpenTuiApp() {
 
     if (effectiveFocus === 'sessions' && key.name === 'a' && !key.ctrl && !key.shift && !key.meta) {
       handled(() => {
-        setSidebarView((current) => current === 'sessions' ? 'coordinator' : 'sessions')
+        setSidebarView((current) => {
+          const next = current === 'sessions' ? 'coordinator' : 'sessions'
+          showToggleOutcome('Sidebar view:', next)
+          return next
+        })
       })
       return
     }
@@ -15761,6 +15863,7 @@ export default function OpenTuiApp() {
     if (effectiveFocus === 'sessions' && sidebarView === 'sessions' && isShifted('S')) {
       handled(() => {
         toggleSidebarSort()
+        showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project')
       })
       return
     }
@@ -16119,6 +16222,7 @@ export default function OpenTuiApp() {
         handled(() => {
           const next: TuiDiffLayout = diffLayout === 'stack' ? 'split' : 'stack'
           setDiffLayout(next)
+          showToggleOutcome('Diff layout:', next)
           void writeTuiDiffLayout(next).catch((err) => {
             setError(err instanceof Error ? err.message : 'Failed to store diff layout')
           })
@@ -16182,37 +16286,17 @@ export default function OpenTuiApp() {
     }
 
     if (sequence === 'R' && !composerActive) {
-      handled(() => {
-        const messages = sessionDetail?.threadedMessages
-        if (!messages || messages.length === 0) return
-        let lastUserText = ''
-        for (let i = messages.length - 1; i >= 0; i -= 1) {
-          const msg = messages[i]
-          if (msg.role !== 'user') continue
-          const text = msg.blocks
-            .map((block) => {
-              if (block.type === 'text') return block.text ?? ''
-              if (block.type === 'local_command_stdout' && 'stdout' in block && typeof block.stdout === 'string') return block.stdout
-              return ''
-            })
-            .join('\n')
-            .trim()
-          if (text.length > 0) {
-            lastUserText = text
-            break
-          }
-        }
-        if (!lastUserText) return
-        setComposerActive(true)
-        composerTextareaRef.current?.setText(lastUserText)
-        setComposerDraft(lastUserText)
-      })
+      handled(reuseLastPrompt)
       return
     }
 
     if (sequence === 'i') {
       handled(() => {
-        setThinkingMode((current) => !current)
+        setThinkingMode((current) => {
+          const next = !current
+          showToggleOutcome('Thinking mode', next)
+          return next
+        })
       })
       return
     }
@@ -16221,6 +16305,7 @@ export default function OpenTuiApp() {
       handled(() => {
         setShowToolCalls((v) => {
           const next = !v
+          showToggleOutcome('Tool calls', next ? 'shown' : 'hidden')
           void writeTuiShowToolCalls(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store tool visibility'))
           return next
         })
@@ -16233,7 +16318,7 @@ export default function OpenTuiApp() {
         setVelocityScrollEnabled((v) => {
           const next = !v
           void writeTuiVelocityScroll(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store velocity scroll'))
-          showNotice('info', next ? 'Velocity scroll enabled' : 'Velocity scroll disabled')
+          showToggleOutcome('Velocity scroll', next)
           return next
         })
       })
@@ -16268,6 +16353,7 @@ export default function OpenTuiApp() {
       handled(() => {
         const next = !tabsEnabled
         setTabsEnabled(next)
+        showToggleOutcome('Tab bar', next)
         void writeTuiTabsEnabled(next).catch((err) => {
           setError(err instanceof Error ? err.message : 'Failed to store tab setting')
         })
@@ -16279,6 +16365,7 @@ export default function OpenTuiApp() {
       handled(() => {
         const nextVisible = !railVisible
         setRailVisible(nextVisible)
+        showToggleOutcome('Session rail', nextVisible)
         if (!nextVisible && focusedPane === 'sessions') setFocusedPane('messages')
         void writeTuiRailVisible(nextVisible).catch((err) => {
           setError(err instanceof Error ? err.message : 'Failed to store reader layout')
@@ -16291,6 +16378,7 @@ export default function OpenTuiApp() {
       handled(() => {
         const next = !focusMode
         setFocusMode(next)
+        showToggleOutcome('Focus mode', next)
         if (next) setFocusedPane('messages')
         void writeTuiFocusMode(next).catch((err) => {
           setError(err instanceof Error ? err.message : 'Failed to store focus mode')
@@ -16303,6 +16391,7 @@ export default function OpenTuiApp() {
       handled(() => {
         const next = cycleDensityValue(density)
         setDensity(next)
+        showToggleOutcome('Density:', next)
         void writeTuiDensity(next).catch((err) => {
           setError(err instanceof Error ? err.message : 'Failed to store density')
         })
@@ -16314,6 +16403,7 @@ export default function OpenTuiApp() {
       handled(() => {
         const next: TuiTranscriptWidth = transcriptWidth === 'centered' ? 'full' : 'centered'
         setTranscriptWidth(next)
+        showToggleOutcome('Transcript width:', next)
         void writeTuiTranscriptWidth(next).catch((err) => {
           setError(err instanceof Error ? err.message : 'Failed to store transcript width')
         })
@@ -16765,6 +16855,7 @@ export default function OpenTuiApp() {
               // a click on this box itself (not a child row) means the border/title.
               if (box && event.target === box && event.y === box.y && sidebarView === 'sessions') {
                 toggleSidebarSort()
+                showToggleOutcome('Sidebar sort:', sidebarSort === 'project' ? 'time' : 'project')
               }
             }}
           >
@@ -16900,7 +16991,7 @@ export default function OpenTuiApp() {
             </box>
           ) : null}
 
-          {fleetStripVisible && transcriptView !== 'stream' ? (
+          {fleetStripVisible ? (
             <box paddingX={1} flexDirection="row" overflow="hidden">
               <text wrapMode="none">
                 {renderInlineTextSegments(fleetStripSegments, rightPaneWidth - 4, theme.dim)}
@@ -18095,6 +18186,7 @@ export default function OpenTuiApp() {
           onToggleVelocityScroll={() => {
             setVelocityScrollEnabled((current) => {
               const next = !current
+              showToggleOutcome('Velocity scroll', next)
               void writeTuiVelocityScroll(next).catch((err) => setError(err instanceof Error ? err.message : 'Failed to store velocity scroll'))
               return next
             })
