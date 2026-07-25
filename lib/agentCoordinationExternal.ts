@@ -7,6 +7,7 @@ import {
   finalizeExternalProtocolRun,
   handoffExternalProtocolTask,
   joinExternalProtocolRun,
+  listProtocolRuns,
   listRunPlaybooks,
   loadRunPlaybook,
   publishExternalProtocolFinding,
@@ -90,7 +91,7 @@ function negotiation(body: Record<string, unknown>): {
 export async function executeExternalCoordinatorAction(body: Record<string, unknown>): Promise<unknown> {
   const action = text(body.action)
   const requestId = optionalText(body.requestId)
-  const participantIdentity = ['create_run', 'join_run', 'list_playbooks'].includes(action) ? null : identity(body)
+  const participantIdentity = ['create_run', 'join_run', 'list_playbooks', 'list_runs'].includes(action) ? null : identity(body)
   const mutate = <T>(operation: () => Promise<T>) => {
     if (!participantIdentity) return operation()
     return runExternalProtocolIdempotent(participantIdentity, action, requestId, operation)
@@ -155,11 +156,11 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     }))
   }
   if (action === 'read_inbox') {
-    return readExternalProtocolInbox(identity(body), {
+    return mutate(() => readExternalProtocolInbox(participantIdentity!, {
       after: optionalText(body.after),
       limit: Number(body.limit) || undefined,
       acknowledge: body.acknowledge !== false,
-    })
+    }))
   }
   if (action === 'send_message') {
     const kind = text(body.kind) || 'request'
@@ -252,6 +253,9 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
   }
   if (action === 'list_playbooks') {
     return { playbooks: await listRunPlaybooks(text(body.cwd) || process.cwd()) }
+  }
+  if (action === 'list_runs') {
+    return { runs: await listProtocolRuns(Number(body.limit) || 20) }
   }
   throw new Error(`Unknown external Coordinator action: ${action || '(missing)'}`)
 }

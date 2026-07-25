@@ -72,6 +72,10 @@ const daemon = createServer(async (request, response) => {
       response.end(JSON.stringify({ participant, snapshot, instructions: 'lead instructions' }))
       return
     }
+    if (body?.action === 'list_runs') {
+      response.end(JSON.stringify({ runs: [snapshot.run] }))
+      return
+    }
     if (body?.action === 'join_run') {
       const joined = { ...participant, agentId: 'external-claude', token: 'token-claude', name: 'claude-cli', role: 'teammate', provider: 'claude', cwd: '/tmp/claude' }
       response.end(JSON.stringify({ participant: joined, snapshot: { ...snapshot, agents: [joined] }, instructions: 'teammate instructions' }))
@@ -223,6 +227,9 @@ try {
   if (createRequest?.body?.client?.protocolVersion !== 2 || !Array.isArray(createRequest?.body?.capabilities?.tools)) {
     throw new Error('MCP bridge did not advertise its protocol version and capabilities')
   }
+  const runs = await client.callTool({ name: 'coord_list_runs', arguments: { limit: 5 } })
+  const runsPayload = JSON.parse(runs.content?.[0]?.text ?? '{}')
+  if (runsPayload.runs?.[0]?.id !== 'run-1') throw new Error('Legacy Coordinator run discovery did not round-trip')
 
   const waited = await client.callTool({ name: 'coord_wait', arguments: { timeout_ms: 0 } })
   const waitedPayload = JSON.parse(waited.content?.[0]?.text ?? '{}')
@@ -254,6 +261,13 @@ try {
       name: 'coord_create_task',
       arguments: { title: 'Implement bridge', detail: 'Add the shared workflow', paths: ['lib/bridge.ts'] },
     })
+    const generatedIdempotencyKey = seen.find((entry) => (
+      entry.url === '/api/agent-protocol/external'
+      && entry.body?.action === 'create_task'
+    ))?.body?.requestId
+    if (typeof generatedIdempotencyKey !== 'string' || !generatedIdempotencyKey.startsWith('mcp-')) {
+      throw new Error('MCP bridge did not supply an idempotency key for an omitted mutation request_id')
+    }
     const claimed = await secondClient.callTool({ name: 'coord_claim_task', arguments: { task_id: 'task-1' } })
     const claimedPayload = JSON.parse(claimed.content?.[0]?.text ?? '{}')
     if (claimedPayload.task?.ownerAgentId !== 'external-claude') throw new Error('External teammate did not claim the shared task')

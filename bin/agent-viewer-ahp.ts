@@ -49,6 +49,7 @@ function attachFramedPeer(
   onData: (listener: (chunk: string) => void) => void,
   onClose: (listener: () => void) => void,
   afterClose?: () => void,
+  drainBeforeClose = false,
 ): CoordinatorAhpConnection {
   let buffer = ''
   let handling = Promise.resolve()
@@ -102,10 +103,15 @@ function attachFramedPeer(
     }
   })
   onClose(() => {
-    void handling.finally(() => {
-      connection.close()
-      afterClose?.()
-    })
+    if (drainBeforeClose) {
+      void handling.catch(() => {}).finally(() => {
+        connection.close()
+        afterClose?.()
+      })
+      return
+    }
+    connection.close()
+    void handling.catch(() => {}).finally(() => afterClose?.())
   })
   return connection
 }
@@ -203,7 +209,8 @@ if (websocketArg) {
         }
       },
       close(peer) {
-        void peer.data.handling.finally(() => peer.data.connection?.close())
+        peer.data.connection?.close()
+        void peer.data.handling.catch(() => {})
       },
     },
   })
@@ -247,5 +254,6 @@ if (websocketArg) {
       clearInterval(refreshTimer)
       host.close()
     },
+    true,
   )
 }

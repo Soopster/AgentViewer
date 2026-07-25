@@ -479,7 +479,9 @@ framed.stdin.end(`${JSON.stringify({
   method: 'listSessions',
   params: { channel: 'ahp-root://', limit: 10 },
 })}\n`)
-const framedExit = await new Promise<number | null>((resolve) => framed.once('exit', resolve))
+// `exit` can precede the final stdout read; `close` waits for the stdio pipes
+// to drain so a valid final JSON-RPC frame is never parsed as truncated.
+const framedExit = await new Promise<number | null>((resolve) => framed.once('close', resolve))
 assert.equal(framedExit, 0, framedError)
 const framedResponses = framedOutput.trim().split('\n').map((line) => JSON.parse(line))
 const framedResponse = framedResponses.find((frame) => frame.id === 9)

@@ -2,6 +2,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -13,7 +14,24 @@ import {
 
 const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 const EXTERNAL_COORD_PROTOCOL_VERSION = 2
-const requestIdField = z.string().min(1).max(160).optional().describe('Stable idempotency key; reuse the same value when retrying this mutation')
+const IDEMPOTENT_COORDINATOR_ACTIONS = new Set([
+  'claim_task',
+  'complete_task',
+  'create_task',
+  'fail_task',
+  'finalize_run',
+  'finding',
+  'handoff_task',
+  'progress',
+  'read_inbox',
+  'release_task',
+  'request_locks',
+  'review_plan',
+  'save_playbook',
+  'send_message',
+  'submit_plan',
+])
+const requestIdField = z.string().min(1).max(160).optional().describe('Stable idempotency key; the bridge generates one when omitted, or reuse your explicit value across separate retries')
 const baseUrl = normalizeBaseUrl(
   process.env.AGENT_VIEWER_MCP_URL
     ?? process.env.AGENT_VIEWER_ATTACH
@@ -189,6 +207,9 @@ async function coordinatorRequest(action, payload = {}, requireIdentity = true) 
     ...(coordinatorIdentity ?? {}),
     ...payload,
   }
+  if (IDEMPOTENT_COORDINATOR_ACTIONS.has(action) && !body.requestId) {
+    body.requestId = `mcp-${randomUUID()}`
+  }
   const result = coordinatorTransport() === 'http'
     ? await requestJson('/api/agent-protocol/external', {
         method: 'POST',
@@ -211,6 +232,7 @@ const server = new McpServer(
       'Create or join a run, then read status and inbox; claim one task, lock paths before editing, report progress, and complete it or release unfinished work.',
       'Teammates run in other CLI processes and see only the board and mailbox — communicate deliberately: answer reply_required mail promptly, publish reusable discoveries with coord_publish_finding, and message teammates whose lanes your work affects.',
       'Use coord_wait instead of polling while idle, prefer coord worker for unattended runs, and never disclose participant capabilities or bypass completion gates.',
+      'Coordinator calls use a persistent AHP connection by default. The bridge restores run subscriptions after disconnects and safely retries reads or idempotent mutations once.',
       'Narrate every mailbox exchange to your own terminal, one line each: "<- <sender>: <message>" on receipt, "-> <recipient>: <message>" after sending. '
         + 'Your human is watching this terminal, not the board — silence reads as dead, even mid-task.',
       'If any coord_* call throws (network error, timeout, daemon unreachable), wait ~2s and retry the SAME call — do not ask the user whether to retry, the answer is always yes. '
@@ -351,7 +373,7 @@ server.registerTool('coord_list_runs', {
   inputSchema: { limit: z.number().int().min(1).max(100).optional() },
   annotations: { readOnlyHint: true },
 }, async ({ limit }) => {
-  const result = await requestJson(`/api/agent-protocol/runs?limit=${limit ?? 20}`)
+  const result = await coordinatorRequest('list_runs', { limit: limit ?? 20 }, false)
   return textResult(result)
 })
 

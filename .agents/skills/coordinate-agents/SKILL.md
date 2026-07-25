@@ -29,6 +29,7 @@ Communication is part of the work, not overhead. Every other participant runs in
 6. If setup or recovery is unclear, run `agent-viewer coord doctor --json`; inspect persistent supervisors with `coord workers`, `coord logs`, and `coord restart` rather than creating a duplicate participant.
 7. Narrate every mailbox exchange to your own terminal, one line each: `← <sender>: <message>` on receipt, `→ <recipient>: <message>` after sending. Your user is watching this terminal, not the board — a silent stretch reads as dead even mid-task.
 8. If any `coord_*` call throws (network error, timeout, daemon unreachable), wait ~2s and retry the SAME call with the SAME identity — do not re-create or re-join, and do not ask the user whether to retry; the answer is always yes. An empty or timed-out `coord_wait` result is normal and not a failure; only a thrown error means the connection actually dropped.
+9. Use the default persistent AHP transport through the `coord_*` tools. The bridge reconnects with the same client identity and run subscriptions, and safely retries reads or idempotent mutations once. Do not bypass it with raw Coordinator HTTP calls or set `AGENT_VIEWER_COORD_TRANSPORT=http` during a normal multi-agent run; HTTP exists only as an explicit compatibility/diagnostic fallback.
 
 ## Multi-agent startup invariant
 

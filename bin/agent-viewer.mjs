@@ -16,6 +16,7 @@ function parseArgs(rawArgs) {
   let identity
   let ahpPort
   let noAhp = false
+  let production = false
 
   for (let i = 0; i < rawArgs.length; i += 1) {
     const arg = rawArgs[i]
@@ -27,6 +28,11 @@ function parseArgs(rawArgs) {
 
     if (arg === '--no-ahp') {
       noAhp = true
+      continue
+    }
+
+    if (arg === '--production') {
+      production = true
       continue
     }
 
@@ -94,7 +100,7 @@ function parseArgs(rawArgs) {
     forwarded.push(arg)
   }
 
-  return { forwarded, port, legacy, attach, identity, ahpPort, noAhp }
+  return { forwarded, port, legacy, attach, identity, ahpPort, noAhp, production }
 }
 
 function normalizeAttachUrl(attach) {
@@ -124,6 +130,7 @@ Options:
   -p, --port <port>    Use a custom port in web mode
   --ahp-port <port>    AHP WebSocket port in web mode (default: web port + 1)
   --no-ahp             Disable the default AHP Coordinator sidecar
+  --production         Run a built Next.js app with \`next start\`
   -a, --attach <url>   Connect the TUI or MCP bridge to an \`agent-viewer web\` daemon
                        (e.g. --attach 3000 or --attach http://127.0.0.1:3000).
                        Turns run in the daemon and survive TUI restarts.
@@ -346,7 +353,7 @@ if (command === '-h' || command === '--help' || command === 'help') {
   forwardSignals(child)
   trackExit(child)
 } else if (command === 'web') {
-  const { forwarded, port, legacy, ahpPort, noAhp } = parseArgs(args.slice(1))
+  const { forwarded, port, legacy, ahpPort, noAhp, production } = parseArgs(args.slice(1))
   if (legacy) {
     const entrypoint = fileURLToPath(new URL('../tui/main.tsx', import.meta.url))
     const child = spawn(process.execPath, ['--import', 'tsx', entrypoint, ...forwarded], {
@@ -361,7 +368,7 @@ if (command === '-h' || command === '--help' || command === 'help') {
     trackExit(child)
   } else {
     const nextBin = fileURLToPath(new URL('../node_modules/next/dist/bin/next', import.meta.url))
-    const nextArgs = ['dev', '--hostname', '127.0.0.1']
+    const nextArgs = [production ? 'start' : 'dev', '--hostname', '127.0.0.1']
     if (port) {
       nextArgs.push('--port', port)
     }

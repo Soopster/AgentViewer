@@ -56,6 +56,15 @@ capability, idempotency, and persistence dispatcher as the compatibility HTTP
 route. Generic AHP clients can ignore this extension and continue using the
 standard session projection.
 
+After a socket loss, the bridge uses AHP `reconnect` with its last server
+sequence and every bound run subscription. Transport closure releases the old
+client ID immediately even when a `coord_wait` is still executing, so a worker
+does not wait for the old long poll to expire before reconnecting. Read
+operations and mutations backed by a stable idempotency key receive one
+automatic transport retry; MCP supplies a per-call key when the caller omits
+one. Create and join are never replayed automatically because duplicating a
+participant would be less safe than surfacing the transport error.
+
 Set `AGENT_VIEWER_AHP_URL` when the AHP socket is not on the derived port. Set
 `AGENT_VIEWER_COORD_TRANSPORT=http` to opt into the legacy HTTP transport, or
 start the web daemon with `--no-ahp` when no Coordinator clients will use AHP.

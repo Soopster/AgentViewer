@@ -420,6 +420,7 @@ export class CoordinatorAhpHost {
   }
 
   replayAfter(lastSeenServerSeq: number, subscriptions: Set<URI>): ActionEnvelope[] | null {
+    if (lastSeenServerSeq > this.serverSeq) return null
     const first = this.replay[0]?.serverSeq
     // A cold host has no proof that it retained the caller's gap. Force fresh
     // snapshots instead of claiming a successful empty replay.
@@ -542,6 +543,7 @@ export class CoordinatorAhpConnection {
   }
 
   async handle(message: JsonRpcMessage): Promise<void> {
+    if (this.closed) return
     if (message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
       if ('id' in message) this.sendError(message.id, JsonRpcErrorCodes.InvalidRequest, 'Invalid JSON-RPC request')
       return
@@ -552,8 +554,9 @@ export class CoordinatorAhpConnection {
     }
     try {
       const result = await this.handleRequest(message.method, message.params)
-      this.send({ jsonrpc: '2.0', id: message.id, result })
+      if (!this.closed) this.send({ jsonrpc: '2.0', id: message.id, result })
     } catch (error) {
+      if (this.closed) return
       if (error instanceof AhpRpcError || error instanceof AhpResourceError || error instanceof AhpTerminalError) {
         this.sendError(message.id, error.code, error.message, error.data)
       } else {
