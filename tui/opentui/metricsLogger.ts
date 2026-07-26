@@ -30,6 +30,8 @@
 import { appendFile, appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { monitorEventLoopDelay, PerformanceObserver, type IntervalHistogram } from 'node:perf_hooks'
+import { PerfStats } from '../../lib/perfStats'
+import type { AgentProvider } from '../../lib/types'
 
 const METRICS_ENABLED = process.env.AGENT_VIEWER_TUI_METRICS === '1'
 const METRICS_PATH = process.env.AGENT_VIEWER_TUI_METRICS_LOG
@@ -140,12 +142,22 @@ function startMonitors(): void {
 
 const FRAME_BUDGET_MS = 1000 / 60
 const frameWindow = { commits: 0, overBudget: 0, maxMs: 0 }
+const composerLatencyStats = new PerfStats()
 
 export function noteRenderFrame(durationMs: number): void {
   if (!METRICS_ENABLED) return
   frameWindow.commits += 1
   if (durationMs > FRAME_BUDGET_MS) frameWindow.overBudget += 1
   if (durationMs > frameWindow.maxMs) frameWindow.maxMs = durationMs
+}
+
+export function noteTuiComposerLatency(
+  provider: AgentProvider,
+  phase: 'send-to-ack' | 'first-output',
+  durationMs: number,
+): void {
+  if (!METRICS_ENABLED || !Number.isFinite(durationMs) || durationMs < 0) return
+  composerLatencyStats.record(`composer.${provider}.${phase}`, durationMs)
 }
 
 function drainFrameWindow(): { commits: number; overBudget: number; maxMs: number } {
@@ -316,6 +328,9 @@ export function startTuiMetricsLogger(): void {
     }
 
     sample.frames = drainFrameWindow()
+
+    const composerLatency = composerLatencyStats.snapshot()
+    if (composerLatency.length > 0) sample.composerLatency = composerLatency
 
     const gauges = collectGauges()
     if (Object.keys(gauges).length > 0) sample.gauges = gauges

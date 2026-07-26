@@ -18,9 +18,17 @@ import { toBmpSafe } from './bmp'
 import { loadBridgeMessagesForSession, addBridgeMessage } from '../../lib/bridgeMessages'
 import { TaskSidePanel } from './TaskSidePanel'
 import { TaskPanelPopover } from './TaskPanelPopover'
-import { scheduleWriteComposerDraft, readComposerDraft, readComposerSentHistory, appendComposerSentHistory } from '../../lib/tuiComposerState'
+import {
+  appendComposerSentHistory,
+  flushComposerQueueWrites,
+  readComposerDraft,
+  readComposerQueue,
+  readComposerSentHistory,
+  scheduleWriteComposerDraft,
+  scheduleWriteComposerQueue,
+} from '../../lib/tuiComposerState'
 import { registerExtraTreeSitterParsers } from './treeSitterParsers'
-import { startTuiMetricsLogger, tuiMetricsEnabled, noteRenderFrame, registerTuiMetricsGauge, cardProfileEnabled, logCardRecompute } from './metricsLogger'
+import { startTuiMetricsLogger, tuiMetricsEnabled, noteRenderFrame, noteTuiComposerLatency, registerTuiMetricsGauge, cardProfileEnabled, logCardRecompute } from './metricsLogger'
 import {
   buildPierreDiffView,
   type TuiPierreDiffRow,
@@ -46,7 +54,14 @@ import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
 import { buildTaskRegistry } from '../../lib/taskRegistry'
 import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
-import { mergeComposerAttachments, restoreComposerDraftPayload } from '../../lib/composerAttachments'
+import {
+  clearComposerQueueTarget,
+  mergeComposerAttachments,
+  rekeyComposerQueueTarget,
+  removeComposerQueueItem,
+  restoreComposerDraftPayload,
+  selectComposerQueueTarget,
+} from '../../lib/composerAttachments'
 import {
   THEME,
   getProviderAccent,
@@ -154,7 +169,7 @@ import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
-import { extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission, type PermissionResponse } from '../../lib/permissions'
+import { extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission, type PendingQuestionAnswers, type PermissionResponse } from '../../lib/permissions'
 import type { readViewSessionComposerOptions } from '../../lib/sessionBackend'
 import {
   sessionMessageFingerprint,
@@ -697,6 +712,33 @@ type ComposerDraftSnapshot = {
   cursorOffset?: number
 }
 type ComposerPromptPartRange = ComposerPromptPart & { start: number; end: number }
+type QueuedComposerSend = {
+  id: string
+  targetKey: string
+  text: string
+  attachments: SendAttachment[]
+  promptParts: ComposerPromptPart[]
+}
+
+function isQueuedComposerSend(value: unknown): value is QueuedComposerSend {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Partial<QueuedComposerSend>
+  if (typeof entry.id !== 'string' || !entry.id) return false
+  if (typeof entry.targetKey !== 'string' || !entry.targetKey) return false
+  if (typeof entry.text !== 'string') return false
+  if (!Array.isArray(entry.attachments) || !entry.attachments.every((attachment) =>
+    attachment && typeof attachment === 'object'
+      && typeof (attachment as Partial<SendAttachment>).id === 'string'
+      && typeof (attachment as Partial<SendAttachment>).type === 'string')) return false
+  return Array.isArray(entry.promptParts) && entry.promptParts.every((part) => {
+    if (!part || typeof part !== 'object') return false
+    const candidate = part as Partial<ComposerPromptPart>
+    if (typeof candidate.id !== 'string' || typeof candidate.marker !== 'string') return false
+    if (candidate.kind === 'text') return typeof candidate.text === 'string'
+    return candidate.kind === 'attachment'
+      && Boolean(candidate.attachment && typeof candidate.attachment === 'object')
+  })
+}
 type ComposerSubmission = {
   visibleText: string
   messageText: string
@@ -1156,6 +1198,23 @@ function fitText(value: string, width: number): string {
   return `${value.slice(0, width - 1)}…`
 }
 
+function openExternalUrl(url: string): Promise<void> {
+  const command = process.platform === 'darwin'
+    ? 'open'
+    : process.platform === 'linux'
+    ? 'xdg-open'
+    : null
+  if (!command) return Promise.reject(new Error(`Open this URL in a browser: ${url}`))
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [url], { detached: true, stdio: 'ignore' })
+    child.once('spawn', () => {
+      child.unref()
+      resolve()
+    })
+    child.once('error', reject)
+  })
+}
+
 type InlineTextSegment = {
   text: string
   fg: string
@@ -1605,7 +1664,10 @@ type PermissionOption = { response: PermissionResponse; label: string }
 // Ordered decisions for the approval overlay. 'always' is hidden when the
 // provider can't offer a session-scoped grant for this request.
 function permissionOptionsFor(permission: PendingPermission): PermissionOption[] {
-  const options: PermissionOption[] = [{ response: 'once', label: 'Allow' }]
+  const options: PermissionOption[] = [{
+    response: 'once',
+    label: permission.elicitation?.mode === 'url' ? 'Open & continue' : 'Allow',
+  }]
   if (permission.canApproveAlways !== false) options.push({ response: 'always', label: 'Always' })
   options.push({ response: 'reject', label: 'Reject' })
   return options
@@ -6794,6 +6856,8 @@ export default function OpenTuiApp() {
   const [questionFocusIndex, setQuestionFocusIndex] = useState(0)
   const [questionOptionIndex, setQuestionOptionIndex] = useState(0)
   const [questionSelections, setQuestionSelections] = useState<Record<number, string[]>>({})
+  const [questionFreeformAnswers, setQuestionFreeformAnswers] = useState<Record<number, string>>({})
+  const [questionFreeformEditing, setQuestionFreeformEditing] = useState(false)
   const questionPermissionIdRef = useRef<string | null>(null)
   const [composerWaitingSeed, setComposerWaitingSeed] = useState('')
   const [composerError, setComposerError] = useState<string | null>(null)
@@ -6806,9 +6870,13 @@ export default function OpenTuiApp() {
   const [liveTranscriptMessages, setLiveTranscriptMessages] = useState<ThreadedMessage[]>([])
   // Queued prompts waiting for the active turn to finish (CLI-style FIFO —
   // a single slot here used to silently overwrite the first queued message).
-  const [queuedComposerSends, setQueuedComposerSends] = useState<Array<{ text: string; attachments: SendAttachment[]; promptParts: ComposerPromptPart[] }>>([])
-  const queuedComposerSendsRef = useRef<Array<{ text: string; attachments: SendAttachment[]; promptParts: ComposerPromptPart[] }>>([])
+  const [queuedComposerSends, setQueuedComposerSends] = useState<QueuedComposerSend[]>(() =>
+    readComposerQueue(isQueuedComposerSend))
+  const queuedComposerSendsRef = useRef<QueuedComposerSend[]>(queuedComposerSends)
+  const queuedComposerSendCounterRef = useRef(0)
+  const [runningRegistryReady, setRunningRegistryReady] = useState(false)
   useEffect(() => { queuedComposerSendsRef.current = queuedComposerSends }, [queuedComposerSends])
+  useEffect(() => { scheduleWriteComposerQueue(queuedComposerSends) }, [queuedComposerSends])
   const activeComposerTurnRequestIdRef = useRef<string | null>(null)
   // Last message delivered INTO the running turn via native steering — shown
   // in the composer status line while the turn is still streaming.
@@ -7307,6 +7375,14 @@ export default function OpenTuiApp() {
   const composerTargetSessionIdentity = composerTargetSession
     ? sessionKey(composerTargetSession)
     : null
+  const activeQueuedComposerSends = useMemo(
+    () => selectComposerQueueTarget(queuedComposerSends, composerTargetSessionIdentity),
+    [composerTargetSessionIdentity, queuedComposerSends],
+  )
+  const composerTargetTurnKnownRunning = Boolean(
+    composerTargetSessionIdentity
+    && providerRunningSessions.some((running) => sessionKey(running) === composerTargetSessionIdentity),
+  )
   const composerTargetSessionRef = useRef<Session | null>(null)
   useEffect(() => { composerTargetSessionRef.current = composerTargetSession }, [composerTargetSession])
   const canUseChannelBridge = Boolean(
@@ -8878,7 +8954,7 @@ export default function OpenTuiApp() {
   const hasComposerStatusMessage = Boolean(
     composerError
     || awaitingPersistedTurn
-    || queuedComposerSends.length > 0
+    || activeQueuedComposerSends.length > 0
     || (composerSendState === 'sending' && (composerLiveText || activeRunningToolCount > 0))
     // Steered notices render while a turn runs, owned or reattached — count
     // them even before the turn streams any output.
@@ -10222,7 +10298,8 @@ export default function OpenTuiApp() {
     if (exitInProgressRef.current) return
     exitInProgressRef.current = true
     setExitCleanupInProgress(true)
-    setQueuedComposerSends([])
+    scheduleWriteComposerQueue(queuedComposerSendsRef.current)
+    flushComposerQueueWrites()
 
     const cleanupPromise = activeComposerSendCleanupRef.current
     const controller = composerAbortRef.current
@@ -10640,9 +10717,9 @@ export default function OpenTuiApp() {
     // The user interrupted to change course — auto-firing queued follow-ups
     // would be a surprise-send. Pop their text back into the composer instead
     // (after any text typed since), so they can edit and re-send.
-    const interruptQueue = queuedComposerSendsRef.current
+    const interruptQueue = selectComposerQueueTarget(queuedComposerSendsRef.current, targetKey)
     if (interruptQueue.length > 0) {
-      setQueuedComposerSends([])
+      setQueuedComposerSends((prev) => clearComposerQueueTarget(prev, targetKey))
       const currentDraft = composerTextareaRef.current?.plainText ?? composerDraft
       const restoredPayload = restoreComposerDraftPayload(
         { text: currentDraft, attachments: composerMentionAttachmentsRef.current },
@@ -10732,6 +10809,9 @@ export default function OpenTuiApp() {
     if (!target || permissionActionLoading) return
     setPermissionActionLoading(permission.id)
     try {
+      if (response === 'once' && permission.elicitation?.mode === 'url' && permission.url) {
+        await openExternalUrl(permission.url)
+      }
       await runTuiSessionAction(
         { ...target, sessionId: permission.sessionId ?? target.sessionId },
         { action: 'respondPermission', permissionId: permission.id, response, provider: target.provider },
@@ -10761,6 +10841,9 @@ export default function OpenTuiApp() {
   // Toggle an AskUserQuestion option for the focused question. Single-select
   // replaces; multi-select adds/removes.
   const toggleTuiQuestionOption = useEffectEvent((qi: number, multiSelect: boolean, label: string) => {
+    if (!multiSelect) {
+      setQuestionFreeformAnswers((prev) => prev[qi] ? { ...prev, [qi]: '' } : prev)
+    }
     setQuestionSelections((prev) => {
       const current = prev[qi] ?? []
       const next = multiSelect
@@ -10776,16 +10859,24 @@ export default function OpenTuiApp() {
     const target = composerTargetSession
     if (!target || permissionActionLoading) return
     const questions = permission.questions ?? []
-    const answers: Record<string, string> = {}
+    const answers: PendingQuestionAnswers = {}
     for (let i = 0; i < questions.length; i += 1) {
-      const sel = questionSelections[i]
-      if (!sel || sel.length === 0) {
+      const question = questions[i]!
+      const selected = questionSelections[i] ?? []
+      const freeform = questionFreeformAnswers[i]?.trim()
+      const values = question.multiSelect && freeform
+        ? [...selected, freeform]
+        : freeform
+        ? [freeform]
+        : selected
+      if (values.length === 0) {
+        if (question.required === false) continue
         // Jump focus to the first unanswered question instead of submitting.
         setQuestionFocusIndex(i)
         setQuestionOptionIndex(0)
         return
       }
-      answers[questions[i]!.id ?? questions[i]!.question] = sel.join(', ')
+      answers[question.id ?? question.question] = values
     }
     setPermissionActionLoading(permission.id)
     try {
@@ -10795,6 +10886,8 @@ export default function OpenTuiApp() {
       )
       setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
       setQuestionSelections({})
+      setQuestionFreeformAnswers({})
+      setQuestionFreeformEditing(false)
       setQuestionFocusIndex(0)
       setQuestionOptionIndex(0)
     } catch (err) {
@@ -11337,6 +11430,8 @@ export default function OpenTuiApp() {
     if (questionPermissionIdRef.current !== qid) {
       questionPermissionIdRef.current = qid
       setQuestionSelections({})
+      setQuestionFreeformAnswers({})
+      setQuestionFreeformEditing(false)
       setQuestionFocusIndex(0)
       setQuestionOptionIndex(0)
     }
@@ -11708,7 +11803,10 @@ export default function OpenTuiApp() {
           // Steering is best-effort; the queue below is the reliable path.
         }
       }
+      queuedComposerSendCounterRef.current += 1
       setQueuedComposerSends((prev) => [...prev, {
+        id: `${targetKey}:${Date.now()}:${queuedComposerSendCounterRef.current}`,
+        targetKey,
         text: submission.visibleText,
         attachments: sendAttachments,
         promptParts: submission.promptParts,
@@ -11741,6 +11839,7 @@ export default function OpenTuiApp() {
     const targetSession = composerTargetSession
     const controller = new AbortController()
     const sendStartedAt = Date.now()
+    const sendPerfStartedAt = performance.now()
     const turnRequestId = globalThis.crypto?.randomUUID?.()
       ?? `${sendStartedAt}-${Math.random().toString(36).slice(2)}`
     let resolveTurnCleanup: () => void = () => {}
@@ -11845,6 +11944,11 @@ export default function OpenTuiApp() {
         },
         controller.signal,
       )
+      noteTuiComposerLatency(
+        targetSession.provider ?? 'claude',
+        'send-to-ack',
+        performance.now() - sendPerfStartedAt,
+      )
 
       if (!res.ok) {
         const json = await res.json().catch(() => ({}))
@@ -11855,6 +11959,16 @@ export default function OpenTuiApp() {
       if (!reader) throw new Error('No response body')
       const decoder = new TextDecoder()
       let sseBuffer = ''
+      let firstOutputRecorded = false
+      const noteFirstOutput = () => {
+        if (firstOutputRecorded) return
+        firstOutputRecorded = true
+        noteTuiComposerLatency(
+          targetSession.provider ?? 'claude',
+          'first-output',
+          performance.now() - sendPerfStartedAt,
+        )
+      }
 
       const activeSubagentIdRef = { current: '' }
 
@@ -11892,7 +12006,10 @@ export default function OpenTuiApp() {
         // transient banner without disturbing the live turn state.
         if (frame.event === 'turn-notice' && parsed) {
           const message = (parsed as { message?: unknown }).message
-          if (typeof message === 'string' && message.trim()) showNotice('info', message.trim())
+          if (typeof message === 'string' && message.trim()) {
+            noteFirstOutput()
+            showNotice('info', message.trim())
+          }
           return
         }
         if (frame.event === 'session' && parsed) {
@@ -11908,6 +12025,7 @@ export default function OpenTuiApp() {
               liveTranscriptBaselineRef.current.set(newKey, baseline)
             }
             if (ownedTurnKeyRef.current === oldKey) ownedTurnKeyRef.current = newKey
+            setQueuedComposerSends((prev) => rekeyComposerQueueTarget(prev, oldKey, newKey))
             setLiveTranscriptMessages((prev) => prev.map((message) =>
               liveMessageSessionKey(message) === oldKey
                 ? { ...message, sessionId: realId }
@@ -11933,6 +12051,7 @@ export default function OpenTuiApp() {
           return
         }
         if (frame.event === 'command-result' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          noteFirstOutput()
           const result = parsed as { message?: unknown; mode?: unknown; transcriptExpected?: unknown }
           if (!commandResultExpectsTranscript(result)) commandResultWithoutTranscript = true
           if (
@@ -11953,6 +12072,7 @@ export default function OpenTuiApp() {
 
         const pendingPermission = extractPendingPermission(parsed)
         if (pendingPermission) {
+          noteFirstOutput()
           setPendingPermissions((prev) => {
             const next = [...prev.filter((entry) => entry.id !== pendingPermission.id), pendingPermission]
             setPermissionOptionIndex(0)
@@ -12057,6 +12177,7 @@ export default function OpenTuiApp() {
 
         const claudeToolUse = extractClaudeStreamToolUse(parsed)
         if (claudeToolUse) {
+          noteFirstOutput()
           // A tool call is a side effect — never blind-retry past this point.
           composerTurnProducedOutputRef.current = true
           const startIndex = streamEventIndex(parsed, 'content_block_start')
@@ -12111,12 +12232,14 @@ export default function OpenTuiApp() {
 
         const openCodeToolThread = extractOpenCodeLiveToolThread(parsed, targetSession)
         if (openCodeToolThread) {
+          noteFirstOutput()
           composerTurnProducedOutputRef.current = true
           setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, openCodeToolThread))
         }
 
         const openCodeSubagent = extractOpenCodeLiveSubagent(parsed)
         if (openCodeSubagent) {
+          noteFirstOutput()
           activeSubagentIdRef.current = openCodeSubagent.agentId
           setLiveSubagentText((prev) => ({
             ...prev,
@@ -12138,6 +12261,7 @@ export default function OpenTuiApp() {
         if (targetSession.provider === 'codex') {
           const codexToolActivity = extractCodexLiveToolActivity(parsedRecord)
           if (codexToolActivity) {
+            noteFirstOutput()
             composerTurnProducedOutputRef.current = true
             setLiveToolActivities((prev) => applyLiveToolActivity(prev, codexToolActivity))
           }
@@ -12173,6 +12297,7 @@ export default function OpenTuiApp() {
         } else if (targetSession.provider === 'copilot') {
           const threaded = extractCopilotFinalAssistantMessage(parsed, targetSession)
           if (threaded) {
+            noteFirstOutput()
             copilotFinalMessageSeen = true
             const finalText = extractStreamingAssistantText(parsed)
             if (finalText) replyAccumulator = finalText
@@ -12193,6 +12318,7 @@ export default function OpenTuiApp() {
         // bail-out so a thinking-only frame still updates the dim preview.
         const reasoningDelta = extractStreamingReasoningText(parsed)
         if (reasoningDelta) {
+          noteFirstOutput()
           setLiveStatus(null)
           pendingLiveReasoningRef.current = `${pendingLiveReasoningRef.current}${reasoningDelta}`
           liveTextTargetSessionRef.current = targetSession
@@ -12203,6 +12329,7 @@ export default function OpenTuiApp() {
 
         const delta = extractStreamingAssistantText(parsed)
         if (!delta) return
+        noteFirstOutput()
         // Committed assistant output — this turn must not be blind-retried.
         composerTurnProducedOutputRef.current = true
         setLiveStatus(null)
@@ -12457,8 +12584,8 @@ export default function OpenTuiApp() {
       // Don't auto-fire queued follow-ups after a failed turn. Rebuild one
       // editable snapshot from the failed send, every queued follow-up, and the
       // newest draft typed while the turn ran—attachments and prompt parts too.
-      const failedQueue = queuedComposerSendsRef.current
-      setQueuedComposerSends([])
+      const failedQueue = selectComposerQueueTarget(queuedComposerSendsRef.current, targetKey)
+      setQueuedComposerSends((prev) => clearComposerQueueTarget(prev, targetKey))
       liveToolIndexesRef.current.clear()
       liveToolInputJsonRef.current.clear()
       const restoredPayload = restoreComposerDraftPayload(
@@ -12543,16 +12670,22 @@ export default function OpenTuiApp() {
   // surprise-send. On error we clear the queue (see the error branch above),
   // so the only state that reaches here with a queued send is a clean idle.
   useEffect(() => {
-    if (queuedComposerSends.length === 0) return
+    if (activeQueuedComposerSends.length === 0) return
+    if (!runningRegistryReady) return
     if (composerSendState !== 'idle') return
     // A turn we reattached to is still running server-side — flushing now
     // would start a second concurrent turn. The registry poll clears the flag
     // when the turn ends.
-    if (reattachedRunning) return
-    const next = queuedComposerSends[0]
-    setQueuedComposerSends((prev) => prev.slice(1))
+    if (reattachedRunning || composerTargetTurnKnownRunning) return
+    const next = activeQueuedComposerSends[0]!
+    const remaining = removeComposerQueueItem(queuedComposerSendsRef.current, next.id)
+    // Persist dequeue before provider I/O so a process crash cannot replay a
+    // prompt that may already have reached a tool-capable agent.
+    scheduleWriteComposerQueue(remaining)
+    flushComposerQueueWrites()
+    setQueuedComposerSends(remaining)
     void sendComposerMessage(next.text, next.attachments, false, next.promptParts)
-  }, [composerSendState, queuedComposerSends, reattachedRunning, sendComposerMessage])
+  }, [activeQueuedComposerSends, composerSendState, composerTargetTurnKnownRunning, reattachedRunning, runningRegistryReady, sendComposerMessage])
 
   // Reattach to turns this composer doesn't own a stream for. In-process the
   // running registry is a cheap synchronous read; remotely attached it's the
@@ -12616,6 +12749,7 @@ export default function OpenTuiApp() {
         registryPollInFlightRef.current = false
       }
       const entries = activity.running
+      setRunningRegistryReady(true)
       setWaitingSessions(activity.waiting)
       setViewerAttentionNotes(activity.attention)
       const runningByKey = new Map(entries.map((entry) => [
@@ -12692,10 +12826,11 @@ export default function OpenTuiApp() {
   // (cancels that one send). Any current draft is preserved by prepending it,
   // mirroring the interrupt-restore ordering. Attachments restore too.
   const popNewestQueuedComposerSend = useEffectEvent(() => {
-    const queue = queuedComposerSendsRef.current
+    const targetKey = composerTargetSessionIdentity
+    const queue = selectComposerQueueTarget(queuedComposerSendsRef.current, targetKey)
     if (queue.length === 0) return
     const item = queue[queue.length - 1]!
-    setQueuedComposerSends((prev) => prev.slice(0, -1))
+    setQueuedComposerSends((prev) => removeComposerQueueItem(prev, item.id))
     const currentDraft = (composerTextareaRef.current?.plainText ?? composerDraft).trim()
     const restored = [currentDraft, item.text].filter(Boolean).join('\n\n')
     const restoredAttachments = mergeComposerAttachments(composerMentionAttachmentsRef.current, item.attachments)
@@ -12712,8 +12847,9 @@ export default function OpenTuiApp() {
 
   // Cancel every queued message at once without firing any of them.
   const clearQueuedComposerSends = useEffectEvent(() => {
-    if (queuedComposerSendsRef.current.length === 0) return
-    setQueuedComposerSends([])
+    const targetKey = composerTargetSessionIdentity
+    if (!targetKey || !queuedComposerSendsRef.current.some((entry) => entry.targetKey === targetKey)) return
+    setQueuedComposerSends((prev) => clearComposerQueueTarget(prev, targetKey))
   })
 
   useEffect(() => {
@@ -13601,10 +13737,10 @@ export default function OpenTuiApp() {
     ? composerError
     : awaitingPersistedTurn
       ? 'Syncing transcript…'
-      : queuedComposerSends.length > 0 && turnRunningForComposer
-        ? (queuedComposerSends.length === 1
-          ? `Queued · sends after current turn: "${queuedComposerSends[0].text.slice(0, 60)}${queuedComposerSends[0].text.length > 60 ? '…' : ''}"`
-          : `${queuedComposerSends.length} queued · send in order after current turn`)
+      : activeQueuedComposerSends.length > 0 && turnRunningForComposer
+        ? (activeQueuedComposerSends.length === 1
+          ? `Queued · sends after current turn: "${activeQueuedComposerSends[0]!.text.slice(0, 60)}${activeQueuedComposerSends[0]!.text.length > 60 ? '…' : ''}"`
+          : `${activeQueuedComposerSends.length} queued · send in order after current turn`)
         : steeredSendNotice && turnRunningForComposer
           ? `Steered · delivered to the running turn: "${steeredSendNotice.slice(0, 60)}${steeredSendNotice.length > 60 ? '…' : ''}"`
           : composerSendState === 'sending'
@@ -13917,6 +14053,20 @@ export default function OpenTuiApp() {
   })
 
   usePaste((event) => {
+    if (questionFreeformEditing) {
+      const activePermission = pendingPermissions[0]
+      const questions = activePermission?.questions ?? []
+      const qi = Math.min(questionFocusIndex, questions.length - 1)
+      const question = questions[qi]
+      if (question?.allowFreeform) {
+        event.preventDefault()
+        event.stopPropagation()
+        const text = Buffer.from(event.bytes).toString('utf8')
+        setQuestionFreeformAnswers((prev) => ({ ...prev, [qi]: `${prev[qi] ?? ''}${text}` }))
+        if (!question.multiSelect) setQuestionSelections((prev) => ({ ...prev, [qi]: [] }))
+        return
+      }
+    }
     if (!composerActiveRef.current) return
     if (!composerTextareaRef.current) return
     const imageMimeType = pasteImageMimeType(event.metadata?.mimeType) ?? inferPastedImageMimeType(event.bytes)
@@ -15202,8 +15352,34 @@ export default function OpenTuiApp() {
       const questions = activePermission.questions ?? []
       const qi = Math.min(questionFocusIndex, questions.length - 1)
       const question = questions[qi]!
-      const optionCount = question.options.length
+      const freeformIndex = question.allowFreeform ? question.options.length : -1
+      const optionCount = question.options.length + (question.allowFreeform ? 1 : 0)
       const optIndex = Math.min(questionOptionIndex, optionCount - 1)
+      if (questionFreeformEditing) {
+        if (key.name === 'return') {
+          handled(() => setQuestionFreeformEditing(false))
+          return
+        }
+        if (key.name === 'escape') {
+          handled(() => setQuestionFreeformEditing(false))
+          return
+        }
+        if (key.name === 'backspace' || key.name === 'delete') {
+          handled(() => setQuestionFreeformAnswers((prev) => ({
+            ...prev,
+            [qi]: (prev[qi] ?? '').slice(0, -1),
+          })))
+          return
+        }
+        if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
+          handled(() => {
+            setQuestionFreeformAnswers((prev) => ({ ...prev, [qi]: `${prev[qi] ?? ''}${key.sequence}` }))
+            if (!question.multiSelect) setQuestionSelections((prev) => ({ ...prev, [qi]: [] }))
+          })
+          return
+        }
+        return
+      }
       if (key.name === 'up' || key.name === 'k') {
         handled(() => setQuestionOptionIndex((i) => Math.max(0, Math.min(i, optionCount - 1) - 1)))
         return
@@ -15221,23 +15397,34 @@ export default function OpenTuiApp() {
         return
       }
       if (sequence === ' ') {
-        const opt = question.options[optIndex]
-        if (opt) handled(() => toggleTuiQuestionOption(qi, question.multiSelect === true, opt.label))
+        if (optIndex === freeformIndex) {
+          handled(() => setQuestionFreeformEditing(true))
+        } else {
+          const opt = question.options[optIndex]
+          if (opt) handled(() => toggleTuiQuestionOption(qi, question.multiSelect === true, opt.value ?? opt.label))
+        }
         return
       }
       const qDigit = Number.parseInt(sequence, 10)
       if (!Number.isNaN(qDigit) && qDigit >= 1 && qDigit <= optionCount) {
-        const opt = question.options[qDigit - 1]!
         handled(() => {
           setQuestionOptionIndex(qDigit - 1)
-          toggleTuiQuestionOption(qi, question.multiSelect === true, opt.label)
+          if (qDigit - 1 === freeformIndex) {
+            setQuestionFreeformEditing(true)
+          } else {
+            const opt = question.options[qDigit - 1]
+            if (opt) toggleTuiQuestionOption(qi, question.multiSelect === true, opt.value ?? opt.label)
+          }
         })
         return
       }
       if (key.name === 'return') {
         // Single-select advances to the next unanswered question; otherwise
         // submit (submit also jumps to any still-unanswered question).
-        handled(() => { void submitTuiQuestion(activePermission) })
+        handled(() => {
+          if (optIndex === freeformIndex) setQuestionFreeformEditing(true)
+          else void submitTuiQuestion(activePermission)
+        })
         return
       }
       // Esc skips the whole prompt (declines the tool), matching the web SKIP.
@@ -15403,7 +15590,7 @@ export default function OpenTuiApp() {
       }
       // Queue management: ⌃Y pops the newest queued message back into the
       // composer to edit (cancelling that send); ⌃Y with shift clears the queue.
-      if (isCtrl('y') && queuedComposerSends.length > 0) {
+      if (isCtrl('y') && activeQueuedComposerSends.length > 0) {
         handled(() => {
           if (key.shift) clearQueuedComposerSends()
           else popNewestQueuedComposerSend()
@@ -16864,9 +17051,9 @@ export default function OpenTuiApp() {
   // Always-visible queued-send list (no modal): shows what will fire after the
   // current turn, in order, with the ⌃Y edit / ⇧⌃Y clear hint.
   const renderComposerQueuePanel = (panelWidth: number, rowWidth: number) => {
-    if (!composerActive || queuedComposerSends.length === 0) return null
-    const visible = Math.min(queuedComposerSends.length, 4)
-    const hiddenCount = queuedComposerSends.length - visible
+    if (!composerActive || activeQueuedComposerSends.length === 0) return null
+    const visible = Math.min(activeQueuedComposerSends.length, 4)
+    const hiddenCount = activeQueuedComposerSends.length - visible
     return (
       <box
         width={panelWidth}
@@ -16879,14 +17066,14 @@ export default function OpenTuiApp() {
         flexDirection="column"
       >
         <text fg={theme.amber ?? composerAccentColor} wrapMode="none">
-          {fitText(`queued (${queuedComposerSends.length}) · sends in order after this turn · ⌃Y edit newest · ⇧⌃Y clear`, rowWidth)}
+          {fitText(`queued (${activeQueuedComposerSends.length}) · sends in order after this turn · ⌃Y edit newest · ⇧⌃Y clear`, rowWidth)}
         </text>
-        {queuedComposerSends.slice(0, visible).map((entry, index) => {
+        {activeQueuedComposerSends.slice(0, visible).map((entry, index) => {
           const compact = compactComposerEntryText(entry.text)
           const attachmentLabel = attachmentCountLabel(entry.attachments)
           const suffix = attachmentLabel ? `  ${attachmentLabel}` : ''
           return (
-            <box key={`queued:${index}:${entry.text.length}`} flexDirection="row" height={1} width={rowWidth}>
+            <box key={entry.id} flexDirection="row" height={1} width={rowWidth}>
               <text fg={theme.dim} wrapMode="none">{`${index + 1}. `}</text>
               <text fg={theme.text} wrapMode="none">{fitText(compact, Math.max(rowWidth - 6 - suffix.length, 8))}</text>
               <text fg={theme.dim} wrapMode="none">{suffix}</text>
@@ -17845,7 +18032,9 @@ export default function OpenTuiApp() {
           <box backgroundColor={theme.surface} paddingX={1} paddingTop={1}>
             <box borderStyle="single" borderColor={theme.violet ?? theme.amber} backgroundColor={theme.surface} flexDirection="column" paddingX={1}>
               <text fg={theme.violet ?? theme.amber} wrapMode="none">
-                {fitText(questions.length === 1 ? '● Claude asks' : `● Claude asks · ${questions.length} questions`, innerWidth)}
+                {fitText(questions.length === 1
+                  ? `● ${formatProviderLabel(permission.provider ?? 'claude')} asks`
+                  : `● ${formatProviderLabel(permission.provider ?? 'claude')} asks · ${questions.length} questions`, innerWidth)}
               </text>
               {questions.map((q, qi) => {
                 const focused = qi === focusIndex
@@ -17856,7 +18045,7 @@ export default function OpenTuiApp() {
                       {fitText(`${questions.length > 1 ? `${focused ? '▶ ' : '  '}` : ''}${q.header ? `[${q.header}] ` : ''}${q.question}${q.multiSelect ? ' (multi)' : ''}`, innerWidth)}
                     </text>
                     {q.options.map((opt, oi) => {
-                      const isSelected = selected.includes(opt.label)
+                      const isSelected = selected.includes(opt.value ?? opt.label)
                       const isCursor = focused && oi === Math.min(questionOptionIndex, q.options.length - 1)
                       const marker = isSelected ? (q.multiSelect ? '☑' : '●') : (q.multiSelect ? '☐' : '○')
                       const color = isCursor ? (theme.violet ?? theme.cyan) : isSelected ? theme.green : theme.dim
@@ -17866,13 +18055,27 @@ export default function OpenTuiApp() {
                         </text>
                       )
                     })}
+                    {q.allowFreeform ? (() => {
+                      const oi = q.options.length
+                      const value = questionFreeformAnswers[qi] ?? ''
+                      const displayValue = q.secret && value ? '•'.repeat(Math.min(value.length, 24)) : value
+                      const isCursor = focused && oi === Math.min(questionOptionIndex, q.options.length)
+                      const isEditing = focused && isCursor && questionFreeformEditing
+                      return (
+                        <text key={`q:${qi}:other`} fg={isEditing ? theme.green : isCursor ? (theme.violet ?? theme.cyan) : value ? theme.green : theme.dim} wrapMode="none">
+                          {fitText(`  ${isCursor ? '▶' : ' '} ${value ? '●' : '○'} [${oi + 1}] Other${displayValue ? `: ${displayValue}` : ''}${isEditing ? ' █' : ''}`, innerWidth)}
+                        </text>
+                      )
+                    })() : null}
                   </box>
                 )
               })}
               <text fg={theme.dim} wrapMode="none">
                 {permissionActionLoading
                   ? 'submitting…'
-                  : fitText(`↑/↓ option${questions.length > 1 ? ' · ←/→ question' : ''} · space/1-4 select · enter submit · esc skip`, innerWidth)}
+                  : questionFreeformEditing
+                  ? fitText('type custom answer · enter finish · esc cancel editing', innerWidth)
+                  : fitText(`↑/↓ option${questions.length > 1 ? ' · ←/→ question' : ''} · space/number select · enter submit · esc skip`, innerWidth)}
               </text>
             </box>
           </box>

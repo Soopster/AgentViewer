@@ -10,13 +10,24 @@ import type { AgentProvider, SendAttachment } from './types'
 
 // A single AskUserQuestion prompt the user must answer interactively. Mirrors
 // the Claude SDK AskUserQuestionInput shape (one entry per question).
-export type PendingQuestionOption = { label: string; description?: string; preview?: string }
+export type PendingQuestionOption = { label: string; value?: string; description?: string; preview?: string }
 export type PendingQuestion = {
   id?: string
   question: string
   header?: string
   multiSelect?: boolean
+  allowFreeform?: boolean
+  secret?: boolean
+  required?: boolean
   options: PendingQuestionOption[]
+}
+
+export type PendingQuestionAnswers = Record<string, string[]>
+
+export type PendingElicitation = {
+  mode: 'form' | 'url'
+  serverName?: string
+  schema?: Record<string, unknown>
 }
 
 export type PendingPermission = {
@@ -39,6 +50,7 @@ export type PendingPermission = {
   // interactive picker. When set, the surface collects answers and replies with
   // the `respondQuestion` action instead of an allow/deny permission decision.
   questions?: PendingQuestion[]
+  elicitation?: PendingElicitation
   // Present only for ExitPlanMode: render a plan-approval card. `plan` is the
   // plan markdown; `allowedPrompts` are the prompt-based permissions the plan
   // needs (pre-approved when the plan is approved). Approving exits plan mode.
@@ -272,6 +284,45 @@ export function extractCopilotPermissionCompletion(payload: unknown): string | n
   return data ? stringField(data, 'requestId') ?? null : null
 }
 
+export function extractCopilotElicitation(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'copilot_event') return null
+  const event = asRecord(record.event)
+  if (!event || event.type !== 'elicitation.requested') return null
+  const data = asRecord(event.data)
+  if (!data) return null
+  const id = stringField(data, 'requestId')
+  if (!id) return null
+  const mode = data.mode === 'url' ? 'url' : 'form'
+  const questions = mode === 'form' ? parseMcpElicitationQuestions(data.requestedSchema) : undefined
+  const source = stringField(data, 'elicitationSource')
+  const message = stringField(data, 'message')
+  return {
+    id,
+    provider: 'copilot',
+    toolName: 'mcpServer/elicitation/request',
+    title: message ?? `${source ?? 'An MCP server'} requests input`,
+    detail: source ? `Requested by ${source}` : message,
+    url: mode === 'url' ? stringField(data, 'url') : undefined,
+    canApproveAlways: false,
+    questions,
+    elicitation: {
+      mode,
+      serverName: source,
+      schema: asRecord(data.requestedSchema) ?? undefined,
+    },
+  }
+}
+
+export function extractCopilotElicitationCompletion(payload: unknown): string | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'copilot_event') return null
+  const event = asRecord(record.event)
+  if (!event || event.type !== 'elicitation.completed') return null
+  const data = asRecord(event.data)
+  return data ? stringField(data, 'requestId') ?? null : null
+}
+
 export function extractCopilotPushedAttachments(payload: unknown): SendAttachment[] {
   const record = asRecord(payload)
   if (!record || record.type !== 'copilot_event') return []
@@ -307,7 +358,10 @@ export function extractCopilotPushedAttachments(payload: unknown): SendAttachmen
 
 // Parse AskUserQuestion tool input into the structured questions the picker
 // renders. Tolerant of partial/streaming input — drops malformed entries.
-export function parsePendingQuestions(input: Record<string, unknown> | null | undefined): PendingQuestion[] | undefined {
+export function parsePendingQuestions(
+  input: Record<string, unknown> | null | undefined,
+  settings: { defaultAllowFreeform?: boolean } = {},
+): PendingQuestion[] | undefined {
   const rawQuestions = input?.questions
   if (!Array.isArray(rawQuestions)) return undefined
   const questions: PendingQuestion[] = []
@@ -335,6 +389,66 @@ export function parsePendingQuestions(input: Record<string, unknown> | null | un
       question,
       header: typeof q.header === 'string' ? q.header : undefined,
       multiSelect: q.multiSelect === true,
+      allowFreeform: q.isOther === true || settings.defaultAllowFreeform === true,
+      secret: q.isSecret === true,
+      options,
+    })
+  }
+  return questions.length > 0 ? questions : undefined
+}
+
+function elicitationOption(value: unknown): PendingQuestionOption | null {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return { label: String(value), value: String(value) }
+  }
+  const record = asRecord(value)
+  if (!record) return null
+  const constant = record.const
+  if (typeof constant !== 'string' && typeof constant !== 'number' && typeof constant !== 'boolean') return null
+  return {
+    label: stringField(record, 'title') ?? String(constant),
+    value: String(constant),
+    description: stringField(record, 'description'),
+  }
+}
+
+export function parseMcpElicitationQuestions(schema: unknown): PendingQuestion[] | undefined {
+  const root = asRecord(schema)
+  const properties = root ? asRecord(root.properties) : null
+  if (!properties) return undefined
+  const required = new Set(Array.isArray(root?.required)
+    ? root.required.filter((value): value is string => typeof value === 'string')
+    : [])
+  const questions: PendingQuestion[] = []
+  for (const [id, rawProperty] of Object.entries(properties)) {
+    const property = asRecord(rawProperty)
+    if (!property) continue
+    const type = stringField(property, 'type')
+    const title = stringField(property, 'title') ?? id
+    const description = stringField(property, 'description')
+    const rawEnum = Array.isArray(property.enum) ? property.enum : null
+    const rawOneOf = Array.isArray(property.oneOf) ? property.oneOf : null
+    const items = asRecord(property.items)
+    const itemEnum = Array.isArray(items?.enum) ? items.enum : null
+    const itemAnyOf = Array.isArray(items?.anyOf) ? items.anyOf : null
+    let options = (rawEnum ?? rawOneOf ?? itemEnum ?? itemAnyOf ?? [])
+      .map(elicitationOption)
+      .filter((option): option is PendingQuestionOption => option !== null)
+    if (type === 'boolean' && options.length === 0) {
+      options = [
+        { label: 'Yes', value: 'true' },
+        { label: 'No', value: 'false' },
+      ]
+    }
+    const allowFreeform = options.length === 0 && (type === 'string' || type === 'number' || type === 'integer' || !type)
+    if (options.length === 0 && !allowFreeform) continue
+    questions.push({
+      id,
+      header: title,
+      question: description ?? title,
+      multiSelect: type === 'array',
+      allowFreeform,
+      required: required.has(id),
       options,
     })
   }
@@ -355,7 +469,7 @@ export function extractClaudePermission(payload: unknown): PendingPermission | n
   // AskUserQuestion is not a permission to allow/deny — it's a question to
   // answer. Surface its structured questions so the picker takes over.
   if (toolName === 'AskUserQuestion') {
-    const questions = parsePendingQuestions(input)
+    const questions = parsePendingQuestions(input, { defaultAllowFreeform: true })
     if (questions) {
       return {
         id,
@@ -426,6 +540,46 @@ export function extractClaudePermissionCompletion(payload: unknown): string | nu
   return data ? stringField(data, 'requestId') ?? null : null
 }
 
+export function extractClaudeElicitation(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'claude_elicitation') return null
+  const event = asRecord(record.event)
+  if (!event || event.type !== 'elicitation.requested') return null
+  const data = asRecord(event.data)
+  if (!data) return null
+  const id = stringField(data, 'requestId')
+  if (!id) return null
+  const mode = data.mode === 'url' ? 'url' : 'form'
+  const questions = mode === 'form' ? parseMcpElicitationQuestions(data.requestedSchema) : undefined
+  const serverName = stringField(data, 'displayName') ?? stringField(data, 'serverName')
+  const message = stringField(data, 'message')
+  return {
+    id,
+    sessionId: stringField(data, 'sessionId'),
+    provider: 'claude',
+    toolName: 'mcpServer/elicitation/request',
+    title: stringField(data, 'title') ?? message ?? `${serverName ?? 'An MCP server'} requests input`,
+    detail: stringField(data, 'description') ?? message,
+    url: mode === 'url' ? stringField(data, 'url') : undefined,
+    canApproveAlways: false,
+    questions,
+    elicitation: {
+      mode,
+      serverName,
+      schema: asRecord(data.requestedSchema) ?? undefined,
+    },
+  }
+}
+
+export function extractClaudeElicitationCompletion(payload: unknown): string | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'claude_elicitation') return null
+  const event = asRecord(record.event)
+  if (!event || event.type !== 'elicitation.completed') return null
+  const data = asRecord(event.data)
+  return data ? stringField(data, 'requestId') ?? null : null
+}
+
 // Codex sends exec/patch/permission approval requests mid-turn. createCodexStream
 // surfaces them as `codex_approval` frames; the user's decision is POSTed back via
 // respondPermission (mapped to the codex decision vocabulary server-side).
@@ -438,7 +592,13 @@ export function extractCodexApproval(payload: unknown): PendingPermission | null
   const method = stringField(eventRecord, 'method')
   if (!id || !method) return null
   const params = asRecord(eventRecord.params) ?? {}
-  const questions = method === 'item/tool/requestUserInput' ? parsePendingQuestions(params) : undefined
+  const isElicitation = method === 'mcpServer/elicitation/request'
+  const elicitationMode = isElicitation && params.mode === 'url' ? 'url' : 'form'
+  const questions = method === 'item/tool/requestUserInput'
+    ? parsePendingQuestions(params)
+    : isElicitation && elicitationMode === 'form'
+    ? parseMcpElicitationQuestions(params.requestedSchema)
+    : undefined
   const command = stringField(params, 'command')
   const cwd = stringField(params, 'cwd')
   const reason = stringField(params, 'reason')
@@ -452,6 +612,8 @@ export function extractCodexApproval(payload: unknown): PendingPermission | null
     ? 'Codex wants to apply a file change'
     : method.includes('permissions')
     ? 'Codex requests additional permissions'
+    : isElicitation
+    ? (stringField(params, 'message') ?? 'An MCP server requests input')
     : questions
     ? (questions.length === 1 ? questions[0].question : `Codex has ${questions.length} questions`)
     : 'Codex requests approval'
@@ -464,9 +626,15 @@ export function extractCodexApproval(payload: unknown): PendingPermission | null
     reason: reason ?? undefined,
     command: command ?? undefined,
     paths: paths.length > 0 ? paths : undefined,
-    detail: command ?? requestedPermissionRule ?? additionalPermissionRule ?? reason ?? undefined,
-    canApproveAlways: true,
+    detail: command ?? requestedPermissionRule ?? additionalPermissionRule ?? reason ?? stringField(params, 'message') ?? undefined,
+    url: isElicitation ? stringField(params, 'url') : undefined,
+    canApproveAlways: isElicitation ? false : true,
     questions,
+    elicitation: isElicitation ? {
+      mode: elicitationMode,
+      serverName: stringField(params, 'serverName'),
+      schema: asRecord(params.requestedSchema) ?? undefined,
+    } : undefined,
   }
 }
 
@@ -474,7 +642,9 @@ export function extractCodexApproval(payload: unknown): PendingPermission | null
 // permission a frame describes, or null.
 export function extractPendingPermission(payload: unknown): PendingPermission | null {
   return extractOpenCodePermission(payload)
+    ?? extractCopilotElicitation(payload)
     ?? extractCopilotPermission(payload)
+    ?? extractClaudeElicitation(payload)
     ?? extractClaudePermission(payload)
     ?? extractCodexApproval(payload)
 }
@@ -497,6 +667,8 @@ export function extractPendingPermissions(
 // Returns the resolved permission id, or null.
 export function extractPermissionReply(payload: unknown): string | null {
   return extractOpenCodePermissionReply(payload)
+    ?? extractCopilotElicitationCompletion(payload)
     ?? extractCopilotPermissionCompletion(payload)
+    ?? extractClaudeElicitationCompletion(payload)
     ?? extractClaudePermissionCompletion(payload)
 }

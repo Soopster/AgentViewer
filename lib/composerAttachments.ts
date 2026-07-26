@@ -13,6 +13,43 @@ export type ComposerDraftPayload = {
   attachments: SendAttachment[]
 }
 
+export type SessionOwnedComposerQueueEntry = {
+  id: string
+  targetKey: string
+}
+
+export function selectComposerQueueTarget<T extends SessionOwnedComposerQueueEntry>(
+  queue: T[],
+  targetKey: string | null,
+): T[] {
+  return targetKey ? queue.filter((entry) => entry.targetKey === targetKey) : []
+}
+
+export function removeComposerQueueItem<T extends SessionOwnedComposerQueueEntry>(
+  queue: T[],
+  id: string,
+): T[] {
+  return queue.filter((entry) => entry.id !== id)
+}
+
+export function clearComposerQueueTarget<T extends SessionOwnedComposerQueueEntry>(
+  queue: T[],
+  targetKey: string | null,
+): T[] {
+  return targetKey ? queue.filter((entry) => entry.targetKey !== targetKey) : queue
+}
+
+export function rekeyComposerQueueTarget<T extends SessionOwnedComposerQueueEntry>(
+  queue: T[],
+  oldTargetKey: string,
+  newTargetKey: string,
+): T[] {
+  if (oldTargetKey === newTargetKey) return queue
+  return queue.map((entry) => entry.targetKey === oldTargetKey
+    ? { ...entry, targetKey: newTargetKey }
+    : entry)
+}
+
 export function mergeComposerAttachments(
   existing: SendAttachment[],
   incoming: SendAttachment[],

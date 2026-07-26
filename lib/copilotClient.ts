@@ -9,6 +9,7 @@ import {
   type SessionConfigBase,
   type TelemetryConfig,
   type CustomAgentConfig,
+  type ElicitationHandler,
 } from '@github/copilot-sdk'
 
 function normalizedEnv(value: string | undefined): string | undefined {
@@ -148,6 +149,8 @@ declare global {
   // eslint-disable-next-line no-var
   var __agentViewerCopilotPermissionHandlers: Map<string, PermissionHandler> | undefined
   // eslint-disable-next-line no-var
+  var __agentViewerCopilotElicitationHandlers: Map<string, ElicitationHandler> | undefined
+  // eslint-disable-next-line no-var
   var __agentViewerCopilotClientPromise: Promise<CopilotClient> | undefined
   // eslint-disable-next-line no-var
   var __agentViewerCopilotSessionPool: Map<string, CopilotPoolEntry> | undefined
@@ -157,6 +160,8 @@ declare global {
 
 const copilotPermissionHandlers = globalThis.__agentViewerCopilotPermissionHandlers
   ?? (globalThis.__agentViewerCopilotPermissionHandlers = new Map<string, PermissionHandler>())
+const copilotElicitationHandlers = globalThis.__agentViewerCopilotElicitationHandlers
+  ?? (globalThis.__agentViewerCopilotElicitationHandlers = new Map<string, ElicitationHandler>())
 
 export function setCopilotPermissionHandler(sessionId: string, handler: PermissionHandler): void {
   copilotPermissionHandlers.set(sessionId, handler)
@@ -164,6 +169,14 @@ export function setCopilotPermissionHandler(sessionId: string, handler: Permissi
 
 export function clearCopilotPermissionHandler(sessionId: string): void {
   copilotPermissionHandlers.delete(sessionId)
+}
+
+export function setCopilotElicitationHandler(sessionId: string, handler: ElicitationHandler): void {
+  copilotElicitationHandlers.set(sessionId, handler)
+}
+
+export function clearCopilotElicitationHandler(sessionId: string): void {
+  copilotElicitationHandlers.delete(sessionId)
 }
 
 async function createClient(): Promise<CopilotClient> {
@@ -204,6 +217,8 @@ async function resumeCopilotSession(
     return await client.resumeSession(sessionId, {
       onPermissionRequest: (request, invocation) =>
         (copilotPermissionHandlers.get(sessionId) ?? approveAll)(request, invocation),
+      onElicitationRequest: (context) =>
+        (copilotElicitationHandlers.get(sessionId) ?? (() => ({ action: 'decline' as const })))(context),
       suppressResumeEvent: true,
       // We're a read-mostly observer; suppress duplicate telemetry events
       // that would otherwise fire on every resume from session list polls.
@@ -243,6 +258,7 @@ function scheduleCopilotEviction(sessionId: string): void {
     if (Date.now() - current.lastUsed < COPILOT_SESSION_TTL_MS) return
     copilotSessionPool.delete(sessionId)
     clearCopilotPermissionHandler(sessionId)
+    clearCopilotElicitationHandler(sessionId)
     await current.session.disconnect().catch(() => {})
   }, COPILOT_SESSION_TTL_MS)
   if (typeof entry.timer === 'object' && entry.timer && 'unref' in entry.timer) {
@@ -284,5 +300,6 @@ export async function evictCopilotSession(sessionId: string): Promise<void> {
   clearTimeout(entry.timer)
   copilotSessionPool.delete(sessionId)
   clearCopilotPermissionHandler(sessionId)
+  clearCopilotElicitationHandler(sessionId)
   await entry.session.disconnect().catch(() => {})
 }

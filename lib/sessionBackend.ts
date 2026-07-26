@@ -27,6 +27,7 @@ import {
   renameSession,
   tagSession,
   type CanUseTool,
+  type ElicitationResult as ClaudeElicitationResult,
   type PermissionResult,
   type PermissionUpdate,
   type Query,
@@ -73,6 +74,8 @@ import {
   type ModelInfo as CopilotModelInfo,
   type PermissionRequest as CopilotPermissionRequest,
   type PermissionRequestResult as CopilotPermissionRequestResult,
+  type ElicitationContext as CopilotElicitationContext,
+  type ElicitationResult as CopilotElicitationResult,
   type SessionEvent as CopilotSessionEvent,
   type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
@@ -106,7 +109,7 @@ import type {
 type CopilotReasoningEffort = Extract<ReasoningEffortLevel, 'low' | 'medium' | 'high' | 'xhigh'>
 
 import { consumeReadModelsWarmQuery, createSessionControlQuery, openPrompt } from './sdkControlQuery'
-import { acquireCopilotSession, copilotIntegrationDiagnostics, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, setCopilotPermissionHandler } from './copilotClient'
+import { acquireCopilotSession, copilotIntegrationDiagnostics, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, setCopilotElicitationHandler, setCopilotPermissionHandler } from './copilotClient'
 import { timeAsync } from './perfLog'
 import { registerDiagnosticsReporter } from './runtimeDiagnostics'
 import {
@@ -643,6 +646,21 @@ function parseTurnRequestId(body: Record<string, unknown>): string {
   return typeof body.turnRequestId === 'string' && body.turnRequestId.trim()
     ? body.turnRequestId.trim()
     : crypto.randomUUID()
+}
+
+function parseQuestionAnswers(value: unknown): Record<string, string[]> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const answers: Record<string, string[]> = {}
+  for (const [key, rawAnswer] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof rawAnswer === 'string') {
+      answers[key] = [rawAnswer]
+      continue
+    }
+    if (Array.isArray(rawAnswer) && rawAnswer.every((entry) => typeof entry === 'string')) {
+      answers[key] = rawAnswer
+    }
+  }
+  return answers
 }
 
 function parseAttachmentPayload(value: unknown): Record<string, unknown> | undefined {
@@ -1293,6 +1311,20 @@ declare global {
 const pendingCopilotPermissions = globalThis.__agentViewerPendingCopilotPermissions
   ?? (globalThis.__agentViewerPendingCopilotPermissions = new Map<string, PendingCopilotPermission>())
 
+type PendingCopilotElicitation = {
+  resolve: (result: CopilotElicitationResult) => void
+  timer: ReturnType<typeof setTimeout>
+  requestPayload: Record<string, unknown>
+  requestedSchema?: Record<string, unknown>
+}
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __agentViewerPendingCopilotElicitations: Map<string, PendingCopilotElicitation> | undefined
+}
+const pendingCopilotElicitations = globalThis.__agentViewerPendingCopilotElicitations
+  ?? (globalThis.__agentViewerPendingCopilotElicitations = new Map<string, PendingCopilotElicitation>())
+
 function pendingCopilotPermissionKey(sessionId: string, permissionId: string): string {
   return `${sessionId}:${permissionId}`
 }
@@ -1357,12 +1389,76 @@ function createCopilotPermissionBridge(
   }
 }
 
+function createCopilotElicitationBridge(
+  sessionId: string,
+  enqueue: (chunk: string) => void,
+  activeIds: Set<string>,
+  isClientAvailable: () => boolean,
+): (context: CopilotElicitationContext) => Promise<CopilotElicitationResult> {
+  return (context) => {
+    if (!isClientAvailable()) return Promise.resolve({ action: 'cancel' })
+    const requestId = `agent-viewer-elicitation-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const requestPayload = {
+      type: 'copilot_event',
+      event: {
+        id: requestId,
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        type: 'elicitation.requested',
+        ephemeral: true,
+        data: {
+          requestId,
+          message: context.message,
+          mode: context.mode ?? 'form',
+          elicitationSource: context.elicitationSource,
+          url: context.url,
+          requestedSchema: context.requestedSchema,
+        },
+      },
+    }
+    activeIds.add(requestId)
+    enqueue(`data: ${JSON.stringify(requestPayload)}\n\n`)
+    return new Promise((resolve) => {
+      const key = pendingCopilotPermissionKey(sessionId, requestId)
+      const timer = setTimeout(() => {
+        pendingCopilotElicitations.delete(key)
+        activeIds.delete(requestId)
+        resolve({ action: 'cancel' })
+      }, 5 * 60 * 1000)
+      if (typeof timer === 'object' && timer && 'unref' in timer) timer.unref()
+      pendingCopilotElicitations.set(key, {
+        resolve: (result) => {
+          clearTimeout(timer)
+          pendingCopilotElicitations.delete(key)
+          activeIds.delete(requestId)
+          resolve(result)
+        },
+        timer,
+        requestPayload,
+        requestedSchema: context.requestedSchema ? { ...context.requestedSchema } : undefined,
+      })
+    })
+  }
+}
+
 function resolvePendingCopilotPermissions(sessionId: string, ids: Set<string>, result: Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }>): void {
   for (const id of Array.from(ids)) {
     const key = pendingCopilotPermissionKey(sessionId, id)
     const pending = pendingCopilotPermissions.get(key)
     if (!pending) continue
     pendingCopilotPermissions.delete(key)
+    clearTimeout(pending.timer)
+    ids.delete(id)
+    pending.resolve(result)
+  }
+}
+
+function resolvePendingCopilotElicitations(sessionId: string, ids: Set<string>, result: CopilotElicitationResult): void {
+  for (const id of Array.from(ids)) {
+    const key = pendingCopilotPermissionKey(sessionId, id)
+    const pending = pendingCopilotElicitations.get(key)
+    if (!pending) continue
+    pendingCopilotElicitations.delete(key)
     clearTimeout(pending.timer)
     ids.delete(id)
     pending.resolve(result)
@@ -1778,6 +1874,20 @@ declare global {
 const pendingClaudePermissions = globalThis.__agentViewerPendingClaudePermissions
   ?? (globalThis.__agentViewerPendingClaudePermissions = new Map<string, PendingClaudePermission>())
 
+type PendingClaudeElicitation = {
+  resolve: (result: ClaudeElicitationResult) => void
+  timer: ReturnType<typeof setTimeout>
+  requestData: Record<string, unknown>
+  requestedSchema?: Record<string, unknown>
+}
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __agentViewerPendingClaudeElicitations: Map<string, PendingClaudeElicitation> | undefined
+}
+const pendingClaudeElicitations = globalThis.__agentViewerPendingClaudeElicitations
+  ?? (globalThis.__agentViewerPendingClaudeElicitations = new Map<string, PendingClaudeElicitation>())
+
 // Pending Claude prompts (tool permissions + AskUserQuestion) still awaiting a
 // response for this session, as permission.requested `data` payloads. Lets a
 // reconnecting client re-arm in-flight prompts instead of waiting out the 5-min
@@ -1789,6 +1899,13 @@ function listPendingClaudePrompts(sessionId: string): Record<string, unknown>[] 
     if (key.startsWith(prefix) && pending.requestData) prompts.push(pending.requestData)
   }
   return prompts
+}
+
+function listPendingClaudeElicitations(sessionId: string): Record<string, unknown>[] {
+  const prefix = `${sessionId}:`
+  return Array.from(pendingClaudeElicitations)
+    .filter(([key]) => key.startsWith(prefix))
+    .map(([, pending]) => pending.requestData)
 }
 
 function pendingClaudePermissionKey(sessionId: string, permissionId: string): string {
@@ -1922,40 +2039,68 @@ function createClaudePermissionBridge(
   }
 }
 
-// Handle MCP elicitation requests from Claude's MCP servers. Without an
-// onElicitation callback an eliciting server has no way to prompt and the turn
-// can stall. We resolve immediately rather than waiting on a round-trip:
-//   - 'url' mode (the common MCP OAuth flow): surface the URL as a turn notice
-//     and accept, so the user completes auth out-of-band in the browser.
-//   - 'form' / structured mode: surface what was asked and decline — agent-viewer
-//     has no in-app schema form yet, and declining is far better than hanging.
-//   - aborted turn: cancel.
-// (A full interactive form UI is a worthwhile follow-up if MCP form-elicitation
-// becomes common; the URL path already covers the dominant real-world case.)
+// Bridge MCP elicitation into the same reattachable interactive surface as
+// tool permissions. URL requests wait for an explicit "open & continue";
+// form requests render their JSON-schema fields and return typed content.
 function createClaudeElicitationBridge(
   sessionId: string,
   controller: ReadableStreamDefaultController<Uint8Array>,
   encoder: TextEncoder,
 ): ClaudeElicitationHandler {
-  const notice = (message: string) => {
+  const enqueue = (payload: Record<string, unknown>) => {
     try {
-      controller.enqueue(encoder.encode(turnNoticeEvent(message)))
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`))
     } catch {
       // Client may have disconnected while the turn keeps running server-side.
     }
   }
   return async (request, options) => {
     if (options.signal.aborted) return { action: 'cancel' }
-    const label = request.displayName?.trim() || request.serverName || 'An MCP server'
-    if (request.mode === 'url' && typeof request.url === 'string' && request.url) {
-      notice(`${label} needs authorization — open ${request.url} to continue.`)
-      return { action: 'accept' }
+    const requestId = request.elicitationId
+      || `claude-elicitation-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const requestData: Record<string, unknown> = {
+      requestId,
+      sessionId,
+      serverName: request.serverName,
+      message: request.message,
+      mode: request.mode ?? 'form',
+      url: request.url,
+      elicitationId: request.elicitationId,
+      requestedSchema: request.requestedSchema,
+      title: request.title,
+      displayName: request.displayName,
+      description: request.description,
     }
-    const ask = typeof request.message === 'string' && request.message.trim()
-      ? `: “${request.message.trim()}”`
-      : ''
-    notice(`${label} requested input${ask} that agent-viewer can’t collect in-app yet — declining.`)
-    return { action: 'decline' }
+    enqueue({
+      type: 'claude_elicitation',
+      event: { type: 'elicitation.requested', data: requestData },
+    })
+    return new Promise<ClaudeElicitationResult>((resolve) => {
+      const key = pendingClaudePermissionKey(sessionId, requestId)
+      const cleanup = () => {
+        pendingClaudeElicitations.delete(key)
+        options.signal.removeEventListener('abort', onAbort)
+      }
+      const finish = (result: ClaudeElicitationResult) => {
+        clearTimeout(timer)
+        cleanup()
+        enqueue({
+          type: 'claude_elicitation',
+          event: { type: 'elicitation.completed', data: { requestId, action: result.action } },
+        })
+        resolve(result)
+      }
+      const onAbort = () => finish({ action: 'cancel' })
+      const timer = setTimeout(() => finish({ action: 'cancel' }), 5 * 60 * 1000)
+      if (typeof timer === 'object' && timer && 'unref' in timer) timer.unref()
+      options.signal.addEventListener('abort', onAbort, { once: true })
+      pendingClaudeElicitations.set(key, {
+        resolve: finish,
+        timer,
+        requestData,
+        requestedSchema: request.requestedSchema,
+      })
+    })
   }
 }
 
@@ -2696,11 +2841,27 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         throw new Error('response must be once, always, or reject')
       }
       const result = copilotPermissionDecision(response, feedback)
-      const pending = pendingCopilotPermissions.get(pendingCopilotPermissionKey(sessionId, permissionId))
+      const key = pendingCopilotPermissionKey(sessionId, permissionId)
+      const pending = pendingCopilotPermissions.get(key)
       if (pending) {
-        pendingCopilotPermissions.delete(pendingCopilotPermissionKey(sessionId, permissionId))
+        pendingCopilotPermissions.delete(key)
         clearTimeout(pending.timer)
         pending.resolve(result)
+        return { ok: true }
+      }
+      let elicitation = pendingCopilotElicitations.get(key)
+      if (!elicitation) {
+        for (const [pendingKey, candidate] of pendingCopilotElicitations) {
+          if (!pendingKey.endsWith(`:${permissionId}`)) continue
+          elicitation = candidate
+          break
+        }
+      }
+      if (elicitation) {
+        elicitation.resolve({
+          action: response === 'reject' ? 'decline' : 'accept',
+          ...(response === 'reject' ? {} : { content: {} }),
+        })
         return { ok: true }
       }
       const session = await acquireCopilotSession(sessionId)
@@ -2709,6 +2870,30 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
         result,
       })
       return { ok: handled.success }
+    }
+    if (action === 'respondQuestion') {
+      const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
+      if (!permissionId) throw new Error('permissionId is required')
+      const answers = parseQuestionAnswers(body.answers)
+      if (!answers) throw new Error('answers is required')
+      const key = pendingCopilotPermissionKey(sessionId, permissionId)
+      let elicitation = pendingCopilotElicitations.get(key)
+      if (!elicitation) {
+        for (const [pendingKey, candidate] of pendingCopilotElicitations) {
+          if (!pendingKey.endsWith(`:${permissionId}`)) continue
+          elicitation = candidate
+          break
+        }
+      }
+      if (!elicitation) throw new Error('Question is no longer pending')
+      elicitation.resolve({
+        action: 'accept',
+        content: elicitationContentFromAnswers(
+          { requestedSchema: elicitation.requestedSchema },
+          answers,
+        ),
+      })
+      return { ok: true }
     }
     if (action === 'setMode') {
       const mode = parseCopilotMode(body.mode)
@@ -2749,7 +2934,22 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
           break
         }
       }
-      if (!pending) throw new Error('Permission request is no longer pending')
+      if (!pending) {
+        let elicitation = pendingClaudeElicitations.get(key)
+        if (!elicitation) {
+          for (const [pendingKey, candidate] of pendingClaudeElicitations) {
+            if (!pendingKey.endsWith(`:${permissionId}`)) continue
+            elicitation = candidate
+            break
+          }
+        }
+        if (!elicitation) throw new Error('Permission request is no longer pending')
+        elicitation.resolve({
+          action: response === 'reject' ? 'decline' : 'accept',
+          ...(response === 'reject' ? {} : { content: {} }),
+        })
+        return { ok: true }
+      }
       pending.resolve(claudePermissionDecision(response, pending))
       return { ok: true }
     }
@@ -2758,9 +2958,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     if (action === 'respondQuestion') {
       const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
       if (!permissionId) throw new Error('permissionId is required')
-      const answers = (body.answers && typeof body.answers === 'object' && !Array.isArray(body.answers))
-        ? body.answers as Record<string, string>
-        : null
+      const answers = parseQuestionAnswers(body.answers)
       if (!answers) throw new Error('answers is required')
       const response = typeof body.response === 'string' && body.response.trim() ? body.response.trim() : undefined
       const annotations = (body.annotations && typeof body.annotations === 'object' && !Array.isArray(body.annotations))
@@ -2775,8 +2973,30 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
           break
         }
       }
-      if (!pending) throw new Error('Question is no longer pending')
-      pending.resolve(claudeQuestionDecision(pending, { answers, response, annotations }))
+      if (!pending) {
+        let elicitation = pendingClaudeElicitations.get(key)
+        if (!elicitation) {
+          for (const [pendingKey, candidate] of pendingClaudeElicitations) {
+            if (!pendingKey.endsWith(`:${permissionId}`)) continue
+            elicitation = candidate
+            break
+          }
+        }
+        if (!elicitation) throw new Error('Question is no longer pending')
+        elicitation.resolve({
+          action: 'accept',
+          content: elicitationContentFromAnswers(
+            { requestedSchema: elicitation.requestedSchema },
+            answers,
+          ),
+        })
+        return { ok: true }
+      }
+      pending.resolve(claudeQuestionDecision(pending, {
+        answers: Object.fromEntries(Object.entries(answers).map(([key, values]) => [key, values.join(', ')])),
+        response,
+        annotations,
+      }))
       return { ok: true }
     }
     if (action === 'setModel') {
@@ -2899,9 +3119,7 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     }
     if (action === 'respondQuestion') {
       const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
-      const answers = body.answers && typeof body.answers === 'object' && !Array.isArray(body.answers)
-        ? body.answers as Record<string, string>
-        : null
+      const answers = parseQuestionAnswers(body.answers)
       if (!permissionId) throw new Error('permissionId is required')
       if (!answers) throw new Error('answers is required')
       respondCodexQuestion(sessionId, permissionId, answers)
@@ -4237,7 +4455,11 @@ function codexApprovalResult(method: string, response: string, params: Record<st
         strictAutoReview: response === 'strict',
       }
     case 'mcpServer/elicitation/request':
-      return { action: 'decline', content: null, _meta: null }
+      return {
+        action: response === 'reject' || response === 'decline' || response === 'cancel' ? 'decline' : 'accept',
+        content: null,
+        _meta: params._meta ?? null,
+      }
     default:
       return undefined
   }
@@ -4257,11 +4479,58 @@ function respondCodexApproval(threadId: string, permissionId: string, response: 
   client.respond(pending.rawId, result)
 }
 
-function respondCodexQuestion(threadId: string, permissionId: string, answers: Record<string, string>): void {
+function elicitationContentFromAnswers(
+  params: Record<string, unknown>,
+  answers: Record<string, string[]>,
+): Record<string, string | number | boolean | string[]> {
+  const schema = params.requestedSchema && typeof params.requestedSchema === 'object' && !Array.isArray(params.requestedSchema)
+    ? params.requestedSchema as Record<string, unknown>
+    : {}
+  const properties = schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)
+    ? schema.properties as Record<string, unknown>
+    : {}
+  const content: Record<string, string | number | boolean | string[]> = {}
+  for (const [key, values] of Object.entries(answers)) {
+    const first = values[0]
+    if (first == null) continue
+    const property = properties[key] && typeof properties[key] === 'object' && !Array.isArray(properties[key])
+      ? properties[key] as Record<string, unknown>
+      : {}
+    switch (property.type) {
+      case 'array':
+        content[key] = values
+        break
+      case 'boolean':
+        content[key] = first === 'true'
+        break
+      case 'number':
+      case 'integer': {
+        const value = Number(first)
+        if (Number.isFinite(value)) content[key] = property.type === 'integer' ? Math.trunc(value) : value
+        break
+      }
+      default:
+        content[key] = first
+        break
+    }
+  }
+  return content
+}
+
+function respondCodexQuestion(threadId: string, permissionId: string, answers: Record<string, string[]>): void {
   const key = pendingCodexApprovalKey(threadId, permissionId)
   const pending = pendingCodexApprovals.get(key)
-  if (!pending || pending.method !== 'item/tool/requestUserInput') {
+  if (!pending || (pending.method !== 'item/tool/requestUserInput' && pending.method !== 'mcpServer/elicitation/request')) {
     throw new Error('Question is no longer pending')
+  }
+  if (pending.method === 'mcpServer/elicitation/request') {
+    pendingCodexApprovals.delete(key)
+    getCodexClient().respond(pending.rawId, {
+      action: 'accept',
+      content: elicitationContentFromAnswers(pending.params, answers),
+      _meta: pending.params._meta ?? null,
+    })
+    return
   }
   const rawQuestions = Array.isArray(pending.params.questions) ? pending.params.questions : []
   const responseAnswers: Record<string, { answers: string[] }> = {}
@@ -4271,8 +4540,8 @@ function respondCodexQuestion(threadId: string, permissionId: string, answers: R
     const id = typeof question.id === 'string' ? question.id : ''
     const prompt = typeof question.question === 'string' ? question.question : ''
     const answer = (id && answers[id]) || (prompt && answers[prompt])
-    if (!id || typeof answer !== 'string') continue
-    responseAnswers[id] = { answers: answer.split(',').map((value) => value.trim()).filter(Boolean) }
+    if (!id || !Array.isArray(answer)) continue
+    responseAnswers[id] = { answers: answer.map((value) => value.trim()).filter(Boolean) }
   }
   pendingCodexApprovals.delete(key)
   getCodexClient().respond(pending.rawId, { answers: responseAnswers })
@@ -5159,6 +5428,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
       let requestAborted = false
       let emittedError = false
       let manualPermissionHandlerInstalled = false
+      let elicitationHandlerInstalled = false
       let broadcastedTurnStart = false
       let turnTimeoutTimer: ReturnType<typeof setTimeout> | null = null
       let finalMessageFallbackTimer: ReturnType<typeof setTimeout> | null = null
@@ -5172,6 +5442,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
       const streamedAssistantMessageIds = new Set<string>()
       const seenUsageEventIds = new Set<string>()
       const bridgedPermissionIds = new Set<string>()
+      const bridgedElicitationIds = new Set<string>()
       let turnOutputTokens = 0
 
       const safeEnqueue = (chunk: string) => {
@@ -5337,6 +5608,13 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         } else {
           setCopilotPermissionHandler(sessionId, approveAll)
         }
+        setCopilotElicitationHandler(sessionId, createCopilotElicitationBridge(
+          sessionId,
+          safeEnqueue,
+          bridgedElicitationIds,
+          () => !downstreamClosed && !cleanedUp,
+        ))
+        elicitationHandlerInstalled = true
         unsubscribe = session.on(handleEvent)
         const historyBaselineCount = await withTimeout(
           readCopilotHistoryFromSession(session),
@@ -5362,6 +5640,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
             return
           }
           resolvePendingCopilotPermissions(sessionId, bridgedPermissionIds, { kind: 'user-not-available' })
+          resolvePendingCopilotElicitations(sessionId, bridgedElicitationIds, { action: 'cancel' })
           void interruptRunningSession(sessionId, turnRequestId).catch(() => {})
         })
 
@@ -5531,8 +5810,12 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         historyPollCancelled = true
         clearFinalMessageFallback()
         resolvePendingCopilotPermissions(sessionId, bridgedPermissionIds, { kind: 'user-not-available' })
+        resolvePendingCopilotElicitations(sessionId, bridgedElicitationIds, { action: 'cancel' })
         if (manualPermissionHandlerInstalled) {
           setCopilotPermissionHandler(sessionId, approveAll)
+        }
+        if (elicitationHandlerInstalled) {
+          setCopilotElicitationHandler(sessionId, () => ({ action: 'decline' }))
         }
         clearRunningSession(sessionId, turnRequestId)
         try { unsubscribe?.() } catch { /* ignore */ }
@@ -6170,16 +6453,27 @@ function listPendingProviderPermissionPayloads(
   provider?: AgentProvider,
 ): Record<string, unknown>[] {
   if (!provider || provider === 'claude') {
-    return listPendingClaudePrompts(sessionId).map((data) => ({
-      type: 'claude_permission',
-      event: { type: 'permission.requested', data },
-    }))
+    return [
+      ...listPendingClaudePrompts(sessionId).map((data) => ({
+        type: 'claude_permission',
+        event: { type: 'permission.requested', data },
+      })),
+      ...listPendingClaudeElicitations(sessionId).map((data) => ({
+        type: 'claude_elicitation',
+        event: { type: 'elicitation.requested', data },
+      })),
+    ]
   }
   if (provider === 'copilot') {
     const prefix = `${sessionId}:`
-    return Array.from(pendingCopilotPermissions)
-      .filter(([key]) => key.startsWith(prefix))
-      .map(([, pending]) => pending.requestPayload)
+    return [
+      ...Array.from(pendingCopilotPermissions)
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([, pending]) => pending.requestPayload),
+      ...Array.from(pendingCopilotElicitations)
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([, pending]) => pending.requestPayload),
+    ]
   }
   if (provider === 'codex') {
     const prefix = `${sessionId}:`
@@ -6844,7 +7138,9 @@ export function getServerMemoryDiagnostics(): Record<string, number> {
     copilotLiveTranscripts: copilotLiveTranscripts.size,
     piLiveTranscripts: piLiveTranscripts.size,
     pendingClaudePermissions: pendingClaudePermissions.size,
+    pendingClaudeElicitations: pendingClaudeElicitations.size,
     pendingCopilotPermissions: pendingCopilotPermissions.size,
+    pendingCopilotElicitations: pendingCopilotElicitations.size,
     pendingCodexApprovals: codexApprovals,
     claudePool: claudePoolSize(),
     piPool: piPoolSize(),

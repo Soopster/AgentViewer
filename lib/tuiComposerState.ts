@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 
 import path from 'node:path'
 
 const DATA_DIR = path.join(process.cwd(), '.agent-viewer-data', 'composer-drafts')
 const FILE = path.join(DATA_DIR, 'drafts.json')
+const QUEUE_FILE = path.join(DATA_DIR, 'queue-v1.json')
 
 type DraftStore = Record<string, { text: string }>
 
@@ -57,6 +58,54 @@ export function readComposerDraft(storageKey: string): string {
   if (pending) return pending.text
   const store = readStoreSync()
   return store[storageKey]?.text ?? ''
+}
+
+let queuedComposerState: unknown[] | null = null
+let queuedComposerWriteTimer: ReturnType<typeof setTimeout> | null = null
+
+function readComposerQueueSync(): unknown[] {
+  try {
+    if (!existsSync(QUEUE_FILE)) return []
+    const parsed = JSON.parse(readFileSync(QUEUE_FILE, 'utf-8')) as { version?: unknown; entries?: unknown }
+    return parsed.version === 1 && Array.isArray(parsed.entries) ? parsed.entries : []
+  } catch {
+    return []
+  }
+}
+
+function flushComposerQueue(): void {
+  queuedComposerWriteTimer = null
+  if (!queuedComposerState) return
+  try {
+    ensureDir()
+    if (queuedComposerState.length === 0) {
+      if (existsSync(QUEUE_FILE)) writeFileSync(QUEUE_FILE, JSON.stringify({ version: 1, entries: [] }), 'utf-8')
+      return
+    }
+    const temporaryFile = `${QUEUE_FILE}.${process.pid}.tmp`
+    writeFileSync(temporaryFile, JSON.stringify({ version: 1, entries: queuedComposerState }), 'utf-8')
+    renameSync(temporaryFile, QUEUE_FILE)
+  } catch {
+    // best-effort; the in-memory queue remains authoritative for this process
+  }
+}
+
+export function readComposerQueue<T>(isEntry: (value: unknown) => value is T): T[] {
+  if (!queuedComposerState) queuedComposerState = readComposerQueueSync()
+  return queuedComposerState.filter(isEntry)
+}
+
+export function scheduleWriteComposerQueue<T>(entries: T[]): void {
+  queuedComposerState = entries
+  if (!queuedComposerWriteTimer) queuedComposerWriteTimer = setTimeout(flushComposerQueue, 100)
+}
+
+export function flushComposerQueueWrites(): void {
+  if (queuedComposerWriteTimer) {
+    clearTimeout(queuedComposerWriteTimer)
+    queuedComposerWriteTimer = null
+  }
+  flushComposerQueue()
 }
 
 // --- Sent history (global, text-only, persisted across restarts) ---

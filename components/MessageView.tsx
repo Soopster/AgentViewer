@@ -18,7 +18,7 @@ import type {
   ReasoningEffortLevel,
 } from '@/lib/types'
 import { buildThreadedMessages, buildThreadedMessagesIncremental, stripToolCallBlocks, type IncrementalThreadingCache, type ThreadedMessage, type ThreadedBlock } from '@/lib/threading'
-import { measureSync } from '@/lib/clientPerf'
+import { measureSync, recordClientPerf } from '@/lib/clientPerf'
 import { exportSessionToHtml, downloadHtml } from '@/lib/export'
 import { pathBasename } from '@/lib/projectPaths'
 import { getPrimarySessionTag } from '@/lib/sessionTags'
@@ -31,7 +31,7 @@ import {
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '@/lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer'
-import { extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission } from '@/lib/permissions'
+import { extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission, type PendingQuestionAnswers } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '@/lib/claudeCommandLifecycle'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '@/lib/transientError'
@@ -56,7 +56,13 @@ import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSe
 import StreamHistoryRail, { type StreamHistoryItem } from './StreamHistoryRail'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '@/lib/composerCommands'
-import { mergeComposerAttachments, restoreComposerDraftPayload } from '@/lib/composerAttachments'
+import {
+  clearComposerQueueTarget,
+  mergeComposerAttachments,
+  removeComposerQueueItem,
+  restoreComposerDraftPayload,
+  selectComposerQueueTarget,
+} from '@/lib/composerAttachments'
 import CodeThemeToggle from './CodeThemeToggle'
 import RenderFontToggle from './RenderFontToggle'
 import TabBar from './TabBar'
@@ -153,6 +159,13 @@ type RollbackPreview = {
 }
 
 type FailedSend = {
+  text: string
+  attachments: SendAttachment[]
+}
+
+type QueuedWebSend = {
+  id: string
+  targetKey: string
   text: string
   attachments: SendAttachment[]
 }
@@ -320,6 +333,7 @@ const TIMELINE_BOTTOM_GUTTER_PX = 72
 const TIMELINE_TARGET_TOP_GUTTER_PX = 72
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 const COMPOSER_DRAFT_STORAGE_PREFIX = 'agentViewer:composerDraft:v1:'
+const COMPOSER_QUEUE_STORAGE_KEY = 'agentViewer:composerQueue:v1'
 const SEND_ATTACHMENT_TYPES = new Set<SendAttachment['type']>(['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob', 'agent', 'extension_context'])
 function detectMentionAtCursor(text: string, cursor: number): { start: number; query: string } | null {
   if (cursor === 0) return null
@@ -498,6 +512,44 @@ function writeComposerDraft(storageKey: string | null, draft: ComposerDraft) {
       return
     }
     window.localStorage.setItem(storageKey, JSON.stringify(draft))
+  } catch {
+    /* localStorage may be unavailable or full */
+  }
+}
+
+function readComposerQueue(): QueuedWebSend[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(COMPOSER_QUEUE_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as { version?: unknown; entries?: unknown }
+    if (parsed.version !== 1 || !Array.isArray(parsed.entries)) return []
+    return parsed.entries.flatMap((value): QueuedWebSend[] => {
+      if (!value || typeof value !== 'object') return []
+      const entry = value as Partial<QueuedWebSend>
+      if (typeof entry.id !== 'string' || !entry.id) return []
+      if (typeof entry.targetKey !== 'string' || !entry.targetKey) return []
+      if (typeof entry.text !== 'string') return []
+      return [{
+        id: entry.id,
+        targetKey: entry.targetKey,
+        text: entry.text,
+        attachments: normalizeDraftAttachments(entry.attachments),
+      }]
+    })
+  } catch {
+    return []
+  }
+}
+
+function writeComposerQueue(queue: QueuedWebSend[]): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (queue.length === 0) {
+      window.localStorage.removeItem(COMPOSER_QUEUE_STORAGE_KEY)
+      return
+    }
+    window.localStorage.setItem(COMPOSER_QUEUE_STORAGE_KEY, JSON.stringify({ version: 1, entries: queue }))
   } catch {
     /* localStorage may be unavailable or full */
   }
@@ -2484,14 +2536,18 @@ function AskUserQuestionPicker({
 }: {
   permission: PendingPermission
   busy: boolean
-  onSubmit: (answers: Record<string, string>) => void
+  onSubmit: (answers: PendingQuestionAnswers) => void
   onCancel: () => void
 }) {
   const questions = permission.questions ?? []
   const [selections, setSelections] = useState<Record<number, string[]>>({})
+  const [freeformAnswers, setFreeformAnswers] = useState<Record<number, string>>({})
   const [openPreview, setOpenPreview] = useState<string | null>(null)
 
   const toggle = (qi: number, multiSelect: boolean, label: string) => {
+    if (!multiSelect) {
+      setFreeformAnswers((freeform) => freeform[qi] ? { ...freeform, [qi]: '' } : freeform)
+    }
     setSelections((prev) => {
       const current = prev[qi] ?? []
       let next: string[]
@@ -2506,7 +2562,7 @@ function AskUserQuestionPicker({
 
   let allAnswered = questions.length > 0
   for (let qi = 0; qi < questions.length; qi += 1) {
-    if ((selections[qi]?.length ?? 0) === 0) {
+    if (questions[qi]?.required !== false && (selections[qi]?.length ?? 0) === 0 && !freeformAnswers[qi]?.trim()) {
       allAnswered = false
       break
     }
@@ -2514,10 +2570,16 @@ function AskUserQuestionPicker({
 
   const submit = () => {
     if (!allAnswered || busy) return
-    const answers: Record<string, string> = {}
+    const answers: PendingQuestionAnswers = {}
     questions.forEach((q, qi) => {
-      const sel = selections[qi]
-      if (sel && sel.length > 0) answers[q.id ?? q.question] = sel.join(', ')
+      const selected = selections[qi] ?? []
+      const freeform = freeformAnswers[qi]?.trim()
+      const values = q.multiSelect && freeform
+        ? [...selected, freeform]
+        : freeform
+        ? [freeform]
+        : selected
+      if (values.length > 0) answers[q.id ?? q.question] = values
     })
     onSubmit(answers)
   }
@@ -2535,7 +2597,9 @@ function AskUserQuestionPicker({
       }}
     >
       <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--violet)', letterSpacing: '0.06em' }}>
-        {questions.length === 1 ? 'CLAUDE ASKS' : `CLAUDE ASKS · ${questions.length} QUESTIONS`}
+        {questions.length === 1
+          ? `${(permission.provider ?? 'claude').toUpperCase()} ASKS`
+          : `${(permission.provider ?? 'claude').toUpperCase()} ASKS · ${questions.length} QUESTIONS`}
       </div>
       {questions.map((q, qi) => {
         const selected = selections[qi] ?? []
@@ -2560,14 +2624,15 @@ function AskUserQuestionPicker({
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {q.options.map((opt, oi) => {
-                const isSelected = selected.includes(opt.label)
+                const optionValue = opt.value ?? opt.label
+                const isSelected = selected.includes(optionValue)
                 const previewKey = `${qi}:${oi}`
                 const previewOpen = openPreview === previewKey
                 return (
                   <div key={oi}>
                     <button
                       type="button"
-                      onClick={() => toggle(qi, q.multiSelect === true, opt.label)}
+                      onClick={() => toggle(qi, q.multiSelect === true, optionValue)}
                       disabled={busy}
                       style={{
                         width: '100%',
@@ -2652,6 +2717,30 @@ function AskUserQuestionPicker({
                   </div>
                 )
               })}
+              {q.allowFreeform && (
+                <Input
+                  type={q.secret ? 'password' : 'text'}
+                  value={freeformAnswers[qi] ?? ''}
+                  onChange={(event) => {
+                    const value = event.target.value
+                    setFreeformAnswers((prev) => ({ ...prev, [qi]: value }))
+                    if (!q.multiSelect && value) {
+                      setSelections((prev) => ({ ...prev, [qi]: [] }))
+                    }
+                  }}
+                  disabled={busy}
+                  aria-label={`Custom answer for ${q.question}`}
+                  placeholder={q.secret ? 'Enter a private answer…' : 'Other — type a custom answer…'}
+                  autoComplete="off"
+                  style={{
+                    height: 32,
+                    borderColor: freeformAnswers[qi]?.trim() ? 'rgba(139,128,240,0.55)' : 'var(--border)',
+                    background: 'var(--surface)',
+                    fontFamily: q.secret ? "'IBM Plex Mono', monospace" : "'IBM Plex Sans', sans-serif",
+                    fontSize: 12,
+                  }}
+                />
+              )}
             </div>
           </div>
         )
@@ -2750,9 +2839,25 @@ export default function MessageView({
   // FIFO backlog of follow-up prompts typed while a turn is in flight. Native
   // CLIs queue an arbitrary number of follow-ups; a single overwritten slot
   // silently dropped all but the most recent draft.
-  const [queuedSends, setQueuedSends] = useState<Array<{ text: string; attachments: SendAttachment[] }>>([])
-  const queuedSendsRef = useRef<Array<{ text: string; attachments: SendAttachment[] }>>([])
+  const [queuedSends, setQueuedSends] = useState<QueuedWebSend[]>([])
+  const queuedSendsRef = useRef<QueuedWebSend[]>([])
+  const queuedSendCounterRef = useRef(0)
+  const [composerQueueStorageReady, setComposerQueueStorageReady] = useState(false)
   useEffect(() => { queuedSendsRef.current = queuedSends }, [queuedSends])
+  useEffect(() => {
+    setQueuedSends(readComposerQueue())
+    setComposerQueueStorageReady(true)
+  }, [])
+  useEffect(() => {
+    if (composerQueueStorageReady) writeComposerQueue(queuedSends)
+  }, [composerQueueStorageReady, queuedSends])
+  const composerQueueTargetKey = session
+    ? `${session.provider ?? 'claude'}:${session.sessionId}`
+    : null
+  const activeQueuedSends = useMemo(
+    () => selectComposerQueueTarget(queuedSends, composerQueueTargetKey),
+    [composerQueueTargetKey, queuedSends],
+  )
   // Last message delivered INTO the running turn via native steering — shown
   // in the composer status line while the turn is still streaming.
   const [steeredNotice, setSteeredNotice] = useState<string | null>(null)
@@ -2925,6 +3030,7 @@ export default function MessageView({
   // idle. When set, the composer reflects the live turn (stop button, steer on
   // send) and the persisted poll surfaces output until the turn finishes.
   const [reattachedRunning, setReattachedRunning] = useState(false)
+  const [runningProbeReadyKey, setRunningProbeReadyKey] = useState<string | null>(null)
   const reattachedRunningRef = useRef(false)
   useEffect(() => { reattachedRunningRef.current = reattachedRunning }, [reattachedRunning])
   const [liveAssistantText, setLiveAssistantText] = useState('')
@@ -3989,9 +4095,13 @@ export default function MessageView({
   useEffect(() => {
     if (!session || projectView) {
       setReattachedRunning(false)
+      setRunningProbeReadyKey(null)
       return
     }
     const sessionId = session.sessionId
+    const sessionProvider = session.provider ?? 'claude'
+    const probeKey = `${sessionProvider}:${sessionId}`
+    setRunningProbeReadyKey(null)
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
     const poll = async () => {
@@ -4015,6 +4125,7 @@ export default function MessageView({
           if (cancelled) return
           const running = info?.running === true
           setReattachedRunning((prev) => (prev === running ? prev : running))
+          setRunningProbeReadyKey(probeKey)
           // Re-surface any provider-native approval/question the turn is
           // blocked on. The original SSE may be gone after reload/navigation,
           // but the process-local resolver remains answerable by id.
@@ -4026,10 +4137,9 @@ export default function MessageView({
               }))
           const reattached = extractPendingPermissions(permissionPayloads, {
             sessionId,
-            provider: session.provider ?? 'claude',
+            provider: sessionProvider,
           })
           setPendingPermissions((prev) => {
-            const sessionProvider = session.provider ?? 'claude'
             const others = prev.filter((p) => !(p.provider === sessionProvider && p.sessionId === sessionId))
             const nextIds = [...others, ...reattached].map((p) => p.id).join('|')
             const prevIds = prev.map((p) => p.id).join('|')
@@ -4046,7 +4156,7 @@ export default function MessageView({
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [session?.sessionId, projectView])
+  }, [projectView, session?.provider, session?.sessionId])
 
   const cancelSend = useCallback(() => {
     if (session) {
@@ -4111,9 +4221,9 @@ export default function MessageView({
     // The user interrupted to change course — auto-firing queued follow-ups
     // would be a surprise-send. Pop their text back into the composer instead
     // so they can edit and re-send.
-    const interruptQueue = queuedSendsRef.current
+    const interruptQueue = selectComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey)
     if (interruptQueue.length > 0) {
-      setQueuedSends([])
+      setQueuedSends((prev) => clearComposerQueueTarget(prev, composerQueueTargetKey))
       const restored = restoreComposerDraftPayload(
         { text: inputTextRef.current, attachments: [] },
         interruptQueue,
@@ -4156,7 +4266,7 @@ export default function MessageView({
       liveToolInputJsonRef.current.clear()
     }
     textareaRef.current?.focus()
-  }, [clearLiveAssistantText, clearLiveSubagentText, optimisticUserText, resizeComposer, session])
+  }, [clearLiveAssistantText, clearLiveSubagentText, composerQueueTargetKey, optimisticUserText, resizeComposer, session])
 
   const backgroundClaudeTasks = useCallback(async () => {
     if (!session || session.provider !== 'claude' || session.isPending || backgroundingTasks) return
@@ -4300,7 +4410,14 @@ export default function MessageView({
           // Steering is best-effort; the queue below is the reliable path.
         }
       }
-      setQueuedSends((prev) => [...prev, { text: queueText, attachments: queueAttachments }])
+      const targetKey = `${session.provider ?? 'claude'}:${session.sessionId}`
+      queuedSendCounterRef.current += 1
+      setQueuedSends((prev) => [...prev, {
+        id: `${targetKey}:${Date.now()}:${queuedSendCounterRef.current}`,
+        targetKey,
+        text: queueText,
+        attachments: queueAttachments,
+      }])
       return
     }
 
@@ -4360,6 +4477,7 @@ export default function MessageView({
     window.requestAnimationFrame(resizeComposer)
 
     const controller = new AbortController()
+    const sendPerfStartedAt = performance.now()
     const turnRequestId = globalThis.crypto?.randomUUID?.()
       ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
     abortControllerRef.current = controller
@@ -4400,6 +4518,10 @@ export default function MessageView({
         }),
         signal: controller.signal,
       })
+      recordClientPerf(
+        `composer.${session.provider ?? 'claude'}.send-to-ack`,
+        performance.now() - sendPerfStartedAt,
+      )
 
       if (!res.ok) {
         const json = await res.json().catch(() => ({}))
@@ -4411,6 +4533,15 @@ export default function MessageView({
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let sseBuffer = ''
+      let firstOutputRecorded = false
+      const noteFirstOutput = () => {
+        if (firstOutputRecorded) return
+        firstOutputRecorded = true
+        recordClientPerf(
+          `composer.${session.provider ?? 'claude'}.first-output`,
+          performance.now() - sendPerfStartedAt,
+        )
+      }
       // Stall watchdog: only Claude emits server heartbeats, so only Claude can
       // be confidently judged dead-vs-slow. Race each read against a timeout; if
       // neither data nor a heartbeat lands within the window, treat the socket as
@@ -4507,6 +4638,7 @@ export default function MessageView({
             try {
               const parsed = JSON.parse(frame.data) as { message?: unknown }
               if (typeof parsed.message === 'string' && parsed.message.trim()) {
+                noteFirstOutput()
                 setSessionActionNotice(parsed.message.trim())
               }
             } catch { /* ignore malformed notice */ }
@@ -4516,6 +4648,7 @@ export default function MessageView({
           if (frame.event === 'command-result') {
             try {
               const parsed = JSON.parse(frame.data) as { message?: unknown; mode?: unknown; transcriptExpected?: unknown }
+              noteFirstOutput()
               if (typeof parsed.message === 'string' && parsed.message.trim()) {
                 setSessionActionNotice(parsed.message.trim())
               }
@@ -4599,6 +4732,7 @@ export default function MessageView({
             }
             const pendingPermission = extractPendingPermission(parsed)
             if (pendingPermission) {
+              noteFirstOutput()
               setPendingPermissions((prev) => [
                 ...prev.filter((permission) => permission.id !== pendingPermission.id),
                 pendingPermission,
@@ -4612,14 +4746,23 @@ export default function MessageView({
             if (pushedAttachments.length > 0) {
               pushedCopilotAttachmentsRef.current = mergeComposerAttachments(pushedCopilotAttachmentsRef.current, pushedAttachments)
               setAttachments((prev) => mergeComposerAttachments(prev, pushedAttachments))
-              setQueuedSends((prev) => prev.length === 0
-                ? prev
-                : prev.map((queued, index) => index === prev.length - 1
+              setQueuedSends((prev) => {
+                let newestTargetIndex = -1
+                for (let index = prev.length - 1; index >= 0; index -= 1) {
+                  if (prev[index]!.targetKey === composerQueueTargetKey) {
+                    newestTargetIndex = index
+                    break
+                  }
+                }
+                if (newestTargetIndex < 0) return prev
+                return prev.map((queued, index) => index === newestTargetIndex
                   ? { ...queued, attachments: mergeComposerAttachments(queued.attachments, pushedAttachments) }
-                  : queued))
+                  : queued)
+              })
             }
             const toolStart = extractLiveToolStart(parsed)
             if (toolStart) {
+              noteFirstOutput()
               // A tool call is a real side effect — once one starts, this turn
               // must never be silently auto-retried (it could re-run the tool).
               turnProducedOutputRef.current = true
@@ -4696,6 +4839,7 @@ export default function MessageView({
 
             const deltaText = extractStreamingAssistantText(parsed)
             if (deltaText) {
+              noteFirstOutput()
               // Committed assistant output — don't blind-retry past this point.
               turnProducedOutputRef.current = true
               setLiveStatus(null)
@@ -4704,6 +4848,7 @@ export default function MessageView({
 
             const reasoningDelta = extractStreamingReasoningText(parsed)
             if (reasoningDelta) {
+              noteFirstOutput()
               setLiveStatus(null)
               queueLiveReasoningText(reasoningDelta)
             }
@@ -4846,8 +4991,8 @@ export default function MessageView({
       // Restore the failed draft, queued follow-ups, and anything the user was
       // already composing, including every attachment from all three sources.
       // A failed turn must be fully reversible, never merely text-recoverable.
-      const failedQueue = queuedSendsRef.current
-      setQueuedSends([])
+      const failedQueue = selectComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey)
+      setQueuedSends((prev) => clearComposerQueueTarget(prev, composerQueueTargetKey))
       const restored = restoreComposerDraftPayload(
         { text: inputTextRef.current, attachments: [] },
         failedQueue,
@@ -4878,12 +5023,13 @@ export default function MessageView({
       activeTurnRequestIdRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, composerQueueTargetKey, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
   useEffect(() => {
-    if (queuedSends.length === 0) return
+    if (activeQueuedSends.length === 0) return
+    if (!composerQueueStorageReady || runningProbeReadyKey !== composerQueueTargetKey) return
     if (sendInFlightRef.current || awaitingPersistedTurnRef.current) return
     // A turn we reattached to is still running server-side — flushing now would
     // start a second concurrent turn. Wait for the /running poll to clear.
@@ -4891,8 +5037,12 @@ export default function MessageView({
     // Gate on strict idle: flushing while sendState is 'error' would auto-fire
     // a queued send after a failed turn (and clobber the restored draft).
     if (sendState !== 'idle' || awaitingPersistedTurn) return
-    const next = queuedSends[0]
-    setQueuedSends((prev) => prev.slice(1))
+    const next = activeQueuedSends[0]!
+    const remaining = removeComposerQueueItem(queuedSendsRef.current, next.id)
+    // Persist dequeue before starting provider I/O. A tab/process crash can
+    // never replay a prompt the provider may already have accepted.
+    writeComposerQueue(remaining)
+    setQueuedSends(remaining)
     setInputText(next.text)
     inputTextRef.current = next.text
     setAttachments(next.attachments)
@@ -4905,21 +5055,21 @@ export default function MessageView({
       resizeComposer()
       void sendMessage()
     })
-  }, [awaitingPersistedTurn, queuedSends, reattachedRunning, resizeComposer, sendMessage, sendState])
+  }, [activeQueuedSends, awaitingPersistedTurn, composerQueueStorageReady, composerQueueTargetKey, reattachedRunning, resizeComposer, runningProbeReadyKey, sendMessage, sendState])
 
   // Remove a single queued message (× on its chip) without firing it.
-  const removeQueuedSend = useCallback((index: number) => {
-    setQueuedSends((prev) => prev.filter((_, i) => i !== index))
+  const removeQueuedSend = useCallback((id: string) => {
+    setQueuedSends((prev) => removeComposerQueueItem(prev, id))
   }, [])
 
   // Pull a queued message back into the composer to edit it. Its attachments
   // are still in memory so they restore too. The current draft is preserved by
   // prepending the edited text only when the composer is empty; otherwise the
   // queued text replaces the draft (matching ↑ history-recall behaviour).
-  const editQueuedSend = useCallback((index: number) => {
-    const item = queuedSendsRef.current[index]
+  const editQueuedSend = useCallback((id: string) => {
+    const item = queuedSendsRef.current.find((entry) => entry.id === id)
     if (!item) return
-    setQueuedSends((prev) => prev.filter((_, i) => i !== index))
+    setQueuedSends((prev) => removeComposerQueueItem(prev, id))
     setInputText(item.text)
     inputTextRef.current = item.text
     setAttachments(item.attachments ?? [])
@@ -5482,6 +5632,9 @@ export default function MessageView({
   }, [session, sessionActionLoading])
 
   const respondToPermission = useCallback(async (permission: PendingPermission, response: 'once' | 'always' | 'reject') => {
+    if (response === 'once' && permission.elicitation?.mode === 'url' && permission.url) {
+      window.open(permission.url, '_blank', 'noopener,noreferrer')
+    }
     // Bridge permissions are those without a sessionId (they came from the CLI bridge)
     if (!permission.sessionId && !permission.provider) {
       setSessionActionLoading(`permission:${permission.id}`)
@@ -5527,10 +5680,11 @@ export default function MessageView({
   }, [session, sessionActionLoading])
 
   // Submit answers to a structured question prompt. Codex keys answers by its
-  // schema id; Claude falls back to question text. Multi-select is comma-joined.
+  // schema id; Claude falls back to question text. Arrays stay lossless for
+  // Codex/MCP (including custom answers that contain commas).
   const respondToQuestion = useCallback(async (
     permission: PendingPermission,
-    answers: Record<string, string>,
+    answers: PendingQuestionAnswers,
   ) => {
     if (!session || sessionActionLoading) return
     setSessionActionLoading(`permission:${permission.id}`)
@@ -6043,10 +6197,10 @@ export default function MessageView({
     ? (channelBridge.sendError ? 'Bridge error' : 'Bridge · sends to live CLI')
     : interrupting
     ? 'Interrupting…'
-    : queuedSends.length > 0 && (sendState === 'sending' || awaitingPersistedTurn)
-    ? (queuedSends.length === 1
+    : activeQueuedSends.length > 0 && (sendState === 'sending' || awaitingPersistedTurn)
+    ? (activeQueuedSends.length === 1
       ? 'Queued · sends after current turn'
-      : `${queuedSends.length} queued · send in order after current turn`)
+      : `${activeQueuedSends.length} queued · send in order after current turn`)
     : steeredNotice && (sendState === 'sending' || reattachedRunning)
     ? 'Steered · delivered to the running turn'
     : sendState === 'sending'
@@ -6060,7 +6214,7 @@ export default function MessageView({
     ? 'var(--red, #f87171)'
     : canUseChannelBridge && channelBridge.routeComposer
     ? (channelBridge.sendError ? 'var(--red, #f87171)' : `var(${composerConfig.cssAccentVar})`)
-    : queuedSends.length > 0
+    : activeQueuedSends.length > 0
     ? 'var(--amber, #eaaa40)'
     : sendState === 'sending' || awaitingPersistedTurn || reattachedRunning
     ? 'var(--cyan)'
@@ -6070,7 +6224,7 @@ export default function MessageView({
   const liveTurnActivityDetail = interrupting
     ? 'Interrupting turn; saving what the agent produced…'
     : awaitingPersistedTurn
-    ? queuedSends.length > 0
+    ? activeQueuedSends.length > 0
       ? 'Turn complete; syncing transcript. Next message queued.'
       : 'Turn complete; syncing transcript.'
     : liveStatus === 'retrying'
@@ -8668,7 +8822,9 @@ export default function MessageView({
                               opacity: sessionActionLoading === `permission:${permission.id}` ? 0.55 : 1,
                             }}
                           >
-                            {response === 'once' ? 'ALLOW' : response.toUpperCase()}
+                            {response === 'once' && permission.elicitation?.mode === 'url'
+                              ? 'OPEN & CONTINUE'
+                              : response === 'once' ? 'ALLOW' : response.toUpperCase()}
                           </Button>
                         ))}
                       </div>
@@ -8679,9 +8835,14 @@ export default function MessageView({
                       </pre>
                     )}
                     {permission.url && (
-                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', wordBreak: 'break-all' }}>
-                        {`URL: ${permission.url}`}
-                      </div>
+                      <a
+                        href={permission.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--cyan)', wordBreak: 'break-all' }}
+                      >
+                        {permission.url}
+                      </a>
                     )}
                     {permission.paths && permission.paths.length > 0 && (
                       <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: 'var(--text-3)', wordBreak: 'break-all' }}>
@@ -8814,7 +8975,7 @@ export default function MessageView({
                 )
               })}
             </div>
-            {queuedSends.length > 0 && (
+            {activeQueuedSends.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6, alignItems: 'center' }}>
                 <span style={{
                   fontFamily: "'IBM Plex Mono', monospace",
@@ -8824,15 +8985,15 @@ export default function MessageView({
                   color: 'var(--amber, #eaaa40)',
                   opacity: 0.85,
                 }}>
-                  Queued ({queuedSends.length})
+                  Queued ({activeQueuedSends.length})
                 </span>
-                {queuedSends.map((entry, index) => {
+                {activeQueuedSends.map((entry, index) => {
                   const preview = entry.text.replace(/\s+/g, ' ').trim()
                   const short = preview.length > 48 ? `${preview.slice(0, 48)}…` : preview
                   const attachmentSuffix = entry.attachments.length > 0 ? ` +${entry.attachments.length}` : ''
                   return (
                     <span
-                      key={`queued-${index}`}
+                      key={entry.id}
                       style={{
                         display: 'inline-flex',
                         alignItems: 'center',
@@ -8851,7 +9012,7 @@ export default function MessageView({
                       <span style={{ color: 'var(--text-3)', fontSize: 9 }}>{index + 1}.</span>
                       <button
                         type="button"
-                        onClick={() => editQueuedSend(index)}
+                        onClick={() => editQueuedSend(entry.id)}
                         title="Click to edit this queued message"
                         style={{
                           background: 'transparent',
@@ -8871,7 +9032,7 @@ export default function MessageView({
                       </button>
                       <button
                         type="button"
-                        onClick={() => removeQueuedSend(index)}
+                        onClick={() => removeQueuedSend(entry.id)}
                         title="Remove from queue"
                         style={{
                           background: 'transparent',

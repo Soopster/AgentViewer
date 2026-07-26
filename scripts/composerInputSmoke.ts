@@ -2,10 +2,14 @@ import assert from 'node:assert/strict'
 import { getCodexClient } from '../lib/codexClient'
 import { buildCodexComposerInput } from '../lib/codexComposerInput'
 import {
+  clearComposerQueueTarget,
   mergeComposerAttachments,
   planComposerAttachments,
+  rekeyComposerQueueTarget,
+  removeComposerQueueItem,
   resolveLocalComposerAttachmentPath,
   restoreComposerDraftPayload,
+  selectComposerQueueTarget,
 } from '../lib/composerAttachments'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../lib/composerCommands'
 import { piSessionPathCacheSize } from '../lib/piClient'
@@ -39,7 +43,7 @@ const codexQuestion = extractCodexApproval({
         header: 'Scope',
         question: 'Which scope?',
         isOther: true,
-        isSecret: false,
+        isSecret: true,
         options: [{ label: 'Current file', description: 'Only edit the active file.' }],
       }],
     },
@@ -48,6 +52,79 @@ const codexQuestion = extractCodexApproval({
 assert.equal(codexQuestion?.title, 'Which scope?')
 assert.equal(codexQuestion?.questions?.[0]?.id, 'scope')
 assert.equal(codexQuestion?.questions?.[0]?.options[0]?.label, 'Current file')
+assert.equal(codexQuestion?.questions?.[0]?.allowFreeform, true)
+assert.equal(codexQuestion?.questions?.[0]?.secret, true)
+const codexElicitation = extractCodexApproval({
+  type: 'codex_approval',
+  event: {
+    type: 'approval.requested',
+    requestId: 'elicitation-request',
+    method: 'mcpServer/elicitation/request',
+    threadId: 'thread-1',
+    params: {
+      mode: 'form',
+      serverName: 'example-mcp',
+      message: 'Configure the export',
+      requestedSchema: {
+        type: 'object',
+        required: ['format'],
+        properties: {
+          format: { type: 'string', title: 'Format', enum: ['json', 'csv'] },
+          notes: { type: 'string', title: 'Notes' },
+          includeDrafts: { type: 'boolean', title: 'Include drafts' },
+        },
+      },
+    },
+  },
+})
+assert.equal(codexElicitation?.title, 'Configure the export')
+assert.equal(codexElicitation?.elicitation?.mode, 'form')
+assert.deepEqual(codexElicitation?.questions?.map((question) => question.id), ['format', 'notes', 'includeDrafts'])
+assert.deepEqual(codexElicitation?.questions?.[0]?.options.map((option) => option.value), ['json', 'csv'])
+assert.equal(codexElicitation?.questions?.[0]?.required, true)
+assert.equal(codexElicitation?.questions?.[1]?.allowFreeform, true)
+assert.deepEqual(codexElicitation?.questions?.[2]?.options.map((option) => option.value), ['true', 'false'])
+const claudeElicitation = extractPendingPermissions([{
+  type: 'claude_elicitation',
+  event: {
+    type: 'elicitation.requested',
+    data: {
+      requestId: 'claude-elicit-1',
+      sessionId: 'claude-session',
+      serverName: 'example-mcp',
+      message: 'Provide an email',
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        required: ['email'],
+        properties: { email: { type: 'string', title: 'Email', format: 'email' } },
+      },
+    },
+  },
+}], { sessionId: 'fallback', provider: 'claude' })[0]
+assert.equal(claudeElicitation?.id, 'claude-elicit-1')
+assert.equal(claudeElicitation?.elicitation?.serverName, 'example-mcp')
+assert.equal(claudeElicitation?.questions?.[0]?.allowFreeform, true)
+const copilotElicitation = extractPendingPermissions([{
+  type: 'copilot_event',
+  event: {
+    type: 'elicitation.requested',
+    data: {
+      requestId: 'copilot-elicit-1',
+      message: 'Choose a target',
+      mode: 'form',
+      elicitationSource: 'copilot-mcp',
+      requestedSchema: {
+        type: 'object',
+        required: ['target'],
+        properties: { target: { type: 'string', title: 'Target', enum: ['local', 'remote'] } },
+      },
+    },
+  },
+}], { sessionId: 'copilot-session', provider: 'copilot' })[0]
+assert.equal(copilotElicitation?.id, 'copilot-elicit-1')
+assert.equal(copilotElicitation?.elicitation?.serverName, 'copilot-mcp')
+assert.deepEqual(copilotElicitation?.questions?.[0]?.options.map((option) => option.value), ['local', 'remote'])
 const reattachedPermissions = extractPendingPermissions([
   {
     type: 'opencode_event',
@@ -84,6 +161,27 @@ const restoredComposer = restoreComposerDraftPayload(
 )
 assert.equal(restoredComposer.text, 'Failed prompt\n\nQueued follow-up\n\nNewest draft')
 assert.deepEqual(restoredComposer.attachments.map((attachment) => attachment.id), ['failed', 'queued', 'new'])
+const sessionOwnedQueue = [
+  { id: 'a-1', targetKey: 'claude:a', text: 'first' },
+  { id: 'b-1', targetKey: 'codex:b', text: 'other session' },
+  { id: 'a-2', targetKey: 'claude:a', text: 'second' },
+]
+assert.deepEqual(
+  selectComposerQueueTarget(sessionOwnedQueue, 'claude:a').map((entry) => entry.id),
+  ['a-1', 'a-2'],
+)
+assert.deepEqual(
+  clearComposerQueueTarget(sessionOwnedQueue, 'claude:a').map((entry) => entry.id),
+  ['b-1'],
+)
+assert.deepEqual(
+  removeComposerQueueItem(sessionOwnedQueue, 'a-1').map((entry) => entry.id),
+  ['b-1', 'a-2'],
+)
+assert.deepEqual(
+  rekeyComposerQueueTarget(sessionOwnedQueue, 'claude:a', 'claude:real').map((entry) => entry.targetKey),
+  ['claude:real', 'codex:b', 'claude:real'],
+)
 assert.deepEqual(
   mergeComposerAttachments(
     [{ id: 'same', type: 'file', path: 'first.ts' }],
