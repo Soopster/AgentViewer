@@ -36,6 +36,36 @@ if (!frame.includes('COMPOSER')) {
   throw new Error('Full app frame missing the composer dock')
 }
 
+// New agent session: Shift+N opens the folder/provider picker modal (rather
+// than immediately creating a session in the viewed workspace). Assert the
+// modal renders both choosable rows, then Esc restores the reader so the
+// split-chord test below runs from a clean root state.
+act(() => {
+  setup.mockInput.pressKey('N', { shift: true })
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 150))
+})
+const newSessionFrame = captureCharFrame()
+if (!newSessionFrame.includes('New agent session')) {
+  throw new Error(`Shift+N did not open the New agent session modal:\n${newSessionFrame}`)
+}
+if (!newSessionFrame.includes('Folder') || !newSessionFrame.includes('Provider')) {
+  throw new Error(`New agent session modal is missing the folder/provider rows:\n${newSessionFrame}`)
+}
+act(() => {
+  setup.mockInput.pressEscape()
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 100))
+})
+const afterCloseFrame = captureCharFrame()
+if (afterCloseFrame.includes('New agent session')) {
+  throw new Error(`Esc did not close the New agent session modal:\n${afterCloseFrame}`)
+}
+
 // Split transcript panes ride a tmux-style prefix: ⌃B arms the chord (the
 // status bar becomes the chord legend), then `%` runs the split — which must
 // refuse here rather than mount an empty pane, since no second tab is open.
