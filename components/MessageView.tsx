@@ -2843,14 +2843,21 @@ export default function MessageView({
   const queuedSendsRef = useRef<QueuedWebSend[]>([])
   const queuedSendCounterRef = useRef(0)
   const [composerQueueStorageReady, setComposerQueueStorageReady] = useState(false)
-  useEffect(() => { queuedSendsRef.current = queuedSends }, [queuedSends])
-  useEffect(() => {
-    setQueuedSends(readComposerQueue())
-    setComposerQueueStorageReady(true)
+  // Queue mutations are durability-sensitive: update the transient ref and
+  // localStorage in the originating event before yielding back to React. An
+  // effect-only write leaves a small page-close window where the newest queue
+  // state has rendered but is neither in the ref nor on disk yet.
+  const commitQueuedSends = useCallback((next: QueuedWebSend[]) => {
+    queuedSendsRef.current = next
+    writeComposerQueue(next)
+    setQueuedSends(next)
   }, [])
   useEffect(() => {
-    if (composerQueueStorageReady) writeComposerQueue(queuedSends)
-  }, [composerQueueStorageReady, queuedSends])
+    const restored = readComposerQueue()
+    queuedSendsRef.current = restored
+    setQueuedSends(restored)
+    setComposerQueueStorageReady(true)
+  }, [])
   const composerQueueTargetKey = session
     ? `${session.provider ?? 'claude'}:${session.sessionId}`
     : null
@@ -4223,7 +4230,7 @@ export default function MessageView({
     // so they can edit and re-send.
     const interruptQueue = selectComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey)
     if (interruptQueue.length > 0) {
-      setQueuedSends((prev) => clearComposerQueueTarget(prev, composerQueueTargetKey))
+      commitQueuedSends(clearComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey))
       const restored = restoreComposerDraftPayload(
         { text: inputTextRef.current, attachments: [] },
         interruptQueue,
@@ -4266,7 +4273,7 @@ export default function MessageView({
       liveToolInputJsonRef.current.clear()
     }
     textareaRef.current?.focus()
-  }, [clearLiveAssistantText, clearLiveSubagentText, composerQueueTargetKey, optimisticUserText, resizeComposer, session])
+  }, [clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, optimisticUserText, resizeComposer, session])
 
   const backgroundClaudeTasks = useCallback(async () => {
     if (!session || session.provider !== 'claude' || session.isPending || backgroundingTasks) return
@@ -4358,8 +4365,8 @@ export default function MessageView({
       }
       return
     }
-    // Native CLIs (Claude, Codex) accept a follow-up prompt while the current
-    // turn is still streaming — they queue it. Mirror that: if a send fires
+    // Provider CLIs accept follow-up input while the current turn is still
+    // streaming — they steer or queue it. Mirror that: if a send fires
     // while one is in flight, stash the draft and have the post-stream effect
     // flush it once the current turn lands. A transient auto-retry (retryOverride)
     // is never a queue candidate — it only fires after the failed turn settled.
@@ -4374,7 +4381,8 @@ export default function MessageView({
       window.requestAnimationFrame(resizeComposer)
       // Native steering first: deliver the message INTO the running turn
       // (Claude pushes onto the warm query's input stream, Codex turn/steer,
-      // Pi steer(), opencode queues server-side). Attachments can't ride a
+      // Copilot immediate mode, Pi steer(), opencode queues server-side).
+      // Attachments can't ride a
       // steer, and a turn in post-stream reconcile has nothing to steer —
       // those (and delivered:false / errors) fall back to the client queue.
       // Slash commands and `!` shell input never steer: steering would inject
@@ -4412,7 +4420,7 @@ export default function MessageView({
       }
       const targetKey = `${session.provider ?? 'claude'}:${session.sessionId}`
       queuedSendCounterRef.current += 1
-      setQueuedSends((prev) => [...prev, {
+      commitQueuedSends([...queuedSendsRef.current, {
         id: `${targetKey}:${Date.now()}:${queuedSendCounterRef.current}`,
         targetKey,
         text: queueText,
@@ -4746,19 +4754,21 @@ export default function MessageView({
             if (pushedAttachments.length > 0) {
               pushedCopilotAttachmentsRef.current = mergeComposerAttachments(pushedCopilotAttachmentsRef.current, pushedAttachments)
               setAttachments((prev) => mergeComposerAttachments(prev, pushedAttachments))
-              setQueuedSends((prev) => {
+              const nextQueuedSends = (() => {
+                const current = queuedSendsRef.current
                 let newestTargetIndex = -1
-                for (let index = prev.length - 1; index >= 0; index -= 1) {
-                  if (prev[index]!.targetKey === composerQueueTargetKey) {
+                for (let index = current.length - 1; index >= 0; index -= 1) {
+                  if (current[index]!.targetKey === composerQueueTargetKey) {
                     newestTargetIndex = index
                     break
                   }
                 }
-                if (newestTargetIndex < 0) return prev
-                return prev.map((queued, index) => index === newestTargetIndex
+                if (newestTargetIndex < 0) return current
+                return current.map((queued, index) => index === newestTargetIndex
                   ? { ...queued, attachments: mergeComposerAttachments(queued.attachments, pushedAttachments) }
                   : queued)
-              })
+              })()
+              if (nextQueuedSends !== queuedSendsRef.current) commitQueuedSends(nextQueuedSends)
             }
             const toolStart = extractLiveToolStart(parsed)
             if (toolStart) {
@@ -4992,7 +5002,7 @@ export default function MessageView({
       // already composing, including every attachment from all three sources.
       // A failed turn must be fully reversible, never merely text-recoverable.
       const failedQueue = selectComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey)
-      setQueuedSends((prev) => clearComposerQueueTarget(prev, composerQueueTargetKey))
+      commitQueuedSends(clearComposerQueueTarget(queuedSendsRef.current, composerQueueTargetKey))
       const restored = restoreComposerDraftPayload(
         { text: inputTextRef.current, attachments: [] },
         failedQueue,
@@ -5023,7 +5033,7 @@ export default function MessageView({
       activeTurnRequestIdRef.current = null
       sendInFlightRef.current = false
     }
-  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, composerQueueTargetKey, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
+  }, [attachments, canUseChannelBridge, canUseIdeBridge, clearLiveAssistantText, clearLiveSubagentText, commitQueuedSends, composerQueueTargetKey, flushLiveAssistantTextNow, messages, onFork, queueLiveAssistantText, queueLiveReasoningText, refreshSessionModels, resizeComposer, resumeFromMessageId, selectedAgent, selectedCopilotContextTier, selectedCopilotMode, selectedCodexApproval, selectedEffort, selectedModel, selectedPermissionMode, session, taskBudgetTokens])
 
   // Flush queued sends once the active turn finishes. Restores the queued
   // text into the composer so sendMessage picks it up and fires naturally.
@@ -5041,8 +5051,7 @@ export default function MessageView({
     const remaining = removeComposerQueueItem(queuedSendsRef.current, next.id)
     // Persist dequeue before starting provider I/O. A tab/process crash can
     // never replay a prompt the provider may already have accepted.
-    writeComposerQueue(remaining)
-    setQueuedSends(remaining)
+    commitQueuedSends(remaining)
     setInputText(next.text)
     inputTextRef.current = next.text
     setAttachments(next.attachments)
@@ -5055,12 +5064,12 @@ export default function MessageView({
       resizeComposer()
       void sendMessage()
     })
-  }, [activeQueuedSends, awaitingPersistedTurn, composerQueueStorageReady, composerQueueTargetKey, reattachedRunning, resizeComposer, runningProbeReadyKey, sendMessage, sendState])
+  }, [activeQueuedSends, awaitingPersistedTurn, commitQueuedSends, composerQueueStorageReady, composerQueueTargetKey, reattachedRunning, resizeComposer, runningProbeReadyKey, sendMessage, sendState])
 
   // Remove a single queued message (× on its chip) without firing it.
   const removeQueuedSend = useCallback((id: string) => {
-    setQueuedSends((prev) => removeComposerQueueItem(prev, id))
-  }, [])
+    commitQueuedSends(removeComposerQueueItem(queuedSendsRef.current, id))
+  }, [commitQueuedSends])
 
   // Pull a queued message back into the composer to edit it. Its attachments
   // are still in memory so they restore too. The current draft is preserved by
@@ -5069,7 +5078,7 @@ export default function MessageView({
   const editQueuedSend = useCallback((id: string) => {
     const item = queuedSendsRef.current.find((entry) => entry.id === id)
     if (!item) return
-    setQueuedSends((prev) => removeComposerQueueItem(prev, id))
+    commitQueuedSends(removeComposerQueueItem(queuedSendsRef.current, id))
     setInputText(item.text)
     inputTextRef.current = item.text
     setAttachments(item.attachments ?? [])
@@ -5082,7 +5091,7 @@ export default function MessageView({
       }
       resizeComposer()
     })
-  }, [resizeComposer])
+  }, [commitQueuedSends, resizeComposer])
 
   const updateComposerHints = useCallback((text: string, cursor: number) => {
     const mention = detectMentionAtCursor(text, cursor)

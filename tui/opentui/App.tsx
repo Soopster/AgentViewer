@@ -6875,8 +6875,16 @@ export default function OpenTuiApp() {
   const queuedComposerSendsRef = useRef<QueuedComposerSend[]>(queuedComposerSends)
   const queuedComposerSendCounterRef = useRef(0)
   const [runningRegistryReady, setRunningRegistryReady] = useState(false)
-  useEffect(() => { queuedComposerSendsRef.current = queuedComposerSends }, [queuedComposerSends])
-  useEffect(() => { scheduleWriteComposerQueue(queuedComposerSends) }, [queuedComposerSends])
+  // Follow-up queue mutations must be crash-safe before the next render. Keep
+  // the transient ref and atomic queue file in lockstep in the originating
+  // interaction; relying only on effects leaves immediate-exit windows where
+  // the newest enqueue/cancel state can be lost or replayed.
+  const commitQueuedComposerSends = useEffectEvent((next: QueuedComposerSend[]) => {
+    queuedComposerSendsRef.current = next
+    scheduleWriteComposerQueue(next)
+    flushComposerQueueWrites()
+    setQueuedComposerSends(next)
+  })
   const activeComposerTurnRequestIdRef = useRef<string | null>(null)
   // Last message delivered INTO the running turn via native steering — shown
   // in the composer status line while the turn is still streaming.
@@ -10719,7 +10727,7 @@ export default function OpenTuiApp() {
     // (after any text typed since), so they can edit and re-send.
     const interruptQueue = selectComposerQueueTarget(queuedComposerSendsRef.current, targetKey)
     if (interruptQueue.length > 0) {
-      setQueuedComposerSends((prev) => clearComposerQueueTarget(prev, targetKey))
+      commitQueuedComposerSends(clearComposerQueueTarget(queuedComposerSendsRef.current, targetKey))
       const currentDraft = composerTextareaRef.current?.plainText ?? composerDraft
       const restoredPayload = restoreComposerDraftPayload(
         { text: currentDraft, attachments: composerMentionAttachmentsRef.current },
@@ -11697,6 +11705,7 @@ export default function OpenTuiApp() {
       : prepareComposerSubmission(visibleText, composerMentionAttachments, composerPromptParts)
     const trimmed = submission.messageText
     if ((!trimmed && submission.attachments.length === 0) || !composerTargetSession) return
+    const submissionTargetKey = sessionKey(composerTargetSession)
 
     // Global Channel Bridge binding: divert the send to the live `claude` CLI
     // session instead of the active provider. Fire-and-forget — replies and
@@ -11762,8 +11771,9 @@ export default function OpenTuiApp() {
       setComposerHistoryOpen(false)
       setComposerHistoryIndex(0)
       // Native steering first: deliver the message INTO the running turn the
-      // way the provider's own CLI does (Claude Code/Codex/Pi/opencode all
-      // accept typed input mid-turn). Attachments can't ride a steer; and if
+      // way the provider's own CLI does (Claude Code, Codex, Copilot, Pi, and
+      // opencode all accept typed input mid-turn). Attachments can't ride a
+      // steer; and if
       // the turn ends while the request is in flight the backend reports
       // delivered:false — both fall back to the client-side queue, which
       // sends as a fresh turn on idle.
@@ -11804,9 +11814,9 @@ export default function OpenTuiApp() {
         }
       }
       queuedComposerSendCounterRef.current += 1
-      setQueuedComposerSends((prev) => [...prev, {
-        id: `${targetKey}:${Date.now()}:${queuedComposerSendCounterRef.current}`,
-        targetKey,
+      commitQueuedComposerSends([...queuedComposerSendsRef.current, {
+        id: `${submissionTargetKey}:${Date.now()}:${queuedComposerSendCounterRef.current}`,
+        targetKey: submissionTargetKey,
         text: submission.visibleText,
         attachments: sendAttachments,
         promptParts: submission.promptParts,
@@ -12025,7 +12035,7 @@ export default function OpenTuiApp() {
               liveTranscriptBaselineRef.current.set(newKey, baseline)
             }
             if (ownedTurnKeyRef.current === oldKey) ownedTurnKeyRef.current = newKey
-            setQueuedComposerSends((prev) => rekeyComposerQueueTarget(prev, oldKey, newKey))
+            commitQueuedComposerSends(rekeyComposerQueueTarget(queuedComposerSendsRef.current, oldKey, newKey))
             setLiveTranscriptMessages((prev) => prev.map((message) =>
               liveMessageSessionKey(message) === oldKey
                 ? { ...message, sessionId: realId }
@@ -12585,7 +12595,7 @@ export default function OpenTuiApp() {
       // editable snapshot from the failed send, every queued follow-up, and the
       // newest draft typed while the turn ran—attachments and prompt parts too.
       const failedQueue = selectComposerQueueTarget(queuedComposerSendsRef.current, targetKey)
-      setQueuedComposerSends((prev) => clearComposerQueueTarget(prev, targetKey))
+      commitQueuedComposerSends(clearComposerQueueTarget(queuedComposerSendsRef.current, targetKey))
       liveToolIndexesRef.current.clear()
       liveToolInputJsonRef.current.clear()
       const restoredPayload = restoreComposerDraftPayload(
@@ -12681,9 +12691,7 @@ export default function OpenTuiApp() {
     const remaining = removeComposerQueueItem(queuedComposerSendsRef.current, next.id)
     // Persist dequeue before provider I/O so a process crash cannot replay a
     // prompt that may already have reached a tool-capable agent.
-    scheduleWriteComposerQueue(remaining)
-    flushComposerQueueWrites()
-    setQueuedComposerSends(remaining)
+    commitQueuedComposerSends(remaining)
     void sendComposerMessage(next.text, next.attachments, false, next.promptParts)
   }, [activeQueuedComposerSends, composerSendState, composerTargetTurnKnownRunning, reattachedRunning, runningRegistryReady, sendComposerMessage])
 
@@ -12830,7 +12838,7 @@ export default function OpenTuiApp() {
     const queue = selectComposerQueueTarget(queuedComposerSendsRef.current, targetKey)
     if (queue.length === 0) return
     const item = queue[queue.length - 1]!
-    setQueuedComposerSends((prev) => removeComposerQueueItem(prev, item.id))
+    commitQueuedComposerSends(removeComposerQueueItem(queuedComposerSendsRef.current, item.id))
     const currentDraft = (composerTextareaRef.current?.plainText ?? composerDraft).trim()
     const restored = [currentDraft, item.text].filter(Boolean).join('\n\n')
     const restoredAttachments = mergeComposerAttachments(composerMentionAttachmentsRef.current, item.attachments)
@@ -12849,7 +12857,7 @@ export default function OpenTuiApp() {
   const clearQueuedComposerSends = useEffectEvent(() => {
     const targetKey = composerTargetSessionIdentity
     if (!targetKey || !queuedComposerSendsRef.current.some((entry) => entry.targetKey === targetKey)) return
-    setQueuedComposerSends((prev) => clearComposerQueueTarget(prev, targetKey))
+    commitQueuedComposerSends(clearComposerQueueTarget(queuedComposerSendsRef.current, targetKey))
   })
 
   useEffect(() => {

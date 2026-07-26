@@ -39,10 +39,10 @@ const CLAUDE: ProviderComposerConfig = {
   cssAccentVar: '--violet',
   cssAccentRgb: '139,128,240',
   placeholderIdle: 'Try "fix the failing test" — Claude can read, edit, run, and explain code.',
-  placeholderStreaming: 'Draft your next message for Claude…',
+  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
   placeholderNoSession: 'Pick a Claude session to send a message',
   footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · @ files · ! bash · ↑↓ history',
-  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ queue next message',
+  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
   sendVerb: 'Send',
   examples: [
     'Try "find where API errors are logged"',
@@ -67,12 +67,12 @@ const CODEX: ProviderComposerConfig = {
   cssAccentRgb: '45,212,160',
   // Mirror codex-rs PLACEHOLDERS[0] so the empty composer reads the same as the CLI.
   placeholderIdle: 'Explain this codebase',
-  placeholderStreaming: 'Type a follow-up — Tab to queue while the turn runs',
+  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
   placeholderNoSession: 'Pick a Codex thread to send a message',
   // Match the bindings implemented by this composer: `/` for commands, `@` for file paths,
   // and Shift+Enter for newline.
   footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · @ files',
-  footerHintSending: 'Esc view transcript · ⌃C cancel · ⇥ to queue · turn running…',
+  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
   sendVerb: 'Send',
   // Verbatim from codex-rs chatwidget.rs PLACEHOLDERS so rotating examples match what Codex shows.
   examples: [
@@ -102,10 +102,10 @@ const OPENCODE: ProviderComposerConfig = {
   cssAccentVar: '--amber',
   cssAccentRgb: '234,170,64',
   placeholderIdle: 'Ask anything — opencode will plan, edit, and run. `!cmd` runs shell.',
-  placeholderStreaming: 'Draft your next prompt for opencode…',
+  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
   placeholderNoSession: 'Pick an opencode session to send a message',
   footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · ! shell · @ files/agents · ↑↓ history',
-  footerHintSending: 'Esc view transcript · ⌃C cancel · streaming…',
+  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
   sendVerb: 'Send',
   examples: [
     'Try "explore the routing layer"',
@@ -128,10 +128,10 @@ const COPILOT: ProviderComposerConfig = {
   cssAccentVar: '--cyan',
   cssAccentRgb: '56,217,245',
   placeholderIdle: 'How can Copilot help with this repo?',
-  placeholderStreaming: 'Draft your next question for Copilot…',
+  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
   placeholderNoSession: 'Pick a Copilot session to send a message',
   footerHintIdle: '⏎ send · ⇧⏎ newline · / commands · mode picker · ↑↓ history',
-  footerHintSending: 'Esc view transcript · ⌃C cancel · thinking…',
+  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
   sendVerb: 'Ask',
   examples: [
     'Try "what changed in the last release?"',
@@ -154,10 +154,10 @@ const PI: ProviderComposerConfig = {
   cssAccentVar: '--red',
   cssAccentRgb: '244,114,182',
   placeholderIdle: 'What\'s on your mind? — Pi will write and run code with you. `!cmd` runs bash.',
-  placeholderStreaming: 'Draft your next message for Pi…',
+  placeholderStreaming: 'Type a follow-up — Enter steers this turn or queues it safely',
   placeholderNoSession: 'Pick a Pi session to send a message',
   footerHintIdle: '⏎ send · ⇧⏎ newline · ! bash · !! bash (no context) · / commands · ↑↓ history',
-  footerHintSending: 'Esc view transcript · ⌃C cancel · responding…',
+  footerHintSending: 'Esc view transcript · ⌃C cancel · ⏎ steer/queue follow-up',
   sendVerb: 'Send',
   examples: [
     'Try "build a quick prototype for X"',

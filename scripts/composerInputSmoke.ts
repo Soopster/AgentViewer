@@ -12,9 +12,11 @@ import {
   selectComposerQueueTarget,
 } from '../lib/composerAttachments'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../lib/composerCommands'
+import { steerCopilotSession } from '../lib/copilotClient'
 import { piSessionPathCacheSize } from '../lib/piClient'
 import { extractCodexApproval, extractPendingPermissions } from '../lib/permissions'
 import { getProviderCapabilities } from '../lib/provider'
+import { getProviderComposer } from '../lib/providerComposer'
 import {
   clearRunningSession,
   getRunningSessionInfo,
@@ -22,12 +24,49 @@ import {
   setRunningSession,
   steerRunningSession,
 } from '../lib/sessionRuntime'
+import { startTurnWatchdog } from '../lib/sessionBackend'
 import type { AgentProvider, SendAttachment } from '../lib/types'
 
 const providers: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 for (const provider of providers) {
   assert.equal(getProviderCapabilities(provider).respondToPermission, true, `${provider} interactive response capability`)
+  const composer = getProviderComposer(provider)
+  assert.match(composer.placeholderStreaming, /Enter steers this turn or queues it safely/)
+  assert.match(composer.footerHintSending, /⏎ steer\/queue follow-up/)
+  assert.doesNotMatch(composer.placeholderStreaming, /Tab/i, `${provider} must not advertise an unimplemented Tab send binding`)
 }
+const copilotSteerCalls: unknown[] = []
+const copilotSteerTarget = {
+  send: async (options: unknown) => {
+    copilotSteerCalls.push(options)
+    return 'copilot-steer-1'
+  },
+} as unknown as Parameters<typeof steerCopilotSession>[0]
+const copilotSteerId = await steerCopilotSession(copilotSteerTarget, 'Change course now')
+assert.equal(copilotSteerId, 'copilot-steer-1')
+assert.deepEqual(copilotSteerCalls, [{ prompt: 'Change course now', mode: 'immediate' }])
+const watchdogProbeTimes: number[] = []
+await new Promise<void>((resolve, reject) => {
+  const timeout = setTimeout(() => reject(new Error('watchdog cadence smoke timed out')), 500)
+  const cancel = startTurnWatchdog({
+    label: 'smoke',
+    idleTimeoutMs: 15,
+    minimumDelayMs: 1,
+    isClosed: () => false,
+    lastActivityAt: () => 0,
+    probe: async () => {
+      watchdogProbeTimes.push(performance.now())
+      return watchdogProbeTimes.length === 1 ? 'running' : 'idle'
+    },
+    onResolved: () => {
+      clearTimeout(timeout)
+      cancel()
+      resolve()
+    },
+  })
+})
+assert.equal(watchdogProbeTimes.length, 2)
+assert.ok(watchdogProbeTimes[1]! - watchdogProbeTimes[0]! >= 10, 'watchdog must wait a full silence window after a running probe')
 assert.equal(isNativeComposerCommandText('/compact'), true)
 assert.equal(isNativeComposerCommandText('!git status'), true)
 assert.equal(isNativeComposerCommandText('explain /compact'), false)

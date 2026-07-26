@@ -109,7 +109,7 @@ import type {
 type CopilotReasoningEffort = Extract<ReasoningEffortLevel, 'low' | 'medium' | 'high' | 'xhigh'>
 
 import { consumeReadModelsWarmQuery, createSessionControlQuery, openPrompt } from './sdkControlQuery'
-import { acquireCopilotSession, copilotIntegrationDiagnostics, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, setCopilotElicitationHandler, setCopilotPermissionHandler } from './copilotClient'
+import { acquireCopilotSession, copilotIntegrationDiagnostics, copilotPoolSize, copilotSessionConfigOverrides, evictCopilotSession, getCopilotClient, setCopilotElicitationHandler, setCopilotPermissionHandler, steerCopilotSession } from './copilotClient'
 import { timeAsync } from './perfLog'
 import { registerDiagnosticsReporter } from './runtimeDiagnostics'
 import {
@@ -1132,9 +1132,11 @@ type TurnWatchdogVerdict = 'idle' | 'running' | 'unknown'
  * provider says idle, or after several inconclusive probes, does it fire
  * `onResolved`, which the caller uses to synthesize a terminal frame and close.
  */
-function startTurnWatchdog(opts: {
+export function startTurnWatchdog(opts: {
   label: string
   idleTimeoutMs: number
+  /** Test seam; production callers retain the one-second floor. */
+  minimumDelayMs?: number
   isClosed: () => boolean
   lastActivityAt: () => number
   probe: () => Promise<TurnWatchdogVerdict>
@@ -1146,10 +1148,16 @@ function startTurnWatchdog(opts: {
   let unknownStreak = 0
   let timer: ReturnType<typeof setTimeout> | null = null
 
-  const arm = () => {
+  const arm = (fromNow = false) => {
     if (cancelled) return
     const elapsed = Date.now() - lastActivityAt()
-    const wait = Math.max(idleTimeoutMs - elapsed, 1000)
+    // After a probe, wait a complete silence window before probing again.
+    // Reusing the original activity timestamp here caused a confirmed-running
+    // provider (or a transiently unreachable one) to be hammered every second.
+    const minimumDelayMs = opts.minimumDelayMs ?? 1000
+    const wait = fromNow
+      ? Math.max(idleTimeoutMs, minimumDelayMs)
+      : Math.max(idleTimeoutMs - elapsed, minimumDelayMs)
     timer = setTimeout(() => { void tick() }, wait)
     if (typeof timer === 'object' && timer && 'unref' in timer) {
       (timer as { unref: () => void }).unref()
@@ -1178,7 +1186,7 @@ function startTurnWatchdog(opts: {
     }
     if (verdict === 'running') {
       unknownStreak = 0
-      arm()
+      arm(true)
       return
     }
     unknownStreak += 1
@@ -1186,7 +1194,7 @@ function startTurnWatchdog(opts: {
       onResolved(`${label}: no terminal signal and ${unknownStreak} inconclusive probes after silence`)
       return
     }
-    arm()
+    arm(true)
   }
 
   arm()
@@ -1312,7 +1320,6 @@ function copilotPermissionDecision(response: string, feedback?: string): Exclude
 
 type PendingCopilotPermission = {
   resolve: (result: Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }>) => void
-  timer: ReturnType<typeof setTimeout>
   requestPayload: Record<string, unknown>
 }
 
@@ -1325,7 +1332,6 @@ const pendingCopilotPermissions = globalThis.__agentViewerPendingCopilotPermissi
 
 type PendingCopilotElicitation = {
   resolve: (result: CopilotElicitationResult) => void
-  timer: ReturnType<typeof setTimeout>
   requestPayload: Record<string, unknown>
   requestedSchema?: Record<string, unknown>
 }
@@ -1365,36 +1371,27 @@ function createCopilotPermissionBridge(
   sessionId: string,
   enqueue: (chunk: string) => void,
   activeIds: Set<string>,
-  isClientAvailable: () => boolean,
+  canAwaitUser: () => boolean,
 ): (request: CopilotPermissionRequest) => Promise<Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }>> {
   return (request) => {
-    if (!isClientAvailable()) {
+    if (!canAwaitUser()) {
       return Promise.resolve({ kind: 'user-not-available' })
     }
     const requestId = `agent-viewer-${Date.now()}-${Math.random().toString(36).slice(2)}`
     activeIds.add(requestId)
     enqueue(`data: ${copilotPermissionRequestedEvent(sessionId, requestId, request)}\n\n`)
-    if (!isClientAvailable()) {
+    if (!canAwaitUser()) {
       activeIds.delete(requestId)
       return Promise.resolve({ kind: 'user-not-available' })
     }
     return new Promise((resolve) => {
       const key = pendingCopilotPermissionKey(sessionId, requestId)
-      const timer = setTimeout(() => {
-        pendingCopilotPermissions.delete(key)
-        activeIds.delete(requestId)
-        resolve({ kind: 'user-not-available' })
-      }, 5 * 60 * 1000)
-      if (typeof timer === 'object' && timer && 'unref' in timer) {
-        (timer as { unref: () => void }).unref()
-      }
       pendingCopilotPermissions.set(key, {
         resolve: (result) => {
-          clearTimeout(timer)
+          pendingCopilotPermissions.delete(key)
           activeIds.delete(requestId)
           resolve(result)
         },
-        timer,
         requestPayload: copilotPermissionRequestedPayload(sessionId, requestId, request),
       })
     })
@@ -1405,10 +1402,10 @@ function createCopilotElicitationBridge(
   sessionId: string,
   enqueue: (chunk: string) => void,
   activeIds: Set<string>,
-  isClientAvailable: () => boolean,
+  canAwaitUser: () => boolean,
 ): (context: CopilotElicitationContext) => Promise<CopilotElicitationResult> {
   return (context) => {
-    if (!isClientAvailable()) return Promise.resolve({ action: 'cancel' })
+    if (!canAwaitUser()) return Promise.resolve({ action: 'cancel' })
     const requestId = `agent-viewer-elicitation-${Date.now()}-${Math.random().toString(36).slice(2)}`
     const requestPayload = {
       type: 'copilot_event',
@@ -1432,20 +1429,12 @@ function createCopilotElicitationBridge(
     enqueue(`data: ${JSON.stringify(requestPayload)}\n\n`)
     return new Promise((resolve) => {
       const key = pendingCopilotPermissionKey(sessionId, requestId)
-      const timer = setTimeout(() => {
-        pendingCopilotElicitations.delete(key)
-        activeIds.delete(requestId)
-        resolve({ action: 'cancel' })
-      }, 5 * 60 * 1000)
-      if (typeof timer === 'object' && timer && 'unref' in timer) timer.unref()
       pendingCopilotElicitations.set(key, {
         resolve: (result) => {
-          clearTimeout(timer)
           pendingCopilotElicitations.delete(key)
           activeIds.delete(requestId)
           resolve(result)
         },
-        timer,
         requestPayload,
         requestedSchema: context.requestedSchema ? { ...context.requestedSchema } : undefined,
       })
@@ -1459,7 +1448,6 @@ function resolvePendingCopilotPermissions(sessionId: string, ids: Set<string>, r
     const pending = pendingCopilotPermissions.get(key)
     if (!pending) continue
     pendingCopilotPermissions.delete(key)
-    clearTimeout(pending.timer)
     ids.delete(id)
     pending.resolve(result)
   }
@@ -1471,7 +1459,6 @@ function resolvePendingCopilotElicitations(sessionId: string, ids: Set<string>, 
     const pending = pendingCopilotElicitations.get(key)
     if (!pending) continue
     pendingCopilotElicitations.delete(key)
-    clearTimeout(pending.timer)
     ids.delete(id)
     pending.resolve(result)
   }
@@ -1869,7 +1856,6 @@ function piLiveTranscriptSignature(messages: PiAgentMessage[]): string {
 
 type PendingClaudePermission = {
   resolve: (result: PermissionResult) => void
-  timer: ReturnType<typeof setTimeout>
   suggestions?: PermissionUpdate[]
   input?: Record<string, unknown>
   // The exact `data` payload sent in the permission.requested frame, retained so
@@ -1888,7 +1874,6 @@ const pendingClaudePermissions = globalThis.__agentViewerPendingClaudePermission
 
 type PendingClaudeElicitation = {
   resolve: (result: ClaudeElicitationResult) => void
-  timer: ReturnType<typeof setTimeout>
   requestData: Record<string, unknown>
   requestedSchema?: Record<string, unknown>
 }
@@ -1902,8 +1887,8 @@ const pendingClaudeElicitations = globalThis.__agentViewerPendingClaudeElicitati
 
 // Pending Claude prompts (tool permissions + AskUserQuestion) still awaiting a
 // response for this session, as permission.requested `data` payloads. Lets a
-// reconnecting client re-arm in-flight prompts instead of waiting out the 5-min
-// timeout on a turn that's blocked on an answer it can no longer see.
+// reconnecting client re-arm in-flight prompts instead of leaving the turn
+// blocked on an answer it can no longer see.
 function listPendingClaudePrompts(sessionId: string): Record<string, unknown>[] {
   const prefix = `${sessionId}:`
   const prompts: Record<string, unknown>[] = []
@@ -2027,21 +2012,12 @@ function createClaudePermissionBridge(
         cleanup()
         resolve(deny('Permission request was cancelled'))
       }
-      const timer = setTimeout(() => {
-        cleanup()
-        resolve(deny('Permission request timed out'))
-      }, 5 * 60 * 1000)
-      if (typeof timer === 'object' && timer && 'unref' in timer) {
-        (timer as { unref: () => void }).unref()
-      }
       options.signal.addEventListener('abort', onAbort, { once: true })
       pendingClaudePermissions.set(key, {
         suggestions: options.suggestions,
         input,
         requestData,
-        timer,
         resolve: (result) => {
-          clearTimeout(timer)
           cleanup()
           enqueuePermissionEvent('permission.completed', { requestId })
           resolve(result)
@@ -2094,7 +2070,6 @@ function createClaudeElicitationBridge(
         options.signal.removeEventListener('abort', onAbort)
       }
       const finish = (result: ClaudeElicitationResult) => {
-        clearTimeout(timer)
         cleanup()
         enqueue({
           type: 'claude_elicitation',
@@ -2103,12 +2078,9 @@ function createClaudeElicitationBridge(
         resolve(result)
       }
       const onAbort = () => finish({ action: 'cancel' })
-      const timer = setTimeout(() => finish({ action: 'cancel' }), 5 * 60 * 1000)
-      if (typeof timer === 'object' && timer && 'unref' in timer) timer.unref()
       options.signal.addEventListener('abort', onAbort, { once: true })
       pendingClaudeElicitations.set(key, {
         resolve: finish,
-        timer,
         requestData,
         requestedSchema: request.requestedSchema,
       })
@@ -2122,7 +2094,6 @@ function resolvePendingClaudePermissions(sessionId: string, ids: Set<string>, me
     const pending = pendingClaudePermissions.get(key)
     if (!pending) continue
     pendingClaudePermissions.delete(key)
-    clearTimeout(pending.timer)
     ids.delete(id)
     pending.resolve({
       behavior: 'deny',
@@ -2921,7 +2892,6 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       const pending = pendingCopilotPermissions.get(key)
       if (pending) {
         pendingCopilotPermissions.delete(key)
-        clearTimeout(pending.timer)
         pending.resolve(result)
         return { ok: true }
       }
@@ -3751,7 +3721,9 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         if (detachOnClientAbort) {
           clientDetached = true
           downstreamClosed = true
-          resolvePendingClaudePermissions(sessionId, bridgedPermissionIds, 'Client disconnected before permission response')
+          // The turn and its permission resolver remain alive. A replacement
+          // client retrieves the retained request through /running and answers
+          // it by id; navigation must not silently deny provider work.
           return
         }
         abortController.abort()
@@ -4805,7 +4777,10 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         cancelWatchdog = startTurnWatchdog({
           label: 'codex',
           idleTimeoutMs: CODEX_WATCHDOG_IDLE_MS,
-          isClosed: () => cleanedUp || downstreamClosed,
+          // A detached HTTP client does not end the provider turn. Keep the
+          // authoritative status probe alive so a dropped terminal event still
+          // clears the process-local running registry for reattach clients.
+          isClosed: () => cleanedUp || (downstreamClosed && !detachOnClientAbort),
           lastActivityAt: () => lastActivityAt,
           probe: async () => {
             try {
@@ -5424,7 +5399,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
         cancelWatchdog = startTurnWatchdog({
           label: 'opencode',
           idleTimeoutMs: OPENCODE_WATCHDOG_IDLE_MS,
-          isClosed: () => cleanedUp || downstreamClosed,
+          isClosed: () => cleanedUp || (downstreamClosed && !detachOnClientAbort),
           lastActivityAt: () => lastActivityAt,
           probe: async () => {
             try {
@@ -5689,7 +5664,10 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
             sessionId,
             safeEnqueue,
             bridgedPermissionIds,
-            () => !downstreamClosed && !cleanedUp,
+            // Detached turns remain answerable through the process-global
+            // pending map and /running replay. Only a true turn teardown makes
+            // the user unavailable.
+            () => !cleanedUp && (!downstreamClosed || detachOnClientAbort),
           ))
           manualPermissionHandlerInstalled = true
         } else {
@@ -5699,7 +5677,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           sessionId,
           safeEnqueue,
           bridgedElicitationIds,
-          () => !downstreamClosed && !cleanedUp,
+          () => !cleanedUp && (!downstreamClosed || detachOnClientAbort),
         ))
         elicitationHandlerInstalled = true
         unsubscribe = session.on(handleEvent)
@@ -5723,7 +5701,8 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           requestAborted = true
           if (detachOnClientAbort) {
             downstreamClosed = true
-            resolvePendingCopilotPermissions(sessionId, bridgedPermissionIds, { kind: 'user-not-available' })
+            // Keep pending permission and elicitation promises alive. They are
+            // replayed by /running and resolved by the reconnecting surface.
             return
           }
           resolvePendingCopilotPermissions(sessionId, bridgedPermissionIds, { kind: 'user-not-available' })
@@ -5857,6 +5836,16 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         }
         if (turnAgentMode) messageOptions.agentMode = turnAgentMode
         await session.send(messageOptions as CopilotMessageOptions)
+        // The initial send has now been accepted, so follow-up text can safely
+        // use Copilot's immediate delivery mode to interject in this same run.
+        // Registering this only after the first send avoids a rapid second tab
+        // accidentally starting the session while model/mode setup is pending.
+        setRunningSession(sessionId, {
+          provider: 'copilot',
+          requestId: turnRequestId,
+          interrupt: () => session?.abort() ?? Promise.resolve(),
+          steer: (text) => steerCopilotSession(session!, text),
+        })
         const historyCompletion = historyBaselineCount == null
           ? new Promise<never>(() => {})
           : (async () => {

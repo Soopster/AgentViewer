@@ -37,6 +37,8 @@
     "mcp:smoke": "node ./scripts/mcpBridgeSmoke.mjs && node ./scripts/mcpAhpCoordinatorSmoke.mjs && node ./scripts/coordWorkerSmoke.mjs && node ./scripts/coordStateSmoke.mjs",
     "ahp:smoke": "bun run ./scripts/ahpSmoke.ts",
     "composer:smoke": "bun run ./scripts/composerInputSmoke.ts && bun run ./scripts/piExtensionUiSmoke.ts",
+    "composer:benchmark": "bun run ./scripts/composerLiveBenchmark.ts",
+    "composer:benchmark:native": "bun run ./scripts/composerNativeBenchmark.ts",
     "tui:ink": "node --import tsx ./tui/main.tsx",
     "tui:ink:dev": "node --watch --import tsx ./tui/main.tsx",
     "regen-codex-schema": "rm -rf lib/codex-schema && codex app-server generate-ts --experimental --out lib/codex-schema",

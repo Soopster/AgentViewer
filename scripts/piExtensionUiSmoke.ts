@@ -93,8 +93,15 @@ await runViewSessionAction({
 })
 assert.equal(await approved, true)
 
+const timedOut = bridge({
+  method: 'input',
+  title: 'Short-lived prompt',
+  timeout: 5,
+})
+assert.equal(await timedOut, undefined)
+
 assert.equal(activeIds.size, 0)
 assert.equal(getServerMemoryDiagnostics().pendingPiUiRequests, 0)
 assert.ok(frames.some((frame) => frame.includes('question.completed')))
 
-console.log('Pi extension UI select, input, confirm, cancel, and cleanup passed')
+console.log('Pi extension UI select, input, confirm, cancel, explicit timeout, and cleanup passed')

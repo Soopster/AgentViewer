@@ -20,7 +20,7 @@ export type PiUiHandler = (request: PiUiRequest) => Promise<PiUiResult>
 type PendingPiUiRequest = {
   method: PiUiDialogMethod
   resolve: (result: PiUiResult) => void
-  timer: ReturnType<typeof setTimeout>
+  timer?: ReturnType<typeof setTimeout>
   requestPayload: Record<string, unknown>
 }
 
@@ -164,7 +164,7 @@ export function createPiUiBridge(
       const finish = (result: PiUiResult) => {
         if (settled) return
         settled = true
-        clearTimeout(timer)
+        if (timer) clearTimeout(timer)
         request.signal?.removeEventListener('abort', onAbort)
         pendingPiUiRequests.delete(key)
         activeIds.delete(requestId)
@@ -175,8 +175,9 @@ export function createPiUiBridge(
         resolve(result)
       }
       const onAbort = () => finish(defaultPiUiResult(method))
-      const timeout = request.timeout && request.timeout > 0 ? request.timeout : 5 * 60 * 1000
-      const timer = setTimeout(onAbort, timeout)
+      const timer = request.timeout && request.timeout > 0
+        ? setTimeout(onAbort, request.timeout)
+        : undefined
       if (typeof timer === 'object' && timer && 'unref' in timer) timer.unref()
       request.signal?.addEventListener('abort', onAbort, { once: true })
       pendingPiUiRequests.set(key, {

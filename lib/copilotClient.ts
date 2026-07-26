@@ -179,6 +179,18 @@ export function clearCopilotElicitationHandler(sessionId: string): void {
   copilotElicitationHandlers.delete(sessionId)
 }
 
+/**
+ * Inject text into Copilot's current agentic loop. `immediate` is the SDK's
+ * native steering mode; the default `enqueue` would start a separate run after
+ * the current one and duplicate AgentViewer's own durable follow-up queue.
+ */
+export async function steerCopilotSession(
+  session: Pick<CopilotSession, 'send'>,
+  text: string,
+): Promise<string> {
+  return session.send({ prompt: text, mode: 'immediate' })
+}
+
 async function createClient(): Promise<CopilotClient> {
   let client: CopilotClient
   try {
