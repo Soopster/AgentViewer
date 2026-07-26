@@ -46,6 +46,7 @@ import { detectTuiCodeFiletypeFromPath } from '../codeFiletypes'
 import { stripToolCallBlocks, type ThreadedMessage } from '../../lib/threading'
 import { buildTaskRegistry } from '../../lib/taskRegistry'
 import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
+import { mergeComposerAttachments, restoreComposerDraftPayload } from '../../lib/composerAttachments'
 import {
   THEME,
   getProviderAccent,
@@ -153,7 +154,7 @@ import { listProjectFiles } from '../../lib/projectFiles'
 import { runGitCommand } from '../../lib/gitNodeProvider'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '../../lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '../../lib/providerComposer'
-import { extractPendingPermission, extractPermissionReply, type PendingPermission, type PermissionResponse } from '../../lib/permissions'
+import { extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission, type PermissionResponse } from '../../lib/permissions'
 import type { readViewSessionComposerOptions } from '../../lib/sessionBackend'
 import {
   sessionMessageFingerprint,
@@ -6748,6 +6749,10 @@ export default function OpenTuiApp() {
   const [composerMentionDismissedStart, setComposerMentionDismissedStart] = useState<number | null>(null)
   const [composerMentionAttachments, setComposerMentionAttachments] = useState<SendAttachment[]>([])
   const [composerPromptParts, setComposerPromptParts] = useState<ComposerPromptPart[]>([])
+  const composerMentionAttachmentsRef = useRef<SendAttachment[]>([])
+  const composerPromptPartsRef = useRef<ComposerPromptPart[]>([])
+  useEffect(() => { composerMentionAttachmentsRef.current = composerMentionAttachments }, [composerMentionAttachments])
+  useEffect(() => { composerPromptPartsRef.current = composerPromptParts }, [composerPromptParts])
   const [composerStash, setComposerStash] = useState<ComposerDraftSnapshot[]>([])
   const [composerStashOpen, setComposerStashOpen] = useState(false)
   const [composerStashIndex, setComposerStashIndex] = useState(0)
@@ -6801,8 +6806,8 @@ export default function OpenTuiApp() {
   const [liveTranscriptMessages, setLiveTranscriptMessages] = useState<ThreadedMessage[]>([])
   // Queued prompts waiting for the active turn to finish (CLI-style FIFO —
   // a single slot here used to silently overwrite the first queued message).
-  const [queuedComposerSends, setQueuedComposerSends] = useState<Array<{ text: string; attachments: SendAttachment[] }>>([])
-  const queuedComposerSendsRef = useRef<Array<{ text: string; attachments: SendAttachment[] }>>([])
+  const [queuedComposerSends, setQueuedComposerSends] = useState<Array<{ text: string; attachments: SendAttachment[]; promptParts: ComposerPromptPart[] }>>([])
+  const queuedComposerSendsRef = useRef<Array<{ text: string; attachments: SendAttachment[]; promptParts: ComposerPromptPart[] }>>([])
   useEffect(() => { queuedComposerSendsRef.current = queuedComposerSends }, [queuedComposerSends])
   const activeComposerTurnRequestIdRef = useRef<string | null>(null)
   // Last message delivered INTO the running turn via native steering — shown
@@ -10635,13 +10640,26 @@ export default function OpenTuiApp() {
     // The user interrupted to change course — auto-firing queued follow-ups
     // would be a surprise-send. Pop their text back into the composer instead
     // (after any text typed since), so they can edit and re-send.
-    const interruptQueuedTexts = queuedComposerSendsRef.current.map((entry) => entry.text).filter(Boolean)
-    if (interruptQueuedTexts.length > 0) {
+    const interruptQueue = queuedComposerSendsRef.current
+    if (interruptQueue.length > 0) {
       setQueuedComposerSends([])
       const currentDraft = composerTextareaRef.current?.plainText ?? composerDraft
-      const restored = [currentDraft.trim(), ...interruptQueuedTexts].filter(Boolean).join('\n\n')
+      const restoredPayload = restoreComposerDraftPayload(
+        { text: currentDraft, attachments: composerMentionAttachmentsRef.current },
+        interruptQueue,
+      )
+      const restored = restoredPayload.text
+      const restoredParts = [
+        ...interruptQueue.flatMap((entry) => entry.promptParts),
+        ...composerPromptPartsRef.current,
+      ]
       composerTextareaRef.current?.setText(restored)
       setComposerDraft(restored)
+      composerMentionAttachmentsRef.current = restoredPayload.attachments
+      composerPromptPartsRef.current = restoredParts
+      setComposerMentionAttachments(restoredPayload.attachments)
+      setComposerPromptParts(restoredParts)
+      restoreComposerPromptPartExtmarks(restoredParts, restored)
     }
     if (reconcileInterrupt) {
       // Keep committed partial cards (liveTranscriptMessages) + baseline for the
@@ -11567,14 +11585,19 @@ export default function OpenTuiApp() {
     setComposerLiveReasoning(pendingLiveReasoningRef.current)
   }, [])
 
-  const sendComposerMessage = useCallback(async (draftOverride?: string, attachmentsOverride?: SendAttachment[], isRetry?: boolean) => {
+  const sendComposerMessage = useCallback(async (
+    draftOverride?: string,
+    attachmentsOverride?: SendAttachment[],
+    isRetry?: boolean,
+    promptPartsOverride?: ComposerPromptPart[],
+  ) => {
     const visibleText = draftOverride ?? composerDraft
     const submission = attachmentsOverride
       ? {
           visibleText,
           messageText: visibleText.trim(),
           attachments: attachmentsOverride,
-          promptParts: [],
+          promptParts: promptPartsOverride ?? [],
         }
       : prepareComposerSubmission(visibleText, composerMentionAttachments, composerPromptParts)
     const trimmed = submission.messageText
@@ -11685,12 +11708,35 @@ export default function OpenTuiApp() {
           // Steering is best-effort; the queue below is the reliable path.
         }
       }
-      setQueuedComposerSends((prev) => [...prev, { text: trimmed, attachments: sendAttachments }])
+      setQueuedComposerSends((prev) => [...prev, {
+        text: submission.visibleText,
+        attachments: sendAttachments,
+        promptParts: submission.promptParts,
+      }])
       return
     }
 
     if (!isRetry) composerRetryCountRef.current = 0
     composerTurnProducedOutputRef.current = false
+
+    // Atomically consume the submitted snapshot before starting I/O. The user
+    // can immediately compose a distinct follow-up while the provider works;
+    // a second Enter can never accidentally queue the just-submitted prompt.
+    if (!isRetry) {
+      composerTextareaRef.current?.setText('')
+      composerTextareaRef.current?.extmarks.clear()
+      setComposerDraft('')
+      if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, '')
+      setComposerMention(null)
+      setComposerMentionResults([])
+      setComposerMentionDismissedStart(null)
+      composerMentionAttachmentsRef.current = []
+      composerPromptPartsRef.current = []
+      setComposerMentionAttachments([])
+      setComposerPromptParts([])
+      setComposerSlashIndex(0)
+      setComposerSlashDismissed(false)
+    }
 
     const targetSession = composerTargetSession
     const controller = new AbortController()
@@ -12268,17 +12314,6 @@ export default function OpenTuiApp() {
       setDraftBeforeHistory({ text: '', attachments: [], promptParts: [] })
       setComposerHistoryOpen(false)
       setComposerHistoryIndex(0)
-      composerTextareaRef.current?.setText('')
-      composerTextareaRef.current?.extmarks.clear()
-      setComposerDraft('')
-      if (composerDraftStorageKeyRef.current) scheduleWriteComposerDraft(composerDraftStorageKeyRef.current, '')
-      setComposerMention(null)
-      setComposerMentionResults([])
-      setComposerMentionDismissedStart(null)
-      setComposerMentionAttachments([])
-      setComposerPromptParts([])
-      setComposerSlashIndex(0)
-      setComposerSlashDismissed(false)
       setComposerSendState('idle')
       setInterruptPressActive(false)
       if (interruptPressTimeoutRef.current) {
@@ -12382,7 +12417,7 @@ export default function OpenTuiApp() {
         if (composerRetryTimerRef.current) clearTimeout(composerRetryTimerRef.current)
         composerRetryTimerRef.current = setTimeout(() => {
           composerRetryTimerRef.current = null
-          void sendComposerMessage(retryDraft, retryAttachments, true)
+          void sendComposerMessage(retryDraft, retryAttachments, true, submission.promptParts)
         }, transientRetryBackoffMs(attempt))
         return
       }
@@ -12412,25 +12447,41 @@ export default function OpenTuiApp() {
         showNotice('info', 'Send stream lost — reattached to the running turn', 3500)
         return
       }
-      const failedDraft = draftOverride ?? composerDraft
+      const failedDraft = submission.visibleText
       setComposerSendState('error')
       setComposerError(err instanceof Error ? err.message : 'Failed to send message')
       setComposerLiveText('')
       setLiveStatus(null)
       setLiveToolActivities([])
       setAwaitingPersistedTurn(false)
-      // Don't auto-fire queued follow-ups after a failed turn (surprise-send) —
-      // but never discard them either: restore their text into the composer
-      // after the failed draft so nothing the user typed is lost. (Attachments
-      // on queued sends can't be reconstructed into mention state; their text
-      // still restores.)
-      const queuedTexts = queuedComposerSendsRef.current.map((entry) => entry.text).filter(Boolean)
+      // Don't auto-fire queued follow-ups after a failed turn. Rebuild one
+      // editable snapshot from the failed send, every queued follow-up, and the
+      // newest draft typed while the turn ran—attachments and prompt parts too.
+      const failedQueue = queuedComposerSendsRef.current
       setQueuedComposerSends([])
       liveToolIndexesRef.current.clear()
       liveToolInputJsonRef.current.clear()
-      const restoredDraft = [failedDraft, ...queuedTexts].filter(Boolean).join('\n\n')
+      const restoredPayload = restoreComposerDraftPayload(
+        {
+          text: composerTextareaRef.current?.plainText ?? '',
+          attachments: composerMentionAttachmentsRef.current,
+        },
+        failedQueue,
+        { text: failedDraft, attachments: sendAttachments },
+      )
+      const restoredParts = [
+        ...submission.promptParts,
+        ...failedQueue.flatMap((entry) => entry.promptParts),
+        ...composerPromptPartsRef.current,
+      ]
+      const restoredDraft = restoredPayload.text
       composerTextareaRef.current?.setText(restoredDraft)
       setComposerDraft(restoredDraft)
+      composerMentionAttachmentsRef.current = restoredPayload.attachments
+      composerPromptPartsRef.current = restoredParts
+      setComposerMentionAttachments(restoredPayload.attachments)
+      setComposerPromptParts(restoredParts)
+      restoreComposerPromptPartExtmarks(restoredParts, restoredDraft)
     } finally {
       void reader?.cancel()
       composerAbortRef.current = null
@@ -12500,10 +12551,7 @@ export default function OpenTuiApp() {
     if (reattachedRunning) return
     const next = queuedComposerSends[0]
     setQueuedComposerSends((prev) => prev.slice(1))
-    composerTextareaRef.current?.setText(next.text)
-    setComposerDraft(next.text)
-    setComposerMentionAttachments(next.attachments)
-    void sendComposerMessage(next.text, next.attachments)
+    void sendComposerMessage(next.text, next.attachments, false, next.promptParts)
   }, [composerSendState, queuedComposerSends, reattachedRunning, sendComposerMessage])
 
   // Reattach to turns this composer doesn't own a stream for. In-process the
@@ -12527,24 +12575,29 @@ export default function OpenTuiApp() {
     setReattachedRunning((prev) => (prev === reattached ? prev : reattached))
 
     if (!selectedKey || selectedKey === ownedKey) return
-    if (selectedEntry?.provider === 'claude') {
-      // While idle for this session, the registry is the authoritative set
-      // of its pending Claude prompts — reconcile (add new, drop answered).
-      const prompts = selectedEntry.pendingPrompts
-        .map((data) => extractPendingPermission({ type: 'claude_permission', event: { type: 'permission.requested', data } }))
-        .filter((p): p is PendingPermission => p !== null)
+    if (selectedEntry) {
+      // While idle for this session, the registry is authoritative for every
+      // provider's still-answerable approvals/questions, not only Claude's.
+      const permissionPayloads = selectedEntry.pendingPermissions.length > 0
+        ? selectedEntry.pendingPermissions
+        : selectedEntry.pendingPrompts.map((data) => ({
+            type: 'claude_permission',
+            event: { type: 'permission.requested', data },
+          }))
+      const prompts = extractPendingPermissions(permissionPayloads, selectedEntry)
       setPendingPermissions((prev) => {
-        const others = prev.filter((p) => !(p.provider === 'claude' && p.sessionId === selectedEntry.sessionId))
+        const others = prev.filter((p) => !(p.provider === selectedEntry.provider && p.sessionId === selectedEntry.sessionId))
         const next = [...others, ...prompts]
         return next.map((p) => p.id).join('|') === prev.map((p) => p.id).join('|') ? prev : next
       })
     } else if (!selectedEntry) {
-      // No turn running for the selected session — drop any reattached
-      // Claude prompts left behind by a turn that ended unanswered.
+      // No turn running for the selected session — drop any reattached prompt
+      // left behind by a turn that ended or timed out unanswered.
       const selectedSessionForKey = sessionsByKeyRef.current.get(selectedKey)
       if (selectedSessionForKey) {
         setPendingPermissions((prev) => {
-          const next = prev.filter((p) => !(p.provider === 'claude' && p.sessionId === selectedSessionForKey.sessionId))
+          const selectedProvider = selectedSessionForKey.provider ?? 'claude'
+          const next = prev.filter((p) => !(p.provider === selectedProvider && p.sessionId === selectedSessionForKey.sessionId))
           return next.length === prev.length ? prev : next
         })
       }
@@ -12599,10 +12652,13 @@ export default function OpenTuiApp() {
       const background: PendingPermission[] = []
       for (const [key, entry] of runningByKey) {
         if (key === ownedKey || key === selectedKey) continue
-        for (const data of entry.pendingPrompts) {
-          const prompt = extractPendingPermission({ type: 'claude_permission', event: { type: 'permission.requested', data } })
-          if (prompt) background.push(prompt)
-        }
+        const permissionPayloads = entry.pendingPermissions.length > 0
+          ? entry.pendingPermissions
+          : entry.pendingPrompts.map((data) => ({
+              type: 'claude_permission',
+              event: { type: 'permission.requested', data },
+            }))
+        background.push(...extractPendingPermissions(permissionPayloads, entry))
       }
       setBackgroundPrompts((prev) => {
         const nextIds = background.map((p) => p.id).join('|')
@@ -12642,9 +12698,15 @@ export default function OpenTuiApp() {
     setQueuedComposerSends((prev) => prev.slice(0, -1))
     const currentDraft = (composerTextareaRef.current?.plainText ?? composerDraft).trim()
     const restored = [currentDraft, item.text].filter(Boolean).join('\n\n')
+    const restoredAttachments = mergeComposerAttachments(composerMentionAttachmentsRef.current, item.attachments)
+    const restoredParts = [...item.promptParts, ...composerPromptPartsRef.current]
     composerTextareaRef.current?.setText(restored)
     setComposerDraft(restored)
-    if (item.attachments.length > 0) setComposerMentionAttachments(item.attachments)
+    composerMentionAttachmentsRef.current = restoredAttachments
+    composerPromptPartsRef.current = restoredParts
+    setComposerMentionAttachments(restoredAttachments)
+    setComposerPromptParts(restoredParts)
+    restoreComposerPromptPartExtmarks(restoredParts, restored)
     setComposerActive(true)
   })
 

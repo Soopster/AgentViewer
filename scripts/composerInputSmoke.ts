@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict'
 import { getCodexClient } from '../lib/codexClient'
 import { buildCodexComposerInput } from '../lib/codexComposerInput'
-import { planComposerAttachments, resolveLocalComposerAttachmentPath } from '../lib/composerAttachments'
+import {
+  mergeComposerAttachments,
+  planComposerAttachments,
+  resolveLocalComposerAttachmentPath,
+  restoreComposerDraftPayload,
+} from '../lib/composerAttachments'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../lib/composerCommands'
 import { piSessionPathCacheSize } from '../lib/piClient'
-import { extractCodexApproval } from '../lib/permissions'
+import { extractCodexApproval, extractPendingPermissions } from '../lib/permissions'
 import {
   clearRunningSession,
   getRunningSessionInfo,
@@ -43,8 +48,52 @@ const codexQuestion = extractCodexApproval({
 assert.equal(codexQuestion?.title, 'Which scope?')
 assert.equal(codexQuestion?.questions?.[0]?.id, 'scope')
 assert.equal(codexQuestion?.questions?.[0]?.options[0]?.label, 'Current file')
+const reattachedPermissions = extractPendingPermissions([
+  {
+    type: 'opencode_event',
+    event: { type: 'permission.updated', properties: { id: 'oc-1', type: 'bash', title: 'Run tests' } },
+  },
+  {
+    type: 'copilot_event',
+    event: {
+      type: 'permission.requested',
+      data: { requestId: 'cp-1', permissionRequest: { kind: 'url', url: 'https://example.test' } },
+    },
+  },
+], { sessionId: 'reattached-session', provider: 'opencode' })
+assert.deepEqual(reattachedPermissions.map((permission) => permission.id), ['oc-1', 'cp-1'])
+assert.deepEqual(reattachedPermissions.map((permission) => permission.sessionId), ['reattached-session', 'reattached-session'])
+assert.deepEqual(reattachedPermissions.map((permission) => permission.provider), ['opencode', 'copilot'])
 assert.equal(resolveLocalComposerAttachmentPath('src/index.ts', '/workspace/project'), '/workspace/project/src/index.ts')
 assert.equal(resolveLocalComposerAttachmentPath('/absolute/index.ts', '/workspace/project'), '/absolute/index.ts')
+const restoredComposer = restoreComposerDraftPayload(
+  {
+    text: 'Newest draft',
+    attachments: [{ id: 'new', type: 'file', path: 'new.ts' }],
+  },
+  [
+    {
+      text: 'Queued follow-up',
+      attachments: [{ id: 'queued', type: 'image', path: '/tmp/queued.png' }],
+    },
+  ],
+  {
+    text: 'Failed prompt',
+    attachments: [{ id: 'failed', type: 'mention', path: 'failed.ts' }],
+  },
+)
+assert.equal(restoredComposer.text, 'Failed prompt\n\nQueued follow-up\n\nNewest draft')
+assert.deepEqual(restoredComposer.attachments.map((attachment) => attachment.id), ['failed', 'queued', 'new'])
+assert.deepEqual(
+  mergeComposerAttachments(
+    [{ id: 'same', type: 'file', path: 'first.ts' }],
+    [
+      { id: 'same', type: 'file', path: 'duplicate.ts' },
+      { id: 'second', type: 'file', path: 'second.ts' },
+    ],
+  ).map((attachment) => attachment.path),
+  ['first.ts', 'second.ts'],
+)
 const attachmentMatrix: SendAttachment[] = [
   { id: 'file', type: 'file', path: 'lib/types.ts', displayName: 'types.ts' },
   { id: 'directory', type: 'directory', path: 'lib', displayName: 'lib' },

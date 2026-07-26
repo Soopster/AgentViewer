@@ -31,7 +31,7 @@ import {
 import { normalizeCodexStreamThreadedMessage } from '@/lib/codexMapper'
 import { getSlashCommandSuggestions, filterSlashCommands, normalizeSlashCommandSuggestions, type SlashCommandSuggestion } from '@/lib/slashCommands'
 import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer'
-import { extractCopilotPushedAttachments, extractPendingPermission, extractPermissionReply, type PendingPermission } from '@/lib/permissions'
+import { extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '@/lib/claudeCommandLifecycle'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '@/lib/transientError'
@@ -56,6 +56,7 @@ import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSe
 import StreamHistoryRail, { type StreamHistoryItem } from './StreamHistoryRail'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '@/lib/composerCommands'
+import { mergeComposerAttachments, restoreComposerDraftPayload } from '@/lib/composerAttachments'
 import CodeThemeToggle from './CodeThemeToggle'
 import RenderFontToggle from './RenderFontToggle'
 import TabBar from './TabBar'
@@ -453,12 +454,6 @@ function permissionDenialReason(permission: PendingPermission): string {
     ? permission.detail
     : permission.title
   return `User rejected ${target} in Agent Viewer.`
-}
-
-function mergeAttachmentsById(existing: SendAttachment[], incoming: SendAttachment[]): SendAttachment[] {
-  const ids = new Set(existing.map((attachment) => attachment.id).filter(Boolean))
-  const next = incoming.filter((attachment) => !attachment.id || !ids.has(attachment.id))
-  return next.length > 0 ? [...existing, ...next].slice(-12) : existing
 }
 
 function composerDraftStorageKey(session: Session | null): string | null {
@@ -4011,23 +4006,31 @@ export default function MessageView({
         const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/running`, { cache: 'no-store' })
         if (!cancelled && res.ok) {
           const info = (await res.json().catch(() => null)) as
-            | { running?: boolean; pendingPrompts?: Record<string, unknown>[] }
+            | {
+                running?: boolean
+                pendingPrompts?: Record<string, unknown>[]
+                pendingPermissions?: Record<string, unknown>[]
+              }
             | null
           if (cancelled) return
           const running = info?.running === true
           setReattachedRunning((prev) => (prev === running ? prev : running))
-          // Re-surface any tool-permission / AskUserQuestion / plan prompt the
-          // turn is blocked on (the original stream that delivered it is gone
-          // after a reload/navigation). Answering still resolves it server-side
-          // by id. This poll only runs while idle, so the server's list is the
-          // authoritative set of this session's pending Claude prompts —
-          // reconcile (add new, drop ones answered elsewhere / timed out).
-          const prompts = Array.isArray(info?.pendingPrompts) ? info!.pendingPrompts! : []
-          const reattached = prompts
-            .map((data) => extractPendingPermission({ type: 'claude_permission', event: { type: 'permission.requested', data } }))
-            .filter((p): p is PendingPermission => p !== null)
+          // Re-surface any provider-native approval/question the turn is
+          // blocked on. The original SSE may be gone after reload/navigation,
+          // but the process-local resolver remains answerable by id.
+          const permissionPayloads = Array.isArray(info?.pendingPermissions)
+            ? info.pendingPermissions
+            : (Array.isArray(info?.pendingPrompts) ? info.pendingPrompts : []).map((data) => ({
+                type: 'claude_permission',
+                event: { type: 'permission.requested', data },
+              }))
+          const reattached = extractPendingPermissions(permissionPayloads, {
+            sessionId,
+            provider: session.provider ?? 'claude',
+          })
           setPendingPermissions((prev) => {
-            const others = prev.filter((p) => !(p.provider === 'claude' && p.sessionId === sessionId))
+            const sessionProvider = session.provider ?? 'claude'
+            const others = prev.filter((p) => !(p.provider === sessionProvider && p.sessionId === sessionId))
             const nextIds = [...others, ...reattached].map((p) => p.id).join('|')
             const prevIds = prev.map((p) => p.id).join('|')
             return nextIds === prevIds ? prev : [...others, ...reattached]
@@ -4108,13 +4111,20 @@ export default function MessageView({
     // The user interrupted to change course — auto-firing queued follow-ups
     // would be a surprise-send. Pop their text back into the composer instead
     // so they can edit and re-send.
-    const interruptQueuedTexts = queuedSendsRef.current.map((entry) => entry.text).filter(Boolean)
-    if (interruptQueuedTexts.length > 0) {
+    const interruptQueue = queuedSendsRef.current
+    if (interruptQueue.length > 0) {
       setQueuedSends([])
-      const restored = [inputTextRef.current.trim(), ...interruptQueuedTexts].filter(Boolean).join('\n\n')
+      const restored = restoreComposerDraftPayload(
+        { text: inputTextRef.current, attachments: [] },
+        interruptQueue,
+      ).text
       inputTextRef.current = restored
       if (textareaRef.current) textareaRef.current.value = restored
       setInputText(restored)
+      setAttachments((current) => restoreComposerDraftPayload(
+        { text: '', attachments: current },
+        interruptQueue,
+      ).attachments)
       window.requestAnimationFrame(resizeComposer)
     }
     if (pendingMessageBaselineRef.current) {
@@ -4245,8 +4255,8 @@ export default function MessageView({
     // is never a queue candidate — it only fires after the failed turn settled.
     if (!retryOverride && (sendInFlightRef.current || awaitingPersistedTurnRef.current || reattachedRunningRef.current)) {
       const queueText = (textareaRef.current?.value ?? inputTextRef.current).trim()
-      if (!queueText) return
       const queueAttachments = attachments
+      if (!queueText && queueAttachments.length === 0) return
       setInputText('')
       inputTextRef.current = ''
       textareaRef.current?.value !== undefined && (textareaRef.current!.value = '')
@@ -4295,7 +4305,8 @@ export default function MessageView({
     }
 
     const text = retryOverride ? retryOverride.text : (textareaRef.current?.value ?? inputTextRef.current).trim()
-    if (!text) return
+    const sendAttachments = retryOverride ? retryOverride.attachments : attachments
+    if (!text && sendAttachments.length === 0) return
 
     // Reset the retry counter at the start of a fresh (non-retry) send.
     if (!retryOverride) transientRetryCountRef.current = 0
@@ -4307,15 +4318,21 @@ export default function MessageView({
     reattachedRunningRef.current = false
     setReattachedRunning(false)
     pushedCopilotAttachmentsRef.current = []
-    const sendAttachments = retryOverride ? retryOverride.attachments : attachments
+    // A send consumes its attachment chips immediately, just like its text.
+    // This lets the user compose the next prompt while the turn runs without
+    // accidentally re-queuing the prior turn's files. Retries keep the user's
+    // newer draft attachments untouched and reuse the captured payload.
+    if (!retryOverride) setAttachments([])
     const effort = selectedEffort === 'auto' ? undefined : selectedEffort
-    setSentHistory((prev) => {
-      if (prev.length > 0 && prev[prev.length - 1] === text) return prev
-      const next = [...prev, text]
-      const capped = next.length > SENT_HISTORY_MAX ? next.slice(next.length - SENT_HISTORY_MAX) : next
-      writePersistedSentHistory(capped)
-      return capped
-    })
+    if (text) {
+      setSentHistory((prev) => {
+        if (prev.length > 0 && prev[prev.length - 1] === text) return prev
+        const next = [...prev, text]
+        const capped = next.length > SENT_HISTORY_MAX ? next.slice(next.length - SENT_HISTORY_MAX) : next
+        writePersistedSentHistory(capped)
+        return capped
+      })
+    }
     setHistoryIndex(-1)
     draftBeforeHistoryRef.current = { text: '', cursorPos: 0 }
     setInputText('')
@@ -4593,12 +4610,12 @@ export default function MessageView({
             }
             const pushedAttachments = extractCopilotPushedAttachments(parsed)
             if (pushedAttachments.length > 0) {
-              pushedCopilotAttachmentsRef.current = mergeAttachmentsById(pushedCopilotAttachmentsRef.current, pushedAttachments)
-              setAttachments((prev) => mergeAttachmentsById(prev, pushedAttachments))
+              pushedCopilotAttachmentsRef.current = mergeComposerAttachments(pushedCopilotAttachmentsRef.current, pushedAttachments)
+              setAttachments((prev) => mergeComposerAttachments(prev, pushedAttachments))
               setQueuedSends((prev) => prev.length === 0
                 ? prev
                 : prev.map((queued, index) => index === prev.length - 1
-                  ? { ...queued, attachments: mergeAttachmentsById(queued.attachments, pushedAttachments) }
+                  ? { ...queued, attachments: mergeComposerAttachments(queued.attachments, pushedAttachments) }
                   : queued))
             }
             const toolStart = extractLiveToolStart(parsed)
@@ -4773,7 +4790,10 @@ export default function MessageView({
       setLiveStatus(null)
       const pushedAttachments = pushedCopilotAttachmentsRef.current
       pushedCopilotAttachmentsRef.current = []
-      setAttachments(pushedAttachments)
+      // Copilot may push fresh context attachments during the turn. Merge them
+      // into whatever the user attached to their next draft while this send was
+      // running; never overwrite that newer draft state on completion.
+      setAttachments((current) => mergeComposerAttachments(current, pushedAttachments))
       // Pick up any model/effort the user invoked via a slash command (e.g.
       // `/model claude-sonnet-4-6`) so the composer chip mirrors the SDK.
       refreshSessionModels({ preserveSelection: true })
@@ -4823,18 +4843,24 @@ export default function MessageView({
       setSendError(errorMessage)
       setLiveStatus(null)
       setFailedSend({ text, attachments: sendAttachments })
-      // Restore the failed draft AND any queued follow-ups into the composer —
-      // auto-firing the queue after a failed turn is a surprise-send, but
-      // discarding it loses typed text. (Queued attachments can't be rebuilt
-      // into composer state; their text still restores.)
-      const queuedTexts = queuedSendsRef.current.map((entry) => entry.text).filter(Boolean)
+      // Restore the failed draft, queued follow-ups, and anything the user was
+      // already composing, including every attachment from all three sources.
+      // A failed turn must be fully reversible, never merely text-recoverable.
+      const failedQueue = queuedSendsRef.current
       setQueuedSends([])
-      const currentText = inputTextRef.current
-      const base = currentText.trim() ? currentText : text
-      const restored = [base, ...queuedTexts].filter(Boolean).join('\n\n')
+      const restored = restoreComposerDraftPayload(
+        { text: inputTextRef.current, attachments: [] },
+        failedQueue,
+        { text, attachments: sendAttachments },
+      ).text
       inputTextRef.current = restored
       if (textareaRef.current) textareaRef.current.value = restored
       setInputText(restored)
+      setAttachments((current) => restoreComposerDraftPayload(
+        { text: '', attachments: current },
+        failedQueue,
+        { text: '', attachments: sendAttachments },
+      ).attachments)
       setOptimisticUserText(null)
       setSteeredUserTexts([])
       clearLiveAssistantText()
@@ -5992,7 +6018,7 @@ export default function MessageView({
   // A turn is live (whether we own its stream or reattached to it) — drives the
   // stop button and the "busy" composer presentation.
   const turnRunning = sendBusy || reattachedRunning
-  const canSubmitMessage = Boolean(session && inputText.trim())
+  const canSubmitMessage = Boolean(session && (inputText.trim() || attachments.length > 0))
   const composerConfig = useMemo(() => getProviderComposer(session?.provider), [session?.provider])
   const composerExampleSeed = useMemo(() => {
     const source = session?.sessionId ?? session?.provider ?? ''

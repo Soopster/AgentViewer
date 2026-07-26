@@ -154,7 +154,7 @@ import {
 } from './codexMapper'
 import { getCodexStoredTag, getCodexStoredTagsForSessions, setCodexStoredTag } from './codexTags'
 import { getOpenCodeClient } from './opencodeClient'
-import { getOpenCodeProjectDiagnostics, subscribeToOpenCodeEvents } from './opencodeHarness'
+import { getOpenCodeProjectDiagnostics, getOpenCodeSessionSnapshot, subscribeToOpenCodeEvents } from './opencodeHarness'
 import { getCodexProjectDiagnostics, subscribeToCodexEvents } from './codexHarness'
 import {
   currentOpenCodeModelValue,
@@ -1283,6 +1283,7 @@ function copilotPermissionDecision(response: string, feedback?: string): Exclude
 type PendingCopilotPermission = {
   resolve: (result: Exclude<CopilotPermissionRequestResult, { kind: 'no-result' }>) => void
   timer: ReturnType<typeof setTimeout>
+  requestPayload: Record<string, unknown>
 }
 
 declare global {
@@ -1296,8 +1297,8 @@ function pendingCopilotPermissionKey(sessionId: string, permissionId: string): s
   return `${sessionId}:${permissionId}`
 }
 
-function copilotPermissionRequestedEvent(sessionId: string, requestId: string, permissionRequest: CopilotPermissionRequest): string {
-  return JSON.stringify({
+function copilotPermissionRequestedPayload(sessionId: string, requestId: string, permissionRequest: CopilotPermissionRequest): Record<string, unknown> {
+  return {
     type: 'copilot_event',
     event: {
       id: requestId,
@@ -1309,7 +1310,11 @@ function copilotPermissionRequestedEvent(sessionId: string, requestId: string, p
         permissionRequest,
       },
     },
-  })
+  }
+}
+
+function copilotPermissionRequestedEvent(sessionId: string, requestId: string, permissionRequest: CopilotPermissionRequest): string {
+  return JSON.stringify(copilotPermissionRequestedPayload(sessionId, requestId, permissionRequest))
 }
 
 function createCopilotPermissionBridge(
@@ -1346,6 +1351,7 @@ function createCopilotPermissionBridge(
           resolve(result)
         },
         timer,
+        requestPayload: copilotPermissionRequestedPayload(sessionId, requestId, request),
       })
     })
   }
@@ -4168,8 +4174,8 @@ function codexApprovalThreadId(params: Record<string, unknown>): string | undefi
   return typeof params.threadId === 'string' ? params.threadId : undefined
 }
 
-function codexApprovalRequestedEvent(threadId: string, request: CodexServerRequest): string {
-  return JSON.stringify({
+function codexApprovalRequestedPayload(threadId: string, request: CodexServerRequest): Record<string, unknown> {
+  return {
     type: 'codex_approval',
     event: {
       type: 'approval.requested',
@@ -4178,7 +4184,11 @@ function codexApprovalRequestedEvent(threadId: string, request: CodexServerReque
       threadId,
       params: request.params,
     },
-  })
+  }
+}
+
+function codexApprovalRequestedEvent(threadId: string, request: CodexServerRequest): string {
+  return JSON.stringify(codexApprovalRequestedPayload(threadId, request))
 }
 
 function grantedCodexPermissionsFromRequest(params: Record<string, unknown>, response: string): Record<string, unknown> {
@@ -6155,31 +6165,76 @@ export async function interruptViewSession(sessionId: string, turnRequestId?: st
     : undefined
 }
 
-/**
- * Whether a turn is currently running server-side for this session, so a client
- * that navigated away or reloaded can reattach to the live turn. Process-local:
- * only reflects turns started by this server process. `pendingPrompts` carries
- * any Claude tool-permission / AskUserQuestion prompts still awaiting a response
- * so a reconnecting client can re-arm and answer them.
- */
-export function readViewSessionRunning(
+function listPendingProviderPermissionPayloads(
   sessionId: string,
-): ReturnType<typeof getRunningSessionInfo> & { pendingPrompts: Record<string, unknown>[] } {
-  return { ...getRunningSessionInfo(sessionId), pendingPrompts: listPendingClaudePrompts(sessionId) }
+  provider?: AgentProvider,
+): Record<string, unknown>[] {
+  if (!provider || provider === 'claude') {
+    return listPendingClaudePrompts(sessionId).map((data) => ({
+      type: 'claude_permission',
+      event: { type: 'permission.requested', data },
+    }))
+  }
+  if (provider === 'copilot') {
+    const prefix = `${sessionId}:`
+    return Array.from(pendingCopilotPermissions)
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([, pending]) => pending.requestPayload)
+  }
+  if (provider === 'codex') {
+    const prefix = `${sessionId}:`
+    return Array.from(pendingCodexApprovals)
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([, pending]) => codexApprovalRequestedPayload(sessionId, {
+        id: pending.rawId,
+        method: pending.method,
+        params: pending.params,
+      }))
+  }
+  if (provider === 'opencode') {
+    return (getOpenCodeSessionSnapshot(sessionId)?.permissions ?? []).map((permission) => ({
+      type: 'opencode_event',
+      event: { type: 'permission.updated', properties: permission },
+    }))
+  }
+  return []
 }
 
 /**
- * Every session with a turn running in this process, each with any Claude
- * prompts the turn is blocked on (see readViewSessionRunning). Process-local.
+ * Whether a turn is currently running server-side for this session, so a client
+ * that navigated away or reloaded can reattach to the live turn. Process-local:
+ * only reflects turns started by this server process. `pendingPermissions`
+ * carries provider-native approval/question payloads so a reconnecting client
+ * can re-arm and answer them through the shared permission parser.
+ */
+export function readViewSessionRunning(
+  sessionId: string,
+): ReturnType<typeof getRunningSessionInfo> & {
+  pendingPrompts: Record<string, unknown>[]
+  pendingPermissions: Record<string, unknown>[]
+} {
+  const info = getRunningSessionInfo(sessionId)
+  return {
+    ...info,
+    pendingPrompts: listPendingClaudePrompts(sessionId),
+    pendingPermissions: listPendingProviderPermissionPayloads(sessionId, info.provider),
+  }
+}
+
+/**
+ * Every session with a turn running in this process, including provider-native
+ * permission/question payloads needed by reattach and attention surfaces.
  */
 export function listViewRunningSessions(): Array<{
   sessionId: string
   provider: AgentProvider
   pendingPrompts: Record<string, unknown>[]
+  pendingPermissions: Record<string, unknown>[]
 }> {
   return listRunningSessionRefs().map((ref) => ({
     ...ref,
     pendingPrompts: listPendingClaudePrompts(ref.sessionId),
+    pendingPermissions: listPendingProviderPermissionPayloads(ref.sessionId, ref.provider),
   }))
 }
 

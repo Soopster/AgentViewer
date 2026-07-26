@@ -479,6 +479,20 @@ export function extractPendingPermission(payload: unknown): PendingPermission | 
     ?? extractCodexApproval(payload)
 }
 
+export function extractPendingPermissions(
+  payloads: unknown[],
+  fallback: { sessionId: string; provider: AgentProvider },
+): PendingPermission[] {
+  return payloads.flatMap((payload) => {
+    const permission = extractPendingPermission(payload)
+    return permission ? [{
+      ...permission,
+      provider: permission.provider ?? fallback.provider,
+      sessionId: permission.sessionId ?? fallback.sessionId,
+    }] : []
+  })
+}
+
 // Convenience: try every provider's "this permission was resolved" extractor.
 // Returns the resolved permission id, or null.
 export function extractPermissionReply(payload: unknown): string | null {

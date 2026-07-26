@@ -8,6 +8,43 @@ export type ComposerAttachmentPlan = {
   unsupported: SendAttachment[]
 }
 
+export type ComposerDraftPayload = {
+  text: string
+  attachments: SendAttachment[]
+}
+
+export function mergeComposerAttachments(
+  existing: SendAttachment[],
+  incoming: SendAttachment[],
+): SendAttachment[] {
+  if (incoming.length === 0) return existing
+  const ids = new Set(existing.map((attachment) => attachment.id).filter(Boolean))
+  const next = incoming.filter((attachment) => !attachment.id || !ids.has(attachment.id))
+  return next.length > 0 ? [...existing, ...next] : existing
+}
+
+/**
+ * Rebuild the editable composer after a failed/interrupted turn without losing
+ * anything typed while the turn was running. Order mirrors user intent:
+ * failed draft, queued follow-ups, then the newest still-editing draft.
+ */
+export function restoreComposerDraftPayload(
+  current: ComposerDraftPayload,
+  queued: ComposerDraftPayload[],
+  failed?: ComposerDraftPayload,
+): ComposerDraftPayload {
+  const text = [failed?.text, ...queued.map((entry) => entry.text), current.text]
+    .map((entry) => entry?.trim() ?? '')
+    .filter(Boolean)
+    .join('\n\n')
+  let attachments = failed?.attachments ?? []
+  for (const queuedEntry of queued) {
+    attachments = mergeComposerAttachments(attachments, queuedEntry.attachments)
+  }
+  attachments = mergeComposerAttachments(attachments, current.attachments)
+  return { text, attachments }
+}
+
 function attachmentPath(attachment: SendAttachment): string | undefined {
   return attachment.path || attachment.filePath
 }

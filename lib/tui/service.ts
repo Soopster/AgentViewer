@@ -435,11 +435,10 @@ export async function interruptTuiSessionTurn(session: { sessionId: string; prov
 }
 
 /**
- * Snapshot of every session with a turn running in this process, each carrying
- * any Claude prompts (tool permissions / AskUserQuestion / plan approval) the
- * turn is blocked on. The TUI and its backend share one process, so this
- * registry read is synchronous and authoritative — it powers live-turn
- * reattach and the cross-session attention surfaces.
+ * Snapshot of every session with a turn running in this process, including
+ * provider-native approvals/questions the turn is blocked on. The TUI and its
+ * backend share one process, so this registry read is synchronous and
+ * authoritative for live-turn reattach and cross-session attention.
  */
 export async function listTuiRunningSessions(): Promise<ReturnType<typeof listViewRunningSessions>> {
   if (isRemoteAttached()) {
