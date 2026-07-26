@@ -50,7 +50,7 @@ import type {
 
 // ServerNotification lives at the schema root (not under v2/) because it
 // imports notifications from both layers.
-import type { ClientRequest, InitializeResponse, ServerNotification } from './codex-schema'
+import type { ClientRequest, InitializeResponse, ServerNotification, ServerRequest } from './codex-schema'
 
 // JSON-RPC envelope is shared infrastructure, not part of the protocol schema.
 export type CodexClientMethod = ClientRequest['method']
@@ -105,11 +105,10 @@ export type CodexJsonRpcResponse = {
 
 // A request the app-server sends to us (e.g. an exec/patch approval). Carries
 // both an id (we must echo it on the response) and a method.
-export type CodexServerRequest = {
-  id: string | number
-  method: string
-  params: Record<string, unknown>
-}
+export type CodexKnownServerRequest = ServerRequest
+export type CodexServerRequest =
+  | CodexKnownServerRequest
+  | { id: string | number; method: string; params: Record<string, unknown> }
 
 // ── Schema re-exports (kept under our Codex* names so call sites don't churn) ──
 

@@ -11,7 +11,12 @@ type OpenCodeRuntime = {
   server: { url: string; close(): void } | null
 }
 
-let runtimePromise: Promise<OpenCodeRuntime> | null = null
+declare global {
+  // The managed OpenCode server is process-owned, not module-owned. Preserve
+  // it across Next.js reloads so a route refresh cannot spawn a second server.
+  // eslint-disable-next-line no-var
+  var __agentViewerOpenCodeRuntimePromise: Promise<OpenCodeRuntime> | undefined
+}
 
 function normalizeBaseUrl(value: string | undefined): string | null {
   if (!value) return null
@@ -114,8 +119,16 @@ async function createRuntime(): Promise<OpenCodeRuntime> {
 }
 
 async function getOpenCodeRuntime(): Promise<OpenCodeRuntime> {
-  runtimePromise ??= createRuntime()
-  return runtimePromise
+  if (!globalThis.__agentViewerOpenCodeRuntimePromise) {
+    const runtime = createRuntime().catch((error) => {
+      if (globalThis.__agentViewerOpenCodeRuntimePromise === runtime) {
+        globalThis.__agentViewerOpenCodeRuntimePromise = undefined
+      }
+      throw error
+    })
+    globalThis.__agentViewerOpenCodeRuntimePromise = runtime
+  }
+  return globalThis.__agentViewerOpenCodeRuntimePromise
 }
 
 export async function getOpenCodeClient(): Promise<OpencodeClient> {

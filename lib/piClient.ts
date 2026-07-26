@@ -12,9 +12,33 @@ import type { AgentMessage } from '@earendil-works/pi-agent-core'
 // All runtime SDK access goes through loadPiSdk(); the imports above are
 // type-only (erased at compile time, zero runtime cost).
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
-let piSdkPromise: Promise<PiSdk> | null = null
+type PiPoolEntry = { session: AgentSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
+
+declare global {
+  // Pi sessions own SDK subscriptions, retry loops, and eviction timers. Keep
+  // the SDK load, path index, single-flight opens, and warm pool together across
+  // Next.js development reloads so a reload cannot orphan or duplicate them.
+  // eslint-disable-next-line no-var
+  var __agentViewerPiSdkPromise: Promise<PiSdk> | undefined
+  // eslint-disable-next-line no-var
+  var __agentViewerPiSessionPathCache: Map<string, string> | undefined
+  // eslint-disable-next-line no-var
+  var __agentViewerPiSessionInflight: Map<string, Promise<AgentSession>> | undefined
+  // eslint-disable-next-line no-var
+  var __agentViewerPiSessionPool: Map<string, PiPoolEntry> | undefined
+}
+
 function loadPiSdk(): Promise<PiSdk> {
-  return (piSdkPromise ??= import('@earendil-works/pi-coding-agent'))
+  if (!globalThis.__agentViewerPiSdkPromise) {
+    const sdk = import('@earendil-works/pi-coding-agent').catch((error) => {
+      if (globalThis.__agentViewerPiSdkPromise === sdk) {
+        globalThis.__agentViewerPiSdkPromise = undefined
+      }
+      throw error
+    })
+    globalThis.__agentViewerPiSdkPromise = sdk
+  }
+  return globalThis.__agentViewerPiSdkPromise
 }
 
 // Cache session ID → file path mappings (populated on list, refreshed on miss).
@@ -22,7 +46,8 @@ function loadPiSdk(): Promise<PiSdk> {
 // only a recent working set instead of retaining one path string per session
 // for the lifetime of the AgentViewer server.
 const PI_SESSION_PATH_CACHE_MAX = 1024
-const sessionPathCache = new Map<string, string>()
+const sessionPathCache = globalThis.__agentViewerPiSessionPathCache
+  ?? (globalThis.__agentViewerPiSessionPathCache = new Map<string, string>())
 
 function rememberPiSessionPath(sessionId: string, sessionPath: string): void {
   // Map insertion order doubles as LRU order. Refresh hits so the entry a user
@@ -126,7 +151,8 @@ export async function getPiSessionEntries(sessionId: string): Promise<SessionEnt
 // same id must share one construction: without dedup, a retry racing the first
 // send builds a second AgentSession for the same session and orphans one (the
 // pool keeps only the last), leaking its subscriptions and drifting ids.
-const piSessionInflight = new Map<string, Promise<AgentSession>>()
+const piSessionInflight = globalThis.__agentViewerPiSessionInflight
+  ?? (globalThis.__agentViewerPiSessionInflight = new Map<string, Promise<AgentSession>>())
 
 export async function createPiAgentSession(cwd: string, options: { id?: string } = {}): Promise<AgentSession> {
   // Idempotent for a requested id: a prewarm (composer focus) and the first
@@ -183,8 +209,8 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
 // after `PI_SESSION_TTL_MS` of inactivity to bound memory.
 const PI_SESSION_TTL_MS = 5 * 60 * 1000
 const PI_SESSION_POOL_MAX = 3
-type PiPoolEntry = { session: AgentSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
-const piSessionPool = new Map<string, PiPoolEntry>()
+const piSessionPool = globalThis.__agentViewerPiSessionPool
+  ?? (globalThis.__agentViewerPiSessionPool = new Map<string, PiPoolEntry>())
 
 type PiPoolSnapshotEntry = { sessionId: string; lastUsed: number; isStreaming: boolean }
 

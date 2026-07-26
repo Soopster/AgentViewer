@@ -80,6 +80,13 @@ import { backgroundRunningSession, clearRunningSession, clearWaitingSession, get
 import { listViewerAttention } from './viewerAttention'
 import { createTurnCheckpoint } from './checkpoints'
 import { isNativeComposerCommandText } from './composerCommands'
+import { buildCodexComposerInput } from './codexComposerInput'
+import {
+  appendPortableComposerContext,
+  assertComposerAttachmentsSupported,
+  planComposerAttachments,
+  resolveLocalComposerAttachmentPath,
+} from './composerAttachments'
 import { getProviderCapabilities } from './provider'
 import { getConfiguredProvider } from './providerState'
 import type {
@@ -123,11 +130,11 @@ import type {
   CodexNotification,
   CodexRequestParams,
   CodexResponseFor,
+  CodexKnownServerRequest,
   CodexServerRequest,
   CodexThread,
   CodexThreadResumeResponse,
   CodexThreadTokenUsage,
-  CodexUserInput,
 } from './codexProtocol'
 import type {
   ErrorNotification,
@@ -632,10 +639,10 @@ function claudeFallbackModelChain(): string | undefined {
   return models.length > 0 ? models.join(',') : undefined
 }
 
-function parseTurnRequestId(body: Record<string, unknown>): string | undefined {
+function parseTurnRequestId(body: Record<string, unknown>): string {
   return typeof body.turnRequestId === 'string' && body.turnRequestId.trim()
     ? body.turnRequestId.trim()
-    : undefined
+    : crypto.randomUUID()
 }
 
 function parseAttachmentPayload(value: unknown): Record<string, unknown> | undefined {
@@ -706,10 +713,6 @@ function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value)
 }
 
-function absoluteAttachmentPath(value: string): string {
-  return value.startsWith('/') ? value : resolvePath(value)
-}
-
 function inferMimeType(path: string | undefined, fallback = 'application/octet-stream'): string {
   const extension = extname(path ?? '').toLowerCase()
   if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg'
@@ -728,7 +731,7 @@ function isSupportedClaudeImageMime(mimeType: string): mimeType is 'image/jpeg' 
   return mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/gif' || mimeType === 'image/webp'
 }
 
-async function readLocalImageAttachment(attachment: SendAttachment): Promise<{ data: string; mimeType: string; name: string } | null> {
+async function readLocalImageAttachment(attachment: SendAttachment, cwd?: string): Promise<{ data: string; mimeType: string; name: string } | null> {
   if (attachment.type !== 'image' && attachment.mimeType?.startsWith('image/') !== true) return null
   if (attachment.type === 'blob' && attachment.data && attachment.mimeType) {
     return { data: attachment.data, mimeType: attachment.mimeType, name: attachmentName(attachment) }
@@ -736,39 +739,19 @@ async function readLocalImageAttachment(attachment: SendAttachment): Promise<{ d
   const path = attachmentPath(attachment)
   if (!path || isHttpUrl(path)) return null
   const mimeType = attachment.mimeType || inferMimeType(path)
-  const data = await readFile(absoluteAttachmentPath(path), 'base64')
+  const data = await readFile(resolveLocalComposerAttachmentPath(path, cwd), 'base64')
   return { data, mimeType, name: attachmentName(attachment) }
 }
 
-function attachmentPromptLine(attachment: SendAttachment): string | null {
-  const path = attachmentPath(attachment)
-  const label = `[${attachment.type}: ${attachmentName(attachment)}]`
-  if (attachment.type === 'selection' && attachment.text?.trim()) {
-    const location = path ? ` ${path}` : ''
-    return `${label}${location}\n${attachment.text.trim()}`
-  }
-  if (path) return `${label} ${path}`
-  if (attachment.text?.trim()) return `${label}\n${attachment.text.trim()}`
-  return null
-}
-
-function attachmentsAsPromptText(attachments: SendAttachment[], ignoredTypes: SendAttachment['type'][] = ['image', 'blob']): string {
-  const ignored = new Set<SendAttachment['type']>(ignoredTypes)
-  const lines = attachments.flatMap((attachment) => {
-    if (ignored.has(attachment.type)) return []
-    const line = attachmentPromptLine(attachment)
-    return line ? [line] : []
-  })
-  return lines.length > 0 ? `\n\n${lines.join('\n')}` : ''
-}
-
-async function buildClaudePromptParts(userMessage: string, attachments: SendAttachment[]): Promise<{
+async function buildClaudePromptParts(userMessage: string, attachments: SendAttachment[], cwd?: string): Promise<{
   text: string
   imageBlocks: ClaudeContentBlockParam[]
 }> {
+  const plan = planComposerAttachments('claude', attachments)
+  assertComposerAttachmentsSupported('claude', plan)
   const imageBlocks: ClaudeContentBlockParam[] = []
-  for (const attachment of attachments) {
-    const image = await readLocalImageAttachment(attachment)
+  for (const attachment of plan.native) {
+    const image = await readLocalImageAttachment(attachment, cwd)
     if (!image) continue
     if (!isSupportedClaudeImageMime(image.mimeType)) {
       throw new Error(`Claude image attachment ${image.name} has unsupported MIME type ${image.mimeType}`)
@@ -783,12 +766,12 @@ async function buildClaudePromptParts(userMessage: string, attachments: SendAtta
     })
   }
 
-  const text = `${userMessage}${attachmentsAsPromptText(attachments)}`.trim()
+  const text = appendPortableComposerContext(userMessage, plan.portableText)
   return { text, imageBlocks }
 }
 
-async function buildClaudeUserMessage(userMessage: string, attachments: SendAttachment[]): Promise<SDKUserMessage> {
-  const { text, imageBlocks } = await buildClaudePromptParts(userMessage, attachments)
+async function buildClaudeUserMessage(userMessage: string, attachments: SendAttachment[], cwd?: string): Promise<SDKUserMessage> {
+  const { text, imageBlocks } = await buildClaudePromptParts(userMessage, attachments, cwd)
   return {
     type: 'user',
     message: {
@@ -810,25 +793,6 @@ function claudeUserMessageUuid(message: SDKUserMessage): string | undefined {
   return typeof uuid === 'string' ? uuid : undefined
 }
 
-function buildCodexInput(userMessage: string, attachments: SendAttachment[]): CodexUserInput[] {
-  const input: CodexUserInput[] = [{ type: 'text', text: userMessage, text_elements: [] }]
-  for (const attachment of attachments) {
-    const path = attachmentPath(attachment)
-    if (attachment.type === 'blob' && attachment.data && attachment.mimeType?.startsWith('image/')) {
-      input.push({ type: 'image', url: `data:${attachment.mimeType};base64,${attachment.data}` })
-    } else if (attachment.type === 'image' && path) {
-      input.push(isHttpUrl(path)
-        ? { type: 'image', url: path }
-        : { type: 'localImage', path: absoluteAttachmentPath(path) })
-    } else if (attachment.type === 'skill' && path) {
-      input.push({ type: 'skill', name: attachmentName(attachment), path: absoluteAttachmentPath(path) })
-    } else if ((attachment.type === 'file' || attachment.type === 'directory' || attachment.type === 'mention') && path) {
-      input.push({ type: 'mention', name: attachmentName(attachment), path: absoluteAttachmentPath(path) })
-    }
-  }
-  return input
-}
-
 type CopilotSendAttachment = NonNullable<CopilotMessageOptions['attachments']>[number] | {
   type: 'extension_context'
   title: string
@@ -843,16 +807,16 @@ type CopilotSendMessageOptions = Omit<CopilotMessageOptions, 'attachments'> & {
   attachments?: CopilotSendAttachment[]
 }
 
-function buildCopilotAttachments(attachments: SendAttachment[]): CopilotSendAttachment[] {
+function buildCopilotAttachments(attachments: SendAttachment[], cwd?: string): CopilotSendAttachment[] {
   const result: CopilotSendAttachment[] = []
   for (const attachment of attachments) {
     const path = attachmentPath(attachment)
     if (attachment.type === 'file' || attachment.type === 'image' || attachment.type === 'mention') {
-      if (path) result.push({ type: 'file', path, displayName: attachment.displayName })
+      if (path) result.push({ type: 'file', path: resolveLocalComposerAttachmentPath(path, cwd), displayName: attachment.displayName })
       continue
     }
     if (attachment.type === 'directory') {
-      if (path) result.push({ type: 'directory', path, displayName: attachment.displayName })
+      if (path) result.push({ type: 'directory', path: resolveLocalComposerAttachmentPath(path, cwd), displayName: attachment.displayName })
       continue
     }
     if (attachment.type === 'selection') {
@@ -860,7 +824,7 @@ function buildCopilotAttachments(attachments: SendAttachment[]): CopilotSendAtta
       if (filePath && attachment.displayName) {
         result.push({
           type: 'selection',
-          filePath,
+          filePath: resolveLocalComposerAttachmentPath(filePath, cwd),
           displayName: attachment.displayName,
           selection: attachment.selection,
           text: attachment.text,
@@ -892,10 +856,12 @@ function buildCopilotAttachments(attachments: SendAttachment[]): CopilotSendAtta
   return result
 }
 
-function buildOpenCodeParts(userMessage: string, attachments: SendAttachment[]): Array<OpenCodeTextPartInput | OpenCodeFilePartInput | OpenCodeAgentPartInput> {
-  const text = `${userMessage}${attachmentsAsPromptText(attachments, ['file', 'image', 'blob', 'mention', 'agent'])}`.trim()
+function buildOpenCodeParts(userMessage: string, attachments: SendAttachment[], cwd?: string): Array<OpenCodeTextPartInput | OpenCodeFilePartInput | OpenCodeAgentPartInput> {
+  const plan = planComposerAttachments('opencode', attachments)
+  assertComposerAttachmentsSupported('opencode', plan)
+  const text = appendPortableComposerContext(userMessage, plan.portableText)
   const parts: Array<OpenCodeTextPartInput | OpenCodeFilePartInput | OpenCodeAgentPartInput> = [{ type: 'text', text }]
-  for (const attachment of attachments) {
+  for (const attachment of plan.native) {
     const path = attachmentPath(attachment)
     if (attachment.type === 'agent') {
       const name = attachmentName(attachment)
@@ -922,7 +888,7 @@ function buildOpenCodeParts(userMessage: string, attachments: SendAttachment[]):
     }
     if (!path || (attachment.type !== 'file' && attachment.type !== 'image' && attachment.type !== 'mention')) continue
     const name = attachmentName(attachment)
-    const resolved = isHttpUrl(path) ? path : absoluteAttachmentPath(path)
+    const resolved = isHttpUrl(path) ? path : resolveLocalComposerAttachmentPath(path, cwd)
     const label = `@${name}`
     parts.push({
       type: 'file',
@@ -939,10 +905,10 @@ function buildOpenCodeParts(userMessage: string, attachments: SendAttachment[]):
   return parts
 }
 
-async function buildPiImages(attachments: SendAttachment[]): Promise<Array<{ type: 'image'; data: string; mimeType: string }>> {
+async function buildPiImages(attachments: SendAttachment[], cwd?: string): Promise<Array<{ type: 'image'; data: string; mimeType: string }>> {
   const images: Array<{ type: 'image'; data: string; mimeType: string }> = []
   for (const attachment of attachments) {
-    const image = await readLocalImageAttachment(attachment)
+    const image = await readLocalImageAttachment(attachment, cwd)
     if (image) images.push({ type: 'image', data: image.data, mimeType: image.mimeType })
   }
   return images
@@ -1223,7 +1189,7 @@ function copilotCommandResultEvent(data: Record<string, unknown>): string {
 // natively (e.g. /compact) instead of sending it as prompt text. The clients
 // render the `message` field as a session notice.
 function commandResultEvent(provider: AgentProvider, data: Record<string, unknown>): string {
-  return `event: command-result\ndata: ${JSON.stringify({ provider, ...data })}\n\n`
+  return `event: command-result\ndata: ${JSON.stringify({ provider, transcriptExpected: true, ...data })}\n\n`
 }
 
 // A non-fatal banner shown mid-turn (e.g. an MCP elicitation prompt). Distinct
@@ -1267,7 +1233,6 @@ const CODEX_PERMISSION_MODE_OPTIONS = [
   { value: 'auto', label: 'CONFIG', description: 'Use the app-server configured approval policy.' },
   { value: 'untrusted', label: 'UNTRUSTED', description: 'Only trusted operations run without approval.' },
   { value: 'on-request', label: 'ON REQUEST', description: 'Ask when the agent requests elevated execution.' },
-  { value: 'on-failure', label: 'ON FAILURE', description: 'Ask after a sandboxed operation fails.' },
   { value: 'never', label: 'NEVER', description: 'Never request approval.' },
 ] satisfies NonNullable<SessionComposerOptions['permissionModes']>
 
@@ -1320,7 +1285,12 @@ type PendingCopilotPermission = {
   timer: ReturnType<typeof setTimeout>
 }
 
-const pendingCopilotPermissions = new Map<string, PendingCopilotPermission>()
+declare global {
+  // eslint-disable-next-line no-var
+  var __agentViewerPendingCopilotPermissions: Map<string, PendingCopilotPermission> | undefined
+}
+const pendingCopilotPermissions = globalThis.__agentViewerPendingCopilotPermissions
+  ?? (globalThis.__agentViewerPendingCopilotPermissions = new Map<string, PendingCopilotPermission>())
 
 function pendingCopilotPermissionKey(sessionId: string, permissionId: string): string {
   return `${sessionId}:${permissionId}`
@@ -1420,7 +1390,12 @@ const COPILOT_LIVE_TRANSCRIPT_TTL_MS = 5 * 60 * 1000
 // missed (e.g. a turn dies mid-stream), the map still cannot grow past the
 // realistic concurrent-live-session count.
 const LIVE_TRANSCRIPT_MAX_ENTRIES = 32
-const copilotLiveTranscripts = new Map<string, CopilotLiveTranscriptEntry>()
+declare global {
+  // eslint-disable-next-line no-var
+  var __agentViewerCopilotLiveTranscripts: Map<string, CopilotLiveTranscriptEntry> | undefined
+}
+const copilotLiveTranscripts = globalThis.__agentViewerCopilotLiveTranscripts
+  ?? (globalThis.__agentViewerCopilotLiveTranscripts = new Map<string, CopilotLiveTranscriptEntry>())
 
 function getCopilotLiveTranscriptEntry(sessionId: string): CopilotLiveTranscriptEntry {
   let entry = copilotLiveTranscripts.get(sessionId)
@@ -1596,7 +1571,12 @@ type PiLiveTranscriptEntry = {
 }
 
 const PI_LIVE_TRANSCRIPT_TTL_MS = 5 * 60 * 1000
-const piLiveTranscripts = new Map<string, PiLiveTranscriptEntry>()
+declare global {
+  // eslint-disable-next-line no-var
+  var __agentViewerPiLiveTranscripts: Map<string, PiLiveTranscriptEntry> | undefined
+}
+const piLiveTranscripts = globalThis.__agentViewerPiLiveTranscripts
+  ?? (globalThis.__agentViewerPiLiveTranscripts = new Map<string, PiLiveTranscriptEntry>())
 
 function getPiLiveTranscriptEntry(sessionId: string): PiLiveTranscriptEntry {
   let entry = piLiveTranscripts.get(sessionId)
@@ -1785,7 +1765,12 @@ type PendingClaudePermission = {
   requestData?: Record<string, unknown>
 }
 
-const pendingClaudePermissions = new Map<string, PendingClaudePermission>()
+declare global {
+  // eslint-disable-next-line no-var
+  var __agentViewerPendingClaudePermissions: Map<string, PendingClaudePermission> | undefined
+}
+const pendingClaudePermissions = globalThis.__agentViewerPendingClaudePermissions
+  ?? (globalThis.__agentViewerPendingClaudePermissions = new Map<string, PendingClaudePermission>())
 
 // Pending Claude prompts (tool permissions + AskUserQuestion) still awaiting a
 // response for this session, as permission.requested `data` payloads. Lets a
@@ -2319,21 +2304,37 @@ async function resumeCodexThread(sessionId: string): Promise<CodexThreadResumeRe
 // turn/start (first-token latency). Cleared wholesale when the app-server
 // child exits — a respawned server has no live threads — and per-thread when
 // turn/start reports a missing rollout (see createCodexStream's retry).
-const codexResumedThreads = new Map<string, string | null>()
-let codexResumeInvalidatorInstalled = false
+declare global {
+  // eslint-disable-next-line no-var
+  var __agentViewerCodexResumedThreads: Map<string, string | null> | undefined
+  // eslint-disable-next-line no-var
+  var __agentViewerCodexResumeInvalidatorInstalled: boolean | undefined
+  // eslint-disable-next-line no-var
+  var __agentViewerCodexResumeInflight: Map<string, Promise<{ model: string | null }>> | undefined
+}
+const codexResumedThreads = globalThis.__agentViewerCodexResumedThreads
+  ?? (globalThis.__agentViewerCodexResumedThreads = new Map<string, string | null>())
+const codexResumeInflight = globalThis.__agentViewerCodexResumeInflight
+  ?? (globalThis.__agentViewerCodexResumeInflight = new Map<string, Promise<{ model: string | null }>>())
 
 async function ensureCodexThreadResumed(sessionId: string): Promise<{ model: string | null }> {
   const client = getCodexClient()
-  if (!codexResumeInvalidatorInstalled) {
-    codexResumeInvalidatorInstalled = true
+  if (!globalThis.__agentViewerCodexResumeInvalidatorInstalled) {
+    globalThis.__agentViewerCodexResumeInvalidatorInstalled = true
     client.subscribeDisconnect(() => codexResumedThreads.clear())
   }
   const cached = codexResumedThreads.get(sessionId)
   if (cached !== undefined) return { model: cached }
-  const resume = await resumeCodexThread(sessionId)
-  const model = typeof resume?.model === 'string' ? resume.model : null
-  codexResumedThreads.set(sessionId, model)
-  return { model }
+  const inflight = codexResumeInflight.get(sessionId)
+  if (inflight) return inflight
+  const resume = resumeCodexThread(sessionId).then((result) => {
+    const model = typeof result?.model === 'string' ? result.model : null
+    codexResumedThreads.set(sessionId, model)
+    return { model }
+  })
+  codexResumeInflight.set(sessionId, resume)
+  resume.finally(() => codexResumeInflight.delete(sessionId)).catch(() => {})
+  return resume
 }
 
 async function listOpenCodeSessions({ dir }: ListParams): Promise<Session[]> {
@@ -2610,10 +2611,13 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
   // queueing the message for the next turn.
   if (action === 'steer') {
     const message = typeof body.message === 'string' ? body.message.trim() : ''
+    const turnRequestId = typeof body.turnRequestId === 'string' && body.turnRequestId.trim()
+      ? body.turnRequestId.trim()
+      : undefined
     if (!message) throw new Error('message is required')
     if (isNativeComposerCommandText(message)) return { delivered: false }
     try {
-      const steered = await steerRunningSession(sessionId, message)
+      const steered = await steerRunningSession(sessionId, message, turnRequestId)
       return { delivered: steered.delivered, messageUuid: steered.messageUuid }
     } catch {
       return { delivered: false }
@@ -2885,6 +2889,16 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       if (!permissionId) throw new Error('permissionId is required')
       if (!response) throw new Error('response is required')
       respondCodexApproval(sessionId, permissionId, response)
+      return { ok: true }
+    }
+    if (action === 'respondQuestion') {
+      const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
+      const answers = body.answers && typeof body.answers === 'object' && !Array.isArray(body.answers)
+        ? body.answers as Record<string, string>
+        : null
+      if (!permissionId) throw new Error('permissionId is required')
+      if (!answers) throw new Error('answers is required')
+      respondCodexQuestion(sessionId, permissionId, answers)
       return { ok: true }
     }
   }
@@ -3389,7 +3403,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
   // the bang branch inside start() below.
   const { pushUserMessage, endInput, iterable } = createInputStream()
   if (bangShell == null) {
-    pushUserMessage(await buildClaudeUserMessage(userMessage, attachments))
+    pushUserMessage(await buildClaudeUserMessage(userMessage, attachments, cwdOverride))
   }
 
   const encoder = new TextEncoder()
@@ -3650,8 +3664,8 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         // Clear the bridge in case adoption didn't happen (error, abort) so the
         // box isn't left pointing at a dead stream controller.
         bridgeBox.fn = null
-        clearRunningSession(sessionId)
-        if (realizedSessionId && realizedSessionId !== sessionId) clearRunningSession(realizedSessionId)
+        clearRunningSession(sessionId, turnRequestId)
+        if (realizedSessionId && realizedSessionId !== sessionId) clearRunningSession(realizedSessionId, turnRequestId)
         resolvePendingClaudePermissions(sessionId, bridgedPermissionIds, 'Permission request ended before a response was received')
         if (!adopted) {
           signal.removeEventListener('abort', propagateAbort)
@@ -3717,7 +3731,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
   let pushMessage: SDKUserMessage | null = null
   if (bangShell == null) {
     try {
-      pushMessage = await buildClaudeUserMessage(userMessage, attachments)
+      pushMessage = await buildClaudeUserMessage(userMessage, attachments, cwdOverride)
     } catch (err) {
       return new Response(
         JSON.stringify({ error: err instanceof Error ? err.message : 'Failed to build prompt' }),
@@ -3974,7 +3988,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
         }
       } finally {
         clearInterval(heartbeat)
-        clearRunningSession(sessionId)
+        clearRunningSession(sessionId, turnRequestId)
         resolvePendingClaudePermissions(sessionId, bridgedPermissionIds, 'Permission request ended before a response was received')
         try { controller.close() } catch { /* idempotent */ }
       }
@@ -4124,19 +4138,27 @@ function isCodexIdleStatusNotification(notification: CodexNotification, sessionI
 
 type PendingCodexApproval = { rawId: string | number; method: string; params: Record<string, unknown> }
 
-const pendingCodexApprovals = new Map<string, PendingCodexApproval>()
+declare global {
+  // eslint-disable-next-line no-var
+  var __agentViewerPendingCodexApprovals: Map<string, PendingCodexApproval> | undefined
+}
+const pendingCodexApprovals = globalThis.__agentViewerPendingCodexApprovals
+  ?? (globalThis.__agentViewerPendingCodexApprovals = new Map<string, PendingCodexApproval>())
 
 function pendingCodexApprovalKey(threadId: string, id: string): string {
   return `${threadId}:${id}`
 }
 
-const CODEX_APPROVAL_METHODS = new Set([
+const CODEX_APPROVAL_METHOD_NAMES = [
   'item/commandExecution/requestApproval',
   'item/fileChange/requestApproval',
   'item/permissions/requestApproval',
   'item/tool/requestUserInput',
   'mcpServer/elicitation/request',
-])
+  'applyPatchApproval',
+  'execCommandApproval',
+] as const satisfies readonly CodexKnownServerRequest['method'][]
+const CODEX_APPROVAL_METHODS = new Set<string>(CODEX_APPROVAL_METHOD_NAMES)
 
 function isCodexApprovalRequest(method: string): boolean {
   return CODEX_APPROVAL_METHODS.has(method)
@@ -4189,12 +4211,23 @@ function codexApprovalResult(method: string, response: string, params: Record<st
     case 'item/commandExecution/requestApproval':
     case 'item/fileChange/requestApproval':
       return { decision }
+    case 'applyPatchApproval':
+    case 'execCommandApproval':
+      return {
+        decision: response === 'always' || response === 'acceptForSession'
+          ? 'approved_for_session'
+          : response === 'reject' || response === 'decline' || response === 'cancel'
+          ? { denied: { rejection: 'Denied by user' } }
+          : 'approved',
+      }
     case 'item/permissions/requestApproval':
       return {
         permissions: grantedCodexPermissionsFromRequest(params, response),
         scope: response === 'always' || response === 'acceptForSession' ? 'session' : 'turn',
         strictAutoReview: response === 'strict',
       }
+    case 'mcpServer/elicitation/request':
+      return { action: 'decline', content: null, _meta: null }
     default:
       return undefined
   }
@@ -4214,6 +4247,27 @@ function respondCodexApproval(threadId: string, permissionId: string, response: 
   client.respond(pending.rawId, result)
 }
 
+function respondCodexQuestion(threadId: string, permissionId: string, answers: Record<string, string>): void {
+  const key = pendingCodexApprovalKey(threadId, permissionId)
+  const pending = pendingCodexApprovals.get(key)
+  if (!pending || pending.method !== 'item/tool/requestUserInput') {
+    throw new Error('Question is no longer pending')
+  }
+  const rawQuestions = Array.isArray(pending.params.questions) ? pending.params.questions : []
+  const responseAnswers: Record<string, { answers: string[] }> = {}
+  for (const rawQuestion of rawQuestions) {
+    if (!rawQuestion || typeof rawQuestion !== 'object' || Array.isArray(rawQuestion)) continue
+    const question = rawQuestion as Record<string, unknown>
+    const id = typeof question.id === 'string' ? question.id : ''
+    const prompt = typeof question.question === 'string' ? question.question : ''
+    const answer = (id && answers[id]) || (prompt && answers[prompt])
+    if (!id || typeof answer !== 'string') continue
+    responseAnswers[id] = { answers: answer.split(',').map((value) => value.trim()).filter(Boolean) }
+  }
+  pendingCodexApprovals.delete(key)
+  getCodexClient().respond(pending.rawId, { answers: responseAnswers })
+}
+
 // Decline any unanswered approvals for a thread when its turn ends/errors so the
 // app-server is never left blocked. Safe on a clean completion (no pending) and
 // idempotent if the server already cancelled the request.
@@ -4231,7 +4285,7 @@ function declinePendingCodexApprovals(threadId: string): void {
 // AskForApproval string variants accepted from the composer's APPROVALS picker.
 // (The `granular` object variant isn't exposed in the UI.) Omitted → use the
 // app-server's configured default.
-const CODEX_APPROVAL_POLICIES = ['untrusted', 'on-failure', 'on-request', 'never'] as const
+const CODEX_APPROVAL_POLICIES = ['untrusted', 'on-request', 'never'] as const
 type CodexApprovalPolicy = typeof CODEX_APPROVAL_POLICIES[number]
 
 function parseCodexApprovalPolicy(body: Record<string, unknown>): CodexApprovalPolicy | undefined {
@@ -4251,6 +4305,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
     ? effort
     : undefined
   const attachments = parseAttachments(body)
+  const cwdOverride = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined
   const approvalPolicy = parseCodexApprovalPolicy(body)
   const bangShell = userMessage.startsWith('!') && attachments.length === 0
     ? userMessage.slice(1).trim()
@@ -4304,7 +4359,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         }
         cancelWatchdog?.()
         cancelWatchdog = null
-        clearRunningSession(sessionId)
+        clearRunningSession(sessionId, turnRequestId)
         unsubscribe()
         safeClose()
       }
@@ -4341,16 +4396,18 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
       // Surface this thread's server→client approval requests as codex_approval
       // SSE frames. The app-server blocks the turn until respondPermission replies.
       const unsubscribeApprovals = client.subscribeServerRequests((request) => {
-        if (consumeAborted) return
-        if (!isCodexApprovalRequest(request.method)) return
-        const approvalThreadId = codexApprovalThreadId(request.params)
-        if (approvalThreadId && approvalThreadId !== sessionId) return
+        if (consumeAborted) return false
+        if (!isCodexApprovalRequest(request.method)) return false
+        const params = request.params as Record<string, unknown>
+        const approvalThreadId = codexApprovalThreadId(params)
+        if (approvalThreadId && approvalThreadId !== sessionId) return false
         pendingCodexApprovals.set(pendingCodexApprovalKey(sessionId, String(request.id)), {
           rawId: request.id,
           method: request.method,
-          params: request.params,
+          params,
         })
         safeEnqueue(`data: ${codexApprovalRequestedEvent(sessionId, request)}\n\n`)
+        return true
       })
       const unsubscribe = () => {
         consumeAborted = true
@@ -4378,7 +4435,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           steer: (text) => client.request('turn/steer', {
             threadId: sessionId,
             expectedTurnId: turnId,
-            input: buildCodexInput(text, []),
+            input: buildCodexComposerInput(text, []),
           }),
         })
 
@@ -4548,10 +4605,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           downstreamClosed = true
           return
         }
-        const running = getRunningSession(sessionId)
-        if (running?.provider === 'codex') {
-          void running.interrupt().catch(() => {})
-        }
+        void interruptRunningSession(sessionId, turnRequestId).catch(() => {})
       })
 
       try {
@@ -4616,7 +4670,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
               ? commandArgs as CodexApprovalPolicy
               : undefined
             if (!nextPolicy) {
-              finishCommand('Use /permissions untrusted, /permissions on-request, /permissions on-failure, or /permissions never.')
+              finishCommand('Use /permissions untrusted, /permissions on-request, or /permissions never.')
               return
             }
             await client.request('thread/settings/update', {
@@ -4677,7 +4731,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
           // in the composer (otherwise the configured default is used). This is
           // what makes the exec/patch approval prompts appear interactively.
           ...(approvalPolicy ? { approvalPolicy } : {}),
-          input: buildCodexInput(userMessage, attachments),
+          input: buildCodexComposerInput(userMessage, attachments, cwdOverride),
         } satisfies CodexRequestParams<'turn/start'>
         let started: CodexResponseFor<'turn/start'>
         try {
@@ -4694,7 +4748,7 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         activateTargetTurn(started.turn.id)
       } catch (err) {
         unsubscribe()
-        clearRunningSession(sessionId)
+        clearRunningSession(sessionId, turnRequestId)
         safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
         safeClose()
       }
@@ -4785,10 +4839,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
           downstreamClosed = true
           return
         }
-        const running = getRunningSession(sessionId)
-        if (running?.provider === 'opencode') {
-          void running.interrupt().catch(() => {})
-        }
+        void interruptRunningSession(sessionId, turnRequestId).catch(() => {})
       }, { once: true })
 
       try {
@@ -4997,7 +5048,7 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
             body: {
               model: selectedModel ?? undefined,
               agent: requestedAgent,
-              parts: buildOpenCodeParts(userMessage, attachments),
+            parts: buildOpenCodeParts(userMessage, attachments, sessionDirectory),
             },
           })
         }
@@ -5037,9 +5088,9 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
         cancelWatchdog?.()
         subscription?.close()
         await consumeEvents?.catch(() => {})
-        clearRunningSession(sessionId)
+        clearRunningSession(sessionId, turnRequestId)
         if (targetSessionId !== sessionId) {
-          clearRunningSession(targetSessionId)
+          clearRunningSession(targetSessionId, turnRequestId)
         }
         close()
       }
@@ -5081,7 +5132,11 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
   // opt out explicitly with nativeCommands:false.
   const nativeCommands = body.nativeCommands !== false
   const parsedAttachments = parseAttachments(body)
-  const attachments = buildCopilotAttachments(parsedAttachments)
+  const cwdOverride = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : undefined
+  const attachmentPlan = planComposerAttachments('copilot', parsedAttachments)
+  assertComposerAttachmentsSupported('copilot', attachmentPlan)
+  const attachments = buildCopilotAttachments(attachmentPlan.native, cwdOverride)
+  const composerPrompt = appendPortableComposerContext(userMessage, attachmentPlan.portableText)
   const detachOnClientAbort = body.detachOnClientAbort === true
   const encoder = new TextEncoder()
 
@@ -5297,10 +5352,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
             return
           }
           resolvePendingCopilotPermissions(sessionId, bridgedPermissionIds, { kind: 'user-not-available' })
-          const running = getRunningSession(sessionId)
-          if (running?.provider === 'copilot') {
-            void running.interrupt().catch(() => {})
-          }
+          void interruptRunningSession(sessionId, turnRequestId).catch(() => {})
         })
 
         const copilotEffort = effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'xhigh'
@@ -5328,7 +5380,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           }
         }
 
-        let promptToSend = userMessage
+        let promptToSend = composerPrompt
         const slashCommand = nativeCommands && parsedAttachments.length === 0
           ? parseOpenCodeSlashCommand(userMessage)
           : null
@@ -5472,7 +5524,7 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
         if (manualPermissionHandlerInstalled) {
           setCopilotPermissionHandler(sessionId, approveAll)
         }
-        clearRunningSession(sessionId)
+        clearRunningSession(sessionId, turnRequestId)
         try { unsubscribe?.() } catch { /* ignore */ }
         // Do NOT evict the warm session on a clean turn completion. Evicting
         // here disconnects the JSON-RPC session and forces a full resumeSession
@@ -5505,6 +5557,8 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
   const selectedModel = decodePiModelValue(typeof body.model === 'string' ? body.model : null)
   const effort = parseEffort(body)
   const attachments = parseAttachments(body)
+  const attachmentPlan = planComposerAttachments('pi', attachments)
+  assertComposerAttachmentsSupported('pi', attachmentPlan)
   const directShell = parsePiDirectShell(userMessage)
   const detachOnClientAbort = body.detachOnClientAbort === true
   const encoder = new TextEncoder()
@@ -5565,7 +5619,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         if (effort && PI_THINKING_LEVELS.includes(effort as typeof PI_THINKING_LEVELS[number])) {
           agentSession.setThinkingLevel(effort as typeof PI_THINKING_LEVELS[number])
         }
-        const images = await buildPiImages(attachments)
+        const images = await buildPiImages(attachmentPlan.native, cwdOverride)
 
         safeEnqueue(`event: session\ndata: ${JSON.stringify({ sessionId: targetSessionId })}\n\n`)
         broadcastLiveSessionTurnStart('pi', targetSessionId)
@@ -5575,7 +5629,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         const piSlash = !directShell && attachments.length === 0 ? parseOpenCodeSlashCommand(userMessage) : null
         const finishPiCommand = (message: string) => {
           safeEnqueue(commandResultEvent('pi', { message, transcriptExpected: false }))
-          clearRunningSession(sessionId)
+          clearRunningSession(sessionId, turnRequestId)
           broadcastLiveSessionTurnEnd('pi', targetSessionId)
           schedulePiLiveTranscriptCleanup(targetSessionId)
           close()
@@ -5636,7 +5690,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             safeEnqueue(commandResultEvent('pi', { message: 'Compacted the conversation.' }))
           } finally {
             safeEnqueue(`data: ${JSON.stringify({ type: 'pi_status', status: 'compaction_end', reason: 'manual' })}\n\n`)
-            clearRunningSession(sessionId)
+            clearRunningSession(sessionId, turnRequestId)
             broadcastLiveSessionTurnEnd('pi', targetSessionId)
             schedulePiLiveTranscriptCleanup(targetSessionId)
             close()
@@ -5689,10 +5743,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
               downstreamClosed = true
               return
             }
-            const running = getRunningSession(sessionId)
-            if (running?.provider === 'pi') {
-              void running.interrupt().catch(() => {})
-            }
+            void interruptRunningSession(sessionId, turnRequestId).catch(() => {})
           })
           let directShellOutput = ''
           const bashResult = await agentSession.executeBash(directShell.command, (chunk) => {
@@ -5720,7 +5771,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             cancelled: Boolean(bashResult.cancelled),
             truncated: Boolean(bashResult.truncated),
           })
-          clearRunningSession(sessionId)
+          clearRunningSession(sessionId, turnRequestId)
           broadcastLiveSessionActivity('pi', targetSessionId)
           broadcastLiveSessionTurnEnd('pi', targetSessionId)
           schedulePiLiveTranscriptCleanup(targetSessionId)
@@ -5743,10 +5794,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             downstreamClosed = true
             return
           }
-          const running = getRunningSession(sessionId)
-          if (running?.provider === 'pi') {
-            void running.interrupt().catch(() => {})
-          }
+          void interruptRunningSession(sessionId, turnRequestId).catch(() => {})
         })
 
         // Subscribe to the AgentSession event stream (not the raw Agent): only
@@ -5825,7 +5873,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             if (lastAssistant?.stopReason === 'error') {
               safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: lastAssistant.errorMessage || 'Pi turn failed' })}\n\n`)
             }
-            clearRunningSession(sessionId)
+            clearRunningSession(sessionId, turnRequestId)
             unsubscribePi?.()
             broadcastLiveSessionTurnEnd('pi', targetSessionId)
             schedulePiLiveTranscriptCleanup(targetSessionId)
@@ -5833,7 +5881,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           }
         })
 
-        const text = `${userMessage}${attachmentsAsPromptText(attachments)}`.trim()
+        const text = appendPortableComposerContext(userMessage, attachmentPlan.portableText)
         await agentSession.prompt(text, images.length > 0 ? { images } : undefined)
         // prompt() resolving means the turn is genuinely over. Normally the
         // terminal agent_end handler above already ran cleanup + close (and set
@@ -5843,7 +5891,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         // the happy path.
         if (!cleanedUp) {
           unsubscribePi?.()
-          clearRunningSession(sessionId)
+          clearRunningSession(sessionId, turnRequestId)
           broadcastLiveSessionTurnEnd('pi', targetSessionId)
           schedulePiLiveTranscriptCleanup(targetSessionId)
           close()
@@ -5853,7 +5901,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         if (!requestAborted) {
           safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
         }
-        clearRunningSession(sessionId)
+        clearRunningSession(sessionId, turnRequestId)
         if (broadcastedTurnStart) {
           broadcastLiveSessionTurnEnd('pi', targetSessionId)
           schedulePiLiveTranscriptCleanup(targetSessionId)

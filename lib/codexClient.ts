@@ -16,7 +16,7 @@ type PendingRequest = {
 }
 
 type NotificationListener = (notification: CodexNotification) => void
-type ServerRequestListener = (request: CodexServerRequest) => void
+type ServerRequestListener = (request: CodexServerRequest) => boolean
 type DisconnectListener = () => void
 
 class CodexAppServerClient {
@@ -98,7 +98,17 @@ class CodexAppServerClient {
             method: message.method,
             params: (message.params ?? {}) as Record<string, unknown>,
           }
-          for (const listener of this.requestListeners) listener(request)
+          if (request.method === 'currentTime/read') {
+            this.respond(request.id, { currentTimeAt: Math.floor(Date.now() / 1000) })
+            continue
+          }
+          let handled = false
+          for (const listener of this.requestListeners) {
+            try { handled = listener(request) || handled } catch { /* keep routing to other active turns */ }
+          }
+          if (!handled) {
+            this.respondError(request.id, -32601, `Server request method is not supported: ${request.method}`)
+          }
           continue
         }
         const pending = this.pending.get(String(message.id))
@@ -210,9 +220,15 @@ class CodexAppServerClient {
   }
 }
 
-let client: CodexAppServerClient | null = null
+declare global {
+  // Keep the app-server child and its live JSON-RPC subscriptions stable across
+  // Next.js development module reloads. A second client would spawn a competing
+  // app-server while the first still owns in-flight turns and approvals.
+  // eslint-disable-next-line no-var
+  var __agentViewerCodexClient: CodexAppServerClient | undefined
+}
 
 export function getCodexClient(): CodexAppServerClient {
-  client ??= new CodexAppServerClient()
-  return client
+  return globalThis.__agentViewerCodexClient
+    ?? (globalThis.__agentViewerCodexClient = new CodexAppServerClient())
 }

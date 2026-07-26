@@ -65,12 +65,16 @@ function codexUserInputToText(input: CodexUserInput[]): string {
           return `[image] ${entry.url}`
         case 'localImage':
           return `[local image] ${entry.path}`
+        case 'audio':
+          return `[audio] ${entry.url}`
+        case 'localAudio':
+          return `[local audio] ${entry.path}`
         case 'skill':
           return `[skill] ${entry.name}`
         case 'mention':
           return `[@${entry.name}] ${entry.path}`
         default:
-          return ''
+          return entry satisfies never
       }
     })
     .filter(Boolean)
@@ -246,6 +250,15 @@ function mapItemToMessages(
       ], turnId, timestamp)
       return includeToolResults ? [assistant, result] : [assistant]
     }
+    case 'subAgentActivity':
+      return [makeMessage(
+        threadId,
+        baseId,
+        'assistant',
+        `Sub-agent ${item.kind}: ${item.agentPath} (${item.agentThreadId})`,
+        turnId,
+        timestamp,
+      )]
     case 'webSearch': {
       const toolUseId = `${baseId}:tool`
       const assistant = makeMessage(threadId, baseId, 'assistant', [{
@@ -264,6 +277,8 @@ function mapItemToMessages(
     }
     case 'imageView':
       return [makeMessage(threadId, baseId, 'assistant', `[image view] ${item.path}`, turnId, timestamp)]
+    case 'sleep':
+      return [makeMessage(threadId, baseId, 'assistant', `Paused for ${item.durationMs} ms.`, turnId, timestamp)]
     case 'imageGeneration':
       return [makeMessage(threadId, baseId, 'assistant', `Image generation (${item.status})\n\n${item.result}`, turnId, timestamp)]
     case 'enteredReviewMode':
@@ -275,7 +290,7 @@ function mapItemToMessages(
     case 'hookPrompt':
       return [makeMessage(threadId, baseId, 'assistant', `Hook prompt emitted (${item.fragments.length} fragment${item.fragments.length === 1 ? '' : 's'}).`, turnId, timestamp)]
     default:
-      return []
+      return item satisfies never
   }
 }
 

@@ -1,0 +1,275 @@
+import assert from 'node:assert/strict'
+import { getCodexClient } from '../lib/codexClient'
+import { buildCodexComposerInput } from '../lib/codexComposerInput'
+import { planComposerAttachments, resolveLocalComposerAttachmentPath } from '../lib/composerAttachments'
+import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../lib/composerCommands'
+import { piSessionPathCacheSize } from '../lib/piClient'
+import { extractCodexApproval } from '../lib/permissions'
+import {
+  clearRunningSession,
+  getRunningSessionInfo,
+  interruptRunningSession,
+  setRunningSession,
+  steerRunningSession,
+} from '../lib/sessionRuntime'
+import type { AgentProvider, SendAttachment } from '../lib/types'
+
+const providers: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+assert.equal(isNativeComposerCommandText('/compact'), true)
+assert.equal(isNativeComposerCommandText('!git status'), true)
+assert.equal(isNativeComposerCommandText('explain /compact'), false)
+assert.equal(commandResultExpectsTranscript({}), true)
+assert.equal(commandResultExpectsTranscript({ transcriptExpected: true }), true)
+assert.equal(commandResultExpectsTranscript({ transcriptExpected: false }), false)
+const codexQuestion = extractCodexApproval({
+  type: 'codex_approval',
+  event: {
+    type: 'approval.requested',
+    requestId: 'question-request',
+    method: 'item/tool/requestUserInput',
+    threadId: 'thread-1',
+    params: {
+      questions: [{
+        id: 'scope',
+        header: 'Scope',
+        question: 'Which scope?',
+        isOther: true,
+        isSecret: false,
+        options: [{ label: 'Current file', description: 'Only edit the active file.' }],
+      }],
+    },
+  },
+})
+assert.equal(codexQuestion?.title, 'Which scope?')
+assert.equal(codexQuestion?.questions?.[0]?.id, 'scope')
+assert.equal(codexQuestion?.questions?.[0]?.options[0]?.label, 'Current file')
+assert.equal(resolveLocalComposerAttachmentPath('src/index.ts', '/workspace/project'), '/workspace/project/src/index.ts')
+assert.equal(resolveLocalComposerAttachmentPath('/absolute/index.ts', '/workspace/project'), '/absolute/index.ts')
+const attachmentMatrix: SendAttachment[] = [
+  { id: 'file', type: 'file', path: 'lib/types.ts', displayName: 'types.ts' },
+  { id: 'directory', type: 'directory', path: 'lib', displayName: 'lib' },
+  {
+    id: 'selection',
+    type: 'selection',
+    filePath: 'components/MessageView.tsx',
+    displayName: 'MessageView.tsx',
+    text: 'const selected = true',
+    selection: {
+      start: { line: 41, character: 0 },
+      end: { line: 43, character: 1 },
+    },
+  },
+  { id: 'image', type: 'image', path: '/tmp/screenshot.png', displayName: 'screenshot.png' },
+  { id: 'mention', type: 'mention', path: 'README.md', displayName: 'README.md' },
+  { id: 'skill', type: 'skill', path: '.agents/skills/example/SKILL.md', displayName: 'example' },
+  { id: 'blob', type: 'blob', data: 'aW1hZ2U=', mimeType: 'image/png', displayName: 'pasted.png' },
+  { id: 'agent', type: 'agent', displayName: 'reviewer', text: '@reviewer' },
+  {
+    id: 'extension_context',
+    type: 'extension_context',
+    displayName: 'Issue context',
+    extensionId: 'issues',
+    capturedAt: '2026-07-26T00:00:00Z',
+    payload: { issue: 42, state: 'open' },
+  },
+]
+
+const expectedNative: Record<AgentProvider, SendAttachment['type'][]> = {
+  claude: ['image', 'blob'],
+  codex: ['file', 'directory', 'image', 'mention', 'skill', 'blob'],
+  opencode: ['file', 'image', 'mention', 'blob', 'agent'],
+  copilot: ['file', 'directory', 'selection', 'image', 'mention', 'blob', 'extension_context'],
+  pi: ['image', 'blob'],
+}
+
+for (const provider of providers) {
+  const plan = planComposerAttachments(provider, attachmentMatrix)
+  assert.deepEqual(plan.native.map((attachment) => attachment.type), expectedNative[provider])
+  assert.equal(plan.unsupported.length, 0, `${provider} silently lost a representative attachment`)
+  assert.equal(
+    plan.native.length + plan.portable.length,
+    attachmentMatrix.length,
+    `${provider} did not classify every representative attachment`,
+  )
+  assert.deepEqual(
+    new Set([...plan.native, ...plan.portable].map((attachment) => attachment.id)),
+    new Set(attachmentMatrix.map((attachment) => attachment.id)),
+    `${provider} classified an attachment more than once or not at all`,
+  )
+}
+
+const remoteImage: SendAttachment = {
+  type: 'image',
+  path: 'https://example.test/screenshot.png',
+  displayName: 'remote.png',
+}
+assert.deepEqual(
+  providers.filter((provider) => planComposerAttachments(provider, [remoteImage]).native.length > 0),
+  ['codex', 'opencode'],
+)
+assert.deepEqual(
+  providers.filter((provider) => planComposerAttachments(provider, [remoteImage]).portable.length > 0),
+  ['claude', 'copilot', 'pi'],
+)
+
+const native = buildCodexComposerInput('Inspect these.', [
+  { type: 'file', path: 'lib/types.ts', displayName: 'types.ts' },
+  { type: 'image', path: 'https://example.test/screenshot.png' },
+], '/workspace/project')
+assert.equal(native[0]?.type, 'text')
+assert.equal(native[0]?.type === 'text' ? native[0].text : '', 'Inspect these.')
+assert.deepEqual(native.slice(1).map((input) => input.type), ['mention', 'image'])
+assert.equal(native[1]?.type === 'mention' ? native[1].path : '', '/workspace/project/lib/types.ts')
+
+const portable = buildCodexComposerInput('Fix the selected behavior.', [
+  {
+    type: 'selection',
+    filePath: 'components/MessageView.tsx',
+    displayName: 'MessageView.tsx',
+    text: 'const selected = true',
+    selection: {
+      start: { line: 41, character: 0 },
+      end: { line: 43, character: 1 },
+    },
+  },
+  { type: 'agent', displayName: 'reviewer', text: '@reviewer' },
+  {
+    type: 'extension_context',
+    displayName: 'Issue context',
+    extensionId: 'issues',
+    capturedAt: '2026-07-26T00:00:00Z',
+    payload: { issue: 42, state: 'open' },
+  },
+])
+assert.equal(portable.length, 1)
+assert.equal(portable[0]?.type, 'text')
+const portableText = portable[0]?.type === 'text' ? portable[0].text : ''
+assert.match(portableText, /\[selection: MessageView\.tsx\] components\/MessageView\.tsx:42-44/)
+assert.match(portableText, /const selected = true/)
+assert.match(portableText, /\[agent: reviewer\]\n@reviewer/)
+assert.match(portableText, /\[extension_context: Issue context\]\n\{"issue":42,"state":"open"\}/)
+
+assert.throws(
+  () => buildCodexComposerInput('Read this.', [
+    { type: 'blob', displayName: 'opaque.bin', mimeType: 'application/octet-stream', data: 'AA==' },
+  ]),
+  /cannot represent blob attachment "opaque\.bin"/,
+)
+
+const opaqueBlob: SendAttachment = {
+  type: 'blob',
+  displayName: 'opaque.bin',
+  mimeType: 'application/octet-stream',
+  data: 'AA==',
+}
+assert.deepEqual(
+  providers.filter((provider) => planComposerAttachments(provider, [opaqueBlob]).native.length > 0),
+  ['copilot'],
+)
+assert.deepEqual(
+  providers.filter((provider) => planComposerAttachments(provider, [opaqueBlob]).unsupported.length > 0),
+  ['claude', 'codex', 'opencode', 'pi'],
+)
+
+// A retry/new turn can replace the running registry before the old stream's
+// finally block executes. Stale cleanup and stale interrupts must not erase or
+// cancel the replacement turn.
+const lifecycleSessionId = 'composer-lifecycle-race'
+let oldInterrupts = 0
+let newInterrupts = 0
+let steeredMessages = 0
+setRunningSession(lifecycleSessionId, {
+  provider: 'codex',
+  requestId: 'turn-old',
+  interrupt: async () => { oldInterrupts += 1 },
+})
+setRunningSession(lifecycleSessionId, {
+  provider: 'codex',
+  requestId: 'turn-new',
+  interrupt: async () => { newInterrupts += 1 },
+  steer: async () => { steeredMessages += 1 },
+})
+assert.equal(clearRunningSession(lifecycleSessionId, 'turn-old'), false)
+assert.deepEqual(getRunningSessionInfo(lifecycleSessionId), {
+  running: true,
+  provider: 'codex',
+  canSteer: true,
+  canInterrupt: true,
+  canBackground: false,
+})
+await interruptRunningSession(lifecycleSessionId, 'turn-old')
+assert.equal(oldInterrupts, 0)
+assert.equal(newInterrupts, 0)
+assert.deepEqual(await steerRunningSession(lifecycleSessionId, 'stale', 'turn-old'), { delivered: false })
+assert.equal(steeredMessages, 0)
+assert.equal((await steerRunningSession(lifecycleSessionId, 'current', 'turn-new')).delivered, true)
+assert.equal(steeredMessages, 1)
+await interruptRunningSession(lifecycleSessionId, 'turn-new')
+assert.equal(newInterrupts, 1)
+assert.equal(clearRunningSession(lifecycleSessionId, 'turn-new'), true)
+assert.equal(getRunningSessionInfo(lifecycleSessionId).running, false)
+
+let uncorrelatedInterrupts = 0
+setRunningSession(lifecycleSessionId, {
+  provider: 'pi',
+  interrupt: async () => { uncorrelatedInterrupts += 1 },
+})
+await interruptRunningSession(lifecycleSessionId, 'turn-targeted')
+assert.equal(uncorrelatedInterrupts, 0)
+await interruptRunningSession(lifecycleSessionId)
+assert.equal(uncorrelatedInterrupts, 1)
+clearRunningSession(lifecycleSessionId)
+
+let pendingInterrupts = 0
+await interruptRunningSession(lifecycleSessionId, 'turn-future')
+setRunningSession(lifecycleSessionId, {
+  provider: 'opencode',
+  requestId: 'turn-unrelated',
+  interrupt: async () => { pendingInterrupts += 100 },
+})
+await new Promise((resolve) => setTimeout(resolve, 0))
+assert.equal(pendingInterrupts, 0)
+setRunningSession(lifecycleSessionId, {
+  provider: 'opencode',
+  requestId: 'turn-future',
+  interrupt: async () => { pendingInterrupts += 1 },
+})
+await new Promise((resolve) => setTimeout(resolve, 0))
+assert.equal(pendingInterrupts, 1)
+clearRunningSession(lifecycleSessionId, 'turn-future')
+
+// Next.js can evaluate sessionRuntime again during a development/module reload
+// while the original provider turn is still alive. A second module instance
+// must see and control the same real registry entry rather than an empty Map.
+setRunningSession(lifecycleSessionId, {
+  provider: 'claude',
+  requestId: 'turn-reload',
+  interrupt: async () => {},
+  steer: async () => {},
+})
+const reloadedRuntimeUrl = new URL(`../lib/sessionRuntime.ts?composer-reload=${Date.now()}`, import.meta.url).href
+const reloadedRuntime = await import(reloadedRuntimeUrl) as typeof import('../lib/sessionRuntime')
+assert.deepEqual(reloadedRuntime.getRunningSessionInfo(lifecycleSessionId), {
+  running: true,
+  provider: 'claude',
+  canSteer: true,
+  canInterrupt: true,
+  canBackground: false,
+})
+assert.equal(reloadedRuntime.clearRunningSession(lifecycleSessionId, 'turn-reload'), true)
+assert.equal(getRunningSessionInfo(lifecycleSessionId).running, false)
+
+// Provider-owned singleton state must survive the same reload boundary. Codex
+// must not spawn a second app-server, and Pi must not discard its session path
+// index (which would force an all-session disk scan on the next send).
+const codexClient = getCodexClient()
+const reloadedCodexUrl = new URL(`../lib/codexClient.ts?composer-reload=${Date.now()}`, import.meta.url).href
+const reloadedCodex = await import(reloadedCodexUrl) as typeof import('../lib/codexClient')
+assert.equal(reloadedCodex.getCodexClient(), codexClient)
+globalThis.__agentViewerPiSessionPathCache?.set('composer-reload-path', '/tmp/composer-reload-path.jsonl')
+const reloadedPiUrl = new URL(`../lib/piClient.ts?composer-reload=${Date.now()}`, import.meta.url).href
+const reloadedPi = await import(reloadedPiUrl) as typeof import('../lib/piClient')
+assert.equal(piSessionPathCacheSize(), 1)
+assert.equal(reloadedPi.piSessionPathCacheSize(), 1)
+
+console.log('cross-provider composer attachment and lifecycle conformance passed')

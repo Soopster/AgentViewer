@@ -12,6 +12,7 @@ import type { AgentProvider, SendAttachment } from './types'
 // the Claude SDK AskUserQuestionInput shape (one entry per question).
 export type PendingQuestionOption = { label: string; description?: string; preview?: string }
 export type PendingQuestion = {
+  id?: string
   question: string
   header?: string
   multiSelect?: boolean
@@ -330,6 +331,7 @@ export function parsePendingQuestions(input: Record<string, unknown> | null | un
     }
     if (options.length === 0) continue
     questions.push({
+      id: typeof q.id === 'string' ? q.id : undefined,
       question,
       header: typeof q.header === 'string' ? q.header : undefined,
       multiSelect: q.multiSelect === true,
@@ -436,6 +438,7 @@ export function extractCodexApproval(payload: unknown): PendingPermission | null
   const method = stringField(eventRecord, 'method')
   if (!id || !method) return null
   const params = asRecord(eventRecord.params) ?? {}
+  const questions = method === 'item/tool/requestUserInput' ? parsePendingQuestions(params) : undefined
   const command = stringField(params, 'command')
   const cwd = stringField(params, 'cwd')
   const reason = stringField(params, 'reason')
@@ -449,6 +452,8 @@ export function extractCodexApproval(payload: unknown): PendingPermission | null
     ? 'Codex wants to apply a file change'
     : method.includes('permissions')
     ? 'Codex requests additional permissions'
+    : questions
+    ? (questions.length === 1 ? questions[0].question : `Codex has ${questions.length} questions`)
     : 'Codex requests approval'
   return {
     id,
@@ -461,6 +466,7 @@ export function extractCodexApproval(payload: unknown): PendingPermission | null
     paths: paths.length > 0 ? paths : undefined,
     detail: command ?? requestedPermissionRule ?? additionalPermissionRule ?? reason ?? undefined,
     canApproveAlways: true,
+    questions,
   }
 }
 

@@ -55,7 +55,7 @@ import { buildTaskRegistry, buildTaskRegistryFromCodexPlan, buildTaskRegistryFro
 import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSessionVisualizer'
 import StreamHistoryRail, { type StreamHistoryItem } from './StreamHistoryRail'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
-import { isNativeComposerCommandText } from '@/lib/composerCommands'
+import { commandResultExpectsTranscript, isNativeComposerCommandText } from '@/lib/composerCommands'
 import CodeThemeToggle from './CodeThemeToggle'
 import RenderFontToggle from './RenderFontToggle'
 import TabBar from './TabBar'
@@ -2522,7 +2522,7 @@ function AskUserQuestionPicker({
     const answers: Record<string, string> = {}
     questions.forEach((q, qi) => {
       const sel = selections[qi]
-      if (sel && sel.length > 0) answers[q.question] = sel.join(', ')
+      if (sel && sel.length > 0) answers[q.id ?? q.question] = sel.join(', ')
     })
     onSubmit(answers)
   }
@@ -2748,7 +2748,7 @@ export default function MessageView({
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'>('default')
   // Codex `/approvals` policy — passed through to body.approvalPolicy on send.
   // 'auto' leaves the app-server's configured default untouched.
-  const [selectedCodexApproval, setSelectedCodexApproval] = useState<'auto' | 'untrusted' | 'on-request' | 'on-failure' | 'never'>('auto')
+  const [selectedCodexApproval, setSelectedCodexApproval] = useState<'auto' | 'untrusted' | 'on-request' | 'never'>('auto')
   // Mirrors the CLI "queue next prompt while streaming" behavior. When a send
   // fires while one is in flight, the draft is captured here and flushed by an
   // effect once the active turn finishes.
@@ -3026,6 +3026,7 @@ export default function MessageView({
   const slashItemRefs = useRef<Array<HTMLButtonElement | null>>([])
   const [liveSlashCommands, setLiveSlashCommands] = useState<SlashCommandSuggestion[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const composerPrewarmInFlightRef = useRef(new Set<string>())
   const isComposingRef = useRef(false)
   const timelineRef = useRef<HTMLDivElement>(null)
   const timelineContentRef = useRef<HTMLDivElement | null>(null)
@@ -3339,6 +3340,46 @@ export default function MessageView({
       .then(data => { if (!data.error) setSessionInfo(data.info) })
       .catch(() => {})
   }, [session?.provider, session?.sessionId])
+
+  const prewarmComposer = useCallback(() => {
+    const sessionId = session?.sessionId
+    const provider = session?.provider
+    const cwd = session?.cwd
+    const isPending = session?.isPending === true
+    if (!sessionId) return
+    // Pending Claude/Codex/Copilot sessions do not have a resumable provider
+    // identity yet. Pi can warm its expensive cold open against the reserved id.
+    if (isPending && provider !== 'pi') return
+    const effort = selectedEffort === 'auto' ? undefined : selectedEffort
+    const key = [
+      provider ?? 'claude',
+      sessionId,
+      cwd ?? '',
+      selectedModel,
+      effort ?? '',
+    ].join('\0')
+    if (composerPrewarmInFlightRef.current.has(key)) return
+    composerPrewarmInFlightRef.current.add(key)
+    void fetch(`/api/sessions/${sessionId}/composer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider,
+        cwd: cwd ?? undefined,
+        model: selectedModel || undefined,
+        effort,
+        isPending,
+      }),
+    })
+      .catch(() => { /* best-effort: send pays the usual cold cost */ })
+      .finally(() => { composerPrewarmInFlightRef.current.delete(key) })
+  }, [selectedEffort, selectedModel, session?.cwd, session?.isPending, session?.provider, session?.sessionId])
+
+  useEffect(() => {
+    // Session/model selection can change through keyboard navigation while the
+    // same textarea node retains focus, in which case no new focus event fires.
+    if (document.activeElement === textareaRef.current) prewarmComposer()
+  }, [prewarmComposer])
 
   // Load message bookmarks for the active session. Reset the "bookmarks only"
   // filter on every session switch so a stale focus doesn't carry over.
@@ -3972,6 +4013,7 @@ export default function MessageView({
           const info = (await res.json().catch(() => null)) as
             | { running?: boolean; pendingPrompts?: Record<string, unknown>[] }
             | null
+          if (cancelled) return
           const running = info?.running === true
           setReattachedRunning((prev) => (prev === running ? prev : running))
           // Re-surface any tool-permission / AskUserQuestion / plan prompt the
@@ -4224,7 +4266,12 @@ export default function MessageView({
           const res = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'steer', message: queueText, provider: session.provider }),
+            body: JSON.stringify({
+              action: 'steer',
+              message: queueText,
+              provider: session.provider,
+              turnRequestId: activeTurnRequestIdRef.current ?? undefined,
+            }),
           })
           if (res.ok) {
             const json = await res.json().catch(() => ({})) as { result?: { delivered?: unknown; messageUuid?: unknown } }
@@ -4451,21 +4498,23 @@ export default function MessageView({
 
           if (frame.event === 'command-result') {
             try {
-              const parsed = JSON.parse(frame.data) as { message?: unknown; mode?: unknown }
+              const parsed = JSON.parse(frame.data) as { message?: unknown; mode?: unknown; transcriptExpected?: unknown }
               if (typeof parsed.message === 'string' && parsed.message.trim()) {
                 setSessionActionNotice(parsed.message.trim())
               }
               if (typeof parsed.mode === 'string') {
                 setSelectedCopilotMode(parsed.mode)
               }
+              if (!commandResultExpectsTranscript(parsed)) {
+                pendingMessageBaselineRef.current = null
+                setOptimisticUserText(null)
+                setSteeredUserTexts([])
+                clearLiveAssistantText()
+                setLiveToolActivities([])
+                setLiveThreadedMessages([])
+                clearLiveSubagentText()
+              }
             } catch { /* ignore malformed command result */ }
-            pendingMessageBaselineRef.current = null
-            setOptimisticUserText(null)
-            setSteeredUserTexts([])
-            clearLiveAssistantText()
-            setLiveToolActivities([])
-            setLiveThreadedMessages([])
-            clearLiveSubagentText()
             continue
           }
 
@@ -5451,8 +5500,8 @@ export default function MessageView({
     }
   }, [session, sessionActionLoading])
 
-  // Submit answers to an AskUserQuestion prompt. `answers` is keyed by question
-  // text; multi-select values are comma-joined per the SDK output schema.
+  // Submit answers to a structured question prompt. Codex keys answers by its
+  // schema id; Claude falls back to question text. Multi-select is comma-joined.
   const respondToQuestion = useCallback(async (
     permission: PendingPermission,
     answers: Record<string, string>,
@@ -8367,7 +8416,6 @@ export default function MessageView({
                     <NativeSelectOption value="auto">CONFIG</NativeSelectOption>
                     <NativeSelectOption value="untrusted">UNTRUSTED</NativeSelectOption>
                     <NativeSelectOption value="on-request">ON REQUEST</NativeSelectOption>
-                    <NativeSelectOption value="on-failure">ON FAILURE</NativeSelectOption>
                     <NativeSelectOption value="never">NEVER</NativeSelectOption>
                   </NativeSelect>
                 </label>
@@ -8889,6 +8937,7 @@ export default function MessageView({
               <Textarea
                 ref={textareaRef}
                 value={inputText}
+                onFocus={prewarmComposer}
                 onChange={e => {
                   const next = e.target.value
                   setInputText(next)

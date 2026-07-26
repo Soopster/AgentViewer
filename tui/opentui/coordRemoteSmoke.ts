@@ -59,6 +59,7 @@ try {
     cleanupTuiProtocolRunWorktrees,
     deleteTuiProtocolRun,
     listTuiProtocolRuns,
+    prewarmTuiSession,
     readTuiProtocolRun,
     startTuiProtocolRun,
     stopTuiProtocolRun,
@@ -71,6 +72,10 @@ try {
     teammateProviders: ['codex'],
     maxAgents: 3,
   })
+  await prewarmTuiSession(
+    { sessionId: 'session / remote', provider: 'pi', cwd: smokeCwd, isPending: true },
+    { model: 'anthropic/claude', effort: 'high', isPending: true },
+  )
   await listTuiProtocolRuns(7)
   await readTuiProtocolRun(snapshot.run.id)
   const event: AgentProtocolEvent = {
@@ -90,6 +95,11 @@ try {
   const encodedRun = 'run%20%2F%20remote'
   const expected: SeenRequest[] = [
     { url: base, method: 'POST', body: { prompt: 'keep working', baseCwd: smokeCwd, provider: 'codex', teammateProviders: ['codex'], maxAgents: 3 } },
+    {
+      url: 'http://daemon.example.test/api/sessions/session%20%2F%20remote/composer',
+      method: 'POST',
+      body: { provider: 'pi', cwd: smokeCwd, model: 'anthropic/claude', effort: 'high', isPending: true },
+    },
     { url: `${base}?limit=7`, method: 'GET', body: null },
     { url: `${base}/${encodedRun}`, method: 'GET', body: null },
     { url: `${base}/${encodedRun}/events`, method: 'POST', body: event },

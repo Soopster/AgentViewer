@@ -644,9 +644,19 @@ export async function prewarmTuiSession(
   session: Session,
   opts?: { model?: string; effort?: import('../types').ReasoningEffortLevel; isPending?: boolean },
 ): Promise<void> {
-  // No prewarm over the wire: the daemon warms its own pool on send, and a
-  // remote prewarm per keystroke-focus would be pure request noise.
-  if (isRemoteAttached()) return
+  if (isRemoteAttached()) {
+    await remoteJson(encodeSessionPath(session.sessionId, '/composer'), {
+      method: 'POST',
+      body: JSON.stringify({
+        provider: session.provider,
+        cwd: session.cwd ?? undefined,
+        model: opts?.model,
+        effort: opts?.effort,
+        isPending: opts?.isPending,
+      }),
+    })
+    return
+  }
   await prewarmViewSession({
     sessionId: session.sessionId,
     provider: session.provider as AgentProvider | undefined,

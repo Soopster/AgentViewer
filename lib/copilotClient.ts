@@ -139,7 +139,24 @@ export function copilotIntegrationDiagnostics(): string[] {
 // turns auto-approve, others route through an interactive bridge. We resume
 // with a stable dispatcher that reads the current handler from this map so a
 // turn can swap behavior without forcing a re-resume.
-const copilotPermissionHandlers = new Map<string, PermissionHandler>()
+type CopilotPoolEntry = { session: CopilotSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
+
+declare global {
+  // Copilot's client and streaming sessions retain JSON-RPC subscriptions and
+  // permission dispatch closures. Preserve the complete runtime across Next.js
+  // reloads so new routes keep controlling the same live provider objects.
+  // eslint-disable-next-line no-var
+  var __agentViewerCopilotPermissionHandlers: Map<string, PermissionHandler> | undefined
+  // eslint-disable-next-line no-var
+  var __agentViewerCopilotClientPromise: Promise<CopilotClient> | undefined
+  // eslint-disable-next-line no-var
+  var __agentViewerCopilotSessionPool: Map<string, CopilotPoolEntry> | undefined
+  // eslint-disable-next-line no-var
+  var __agentViewerCopilotSessionInflight: Map<string, Promise<CopilotSession>> | undefined
+}
+
+const copilotPermissionHandlers = globalThis.__agentViewerCopilotPermissionHandlers
+  ?? (globalThis.__agentViewerCopilotPermissionHandlers = new Map<string, PermissionHandler>())
 
 export function setCopilotPermissionHandler(sessionId: string, handler: PermissionHandler): void {
   copilotPermissionHandlers.set(sessionId, handler)
@@ -148,8 +165,6 @@ export function setCopilotPermissionHandler(sessionId: string, handler: Permissi
 export function clearCopilotPermissionHandler(sessionId: string): void {
   copilotPermissionHandlers.delete(sessionId)
 }
-
-let clientPromise: Promise<CopilotClient> | null = null
 
 async function createClient(): Promise<CopilotClient> {
   let client: CopilotClient
@@ -168,11 +183,16 @@ async function createClient(): Promise<CopilotClient> {
 }
 
 export async function getCopilotClient(): Promise<CopilotClient> {
-  clientPromise ??= createClient().catch((error) => {
-    clientPromise = null
-    throw error
-  })
-  return clientPromise
+  if (!globalThis.__agentViewerCopilotClientPromise) {
+    const client = createClient().catch((error) => {
+      if (globalThis.__agentViewerCopilotClientPromise === client) {
+        globalThis.__agentViewerCopilotClientPromise = undefined
+      }
+      throw error
+    })
+    globalThis.__agentViewerCopilotClientPromise = client
+  }
+  return globalThis.__agentViewerCopilotClientPromise
 }
 
 async function resumeCopilotSession(
@@ -203,8 +223,10 @@ async function resumeCopilotSession(
 // streaming-enabled session per sessionId and let callers subscribe via the
 // session's native `on()` API per turn. Evicted after TTL to bound memory.
 const COPILOT_SESSION_TTL_MS = 5 * 60 * 1000
-type CopilotPoolEntry = { session: CopilotSession; lastUsed: number; timer: ReturnType<typeof setTimeout> }
-const copilotSessionPool = new Map<string, CopilotPoolEntry>()
+const copilotSessionPool = globalThis.__agentViewerCopilotSessionPool
+  ?? (globalThis.__agentViewerCopilotSessionPool = new Map<string, CopilotPoolEntry>())
+const copilotSessionInflight = globalThis.__agentViewerCopilotSessionInflight
+  ?? (globalThis.__agentViewerCopilotSessionInflight = new Map<string, Promise<CopilotSession>>())
 
 /** Number of warm Copilot sessions currently pooled. Diagnostics only. */
 export function copilotPoolSize(): number {
@@ -235,21 +257,28 @@ export async function acquireCopilotSession(sessionId: string): Promise<CopilotS
     scheduleCopilotEviction(sessionId)
     return cached.session
   }
-  const session = await resumeCopilotSession(sessionId, {
+  const inflight = copilotSessionInflight.get(sessionId)
+  if (inflight) return inflight
+  const build = resumeCopilotSession(sessionId, {
     suppressResumeEvent: false,
     streaming: true,
+  }).then((session) => {
+    const entry: CopilotPoolEntry = {
+      session,
+      lastUsed: Date.now(),
+      timer: setTimeout(() => {}, 0),
+    }
+    copilotSessionPool.set(sessionId, entry)
+    scheduleCopilotEviction(sessionId)
+    return session
   })
-  const entry: CopilotPoolEntry = {
-    session,
-    lastUsed: Date.now(),
-    timer: setTimeout(() => {}, 0),
-  }
-  copilotSessionPool.set(sessionId, entry)
-  scheduleCopilotEviction(sessionId)
-  return session
+  copilotSessionInflight.set(sessionId, build)
+  build.finally(() => copilotSessionInflight.delete(sessionId)).catch(() => {})
+  return build
 }
 
 export async function evictCopilotSession(sessionId: string): Promise<void> {
+  await copilotSessionInflight.get(sessionId)?.catch(() => {})
   const entry = copilotSessionPool.get(sessionId)
   if (!entry) return
   clearTimeout(entry.timer)

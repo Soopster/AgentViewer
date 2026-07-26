@@ -36,9 +36,35 @@ type RunningSession = {
   requestId?: string
 }
 
-const runningSessions = new Map<string, RunningSession>()
-const waitingSessions = new Map<string, WaitingSession>()
-const pendingInterrupts = new Map<string, { requestId: string; timer: ReturnType<typeof setTimeout> }>()
+type PendingInterrupt = { requestId: string; timer: ReturnType<typeof setTimeout> }
+
+type SessionRuntimeState = {
+  runningSessions: Map<string, RunningSession>
+  waitingSessions: Map<string, WaitingSession>
+  pendingInterrupts: Map<string, PendingInterrupt>
+}
+
+declare global {
+  // Next.js development reloads can re-evaluate this module while provider
+  // turns from the previous module instance are still alive. Keep their real
+  // control closures on globalThis so the new routes can reattach, steer, and
+  // interrupt instead of observing a fresh empty registry.
+  // eslint-disable-next-line no-var
+  var __agentViewerSessionRuntimeState: SessionRuntimeState | undefined
+}
+
+function getSessionRuntimeState(): SessionRuntimeState {
+  if (!globalThis.__agentViewerSessionRuntimeState) {
+    globalThis.__agentViewerSessionRuntimeState = {
+      runningSessions: new Map(),
+      waitingSessions: new Map(),
+      pendingInterrupts: new Map(),
+    }
+  }
+  return globalThis.__agentViewerSessionRuntimeState
+}
+
+const { runningSessions, waitingSessions, pendingInterrupts } = getSessionRuntimeState()
 const PENDING_INTERRUPT_TTL_MS = 30_000
 
 export function setRunningSession(sessionId: string, session: RunningSession): void {
@@ -74,8 +100,13 @@ export function getRunningSession(sessionId: string): RunningSession | undefined
   return runningSessions.get(sessionId)
 }
 
-export function clearRunningSession(sessionId: string): void {
-  runningSessions.delete(sessionId)
+export function clearRunningSession(sessionId: string, requestId?: string): boolean {
+  const running = runningSessions.get(sessionId)
+  if (!running) return false
+  // A stale stream can finish after a retry/new turn has replaced its registry
+  // entry. Request-scoped cleanup must never erase that newer turn.
+  if (requestId && running.requestId !== requestId) return false
+  return runningSessions.delete(sessionId)
 }
 
 /**
@@ -86,7 +117,10 @@ export function clearRunningSession(sessionId: string): void {
 export async function interruptRunningSession(sessionId: string, requestId?: string, cancelQueued = false): Promise<unknown> {
   const running = runningSessions.get(sessionId)
   if (running) {
-    if (requestId && running.requestId && running.requestId !== requestId) return undefined
+    // A caller carrying a turn id is intentionally targeting one exact turn.
+    // An uncorrelated/legacy registry entry is not safe to interrupt on its
+    // behalf: it may already be the next turn after a cleanup race.
+    if (requestId && running.requestId !== requestId) return undefined
     return await running.interrupt(cancelQueued)
   }
 
@@ -113,9 +147,10 @@ export async function interruptRunningSession(sessionId: string, requestId?: str
  * set when the provider stamps the delivered message (Claude), so clients can
  * correlate command_lifecycle frames and interrupt still_queued receipts.
  */
-export async function steerRunningSession(sessionId: string, text: string): Promise<{ delivered: boolean; messageUuid?: string }> {
+export async function steerRunningSession(sessionId: string, text: string, requestId?: string): Promise<{ delivered: boolean; messageUuid?: string }> {
   const running = runningSessions.get(sessionId)
   if (!running?.steer) return { delivered: false }
+  if (requestId && running.requestId !== requestId) return { delivered: false }
   const result = await running.steer(text)
   return { delivered: true, messageUuid: typeof result === 'string' ? result : undefined }
 }

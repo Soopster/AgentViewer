@@ -146,7 +146,7 @@ import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } fr
 import { CheckpointPopover } from './CheckpointPopover'
 import { CoordinationPopover } from './CoordinationPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
-import { isNativeComposerCommandText } from '../../lib/composerCommands'
+import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../../lib/composerCommands'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '../../lib/claudeCommandLifecycle'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
@@ -4138,7 +4138,7 @@ function cycleCoordProvider(current: AgentProvider, direction: 1 | -1): AgentPro
 }
 
 type TuiEffort = 'auto' | ReasoningEffortLevel
-type TuiCodexApproval = 'auto' | 'untrusted' | 'on-request' | 'on-failure' | 'never'
+type TuiCodexApproval = 'auto' | 'untrusted' | 'on-request' | 'never'
 type TuiCopilotPermissionMode = 'off' | 'auto' | 'on'
 type ModelPickerFocus = 'model' | 'effort' | 'permissions'
 type ModelPickerOption = SelectOption & Pick<SessionModelInfo, 'supportsEffort' | 'supportedEffortLevels'>
@@ -10352,7 +10352,7 @@ export default function OpenTuiApp() {
     if (!target || !value) return
     if (target.provider === 'claude' && CLAUDE_PERMISSION_MODE_ORDER.includes(value as TuiPermissionMode)) {
       setClaudeComposerPermissionMode(target, value as TuiPermissionMode)
-    } else if (target.provider === 'codex' && (value === 'auto' || value === 'untrusted' || value === 'on-request' || value === 'on-failure' || value === 'never')) {
+    } else if (target.provider === 'codex' && (value === 'auto' || value === 'untrusted' || value === 'on-request' || value === 'never')) {
       setTuiCodexApprovalByKey((prev) => ({ ...prev, [sessionKey(target)]: value }))
     } else if (target.provider === 'copilot' && (value === 'off' || value === 'auto' || value === 'on')) {
       setTuiCopilotPermissionModeByKey((prev) => ({ ...prev, [sessionKey(target)]: value }))
@@ -10767,7 +10767,7 @@ export default function OpenTuiApp() {
         setQuestionOptionIndex(0)
         return
       }
-      answers[questions[i]!.question] = sel.join(', ')
+      answers[questions[i]!.id ?? questions[i]!.question] = sel.join(', ')
     }
     setPermissionActionLoading(permission.id)
     try {
@@ -11656,7 +11656,11 @@ export default function OpenTuiApp() {
       const steerTarget = composerTargetSession
       if (trimmed && sendAttachments.length === 0 && steerTarget && !isNativeComposerCommandText(trimmed)) {
         try {
-          const result = await runTuiSessionAction(steerTarget, { action: 'steer', message: trimmed })
+          const result = await runTuiSessionAction(steerTarget, {
+            action: 'steer',
+            message: trimmed,
+            turnRequestId: activeComposerTurnRequestIdRef.current ?? undefined,
+          })
           if (result.delivered === true) {
             setSteeredSendNotice(trimmed)
             // Echo the steered message into the live transcript immediately —
@@ -11884,7 +11888,7 @@ export default function OpenTuiApp() {
         }
         if (frame.event === 'command-result' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           const result = parsed as { message?: unknown; mode?: unknown; transcriptExpected?: unknown }
-          if (result.transcriptExpected === false) commandResultWithoutTranscript = true
+          if (!commandResultExpectsTranscript(result)) commandResultWithoutTranscript = true
           if (
             result.mode === 'interactive'
             || result.mode === 'plan'
