@@ -14,6 +14,7 @@ import {
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../lib/composerCommands'
 import { piSessionPathCacheSize } from '../lib/piClient'
 import { extractCodexApproval, extractPendingPermissions } from '../lib/permissions'
+import { getProviderCapabilities } from '../lib/provider'
 import {
   clearRunningSession,
   getRunningSessionInfo,
@@ -24,6 +25,9 @@ import {
 import type { AgentProvider, SendAttachment } from '../lib/types'
 
 const providers: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+for (const provider of providers) {
+  assert.equal(getProviderCapabilities(provider).respondToPermission, true, `${provider} interactive response capability`)
+}
 assert.equal(isNativeComposerCommandText('/compact'), true)
 assert.equal(isNativeComposerCommandText('!git status'), true)
 assert.equal(isNativeComposerCommandText('explain /compact'), false)
@@ -125,6 +129,47 @@ const copilotElicitation = extractPendingPermissions([{
 assert.equal(copilotElicitation?.id, 'copilot-elicit-1')
 assert.equal(copilotElicitation?.elicitation?.serverName, 'copilot-mcp')
 assert.deepEqual(copilotElicitation?.questions?.[0]?.options.map((option) => option.value), ['local', 'remote'])
+const openCodeQuestion = extractPendingPermissions([{
+  type: 'opencode_event',
+  event: {
+    type: 'question.asked',
+    properties: {
+      id: 'opencode-question-1',
+      sessionID: 'opencode-session',
+      questions: [{
+        header: 'Strategy',
+        question: 'How should this be implemented?',
+        multiple: false,
+        custom: true,
+        options: [
+          { label: 'Minimal', description: 'Make the smallest change.' },
+          { label: 'Complete', description: 'Cover the full workflow.' },
+        ],
+      }],
+    },
+  },
+}], { sessionId: 'fallback', provider: 'opencode' })[0]
+assert.equal(openCodeQuestion?.id, 'opencode-question-1')
+assert.equal(openCodeQuestion?.sessionId, 'opencode-session')
+assert.equal(openCodeQuestion?.questions?.[0]?.id, '0')
+assert.equal(openCodeQuestion?.questions?.[0]?.allowFreeform, true)
+assert.deepEqual(openCodeQuestion?.questions?.[0]?.options.map((option) => option.value), ['Minimal', 'Complete'])
+const piQuestion = extractPendingPermissions([{
+  type: 'pi_ui',
+  event: {
+    type: 'question.requested',
+    data: {
+      requestId: 'pi-ui-1',
+      sessionId: 'pi-session',
+      method: 'confirm',
+      title: 'Deploy changes?',
+      message: 'This will publish the current branch.',
+    },
+  },
+}], { sessionId: 'fallback', provider: 'pi' })[0]
+assert.equal(piQuestion?.id, 'pi-ui-1')
+assert.equal(piQuestion?.sessionId, 'pi-session')
+assert.deepEqual(piQuestion?.questions?.[0]?.options.map((option) => option.value), ['true', 'false'])
 const reattachedPermissions = extractPendingPermissions([
   {
     type: 'opencode_event',

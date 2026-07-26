@@ -156,7 +156,7 @@ import {
   mapCodexTokenUsageToContextUsage,
 } from './codexMapper'
 import { getCodexStoredTag, getCodexStoredTagsForSessions, setCodexStoredTag } from './codexTags'
-import { getOpenCodeClient } from './opencodeClient'
+import { getOpenCodeClient, getOpenCodeV2Client } from './opencodeClient'
 import { getOpenCodeProjectDiagnostics, getOpenCodeSessionSnapshot, subscribeToOpenCodeEvents } from './opencodeHarness'
 import { getCodexProjectDiagnostics, subscribeToCodexEvents } from './codexHarness'
 import {
@@ -189,6 +189,7 @@ import type {
   Session as OpenCodeSession,
   TextPartInput as OpenCodeTextPartInput,
 } from '@opencode-ai/sdk'
+import type { QuestionRequest as OpenCodeQuestionRequest } from '@opencode-ai/sdk/v2'
 import type { AgentEvent as PiAgentEvent, AgentMessage as PiAgentMessage } from '@earendil-works/pi-agent-core'
 import { normalizeProjectPath, sameProjectPath } from './projectPaths'
 import {
@@ -204,6 +205,17 @@ import {
   piPoolSize,
   refreshPiSessionCache,
 } from './piClient'
+import {
+  cancelPendingPiUiRequests,
+  createPiUiBridge,
+  ensurePiExtensionUiBound,
+  installPiUiHandler,
+  listPendingPiUiPayloads,
+  pendingPiUiRequestCount,
+  respondPiUiPermission,
+  respondPiUiQuestion,
+  type PiUiHandler,
+} from './piExtensionUi'
 import {
   mapPiDiagnosticsToSections,
   mapPiMessagesToSessionMessages,
@@ -2812,6 +2824,19 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       if (response !== 'once' && response !== 'always' && response !== 'reject') {
         throw new Error('response must be once, always, or reject')
       }
+      const pendingQuestion = getOpenCodeSessionSnapshot(sessionId)?.questions?.find((question) => question.id === permissionID)
+      if (pendingQuestion) {
+        if (response !== 'reject') throw new Error('OpenCode questions must be answered with respondQuestion')
+        const [questionClient, session] = await Promise.all([
+          getOpenCodeV2Client(),
+          getOpenCodeSession(sessionId),
+        ])
+        const result = await questionClient.question.reject({
+          requestID: permissionID,
+          directory: session.directory,
+        }, OPENCODE_OPTIONS)
+        return { ok: openCodeData<boolean>(result) }
+      }
       const result = await client.postSessionIdPermissionsPermissionId({
         ...OPENCODE_OPTIONS,
         path: { id: sessionId, permissionID },
@@ -2819,9 +2844,60 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
       })
       return { ok: openCodeData<boolean>(result) }
     }
+    if (action === 'respondQuestion') {
+      const permissionID = typeof body.permissionId === 'string' ? body.permissionId : ''
+      if (!permissionID) throw new Error('permissionId is required')
+      const answers = parseQuestionAnswers(body.answers)
+      if (!answers) throw new Error('answers is required')
+      const [questionClient, session] = await Promise.all([
+        getOpenCodeV2Client(),
+        getOpenCodeSession(sessionId),
+      ])
+      let question = getOpenCodeSessionSnapshot(sessionId)?.questions?.find((entry) => entry.id === permissionID)
+      if (!question) {
+        const pending = await questionClient.question.list(
+          session.directory ? { directory: session.directory } : undefined,
+          OPENCODE_OPTIONS,
+        )
+        question = openCodeData<OpenCodeQuestionRequest[]>(pending).find((entry) =>
+          entry.id === permissionID && entry.sessionID === sessionId
+        )
+      }
+      if (!question) throw new Error('Question is no longer pending')
+      const orderedAnswers = question.questions.map((entry, index) =>
+        answers[String(index)]
+          ?? answers[entry.question]
+          ?? answers[entry.header]
+          ?? []
+      )
+      const result = await questionClient.question.reply({
+        requestID: permissionID,
+        directory: session.directory,
+        answers: orderedAnswers,
+      }, OPENCODE_OPTIONS)
+      return { ok: openCodeData<boolean>(result) }
+    }
   }
 
   if (resolvedProvider === 'pi') {
+    if (action === 'respondPermission') {
+      const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
+      if (!permissionId) throw new Error('permissionId is required')
+      const response = body.response
+      if (response !== 'once' && response !== 'always' && response !== 'reject') {
+        throw new Error('response must be once, always, or reject')
+      }
+      respondPiUiPermission(sessionId, permissionId, response)
+      return { ok: true }
+    }
+    if (action === 'respondQuestion') {
+      const permissionId = typeof body.permissionId === 'string' ? body.permissionId : ''
+      if (!permissionId) throw new Error('permissionId is required')
+      const answers = parseQuestionAnswers(body.answers)
+      if (!answers) throw new Error('answers is required')
+      respondPiUiQuestion(sessionId, permissionId, answers)
+      return { ok: true }
+    }
     if (action === 'summarize') {
       const session = await openPiAgentSession(sessionId)
       await session.compact()
@@ -3666,6 +3742,9 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           downstreamClosed = true
         }
       }
+      // Commit headers/body immediately, before CLI startup or initialization.
+      // SSE comments are ignored by both clients and do not count as model output.
+      safeEnqueue(':ok\n\n')
       // Named handler so we can detach it on successful adoption — otherwise a
       // post-turn client disconnect would abort the Query we just gave to the pool.
       const propagateAbort = () => {
@@ -5162,6 +5241,12 @@ async function createOpenCodeStream(sessionId: string, signal: AbortSignal, body
         for (const permission of cached?.permissions ?? []) {
           safeEnqueue(`data: ${formatOpenCodeEvent({ type: 'permission.updated', properties: permission } as OpenCodeEvent)}\n\n`)
         }
+        for (const question of cached?.questions ?? []) {
+          safeEnqueue(`data: ${formatOpenCodeEvent({
+            type: 'question.asked',
+            properties: question,
+          } as unknown as OpenCodeEvent)}\n\n`)
+        }
 
         // Sending another prompt while the session is busy queues it server-side
         // (the native opencode TUI's type-while-running flow). The session stays
@@ -5453,6 +5538,8 @@ async function createCopilotStream(sessionId: string, signal: AbortSignal, body:
           downstreamClosed = true
         }
       }
+      // Commit the streaming response before resume/model discovery work.
+      safeEnqueue(':ok\n\n')
 
       const close = () => {
         if (cleanedUp) return
@@ -5865,6 +5952,9 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
       let targetSessionId = sessionId
       let unsubscribePi: (() => void) | undefined
       let turnOutputTokens = 0
+      const activePiUiIds = new Set<string>()
+      let piUiHandler: PiUiHandler | undefined
+      let clearPiUiHandler: (() => void) | undefined
 
       const safeEnqueue = (chunk: string) => {
         if (downstreamClosed) return
@@ -5874,10 +5964,14 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           downstreamClosed = true
         }
       }
+      // Commit the response before a cold AgentSession open/resource reload.
+      safeEnqueue(':ok\n\n')
 
       const close = () => {
         if (cleanedUp) return
         cleanedUp = true
+        cancelPendingPiUiRequests(targetSessionId, activePiUiIds)
+        clearPiUiHandler?.()
         if (downstreamClosed) return
         downstreamClosed = true
         try {
@@ -5900,6 +5994,19 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
         if (agentSession.isStreaming) {
           throw new Error('Pi is still finishing the previous message. Wait for it to complete before sending another.')
         }
+        // Claim the session before any async model/image/extension setup. Two
+        // tabs can otherwise both pass isStreaming while Pi is still idle and
+        // race into prompt(), with the later stream stealing the UI bridge.
+        // The registry check + set are synchronous, so this closes that window.
+        if (getRunningSession(sessionId)) {
+          throw new Error('Pi is already preparing or running another message for this session.')
+        }
+        setRunningSession(sessionId, {
+          provider: 'pi',
+          requestId: turnRequestId,
+          interrupt: () => agentSession.abort(),
+          steer: (text) => agentSession.steer(text),
+        })
         if (selectedModel) {
           const model = agentSession.modelRuntime.getModel(selectedModel.providerID, selectedModel.modelID)
           if (!model) {
@@ -6072,23 +6179,25 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
           return
         }
 
-        setRunningSession(sessionId, {
-          provider: 'pi',
-          requestId: turnRequestId,
-          interrupt: () => agentSession.abort(),
-          // Pi's native steering queue (queue_update events already stream the
-          // pending entries to the composer's live status line).
-          steer: (text) => agentSession.steer(text),
-        })
-
         signal.addEventListener('abort', () => {
           requestAborted = true
           if (detachOnClientAbort) {
             downstreamClosed = true
             return
           }
+          cancelPendingPiUiRequests(targetSessionId, activePiUiIds)
           void interruptRunningSession(sessionId, turnRequestId).catch(() => {})
         })
+
+        // Pi extensions use an RPC-style UI contract for select/confirm/input
+        // dialogs. Bind a stable dispatcher once per warm AgentSession and aim
+        // its current handler at this turn so extension prompts become the same
+        // reattachable structured questions used by every other provider. The
+        // running entry is installed first because extension session-start hooks
+        // can themselves request input before prompt() begins.
+        piUiHandler = createPiUiBridge(targetSessionId, safeEnqueue, activePiUiIds)
+        clearPiUiHandler = installPiUiHandler(targetSessionId, piUiHandler)
+        await ensurePiExtensionUiBound(agentSession, targetSessionId)
 
         // Subscribe to the AgentSession event stream (not the raw Agent): only
         // AgentSession surfaces willRetry on agent_end plus auto_retry/compaction/
@@ -6486,10 +6595,20 @@ function listPendingProviderPermissionPayloads(
       }))
   }
   if (provider === 'opencode') {
-    return (getOpenCodeSessionSnapshot(sessionId)?.permissions ?? []).map((permission) => ({
-      type: 'opencode_event',
-      event: { type: 'permission.updated', properties: permission },
-    }))
+    const snapshot = getOpenCodeSessionSnapshot(sessionId)
+    return [
+      ...(snapshot?.permissions ?? []).map((permission) => ({
+        type: 'opencode_event',
+        event: { type: 'permission.updated', properties: permission },
+      })),
+      ...(snapshot?.questions ?? []).map((question) => ({
+        type: 'opencode_event',
+        event: { type: 'question.asked', properties: question },
+      })),
+    ]
+  }
+  if (provider === 'pi') {
+    return listPendingPiUiPayloads(sessionId)
   }
   return []
 }
@@ -7141,6 +7260,7 @@ export function getServerMemoryDiagnostics(): Record<string, number> {
     pendingClaudeElicitations: pendingClaudeElicitations.size,
     pendingCopilotPermissions: pendingCopilotPermissions.size,
     pendingCopilotElicitations: pendingCopilotElicitations.size,
+    pendingPiUiRequests: pendingPiUiRequestCount(),
     pendingCodexApprovals: codexApprovals,
     claudePool: claudePoolSize(),
     piPool: piPoolSize(),

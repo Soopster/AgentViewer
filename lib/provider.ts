@@ -10,7 +10,7 @@ const CLAUDE_CAPABILITIES: SessionCapabilities = {
   unshareSession: false,
   summarizeSession: false,
   unrevertSession: false,
-  respondToPermission: false,
+  respondToPermission: true,
 }
 
 export const CODEX_CAPABILITIES: SessionCapabilities = {
@@ -62,7 +62,7 @@ export const PI_CAPABILITIES: SessionCapabilities = {
   unshareSession: false,
   summarizeSession: true,
   unrevertSession: false,
-  respondToPermission: false,
+  respondToPermission: true,
 }
 
 export function getProviderCapabilities(provider: AgentProvider): SessionCapabilities {

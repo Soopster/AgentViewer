@@ -5,9 +5,14 @@ import {
   type OpencodeClient,
   type OpencodeClientConfig,
 } from '@opencode-ai/sdk'
+import {
+  createOpencodeClient as createOpencodeV2Client,
+  type OpencodeClient as OpencodeV2Client,
+} from '@opencode-ai/sdk/v2'
 
 type OpenCodeRuntime = {
   client: OpencodeClient
+  clientV2: OpencodeV2Client
   server: { url: string; close(): void } | null
 }
 
@@ -27,6 +32,10 @@ function normalizeBaseUrl(value: string | undefined): string | null {
 function openCodeClientFor(baseUrl: string): OpencodeClient {
   const config: OpencodeClientConfig = { baseUrl }
   return createOpencodeClient(config)
+}
+
+function openCodeV2ClientFor(baseUrl: string): OpencodeV2Client {
+  return createOpencodeV2Client({ baseUrl })
 }
 
 async function canReachOpenCode(baseUrl: string): Promise<boolean> {
@@ -75,6 +84,7 @@ async function connectExistingServer(): Promise<OpenCodeRuntime | null> {
     if (!(await canReachOpenCode(baseUrl))) continue
     return {
       client: openCodeClientFor(baseUrl),
+      clientV2: openCodeV2ClientFor(baseUrl),
       server: null,
     }
   }
@@ -93,6 +103,7 @@ async function startManagedServer(): Promise<OpenCodeRuntime> {
 
   return {
     client: openCodeClientFor(server.url),
+    clientV2: openCodeV2ClientFor(server.url),
     server,
   }
 }
@@ -133,4 +144,13 @@ async function getOpenCodeRuntime(): Promise<OpenCodeRuntime> {
 
 export async function getOpenCodeClient(): Promise<OpencodeClient> {
   return (await getOpenCodeRuntime()).client
+}
+
+/**
+ * The package keeps its compatibility client at the root while newer native
+ * question APIs live on the v2 client. Both clients share the same long-lived
+ * server process; this does not add another connection manager or subprocess.
+ */
+export async function getOpenCodeV2Client(): Promise<OpencodeV2Client> {
+  return (await getOpenCodeRuntime()).clientV2
 }

@@ -254,6 +254,58 @@ export function extractOpenCodePermissionReply(payload: unknown): string | null 
   return properties ? stringField(properties, 'permissionID') ?? null : null
 }
 
+export function extractOpenCodeQuestion(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'opencode_event') return null
+  const event = asRecord(record.event)
+  if (!event || event.type !== 'question.asked') return null
+  const properties = asRecord(event.properties)
+  if (!properties) return null
+  const id = stringField(properties, 'id')
+  const rawQuestions = Array.isArray(properties.questions) ? properties.questions : []
+  if (!id || rawQuestions.length === 0) return null
+  const questions = rawQuestions.flatMap((rawQuestion, index): PendingQuestion[] => {
+    const question = asRecord(rawQuestion)
+    const prompt = question ? stringField(question, 'question') : undefined
+    if (!question || !prompt) return []
+    const rawOptions = Array.isArray(question.options) ? question.options : []
+    const options = rawOptions.flatMap((rawOption): PendingQuestionOption[] => {
+      const option = asRecord(rawOption)
+      const label = option ? stringField(option, 'label') : undefined
+      if (!option || !label) return []
+      return [{ label, value: label, description: stringField(option, 'description') }]
+    })
+    return [{
+      id: String(index),
+      header: stringField(question, 'header'),
+      question: prompt,
+      multiSelect: question.multiple === true,
+      allowFreeform: question.custom === true,
+      required: true,
+      options,
+    }]
+  })
+  if (questions.length === 0) return null
+  return {
+    id,
+    sessionId: stringField(properties, 'sessionID'),
+    provider: 'opencode',
+    toolName: 'question',
+    title: questions.length === 1 ? questions[0]!.question : `OpenCode has ${questions.length} questions`,
+    questions,
+    canApproveAlways: false,
+  }
+}
+
+export function extractOpenCodeQuestionReply(payload: unknown): string | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'opencode_event') return null
+  const event = asRecord(record.event)
+  if (!event || (event.type !== 'question.replied' && event.type !== 'question.rejected')) return null
+  const properties = asRecord(event.properties)
+  return properties ? stringField(properties, 'requestID') ?? null : null
+}
+
 export function extractCopilotPermission(payload: unknown): PendingPermission | null {
   const record = asRecord(payload)
   if (!record || record.type !== 'copilot_event') return null
@@ -354,6 +406,53 @@ export function extractCopilotPushedAttachments(payload: unknown): SendAttachmen
       payload: objectField(attachmentRecord, 'payload'),
     }]
   })
+}
+
+export function extractPiQuestion(payload: unknown): PendingPermission | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'pi_ui') return null
+  const event = asRecord(record.event)
+  if (!event || event.type !== 'question.requested') return null
+  const data = asRecord(event.data)
+  if (!data) return null
+  const id = stringField(data, 'requestId')
+  const method = stringField(data, 'method')
+  const title = stringField(data, 'title')
+  if (!id || !method || !title) return null
+  const rawOptions = Array.isArray(data.options)
+    ? data.options.filter((option): option is string => typeof option === 'string')
+    : []
+  const options = method === 'confirm'
+    ? [{ label: 'Yes', value: 'true' }, { label: 'No', value: 'false' }]
+    : rawOptions.map((option) => ({ label: option, value: option }))
+  const allowFreeform = method === 'input' || method === 'editor'
+  return {
+    id,
+    sessionId: stringField(data, 'sessionId'),
+    provider: 'pi',
+    toolName: `extension_ui.${method}`,
+    title,
+    detail: stringField(data, 'message') ?? stringField(data, 'placeholder'),
+    questions: [{
+      id: 'value',
+      header: method === 'confirm' ? 'Confirm' : method === 'select' ? 'Select' : 'Answer',
+      question: stringField(data, 'message') ?? title,
+      multiSelect: false,
+      allowFreeform,
+      required: true,
+      options,
+    }],
+    canApproveAlways: false,
+  }
+}
+
+export function extractPiQuestionCompletion(payload: unknown): string | null {
+  const record = asRecord(payload)
+  if (!record || record.type !== 'pi_ui') return null
+  const event = asRecord(record.event)
+  if (!event || event.type !== 'question.completed') return null
+  const data = asRecord(event.data)
+  return data ? stringField(data, 'requestId') ?? null : null
 }
 
 // Parse AskUserQuestion tool input into the structured questions the picker
@@ -641,7 +740,9 @@ export function extractCodexApproval(payload: unknown): PendingPermission | null
 // Convenience: try every provider's extractor in turn. Returns the pending
 // permission a frame describes, or null.
 export function extractPendingPermission(payload: unknown): PendingPermission | null {
-  return extractOpenCodePermission(payload)
+  return extractOpenCodeQuestion(payload)
+    ?? extractOpenCodePermission(payload)
+    ?? extractPiQuestion(payload)
     ?? extractCopilotElicitation(payload)
     ?? extractCopilotPermission(payload)
     ?? extractClaudeElicitation(payload)
@@ -666,7 +767,9 @@ export function extractPendingPermissions(
 // Convenience: try every provider's "this permission was resolved" extractor.
 // Returns the resolved permission id, or null.
 export function extractPermissionReply(payload: unknown): string | null {
-  return extractOpenCodePermissionReply(payload)
+  return extractOpenCodeQuestionReply(payload)
+    ?? extractOpenCodePermissionReply(payload)
+    ?? extractPiQuestionCompletion(payload)
     ?? extractCopilotElicitationCompletion(payload)
     ?? extractCopilotPermissionCompletion(payload)
     ?? extractClaudeElicitationCompletion(payload)

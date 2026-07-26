@@ -11,6 +11,7 @@ import type {
   SessionStatus as OpenCodeSessionStatus,
   Todo as OpenCodeTodo,
 } from '@opencode-ai/sdk'
+import type { QuestionRequest as OpenCodeQuestionRequest } from '@opencode-ai/sdk/v2'
 
 // Mirror of packages/app/src/context/global-sdk.tsx — opencode's web app
 // owns one event subscription per server connection and multiplexes the
@@ -55,6 +56,7 @@ export type SessionSnapshot = {
   status?: OpenCodeSessionStatus
   todos?: OpenCodeTodo[]
   permissions: OpenCodePermission[]
+  questions: OpenCodeQuestionRequest[]
 }
 
 export type ProjectDiagnostics = {
@@ -425,7 +427,21 @@ class OpenCodeHarness {
   private applyToSnapshot(event: OpenCodeEvent): void {
     const sessionId = eventSessionId(event)
     if (!sessionId) return
-    const existing = this.snapshots.get(sessionId) ?? { permissions: [] }
+    const existing = this.snapshots.get(sessionId) ?? { permissions: [], questions: [] }
+    const eventRecord = event as unknown as { type: string; properties?: Record<string, unknown> }
+    const properties = eventRecord.properties
+
+    if (eventRecord.type === 'question.asked' && properties) {
+      const id = typeof properties.id === 'string' ? properties.id : undefined
+      const questionSessionId = typeof properties.sessionID === 'string' ? properties.sessionID : undefined
+      if (id && questionSessionId && Array.isArray(properties.questions)) {
+        existing.questions = (existing.questions ?? []).filter((question) => question.id !== id)
+        existing.questions.push(properties as unknown as OpenCodeQuestionRequest)
+      }
+    } else if ((eventRecord.type === 'question.replied' || eventRecord.type === 'question.rejected') && properties) {
+      const requestId = typeof properties.requestID === 'string' ? properties.requestID : undefined
+      if (requestId) existing.questions = (existing.questions ?? []).filter((question) => question.id !== requestId)
+    }
 
     switch (event.type) {
       case 'session.status': {
