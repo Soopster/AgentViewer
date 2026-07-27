@@ -56,8 +56,11 @@ import MessageSessionVisualizer, { type MessageVisualizerRow } from './MessageSe
 import StreamHistoryRail, { type StreamHistoryItem } from './StreamHistoryRail'
 import { getContinueInCliCommand } from '@/lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '@/lib/composerCommands'
+import { deliverComposerSteer } from '@/lib/composerSteering'
+import { createDefaultWebComposerQueueStore, type WebComposerQueueDurability } from '@/lib/webComposerQueue'
 import {
   clearComposerQueueTarget,
+  createComposerQueueItemId,
   mergeComposerAttachments,
   removeComposerQueueItem,
   restoreComposerDraftPayload,
@@ -333,7 +336,7 @@ const TIMELINE_BOTTOM_GUTTER_PX = 72
 const TIMELINE_TARGET_TOP_GUTTER_PX = 72
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
 const COMPOSER_DRAFT_STORAGE_PREFIX = 'agentViewer:composerDraft:v1:'
-const COMPOSER_QUEUE_STORAGE_KEY = 'agentViewer:composerQueue:v1'
+const COMPOSER_QUEUE_LOCAL_INLINE_LIMIT = 256 * 1024
 const SEND_ATTACHMENT_TYPES = new Set<SendAttachment['type']>(['file', 'directory', 'selection', 'image', 'mention', 'skill', 'blob', 'agent', 'extension_context'])
 function detectMentionAtCursor(text: string, cursor: number): { start: number; query: string } | null {
   if (cursor === 0) return null
@@ -517,42 +520,49 @@ function writeComposerDraft(storageKey: string | null, draft: ComposerDraft) {
   }
 }
 
-function readComposerQueue(): QueuedWebSend[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(COMPOSER_QUEUE_STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as { version?: unknown; entries?: unknown }
-    if (parsed.version !== 1 || !Array.isArray(parsed.entries)) return []
-    return parsed.entries.flatMap((value): QueuedWebSend[] => {
-      if (!value || typeof value !== 'object') return []
-      const entry = value as Partial<QueuedWebSend>
-      if (typeof entry.id !== 'string' || !entry.id) return []
-      if (typeof entry.targetKey !== 'string' || !entry.targetKey) return []
-      if (typeof entry.text !== 'string') return []
-      return [{
-        id: entry.id,
-        targetKey: entry.targetKey,
-        text: entry.text,
-        attachments: normalizeDraftAttachments(entry.attachments),
-      }]
-    })
-  } catch {
-    return []
-  }
+function isQueuedWebSend(value: unknown): value is QueuedWebSend {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Partial<QueuedWebSend>
+  if (typeof entry.id !== 'string' || !entry.id) return false
+  if (typeof entry.targetKey !== 'string' || !entry.targetKey) return false
+  if (typeof entry.text !== 'string' || !Array.isArray(entry.attachments)) return false
+  return entry.attachments.every((attachment) => (
+    Boolean(attachment)
+    && typeof attachment === 'object'
+    && typeof attachment.type === 'string'
+    && SEND_ATTACHMENT_TYPES.has(attachment.type as SendAttachment['type'])
+  ))
 }
 
-function writeComposerQueue(queue: QueuedWebSend[]): void {
-  if (typeof window === 'undefined') return
-  try {
-    if (queue.length === 0) {
-      window.localStorage.removeItem(COMPOSER_QUEUE_STORAGE_KEY)
-      return
+function shouldInlineComposerQueue(queue: QueuedWebSend[]): boolean {
+  let inlineChars = 0
+  for (const entry of queue) {
+    inlineChars += entry.text.length + entry.id.length + entry.targetKey.length
+    for (const attachment of entry.attachments) {
+      // Structured extension payloads can be arbitrarily large. Keep those on
+      // IndexedDB's asynchronous path instead of serializing them on the input
+      // event that queues the follow-up.
+      if (attachment.payload) return false
+      inlineChars += (attachment.data?.length ?? 0)
+        + (attachment.text?.length ?? 0)
+        + (attachment.path?.length ?? 0)
+        + (attachment.filePath?.length ?? 0)
+        + (attachment.displayName?.length ?? 0)
+      if (inlineChars > COMPOSER_QUEUE_LOCAL_INLINE_LIMIT) return false
     }
-    window.localStorage.setItem(COMPOSER_QUEUE_STORAGE_KEY, JSON.stringify({ version: 1, entries: queue }))
-  } catch {
-    /* localStorage may be unavailable or full */
   }
+  return true
+}
+
+let webComposerQueueStore: ReturnType<typeof createDefaultWebComposerQueueStore<QueuedWebSend>> | null = null
+
+function getWebComposerQueueStore() {
+  webComposerQueueStore ??= createDefaultWebComposerQueueStore(
+    isQueuedWebSend,
+    shouldInlineComposerQueue,
+    (entry) => entry.id,
+  )
+  return webComposerQueueStore
 }
 
 function extractSseFrames(buffer: string): { frames: SseFrame[]; remaining: string } {
@@ -2841,26 +2851,53 @@ export default function MessageView({
   // silently dropped all but the most recent draft.
   const [queuedSends, setQueuedSends] = useState<QueuedWebSend[]>([])
   const queuedSendsRef = useRef<QueuedWebSend[]>([])
-  const queuedSendCounterRef = useRef(0)
   const [composerQueueStorageReady, setComposerQueueStorageReady] = useState(false)
+  const [composerQueueDurability, setComposerQueueDurability] = useState<WebComposerQueueDurability>('saving')
+  const composerQueueCommitCounterRef = useRef(0)
+  const composerQueueClaimInFlightRef = useRef(new Set<string>())
+  const composerQueueMountedRef = useRef(false)
   // Queue mutations are durability-sensitive: update the transient ref and
   // localStorage in the originating event before yielding back to React. An
   // effect-only write leaves a small page-close window where the newest queue
   // state has rendered but is neither in the ref nor on disk yet.
   const commitQueuedSends = useCallback((next: QueuedWebSend[]) => {
     queuedSendsRef.current = next
-    writeComposerQueue(next)
     setQueuedSends(next)
+    composerQueueCommitCounterRef.current += 1
+    const commitNumber = composerQueueCommitCounterRef.current
+    const commit = getWebComposerQueueStore().commit(next)
+    setComposerQueueDurability(commit.durability)
+    void commit.settled.then((durability) => {
+      if (composerQueueCommitCounterRef.current === commitNumber) setComposerQueueDurability(durability)
+    })
   }, [])
   useEffect(() => {
-    const restored = readComposerQueue()
-    queuedSendsRef.current = restored
-    setQueuedSends(restored)
-    setComposerQueueStorageReady(true)
+    let cancelled = false
+    composerQueueMountedRef.current = true
+    const store = getWebComposerQueueStore()
+    const sync = store.hydrateSync()
+    queuedSendsRef.current = sync.entries
+    setQueuedSends(sync.entries)
+    setComposerQueueDurability(sync.durability)
+    void store.hydrateAsync().then((restored) => {
+      if (cancelled) return
+      if (restored) {
+        queuedSendsRef.current = restored.entries
+        setQueuedSends(restored.entries)
+        setComposerQueueDurability(restored.durability)
+      }
+      setComposerQueueStorageReady(true)
+    })
+    return () => {
+      cancelled = true
+      composerQueueMountedRef.current = false
+    }
   }, [])
   const composerQueueTargetKey = session
     ? `${session.provider ?? 'claude'}:${session.sessionId}`
     : null
+  const composerQueueTargetKeyRef = useRef(composerQueueTargetKey)
+  composerQueueTargetKeyRef.current = composerQueueTargetKey
   const activeQueuedSends = useMemo(
     () => selectComposerQueueTarget(queuedSends, composerQueueTargetKey),
     [composerQueueTargetKey, queuedSends],
@@ -4391,37 +4428,38 @@ export default function MessageView({
       // flushes into the send path, which does exactly that.
       if ((sendInFlightRef.current || reattachedRunningRef.current) && queueAttachments.length === 0 && !isNativeComposerCommandText(queueText)) {
         try {
-          const res = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'steer',
-              message: queueText,
-              provider: session.provider,
-              turnRequestId: activeTurnRequestIdRef.current ?? undefined,
-            }),
+          const result = await deliverComposerSteer(async (payload) => {
+            const res = await fetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/actions`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            })
+            if (!res.ok) throw new Error(`Steer failed with HTTP ${res.status}`)
+            const json = await res.json() as { result?: { delivered?: unknown; messageUuid?: unknown } }
+            if (!json.result) throw new Error('Steer response did not include a result')
+            return json.result
+          }, {
+            message: queueText,
+            provider: session.provider,
+            turnRequestId: activeTurnRequestIdRef.current ?? undefined,
           })
-          if (res.ok) {
-            const json = await res.json().catch(() => ({})) as { result?: { delivered?: unknown; messageUuid?: unknown } }
-            if (json.result?.delivered === true) {
-              setSteeredNotice(queueText)
-              // Echo it into the live overlay immediately — it's part of the
-              // running turn now, like typing in the provider's native CLI.
-              const messageUuid = typeof json.result.messageUuid === 'string' ? json.result.messageUuid : undefined
-              const nextSteeredEntries = [...steeredUserTextsRef.current, { text: queueText, messageUuid }]
-              steeredUserTextsRef.current = nextSteeredEntries
-              setSteeredUserTexts(nextSteeredEntries)
-              return
-            }
+          if (result.delivered === true) {
+            setSteeredNotice(queueText)
+            // Echo it into the live overlay immediately — it's part of the
+            // running turn now, like typing in the provider's native CLI.
+            const messageUuid = typeof result.messageUuid === 'string' ? result.messageUuid : undefined
+            const nextSteeredEntries = [...steeredUserTextsRef.current, { text: queueText, messageUuid }]
+            steeredUserTextsRef.current = nextSteeredEntries
+            setSteeredUserTexts(nextSteeredEntries)
+            return
           }
         } catch {
           // Steering is best-effort; the queue below is the reliable path.
         }
       }
       const targetKey = `${session.provider ?? 'claude'}:${session.sessionId}`
-      queuedSendCounterRef.current += 1
       commitQueuedSends([...queuedSendsRef.current, {
-        id: `${targetKey}:${Date.now()}:${queuedSendCounterRef.current}`,
+        id: createComposerQueueItemId(targetKey),
         targetKey,
         text: queueText,
         attachments: queueAttachments,
@@ -5041,6 +5079,7 @@ export default function MessageView({
     if (activeQueuedSends.length === 0) return
     if (!composerQueueStorageReady || runningProbeReadyKey !== composerQueueTargetKey) return
     if (sendInFlightRef.current || awaitingPersistedTurnRef.current) return
+    if (!composerQueueTargetKey) return
     // A turn we reattached to is still running server-side — flushing now would
     // start a second concurrent turn. Wait for the /running poll to clear.
     if (reattachedRunning) return
@@ -5048,21 +5087,46 @@ export default function MessageView({
     // a queued send after a failed turn (and clobber the restored draft).
     if (sendState !== 'idle' || awaitingPersistedTurn) return
     const next = activeQueuedSends[0]!
-    const remaining = removeComposerQueueItem(queuedSendsRef.current, next.id)
-    // Persist dequeue before starting provider I/O. A tab/process crash can
-    // never replay a prompt the provider may already have accepted.
-    commitQueuedSends(remaining)
-    setInputText(next.text)
-    inputTextRef.current = next.text
-    setAttachments(next.attachments)
-    window.requestAnimationFrame(() => {
-      const ta = textareaRef.current
-      if (ta) {
-        ta.value = next.text
-        ta.setSelectionRange(next.text.length, next.text.length)
+    if (composerQueueClaimInFlightRef.current.has(next.id)) return
+    composerQueueClaimInFlightRef.current.add(next.id)
+    // Claim across browser tabs and persist the dequeue before provider I/O.
+    // A stale tab that loses the claim updates to the authoritative queue and
+    // never sends the same follow-up a second time.
+    const claimedTargetKey = composerQueueTargetKey
+    const store = getWebComposerQueueStore()
+    void store.claim(claimedTargetKey, next.id).then((claim) => {
+      composerQueueCommitCounterRef.current += 1
+      queuedSendsRef.current = claim.entries
+      if (composerQueueMountedRef.current) {
+        setQueuedSends(claim.entries)
+        setComposerQueueDurability(claim.durability)
       }
-      resizeComposer()
-      void sendMessage()
+      if (!claim.claimed) return
+      if (!composerQueueMountedRef.current || composerQueueTargetKeyRef.current !== claimedTargetKey) {
+        // Navigation/session changes can occur while waiting for another tab's
+        // lock. Put the unconsumed entry back instead of sending it through a
+        // composer that now targets a different session.
+        const restoredQueue = [next, ...claim.entries.filter((entry) => entry.id !== next.id)]
+        if (composerQueueMountedRef.current) commitQueuedSends(restoredQueue)
+        else store.commit(restoredQueue)
+        return
+      }
+      setInputText(next.text)
+      inputTextRef.current = next.text
+      setAttachments(next.attachments)
+      window.requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (ta) {
+          ta.value = next.text
+          ta.setSelectionRange(next.text.length, next.text.length)
+        }
+        resizeComposer()
+        void sendMessage()
+      })
+    }).catch(() => {
+      if (composerQueueMountedRef.current) setComposerQueueDurability('memory-only')
+    }).finally(() => {
+      composerQueueClaimInFlightRef.current.delete(next.id)
     })
   }, [activeQueuedSends, awaitingPersistedTurn, commitQueuedSends, composerQueueStorageReady, composerQueueTargetKey, reattachedRunning, resizeComposer, runningProbeReadyKey, sendMessage, sendState])
 
@@ -6206,6 +6270,8 @@ export default function MessageView({
     ? (channelBridge.sendError ? 'Bridge error' : 'Bridge · sends to live CLI')
     : interrupting
     ? 'Interrupting…'
+    : activeQueuedSends.length > 0 && composerQueueDurability === 'memory-only'
+    ? 'Queued in memory · keep this tab open'
     : activeQueuedSends.length > 0 && (sendState === 'sending' || awaitingPersistedTurn)
     ? (activeQueuedSends.length === 1
       ? 'Queued · sends after current turn'
@@ -6223,6 +6289,8 @@ export default function MessageView({
     ? 'var(--red, #f87171)'
     : canUseChannelBridge && channelBridge.routeComposer
     ? (channelBridge.sendError ? 'var(--red, #f87171)' : `var(${composerConfig.cssAccentVar})`)
+    : activeQueuedSends.length > 0 && composerQueueDurability === 'memory-only'
+    ? 'var(--red, #f87171)'
     : activeQueuedSends.length > 0
     ? 'var(--amber, #eaaa40)'
     : sendState === 'sending' || awaitingPersistedTurn || reattachedRunning
@@ -8995,6 +9063,29 @@ export default function MessageView({
                   opacity: 0.85,
                 }}>
                   Queued ({activeQueuedSends.length})
+                </span>
+                <span
+                  role="status"
+                  style={{
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontSize: 9,
+                    color: composerQueueDurability === 'memory-only'
+                      ? 'var(--red, #f87171)'
+                      : composerQueueDurability === 'saving'
+                      ? 'var(--cyan)'
+                      : 'var(--text-3)',
+                  }}
+                  title={composerQueueDurability === 'memory-only'
+                    ? 'Browser storage is unavailable. Keep this tab open or edit the queued message back into the composer.'
+                    : composerQueueDurability === 'saving'
+                    ? 'Saving queued messages to browser storage…'
+                    : 'Queued messages are saved in browser storage.'}
+                >
+                  {composerQueueDurability === 'memory-only'
+                    ? 'Memory only'
+                    : composerQueueDurability === 'saving'
+                    ? 'Saving…'
+                    : 'Saved'}
                 </span>
                 {activeQueuedSends.map((entry, index) => {
                   const preview = entry.text.replace(/\s+/g, ' ').trim()

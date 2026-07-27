@@ -38,10 +38,20 @@ type RunningSession = {
 
 type PendingInterrupt = { requestId: string; timer: ReturnType<typeof setTimeout> }
 
+type SteerReceipt = {
+  text: string
+  turnRequestId?: string
+  createdAt: number
+  settled: boolean
+  promise: Promise<{ delivered: boolean; messageUuid?: string }>
+}
+
 type SessionRuntimeState = {
   runningSessions: Map<string, RunningSession>
   waitingSessions: Map<string, WaitingSession>
   pendingInterrupts: Map<string, PendingInterrupt>
+  /** Optional for compatibility with state created before a development HMR. */
+  steerReceipts?: Map<string, SteerReceipt>
 }
 
 declare global {
@@ -59,13 +69,17 @@ function getSessionRuntimeState(): SessionRuntimeState {
       runningSessions: new Map(),
       waitingSessions: new Map(),
       pendingInterrupts: new Map(),
+      steerReceipts: new Map(),
     }
   }
+  globalThis.__agentViewerSessionRuntimeState.steerReceipts ??= new Map()
   return globalThis.__agentViewerSessionRuntimeState
 }
 
-const { runningSessions, waitingSessions, pendingInterrupts } = getSessionRuntimeState()
+const { runningSessions, waitingSessions, pendingInterrupts, steerReceipts } = getSessionRuntimeState()
 const PENDING_INTERRUPT_TTL_MS = 30_000
+const STEER_RECEIPT_TTL_MS = 10 * 60 * 1000
+const MAX_STEER_RECEIPTS = 1_000
 
 export function setRunningSession(sessionId: string, session: RunningSession): void {
   // A new foreground turn supersedes the prior Stop-hook pause snapshot. The
@@ -153,6 +167,70 @@ export async function steerRunningSession(sessionId: string, text: string, reque
   if (requestId && running.requestId !== requestId) return { delivered: false }
   const result = await running.steer(text)
   return { delivered: true, messageUuid: typeof result === 'string' ? result : undefined }
+}
+
+function pruneSteerReceipts(now: number): void {
+  for (const [key, receipt] of steerReceipts!) {
+    if (receipt.settled && now - receipt.createdAt >= STEER_RECEIPT_TTL_MS) {
+      steerReceipts!.delete(key)
+    }
+  }
+}
+
+function reserveSteerReceiptSlot(): boolean {
+  if (steerReceipts!.size < MAX_STEER_RECEIPTS) return true
+  for (const [key, receipt] of steerReceipts!) {
+    if (!receipt.settled) continue
+    steerReceipts!.delete(key)
+    return true
+  }
+  return false
+}
+
+/**
+ * Process-local exactly-once wrapper for a steering request. It retains both
+ * in-flight and recently settled receipts so an HTTP retry after a lost
+ * response observes the original result instead of invoking the provider a
+ * second time. The request id is scoped to the session and exact turn/text.
+ */
+export function steerRunningSessionIdempotent(
+  sessionId: string,
+  text: string,
+  turnRequestId: string | undefined,
+  steerRequestId: string | undefined,
+): Promise<{ delivered: boolean; messageUuid?: string }> {
+  if (!steerRequestId) return steerRunningSession(sessionId, text, turnRequestId)
+  const now = Date.now()
+  pruneSteerReceipts(now)
+  const key = `${sessionId}\u0000${steerRequestId}`
+  const existing = steerReceipts!.get(key)
+  if (existing) {
+    if (existing.text !== text || existing.turnRequestId !== turnRequestId) {
+      return Promise.reject(new Error('steerRequestId was reused with a different payload'))
+    }
+    return existing.promise
+  }
+  if (!reserveSteerReceiptSlot()) {
+    return Promise.reject(new Error('Steer receipt capacity reached; request was not delivered'))
+  }
+
+  const receipt: SteerReceipt = {
+    text,
+    turnRequestId,
+    createdAt: now,
+    settled: false,
+    promise: Promise.resolve({ delivered: false }),
+  }
+  receipt.promise = steerRunningSession(sessionId, text, turnRequestId).finally(() => {
+    receipt.settled = true
+  })
+  steerReceipts!.set(key, receipt)
+  return receipt.promise
+}
+
+export function getSessionRuntimeDiagnostics(): { steerReceipts: number } {
+  pruneSteerReceipts(Date.now())
+  return { steerReceipts: steerReceipts!.size }
 }
 
 /**

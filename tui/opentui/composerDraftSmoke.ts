@@ -29,12 +29,12 @@ const queued = [{
   promptParts: [],
 }]
 scheduleWriteComposerQueue(queued)
-flushComposerQueueWrites()
+assert.equal(flushComposerQueueWrites(), true)
 const queueFile = path.join(process.cwd(), '.agent-viewer-data', 'composer-drafts', 'queue-v1.json')
 assert.deepEqual(JSON.parse(readFileSync(queueFile, 'utf8')), { version: 1, entries: queued })
 
 scheduleWriteComposerQueue([])
-flushComposerQueueWrites()
+assert.equal(flushComposerQueueWrites(), true)
 assert.deepEqual(JSON.parse(readFileSync(queueFile, 'utf8')), { version: 1, entries: [] })
 
 console.log('Composer drafts remain isolated and follow-up queue commits flush atomically')

@@ -56,6 +56,7 @@ import { buildTaskRegistry } from '../../lib/taskRegistry'
 import { buildDiffCommentComposerPrompt } from '../../lib/diffCommentComposer'
 import {
   clearComposerQueueTarget,
+  createComposerQueueItemId,
   mergeComposerAttachments,
   rekeyComposerQueueTarget,
   removeComposerQueueItem,
@@ -163,6 +164,7 @@ import { CheckpointPopover } from './CheckpointPopover'
 import { CoordinationPopover } from './CoordinationPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../../lib/composerCommands'
+import { deliverComposerSteer } from '../../lib/composerSteering'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '../../lib/claudeCommandLifecycle'
 import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '../../lib/transientError'
 import { listProjectFiles } from '../../lib/projectFiles'
@@ -6873,7 +6875,7 @@ export default function OpenTuiApp() {
   const [queuedComposerSends, setQueuedComposerSends] = useState<QueuedComposerSend[]>(() =>
     readComposerQueue(isQueuedComposerSend))
   const queuedComposerSendsRef = useRef<QueuedComposerSend[]>(queuedComposerSends)
-  const queuedComposerSendCounterRef = useRef(0)
+  const [composerQueueDurable, setComposerQueueDurable] = useState(true)
   const [runningRegistryReady, setRunningRegistryReady] = useState(false)
   // Follow-up queue mutations must be crash-safe before the next render. Keep
   // the transient ref and atomic queue file in lockstep in the originating
@@ -6882,7 +6884,7 @@ export default function OpenTuiApp() {
   const commitQueuedComposerSends = useEffectEvent((next: QueuedComposerSend[]) => {
     queuedComposerSendsRef.current = next
     scheduleWriteComposerQueue(next)
-    flushComposerQueueWrites()
+    setComposerQueueDurable(flushComposerQueueWrites())
     setQueuedComposerSends(next)
   })
   const activeComposerTurnRequestIdRef = useRef<string | null>(null)
@@ -11784,11 +11786,14 @@ export default function OpenTuiApp() {
       const steerTarget = composerTargetSession
       if (trimmed && sendAttachments.length === 0 && steerTarget && !isNativeComposerCommandText(trimmed)) {
         try {
-          const result = await runTuiSessionAction(steerTarget, {
-            action: 'steer',
-            message: trimmed,
-            turnRequestId: activeComposerTurnRequestIdRef.current ?? undefined,
-          })
+          const result = await deliverComposerSteer(
+            (payload) => runTuiSessionAction(steerTarget, payload),
+            {
+              message: trimmed,
+              provider: steerTarget.provider,
+              turnRequestId: activeComposerTurnRequestIdRef.current ?? undefined,
+            },
+          )
           if (result.delivered === true) {
             setSteeredSendNotice(trimmed)
             // Echo the steered message into the live transcript immediately —
@@ -11813,9 +11818,8 @@ export default function OpenTuiApp() {
           // Steering is best-effort; the queue below is the reliable path.
         }
       }
-      queuedComposerSendCounterRef.current += 1
       commitQueuedComposerSends([...queuedComposerSendsRef.current, {
-        id: `${submissionTargetKey}:${Date.now()}:${queuedComposerSendCounterRef.current}`,
+        id: createComposerQueueItemId(submissionTargetKey),
         targetKey: submissionTargetKey,
         text: submission.visibleText,
         attachments: sendAttachments,
@@ -13743,6 +13747,8 @@ export default function OpenTuiApp() {
   const turnRunningForComposer = composerSendState === 'sending' || reattachedRunning
   const composerStatusMessage = composerError
     ? composerError
+    : activeQueuedComposerSends.length > 0 && !composerQueueDurable
+      ? 'Queue persistence failed · keep this TUI open or edit the message back into the composer.'
     : awaitingPersistedTurn
       ? 'Syncing transcript…'
       : activeQueuedComposerSends.length > 0 && turnRunningForComposer
@@ -17070,11 +17076,11 @@ export default function OpenTuiApp() {
         backgroundColor={theme.surface2}
         border
         borderStyle="single"
-        borderColor={theme.amber ?? theme.border2}
+        borderColor={composerQueueDurable ? (theme.amber ?? theme.border2) : theme.red}
         flexDirection="column"
       >
-        <text fg={theme.amber ?? composerAccentColor} wrapMode="none">
-          {fitText(`queued (${activeQueuedComposerSends.length}) · sends in order after this turn · ⌃Y edit newest · ⇧⌃Y clear`, rowWidth)}
+        <text fg={composerQueueDurable ? (theme.amber ?? composerAccentColor) : theme.red} wrapMode="none">
+          {fitText(`${composerQueueDurable ? '' : 'memory only · '}queued (${activeQueuedComposerSends.length}) · sends in order after this turn · ⌃Y edit newest · ⇧⌃Y clear`, rowWidth)}
         </text>
         {activeQueuedComposerSends.slice(0, visible).map((entry, index) => {
           const compact = compactComposerEntryText(entry.text)

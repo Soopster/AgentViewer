@@ -73,20 +73,18 @@ function readComposerQueueSync(): unknown[] {
   }
 }
 
-function flushComposerQueue(): void {
+function flushComposerQueue(): boolean {
   queuedComposerWriteTimer = null
-  if (!queuedComposerState) return
+  if (!queuedComposerState) return true
   try {
     ensureDir()
-    if (queuedComposerState.length === 0) {
-      if (existsSync(QUEUE_FILE)) writeFileSync(QUEUE_FILE, JSON.stringify({ version: 1, entries: [] }), 'utf-8')
-      return
-    }
     const temporaryFile = `${QUEUE_FILE}.${process.pid}.tmp`
     writeFileSync(temporaryFile, JSON.stringify({ version: 1, entries: queuedComposerState }), 'utf-8')
     renameSync(temporaryFile, QUEUE_FILE)
+    return true
   } catch {
     // best-effort; the in-memory queue remains authoritative for this process
+    return false
   }
 }
 
@@ -100,12 +98,12 @@ export function scheduleWriteComposerQueue<T>(entries: T[]): void {
   if (!queuedComposerWriteTimer) queuedComposerWriteTimer = setTimeout(flushComposerQueue, 100)
 }
 
-export function flushComposerQueueWrites(): void {
+export function flushComposerQueueWrites(): boolean {
   if (queuedComposerWriteTimer) {
     clearTimeout(queuedComposerWriteTimer)
     queuedComposerWriteTimer = null
   }
-  flushComposerQueue()
+  return flushComposerQueue()
 }
 
 // --- Sent history (global, text-only, persisted across restarts) ---

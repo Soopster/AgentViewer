@@ -18,6 +18,15 @@ export type SessionOwnedComposerQueueEntry = {
   targetKey: string
 }
 
+let composerQueueIdCounter = 0
+
+export function createComposerQueueItemId(targetKey: string): string {
+  const randomUuid = globalThis.crypto?.randomUUID
+  if (typeof randomUuid === 'function') return `${targetKey}:${randomUuid.call(globalThis.crypto)}`
+  composerQueueIdCounter += 1
+  return `${targetKey}:${Date.now()}:${Math.random().toString(36).slice(2)}:${composerQueueIdCounter}`
+}
+
 export function selectComposerQueueTarget<T extends SessionOwnedComposerQueueEntry>(
   queue: T[],
   targetKey: string | null,

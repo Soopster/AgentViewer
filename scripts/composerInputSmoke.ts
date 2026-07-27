@@ -3,6 +3,7 @@ import { getCodexClient } from '../lib/codexClient'
 import { buildCodexComposerInput } from '../lib/codexComposerInput'
 import {
   clearComposerQueueTarget,
+  createComposerQueueItemId,
   mergeComposerAttachments,
   planComposerAttachments,
   rekeyComposerQueueTarget,
@@ -12,6 +13,7 @@ import {
   selectComposerQueueTarget,
 } from '../lib/composerAttachments'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../lib/composerCommands'
+import { deliverComposerSteer } from '../lib/composerSteering'
 import { steerCopilotSession } from '../lib/copilotClient'
 import { piSessionPathCacheSize } from '../lib/piClient'
 import { extractCodexApproval, extractPendingPermissions } from '../lib/permissions'
@@ -23,11 +25,14 @@ import {
   interruptRunningSession,
   setRunningSession,
   steerRunningSession,
+  steerRunningSessionIdempotent,
 } from '../lib/sessionRuntime'
-import { startTurnWatchdog } from '../lib/sessionBackend'
+import { runViewSessionAction, startTurnWatchdog } from '../lib/sessionBackend'
 import type { AgentProvider, SendAttachment } from '../lib/types'
 
 const providers: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
+const queueItemIds = new Set(Array.from({ length: 100 }, () => createComposerQueueItemId('codex:shared')))
+assert.equal(queueItemIds.size, 100, 'queue item ids must remain unique across independent producers')
 for (const provider of providers) {
   assert.equal(getProviderCapabilities(provider).respondToPermission, true, `${provider} interactive response capability`)
   const composer = getProviderComposer(provider)
@@ -435,6 +440,72 @@ assert.deepEqual(await steerRunningSession(lifecycleSessionId, 'stale', 'turn-ol
 assert.equal(steeredMessages, 0)
 assert.equal((await steerRunningSession(lifecycleSessionId, 'current', 'turn-new')).delivered, true)
 assert.equal(steeredMessages, 1)
+const idempotentResults = await Promise.all([
+  steerRunningSessionIdempotent(lifecycleSessionId, 'exactly once', 'turn-new', 'steer-request-1'),
+  steerRunningSessionIdempotent(lifecycleSessionId, 'exactly once', 'turn-new', 'steer-request-1'),
+])
+assert.equal(idempotentResults.every((result) => result.delivered), true)
+assert.equal(steeredMessages, 2, 'concurrent retries with one steer request id must invoke the provider once')
+await assert.rejects(
+  steerRunningSessionIdempotent(lifecycleSessionId, 'different payload', 'turn-new', 'steer-request-1'),
+  /different payload/,
+)
+
+let ambiguousTransportAttempts = 0
+const ambiguousTransportRequestIds = new Set<string>()
+const retryResult = await deliverComposerSteer(async (payload) => {
+  ambiguousTransportAttempts += 1
+  ambiguousTransportRequestIds.add(payload.steerRequestId)
+  const result = await steerRunningSessionIdempotent(
+    lifecycleSessionId,
+    payload.message,
+    payload.turnRequestId,
+    payload.steerRequestId,
+  )
+  if (ambiguousTransportAttempts === 1) throw new Error('response connection lost after delivery')
+  return result
+}, {
+  message: 'retry safely',
+  provider: 'codex',
+  turnRequestId: 'turn-new',
+})
+assert.equal(retryResult.delivered, true)
+assert.equal(ambiguousTransportAttempts, 2)
+assert.equal(ambiguousTransportRequestIds.size, 1, 'transport retry must reuse one request id')
+assert.equal(steeredMessages, 3, 'same-id transport retry must not invoke the provider twice')
+
+const actionPayload = {
+  action: 'steer',
+  message: 'action layer retry',
+  turnRequestId: 'turn-new',
+  steerRequestId: 'steer-action-request-1',
+}
+const actionResults = await Promise.all([
+  runViewSessionAction({ sessionId: lifecycleSessionId, body: actionPayload, provider: 'codex' }),
+  runViewSessionAction({ sessionId: lifecycleSessionId, body: actionPayload, provider: 'codex' }),
+])
+assert.equal(actionResults.every((result) => result.delivered === true), true)
+assert.equal(steeredMessages, 4, 'action-layer retries must share the runtime steer receipt')
+await assert.rejects(
+  runViewSessionAction({
+    sessionId: lifecycleSessionId,
+    provider: 'codex',
+    body: { ...actionPayload, steerRequestId: 'x'.repeat(257) },
+  }),
+  /steerRequestId is too long/,
+)
+
+let definiteRejectionAttempts = 0
+const definiteRejection = await deliverComposerSteer(async () => {
+  definiteRejectionAttempts += 1
+  return { delivered: false }
+}, {
+  message: 'queue this instead',
+  provider: 'codex',
+  turnRequestId: 'turn-new',
+})
+assert.equal(definiteRejection.delivered, false)
+assert.equal(definiteRejectionAttempts, 1, 'a definite not-delivered result must fall back without retrying')
 await interruptRunningSession(lifecycleSessionId, 'turn-new')
 assert.equal(newInterrupts, 1)
 assert.equal(clearRunningSession(lifecycleSessionId, 'turn-new'), true)

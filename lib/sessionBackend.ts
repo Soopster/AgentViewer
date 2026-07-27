@@ -79,7 +79,7 @@ import {
   type SessionEvent as CopilotSessionEvent,
   type SessionMetadata as CopilotSessionMetadata,
 } from '@github/copilot-sdk'
-import { backgroundRunningSession, clearRunningSession, clearWaitingSession, getRunningSession, getRunningSessionInfo, interruptRunningSession, listRunningSessionRefs, listWaitingSessions, setRunningSession, steerRunningSession } from './sessionRuntime'
+import { backgroundRunningSession, clearRunningSession, clearWaitingSession, getRunningSession, getRunningSessionInfo, getSessionRuntimeDiagnostics, interruptRunningSession, listRunningSessionRefs, listWaitingSessions, setRunningSession, steerRunningSessionIdempotent } from './sessionRuntime'
 import { listViewerAttention } from './viewerAttention'
 import { createTurnCheckpoint } from './checkpoints'
 import { isNativeComposerCommandText } from './composerCommands'
@@ -2748,10 +2748,14 @@ export async function runViewSessionAction({ sessionId, body, provider }: Sessio
     const turnRequestId = typeof body.turnRequestId === 'string' && body.turnRequestId.trim()
       ? body.turnRequestId.trim()
       : undefined
+    const steerRequestId = typeof body.steerRequestId === 'string' && body.steerRequestId.trim()
+      ? body.steerRequestId.trim()
+      : undefined
     if (!message) throw new Error('message is required')
+    if (steerRequestId && steerRequestId.length > 256) throw new Error('steerRequestId is too long')
     if (isNativeComposerCommandText(message)) return { delivered: false }
     try {
-      const steered = await steerRunningSession(sessionId, message, turnRequestId)
+      const steered = await steerRunningSessionIdempotent(sessionId, message, turnRequestId, steerRequestId)
       return { delivered: steered.delivered, messageUuid: steered.messageUuid }
     } catch {
       return { delivered: false }
@@ -7251,6 +7255,7 @@ export function getServerMemoryDiagnostics(): Record<string, number> {
     pendingCopilotElicitations: pendingCopilotElicitations.size,
     pendingPiUiRequests: pendingPiUiRequestCount(),
     pendingCodexApprovals: codexApprovals,
+    ...getSessionRuntimeDiagnostics(),
     claudePool: claudePoolSize(),
     piPool: piPoolSize(),
     copilotPool: copilotPoolSize(),
