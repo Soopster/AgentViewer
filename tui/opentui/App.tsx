@@ -3320,6 +3320,22 @@ function isAgentsToolOnlyCard(card: TuiTranscriptCard): boolean {
   return card.category === 'technical' || card.category === 'diff'
 }
 
+// A lone operation already has a purpose-built transcript card. In centered
+// (non-wide) Agents view, wrapping it in the multi-operation agent container
+// adds a redundant "1 tool call" header and a second layer of padding. Keep
+// the grouped treatment for actual groups and for full-width mode, where the
+// agent rail is part of the intended presentation.
+export function shouldRenderStandaloneAgentToolCard(
+  card: TuiTranscriptCard,
+  transcriptView: TuiTranscriptView,
+  transcriptWidth: TuiTranscriptWidth,
+): boolean {
+  return transcriptView === 'agents'
+    && transcriptWidth === 'centered'
+    && !card.key.startsWith('agents-tools:')
+    && isAgentsToolOnlyCard(card)
+}
+
 function agentsToolCollapsedLines(card: TuiTranscriptCard): TuiTranscriptCardLine[] {
   const summary = agentsToolSummaryLine(card)
   if (card.lines.length === 0) return [summary]
@@ -4124,6 +4140,19 @@ function codeBlockLabel(block: TuiTranscriptCodeBlock): string {
 // full box returns on expand. Height math below must mirror that branch.
 function isCompactSystemCard(card: TuiTranscriptCard, isExpanded: boolean): boolean {
   return card.category === 'system' && !isExpanded
+}
+
+// Tail-follow normally owns the scroll position, so the outer cursor does not
+// request a reveal there. Nested tool navigation is different: its parent card
+// key stays fixed while the highlighted child moves, and that child still needs
+// to be brought into view even when the group is the latest transcript card.
+export function transcriptCursorScrollTargetKey(
+  transcriptCursorKey: string | null,
+  agentToolCursorKey: string | null,
+  followTail: boolean,
+): string | null {
+  if (agentToolCursorKey) return agentToolCursorKey
+  return followTail ? null : transcriptCursorKey
 }
 
 function cardHeight(
@@ -9381,8 +9410,9 @@ export default function OpenTuiApp() {
     const result = renderedTranscriptCards.map((card) => {
       const isExpanded = expandedKeysForRender.has(card.key)
       const thinkingFull = thinkingFullKeys.has(card.key)
-      const agentsModeForCard = transcriptView === 'agents'
-        || (transcriptView === 'stream' && isStreamOperationalCard(card))
+      const agentsModeForCard = !shouldRenderStandaloneAgentToolCard(card, transcriptView, transcriptWidth)
+        && (transcriptView === 'agents'
+          || (transcriptView === 'stream' && isStreamOperationalCard(card)))
       // Stream is a chronological transcript, not a collapsed card preview:
       // feed prose its untruncated formatter lines and let the text renderer
       // wrap them to the active transcript width. Technical cards stay bounded.
@@ -9433,7 +9463,7 @@ export default function OpenTuiApp() {
       })
     }
     return result
-  }, [renderedTranscriptCards, expandedKeysForRender, densityState.bodyLines, thinkingFullKeys, transcriptView])
+  }, [renderedTranscriptCards, expandedKeysForRender, densityState.bodyLines, thinkingFullKeys, transcriptView, transcriptWidth])
 
   const allLandmarksRef = useRef<CardLandmark[][] | null>(null)
   const allLandmarks = useMemo(() => {
@@ -9617,7 +9647,8 @@ export default function OpenTuiApp() {
         imessageStyle,
         transcriptWidth,
         streamMode: transcriptView === 'stream',
-        agentsMode: transcriptView === 'agents' || (transcriptView === 'stream' && isStreamOperationalCard(card)),
+        agentsMode: !shouldRenderStandaloneAgentToolCard(card, transcriptView, transcriptWidth)
+          && (transcriptView === 'agents' || (transcriptView === 'stream' && isStreamOperationalCard(card))),
         agentToolCursorKey: groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null,
         agentToolExpandedKeys: groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS,
         agentToolCollapsedKeys: groupedToolView ? collapsedCardKeys : EMPTY_EXPANDED_KEYS,
@@ -13547,19 +13578,28 @@ export default function OpenTuiApp() {
     tabSelectRef.current.setSelectedIndex(activeTabIndex)
   }, [activeTabIndex])
 
+  const activeAgentToolCursorKey = groupedToolView
+    && transcriptCursorKey
+    && resolvedExpandedKeys.has(transcriptCursorKey)
+    ? agentToolCursorByGroupKey[transcriptCursorKey] ?? null
+    : null
   useEffect(() => {
-    if (!transcriptCursorKey) return
-    if (followTail) return
+    const scrollTargetKey = transcriptCursorScrollTargetKey(
+      transcriptCursorKey,
+      activeAgentToolCursorKey,
+      followTail,
+    )
+    if (!scrollTargetKey) return
     const timer = setTimeout(() => {
       const scrollbox = transcriptScrollRef.current
-      scrollbox?.scrollChildIntoView(`card:${transcriptCursorKey}`)
+      scrollbox?.scrollChildIntoView(`card:${scrollTargetKey}`)
       const scrollTop = scrollbox?.scrollTop
       if (typeof scrollTop === 'number') {
         pausedTranscriptScrollTopRef.current = scrollTop
       }
     }, 0)
     return () => clearTimeout(timer)
-  }, [followTail, transcriptCursorKey])
+  }, [activeAgentToolCursorKey, followTail, transcriptCursorKey])
 
   // ── Reader window management ───────────────────────────────────────────────
   // Reset the detached window whenever the displayed session changes or the
