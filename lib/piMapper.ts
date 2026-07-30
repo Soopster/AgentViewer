@@ -177,10 +177,13 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
       }]
     }
     case 'bashExecution': {
-      const be = msg as { role: 'bashExecution'; command: string; output: string; exitCode: number | undefined; cancelled: boolean; truncated: boolean; timestamp: number; excludeFromContext?: boolean }
+      const be = msg as { role: 'bashExecution'; command: string; output: string; exitCode: number | undefined; cancelled: boolean; truncated: boolean; fullOutputPath?: string; timestamp: number; excludeFromContext?: boolean }
       const output = be.output ? `\n${be.output}` : ''
-      const exitLabel = be.exitCode !== undefined ? ` (exit ${be.exitCode})` : ''
+      const exitLabel = be.cancelled ? ' (cancelled)' : be.exitCode !== undefined ? ` (exit ${be.exitCode})` : ''
       const contextLabel = be.excludeFromContext ? ' [excluded from context]' : ''
+      const truncatedNote = be.truncated
+        ? `\n[output truncated${be.fullOutputPath ? ` — full output: ${be.fullOutputPath}` : ''}]`
+        : ''
       return [{
         type: 'assistant',
         uuid: `pi-${sessionId}-${index}-bash`,
@@ -209,8 +212,8 @@ function mapSingleMessage(sessionId: string, msg: AgentMessage, index: number): 
           content: [{
             type: 'tool_result',
             tool_use_id: `bash-${index}`,
-            content: `$ ${be.command}${contextLabel}${output}${exitLabel}`,
-            is_error: (be.exitCode !== undefined && be.exitCode !== 0) || undefined,
+            content: `$ ${be.command}${contextLabel}${output}${truncatedNote}${exitLabel}`,
+            is_error: be.cancelled || (be.exitCode !== undefined && be.exitCode !== 0) || undefined,
           }],
         },
       }]

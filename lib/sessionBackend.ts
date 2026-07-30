@@ -1787,6 +1787,7 @@ function recordPiLiveBashMessage(
     exitCode?: number
     cancelled?: boolean
     truncated?: boolean
+    fullOutputPath?: string
   },
 ): void {
   recordPiLiveMessage(sessionId, {
@@ -1796,6 +1797,7 @@ function recordPiLiveBashMessage(
     exitCode: params.exitCode,
     cancelled: params.cancelled ?? false,
     truncated: params.truncated ?? false,
+    fullOutputPath: params.fullOutputPath,
     timestamp: Date.now(),
     excludeFromContext: params.excludeFromContext,
   } as unknown as PiAgentMessage, `bash:${params.command}`)
@@ -6163,6 +6165,7 @@ async function createPiStream(sessionId: string, signal: AbortSignal, body: Reco
             exitCode: typeof bashResult.exitCode === 'number' ? bashResult.exitCode : undefined,
             cancelled: Boolean(bashResult.cancelled),
             truncated: Boolean(bashResult.truncated),
+            fullOutputPath: typeof bashResult.fullOutputPath === 'string' ? bashResult.fullOutputPath : undefined,
           })
           clearRunningSession(sessionId, turnRequestId)
           broadcastLiveSessionActivity('pi', targetSessionId)
