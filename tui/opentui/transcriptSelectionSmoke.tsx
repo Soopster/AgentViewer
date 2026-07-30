@@ -2,9 +2,10 @@
 import React from 'react'
 import {
   selectTranscriptCardVariants,
-  shouldRenderStandaloneAgentToolCard,
+  shouldCenterTranscriptCard,
   transcriptCursorScrollTargetKey,
   type TranscriptCardSelectionVariants,
+  usesAgentCardPresentation,
 } from './App'
 import type { TuiTranscriptCard } from '../format'
 
@@ -74,23 +75,32 @@ const conversationCard = {
   category: 'conversation',
 } as TuiTranscriptCard
 
-if (!shouldRenderStandaloneAgentToolCard(standaloneToolCard, 'agents', 'centered')) {
-  throw new Error('Centered Agents view did not keep a single tool call on its native card surface')
+if (!usesAgentCardPresentation(standaloneToolCard, 'agents')) {
+  throw new Error('Agents view did not use the grouped presentation for a single tool call')
 }
-if (!shouldRenderStandaloneAgentToolCard(standaloneDiffCard, 'agents', 'centered')) {
-  throw new Error('Centered Agents view did not keep a single file change on its native card surface')
+if (!usesAgentCardPresentation(standaloneDiffCard, 'agents')) {
+  throw new Error('Agents view did not use the grouped presentation for a single file change')
 }
-if (shouldRenderStandaloneAgentToolCard(groupedToolCard, 'agents', 'centered')) {
-  throw new Error('Centered Agents view unwrapped a real multi-tool group')
+if (!usesAgentCardPresentation(groupedToolCard, 'agents')) {
+  throw new Error('Agents view lost the grouped presentation for a multi-tool group')
 }
-if (shouldRenderStandaloneAgentToolCard(standaloneToolCard, 'agents', 'full')) {
-  throw new Error('Wide Agents view lost its agent-group presentation')
+if (usesAgentCardPresentation(standaloneToolCard, 'conversation')) {
+  throw new Error('Conversation view incorrectly adopted the Agents tool presentation')
 }
-if (shouldRenderStandaloneAgentToolCard(standaloneToolCard, 'stream', 'centered')) {
-  throw new Error('Stream view incorrectly adopted the centered Agents exception')
+if (!usesAgentCardPresentation(standaloneToolCard, 'stream')) {
+  throw new Error('Stream view lost its operational tool presentation')
 }
-if (shouldRenderStandaloneAgentToolCard(conversationCard, 'agents', 'centered')) {
-  throw new Error('Centered Agents view treated prose as a standalone tool card')
+if (usesAgentCardPresentation(conversationCard, 'stream')) {
+  throw new Error('Stream view incorrectly treated prose as an operational tool card')
+}
+if (!shouldCenterTranscriptCard(standaloneDiffCard, 'centered', true)) {
+  throw new Error('A single Agents file change did not match the centered multi-tool width')
+}
+if (shouldCenterTranscriptCard(standaloneDiffCard, 'centered', false)) {
+  throw new Error('Native diff review unexpectedly lost its full-width layout')
+}
+if (shouldCenterTranscriptCard(groupedToolCard, 'full', true)) {
+  throw new Error('Wide Agents view unexpectedly centered a tool group')
 }
 
 if (transcriptCursorScrollTargetKey('group:one', 'tool:two', true) !== 'tool:two') {
@@ -106,4 +116,4 @@ if (transcriptCursorScrollTargetKey('card:one', null, true) !== null) {
   throw new Error('Ordinary tail-follow unexpectedly requested an outer card reveal')
 }
 
-console.log('Transcript selection identity, centered single-tool rendering, and nested reveal smoke passed')
+console.log('Transcript selection identity, consistent Agents tool rendering, and nested reveal smoke passed')

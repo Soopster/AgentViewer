@@ -3320,22 +3320,6 @@ function isAgentsToolOnlyCard(card: TuiTranscriptCard): boolean {
   return card.category === 'technical' || card.category === 'diff'
 }
 
-// A lone operation already has a purpose-built transcript card. In centered
-// (non-wide) Agents view, wrapping it in the multi-operation agent container
-// adds a redundant "1 tool call" header and a second layer of padding. Keep
-// the grouped treatment for actual groups and for full-width mode, where the
-// agent rail is part of the intended presentation.
-export function shouldRenderStandaloneAgentToolCard(
-  card: TuiTranscriptCard,
-  transcriptView: TuiTranscriptView,
-  transcriptWidth: TuiTranscriptWidth,
-): boolean {
-  return transcriptView === 'agents'
-    && transcriptWidth === 'centered'
-    && !card.key.startsWith('agents-tools:')
-    && isAgentsToolOnlyCard(card)
-}
-
 function agentsToolCollapsedLines(card: TuiTranscriptCard): TuiTranscriptCardLine[] {
   const summary = agentsToolSummaryLine(card)
   if (card.lines.length === 0) return [summary]
@@ -3508,6 +3492,28 @@ function groupStreamToolCards(cards: TuiTranscriptCard[]): TuiTranscriptCard[] {
 
 function isStreamOperationalCard(card: TuiTranscriptCard): boolean {
   return card.key.startsWith('agents-tools:') || card.category === 'technical'
+}
+
+// Agents view uses one consistent card language for prose, standalone tools,
+// and grouped tools. Stream keeps that treatment only for operational rows.
+// Keeping this decision shared between body preparation and element creation
+// prevents a single tool from receiving grouped lines but a native wrapper (or
+// vice versa).
+export function usesAgentCardPresentation(
+  card: TuiTranscriptCard,
+  transcriptView: TuiTranscriptView,
+): boolean {
+  return transcriptView === 'agents'
+    || (transcriptView === 'stream' && isStreamOperationalCard(card))
+}
+
+export function shouldCenterTranscriptCard(
+  card: TuiTranscriptCard,
+  transcriptWidth: TuiTranscriptWidth,
+  agentsMode: boolean,
+): boolean {
+  return transcriptWidth === 'centered'
+    && (card.category !== 'diff' || agentsMode)
 }
 
 function agentToolCardsFor(card: TuiTranscriptCard): TuiTranscriptCard[] {
@@ -4856,7 +4862,10 @@ function TranscriptCardInner({
                 ? accent
                 : theme.border
   const availableCardWidth = Math.max(rightPaneWidth - 4, 20)
-  const centeredCard = card.category !== 'diff' && transcriptWidth === 'centered'
+  // Native diff review keeps the full reader width. Once a diff is presented
+  // as an Agents operation, its outer container should follow the same centered
+  // width as every multi-tool group; the nested diff still fills that container.
+  const centeredCard = shouldCenterTranscriptCard(card, transcriptWidth, agentsMode)
   const readableCardWidth = centeredCard
     ? Math.min(availableCardWidth, MAX_TRANSCRIPT_CARD_WIDTH)
     : availableCardWidth
@@ -9410,9 +9419,7 @@ export default function OpenTuiApp() {
     const result = renderedTranscriptCards.map((card) => {
       const isExpanded = expandedKeysForRender.has(card.key)
       const thinkingFull = thinkingFullKeys.has(card.key)
-      const agentsModeForCard = !shouldRenderStandaloneAgentToolCard(card, transcriptView, transcriptWidth)
-        && (transcriptView === 'agents'
-          || (transcriptView === 'stream' && isStreamOperationalCard(card)))
+      const agentsModeForCard = usesAgentCardPresentation(card, transcriptView)
       // Stream is a chronological transcript, not a collapsed card preview:
       // feed prose its untruncated formatter lines and let the text renderer
       // wrap them to the active transcript width. Technical cards stay bounded.
@@ -9463,7 +9470,7 @@ export default function OpenTuiApp() {
       })
     }
     return result
-  }, [renderedTranscriptCards, expandedKeysForRender, densityState.bodyLines, thinkingFullKeys, transcriptView, transcriptWidth])
+  }, [renderedTranscriptCards, expandedKeysForRender, densityState.bodyLines, thinkingFullKeys, transcriptView])
 
   const allLandmarksRef = useRef<CardLandmark[][] | null>(null)
   const allLandmarks = useMemo(() => {
@@ -9647,8 +9654,7 @@ export default function OpenTuiApp() {
         imessageStyle,
         transcriptWidth,
         streamMode: transcriptView === 'stream',
-        agentsMode: !shouldRenderStandaloneAgentToolCard(card, transcriptView, transcriptWidth)
-          && (transcriptView === 'agents' || (transcriptView === 'stream' && isStreamOperationalCard(card))),
+        agentsMode: usesAgentCardPresentation(card, transcriptView),
         agentToolCursorKey: groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null,
         agentToolExpandedKeys: groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS,
         agentToolCollapsedKeys: groupedToolView ? collapsedCardKeys : EMPTY_EXPANDED_KEYS,
