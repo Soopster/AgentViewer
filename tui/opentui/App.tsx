@@ -184,6 +184,7 @@ import { release, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  calculateSplitPaneBodyRows,
   calculateSplitPaneLayout,
   groupItemsBySplitPaneKey,
   preserveArrayIdentity,
@@ -6486,13 +6487,9 @@ function SplitTranscriptPaneInner({
     scrollRef.current?.scrollChildIntoView(`card:${cursorKey}`)
   }, [cursorKey, tailCards])
 
-  // Losing focus hands the pane back to the live tail — a stale cursor left
-  // behind would freeze an unfocused pane's view.
-  useEffect(() => {
-    if (focused) return
-    setCursorKey(null)
-    setFollowTail(true)
-  }, [focused])
+  // Focus changes intentionally do not touch cursorKey, followTail, or the
+  // scrollbox. Each pane owns its viewport, so cycling reader → pane → pane
+  // returns to the exact card and offset that pane had before losing focus.
 
   const scrollbarOptions = useMemo(
     () => ({ trackOptions: { foregroundColor: theme.muted, backgroundColor: theme.surface2 } }),
@@ -6501,13 +6498,12 @@ function SplitTranscriptPaneInner({
 
   const accent = transcriptAccent('assistant', session.provider ?? undefined)
   const innerWidth = Math.max(width - 4, 12)
-  // The focused pane trades one body row for its key hint, so the scroll
-  // viewport must shrink to match or the hint pushes past the bottom border.
   const statusRowCount = (liveText || (running && tailCards.length > 0)) ? 1 : 0
   // Exact row budget, or the frame shrinks: border (2) + meta row (1) + the
-  // body box's own paddingBottom (1) + the optional live and hint rows. Getting
-  // this one row wrong made the pane render ~3 rows short of the reader.
-  const bodyRows = Math.max(height - 4 - statusRowCount - (focused ? 1 : 0), 3)
+  // body box's own paddingBottom (1) + the optional live row + one action row.
+  // The action row is reserved in every pane so focus never changes viewport
+  // height or the meaning of its stored scrollTop.
+  const bodyRows = calculateSplitPaneBodyRows(height, statusRowCount)
   // Count against the PERSISTED window only — live cards are additions, not
   // part of the loaded history, and would otherwise undercount what's above.
   const hiddenCount = Math.max(cards.length - persistedTailCards.length, 0)
@@ -6653,13 +6649,13 @@ function SplitTranscriptPaneInner({
           <Spinner label={fitText('working…', Math.max(innerWidth - 2, 8))} fg={theme.dim} />
         </box>
       ) : null}
-      {focused ? (
-        <box paddingX={1} height={1}>
-          <text fg={theme.dim} wrapMode="none">
-            {fitText(running ? 'j/k card  e fold  y copy  b mark  c send  ⌃C stop  ↵ open  esc reader' : 'j/k card  e fold  y copy  b mark  Q reply  c send  ↵ open  esc reader', innerWidth)}
-          </text>
-        </box>
-      ) : null}
+      <box paddingX={1} height={1}>
+        <text fg={theme.dim} wrapMode="none">
+          {focused
+            ? fitText(running ? 'j/k card  e fold  y copy  b mark  c send  ⌃C stop  ↵ open  esc reader' : 'j/k card  e fold  y copy  b mark  Q reply  c send  ↵ open  esc reader', innerWidth)
+            : ' '}
+        </text>
+      </box>
     </box>
   )
 }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 
 import {
+  calculateSplitPaneBodyRows,
   calculateSplitPaneLayout,
   groupItemsBySplitPaneKey,
   preserveArrayIdentity,
@@ -52,4 +53,11 @@ const twoPaneLayout = calculateSplitPaneLayout({
 })
 assert.equal(twoPaneLayout.visibleCount, 2)
 
-console.log('Split pane state routing, identity, close targeting, and layout passed')
+// Focus styling must never resize a pane's scroll viewport. The action row is
+// permanently reserved, leaving the same body height before and after focus
+// navigation; a live-status row remains the only intentional height change.
+assert.equal(calculateSplitPaneBodyRows(40, 0), 35)
+assert.equal(calculateSplitPaneBodyRows(40, 1), 34)
+assert.equal(calculateSplitPaneBodyRows(6, 0), 3)
+
+console.log('Split pane state routing, identity, viewport stability, close targeting, and layout passed')
