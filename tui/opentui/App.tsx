@@ -6028,6 +6028,77 @@ function TranscriptCardInner({
 
 const TranscriptCard = React.memo(TranscriptCardInner)
 
+export type TranscriptCardSelectionVariants = {
+  cardKey: string
+  idle: React.ReactNode
+  selected: React.ReactNode
+  focused: React.ReactNode
+}
+
+type TranscriptCardVariantProps = Omit<TranscriptCardProps, 'hasCursor' | 'isSelected'>
+type TranscriptCardVariantCacheEntry = {
+  props: TranscriptCardVariantProps
+  variants: TranscriptCardSelectionVariants
+}
+
+function makeTranscriptCardSelectionVariants(
+  props: TranscriptCardVariantProps,
+): TranscriptCardSelectionVariants {
+  const render = (hasCursor: boolean, isSelected: boolean) => (
+    <TranscriptCard
+      key={props.card.key}
+      {...props}
+      hasCursor={hasCursor}
+      isSelected={isSelected}
+    />
+  )
+  return {
+    cardKey: props.card.key,
+    idle: render(false, false),
+    selected: render(false, true),
+    focused: render(true, true),
+  }
+}
+
+function transcriptCardVariantPropsEqual(
+  left: TranscriptCardVariantProps,
+  right: TranscriptCardVariantProps,
+): boolean {
+  const keys = Object.keys(left) as Array<keyof TranscriptCardVariantProps>
+  if (keys.length !== Object.keys(right).length) return false
+  for (const key of keys) {
+    if (!Object.is(left[key], right[key])) return false
+  }
+  return true
+}
+
+function cachedTranscriptCardSelectionVariants(
+  cache: WeakMap<TuiTranscriptCard, TranscriptCardVariantCacheEntry>,
+  props: TranscriptCardVariantProps,
+): TranscriptCardSelectionVariants {
+  const previous = cache.get(props.card)
+  if (previous && transcriptCardVariantPropsEqual(previous.props, props)) return previous.variants
+  const variants = makeTranscriptCardSelectionVariants(props)
+  cache.set(props.card, { props, variants })
+  return variants
+}
+
+// Cursor movement used to rebuild a fresh React element for every mounted
+// card, even though React.memo ultimately rendered only the old and new
+// selection. Reuse the exact prebuilt element for every unchanged card so
+// React can skip reconciliation by identity. The chosen TranscriptCard and
+// its props are identical to the previous implementation; this adds no
+// wrapper or native node and cannot change card geometry or scroll offsets.
+export function selectTranscriptCardVariants<T extends TranscriptCardSelectionVariants>(
+  variants: readonly T[],
+  cursorKey: string | null,
+  focused: boolean,
+): React.ReactNode[] {
+  return variants.map((variant) => variant.cardKey === cursorKey
+    ? focused ? variant.focused : variant.selected
+    : variant.idle)
+}
+
 // ── Split transcript panes ───────────────────────────────────────────────────
 // A split pane is a read-only tail view of another open tab, mounted beside the
 // primary reader so two (or three) sessions can be watched at once. It owns its
@@ -6039,8 +6110,9 @@ const SPLIT_PANE_MIN_WIDTH = 46
 const SPLIT_PANE_MAX = 2
 // Tail-only mount budget. OpenTUI's scrollbox lays out every mounted child, so
 // a pane that mounted the whole transcript would cost the same as a second
-// reader; 30 collapsed cards is a screenful with headroom for scroll-back.
-const SPLIT_PANE_CARD_WINDOW = 30
+// reader; 80 collapsed cards provides deeper scroll-back while retaining the
+// existing paged growth behavior for older history.
+const SPLIT_PANE_CARD_WINDOW = 80
 const SPLIT_PANE_POLL_MS = 2500
 const SPLIT_PANE_EMPTY_NOTES: Map<string, TranscriptDiffNote> = new Map()
 const SPLIT_PANE_EMPTY_NUMBERS: Readonly<Record<string, number>> = {}
@@ -6123,6 +6195,7 @@ function SplitTranscriptPaneInner({
   const [error, setError] = useState<string | null>(null)
   const [followTail, setFollowTail] = useState(true)
   const scrollRef = useRef<ScrollBoxRenderable>(null)
+  const selectionVariantCacheRef = useRef(new WeakMap<TuiTranscriptCard, TranscriptCardVariantCacheEntry>())
   const key = sessionKey(session)
 
 
@@ -6400,6 +6473,72 @@ function SplitTranscriptPaneInner({
   // Count against the PERSISTED window only — live cards are additions, not
   // part of the loaded history, and would otherwise undercount what's above.
   const hiddenCount = Math.max(cards.length - persistedTailCards.length, 0)
+  const splitCardVariants = useMemo(() => tailCards.map((card, index) => {
+    const display = displayData[index]
+    if (!display) return null
+    return cachedTranscriptCardSelectionVariants(selectionVariantCacheRef.current, {
+      card,
+      display,
+      theme,
+      densityState,
+      syntaxStyle,
+      rightPaneWidth: width,
+      isExpanded: expandedKeys.has(card.key),
+      isSearchHit: false,
+      isActiveMatch: false,
+      bookmarked: bookmarkedKeys.has(card.key),
+      onSelectCard: selectPaneCard,
+      thinkingMode,
+      diffLayout,
+      imessageStyle,
+      transcriptWidth,
+      streamMode: transcriptView === 'stream',
+      agentsMode: false,
+      agentToolCursorKey: null,
+      agentToolExpandedKeys: EMPTY_EXPANDED_KEYS,
+      agentToolCollapsedKeys: EMPTY_EXPANDED_KEYS,
+      onSelectAgentTool: noopSelectAgentTool,
+      noteNamespace: `split:${key}`,
+      diffNotes: SPLIT_PANE_EMPTY_NOTES,
+      diffDraft: null,
+      hoveredDiffAnchor: null,
+      activateDiffHover: noopDiffHover,
+      openDiffNote: noopOpenDiffNote,
+      sendDiffNoteToComposer: noopSendDiffNote,
+      diffPlain: false,
+      diffShowLineNumbers: true,
+      diffShowHunkHeaders: true,
+      diffRowCursor: 0,
+      diffSelectionAnchor: null,
+      diffPlainCardKeys: EMPTY_EXPANDED_KEYS,
+      diffHiddenLineNumberCardKeys: EMPTY_EXPANDED_KEYS,
+      diffHiddenHunkHeaderCardKeys: EMPTY_EXPANDED_KEYS,
+      diffRowCursorByCardKey: SPLIT_PANE_EMPTY_NUMBERS,
+      diffSelectionAnchorByCardKey: SPLIT_PANE_EMPTY_NUMBERS,
+      setDiffRowCursor: noopSetDiffRow,
+      setDiffSelectionAnchor: noopSetDiffAnchor,
+    })
+  }).filter((variant): variant is TranscriptCardSelectionVariants => variant !== null), [
+    tailCards,
+    displayData,
+    theme,
+    densityState,
+    syntaxStyle,
+    width,
+    expandedKeys,
+    bookmarkedKeys,
+    selectPaneCard,
+    thinkingMode,
+    diffLayout,
+    imessageStyle,
+    transcriptWidth,
+    transcriptView,
+    key,
+  ])
+  const splitCardElements = useMemo(
+    () => selectTranscriptCardVariants(splitCardVariants, cursorKey, focused),
+    [splitCardVariants, cursorKey, focused],
+  )
 
   return (
     <box
@@ -6462,57 +6601,7 @@ function SplitTranscriptPaneInner({
                   </text>
                 </box>
               ) : null}
-              {tailCards.map((card, i) => {
-                const display = displayData[i]
-                if (!display) return null
-                return (
-                  <TranscriptCard
-                    key={card.key}
-                    card={card}
-                    display={display}
-                    theme={theme}
-                    densityState={densityState}
-                    syntaxStyle={syntaxStyle}
-                    rightPaneWidth={width}
-                    isExpanded={expandedKeys.has(card.key)}
-                    hasCursor={focused && card.key === cursorKey}
-                    isSelected={card.key === cursorKey}
-                    isSearchHit={false}
-                    isActiveMatch={false}
-                    bookmarked={bookmarkedKeys.has(card.key)}
-                    onSelectCard={selectPaneCard}
-                    thinkingMode={thinkingMode}
-                    diffLayout={diffLayout}
-                    imessageStyle={imessageStyle}
-                    transcriptWidth={transcriptWidth}
-                    streamMode={transcriptView === 'stream'}
-                    agentsMode={false}
-                    agentToolCursorKey={null}
-                    agentToolExpandedKeys={EMPTY_EXPANDED_KEYS}
-                    agentToolCollapsedKeys={EMPTY_EXPANDED_KEYS}
-                    onSelectAgentTool={noopSelectAgentTool}
-                    noteNamespace={`split:${key}`}
-                    diffNotes={SPLIT_PANE_EMPTY_NOTES}
-                    diffDraft={null}
-                    hoveredDiffAnchor={null}
-                    activateDiffHover={noopDiffHover}
-                    openDiffNote={noopOpenDiffNote}
-                    sendDiffNoteToComposer={noopSendDiffNote}
-                    diffPlain={false}
-                    diffShowLineNumbers
-                    diffShowHunkHeaders
-                    diffRowCursor={0}
-                    diffSelectionAnchor={null}
-                    diffPlainCardKeys={EMPTY_EXPANDED_KEYS}
-                    diffHiddenLineNumberCardKeys={EMPTY_EXPANDED_KEYS}
-                    diffHiddenHunkHeaderCardKeys={EMPTY_EXPANDED_KEYS}
-                    diffRowCursorByCardKey={SPLIT_PANE_EMPTY_NUMBERS}
-                    diffSelectionAnchorByCardKey={SPLIT_PANE_EMPTY_NUMBERS}
-                    setDiffRowCursor={noopSetDiffRow}
-                    setDiffSelectionAnchor={noopSetDiffAnchor}
-                  />
-                )
-              })}
+              {splitCardElements}
             </TuiErrorBoundary>
           </scrollbox>
         )}
@@ -9501,66 +9590,102 @@ export default function OpenTuiApp() {
   const selectAgentTool = useCallback((groupKey: string, toolKey: string) => {
     setAgentToolCursorByGroupKey((current) => current[groupKey] === toolKey ? current : { ...current, [groupKey]: toolKey })
   }, [])
-  const transcriptChildren = useMemo(() => {
-    const cards: React.ReactNode[] = renderedTranscriptCards.map((card, i) => {
+  const transcriptCardVariantCacheRef = useRef(new WeakMap<TuiTranscriptCard, TranscriptCardVariantCacheEntry>())
+  const transcriptCardVariants = useMemo(() => renderedTranscriptCards.map((card, i) => {
       // cardDisplayData/stableCardData are window-relative (index i); search
       // matches are absolute indices into visibleTranscriptCards.
       const absoluteIndex = transcriptRenderStart + i
       const display = cardDisplayData[i]
       if (!display) return null
-      const isSelected = card.key === transcriptCursorKey
-      const hasCursor = isSelected && effectiveFocus === 'messages'
       const isExpanded = expandedKeysForRender.has(card.key)
       const isSearchHit = searchMatchSet.has(absoluteIndex)
       const isActiveMatch = isSearchHit && activeMatchTargetIndex === absoluteIndex
-      return (
-        <TranscriptCard
-          key={card.key}
-          card={card}
-          display={display}
-          theme={theme}
-          densityState={densityState}
-          syntaxStyle={syntaxStyle}
-          rightPaneWidth={rightPaneWidth}
-          isExpanded={isExpanded}
-          hasCursor={hasCursor}
-          isSelected={isSelected}
-          isSearchHit={isSearchHit}
-          isActiveMatch={isActiveMatch}
-          bookmarked={bookmarkKeys.has(card.key)}
-          onSelectCard={selectTranscriptCard}
-          thinkingMode={thinkingMode}
-          diffLayout={diffLayout}
-          imessageStyle={imessageStyle}
-          transcriptWidth={transcriptWidth}
-          streamMode={transcriptView === 'stream'}
-          agentsMode={transcriptView === 'agents' || (transcriptView === 'stream' && isStreamOperationalCard(card))}
-          agentToolCursorKey={groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null}
-          agentToolExpandedKeys={groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS}
-          agentToolCollapsedKeys={groupedToolView ? collapsedCardKeys : EMPTY_EXPANDED_KEYS}
-          onSelectAgentTool={selectAgentTool}
-          noteNamespace={transcriptNoteNamespace}
-          diffNotes={transcriptDiffNotes}
-          diffDraft={transcriptDiffDraft}
-          hoveredDiffAnchor={hoveredTranscriptDiffAnchor}
-          activateDiffHover={activateTranscriptDiffHover}
-          openDiffNote={openTranscriptDiffNote}
-          sendDiffNoteToComposer={sendTranscriptDiffNoteToComposer}
-          diffPlain={transcriptDiffPlainCardKeys.has(card.key)}
-          diffShowLineNumbers={!transcriptDiffHiddenLineNumberCardKeys.has(card.key)}
-          diffShowHunkHeaders={!transcriptDiffHiddenHunkHeaderCardKeys.has(card.key)}
-          diffRowCursor={transcriptDiffRowCursorByCardKey[card.key] ?? 0}
-          diffSelectionAnchor={transcriptDiffSelectionAnchorByCardKey[card.key] ?? null}
-          diffPlainCardKeys={transcriptDiffPlainCardKeys}
-          diffHiddenLineNumberCardKeys={transcriptDiffHiddenLineNumberCardKeys}
-          diffHiddenHunkHeaderCardKeys={transcriptDiffHiddenHunkHeaderCardKeys}
-          diffRowCursorByCardKey={transcriptDiffRowCursorByCardKey}
-          diffSelectionAnchorByCardKey={transcriptDiffSelectionAnchorByCardKey}
-          setDiffRowCursor={setTranscriptDiffRowCursorForCard}
-          setDiffSelectionAnchor={setTranscriptDiffSelectionAnchorForCard}
-        />
-      )
-    })
+      return cachedTranscriptCardSelectionVariants(transcriptCardVariantCacheRef.current, {
+        card,
+        display,
+        theme,
+        densityState,
+        syntaxStyle,
+        rightPaneWidth,
+        isExpanded,
+        isSearchHit,
+        isActiveMatch,
+        bookmarked: bookmarkKeys.has(card.key),
+        onSelectCard: selectTranscriptCard,
+        thinkingMode,
+        diffLayout,
+        imessageStyle,
+        transcriptWidth,
+        streamMode: transcriptView === 'stream',
+        agentsMode: transcriptView === 'agents' || (transcriptView === 'stream' && isStreamOperationalCard(card)),
+        agentToolCursorKey: groupedToolView ? agentToolCursorByGroupKey[card.key] ?? null : null,
+        agentToolExpandedKeys: groupedToolView ? expandedCardKeys : EMPTY_EXPANDED_KEYS,
+        agentToolCollapsedKeys: groupedToolView ? collapsedCardKeys : EMPTY_EXPANDED_KEYS,
+        onSelectAgentTool: selectAgentTool,
+        noteNamespace: transcriptNoteNamespace,
+        diffNotes: transcriptDiffNotes,
+        diffDraft: transcriptDiffDraft,
+        hoveredDiffAnchor: hoveredTranscriptDiffAnchor,
+        activateDiffHover: activateTranscriptDiffHover,
+        openDiffNote: openTranscriptDiffNote,
+        sendDiffNoteToComposer: sendTranscriptDiffNoteToComposer,
+        diffPlain: transcriptDiffPlainCardKeys.has(card.key),
+        diffShowLineNumbers: !transcriptDiffHiddenLineNumberCardKeys.has(card.key),
+        diffShowHunkHeaders: !transcriptDiffHiddenHunkHeaderCardKeys.has(card.key),
+        diffRowCursor: transcriptDiffRowCursorByCardKey[card.key] ?? 0,
+        diffSelectionAnchor: transcriptDiffSelectionAnchorByCardKey[card.key] ?? null,
+        diffPlainCardKeys: transcriptDiffPlainCardKeys,
+        diffHiddenLineNumberCardKeys: transcriptDiffHiddenLineNumberCardKeys,
+        diffHiddenHunkHeaderCardKeys: transcriptDiffHiddenHunkHeaderCardKeys,
+        diffRowCursorByCardKey: transcriptDiffRowCursorByCardKey,
+        diffSelectionAnchorByCardKey: transcriptDiffSelectionAnchorByCardKey,
+        setDiffRowCursor: setTranscriptDiffRowCursorForCard,
+        setDiffSelectionAnchor: setTranscriptDiffSelectionAnchorForCard,
+      })
+    }).filter((variant): variant is TranscriptCardSelectionVariants => variant !== null), [
+    renderedTranscriptCards,
+    transcriptRenderStart,
+    cardDisplayData,
+    expandedKeysForRender,
+    searchMatchSet,
+    activeMatchTargetIndex,
+    bookmarkKeys,
+    selectTranscriptCard,
+    theme,
+    densityState,
+    syntaxStyle,
+    rightPaneWidth,
+    thinkingMode,
+    diffLayout,
+    imessageStyle,
+    transcriptWidth,
+    transcriptView,
+    groupedToolView,
+    agentToolCursorByGroupKey,
+    expandedCardKeys,
+    collapsedCardKeys,
+    selectAgentTool,
+    transcriptNoteNamespace,
+    transcriptDiffNotes,
+    transcriptDiffDraft,
+    hoveredTranscriptDiffAnchor,
+    activateTranscriptDiffHover,
+    openTranscriptDiffNote,
+    sendTranscriptDiffNoteToComposer,
+    transcriptDiffPlainCardKeys,
+    transcriptDiffHiddenLineNumberCardKeys,
+    transcriptDiffHiddenHunkHeaderCardKeys,
+    transcriptDiffRowCursorByCardKey,
+    transcriptDiffSelectionAnchorByCardKey,
+    setTranscriptDiffSelectionAnchorForCard,
+    setTranscriptDiffRowCursorForCard,
+  ])
+  const transcriptChildren = useMemo(() => {
+    const cards: React.ReactNode[] = selectTranscriptCardVariants(
+      transcriptCardVariants,
+      transcriptCursorKey,
+      effectiveFocus === 'messages',
+    )
     if (transcriptRenderStart > 0) {
       cards.unshift(
         <box key="preview-cap-hint" paddingX={1}>
@@ -9587,45 +9712,14 @@ export default function OpenTuiApp() {
     }
     return cards
   }, [
-    renderedTranscriptCards,
+    transcriptCardVariants,
     transcriptRenderStart,
     transcriptRenderEnd,
     totalTranscriptCards,
-    cardDisplayData,
     transcriptCursorKey,
     effectiveFocus,
-    expandedKeysForRender,
-    searchMatchSet,
-    activeMatchTargetIndex,
-    bookmarkKeys,
-    selectTranscriptCard,
     theme,
-    densityState,
-    syntaxStyle,
     rightPaneWidth,
-    thinkingMode,
-    diffLayout,
-    imessageStyle,
-    transcriptWidth,
-    transcriptView,
-    agentToolCursorByGroupKey,
-    expandedCardKeys,
-    collapsedCardKeys,
-    selectAgentTool,
-    transcriptNoteNamespace,
-    transcriptDiffNotes,
-    transcriptDiffDraft,
-    hoveredTranscriptDiffAnchor,
-    activateTranscriptDiffHover,
-    openTranscriptDiffNote,
-    sendTranscriptDiffNoteToComposer,
-    transcriptDiffPlainCardKeys,
-    transcriptDiffHiddenLineNumberCardKeys,
-    transcriptDiffHiddenHunkHeaderCardKeys,
-    transcriptDiffRowCursorByCardKey,
-    transcriptDiffSelectionAnchorByCardKey,
-    setTranscriptDiffSelectionAnchorForCard,
-    setTranscriptDiffRowCursorForCard,
   ])
 
   const refreshSessions = useCallback(async (
