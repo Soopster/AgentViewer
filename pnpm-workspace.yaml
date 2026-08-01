@@ -25,6 +25,13 @@ trustPolicyExclude:
   # directly, not a takeover.
   - '@pierre/theme@1.1.0'
   - '@pierre/theming@0.0.2'
+  # 2026-08-01 update-all: @pierre/diffs@1.3.1 pins @pierre/theme@2.0.0, which
+  # was published 2026-07-24 without provenance. Tarball downloaded and diffed
+  # against attested 1.1.0: only LICENSE (MIT->Apache-2.0), a new NOTICE.md,
+  # and the package.json version/license fields changed - zero code changes.
+  # Local sha512 of the tarball matches registry dist.integrity. A pure
+  # relicensing release from the same manual-publish pipeline, not a takeover.
+  - '@pierre/theme@2.0.0'
   # Pi SDK's clipboard native binaries — all 11 platform packages of 0.3.6
   # verified against the registry the same way.
   - '@mariozechner/clipboard@0.3.6'
@@ -47,6 +54,18 @@ allowBuilds:
   protobufjs: set this to true or false
   sharp: set this to true or false
 minimumReleaseAgeExclude:
+  # 2026-08-01 update-all: versions adopted by npm/bun this round that are
+  # younger than the 7-day quarantine. Registry dist.integrity verified
+  # byte-for-byte against package-lock for each; version-pinned so future
+  # releases are still quarantined.
+  - '@opencode-ai/sdk@1.18.10'
+  - '@pierre/diffs@1.3.1'
+  - '@types/react-dom@19.2.4'
+  - '@types/react@19.2.18'
+  - 'shadcn@4.16.1'
+  # Security floor for GHSA-frvp-7c67-39w9 (path traversal in serve-static);
+  # published 2026-07-26, integrity verified against package-lock.
+  - '@hono/node-server@2.0.12'
   # 2026-07-30 update-all: versions adopted by npm/bun this round that are
   # younger than the 7-day quarantine. Registry dist.integrity verified
   # byte-for-byte against package-lock for every directly-listed package;
