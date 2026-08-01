@@ -7,6 +7,7 @@ import {
   finalizeExternalProtocolRun,
   handoffExternalProtocolTask,
   joinExternalProtocolRun,
+  leaveExternalProtocolRun,
   listProtocolRuns,
   listRunPlaybooks,
   loadRunPlaybook,
@@ -25,6 +26,7 @@ import {
   waitForExternalProtocolChange,
 } from './agentCoordination'
 import {
+  PROTOCOL_FAILURE_CLASSES,
   parseRunPlaybook,
   type ExternalProtocolCapabilities,
   type ExternalProtocolClient,
@@ -32,8 +34,10 @@ import {
   type ProtocolFailureClass,
   type ProtocolMessageKind,
   type ProtocolMessagePriority,
+  type ProtocolTaskTargetRole,
 } from './agentProtocol'
 import { isAgentProvider } from './provider'
+import type { AgentProvider } from './types'
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -61,6 +65,7 @@ function identity(body: Record<string, unknown>): ExternalProtocolIdentity {
 function negotiation(body: Record<string, unknown>): {
   client: ExternalProtocolClient
   capabilities: ExternalProtocolCapabilities
+  provider?: AgentProvider
 } {
   const clientRecord = body.client && typeof body.client === 'object' && !Array.isArray(body.client)
     ? body.client as Record<string, unknown>
@@ -85,6 +90,7 @@ function negotiation(body: Record<string, unknown>): {
       maxParallelTasks: Number(capabilityRecord.maxParallelTasks) || undefined,
       tools: strings(capabilityRecord.tools),
     },
+    provider: isAgentProvider(body.provider) ? body.provider : undefined,
   }
 }
 
@@ -130,6 +136,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     })
   }
   if (action === 'resume') return resumeExternalProtocolParticipant(participantIdentity!, negotiation(body))
+  if (action === 'leave_run') return mutate(() => leaveExternalProtocolRun(participantIdentity!, optionalText(body.reason)))
   if (action === 'status') return readExternalProtocolStatus(participantIdentity!)
   if (action === 'wait') {
     return waitForExternalProtocolChange(participantIdentity!, {
@@ -140,12 +147,15 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     })
   }
   if (action === 'create_task') {
+    const targetRole = text(body.targetRole) || 'teammate'
+    if (!['lead', 'teammate', 'any'].includes(targetRole)) throw new Error('Invalid task target role')
     return mutate(() => createExternalProtocolTask(participantIdentity!, {
       title: text(body.title),
       detail: text(body.detail),
       paths: strings(body.paths),
       dependsOn: strings(body.dependsOn),
       phase: optionalText(body.phase),
+      targetRole: targetRole as ProtocolTaskTargetRole,
     }))
   }
   if (action === 'claim_task') return mutate(() => claimExternalProtocolTask(participantIdentity!, optionalText(body.taskId)))
@@ -181,7 +191,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
   }
   if (action === 'handoff_task') {
     const failureClass = text(body.failureClass)
-    if (!['rate_limited', 'authentication_failed', 'context_exhausted', 'approval_blocked', 'cli_missing', 'transient_transport', 'provider_failure'].includes(failureClass)) {
+    if (!PROTOCOL_FAILURE_CLASSES.some((entry) => entry === failureClass)) {
       throw new Error('Invalid provider failure class')
     }
     return mutate(() => handoffExternalProtocolTask(participantIdentity!, {

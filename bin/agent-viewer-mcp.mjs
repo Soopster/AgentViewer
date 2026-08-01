@@ -499,14 +499,16 @@ server.registerTool('coord_create_task', {
     paths: z.array(z.string().min(1)).max(100).optional(),
     depends_on: z.array(z.string().min(1)).max(100).optional(),
     phase: z.string().min(1).max(120).optional().describe('Playbook phase title this task belongs to (rollup grouping; barriers are not re-derived mid-run)'),
+    role: z.enum(['lead', 'teammate', 'any']).optional().describe('Participant role responsible for this task; defaults to teammate'),
     request_id: requestIdField,
   },
-}, async ({ title, detail, paths, depends_on, phase, request_id }) => textResult(await coordinatorRequest('create_task', {
+}, async ({ title, detail, paths, depends_on, phase, role, request_id }) => textResult(await coordinatorRequest('create_task', {
   title,
   detail,
   paths,
   dependsOn: depends_on,
   phase,
+  targetRole: role,
   requestId: request_id,
 })))
 
@@ -571,12 +573,12 @@ server.registerTool('coord_send_message', {
 })))
 
 server.registerTool('coord_handoff_task', {
-  description: 'Checkpoint owned work after a provider/CLI failure, release its locks, and return it to the board. The lead receives an urgent durable handoff.',
+  description: 'Checkpoint owned work after a provider/CLI failure or bounded supervisor stop, release its locks, and return it to the board. The lead receives an urgent durable handoff.',
   inputSchema: {
     task_id: z.string().min(1),
     summary: z.string().min(1).max(1000),
     detail: z.string().max(8000).optional(),
-    failure_class: z.enum(['rate_limited', 'authentication_failed', 'context_exhausted', 'approval_blocked', 'cli_missing', 'transient_transport', 'provider_failure']),
+    failure_class: z.enum(['rate_limited', 'authentication_failed', 'context_exhausted', 'approval_blocked', 'cli_missing', 'transient_transport', 'provider_failure', 'provider_timeout', 'supervisor_stopped']),
     request_id: requestIdField,
   },
 }, async ({ task_id, summary, detail, failure_class, request_id }) => textResult(await coordinatorRequest('handoff_task', {

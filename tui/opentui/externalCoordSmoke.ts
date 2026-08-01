@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -52,6 +53,12 @@ legacyDb.exec(`
 `)
 legacyDb.close()
 
+process.env.AGENT_VIEWER_COORD_SESSION_INTERRUPT_TIMEOUT_MS = '150'
+process.env.AGENT_VIEWER_COORD_IDEMPOTENCY_WINDOW = '8'
+process.env.AGENT_VIEWER_COORD_LIVE_NOISE_WINDOW = '8'
+process.env.AGENT_VIEWER_COORD_RETENTION_DAYS = '1'
+process.env.AGENT_VIEWER_COORD_PRUNE_INTERVAL_MS = '100'
+process.env.AGENT_VIEWER_COORD_DB_BUSY_TIMEOUT_MS = '1000'
 const coordination = await import('../../lib/agentCoordination')
 const sessionRuntime = await import('../../lib/sessionRuntime')
 
@@ -70,6 +77,61 @@ assert.ok(lead.token.length >= 32)
 assert.equal(lead.serverProtocolVersion, 2)
 assert.equal(lead.negotiatedProtocolVersion, 1)
 assert.deepEqual(lead.capabilities, {})
+assert.match(leadResult.instructions, /You are the lead: decompose the objective/)
+assert.doesNotMatch(leadResult.instructions, /claim one unblocked teammate task/)
+
+// Another Agent Viewer process can briefly hold the WAL writer lock. Normal
+// multi-process contention must wait for that writer instead of immediately
+// failing the Coordinator mutation with SQLITE_BUSY.
+const lockHolder = spawn(process.execPath, ['-e', `
+  import { Database } from 'bun:sqlite'
+  const db = new Database(process.argv[1])
+  db.exec('BEGIN IMMEDIATE')
+  process.stdout.write('locked\\n')
+  setTimeout(() => {
+    db.exec('COMMIT')
+    db.close()
+    process.exit(0)
+  }, 150)
+`, path.join(coordinationDir, 'coordination.sqlite')], { stdio: ['ignore', 'pipe', 'pipe'] })
+const [lockedChunk] = await once(lockHolder.stdout, 'data')
+assert.match(String(lockedChunk), /locked/)
+const contendedMutation = coordination.reportExternalProtocolProgress(lead, {
+  status: 'heartbeat',
+  summary: 'Waiting safely for a concurrent Coordinator writer.',
+})
+await contendedMutation
+const [lockExitCode] = await once(lockHolder, 'exit')
+assert.equal(lockExitCode, 0)
+
+// A long-running supervisor gets a bounded idempotency retry window and does
+// not persist empty heartbeat noise forever.
+for (let index = 0; index < 12; index += 1) {
+  await coordination.runExternalProtocolIdempotent(
+    lead,
+    'retention-smoke',
+    `retention-${index}`,
+    async () => ({ index }),
+  )
+}
+const retentionDb = new Database(path.join(coordinationDir, 'coordination.sqlite'))
+assert.equal(Number(retentionDb.prepare(`
+  SELECT COUNT(*) AS n FROM protocol_idempotency
+  WHERE run_id = ? AND agent_id = ?
+`).get(lead.runId, lead.agentId)?.n), 8)
+const heartbeatRowsBefore = Number(retentionDb.prepare(`
+  SELECT COUNT(*) AS n FROM protocol_events
+  WHERE run_id = ? AND agent_id = ? AND type = 'agent.heartbeat'
+`).get(lead.runId, lead.agentId)?.n)
+retentionDb.close()
+await coordination.reportExternalProtocolProgress(lead, { status: 'heartbeat' })
+await coordination.reportExternalProtocolProgress(lead, { status: 'heartbeat' })
+const heartbeatDb = new Database(path.join(coordinationDir, 'coordination.sqlite'))
+assert.equal(Number(heartbeatDb.prepare(`
+  SELECT COUNT(*) AS n FROM protocol_events
+  WHERE run_id = ? AND agent_id = ? AND type = 'agent.heartbeat'
+`).get(lead.runId, lead.agentId)?.n), heartbeatRowsBefore)
+heartbeatDb.close()
 
 await assert.rejects(
   coordination.createExternalProtocolRun({
@@ -80,6 +142,133 @@ await assert.rejects(
     client: { name: 'future-cli', protocolVersion: 3 },
   }),
   /newer than server protocol 2/,
+)
+
+// A supervisor that exits before claiming work must retire immediately and
+// free capacity for a replacement. Historical roster evidence remains, while
+// stopped participants no longer consume the live participant limit or block
+// reuse of the operator-facing name.
+const replacementRun = await coordination.createExternalProtocolRun({
+  prompt: 'Replace a pre-claim failed worker',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Replacement lead',
+  maxAgents: 2,
+})
+const retiringWorker = (await coordination.joinExternalProtocolRun({
+  runId: replacementRun.participant.runId,
+  provider: 'pi',
+  cwd: testCwd,
+  participantName: 'Replaceable worker',
+})).participant
+await coordination.leaveExternalProtocolRun(retiringWorker, 'Provider authentication failed before claim')
+assert.equal(
+  (await coordination.readExternalProtocolRun(replacementRun.participant)).agents
+    .find((agent) => agent.id === retiringWorker.agentId)?.status,
+  'stopped',
+)
+const replacementWorker = (await coordination.joinExternalProtocolRun({
+  runId: replacementRun.participant.runId,
+  provider: 'copilot',
+  cwd: testCwd,
+  participantName: 'Replaceable worker',
+})).participant
+assert.notEqual(replacementWorker.agentId, retiringWorker.agentId)
+await coordination.sendExternalProtocolMessage(replacementRun.participant, {
+  to: 'Replaceable worker',
+  body: 'This must reach the active replacement, not retired history.',
+})
+assert.ok((await coordination.readExternalProtocolInbox(replacementWorker)).messages
+  .some((message) => message.body.includes('active replacement')))
+const failedOverWorker = await coordination.resumeExternalProtocolParticipant(replacementWorker, {
+  provider: 'opencode',
+  client: { name: 'worker-supervisor', protocolVersion: 2 },
+  capabilities: { unattended: true },
+})
+assert.equal(failedOverWorker.participant.provider, 'opencode')
+for (let index = 0; index < 25; index += 1) {
+  await coordination.publishExternalProtocolFinding(replacementRun.participant, {
+    kind: 'finding',
+    summary: `Complete audit evidence ${index}`,
+  })
+}
+assert.equal(
+  (await coordination.readExternalProtocolStatus(replacementRun.participant)).snapshot.events
+    .filter((event) => event.type === 'finding').length,
+  25,
+)
+await coordination.appendProtocolEvent({
+  version: '1.0',
+  runId: replacementWorker.runId,
+  agentId: replacementWorker.agentId,
+  type: 'shutdown.requested',
+  summary: 'Replacement supervisor intentionally stopped',
+})
+assert.equal(
+  (await coordination.readExternalProtocolRun(replacementRun.participant)).agents
+    .find((agent) => agent.id === replacementWorker.agentId)?.status,
+  'stopped',
+)
+await coordination.stopProtocolRun(replacementRun.participant.runId)
+
+const departedLeadRun = await coordination.createExternalProtocolRun({
+  prompt: 'Fail explicitly when the lead exits',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Departing lead',
+  maxAgents: 2,
+})
+const departedLeadTeammate = (await coordination.joinExternalProtocolRun({
+  runId: departedLeadRun.participant.runId,
+  provider: 'opencode',
+  cwd: testCwd,
+  participantName: 'Leadless teammate',
+})).participant
+const departedLead = await coordination.leaveExternalProtocolRun(
+  departedLeadRun.participant,
+  'Lead provider failed before synthesis',
+)
+assert.equal(departedLead.runStatus, 'failed')
+const departedLeadSnapshot = await coordination.readExternalProtocolRun(departedLeadTeammate)
+assert.equal(departedLeadSnapshot.run.status, 'failed')
+assert.equal(departedLeadSnapshot.agents.find((agent) => agent.id === departedLeadTeammate.agentId)?.status, 'stopped')
+
+const claimInvariantRun = await coordination.createExternalProtocolRun({
+  prompt: 'Enforce single ownership and atomic path locks',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Claim invariant lead',
+  maxAgents: 2,
+})
+const claimInvariantTeammate = (await coordination.joinExternalProtocolRun({
+  runId: claimInvariantRun.participant.runId,
+  provider: 'opencode',
+  cwd: testCwd,
+  participantName: 'Claim invariant teammate',
+})).participant
+const firstOwnedTask = (await coordination.createExternalProtocolTask(claimInvariantRun.participant, {
+  title: 'Own the shared path first', detail: 'Hold the declared path.', paths: ['shared-lock.txt'], targetRole: 'any',
+})).task!
+const conflictingTask = (await coordination.createExternalProtocolTask(claimInvariantRun.participant, {
+  title: 'Conflicting task', detail: 'Must not claim without its declared lock.', paths: ['shared-lock.txt'], targetRole: 'any',
+})).task!
+await coordination.claimExternalProtocolTask(claimInvariantRun.participant, firstOwnedTask.id)
+await assert.rejects(
+  coordination.claimExternalProtocolTask(claimInvariantRun.participant, conflictingTask.id),
+  new RegExp(`already owns ${firstOwnedTask.id}`),
+)
+await assert.rejects(
+  coordination.claimExternalProtocolTask(claimInvariantTeammate, conflictingTask.id),
+  /requires a path locked by/,
+)
+assert.equal(
+  (await coordination.readExternalProtocolRun(claimInvariantRun.participant)).tasks.find((entry) => entry.id === conflictingTask.id)?.status,
+  'pending',
+)
+await coordination.stopProtocolRun(claimInvariantRun.participant.runId)
+await assert.rejects(
+  coordination.claimExternalProtocolTask(claimInvariantTeammate, conflictingTask.id),
+  /Coordinator run is stopped/,
 )
 
 const teammateResult = await coordination.joinExternalProtocolRun({
@@ -96,6 +285,31 @@ assert.equal(teammate.provider, 'claude')
 assert.notEqual(teammate.token, lead.token)
 assert.equal(teammate.negotiatedProtocolVersion, 2)
 assert.deepEqual(teammate.capabilities.tools, ['coord_*'])
+assert.match(teammateResult.instructions, /You are a teammate: claim one unblocked teammate task/)
+
+for (let index = 0; index < 12; index += 1) {
+  await coordination.sendExternalProtocolMessage(lead, {
+    to: teammate.agentId,
+    body: `Retention status ${index}`,
+    kind: 'status',
+    priority: 'status',
+    correlationId: 'retention-status',
+  })
+}
+await coordination.readExternalProtocolInbox(teammate)
+// Any following event performs the post-ack status-row sweep.
+await coordination.reportExternalProtocolProgress(teammate, { status: 'heartbeat' })
+const liveNoiseDb = new Database(path.join(coordinationDir, 'coordination.sqlite'))
+assert.equal(Number(liveNoiseDb.prepare(`
+  SELECT COUNT(*) AS n FROM protocol_messages
+  WHERE run_id = ? AND delivered_at IS NOT NULL AND (kind = 'status' OR priority = 'status')
+`).get(lead.runId)?.n), 8)
+assert.equal(Number(liveNoiseDb.prepare(`
+  SELECT COUNT(*) AS n FROM protocol_events
+  WHERE run_id = ? AND type = 'message' AND payload_json LIKE '%"priority":"status"%'
+`).get(lead.runId)?.n), 8)
+liveNoiseDb.close()
+assert.doesNotMatch(teammateResult.instructions, /You are the lead: decompose the objective/)
 const resumedTeammate = await coordination.resumeExternalProtocolParticipant(teammate, {
   client: { name: 'claude-mcp', version: '1.3.1', protocolVersion: 2 },
   capabilities: { unattended: true, sessionResume: true, tools: ['coord_*'] },
@@ -127,7 +341,11 @@ const task = createResult.task
 assert.ok(task)
 // Mutations return the compact result, not the board.
 assert.equal(createResult.runStatus, 'running')
-assert.ok(createResult.actionable.claimableTasks.some((entry) => entry.id === task.id))
+// A fresh unattended teammate is an active executor. Reserve teammate work for
+// it instead of letting a fast lead absorb the task before its first poll.
+assert.equal(createResult.actionable.claimableTasks.some((entry) => entry.id === task.id), false)
+assert.ok((await coordination.readExternalProtocolStatus(teammate)).actionable.claimableTasks
+  .some((entry) => entry.id === task.id && entry.targetRole === 'teammate'))
 assert.ok(!('snapshot' in createResult))
 
 const claim = await coordination.claimExternalProtocolTask(teammate, task.id)
@@ -318,8 +536,8 @@ assert.ok(supervisionInbox.messages.some((message) => (
   && message.body.includes(task.id)
 )))
 
-// Lock results are explicit: the holder re-requests and is granted; a
-// conflicting participant is denied with the holder named.
+// Lock results are explicit: the holder re-requests and is granted. A
+// taskless participant cannot reserve or perpetually renew arbitrary paths.
 const ownLocks = await coordination.requestExternalProtocolLocks(teammate, ['owned.txt'])
 assert.equal(ownLocks.granted.length, 1)
 assert.equal(ownLocks.denied.length, 0)
@@ -336,15 +554,10 @@ const renewalWake = await coordination.waitForExternalProtocolChange(lead, {
   timeoutMs: 0,
 })
 assert.equal(renewalWake.changed, false)
-const conflictedLocks = await coordination.requestExternalProtocolLocks(lead, ['owned.txt'])
-assert.equal(conflictedLocks.granted.length, 0)
-assert.equal(conflictedLocks.denied.length, 1)
-assert.match(conflictedLocks.denied[0].reason, new RegExp(teammate.agentId))
-for (let index = 0; index < 205; index += 1) {
-  await coordination.requestExternalProtocolLocks(lead, ['owned.txt'])
-}
-const boundedLockSnapshot = await coordination.readExternalProtocolRun(lead)
-assert.equal(boundedLockSnapshot.locks.filter((lock) => lock.status !== 'active').length, 200)
+await assert.rejects(
+  coordination.requestExternalProtocolLocks(lead, ['owned.txt']),
+  /without owning a Coordinator task/,
+)
 
 writeFileSync(path.join(testCwd, 'owned.txt'), 'participant change\n')
 
@@ -355,6 +568,7 @@ const discovery = await coordination.createExternalProtocolTask(teammate, {
   title: 'Follow-up discovered by teammate',
   detail: 'Write second.txt with the follow-up change.',
   paths: ['second.txt'],
+  targetRole: 'any',
 })
 const followUp = discovery.task!
 assert.equal(followUp.id, 'task-2')
@@ -364,7 +578,28 @@ const leadWake = await coordination.waitForExternalProtocolChange(lead, {
 })
 assert.equal(leadWake.changed, true)
 assert.ok(leadWake.events.some((event) => event.type === 'task.created'))
-assert.ok(leadWake.actionable.claimableTasks.some((entry) => entry.id === followUp.id))
+assert.ok(leadWake.actionable.claimableTasks.some((entry) => entry.id === followUp.id && entry.targetRole === 'any'))
+assert.ok(discovery.actionable.claimableTasks.some((entry) => entry.id === followUp.id && entry.targetRole === 'any'))
+
+// A different owned task may request an overlapping path, but the existing
+// task-scoped lock must deny it. Repeated denials exercise bounded lock history.
+const leadClaim = await coordination.claimExternalProtocolTask(lead, followUp.id)
+assert.equal(leadClaim.task.ownerAgentId, lead.agentId)
+const conflictedLocks = await coordination.requestExternalProtocolLocks(lead, ['owned.txt'])
+assert.equal(conflictedLocks.granted.length, 0)
+assert.equal(conflictedLocks.denied.length, 1)
+assert.match(conflictedLocks.denied[0].reason, new RegExp(teammate.agentId))
+for (let index = 0; index < 205; index += 1) {
+  await coordination.requestExternalProtocolLocks(lead, ['owned.txt'])
+}
+const boundedLockSnapshot = await coordination.readExternalProtocolRun(lead)
+assert.equal(boundedLockSnapshot.locks.filter((lock) => lock.status !== 'active').length, 200)
+const released = await coordination.releaseExternalProtocolTask(lead, {
+  taskId: followUp.id,
+  reason: 'Handing back to the implementation teammate',
+})
+assert.equal(released.task.status, 'pending')
+assert.equal(released.task.ownerAgentId, undefined)
 
 // The retried completion re-runs the gates instead of replaying the cached
 // rejection, and the still-open follow-up task keeps the run out of synthesis.
@@ -391,16 +626,6 @@ assert.ok(resultInbox.messages.some((message) => (
   && message.body.includes('owned.txt contains the verified participant change.')
 )))
 
-// Claimed work can be handed back: the task requeues and its locks release.
-const leadClaim = await coordination.claimExternalProtocolTask(lead, followUp.id)
-assert.equal(leadClaim.task.ownerAgentId, lead.agentId)
-const released = await coordination.releaseExternalProtocolTask(lead, {
-  taskId: followUp.id,
-  reason: 'Handing back to the implementation teammate',
-})
-assert.equal(released.task.status, 'pending')
-assert.equal(released.task.ownerAgentId, undefined)
-
 const reclaimed = await coordination.claimExternalProtocolTask(teammate, followUp.id)
 assert.equal(reclaimed.task.ownerAgentId, teammate.agentId)
 await coordination.submitExternalProtocolPlan(teammate, {
@@ -423,6 +648,35 @@ assert.match(leadInbox.messages.at(-1)?.body ?? '', /coord_finalize_run/)
 // task helper. A follow-up task emitted after an earlier terminal event raced
 // synthesis in a real run; it must reopen the board instead of being completed
 // underneath its owner.
+const preInternalTaskIds = (await coordination.readExternalProtocolStatus(lead)).snapshot.tasks.map((entry) => entry.id)
+await assert.rejects(
+  coordination.appendProtocolEvent({
+    version: '1.0',
+    runId: lead.runId,
+    agentId: lead.agentId,
+    type: 'task.created',
+    title: 'Invalid internal dependency',
+    detail: 'This event must not mutate the board.',
+    dependsOn: ['task-404'],
+  }),
+  /Invalid dependency.*task-404/,
+)
+await assert.rejects(
+  coordination.appendProtocolEvent({
+    version: '1.0',
+    runId: lead.runId,
+    agentId: lead.agentId,
+    type: 'task.planned',
+    title: 'Invalid internally planned dependency',
+    detail: 'The plan-created task path must enforce the same invariant.',
+    dependsOn: ['task-3'],
+  }),
+  /Invalid dependency.*task-3/,
+)
+assert.deepEqual(
+  (await coordination.readExternalProtocolStatus(lead)).snapshot.tasks.map((entry) => entry.id),
+  preInternalTaskIds,
+)
 await coordination.appendProtocolEvent({
   version: '1.0',
   runId: lead.runId,
@@ -570,7 +824,7 @@ const playbook = parseRunPlaybook({
     {
       title: 'Fix',
       tasks: [
-        { key: 'fix', title: 'Fix findings', detail: 'Apply fixes for {{args.target}}.', paths: ['third.txt'] },
+        { key: 'fix', role: 'lead', title: 'Fix findings', detail: 'Apply fixes for {{args.target}}.', paths: ['third.txt'] },
       ],
     },
   ],
@@ -589,7 +843,9 @@ const seeded = playbookRun.snapshot.tasks
 assert.equal(seeded.length, 2)
 assert.equal(seeded[0].title, 'Survey third.txt')
 assert.equal(seeded[0].phase, 'Survey')
+assert.equal(seeded[0].targetRole, 'teammate')
 assert.equal(seeded[1].phase, 'Fix')
+assert.equal(seeded[1].targetRole, 'lead')
 // Phase barrier: the Fix task depends on the Survey task.
 assert.deepEqual(seeded[1].blockedBy, [seeded[0].id])
 assert.equal(playbookRun.snapshot.run.maxAgents, 3)
@@ -625,6 +881,7 @@ assert.equal(listed.invalid.length, 0)
 // The saved playbook reloads and reseeds an identical phased board.
 const reloaded = await coordination.loadRunPlaybook(testCwd, 'smoke-audit-saved')
 assert.equal(reloaded.phases.length, 2)
+assert.equal(reloaded.phases[1].tasks[0].dependsOn, undefined)
 await coordination.finalizeExternalProtocolRun(playbookLead, 'Playbook smoke complete.')
 const replay = await coordination.createExternalProtocolRun({
   prompt: 'Replay from saved playbook',
@@ -636,6 +893,166 @@ const replay = await coordination.createExternalProtocolRun({
 assert.equal(replay.snapshot.tasks.length, 2)
 assert.equal(replay.snapshot.tasks[1].blockedBy.length, 1)
 await coordination.finalizeExternalProtocolRun(replay.participant, 'x').catch(() => {})
+
+// A joined/ready roster entry is not evidence that a teammate executor ever
+// started participating. It must not suppress the lead's single-agent fallback
+// and strand an otherwise runnable teammate lane.
+const rosterOnlyRun = await coordination.createExternalProtocolRun({
+  prompt: 'Do not let roster-only presence strand the board',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Roster-only fallback lead',
+})
+await coordination.joinExternalProtocolRun({
+  runId: rosterOnlyRun.participant.runId,
+  provider: 'claude',
+  cwd: testCwd,
+  participantName: 'Joined but inactive teammate',
+})
+const rosterOnlyTask = (await coordination.createExternalProtocolTask(rosterOnlyRun.participant, {
+  title: 'Fallback teammate lane',
+  detail: 'The lead must be able to absorb this lane.',
+  paths: [],
+})).task!
+assert.equal(
+  (await coordination.claimExternalProtocolTask(rosterOnlyRun.participant, rosterOnlyTask.id)).task.ownerAgentId,
+  rosterOnlyRun.participant.agentId,
+)
+await coordination.failExternalProtocolTask(rosterOnlyRun.participant, {
+  taskId: rosterOnlyTask.id,
+  summary: 'Roster-only fallback covered',
+})
+await coordination.finalizeExternalProtocolRun(rosterOnlyRun.participant, 'Roster fallback smoke complete.')
+
+// A fresh unattended supervisor is stronger evidence than a passive roster
+// entry: while it is connected and ready, teammate lanes stay delegated so the
+// lead cannot race it during startup.
+const liveWorkerRun = await coordination.createExternalProtocolRun({
+  prompt: 'Keep fresh unattended lanes delegated',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Live-worker lead',
+})
+await coordination.joinExternalProtocolRun({
+  runId: liveWorkerRun.participant.runId,
+  provider: 'opencode',
+  cwd: testCwd,
+  participantName: 'Fresh unattended worker',
+  capabilities: { unattended: true },
+})
+const liveWorkerTask = (await coordination.createExternalProtocolTask(liveWorkerRun.participant, {
+  title: 'Delegated unattended lane', detail: 'Only the live teammate should claim this.', paths: [],
+})).task!
+await assert.rejects(
+  coordination.claimExternalProtocolTask(liveWorkerRun.participant, liveWorkerTask.id),
+  /targets the teammate role/,
+)
+await coordination.stopProtocolRun(liveWorkerRun.participant.runId)
+
+// The shared SQL prefilter must admit the shorter unattended timeout before
+// applying each participant's own threshold. Otherwise a five-minute worker is
+// not reaped until the twenty-minute interactive cutoff.
+const staleClassRun = await coordination.createExternalProtocolRun({
+  prompt: 'Apply distinct stale thresholds',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Stale-class lead',
+  maxAgents: 3,
+})
+const staleUnattended = (await coordination.joinExternalProtocolRun({
+  runId: staleClassRun.participant.runId,
+  provider: 'opencode',
+  cwd: testCwd,
+  participantName: 'Stale unattended',
+  capabilities: { unattended: true },
+})).participant
+const quietInteractive = (await coordination.joinExternalProtocolRun({
+  runId: staleClassRun.participant.runId,
+  provider: 'copilot',
+  cwd: testCwd,
+  participantName: 'Quiet interactive',
+})).participant
+const staleClassDb = new Database(path.join(coordinationDir, 'coordination.sqlite'))
+const tenMinutesAgo = new Date(Date.now() - 10 * 60_000).toISOString()
+staleClassDb.prepare('UPDATE protocol_agents SET last_seen_at = ?, updated_at = ? WHERE run_id = ? AND id IN (?, ?)')
+  .run(tenMinutesAgo, tenMinutesAgo, staleClassRun.participant.runId, staleUnattended.agentId, quietInteractive.agentId)
+staleClassDb.close()
+await coordination.waitForExternalProtocolChange(staleClassRun.participant, { timeoutMs: 0 })
+const staleClassSnapshot = await coordination.readExternalProtocolRun(staleClassRun.participant)
+assert.equal(staleClassSnapshot.agents.find((agent) => agent.id === staleUnattended.agentId)?.status, 'stopped')
+assert.equal(staleClassSnapshot.agents.find((agent) => agent.id === quietInteractive.agentId)?.status, 'ready')
+await coordination.stopProtocolRun(staleClassRun.participant.runId)
+
+// A stale lead is not an ordinary lost worker: nobody else can synthesize or
+// finalize its lead-only lanes. Fail explicitly instead of leaving a live
+// board without a coordinator.
+const staleLeadRun = await coordination.createExternalProtocolRun({
+  prompt: 'Fail when the unattended lead disappears',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Stale lead',
+  maxAgents: 2,
+  capabilities: { unattended: true },
+})
+const staleLeadObserver = (await coordination.joinExternalProtocolRun({
+  runId: staleLeadRun.participant.runId,
+  provider: 'opencode',
+  cwd: testCwd,
+  participantName: 'Stale lead observer',
+  capabilities: { unattended: true },
+})).participant
+const staleLeadDb = new Database(path.join(coordinationDir, 'coordination.sqlite'))
+staleLeadDb.prepare('UPDATE protocol_agents SET last_seen_at = ?, updated_at = ? WHERE run_id = ? AND id = ?')
+  .run(tenMinutesAgo, tenMinutesAgo, staleLeadRun.participant.runId, staleLeadRun.participant.agentId)
+staleLeadDb.close()
+await coordination.waitForExternalProtocolChange(staleLeadObserver, { timeoutMs: 0 })
+const staleLeadSnapshot = await coordination.readExternalProtocolRun(staleLeadObserver)
+assert.equal(staleLeadSnapshot.run.status, 'failed')
+assert.equal(staleLeadSnapshot.agents.find((agent) => agent.id === staleLeadRun.participant.agentId)?.status, 'stopped')
+
+// A failed prerequisite cannot leave an invisible, permanently unclaimable
+// dependency chain behind. Downstream work fails atomically and the board can
+// enter synthesis immediately; failed tasks remain releasable for repair.
+const dependencyFailureRun = await coordination.createExternalProtocolRun({
+  prompt: 'Resolve terminal dependency chains deterministically',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Dependency failure lead',
+})
+const dependencyRoot = (await coordination.createExternalProtocolTask(dependencyFailureRun.participant, {
+  title: 'Root prerequisite',
+  detail: 'Fail this task to exercise downstream propagation.',
+  paths: [],
+  targetRole: 'any',
+})).task!
+const dependencyChild = (await coordination.createExternalProtocolTask(dependencyFailureRun.participant, {
+  title: 'Direct dependent',
+  detail: 'Must not remain pending after its prerequisite fails.',
+  paths: [],
+  dependsOn: [dependencyRoot.id],
+  targetRole: 'any',
+})).task!
+const dependencyGrandchild = (await coordination.createExternalProtocolTask(dependencyFailureRun.participant, {
+  title: 'Transitive dependent',
+  detail: 'Must fail transitively in the same ledger transaction.',
+  paths: [],
+  dependsOn: [dependencyChild.id],
+  targetRole: 'any',
+})).task!
+await coordination.claimExternalProtocolTask(dependencyFailureRun.participant, dependencyRoot.id)
+await coordination.failExternalProtocolTask(dependencyFailureRun.participant, {
+  taskId: dependencyRoot.id,
+  summary: 'Deliberate prerequisite failure',
+})
+const failedDependencyStatus = await coordination.readExternalProtocolStatus(dependencyFailureRun.participant)
+assert.equal(failedDependencyStatus.actionable.runStatus, 'synthesizing')
+assert.equal(failedDependencyStatus.snapshot.tasks.find((task) => task.id === dependencyChild.id)?.status, 'failed')
+assert.equal(failedDependencyStatus.snapshot.tasks.find((task) => task.id === dependencyGrandchild.id)?.status, 'failed')
+assert.equal(failedDependencyStatus.actionable.allTasksTerminal, true)
+assert.ok(failedDependencyStatus.snapshot.events.some((event) => (
+  event.taskId === dependencyGrandchild.id && event.type === 'task.failed' && event.payload?.cascaded === true
+)))
+await coordination.finalizeExternalProtocolRun(dependencyFailureRun.participant, 'Dependency cascade smoke complete.')
 
 // Later-phase dependencies are rejected at parse time — with the barrier they
 // can never complete first, so seeding them would deadlock the board.
@@ -1046,5 +1463,100 @@ assert.equal(
   true,
   `Lane B blocked by lane A's edits: ${laneBResult.reason ?? ''}`,
 )
+
+// Stopping a run is an observable terminal transition. Long-polling external
+// supervisors must wake immediately instead of discovering it only after their
+// 55-second timeout expires.
+const stopWakeRun = await coordination.createExternalProtocolRun({
+  prompt: 'Wake an external supervisor when the run stops',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Stop-wake lead',
+  maxAgents: 1,
+})
+const stopWakeLead = stopWakeRun.participant
+const beforeStop = await coordination.waitForExternalProtocolChange(stopWakeLead, { timeoutMs: 0 })
+const stoppedWait = coordination.waitForExternalProtocolChange(stopWakeLead, {
+  cursor: beforeStop.cursor ?? undefined,
+  timeoutMs: 2_000,
+})
+sessionRuntime.setRunningSession(`external:${stopWakeLead.agentId}`, {
+  provider: 'codex',
+  interrupt: () => new Promise(() => {}),
+  steer: async () => {},
+})
+const stopStartedAt = Date.now()
+const stopPromise = coordination.stopProtocolRun(stopWakeLead.runId)
+const afterStop = await Promise.race([
+  stoppedWait,
+  new Promise<never>((_, reject) => setTimeout(() => reject(new Error('stop event was blocked by a stalled provider interrupt')), 500)),
+])
+assert.ok(Date.now() - stopStartedAt < 500, 'durable stop should wake waiters before provider interruption settles')
+assert.equal(afterStop.changed, true)
+assert.equal(afterStop.actionable.runStatus, 'stopped')
+assert.ok(afterStop.events.some((event) => (
+  event.type === 'run.status' && event.payload?.status === 'stopped'
+)))
+// A supervisor commonly polls once more after seeing the terminal event. That
+// final wait must not make the stopped participant look live again.
+await coordination.waitForExternalProtocolChange(stopWakeLead, { timeoutMs: 0 })
+assert.equal(
+  (await coordination.readExternalProtocolRun(stopWakeLead)).agents.find((agent) => agent.id === stopWakeLead.agentId)?.status,
+  'stopped',
+)
+await stopPromise
+sessionRuntime.clearRunningSession(`external:${stopWakeLead.agentId}`)
+
+// Deletion follows the same terminal-first contract: the board disappears
+// before a stalled provider interrupt reaches its bounded timeout.
+const deleteWakeRun = await coordination.createExternalProtocolRun({
+  prompt: 'Delete promptly despite a stalled provider interrupt',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Delete-wake lead',
+  maxAgents: 1,
+})
+const deleteWakeLead = deleteWakeRun.participant
+sessionRuntime.setRunningSession(`external:${deleteWakeLead.agentId}`, {
+  provider: 'codex',
+  interrupt: () => new Promise(() => {}),
+  steer: async () => {},
+})
+const deletePromise = coordination.deleteProtocolRun(deleteWakeLead.runId)
+await new Promise((resolve) => setTimeout(resolve, 25))
+await assert.rejects(
+  coordination.readExternalProtocolStatus(deleteWakeLead),
+  /Invalid Coordinator participant capability|not found|no longer exists/i,
+  'deleted run stayed visible behind a stalled provider interrupt',
+)
+assert.equal((await deletePromise).deleted, true)
+sessionRuntime.clearRunningSession(`external:${deleteWakeLead.agentId}`)
+
+// Retention maintenance repeats inside a long-lived process; it is not tied to
+// the one-time database open. Age a terminal run, cross the smoke sweep
+// interval, and use an unrelated write to trigger pruning.
+const expiredRun = await coordination.createExternalProtocolRun({
+  prompt: 'Expire this terminal run during live maintenance',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Expired-run lead',
+})
+await coordination.stopProtocolRun(expiredRun.participant.runId)
+const expiryDb = new Database(path.join(coordinationDir, 'coordination.sqlite'))
+expiryDb.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?')
+  .run(new Date(Date.now() - 2 * 86_400_000).toISOString(), expiredRun.participant.runId)
+expiryDb.close()
+await new Promise((resolve) => setTimeout(resolve, 120))
+const pruneTrigger = await coordination.createExternalProtocolRun({
+  prompt: 'Trigger periodic retention maintenance',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Prune-trigger lead',
+})
+const prunedDb = new Database(path.join(coordinationDir, 'coordination.sqlite'))
+assert.equal(Number(prunedDb.prepare('SELECT COUNT(*) AS n FROM protocol_runs WHERE id = ?')
+  .get(expiredRun.participant.runId)?.n ?? 0), 0)
+prunedDb.close()
+await coordination.stopProtocolRun(pruneTrigger.participant.runId)
 
 console.log('External Coordinator smoke passed')

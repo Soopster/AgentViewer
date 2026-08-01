@@ -11,6 +11,7 @@ const IDEMPOTENT_RETRY_ACTIONS = new Set([
   'finalize_run',
   'finding',
   'handoff_task',
+  'leave_run',
   'progress',
   'read_inbox',
   'release_task',
@@ -65,8 +66,10 @@ export class CoordinatorAhpClient {
     this.subscriptions = new Set([ROOT_CHANNEL])
   }
 
-  async request(action, payload = {}, timeoutMs = 10_000) {
+  async request(action, payload = {}, timeoutMs = 10_000, signal) {
+    signal?.throwIfAborted?.()
     await this.ensureConnected()
+    signal?.throwIfAborted?.()
     const params = {
       channel: ROOT_CHANNEL,
       action,
@@ -76,6 +79,9 @@ export class CoordinatorAhpClient {
     try {
       result = await this.sendRequest(COORDINATOR_METHOD, params, timeoutMs)
     } catch (error) {
+      // Supervisor shutdown deliberately closes the transport to unblock an
+      // in-flight long poll. Do not reconnect for another full wait.
+      signal?.throwIfAborted?.()
       const retryableFailure = error?.code === 'AHP_TRANSPORT_CLOSED'
         || error?.code === 'AHP_REQUEST_TIMEOUT'
       const retryable = retryableFailure
@@ -86,6 +92,7 @@ export class CoordinatorAhpClient {
         )
       if (!retryable) throw error
       await this.ensureConnected()
+      signal?.throwIfAborted?.()
       result = await this.sendRequest(COORDINATOR_METHOD, params, timeoutMs)
     }
     await this.rememberRunSubscription(result)

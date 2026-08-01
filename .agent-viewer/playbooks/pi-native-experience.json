@@ -27,6 +27,7 @@
       "tasks": [
         {
           "key": "integrate",
+          "role": "lead",
           "title": "Lead: review, merge lanes, verify Pi end-to-end",
           "detail": "Lead integration task (blocked until both lanes complete): review both lane diffs (their worktrees live under .agent-viewer-data/coord-worktrees/<runId>/), reconcile any cross-file assumptions, merge both lane branches into the main checkout, run npx tsc --noEmit and npm run tui:check on the merged result, and publish a synthesis of memory savings + native-experience improvements as a finding before completing. If review finds gaps, coord_create_task follow-ups instead of merging broken work.",
           "dependsOn": ["pi-memory", "pi-native"]

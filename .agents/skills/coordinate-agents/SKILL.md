@@ -35,7 +35,7 @@ Communication is part of the work, not overhead. Every other participant runs in
 
 When the user requests multiple participating agents, seed the board before starting teammate workers. A joined or `ready` agent is roster presence, not participation.
 
-1. Create one independent, initially claimable lane per teammate, with non-overlapping paths and a concrete evidence or implementation outcome. Create a separate lead integration task that depends on the teammate lanes. For three agents, the normal shape is two parallel teammate tasks plus one dependent lead task.
+1. Create one independent, initially claimable lane per teammate, with `role: teammate`, non-overlapping paths, and a concrete evidence or implementation outcome. Create a separate `role: lead` integration task that depends on the teammate lanes. For three agents, the normal shape is two parallel teammate tasks plus one dependent lead task. Use `role: any` only when either role is intentionally allowed to take the lane.
 2. Do not let the lead claim an umbrella task that contains the work intended for teammates. The lead coordinates while teammate lanes run, then claims the dependent integration task.
 3. Choose a startup path that makes board seeding happen before autonomous claiming:
    - With an unbound interactive MCP bridge, call `coord_create_run`, create the complete task graph, verify it with `coord_status`, and only then start or join teammate workers.
@@ -56,7 +56,7 @@ A playbook is a saved run definition — the plan held in an artifact instead of
 - Run one with `coord_create_run` using `playbook_name` and `args` — the whole task board is seeded instantly with phases as dependency barriers (phase N+1 waits for all of phase N), and `{{args}}` / `{{args.<key>}}` placeholders in task text are filled from `args`. No lead planning turn is needed; teammates can claim immediately.
 - When a run's board is worth repeating, the lead saves it with `coord_save_playbook` (a name slug, description, and args hint). Prefer running a saved playbook over re-deriving the same plan.
 - Status responses include a `phases` rollup (per-phase task counts) — use it to report progress phase by phase.
-- A single CLI can kick off a playbook run alone and then staff it either way: spawn unattended workers with `agent-viewer coord worker --join latest --name <name> --provider codex|claude|opencode|copilot|pi` (one per lane, via the shell) and supervise as lead, or — when no teammates are expected — claim and work the tasks itself phase by phase. Claiming is not role-restricted; phase barriers enforce order either way.
+- A single CLI can kick off a playbook run alone and then staff it either way: spawn unattended workers with `agent-viewer coord worker --join latest --name <name> --provider codex|claude|opencode|copilot|pi` (one per lane, via the shell) and supervise as lead, or — when no teammates are expected — claim and work teammate tasks itself phase by phase. Once a live teammate exists, role affinity is enforced: teammates claim `teammate`/`any` lanes and leads claim `lead`/`any` lanes. Phase barriers still enforce order.
 
 ## Lead workflow
 
@@ -67,6 +67,7 @@ When the participant role is `lead`:
    - a concrete outcome and acceptance check;
    - the narrowest expected write paths;
    - explicit dependencies when another task must finish first.
+   - an explicit role: `teammate` for execution lanes, `lead` for integration/synthesis, or `any` only for intentional fallback work.
 3. Match the configured checkout mode. In isolated mode, keep each external CLI in its assigned clean checkout. In shared mode, keep every write lane disjoint and make ownership explicit before editing.
 4. Keep one integration or review task for the lead when useful; make it depend on teammate lanes so the lead cannot absorb their work before they participate.
 5. Send important context or changed priorities through `coord_send_message`; do not assume another CLI sees local terminal output. Use `priority: urgent` only when it should wake a worker, `priority: status` for batchable progress, and `reply_required` for a request that must stay actionable until answered. Check the returned `delivery` field for each recipient's liveness (`fresh`/`stale`/`dead` + age) — if `stale` or `dead`, do not wait on a reply that may never come; escalate directly, reassign the work, or route around them.

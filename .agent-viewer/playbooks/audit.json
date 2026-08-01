@@ -39,6 +39,7 @@
       "tasks": [
         {
           "key": "report",
+          "role": "lead",
           "title": "Synthesize the audit report",
           "detail": "Collect the confirmed findings (skip anything the verify phase refuted) and write one ranked report: most severe first, each with file:line, why it matters, and a suggested fix direction. Complete this task with the full report in the completion detail so the lead can finalize the run with it."
         }

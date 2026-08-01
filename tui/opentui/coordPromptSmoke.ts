@@ -34,6 +34,7 @@ const task: ProtocolTask = {
   title: 'Update coordinator guidance',
   prompt: 'Keep checkout directions mode-aware.',
   status: 'in_progress',
+  targetRole: 'teammate',
   ownerAgentId: agent.id,
   paths: ['lib/agentProtocol.ts'],
   blockedBy: [],

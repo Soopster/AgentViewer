@@ -150,6 +150,7 @@ export type ProtocolRunStatus = 'planning' | 'running' | 'synthesizing' | 'block
 export type ProtocolAgentStatus = 'ready' | 'idle' | 'working' | 'blocked' | 'done' | 'failed' | 'stopped'
 export type ProtocolAgentRole = 'lead' | 'teammate'
 export type ProtocolTaskStatus = 'pending' | 'claimed' | 'planning' | 'planned' | 'in_progress' | 'blocked' | 'completed' | 'failed' | 'cancelled'
+export type ProtocolTaskTargetRole = 'lead' | 'teammate' | 'any'
 
 /**
  * Maps the Coordinator's task-board status onto the A2A task-state enum.
@@ -182,7 +183,18 @@ export function taskStateFromStatus(status: ProtocolTaskStatus): A2ATaskState {
 export type ProtocolLockStatus = 'active' | 'released' | 'expired' | 'denied'
 export type ProtocolMessageKind = 'request' | 'response' | 'status' | 'status_summary' | 'finding' | 'handoff' | 'review_request' | 'review_result'
 export type ProtocolMessagePriority = 'urgent' | 'normal' | 'status'
-export type ProtocolFailureClass = 'rate_limited' | 'authentication_failed' | 'context_exhausted' | 'approval_blocked' | 'cli_missing' | 'transient_transport' | 'provider_failure'
+export const PROTOCOL_FAILURE_CLASSES = [
+  'rate_limited',
+  'authentication_failed',
+  'context_exhausted',
+  'approval_blocked',
+  'cli_missing',
+  'transient_transport',
+  'provider_failure',
+  'provider_timeout',
+  'supervisor_stopped',
+] as const
+export type ProtocolFailureClass = (typeof PROTOCOL_FAILURE_CLASSES)[number]
 
 export type ExternalProtocolClient = {
   name: string
@@ -308,6 +320,8 @@ export type ProtocolTask = {
   prompt: string
   status: ProtocolTaskStatus
   ownerAgentId?: string
+  /** Which participant role should claim this lane. Defaults to teammate. */
+  targetRole: ProtocolTaskTargetRole
   paths: string[]
   blockedBy: string[]
   /** Playbook phase this task belongs to (display + barrier grouping). */
@@ -480,7 +494,7 @@ export type ProtocolTaskPlanState = 'none' | 'awaiting' | 'approved' | 'rejected
 export type ExternalProtocolActionable = {
   runStatus: ProtocolRunStatus
   /** Pending, unowned tasks whose dependencies are all completed. */
-  claimableTasks: Array<{ id: string; title: string }>
+  claimableTasks: Array<{ id: string; title: string; targetRole: ProtocolTaskTargetRole }>
   /** Undelivered mailbox messages addressed to this participant. */
   inboxCount: number
   urgentCount: number
@@ -577,6 +591,8 @@ export type PlaybookTask = {
   title: string
   /** Full teammate prompt. Supports {{args}} and {{args.<key>}} interpolation. */
   detail: string
+  /** Role responsible for this lane. Defaults to teammate. */
+  role?: ProtocolTaskTargetRole
   paths?: string[]
   /** Keys (same or earlier phase) this task depends on, beyond the phase barrier. */
   dependsOn?: string[]
@@ -671,6 +687,9 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
       const taskTitle = typeof task.title === 'string' ? task.title.trim() : ''
       const detail = typeof task.detail === 'string' ? task.detail.trim() : ''
       if (!taskTitle || !detail) throw new Error(`task ${taskIndex + 1} in phase "${title}" needs title and detail`)
+      if (task.role !== undefined && task.role !== 'lead' && task.role !== 'teammate' && task.role !== 'any') {
+        throw new Error(`task ${taskIndex + 1} in phase "${title}" has invalid role; expected lead, teammate, or any`)
+      }
       const key = typeof task.key === 'string' && task.key.trim() ? task.key.trim() : undefined
       if (key) {
         if (keyPhase.has(key)) throw new Error(`duplicate playbook task key: ${key}`)
@@ -680,6 +699,7 @@ export function parseRunPlaybook(value: unknown): RunPlaybook {
         key,
         title: taskTitle,
         detail,
+        role: task.role === 'lead' || task.role === 'any' ? task.role : 'teammate',
         paths: Array.isArray(task.paths)
           ? task.paths.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
           : undefined,
@@ -1066,7 +1086,7 @@ export function formatTaskBoard(tasks: ProtocolTask[]): string {
     const result = task.resultSummary
       ? `\n  result: ${task.resultSummary}${resultDetail ? ` — ${resultDetail}` : ''}`
       : ''
-    return `- ${task.id} [${task.status}]${owner}${deps} ${task.title}${result}`
+    return `- ${task.id} [${task.status}] role:${task.targetRole}${owner}${deps} ${task.title}${result}`
   }).join('\n')
 }
 

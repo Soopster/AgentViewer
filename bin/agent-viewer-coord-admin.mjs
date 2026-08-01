@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from 'node:child_process'
-import { open, readFile } from 'node:fs/promises'
+import { open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -18,6 +18,7 @@ import {
 const args = process.argv.slice(2)
 const command = args[0]
 const PROVIDER_CHECK_TIMEOUT_MS = Math.max(100, Number(process.env.AGENT_VIEWER_COORD_CLI_TIMEOUT_MS) || 5_000)
+const WORKER_STOP_TIMEOUT_MS = Math.max(500, Number(process.env.AGENT_VIEWER_COORD_STOP_TIMEOUT_MS) || 25_000)
 
 function option(name, fallback) {
   const direct = args.indexOf(name)
@@ -36,15 +37,15 @@ function usage(message) {
   if (message) console.error(message)
   console.log(`Usage:
   agent-viewer coord doctor [--json] [--attach <url>] [--identity <file>]
-  agent-viewer coord workers [--json]
-  agent-viewer coord restart <agent-id|name|identity-file>
+  agent-viewer coord workers [--json] [--run <run-id>] [--status <status>] [--limit <n>]
+  agent-viewer coord restart <agent-id|name|identity-file> [--provider codex|claude|opencode|copilot|pi]
   agent-viewer coord logs <agent-id|name|identity-file> [-n <lines>] [-f]
 `)
   process.exit(message ? 1 : 0)
 }
 
-function executableCheck(name, envName) {
-  const executable = process.env[envName] || name
+function executableCheck(name, ...envNames) {
+  const executable = envNames.map((envName) => process.env[envName]).find(Boolean) || name
   const result = spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: PROVIDER_CHECK_TIMEOUT_MS })
   const ok = !result.error && result.status === 0
   return {
@@ -95,15 +96,18 @@ async function protocolCheck(baseUrl, identityFile) {
 
 async function doctor() {
   const json = args.includes('--json')
-  const baseUrl = normalizeUrl(option('--attach', process.env.AGENT_VIEWER_ATTACH))
   const identityFile = option('--identity', process.env.AGENT_VIEWER_COORD_IDENTITY_FILE)
   const records = await listWorkerRecords()
   const identity = identityFile ? await inspectIdentity(path.resolve(identityFile)) : null
+  const scopedRecords = identity?.runId
+    ? records.filter((record) => record.runId === identity.runId)
+    : records
+  const baseUrl = normalizeUrl(option('--attach', process.env.AGENT_VIEWER_ATTACH || identity?.attach))
   const providerClis = [
     executableCheck('codex', 'CODEX_PATH'),
     executableCheck('claude', 'CLAUDE_PATH'),
     executableCheck('opencode', 'OPENCODE_PATH'),
-    executableCheck('copilot', 'COPILOT_PATH'),
+    executableCheck('copilot', 'COPILOT_CLI_PATH', 'COPILOT_PATH'),
     executableCheck('pi', 'PI_PATH'),
   ]
   const checks = {
@@ -111,13 +115,14 @@ async function doctor() {
     protocol: await protocolCheck(baseUrl, identityFile ? path.resolve(identityFile) : null),
     providerClis,
     identity: identityFile ? { file: path.resolve(identityFile), ...identity, secureMode: identity?.mode === 0o600 } : null,
-    workers: records.map(({ token: _token, ...record }) => record),
+    workers: scopedRecords.map(({ token: _token, ...record }) => record),
   }
   const failures = [
     !checks.daemon.ok && 'daemon',
     !checks.protocol.ok && 'protocol',
     checks.identity && (!checks.identity.ok || !checks.identity.secureMode) && 'identity',
     checks.identity?.provider && !providerClis.find((cli) => cli.name === checks.identity.provider)?.ok && `provider-cli:${checks.identity.provider}`,
+    scopedRecords.some((record) => record.stale) && 'stale-workers',
   ].filter(Boolean)
   const report = {
     ok: failures.length === 0,
@@ -133,13 +138,20 @@ async function doctor() {
     console.log(`Daemon: ${checks.daemon.ok ? 'reachable' : `unreachable (${checks.daemon.error})`}`)
     for (const cli of checks.providerClis) console.log(`${cli.name}: ${cli.ok ? cli.version : `unavailable (${cli.error})`}`)
     if (checks.identity) console.log(`Identity: ${checks.identity.ok && checks.identity.secureMode ? 'valid 0600' : 'invalid or insecure'}`)
-    console.log(`Workers: ${records.length} registered, ${records.filter((record) => record.alive).length} alive, ${records.filter((record) => record.stale).length} stale`)
+    console.log(`Workers: ${scopedRecords.length} registered, ${scopedRecords.filter((record) => record.alive).length} alive, ${scopedRecords.filter((record) => record.stale).length} stale`)
   }
   if (!report.ok) process.exitCode = 1
 }
 
 async function workers() {
-  const records = await listWorkerRecords()
+  const runId = option('--run')
+  const status = option('--status')
+  const requestedLimit = Number(option('--limit', '100'))
+  const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(Math.trunc(requestedLimit), 1_000)) : 100
+  const records = (await listWorkerRecords())
+    .filter((record) => !runId || record.runId === runId)
+    .filter((record) => !status || record.status === status)
+    .slice(0, limit)
   if (args.includes('--json')) {
     console.log(JSON.stringify(records.map(({ token: _token, ...record }) => record), null, 2))
     return
@@ -163,27 +175,46 @@ async function workers() {
 async function restart() {
   const selector = args[1]
   if (!selector || selector.startsWith('-')) usage('coord restart requires a worker selector')
+  const provider = option('--provider')
+  if (provider && !['codex', 'claude', 'opencode', 'copilot', 'pi'].includes(provider)) {
+    usage('--provider must be codex, claude, opencode, copilot, or pi')
+  }
   const record = await resolveWorkerRecord(selector)
   if (!record.identityFile) throw new Error('Worker record has no identity file')
   if (processAlive(Number(record.pid))) {
     const verifiedWorker = managedWorkerProcess(Number(record.pid), record)
-      || (record.alive && record.liveness === 'heartbeat')
     if (!verifiedWorker) {
-      if (record.alive) throw new Error(`Refusing to signal pid ${record.pid}: it is not the recorded Agent Viewer Coordinator worker`)
+      throw new Error(`Refusing to signal pid ${record.pid}: it is not the recorded Agent Viewer Coordinator worker`)
     } else {
       process.kill(Number(record.pid), 'SIGTERM')
-      await new Promise((resolve) => setTimeout(resolve, 250))
+      const deadline = Date.now() + WORKER_STOP_TIMEOUT_MS
+      while (processAlive(Number(record.pid)) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      if (processAlive(Number(record.pid))) {
+        throw new Error(
+          `Worker pid ${record.pid} did not stop within ${WORKER_STOP_TIMEOUT_MS}ms; refusing to start a duplicate supervisor`,
+        )
+      }
     }
   }
   const launcher = fileURLToPath(new URL('./agent-viewer.mjs', import.meta.url))
-  const child = spawn(process.execPath, [launcher, 'coord', 'worker', '--identity', record.identityFile], {
+  const child = spawn(process.execPath, [
+    launcher, 'coord', 'worker', '--identity', record.identityFile,
+    ...(provider ? ['--provider', provider] : []),
+  ], {
     cwd: record.cwd || process.cwd(),
     detached: true,
     env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordinatorStateRoot() },
     stdio: 'ignore',
   })
   child.unref()
-  await writeWorkerRecord(record.identityFile, { status: 'starting', pid: child.pid, restartRequestedAt: new Date().toISOString() })
+  await writeWorkerRecord(record.identityFile, {
+    status: 'starting',
+    pid: child.pid,
+    ...(provider ? { provider } : {}),
+    restartRequestedAt: new Date().toISOString(),
+  })
   console.log(`Restarted ${record.name || record.agentId} as pid ${child.pid}.`)
 }
 
@@ -192,21 +223,36 @@ async function logs() {
   if (!selector || selector.startsWith('-')) usage('coord logs requires a worker selector')
   const record = await resolveWorkerRecord(selector)
   const file = record.logFile || workerLogPath(record.identityFile)
+  const rotatedFile = `${file}.1`
   const count = Math.max(1, Math.min(10_000, Number(option('-n', 100)) || 100))
   let offset = 0
+  let activeIdentity = null
   async function printTail(initial) {
     let content = ''
+    let identity = null
     try { content = await readFile(file, 'utf8') } catch (error) {
       if (initial) throw new Error(`Cannot read worker log ${file}: ${error instanceof Error ? error.message : error}`)
       return
     }
+    try {
+      const entry = await stat(file)
+      identity = `${entry.dev}:${entry.ino}`
+    } catch {}
     if (initial) {
-      const lines = content.split('\n')
+      const rotated = await readFile(rotatedFile, 'utf8').catch(() => '')
+      const lines = `${rotated}${content}`.split('\n')
       process.stdout.write(`${lines.slice(Math.max(0, lines.length - count - 1)).join('\n')}\n`)
+    } else if ((activeIdentity && identity !== activeIdentity) || content.length < offset) {
+      // Rotation renames the previous active file to .1. Drain anything that
+      // arrived after our last offset, then continue from the new active file.
+      const rotated = await readFile(rotatedFile, 'utf8').catch(() => '')
+      if (rotated.length > offset) process.stdout.write(rotated.slice(offset))
+      if (content) process.stdout.write(content)
     } else if (content.length > offset) {
       process.stdout.write(content.slice(offset))
     }
     offset = content.length
+    activeIdentity = identity
   }
   await printTail(true)
   if (!args.includes('-f') && !args.includes('--follow')) return

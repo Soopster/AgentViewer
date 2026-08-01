@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -19,6 +19,10 @@ export function workerLogPath(identityFile) {
 }
 
 const workerRecordWrites = new Map()
+const WORKER_RETENTION_MS = Math.max(
+  1,
+  Number(process.env.AGENT_VIEWER_COORD_WORKER_RETENTION_DAYS) || 30,
+) * 86_400_000
 
 async function writeWorkerRecordNow(identityFile, patch) {
   const file = workerRecordPath(identityFile)
@@ -128,10 +132,25 @@ export async function listWorkerRecords(root = coordinatorStateRoot()) {
     try {
       const record = JSON.parse(await readFile(file, 'utf8'))
       const pid = Number(record.pid)
-      const heartbeatAlive = freshWorkerHeartbeat(pid, record)
-      const processVerified = heartbeatAlive ? false : managedWorkerProcess(pid, record)
-      const alive = heartbeatAlive || processVerified
+      const processVerified = managedWorkerProcess(pid, record)
+      const heartbeatAlive = processVerified && freshWorkerHeartbeat(pid, record)
+      const alive = processVerified
       const stale = !alive && ['running', 'starting', 'retrying'].includes(record.status)
+      const updatedAt = Date.parse(String(record.updatedAt || ''))
+      const terminal = ['stopped', 'handed_off', 'failed'].includes(record.status)
+      if (terminal && Number.isFinite(updatedAt) && Date.now() - updatedAt > WORKER_RETENTION_MS) {
+        const logFile = path.resolve(record.logFile || workerLogPath(record.identityFile))
+        const identityFile = typeof record.identityFile === 'string' ? path.resolve(record.identityFile) : null
+        const stateRoot = path.resolve(root)
+        const identityInsideStateRoot = identityFile?.startsWith(`${stateRoot}${path.sep}`)
+        const logInsideStateRoot = logFile.startsWith(`${stateRoot}${path.sep}`)
+        await Promise.allSettled([
+          rm(file, { force: true }),
+          ...(logInsideStateRoot ? [rm(logFile, { force: true }), rm(`${logFile}.1`, { force: true })] : []),
+          ...(identityInsideStateRoot ? [rm(identityFile, { force: true })] : []),
+        ])
+        continue
+      }
       records.push({
         ...record,
         recordFile: file,

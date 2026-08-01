@@ -51,7 +51,7 @@ function git(cwd: string, args: string[]): Promise<string> {
 // itself reports (macOS /var → /private/var, /tmp) — otherwise every worktree
 // under a symlinked repo path is invisible to listWorktreeTasks.
 function canonicalPath(value: string): Promise<string> {
-  return fs.realpath(value).catch(() => value)
+  return fs.realpath(/* turbopackIgnore: true */ value).catch(() => value)
 }
 
 /**
@@ -63,7 +63,7 @@ export async function findRepoRoot(cwd: string): Promise<string | null> {
   try {
     const commonDir = await git(cwd, ['rev-parse', '--git-common-dir'])
     if (!commonDir) return null
-    const absolute = path.resolve(cwd, commonDir)
+    const absolute = path.resolve(/* turbopackIgnore: true */ cwd, commonDir)
     if (path.basename(absolute) === '.git') return canonicalPath(path.dirname(absolute))
     // Bare/unusual layouts: fall back to the worktree's own toplevel.
     const root = await git(cwd, ['rev-parse', '--show-toplevel'])
@@ -87,11 +87,11 @@ function slugify(name: string): string {
 async function ensureWorktreeDirExcluded(repoRoot: string): Promise<void> {
   try {
     const commonDir = await git(repoRoot, ['rev-parse', '--git-common-dir'])
-    const excludePath = path.resolve(repoRoot, commonDir, 'info', 'exclude')
+    const excludePath = path.resolve(/* turbopackIgnore: true */ repoRoot, commonDir, 'info', 'exclude')
     const line = `/${WORKTREE_TASKS_DIR}/`
     let current = ''
     try {
-      current = await fs.readFile(excludePath, 'utf-8')
+      current = await fs.readFile(/* turbopackIgnore: true */ excludePath, 'utf-8')
     } catch {
       // no exclude file yet
     }
@@ -126,7 +126,10 @@ export async function createWorktreeTask(cwd: string, name: string): Promise<Wor
   // Suffix on collision rather than failing — task names repeat.
   let slug = baseSlug
   for (let attempt = 2; ; attempt += 1) {
-    const worktreePath = path.join(repoRoot, WORKTREE_TASKS_DIR, slug)
+    // Runtime git state chooses this path; it is not a build-time asset root.
+    // Without the annotation Turbopack traces the dynamic repo root and can
+    // conservatively pull the entire project into the route dependency graph.
+    const worktreePath = path.join(/* turbopackIgnore: true */ repoRoot, WORKTREE_TASKS_DIR, slug)
     const branch = `${WORKTREE_BRANCH_PREFIX}${slug}`
     try {
       await fs.access(worktreePath)
@@ -153,7 +156,7 @@ export async function createWorktreeTask(cwd: string, name: string): Promise<Wor
 export async function listWorktreeTasks(cwd: string): Promise<WorktreeTask[]> {
   const repoRoot = await findRepoRoot(cwd)
   if (!repoRoot) return []
-  const home = path.join(repoRoot, WORKTREE_TASKS_DIR)
+  const home = path.join(/* turbopackIgnore: true */ repoRoot, WORKTREE_TASKS_DIR)
   let porcelain: string
   try {
     porcelain = await git(repoRoot, ['worktree', 'list', '--porcelain'])
@@ -167,7 +170,7 @@ export async function listWorktreeTasks(cwd: string): Promise<WorktreeTask[]> {
   let sawPrunable = false
   const flush = () => {
     if (currentPath && currentBranch) {
-      const normalized = path.resolve(currentPath)
+      const normalized = path.resolve(/* turbopackIgnore: true */ currentPath)
       if (currentBranch.startsWith(WORKTREE_BRANCH_PREFIX) && normalized.startsWith(home + path.sep) && !currentPrunable) {
         tasks.push({
           path: normalized,
@@ -210,7 +213,9 @@ export async function listWorktreeTasks(cwd: string): Promise<WorktreeTask[]> {
 export async function findWorktreeTaskForCwd(cwd: string): Promise<WorktreeTask | null> {
   // realpath both sides: session cwds can arrive through symlinks (macOS /tmp)
   // while git reports resolved paths.
-  const normalized = await fs.realpath(path.resolve(cwd)).catch(() => path.resolve(cwd))
+  const normalized = await fs.realpath(
+    /* turbopackIgnore: true */ path.resolve(/* turbopackIgnore: true */ cwd),
+  ).catch(() => path.resolve(/* turbopackIgnore: true */ cwd))
   if (!normalized.includes(`${path.sep}${WORKTREE_TASKS_DIR}${path.sep}`)) return null
   const tasks = await listWorktreeTasks(normalized)
   return tasks.find((task) => normalized === task.path || normalized.startsWith(task.path + path.sep)) ?? null
@@ -260,7 +265,7 @@ export async function mergeWorktreeTask(task: WorktreeTask): Promise<{ staged: b
  * changes; without it, a dirty worktree makes git refuse and we surface that.
  */
 export async function removeWorktreeTask(task: WorktreeTask, opts?: { force?: boolean }): Promise<void> {
-  const dirExists = await fs.access(task.path).then(() => true, () => false)
+  const dirExists = await fs.access(/* turbopackIgnore: true */ task.path).then(() => true, () => false)
   if (!dirExists) {
     // Directory already gone — `worktree remove` would fail on the ghost
     // registration; prune it instead so the branch delete below can proceed.
