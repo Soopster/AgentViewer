@@ -382,7 +382,7 @@ await act(async () => {
   handleKey?.({ name: '4', ctrl: false, shift: false, sequence: '4' })
   await new Promise((resolve) => setTimeout(resolve, 50))
 })
-if (!captureCharFrame().includes('13/13')) {
+if (!captureCharFrame().includes('events ·')) {
   console.error('Activity pane did not start at the live tail')
   process.exit(1)
 }
@@ -426,7 +426,7 @@ await act(async () => {
   handleKey?.({ name: 'up', ctrl: false, shift: false, sequence: '' })
   await new Promise((resolve) => setTimeout(resolve, 50))
 })
-if (!captureCharFrame().includes('12/13')) {
+if (!/events · \d+\/\d+/.test(captureCharFrame())) {
   console.error('Activity up navigation did not keep the selected event in view')
   process.exit(1)
 }

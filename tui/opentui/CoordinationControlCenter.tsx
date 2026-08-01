@@ -51,6 +51,7 @@ type Props = {
   onSelectTask?: (taskId: string) => void
   onSelectAgent?: (agentId: string) => void
   onSelectEvent?: (eventIndex: number) => void
+  onEventFilter?: (filter: 'all' | 'attention' | 'messages' | 'tasks') => void
   onScrollSection?: (section: ControlCenterSection, delta: number) => void
   onActivateSelection?: (section: ControlCenterSection) => void
 }
@@ -278,6 +279,7 @@ export function CoordinationControlCenter({
   onSelectTask,
   onSelectAgent,
   onSelectEvent,
+  onEventFilter,
   onScrollSection,
   onActivateSelection,
 }: Props) {
@@ -287,13 +289,14 @@ export function CoordinationControlCenter({
   const popLeft = Math.max(Math.floor((width - popW) / 2), 0)
   const innerW = Math.max(popW - 2, 1)
   const headerH = 3
+  const metricsH = 4
   const promptH = 2
   const footerH = 2
-  const bodyH = Math.max(popH - headerH - promptH - footerH - 2, 8)
+  const bodyH = Math.max(popH - headerH - metricsH - promptH - footerH - 2, 8)
   const leftW = Math.max(24, Math.floor(innerW * 0.27))
   const rightW = Math.max(31, Math.floor(innerW * 0.29))
   const centerW = Math.max(innerW - leftW - rightW - 2, 20)
-  const inspectorH = Math.min(22, Math.max(15, Math.floor(bodyH * 0.46)))
+  const inspectorH = Math.min(13, Math.max(12, Math.floor(bodyH * 0.30)))
   const showProviderHealth = innerW >= 165
   const showTaskColumns = centerW >= 58
   const showInspectorDetails = rightW >= 40 && inspectorH >= 20
@@ -358,7 +361,7 @@ export function CoordinationControlCenter({
     active: filteredTasks.filter((task) => taskStage(task) === 'active'),
     verify: filteredTasks.filter((task) => taskStage(task) === 'verify'),
   }), [filteredTasks])
-  const activityFooterH = 2
+  const activityFooterH = 1
   // border-top (1) + the DETAIL header (1) + DETAIL_BODY_ROWS. Sized so the
   // header and a two-line body both fit: at 3 the body's second line had no row
   // to live in, so it overlapped the header — the header vanished and its
@@ -461,6 +464,14 @@ export function CoordinationControlCenter({
   const inspectedBlockedReason = agentErrorEvent?.detail ?? agentErrorEvent?.summary
     ?? (inspectedTask ? taskBlockReasonById.get(inspectedTask.id) : undefined)
   const recentInspectedMessages = inspectedMessages.slice(-6).reverse()
+  const compactInspectedMessage = recentInspectedMessages[0] ? (() => {
+    const message = recentInspectedMessages[0]
+    const outbound = message.fromAgentId === inspectedAgent?.id
+    const counterpartyId = outbound ? message.toAgentId : message.fromAgentId
+    const counterparty = agentsById.get(counterpartyId)?.name ?? counterpartyId
+    const marker = message.replyRequired ? (message.resolvedAt ? ' ✓' : ' ?') : ''
+    return `${outbound ? '→' : '←'} ${counterparty}  ${message.kind}${marker}`
+  })() : null
   // Report where agents ACTUALLY work, not just the run flag: a run created
   // with worktrees enabled can still be staffed by `--shared` workers that all
   // sit in one checkout, and labelling that "isolated checkouts" sends an
@@ -515,6 +526,15 @@ export function CoordinationControlCenter({
     ? '[R] rerun failed/blocked  [M] broadcast  [m] message focused agent'
     : 'Message the current context…  [M] broadcast  [m] message focused agent'
   const activityFooterText = rightW >= 40 ? '4 focus  ·  g tail  ·  / filter  ·  m message' : '4 focus  ·  g tail'
+  const metricWidth = Math.max(14, Math.floor((innerW - 4) / 5))
+  const attentionCount = hasRunAttention ? Math.max(1, fleet.attention) : fleet.attention
+  const metrics = [
+    { icon: '◇', label: 'WORKFLOWS', value: runs.length, tone: theme.cyan },
+    { icon: '♧', label: 'AGENTS', value: fleet.agents, tone: theme.violet },
+    { icon: '∿', label: 'WORKING', value: fleet.working, tone: theme.green },
+    { icon: '◷', label: 'QUEUED', value: fleet.queued, tone: theme.amber },
+    { icon: '!', label: 'ATTENTION', value: attentionCount, tone: attentionCount > 0 ? theme.red : theme.dim },
+  ]
 
   return (
     <box
@@ -563,6 +583,18 @@ export function CoordinationControlCenter({
           {run ? <text flexShrink={1} fg={checkoutIsShared ? theme.amber : theme.green} wrapMode="none">{checkoutIsShared ? 'shared checkout' : 'isolated checkouts'}</text> : null}
           {busy ? <text fg={theme.amber} wrapMode="none">{'  ·  refreshing'}</text> : null}
         </box>
+      </box>
+
+      <box height={metricsH} paddingX={1} paddingTop={1} flexDirection="row" overflow="hidden">
+        {metrics.map((metric, index) => (
+          <box key={metric.label} width={metricWidth} height={3} marginRight={index === metrics.length - 1 ? 0 : 1} paddingX={1} border borderStyle="single" borderColor={metric.tone} flexDirection="row" alignItems="center" overflow="hidden">
+            <text fg={metric.tone} wrapMode="none">{`${metric.icon} `}</text>
+            <box flexDirection="column" minWidth={0} overflow="hidden">
+              <text fg={metric.tone} wrapMode="none">{String(metric.value)}</text>
+              <text fg={theme.dim} wrapMode="none">{fit(metric.label, Math.max(metricWidth - 5, 6))}</text>
+            </box>
+          </box>
+        ))}
       </box>
 
       <box height={bodyH} minHeight={0} flexDirection="row" overflow="hidden">
@@ -738,7 +770,9 @@ export function CoordinationControlCenter({
                   <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Checkout: </text><text fg={theme.muted} wrapMode="none">{fit(`${inspectedAgent.worktreeBranch || 'main'} · ${worktree ? `${worktree.dirtyFiles} dirty, ${worktree.aheadCommits} ahead` : 'shared'} · ${latestAgentEvent?.type ?? 'idle'}`, rightW - 12)}</text></box>
                 ) : null}
                 <box flexDirection="row"><text fg={theme.violet} wrapMode="none">MAIL      </text><text fg={theme.muted} wrapMode="none">{fit(`sent ${inspectedMailSent} · received ${inspectedMailReceived} · latest exchanges`, rightW - 12)}</text></box>
-                {recentInspectedMessages.slice(0, inspectorMailRows).map((message) => {
+                {inspectorH <= 13 && compactInspectedMessage ? (
+                  <text fg={theme.violet} wrapMode="none">{fit(`MAIL  ${compactInspectedMessage}`, rightW - 2)}</text>
+                ) : recentInspectedMessages.slice(0, inspectorMailRows).map((message) => {
                   const outbound = message.fromAgentId === inspectedAgent.id
                   const counterpartyId = outbound ? message.toAgentId : message.fromAgentId
                   const counterparty = agentsById.get(counterpartyId)?.name ?? counterpartyId
@@ -791,12 +825,32 @@ export function CoordinationControlCenter({
             onMouseUp={() => onFocusSection?.('events')}
             onMouseScroll={(event) => onScrollSection?.('events', event.scroll?.direction === 'up' ? -1 : 1)}
           >
-            <box height={2} border={['bottom']} borderStyle="single" borderColor={section === 'events' ? theme.cyan : theme.border} backgroundColor={section === 'events' ? theme.surface3 : theme.surface} flexDirection="row" alignItems="center">
-              <text fg={section === 'events' ? theme.cyan : theme.text} wrapMode="none">[4] LIVE ACTIVITY</text>
-              <box flexGrow={1} />
-              <text fg={theme.dim} wrapMode="none">{`[${eventFilter}${section === 'events' ? '' : ' · tail'}]`}</text>
+            <box height={3} border={['bottom']} borderStyle="single" borderColor={section === 'events' ? theme.cyan : theme.border} backgroundColor={section === 'events' ? theme.surface3 : theme.surface} flexDirection="column" overflow="hidden">
+              <box height={1} flexDirection="row" alignItems="center">
+                <text fg={section === 'events' ? theme.cyan : theme.text} wrapMode="none">ACTIVITY · LIVE</text>
+                <box flexGrow={1} />
+                <text fg={theme.dim} wrapMode="none">{`${events.length} events · ${Math.max(selectedEventIndex + 1, 0)}/${filteredEvents.length}`}</text>
+              </box>
+              <box height={1} flexDirection="row" alignItems="center" overflow="hidden">
+                <text fg={section === 'events' ? theme.cyan : theme.dim} wrapMode="none">[4] LIVE ACTIVITY</text>
+                {showActivityColumns ? (
+                  <>
+                    {([
+                      ['all', 'ALL', events.length],
+                      ['attention', 'Attention', events.filter((event) => ATTENTION_EVENTS.has(event.type)).length],
+                      ['messages', 'Messages', events.filter((event) => event.type === 'message').length],
+                      ['tasks', 'Tasks', events.filter((event) => event.type.startsWith('task.')).length],
+                    ] as const).map(([value, label, count]) => (
+                      <box key={value} marginLeft={1} paddingX={1} backgroundColor={eventFilter === value ? theme.surface3 : theme.surface}
+                        onMouseUp={() => { onFocusSection?.('events'); onEventFilter?.(value) }}>
+                        <text fg={eventFilter === value ? theme.cyan : theme.dim} wrapMode="none">{`${label} ${count}`}</text>
+                      </box>
+                    ))}
+                  </>
+                ) : null}
+              </box>
             </box>
-            <box flexGrow={1} minHeight={0} flexDirection="column" overflow="hidden">
+            <box height={eventRows} flexGrow={0} minHeight={0} flexDirection="column" overflow="hidden">
               {visibleEvents.length === 0 ? <text fg={theme.dim} wrapMode="none">No activity yet</text> : visibleEvents.map((event, index) => {
                 const message = messageMetaByEvent.get(event)
                 const sender = agentsById.get(event.agentId)?.name ?? event.agentId
@@ -810,15 +864,17 @@ export function CoordinationControlCenter({
                 const who = message && showActivityColumns ? `${pair === previousPair ? '│' : '┌'} ${pair}` : pair
                 // The reply marker outranks the kind: truncate the kind to keep
                 // "!?" (unanswered) visible, never `request…` which hides it.
-                const activityMarker = message?.replyRequired ? message.unanswered ? '!?' : '!✓' : ''
+                const activityMarker = message?.replyRequired ? message.unanswered ? ' ?' : ' ✓' : ''
                 const activityKind = message ? message.kind : event.type
                 const activityWidth = showActivityColumns ? 14 : 8
-                const activityType = `${fit(activityKind, Math.max(activityWidth - activityMarker.length, 3))}${activityMarker}`
+                const activityType = message?.unanswered
+                  ? 'request ?'
+                  : `${fit(activityKind, Math.max(activityWidth - activityMarker.length, 3))}${activityMarker}`
                 // The kind column already names the event, so repeating it here
                 // spent the widest column restating "agent.heartbeat" instead of
                 // showing what happened. Summary only — and when there is none,
                 // leave the cell empty rather than printing a dangling "·".
-                const activityDetail = (event.summary ?? event.detail ?? '').replace(/\s+/g, ' ').trim()
+                const activityDetail = `${message?.unanswered && message.recipient ? `→ ${message.recipient} ` : ''}${(event.summary ?? event.detail ?? '').replace(/\s+/g, ' ').trim()}`
                 const selected = selectedEvent === event
                 const focused = selected && section === 'events'
                 return (
@@ -833,13 +889,13 @@ export function CoordinationControlCenter({
                       if (actualIndex >= 0) onSelectEvent?.(actualIndex)
                     }}
                   >
-                    <box width={showActivityColumns ? 9 : 6} overflow="hidden"><text fg={theme.dim} wrapMode="none">{`${showActivityColumns ? clock(event.timestamp) : clock(event.timestamp).slice(3)} `}</text></box>
+                    <box width={showActivityColumns ? 9 : 6} overflow="hidden"><text fg={message ? theme.cyan : eventTone(event, theme)} wrapMode="none">{`● ${showActivityColumns ? clock(event.timestamp) : clock(event.timestamp).slice(3)} `}</text></box>
                     <box width={showActivityColumns ? 18 : 10} paddingLeft={1} overflow="hidden"><text fg={message ? theme.violet : eventTone(event, theme)} wrapMode="none">{fit(who, showActivityColumns ? 16 : 9)}</text></box>
                     {/* paddingLeft must stay on both widths: without it a full-width
                         pair ("lead→nova") butts straight against the kind column
                         and reads as one word ("lead→novaresponse"). */}
-                    <box width={showActivityColumns ? 16 : 10} paddingLeft={1} overflow="hidden"><text fg={focused ? theme.text : eventTone(event, theme)} wrapMode="none">{activityType}</text></box>
-                    <box flexGrow={1} minWidth={0} paddingLeft={1} overflow="hidden"><text fg={focused ? theme.text : theme.muted} wrapMode="none">{fit(activityDetail, Math.max(rightW - (showActivityColumns ? 43 : 24), 6))}</text></box>
+                    <box width={showActivityColumns ? 16 : 12} paddingLeft={1} overflow="hidden"><text fg={focused ? theme.text : eventTone(event, theme)} wrapMode="none">{activityType}</text></box>
+                    <box flexGrow={1} minWidth={0} paddingLeft={1} overflow="hidden"><text fg={focused ? theme.text : theme.muted} wrapMode="none">{fit(activityDetail, Math.max(rightW - (showActivityColumns ? 43 : 26), 5))}</text></box>
                   </box>
                 )
               })}

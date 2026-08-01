@@ -524,6 +524,11 @@ export function CoordinationPopover({
       else switchRun(delta as 1 | -1)
       return
     }
+    if ((key.name === 'left' || key.name === 'right') && section === 'events') {
+      setEventFilter((current) => cycleValue(EVENT_FILTERS, current, key.name === 'right' ? 1 : -1))
+      setEventIndex(-1)
+      return
+    }
     if (key.name === 'return') {
       if (section === 'team' && selectedAgent) {
         onOpenSession(selectedAgent)
@@ -714,6 +719,10 @@ export function CoordinationPopover({
           if (index >= 0) setTeamIndex(index)
         }}
         onSelectEvent={setEventIndex}
+        onEventFilter={(nextFilter) => {
+          setEventFilter(nextFilter)
+          setEventIndex(-1)
+        }}
         onScrollSection={(target, delta) => {
           if (target === 'overview') switchRun(delta as 1 | -1)
           else if (target === 'team') setTeamIndex(Math.max(0, Math.min(clampedTeam + delta, agents.length - 1)))
