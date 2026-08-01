@@ -1,8 +1,9 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, Check, FileCode2, GitBranch, Pencil, RefreshCw, Save, Terminal, X } from 'lucide-react'
+import type { FileContents } from '@pierre/diffs'
 import type { GitReviewData, GitReviewFile } from '@/lib/gitProvider'
 import type { Session } from '@/lib/types'
 import type { ThreadedMessage, ToolThread } from '@/lib/threading'
@@ -321,6 +322,9 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
   const [editedContent, setEditedContent] = useState<string | null>(null)
   const [editBusy, setEditBusy] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+  // Whole-file contents keyed by path, so expanding several hunks in one file
+  // costs a single fetch. Invalidated whenever the working copy may have moved.
+  const contentsCache = useRef(new Map<string, EditableFile>())
 
   const loadReview = useCallback(async () => {
     if (!session.cwd) return
@@ -328,6 +332,8 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
     setError(null)
     try {
       const next = await fetchReview(session.cwd)
+      // Fresh patches mean any cached whole-file contents may be stale.
+      contentsCache.current.clear()
       setReview(next)
       setSelectedPath((current) => current && next.files.some((file) => file.path === current) ? current : next.files[0]?.path ?? null)
     } catch (err) {
@@ -347,6 +353,18 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
 
   const editingPath = editable?.path ?? null
   const dirty = editable != null && editedContent != null && editedContent !== editable.content
+
+  const loadDiffFiles = useCallback(async (): Promise<{ oldFile: FileContents; newFile: FileContents }> => {
+    const path = selectedFile?.path
+    if (!session.cwd || !path) throw new Error('No file selected to expand')
+    const cached = contentsCache.current.get(path)
+    const file = cached ?? await fetchEditableFile(session.cwd, path)
+    if (!cached) contentsCache.current.set(path, file)
+    return {
+      oldFile: { name: path, contents: file.headContent },
+      newFile: { name: path, contents: file.content },
+    }
+  }, [selectedFile?.path, session.cwd])
 
   const closeEditor = useCallback(() => {
     setEditable(null)
@@ -380,6 +398,7 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
     setEditError(null)
     try {
       await saveEditableFile(session.cwd, editable.path, editedContent, editable.sha256)
+      contentsCache.current.delete(editable.path)
       closeEditor()
       await loadReview()
     } catch (err) {
@@ -607,6 +626,7 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
                   patch={selectedFile.patch}
                   maxHeight={null}
                   presentation={{ ...diffOptions, diffStyle }}
+                  loadDiffFiles={loadDiffFiles}
                 />
               ) : (
                 <div style={{ padding: 18, color: 'var(--text-3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>

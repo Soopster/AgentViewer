@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { EditProvider, FileDiff, MultiFileDiff } from '@pierre/diffs/react'
 import { Editor } from '@pierre/diffs/edit'
-import { parsePatchFiles, type DiffLineAnnotation, type FileDiffMetadata, type FileDiffOptions, type SelectedLineRange } from '@pierre/diffs'
+import { parsePatchFiles, type DiffLineAnnotation, type FileDiffContentsLoader, type FileDiffMetadata, type FileDiffOptions, type SelectedLineRange } from '@pierre/diffs'
 import { createFileTreeIconResolver, getBuiltInSpriteSheet, prepareFileTreeInput } from '@pierre/trees'
 
 export type PierreDiffStyle = 'stacked' | 'split'
@@ -247,6 +247,7 @@ export function PierrePatchDiffView({
   lineAnnotations,
   renderAnnotation,
   onGutterUtilityClick,
+  loadDiffFiles,
 }: {
   patch: string
   maxHeight?: number | null
@@ -257,6 +258,12 @@ export function PierrePatchDiffView({
   lineAnnotations?: PierreDiffAnnotation[]
   renderAnnotation?: (annotation: PierreDiffAnnotation) => ReactNode
   onGutterUtilityClick?: (range: SelectedLineRange) => void
+  /**
+   * Supplies whole-file contents for a patch-parsed diff. Patches only carry
+   * their own hunks, so without this the renderer cannot expand context
+   * between them. Omit to keep a diff strictly read-only.
+   */
+  loadDiffFiles?: FileDiffContentsLoader
 }) {
   const files = useMemo(() => parsePatchDiffFiles(patch), [patch])
 
@@ -282,6 +289,7 @@ export function PierrePatchDiffView({
             options={{
               ...getDiffOptions(presentation),
               ...(onGutterUtilityClick ? { enableGutterUtility: true, onGutterUtilityClick } : {}),
+              ...(loadDiffFiles ? { loadDiffFiles } : {}),
               onLineSelectionStart: onSelectedLinesChange,
               onLineSelectionChange: onSelectedLinesChange,
               onLineSelectionEnd: onSelectedLinesChange,
