@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic'
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ArrowRight, Check, FileCode2, GitBranch, RefreshCw, Terminal } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Check, FileCode2, GitBranch, Pencil, RefreshCw, Save, Terminal, X } from 'lucide-react'
 import type { GitReviewData, GitReviewFile } from '@/lib/gitProvider'
 import type { Session } from '@/lib/types'
 import type { ThreadedMessage, ToolThread } from '@/lib/threading'
@@ -18,6 +18,33 @@ const PierrePatchDiffView = dynamic(() => import('./PierreDiffView').then((mod) 
     </pre>
   ),
 })
+
+const PierreEditableFileDiffView = dynamic(() => import('./PierreDiffView').then((mod) => mod.PierreEditableFileDiffView), {
+  ssr: false,
+  loading: () => (
+    <pre style={{ margin: 0, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-3)', padding: 12 }}>
+      Loading editor…
+    </pre>
+  ),
+})
+
+function editActionStyle(accent: string | null): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    height: 24,
+    padding: '0 9px',
+    borderRadius: 6,
+    border: `1px solid ${accent ? `color-mix(in srgb, ${accent} 45%, var(--border))` : 'var(--border)'}`,
+    background: accent ? `color-mix(in srgb, ${accent} 10%, var(--surface))` : 'var(--surface)',
+    color: accent ?? 'var(--text-2)',
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 10,
+    letterSpacing: '0.06em',
+    cursor: 'pointer',
+  }
+}
 
 type ReviewEvidenceKind = 'edit' | 'command' | 'test' | 'error'
 
@@ -161,6 +188,34 @@ async function fetchReview(cwd: string): Promise<GitReviewData> {
   return body.review
 }
 
+type EditableFile = {
+  path: string
+  headContent: string
+  content: string
+  sha256: string
+}
+
+async function fetchEditableFile(cwd: string, path: string): Promise<EditableFile> {
+  const params = new URLSearchParams({ cwd, path })
+  const res = await fetch(`/api/files/edit?${params.toString()}`)
+  const body = await res.json() as { content?: string; headContent?: string | null; sha256?: string; error?: string }
+  if (!res.ok || typeof body.content !== 'string' || typeof body.sha256 !== 'string') {
+    throw new Error(body.error ?? 'Failed to open file for editing')
+  }
+  return { path, content: body.content, headContent: body.headContent ?? '', sha256: body.sha256 }
+}
+
+async function saveEditableFile(cwd: string, path: string, content: string, expectedSha256: string): Promise<string> {
+  const res = await fetch('/api/files/edit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cwd, path, content, expectedSha256 }),
+  })
+  const body = await res.json() as { sha256?: string; error?: string }
+  if (!res.ok || typeof body.sha256 !== 'string') throw new Error(body.error ?? 'Failed to save file')
+  return body.sha256
+}
+
 function statusColor(file: GitReviewFile): string {
   if (file.status === 'conflict') return 'var(--red)'
   if (file.untracked || file.status === 'added') return 'var(--green)'
@@ -262,6 +317,10 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [editable, setEditable] = useState<EditableFile | null>(null)
+  const [editedContent, setEditedContent] = useState<string | null>(null)
+  const [editBusy, setEditBusy] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
 
   const loadReview = useCallback(async () => {
     if (!session.cwd) return
@@ -285,6 +344,50 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
   const analysis = useMemo(() => analyzeMessages(messages), [messages])
   const selectedFile = review?.files.find((file) => file.path === selectedPath) ?? review?.files[0] ?? null
   const selectedEvidence = selectedFile ? analysis.editsByPath.get(selectedFile.path) ?? [] : []
+
+  const editingPath = editable?.path ?? null
+  const dirty = editable != null && editedContent != null && editedContent !== editable.content
+
+  const closeEditor = useCallback(() => {
+    setEditable(null)
+    setEditedContent(null)
+    setEditError(null)
+  }, [])
+
+  // Switching files abandons an edit session; the editor is bound to one file.
+  useEffect(() => {
+    if (editingPath && selectedFile?.path !== editingPath) closeEditor()
+  }, [closeEditor, editingPath, selectedFile?.path])
+
+  const openEditor = useCallback(async () => {
+    if (!session.cwd || !selectedFile) return
+    setEditBusy(true)
+    setEditError(null)
+    try {
+      const file = await fetchEditableFile(session.cwd, selectedFile.path)
+      setEditable(file)
+      setEditedContent(file.content)
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : 'Failed to open file for editing')
+    } finally {
+      setEditBusy(false)
+    }
+  }, [selectedFile, session.cwd])
+
+  const saveEditor = useCallback(async () => {
+    if (!session.cwd || !editable || editedContent == null) return
+    setEditBusy(true)
+    setEditError(null)
+    try {
+      await saveEditableFile(session.cwd, editable.path, editedContent, editable.sha256)
+      closeEditor()
+      await loadReview()
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : 'Failed to save file')
+    } finally {
+      setEditBusy(false)
+    }
+  }, [closeEditor, editable, editedContent, loadReview, session.cwd])
   const checks = useMemo(() => healthChecks(review, analysis), [analysis, review])
   const totals = useMemo(() => {
     if (!review) return { additions: 0, deletions: 0, staged: 0, unstaged: 0, untracked: 0 }
@@ -448,14 +551,58 @@ export default function DiffReviewMode({ session, messages, diffStyle, diffOptio
                 )}
               </div>
               {selectedFile && (
-                <div style={{ flexShrink: 0, fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>
-                  <span style={{ color: 'var(--green)' }}>+{selectedFile.additions}</span>{' '}
-                  <span style={{ color: 'var(--red)' }}>-{selectedFile.deletions}</span>
+                <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 }}>
+                    <span style={{ color: 'var(--green)' }}>+{selectedFile.additions}</span>{' '}
+                    <span style={{ color: 'var(--red)' }}>-{selectedFile.deletions}</span>
+                  </div>
+                  {editable ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <button
+                        type="button"
+                        onClick={saveEditor}
+                        disabled={!dirty || editBusy}
+                        title={dirty ? 'Write changes to disk' : 'No changes to save'}
+                        style={editActionStyle(dirty && !editBusy ? 'var(--green)' : null)}
+                      >
+                        <Save size={12} />
+                        SAVE
+                      </button>
+                      <button type="button" onClick={closeEditor} disabled={editBusy} style={editActionStyle(null)}>
+                        <X size={12} />
+                        DONE
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={openEditor}
+                      disabled={editBusy || selectedFile.untracked}
+                      title={selectedFile.untracked ? 'Untracked files have no committed side to diff against' : 'Edit this file inline'}
+                      style={editActionStyle(null)}
+                    >
+                      <Pencil size={12} />
+                      EDIT
+                    </button>
+                  )}
                 </div>
               )}
             </div>
+            {editError && (
+              <div style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', color: 'var(--red)', background: 'color-mix(in srgb, var(--red) 8%, var(--surface))', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>
+                {editError}
+              </div>
+            )}
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-              {selectedFile ? (
+              {editable ? (
+                <PierreEditableFileDiffView
+                  headStr={editable.headContent}
+                  workingStr={editable.content}
+                  filePath={editable.path}
+                  presentation={{ ...diffOptions, diffStyle }}
+                  onEditedContentChange={setEditedContent}
+                />
+              ) : selectedFile ? (
                 <PierrePatchDiffView
                   patch={selectedFile.patch}
                   maxHeight={null}

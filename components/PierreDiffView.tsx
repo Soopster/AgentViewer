@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
-import { FileDiff, MultiFileDiff } from '@pierre/diffs/react'
+import { EditProvider, FileDiff, MultiFileDiff } from '@pierre/diffs/react'
+import { Editor } from '@pierre/diffs/edit'
 import { parsePatchFiles, type DiffLineAnnotation, type FileDiffMetadata, type FileDiffOptions, type SelectedLineRange } from '@pierre/diffs'
 import { createFileTreeIconResolver, getBuiltInSpriteSheet, prepareFileTreeInput } from '@pierre/trees'
 
@@ -170,6 +171,68 @@ export function PierreFileDiffView({
         renderAnnotation={renderAnnotation}
         disableWorkerPool
       />
+    </PierreDiffFrame>
+  )
+}
+
+const MultiFileDiffEditable = MultiFileDiff as unknown as (props: Record<string, unknown>) => React.JSX.Element
+
+/**
+ * Working-tree diff whose right-hand side is a live editor. The old side stays
+ * the committed text, so the diff re-renders against HEAD as the user types.
+ */
+export function PierreEditableFileDiffView({
+  headStr,
+  workingStr,
+  filePath,
+  maxHeight = null,
+  presentation,
+  onEditedContentChange,
+}: {
+  headStr: string
+  workingStr: string
+  filePath: string
+  maxHeight?: number | null
+  presentation?: PierreDiffPresentation
+  onEditedContentChange: (contents: string) => void
+}) {
+  const oldFile = useMemo(() => ({ name: filePath, contents: headStr }), [filePath, headStr])
+  const newFile = useMemo(() => ({ name: filePath, contents: workingStr }), [filePath, workingStr])
+
+  const changeRef = useRef(onEditedContentChange)
+  useEffect(() => {
+    changeRef.current = onEditedContentChange
+  }, [onEditedContentChange])
+
+  // The factory must forward the options the component hands it — that is how
+  // the surface's own onChange reaches the editor instance.
+  const createEditor = useCallback((options: ConstructorParameters<typeof Editor<undefined>>[0]) => (
+    new Editor<undefined>({
+      ...options,
+      historyMaxEntries: 500,
+      onChange: (file, lineAnnotations, event) => {
+        options?.onChange?.(file, lineAnnotations, event)
+        changeRef.current(file.contents)
+      },
+    })
+  ), [])
+
+  const options = useMemo(() => ({
+    ...getDiffOptions(presentation),
+    enableLineSelection: false,
+  }), [presentation])
+
+  return (
+    <PierreDiffFrame maxHeight={maxHeight}>
+      <EditProvider createEditor={createEditor}>
+        <MultiFileDiffEditable
+          oldFile={oldFile}
+          newFile={newFile}
+          options={options}
+          disableWorkerPool
+          edit
+        />
+      </EditProvider>
     </PierreDiffFrame>
   )
 }
