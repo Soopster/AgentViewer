@@ -143,6 +143,48 @@ export function CheckpointPopover({
   const rowsLength = tab === 'turns' ? turnsRows.length : reviewRows.length
   const clampedCursor = rowsLength === 0 ? 0 : Math.min(cursor, rowsLength - 1)
 
+  // Every row above the cursor is exactly one line — only the selected review
+  // hunk expands — so the cursor's own offset is its index.
+  const selectedRowHeight = useMemo(() => {
+    if (tab !== 'review') return 1
+    const row = reviewRows[clampedCursor]
+    if (row?.kind !== 'hunk') return 1
+    return 1 + Math.min(Math.max(row.hunk.lines.length - 1, 0), 12)
+  }, [clampedCursor, reviewRows, tab])
+
+  const popW = Math.min(width - 4, 110)
+  const popH = Math.min(height - 4, 38)
+  const popTop = Math.floor((height - popH) / 2)
+  const popLeft = Math.floor((width - popW) / 2)
+  const innerW = popW - 4
+  const headerH = 2
+  const footerH = 2
+  const bodyH = Math.max(popH - headerH - footerH - 2, 6)
+
+  const scrollBody = useCallback((delta: number) => {
+    const box = scrollRef.current
+    if (!box) return
+    const max = Math.max(box.scrollHeight - bodyH, 0)
+    box.scrollTop = Math.max(0, Math.min(box.scrollTop + delta, max))
+  }, [bodyH])
+
+  // Keep the keyboard cursor inside the viewport — without this the list only
+  // ever shows its first bodyH rows and j/k walks the selection off-screen.
+  useEffect(() => {
+    if (diffLines) return
+    const box = scrollRef.current
+    if (!box) return
+    const top = clampedCursor
+    const bottom = top + selectedRowHeight
+    if (top < box.scrollTop) box.scrollTop = top
+    else if (bottom > box.scrollTop + bodyH) box.scrollTop = bottom - bodyH
+  }, [bodyH, clampedCursor, diffLines, rowsLength, selectedRowHeight])
+
+  // Diff overlay and tab switches both replace the content wholesale.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+  }, [diffLines, tab])
+
   const runAction = useCallback(async (action: PendingAction) => {
     setBusy(true)
     try {
@@ -212,6 +254,12 @@ export function CheckpointPopover({
     }
     if (diffLines) {
       if (key.name === 'escape' || key.name === 'q' || key.name === 'd') setDiffLines(null)
+      else if (key.name === 'j' || key.name === 'down') scrollBody(1)
+      else if (key.name === 'k' || key.name === 'up') scrollBody(-1)
+      else if (key.name === 'pagedown' || (key.name === 'f' && key.ctrl)) scrollBody(bodyH)
+      else if (key.name === 'pageup' || (key.name === 'b' && key.ctrl)) scrollBody(-bodyH)
+      else if (key.name === 'G' || (key.name === 'g' && key.shift)) scrollBody(Number.MAX_SAFE_INTEGER)
+      else if (key.name === 'g') scrollBody(-Number.MAX_SAFE_INTEGER)
       return
     }
     if (pending) {
@@ -262,6 +310,22 @@ export function CheckpointPopover({
       setCursor((current) => Math.max(current - 1, 0))
       return
     }
+    if (key.name === 'pagedown' || (key.name === 'f' && key.ctrl)) {
+      setCursor((current) => Math.min(current + bodyH, Math.max(rowsLength - 1, 0)))
+      return
+    }
+    if (key.name === 'pageup' || (key.name === 'b' && key.ctrl)) {
+      setCursor((current) => Math.max(current - bodyH, 0))
+      return
+    }
+    if (key.name === 'home' || (key.name === 'g' && !key.shift)) {
+      setCursor(0)
+      return
+    }
+    if (key.name === 'end' || key.name === 'G' || (key.name === 'g' && key.shift)) {
+      setCursor(Math.max(rowsLength - 1, 0))
+      return
+    }
     if (key.name === 'return' && tab === 'turns') {
       const row = turnsRows[clampedCursor]
       if (row?.kind === 'checkpoint') {
@@ -296,18 +360,9 @@ export function CheckpointPopover({
       setPending({ kind: 'create-pr' })
       return
     }
-  }, [busy, checkpoints, clampedCursor, commitMode, diffLines, onClose, onNotice, openDiff, pending, reviewRows, rowsLength, runAction, submitCommit, tab, turnsRows])
+  }, [bodyH, busy, checkpoints, clampedCursor, commitMode, diffLines, onClose, onNotice, openDiff, pending, reviewRows, rowsLength, runAction, scrollBody, submitCommit, tab, turnsRows])
 
   useEffect(() => { onKeyHandlerReady(handleKey) }, [handleKey, onKeyHandlerReady])
-
-  const popW = Math.min(width - 4, 110)
-  const popH = Math.min(height - 4, 38)
-  const popTop = Math.floor((height - popH) / 2)
-  const popLeft = Math.floor((width - popW) / 2)
-  const innerW = popW - 4
-  const headerH = 2
-  const footerH = 2
-  const bodyH = Math.max(popH - headerH - footerH - 2, 6)
 
   const pendingLabel = pending?.kind === 'restore-all'
     ? `Restore EVERYTHING to "${pending.label}"? Later edits are overwritten.`
@@ -324,12 +379,12 @@ export function CheckpointPopover({
   const footerHint = commitMode
     ? '⏎ commit · Esc cancel'
     : diffLines
-    ? 'Esc/d close diff · scroll with mouse'
+    ? 'j/k scroll · PgUp/PgDn page · g/G ends · Esc/d close diff'
     : pendingLabel
     ? 'y/⏎ confirm · n/Esc cancel'
     : tab === 'turns'
-    ? '⏎ files · d diff · r restore · ⇥ review · Esc close'
-    : 'x reject · c commit · ⇧P pr · ⇥ turns · Esc close'
+    ? '⏎ files · d diff · r restore · PgUp/PgDn · ⇥ review · Esc close'
+    : 'x reject · c commit · ⇧P pr · PgUp/PgDn · ⇥ turns · Esc close'
 
   return (
     <box
