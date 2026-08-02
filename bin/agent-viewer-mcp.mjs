@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 
-import { McpServer } from '@modelcontextprotocol/server'
+import {
+  CLIENT_CAPABILITIES_META_KEY,
+  McpServer,
+  ProtocolError,
+  ProtocolErrorCode,
+} from '@modelcontextprotocol/server'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -11,11 +16,18 @@ import {
   CoordinatorAhpClient,
   coordinatorTransport,
 } from './agent-viewer-ahp-client.mjs'
+import {
+  DurableMcpTaskStore,
+  isTerminalMcpTask,
+  taskSeed,
+} from './agent-viewer-mcp-task-store.mjs'
+import { COORDINATOR_MCP_TOOL_NAMES } from './agent-viewer-coordinator-tools.mjs'
 
 const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 const EXTERNAL_COORD_PROTOCOL_VERSION = 2
 const MCP_UI_EXTENSION = 'io.modelcontextprotocol/ui'
 const MCP_SKILLS_EXTENSION = 'io.modelcontextprotocol/skills'
+const MCP_TASKS_EXTENSION = 'io.modelcontextprotocol/tasks'
 const COORDINATOR_APP_URI = 'ui://agent-viewer/coordinator-dashboard.html'
 const COORDINATOR_SKILL_INDEX_URI = 'skill://index.json'
 const COORDINATOR_SKILL_URI = 'skill://coordinate-agents/SKILL.md'
@@ -23,6 +35,12 @@ const coordinatorAppHtml = await readFile(new URL('./agent-viewer-coordinator-ap
 const coordinatorSkillMarkdown = await readFile(new URL('../.agents/skills/coordinate-agents/SKILL.md', import.meta.url), 'utf8')
 const coordinatorSkillDescription = coordinatorSkillMarkdown.match(/^description:\s*(.+)$/m)?.[1]?.trim()
   ?? 'Operate an Agent Viewer Coordinator run through the agent-viewer MCP.'
+const DEFAULT_MCP_TASK_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const DEFAULT_MCP_TASK_POLL_INTERVAL_MS = 2_000
+const MISSING_REQUIRED_TASK_CAPABILITY = -32003
+const MCP_TASK_METHODS = new Set(['tasks/get', 'tasks/update', 'tasks/cancel'])
+const taskStores = new Map()
+const taskRunners = new Map()
 const IDEMPOTENT_COORDINATOR_ACTIONS = new Set([
   'claim_task',
   'complete_task',
@@ -67,7 +85,7 @@ function coordinatorNegotiation() {
       unattended: process.env.AGENT_VIEWER_COORD_WORKER === '1',
       sessionResume: true,
       maxParallelTasks: 1,
-      tools: ['coord_*'],
+      tools: [...COORDINATOR_MCP_TOOL_NAMES],
     },
   }
 }
@@ -95,6 +113,318 @@ function textResult(value) {
       ? { structuredContent: value }
       : {}),
   }
+}
+
+function taskStorePath() {
+  const configured = process.env.AGENT_VIEWER_MCP_TASK_FILE?.trim()
+  if (configured) return path.resolve(configured)
+  if (coordinatorIdentityFile) return `${coordinatorIdentityFile}.mcp-tasks.json`
+  if (coordinatorIdentity) {
+    return path.join(
+      os.homedir(),
+      '.agent-viewer',
+      'coordinator',
+      coordinatorIdentity.runId,
+      `${coordinatorIdentity.agentId}.mcp-tasks.json`,
+    )
+  }
+  throw new Error('Join, create, or resume a Coordinator run before creating an MCP task')
+}
+
+async function taskStore() {
+  const file = taskStorePath()
+  let store = taskStores.get(file)
+  if (!store) {
+    store = new DurableMcpTaskStore(file)
+    taskStores.set(file, store)
+  }
+  await store.load()
+  return store
+}
+
+function supportsMcpTasks(ctx) {
+  const capabilities = ctx?.mcpReq?.envelope?.[CLIENT_CAPABILITIES_META_KEY]
+  return Boolean(capabilities?.extensions?.[MCP_TASKS_EXTENSION])
+}
+
+function requireMcpTasks(ctx) {
+  if (supportsMcpTasks(ctx)) return
+  throw new ProtocolError(
+    MISSING_REQUIRED_TASK_CAPABILITY,
+    'Missing required client capability',
+    { requiredCapabilities: { extensions: { [MCP_TASKS_EXTENSION]: {} } } },
+  )
+}
+
+function coordinatorRunStatus(result) {
+  return result?.actionable?.runStatus
+    ?? result?.snapshot?.run?.status
+    ?? result?.run?.status
+    ?? null
+}
+
+function coordinatorTaskStatusMessage(result) {
+  const snapshot = result?.snapshot ?? result
+  const runStatus = coordinatorRunStatus(result) ?? 'unknown'
+  const tasks = Array.isArray(snapshot?.tasks) ? snapshot.tasks : []
+  const terminal = tasks.filter((task) => ['completed', 'failed', 'cancelled'].includes(task.status)).length
+  return tasks.length > 0
+    ? `Coordinator run ${runStatus}: ${terminal}/${tasks.length} tasks terminal.`
+    : `Coordinator run ${runStatus}; waiting for board activity.`
+}
+
+function planReviewInput(status, taskId) {
+  const snapshot = status?.snapshot ?? status
+  const task = snapshot?.tasks?.find?.((entry) => entry.id === taskId)
+  const plan = [...(snapshot?.events ?? [])].reverse().find((event) => (
+    event.type === 'task.planned' && event.taskId === taskId
+  ))
+  const planText = [plan?.summary, plan?.detail].filter(Boolean).join('\n\n')
+  return {
+    method: 'elicitation/create',
+    params: {
+      mode: 'form',
+      message: `Review the submitted plan for ${task?.title ?? taskId}.${planText ? `\n\n${planText}` : ''}`,
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          approved: { type: 'boolean', title: 'Approve plan' },
+          summary: { type: 'string', title: 'Review summary' },
+          detail: { type: 'string', title: 'Detailed guidance' },
+        },
+        required: ['approved'],
+        additionalProperties: false,
+      },
+    },
+  }
+}
+
+function taskToolError(error) {
+  const message = error instanceof Error ? error.message : String(error)
+  return {
+    content: [{ type: 'text', text: message }],
+    isError: true,
+  }
+}
+
+function taskBelongsToCurrentParticipant(record) {
+  return Boolean(
+    coordinatorIdentity
+    && record?.operation?.runId === coordinatorIdentity.runId
+    && record?.operation?.agentId === coordinatorIdentity.agentId,
+  )
+}
+
+async function updateTaskIfActive(store, taskId, update) {
+  return store.update(taskId, (current) => (
+    isTerminalMcpTask(current) ? null : (typeof update === 'function' ? update(current) : update)
+  ))
+}
+
+async function runCoordinatorWaitTask(store, record) {
+  const operation = record.operation
+  const { snapshot: _snapshot, ...compact } = await coordinatorRequest('wait', {
+    cursor: operation.cursor,
+    timeoutMs: operation.timeoutMs,
+  })
+  await updateTaskIfActive(store, record.taskId, {
+    status: 'completed',
+    statusMessage: compact.timedOut
+      ? 'Coordinator wait completed without a board change.'
+      : 'Coordinator board activity is ready.',
+    result: textResult(compact),
+  })
+}
+
+async function runCoordinatorAwaitTask(store, record) {
+  let cursor = record.operation.cursor
+  while (true) {
+    const current = await store.getRecord(record.taskId)
+    if (!current || isTerminalMcpTask(current)) return
+
+    const status = await coordinatorRequest('status')
+    const runStatus = coordinatorRunStatus(status)
+    if (['completed', 'failed', 'stopped'].includes(runStatus)) {
+      await updateTaskIfActive(store, record.taskId, {
+        status: 'completed',
+        statusMessage: `Coordinator run reached terminal status ${runStatus}.`,
+        result: textResult(status),
+      })
+      return
+    }
+
+    const plansAwaitingReview = status?.actionable?.plansAwaitingReview ?? []
+    if (plansAwaitingReview.length > 0) {
+      const inputRequests = {}
+      const planInputTasks = {}
+      for (const taskId of plansAwaitingReview) {
+        const key = `plan-review:${taskId}:${randomUUID()}`
+        inputRequests[key] = planReviewInput(status, taskId)
+        planInputTasks[key] = taskId
+      }
+      await updateTaskIfActive(store, record.taskId, (task) => ({
+        status: 'input_required',
+        statusMessage: `${plansAwaitingReview.length} Coordinator plan review${plansAwaitingReview.length === 1 ? ' requires' : 's require'} input.`,
+        inputRequests,
+        operation: { ...task.operation, planInputTasks },
+      }))
+      return
+    }
+
+    await updateTaskIfActive(store, record.taskId, (task) => ({
+      statusMessage: coordinatorTaskStatusMessage(status),
+      operation: { ...task.operation, cursor: status?.cursor ?? cursor },
+    }))
+    cursor = status?.cursor ?? cursor
+
+    const waited = await coordinatorRequest('wait', {
+      cursor,
+      timeoutMs: 25_000,
+    })
+    cursor = waited?.cursor ?? cursor
+    await updateTaskIfActive(store, record.taskId, (task) => ({
+      statusMessage: coordinatorTaskStatusMessage(waited),
+      operation: { ...task.operation, cursor },
+    }))
+  }
+}
+
+async function runMcpTask(store, record) {
+  const runnerKey = `${store.filePath}\0${record.taskId}`
+  if (taskRunners.has(runnerKey) || isTerminalMcpTask(record)) return
+  const runner = (async () => {
+    try {
+      if (!taskBelongsToCurrentParticipant(record)) {
+        throw new Error('The persisted MCP task belongs to a different Coordinator participant')
+      }
+      if (record.operation.kind === 'coord-wait') await runCoordinatorWaitTask(store, record)
+      else if (record.operation.kind === 'coord-await-run') await runCoordinatorAwaitTask(store, record)
+      else throw new Error(`Unsupported persisted MCP task operation: ${record.operation.kind}`)
+    } catch (error) {
+      await updateTaskIfActive(store, record.taskId, {
+        status: 'completed',
+        statusMessage: 'The asynchronous Coordinator operation returned an error.',
+        result: taskToolError(error),
+      })
+    }
+  })().finally(() => taskRunners.delete(runnerKey))
+  taskRunners.set(runnerKey, runner)
+}
+
+async function createMcpTask(operation, statusMessage, { ttlMs = DEFAULT_MCP_TASK_TTL_MS } = {}) {
+  const store = await taskStore()
+  if (operation.kind === 'coord-await-run') {
+    const existing = await store.findActive((task) => (
+      task.operation?.kind === operation.kind
+      && task.operation?.runId === operation.runId
+      && task.operation?.agentId === operation.agentId
+    ))
+    if (existing) {
+      void runMcpTask(store, existing)
+      return taskSeed(existing)
+    }
+  }
+  const seed = await store.create({
+    operation,
+    statusMessage,
+    ttlMs,
+    pollIntervalMs: DEFAULT_MCP_TASK_POLL_INTERVAL_MS,
+  })
+  const record = await store.getRecord(seed.taskId)
+  if (record) void runMcpTask(store, record)
+  return seed
+}
+
+function installMcpTasksHandlers(server) {
+  const protocol = server.server
+  const resolveCodec = protocol._negotiatedWireCodec?.bind(protocol)
+  if (!resolveCodec) throw new Error('The installed MCP server does not expose the codec seam required by ext-tasks')
+  const taskCodecs = new WeakMap()
+  protocol._negotiatedWireCodec = () => {
+    const codec = resolveCodec()
+    if (codec.era !== '2026-07-28') return codec
+    let extended = taskCodecs.get(codec)
+    if (!extended) {
+      extended = new Proxy(codec, {
+        get(target, property, receiver) {
+          if (property === 'hasRequestMethod') {
+            return (method) => MCP_TASK_METHODS.has(method) || target.hasRequestMethod(method)
+          }
+          return Reflect.get(target, property, receiver)
+        },
+      })
+      taskCodecs.set(codec, extended)
+    }
+    return extended
+  }
+
+  const taskIdParams = z.object({ taskId: z.string().min(1) })
+  const resultSchema = z.looseObject({})
+  protocol.setRequestHandler('tasks/get', { params: taskIdParams, result: resultSchema }, async ({ taskId }, ctx) => {
+    requireMcpTasks(ctx)
+    const store = await taskStore()
+    const record = await store.getRecord(taskId)
+    if (!record) throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Failed to retrieve task: Task not found')
+    if (!isTerminalMcpTask(record)) void runMcpTask(store, record)
+    return await store.get(taskId)
+  })
+  protocol.setRequestHandler('tasks/update', {
+    // MCP v2 lifts inputResponses into ctx.mcpReq before custom-method
+    // validation, so keep the wire field optional here and consume the lifted
+    // view when Coordinator adapters begin surfacing input_required tasks.
+    params: z.object({ taskId: z.string().min(1), inputResponses: z.record(z.string(), z.unknown()).optional() }),
+    result: resultSchema,
+  }, async ({ taskId, inputResponses: inlineInputResponses }, ctx) => {
+    requireMcpTasks(ctx)
+    const store = await taskStore()
+    const record = await store.getRecord(taskId)
+    if (!record) {
+      throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Failed to update task: Task not found')
+    }
+    const inputResponses = ctx.mcpReq.inputResponses ?? inlineInputResponses ?? {}
+    if (record.status === 'input_required') {
+      const remainingRequests = { ...(record.inputRequests ?? {}) }
+      const remainingPlanTasks = { ...(record.operation?.planInputTasks ?? {}) }
+      for (const [key, response] of Object.entries(inputResponses)) {
+        const planTaskId = remainingPlanTasks[key]
+        if (!planTaskId || !remainingRequests[key]) continue
+        const accepted = response?.action === 'accept'
+        const content = response?.content && typeof response.content === 'object' ? response.content : {}
+        await coordinatorRequest('review_plan', {
+          taskId: planTaskId,
+          approved: accepted && content.approved === true,
+          summary: typeof content.summary === 'string' ? content.summary : undefined,
+          detail: typeof content.detail === 'string' ? content.detail : undefined,
+          requestId: `mcp-task-${record.taskId.slice(0, 36)}-${key.slice(-36)}`,
+        })
+        delete remainingRequests[key]
+        delete remainingPlanTasks[key]
+      }
+      const hasOutstandingInput = Object.keys(remainingRequests).length > 0
+      await store.update(taskId, (task) => ({
+        status: hasOutstandingInput ? 'input_required' : 'working',
+        statusMessage: hasOutstandingInput
+          ? `${Object.keys(remainingRequests).length} Coordinator plan reviews still require input.`
+          : 'Plan reviews submitted; monitoring the Coordinator run.',
+        inputRequests: hasOutstandingInput ? remainingRequests : undefined,
+        operation: { ...task.operation, planInputTasks: remainingPlanTasks },
+      }))
+      if (!hasOutstandingInput) {
+        const resumed = await store.getRecord(taskId)
+        if (resumed) void runMcpTask(store, resumed)
+      }
+    }
+    // Unknown and already-satisfied keys are intentionally ignored.
+    return { resultType: 'complete' }
+  })
+  protocol.setRequestHandler('tasks/cancel', { params: taskIdParams, result: resultSchema }, async ({ taskId }, ctx) => {
+    requireMcpTasks(ctx)
+    const store = await taskStore()
+    if (!await store.requestCancellation(taskId)) {
+      throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Failed to cancel task: Task not found')
+    }
+    return { resultType: 'complete' }
+  })
 }
 
 async function requestJson(path, init, timeoutMs = 10_000) {
@@ -252,6 +582,7 @@ const server = new McpServer(
       extensions: {
         [MCP_UI_EXTENSION]: { mimeTypes: ['text/html;profile=mcp-app'] },
         [MCP_SKILLS_EXTENSION]: {},
+        [MCP_TASKS_EXTENSION]: {},
       },
     },
     cacheHints: {
@@ -274,6 +605,8 @@ const server = new McpServer(
     ].join(' '),
   },
 )
+
+installMcpTasksHandlers(server)
 
 server.registerResource('Agent Viewer Coordinator skill index', COORDINATOR_SKILL_INDEX_URI, {
   title: 'Agent Viewer Coordinator skills',
@@ -577,18 +910,59 @@ server.registerTool('coord_status', {
 
 server.registerTool('coord_wait', {
   description: 'Block until another participant changes the run (your own writes do not wake you). Returns the events that occurred plus an `actionable` digest saying what you can do now. Prefer this over repeated status polling. '
-    + 'An empty/timed-out result is normal — call it again. If it THROWS instead (network error, timeout), that is a real disconnect: wait ~2s and retry the same call rather than giving up or re-joining.',
+    + 'Tasks-capable MCP clients receive a durable asynchronous handle for non-zero waits; other clients retain the blocking result. An empty/timed-out result is normal — call it again. If it THROWS instead (network error, timeout), that is a real disconnect: wait ~2s and retry the same call rather than giving up or re-joining.',
   inputSchema: {
     cursor: z.string().min(1).optional().describe('Opaque cursor from the previous coord_wait; normally omit because this bridge remembers it'),
     timeout_ms: z.number().int().min(0).max(55_000).optional().describe('Defaults to 25000 milliseconds'),
   },
   annotations: { readOnlyHint: true },
-}, async ({ cursor, timeout_ms }) => {
+}, async ({ cursor, timeout_ms }, ctx) => {
+  if (supportsMcpTasks(ctx) && timeout_ms !== 0) {
+    return createMcpTask({
+      kind: 'coord-wait',
+      runId: coordinatorIdentity?.runId,
+      agentId: coordinatorIdentity?.agentId,
+      cursor: cursor ?? coordinatorCursor ?? undefined,
+      timeoutMs: timeout_ms,
+    }, 'Waiting durably for another participant to change the Coordinator run.')
+  }
   const { snapshot: _snapshot, ...compact } = await coordinatorRequest('wait', {
     cursor: cursor ?? coordinatorCursor ?? undefined,
     timeoutMs: timeout_ms,
   })
   return textResult(compact)
+})
+
+server.registerTool('coord_await_run', {
+  description: 'Create a durable MCP Task that monitors this participant\'s Coordinator run until it reaches completed, failed, or stopped. '
+    + 'Pending lead plan reviews surface as input_required elicitations and tasks/update applies the user\'s response. Use this for an unattended run or an external supervisor that continues working independently; interactive leads should keep acting on coord_status/coord_wait instead of passively awaiting their own work. Requires io.modelcontextprotocol/tasks.',
+  inputSchema: {
+    ttl_ms: z.number().int().min(60_000).max(30 * 24 * 60 * 60 * 1000).optional()
+      .describe('How long the durable task handle is retained; defaults to seven days'),
+  },
+}, async ({ ttl_ms }, ctx) => {
+  if (!supportsMcpTasks(ctx)) {
+    return {
+      ...textResult({
+        error: 'coord_await_run requires a client request that declares io.modelcontextprotocol/tasks',
+      }),
+      isError: true,
+    }
+  }
+  if (!coordinatorIdentity) {
+    return {
+      ...textResult({ error: 'Join, create, or resume a Coordinator run before awaiting it' }),
+      isError: true,
+    }
+  }
+  return createMcpTask({
+    kind: 'coord-await-run',
+    runId: coordinatorIdentity.runId,
+    agentId: coordinatorIdentity.agentId,
+    cursor: coordinatorCursor ?? undefined,
+  }, 'Monitoring the Coordinator run until it reaches a terminal state.', {
+    ttlMs: ttl_ms ?? DEFAULT_MCP_TASK_TTL_MS,
+  })
 })
 
 server.registerTool('coord_create_task', {

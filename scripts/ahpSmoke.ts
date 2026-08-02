@@ -43,7 +43,7 @@ const initialized = await request(1, 'initialize', {
   clientInfo: { name: 'ahp-smoke', title: 'AHP smoke client' },
   initialSubscriptions: ['ahp-root://'],
 })
-assert.equal(initialized.result.protocolVersion, '0.7.0')
+assert.equal(initialized.result.protocolVersion, '0.6.0')
 assert.equal(initialized.result.serverSeq, 0)
 assert.equal(initialized.result.snapshots[0].resource, 'ahp-root://')
 assert.equal(initialized.result.snapshots[0].state.agents.length, 5)
@@ -267,7 +267,7 @@ const beforeCreate = frames.length
 const created = await request(3, 'createSession', {
   channel: sessionChannel,
   provider: 'codex',
-  workingDirectories: [`file://${testCwd}`],
+  workingDirectory: `file://${testCwd}`,
   config: { objective: 'Verify AHP Coordinator interoperability', maxAgents: 3 },
 })
 assert.equal(created.result, null)
@@ -282,7 +282,7 @@ const listed = await request(4, 'listSessions', {
 })
 assert.equal(listed.result.items.length, 1)
 assert.equal(listed.result.items[0].resource, sessionChannel)
-assert.equal(listed.result.items[0].workingDirectories[0], `file://${testCwd}`)
+assert.equal(listed.result.items[0].workingDirectory, `file://${testCwd}`)
 
 const subscribed = await request(5, 'subscribe', { channel: sessionChannel })
 assert.equal(subscribed.result.snapshot.resource, sessionChannel)
@@ -291,6 +291,50 @@ assert.equal(subscribed.result.snapshot.state.chats.length, 1)
 assert.equal(subscribed.result.snapshot.state.activeClients[0].clientId, 'smoke-client')
 assert.ok(subscribed.result.snapshot.state._meta['dev.agent-viewer.coordinator'])
 const chatChannel = subscribed.result.snapshot.state.defaultChat
+
+const legacyFrames: Frame[] = []
+const legacyConnection = host.createConnection((message) => legacyFrames.push(message))
+await legacyConnection.handle({
+  jsonrpc: '2.0',
+  id: 219,
+  method: 'initialize',
+  params: {
+    channel: 'ahp-root://',
+    protocolVersions: ['0.5.1'],
+    clientId: 'legacy-smoke-client',
+    initialSubscriptions: [chatChannel],
+  },
+})
+assert.equal(legacyFrames.find((frame) => frame.id === 219)?.result.protocolVersion, '0.5.1')
+host.emitAction(chatChannel, {
+  type: 'chat/toolCallAuthRequired',
+  turnId: 'version-filter-turn',
+  toolCallId: 'version-filter-call',
+  auth: { resource: 'https://example.test' },
+} as never)
+assert.equal(
+  legacyFrames.some((frame) => frame.method === 'action' && frame.params.action.type === 'chat/toolCallAuthRequired'),
+  false,
+  '0.5.1 clients must not receive actions introduced in AHP 0.6.0',
+)
+legacyConnection.close()
+
+const unknownReconnectFrames: Frame[] = []
+const unknownReconnect = host.createConnection((message) => unknownReconnectFrames.push(message))
+await unknownReconnect.handle({
+  jsonrpc: '2.0',
+  id: 220,
+  method: 'reconnect',
+  params: {
+    channel: 'ahp-root://',
+    clientId: 'never-initialized',
+    lastSeenServerSeq: 0,
+    subscriptions: ['ahp-root://'],
+  },
+})
+assert.equal(unknownReconnectFrames.find((frame) => frame.id === 220)?.error.code, -32600)
+unknownReconnect.close()
+
 assert.equal((await request(210, 'ping', { channel: 'ahp-root://' })).result, null)
 const resolvedConfig = await request(211, 'resolveSessionConfig', {
   channel: 'ahp-root://',
@@ -469,7 +513,7 @@ framed.stdin.end(`${JSON.stringify({
   method: 'initialize',
   params: {
     channel: 'ahp-root://',
-    protocolVersions: ['0.7.0'],
+    protocolVersions: ['0.6.0'],
     clientId: 'framed-smoke',
     initialSubscriptions: ['ahp-root://'],
   },
@@ -485,7 +529,7 @@ const framedExit = await new Promise<number | null>((resolve) => framed.once('cl
 assert.equal(framedExit, 0, framedError)
 const framedResponses = framedOutput.trim().split('\n').map((line) => JSON.parse(line))
 const framedResponse = framedResponses.find((frame) => frame.id === 9)
-assert.equal(framedResponse?.result.protocolVersion, '0.7.0')
+assert.equal(framedResponse?.result.protocolVersion, '0.6.0')
 assert.ok(framedResponses.find((frame) => frame.id === 10)?.result.items.length >= 1)
 
 // Exercise the transport shipped by Microsoft's TypeScript client against
@@ -568,12 +612,33 @@ if (schemaDirectory) {
   const ajv = new Ajv2020({ allErrors: true, strict: false })
   for (const name of schemaFiles) {
     const schema = JSON.parse(readFileSync(path.join(schemaDirectory, `${name}.schema.json`), 'utf8'))
-    // The upstream 0.7 schema currently marks ActionEnvelope.origin required,
-    // while the normative TypeScript type and round-trip fixture 025 require
-    // server-originated envelopes to omit it. Validate the normative wire form.
+    // The published schemas contain two generator mismatches with the
+    // normative 0.6 TypeScript source: server-originated envelopes may omit
+    // origin, and resource-watch pattern `items` are string arrays. Normalize
+    // those definitions before validating the host's wire fixtures.
     if (schema.$defs?.ActionEnvelope?.required) {
       schema.$defs.ActionEnvelope.required = schema.$defs.ActionEnvelope.required
         .filter((field: string) => field !== 'origin')
+    }
+    for (const definition of ['CreateResourceWatchParams', 'ResourceWatchState']) {
+      const watchShape = schema.$defs?.[definition]
+      for (const field of ['includes', 'excludes']) {
+        const items = watchShape?.properties?.[field]?.properties?.items
+        if (items?.type === 'string') {
+          watchShape.properties[field].properties.items = {
+            type: 'array',
+            items: { type: 'string' },
+          }
+        }
+      }
+    }
+    const watchChanges = schema.$defs?.ResourceWatchChangedAction
+      ?.properties?.changes?.properties?.items
+    if (watchChanges?.type === 'string') {
+      schema.$defs.ResourceWatchChangedAction.properties.changes.properties.items = {
+        type: 'array',
+        items: { $ref: '#/$defs/ResourceChange' },
+      }
     }
     schemas.set(name, schema)
     ajv.addSchema(schema)
@@ -612,7 +677,7 @@ if (schemaDirectory) {
     const target = notificationDefinitions[frame.method]
     if (target) validateDefinition(target[0], target[1], frame.params, `${frame.method} notification`)
   }
-  console.log('AHP 0.7 schema validation passed')
+  console.log('AHP 0.6 schema validation passed')
 }
 
 console.log('AHP Coordinator smoke passed')

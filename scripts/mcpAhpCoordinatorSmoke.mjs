@@ -8,6 +8,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
+import { AhpClient } from '@microsoft/agent-host-protocol/client'
+import { WebSocketTransport } from '@microsoft/agent-host-protocol/ws'
+import { COORDINATOR_MCP_TOOL_NAMES } from '../bin/agent-viewer-coordinator-tools.mjs'
 
 const repoRoot = process.cwd()
 const testCwd = await mkdtemp(path.join(tmpdir(), 'agent-viewer-mcp-ahp-'))
@@ -214,6 +217,36 @@ try {
   })
   const leadInbox = await call(lead.client, 'coord_read_inbox')
   assert.equal(leadInbox.messages?.some((message) => message.body === `${taskId} is underway`), true)
+
+  // A generic AHP client must see the exact MCP tool identities and durable
+  // mailbox traffic through standard session/chat state, without knowing the
+  // namespaced Coordinator request method or metadata schema.
+  const ahpTransport = await WebSocketTransport.connect(`ws://127.0.0.1:${websocketPort}`)
+  const ahpClient = new AhpClient(ahpTransport)
+  ahpClient.connect()
+  await ahpClient.initialize({
+    clientId: 'generic-ahp-observer',
+    protocolVersions: ['0.6.0'],
+    initialSubscriptions: ['ahp-root://'],
+  })
+  const ahpSession = await ahpClient.subscribe(`ahp-session:/${encodeURIComponent(runId)}`)
+  const projectedLead = ahpSession.result.snapshot?.state.activeClients.find(
+    (client) => client.clientId === created.participant.capabilities.ahpClientId,
+  )
+  assert.deepEqual(
+    projectedLead?.tools.map((tool) => tool.name),
+    [...COORDINATOR_MCP_TOOL_NAMES],
+    'AHP active-client state must publish exact callable MCP tool names',
+  )
+  const leadChat = await ahpClient.subscribe(
+    `ahp-chat:/${encodeURIComponent(runId)}/${encodeURIComponent(created.participant.agentId)}`,
+  )
+  assert.equal(
+    leadChat.result.snapshot?.state.turns.some((turn) => turn.message.text === `${taskId} is underway`),
+    true,
+    'durable MCP mailbox messages must project into standard AHP chat turns',
+  )
+  await ahpClient.shutdown()
 
   // Advance the teammate's wait cursor, then restart the host while its next
   // long poll is in flight. The same call must reconnect automatically,

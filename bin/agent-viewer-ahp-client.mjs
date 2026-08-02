@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { SUPPORTED_PROTOCOL_VERSIONS } from '@microsoft/agent-host-protocol'
 
 const ROOT_CHANNEL = 'ahp-root://'
 const COORDINATOR_METHOD = 'agent-viewer/coordinator'
@@ -133,7 +134,7 @@ export class CoordinatorAhpClient {
             }, 10_000)
           : await this.sendRequest('initialize', {
               channel: ROOT_CHANNEL,
-              protocolVersions: ['0.7.0', '0.6.0'],
+              protocolVersions: [...SUPPORTED_PROTOCOL_VERSIONS],
               clientId: this.clientId,
               clientInfo: {
                 name: 'agent-viewer',

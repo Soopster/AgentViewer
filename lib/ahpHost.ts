@@ -1,6 +1,9 @@
 import {
   AhpErrorCodes,
   JsonRpcErrorCodes,
+  SUPPORTED_PROTOCOL_VERSIONS,
+  isActionKnownToVersion,
+  isNotificationKnownToVersion,
   type ActionEnvelope,
   type JsonRpcErrorResponse,
   type JsonRpcNotification,
@@ -29,6 +32,8 @@ import {
   AHP_COORDINATOR_META_KEY,
   AHP_ROOT_CHANNEL,
   coordinatorChatParts,
+  coordinatorChatTurn,
+  coordinatorChatUri,
   coordinatorRootState,
   coordinatorSessionState,
   coordinatorSessionSummary,
@@ -49,7 +54,10 @@ import {
 } from './ahpResources'
 import { AhpTerminalError, AhpTerminalManager } from './ahpTerminals'
 
-export const AHP_PROTOCOL_VERSIONS = ['0.7.0', '0.6.0'] as const
+// Keep negotiation pinned to versions the installed reference SDK actually
+// implements. In particular, never advertise the unreleased 0.7 draft merely
+// because it appears on the main-branch documentation site.
+export const AHP_PROTOCOL_VERSIONS = SUPPORTED_PROTOCOL_VERSIONS
 export const AHP_COORDINATOR_REQUEST_METHOD = 'agent-viewer/coordinator'
 const REPLAY_LIMIT = 1_000
 const AHP_STATE_DIR = path.join(process.cwd(), '.agent-viewer-data', 'agent-coordination')
@@ -384,6 +392,29 @@ export class CoordinatorAhpHost {
         }
       }
 
+      const beforeMessageIds = new Set(beforeSnapshot.messages.map((message) => message.id))
+      for (const message of afterSnapshot.messages) {
+        if (beforeMessageIds.has(message.id)) continue
+        const turn = coordinatorChatTurn(message)
+        for (const agentId of new Set([message.fromAgentId, message.toAgentId])) {
+          if (!afterSnapshot.agents.some((agent) => agent.id === agentId)) continue
+          const chatChannel = coordinatorChatUri(run.id, agentId)
+          this.emitAction(chatChannel, stateAction({
+            type: 'chat/turnStarted',
+            turnId: turn.id,
+            startedAt: turn.startedAt ?? message.createdAt,
+            message: turn.message,
+            _meta: turn.message._meta,
+          }))
+          this.emitAction(chatChannel, stateAction({
+            type: 'chat/turnComplete',
+            turnId: turn.id,
+            duration: turn.duration ?? 0,
+            _meta: turn.message._meta,
+          }))
+        }
+      }
+
       const beforeClients = new Map(beforeState.activeClients.map((client) => [client.clientId, client]))
       const afterClients = new Map(afterState.activeClients.map((client) => [client.clientId, client]))
       for (const [clientId, activeClient] of afterClients) {
@@ -529,6 +560,7 @@ export class CoordinatorAhpConnection {
 
   deliverAction(envelope: ActionEnvelope): void {
     if (!this.subscriptions.has(envelope.channel)) return
+    if (!isActionKnownToVersion(envelope.action, this.protocolVersion)) return
     this.send({
       jsonrpc: '2.0',
       method: 'action',
@@ -539,6 +571,10 @@ export class CoordinatorAhpConnection {
   deliverProtocolNotification(method: string, params: Record<string, unknown>): void {
     const channel = text(params.channel)
     if (!channel || !this.subscriptions.has(channel)) return
+    if (!isNotificationKnownToVersion(
+      method as Parameters<typeof isNotificationKnownToVersion>[0],
+      this.protocolVersion,
+    )) return
     this.send({ jsonrpc: '2.0', method, params })
   }
 
@@ -772,9 +808,15 @@ export class CoordinatorAhpConnection {
     await this.host.ensureLoaded()
     this.host.cancelDisconnect(clientId)
     const previous = this.host.previousConnection(clientId)
+    if (!previous) {
+      throw new AhpRpcError(
+        JsonRpcErrorCodes.InvalidRequest,
+        `No reconnectable AHP client state exists for: ${clientId}`,
+      )
+    }
     this.initialized = true
     this.clientId = clientId
-    this.protocolVersion = previous?.protocolVersion ?? AHP_PROTOCOL_VERSIONS[0]
+    this.protocolVersion = previous.protocolVersion
     this.identities.clear()
     for (const [runId, identity] of previous?.identities ?? []) {
       this.identities.set(runId, identity)
@@ -796,7 +838,15 @@ export class CoordinatorAhpConnection {
     for (const channel of validSubscriptions) this.subscriptions.add(channel)
     const replay = this.host.replayAfter(lastSeenServerSeq, this.subscriptions)
     await this.remember()
-    if (replay) return { type: 'replay', actions: replay, missing }
+    if (replay) {
+      return {
+        type: 'replay',
+        actions: replay.filter((envelope) => (
+          isActionKnownToVersion(envelope.action, this.protocolVersion)
+        )),
+        missing,
+      }
+    }
     const snapshots = [...this.subscriptions].flatMap((channel) => {
       const snapshot = this.host.snapshotForChannel(channel)
       return snapshot ? [snapshot] : []
@@ -921,8 +971,7 @@ export class CoordinatorAhpConnection {
     if (activeClient && text(activeClient.clientId) !== this.clientId) {
       throw new AhpRpcError(JsonRpcErrorCodes.InvalidParams, 'activeClient.clientId must match initialize.clientId')
     }
-    const workingDirectories = stringArray(params.workingDirectories)
-    const cwd = filePathFromUri(text(params.workingDirectory) || workingDirectories[0]) || process.cwd()
+    const cwd = filePathFromUri(text(params.workingDirectory)) || process.cwd()
     const maxAgentsValue = Number(config.maxAgents)
     const result = await createExternalProtocolRun({
       runId,

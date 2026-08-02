@@ -118,7 +118,7 @@ Modes:
   (default)  Launch the OpenTUI terminal app via Bun
   web        Launch the Next.js web app
   mcp        Run the Claude/Codex stdio MCP bridge
-  ahp        Run the AHP 0.7/0.6 JSON-RPC host over stdio, TCP, or WebSocket
+  ahp        Run the published AHP JSON-RPC host over stdio, TCP, or WebSocket
   coord worker  Run an autonomous bounded multi-provider Coordinator worker
   coord doctor  Diagnose daemon, CLI, identity, protocol, and worker health
   coord workers List persistent Coordinator worker registrations

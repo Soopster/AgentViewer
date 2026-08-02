@@ -30,6 +30,9 @@ directory actions.
 
 ## Compatibility rules
 
+- The supported version list comes from the installed reference SDK. Agent
+  Viewer currently prefers published AHP 0.6.0 and retains the SDK's 0.5.x
+  fallbacks; it never negotiates an unreleased draft version.
 - Every command and notification carries a top-level `params.channel`.
 - `initialize` negotiates a SemVer protocol version from the client's offered
   list. Unsupported versions return AHP error `-32005`.
@@ -38,8 +41,34 @@ directory actions.
   after validation; rejected actions are echoed with `rejectionReason`.
 - Reconnect replays retained actions when possible and otherwise returns fresh
   snapshots for every still-valid subscription.
-- Unknown actions are ignored by clients, per the AHP forward-compatibility
-  rule. Agent Viewer metadata is namespaced and opaque to generic AHP clients.
+- Actions and protocol notifications are filtered against the negotiated
+  protocol version before delivery. Agent Viewer metadata is namespaced and
+  opaque to generic AHP clients.
+
+Feature availability is capability-driven. The Coordinator projection does
+not advertise authentication, telemetry, changesets, multi-chat, forking, or
+MCP Apps, because it cannot honor those optional surfaces. In particular, the
+AHP `mcp://` side-channel is only for capability-advertised MCP Apps traffic;
+ordinary Coordinator MCP calls instead share one durable AHP connection and
+the namespaced `agent-viewer/coordinator` request described below.
+
+## Published 0.6 feature matrix
+
+| AHP surface | Agent Viewer behavior |
+| --- | --- |
+| JSON-RPC framing and channel routing | Supported on stdio, TCP, and WebSocket; every request and notification is routed by top-level `channel`. |
+| Initialize, version negotiation, identity, locale, capabilities | Supported. Versions come from the Microsoft TypeScript SDK registry; implementation identity is informational and optional client fields are accepted. |
+| Subscribe/unsubscribe and snapshot views/delivery hints | Supported. Coordinator channels return full immutable snapshots; advisory view and delivery hints are safely ignored. |
+| Ordered actions and write-ahead reconciliation | Supported, including origin echo, rejection reasons, per-version filtering, replay, and snapshot fallback. |
+| Root and session catalogues | Supported, including list pagination and add/remove/summary notifications. |
+| Chat channels | Supported as read-only lead/worker projections. Durable mailbox messages are completed turns; completions and turn-fetch commands return the complete retained projection. Multi-chat creation/forking is not advertised. |
+| Resource commands and watches | Supported for authorised run/worktree `file:` resources, including read, write, list, copy, delete, move, resolve, mkdir, grants, and watch actions. |
+| Terminal channels | Supported, including create/dispose, claim validation, input, resize, title, cwd, clear, exit, and command-detection state. |
+| Authentication | Not advertised: Agent Viewer providers authenticate through their native SDK/CLI, so AHP agents expose no protected resources and `authenticate` rejects unadvertised resources. |
+| Changesets and annotations | Not advertised. Coordinator path locks and task evidence are workflow state, not AHP changesets. |
+| Telemetry | Not advertised; `InitializeResult.telemetry` is absent and no `ahp-otlp:` channel exists. |
+| MCP Apps `mcp://` side-channel | Not advertised. The Coordinator host is not itself running the per-CLI MCP server, and AHP 0.6 only defines this side-channel for capability-advertised MCP Apps traffic. |
+| MCP Coordinator bridge | Supported through the namespaced `agent-viewer/coordinator` AHP request on the bridge's persistent connection, with exact MCP tool identities projected into standard AHP active-client state. |
 
 ## Transport
 
@@ -55,6 +84,13 @@ and send their `coord_*` operations through the namespaced
 capability, idempotency, and persistence dispatcher as the compatibility HTTP
 route. Generic AHP clients can ignore this extension and continue using the
 standard session projection.
+
+When the MCP bridge joins a run, it publishes the exact callable `coord_*` MCP
+tool names in its AHP active-client capabilities. The session projection turns
+those into standard AHP `ToolDefinition` entries; it never publishes a
+non-callable wildcard tool identity. Durable Coordinator mailbox traffic is
+also projected into completed AHP chat turns, so generic AHP clients receive a
+standard transcript rather than having to parse the namespaced metadata.
 
 After a socket loss, the bridge uses AHP `reconnect` with its last server
 sequence and every bound run subscription. Transport closure releases the old

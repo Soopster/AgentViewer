@@ -168,17 +168,16 @@ try {
     throw new Error('Bridge server identity did not advertise the Agent Viewer repository')
   }
   const extensions = client.getServerCapabilities()?.extensions
-  if (!extensions?.['io.modelcontextprotocol/ui'] || !extensions?.['io.modelcontextprotocol/skills']) {
-    throw new Error('Bridge did not advertise the MCP Apps and Skills extensions through server/discover')
-  }
-  if (extensions?.['io.modelcontextprotocol/tasks']) {
-    throw new Error('Bridge advertised the experimental Tasks extension without a supported tasks runtime')
+  if (!extensions?.['io.modelcontextprotocol/ui']
+    || !extensions?.['io.modelcontextprotocol/skills']
+    || !extensions?.['io.modelcontextprotocol/tasks']) {
+    throw new Error('Bridge did not advertise the MCP Apps, Skills, and Tasks extensions through server/discover')
   }
   const listed = await client.listTools()
   const names = new Set(listed.tools.map((tool) => tool.name))
   const requiredTools = [
     'get_session_transcript', 'post_attention', 'search_sessions', 'set_bookmark',
-    'coord_list_runs', 'coord_create_run', 'coord_join_run', 'coord_resume', 'coord_status', 'coord_wait', 'coord_create_task',
+    'coord_list_runs', 'coord_create_run', 'coord_join_run', 'coord_resume', 'coord_status', 'coord_wait', 'coord_await_run', 'coord_create_task',
     'coord_claim_task', 'coord_read_inbox', 'coord_send_message', 'coord_request_locks',
     'coord_progress', 'coord_publish_finding', 'coord_submit_plan', 'coord_review_plan',
     'coord_complete_task', 'coord_handoff_task', 'coord_fail_task', 'coord_finalize_run',

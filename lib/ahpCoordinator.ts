@@ -2,17 +2,21 @@ import {
   type AgentInfo,
   type ChatState,
   type ChatSummary,
+  type MessageKind,
   type RootState,
   type SessionLifecycle,
   type SessionState,
   type SessionStatus,
   type SessionSummary,
   type Snapshot,
+  type Turn,
+  type TurnState,
   type URI,
 } from '@microsoft/agent-host-protocol'
 import { pathToFileURL } from 'node:url'
 import type {
   ProtocolAgent,
+  ProtocolMessage,
   ProtocolRun,
   ProtocolRunSnapshot,
   ProtocolRunStatus,
@@ -28,6 +32,12 @@ export const AHP_COORDINATOR_META_VERSION = 1 as const
 // normative wire values locally while keeping the public types checked.
 const AHP_SESSION_LIFECYCLE_READY = 'ready' as SessionLifecycle
 const AHP_STATUS_IDLE = 1 as SessionStatus
+const AHP_STATUS_ERROR = 2 as SessionStatus
+const AHP_STATUS_IN_PROGRESS = 8 as SessionStatus
+const AHP_STATUS_INPUT_NEEDED = 24 as SessionStatus
+const AHP_CHAT_INTERACTIVITY_READ_ONLY = 'read-only' as NonNullable<ChatSummary['interactivity']>
+const AHP_MESSAGE_KIND_AGENT = 'agent' as MessageKind
+const AHP_TURN_STATE_COMPLETE = 'complete' as TurnState
 
 const PROVIDERS: ReadonlyArray<{ provider: AgentProvider; displayName: string }> = [
   { provider: 'claude', displayName: 'Claude' },
@@ -83,6 +93,28 @@ function activity(status: ProtocolRunStatus): string | undefined {
   }
 }
 
+function runStatus(status: ProtocolRunStatus): SessionStatus {
+  switch (status) {
+    case 'planning':
+    case 'running':
+    case 'synthesizing':
+      return AHP_STATUS_IN_PROGRESS
+    case 'blocked':
+      return AHP_STATUS_INPUT_NEEDED
+    case 'failed':
+      return AHP_STATUS_ERROR
+    default:
+      return AHP_STATUS_IDLE
+  }
+}
+
+function agentStatus(agent: ProtocolAgent): SessionStatus {
+  if (agent.status === 'blocked') return AHP_STATUS_INPUT_NEEDED
+  if (agent.status === 'failed') return AHP_STATUS_ERROR
+  if (agent.turnActive || agent.status === 'working') return AHP_STATUS_IN_PROGRESS
+  return AHP_STATUS_IDLE
+}
+
 function fileUri(filePath: string): URI {
   return pathToFileURL(filePath).href
 }
@@ -92,9 +124,9 @@ function chatSummary(run: ProtocolRun, agent: ProtocolAgent): ChatSummary {
   return {
     resource: coordinatorChatUri(run.id, agent.id),
     title: agent.role === 'lead' ? 'Lead' : agent.name,
-    // AHP status is derived from turn state. Coordinator lifecycle remains in
-    // activity and namespaced metadata until transcript turns are projected.
-    status: AHP_STATUS_IDLE,
+    // Surface Coordinator liveness through AHP's standard status flags while
+    // retaining workflow-specific detail in activity and namespaced metadata.
+    status: agentStatus(agent),
     activity: agent.taskId
       ? `${agent.status}: ${agent.taskId}`
       : agent.status === 'working'
@@ -103,12 +135,38 @@ function chatSummary(run: ProtocolRun, agent: ProtocolAgent): ChatSummary {
     modifiedAt: agent.updatedAt,
     // Coordinator participants exchange work through the durable mailbox and
     // task tools. These AHP chats are projections, not agent prompt streams.
-    interactivity: 'read-only',
-    // 0.6 used the singular field; 0.7 generalized it to a set. Emitting both
-    // is additive and lets either negotiated draft reduce the same snapshot.
+    interactivity: AHP_CHAT_INTERACTIVITY_READ_ONLY,
     workingDirectory,
-    workingDirectories: workingDirectory ? [workingDirectory] : undefined,
-  } as ChatSummary
+  }
+}
+
+export function coordinatorChatTurn(message: ProtocolMessage): Turn {
+  return {
+    id: `mailbox:${message.id}`,
+    startedAt: message.createdAt,
+    duration: 0,
+    message: {
+      text: message.body,
+      origin: { kind: AHP_MESSAGE_KIND_AGENT },
+      _meta: {
+        [AHP_COORDINATOR_META_KEY]: {
+          messageId: message.id,
+          fromAgentId: message.fromAgentId,
+          toAgentId: message.toAgentId,
+          kind: message.kind,
+          priority: message.priority,
+          replyRequired: message.replyRequired,
+          correlationId: message.correlationId,
+          inReplyTo: message.inReplyTo,
+          deliveredAt: message.deliveredAt,
+          resolvedAt: message.resolvedAt,
+        },
+      },
+    },
+    responseParts: [],
+    usage: undefined,
+    state: AHP_TURN_STATE_COMPLETE,
+  }
 }
 
 function coordinatorMeta(snapshot: ProtocolRunSnapshot): Record<string, unknown> {
@@ -130,14 +188,13 @@ export function coordinatorSessionSummary(run: ProtocolRun): SessionSummary {
     resource: coordinatorSessionUri(run.id),
     provider: run.provider,
     title: run.prompt.split('\n')[0]?.trim().slice(0, 120) || 'Coordinator run',
-    status: AHP_STATUS_IDLE,
+    status: runStatus(run.status),
     activity: activity(run.status),
     project: {
       displayName: run.baseCwd.split(/[\\/]/).filter(Boolean).at(-1) || run.baseCwd,
       uri: fileUri(run.baseCwd),
     },
     workingDirectory,
-    workingDirectories: [workingDirectory],
     createdAt: run.createdAt,
     modifiedAt: run.updatedAt,
     _meta: {
@@ -167,14 +224,13 @@ export function coordinatorSessionState(snapshot: ProtocolRunSnapshot): SessionS
   return {
     provider: snapshot.run.provider,
     title: snapshot.run.prompt.split('\n')[0]?.trim().slice(0, 120) || 'Coordinator run',
-    status: AHP_STATUS_IDLE,
+    status: runStatus(snapshot.run.status),
     activity: activity(snapshot.run.status),
     project: {
       displayName: snapshot.run.baseCwd.split(/[\\/]/).filter(Boolean).at(-1) || snapshot.run.baseCwd,
       uri: fileUri(snapshot.run.baseCwd),
     },
     workingDirectory,
-    workingDirectories: [workingDirectory],
     lifecycle: AHP_SESSION_LIFECYCLE_READY,
     activeClients,
     chats,
@@ -192,7 +248,10 @@ export function coordinatorChatState(
   const summary = chatSummary(snapshot.run, agent)
   return {
     ...summary,
-    turns: [],
+    turns: snapshot.messages
+      .filter((message) => message.fromAgentId === agent.id || message.toAgentId === agent.id)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+      .map(coordinatorChatTurn),
     _meta: {
       [AHP_COORDINATOR_META_KEY]: {
         version: AHP_COORDINATOR_META_VERSION,
