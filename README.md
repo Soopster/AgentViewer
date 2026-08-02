@@ -153,11 +153,11 @@ The host negotiates AHP `0.7.0` or `0.6.0`. A Coordinator run is an `ahp-session
 For unattended work, use the bounded supervisor. It resumes the same provider session for one useful tick, heartbeats while the CLI works, waits for the next Coordinator event, retries crashes with backoff, and exits when the run is terminal:
 
 ```bash
-agent-viewer coord worker --start "Implement the release" --name codex-lead --provider codex --attach 3000
+agent-viewer coord worker --start "Implement the release" --playbook release --name codex-lead --provider codex --max-agents 4 --attach 3000
 agent-viewer coord worker --join <run-id> --name claude-api --provider claude --attach 3000
 ```
 
-Joined workers create isolated git worktrees by default; pass `--shared` only when that is intentional. Claim-time baselines keep pre-existing dirty files out of completion checks while still detecting participant edits and commits. Mutating MCP tools accept a stable `request_id`, so a resumed CLI can safely repeat a request after losing its response. Stale participants are detected from heartbeat leases and have their locks and tasks released for reassignment.
+For multi-agent startup, seed the full board with `--playbook` before teammates join; an unseeded `--start` is intended only for a lead planning turn. Start-time controls also include `--max-agents 2..16`, `--gate-command <cmd>`, and `--require-plan-approval`. Joined workers create isolated git worktrees by default; pass `--shared` only when that is intentional. Claim-time baselines keep pre-existing dirty files out of completion checks while still detecting participant edits and commits. Mutating MCP tools accept a stable `request_id`, so a resumed CLI can safely repeat a request after losing its response. Stale participants are detected from heartbeat leases and have their locks and tasks released for reassignment.
 
 Restart a supervisor with `agent-viewer coord worker --identity <file>`. A bridge can also load that file with `agent-viewer mcp --identity <file>` or `AGENT_VIEWER_COORD_IDENTITY_FILE`. The older run ID, agent ID, and token environment variables remain supported for compatibility. Treat identity files as secrets.
 
@@ -166,12 +166,13 @@ Workers register their PID, provider session, status, last classified failure, a
 ```bash
 agent-viewer coord doctor --json --attach 3000
 agent-viewer coord workers --json
+agent-viewer coord workers --status stale --limit 20
 agent-viewer coord logs <agent-name|agent-id|identity-file> -n 200
 agent-viewer coord logs <agent-name|agent-id|identity-file> -f
 agent-viewer coord restart <agent-name|agent-id|identity-file>
 ```
 
-`coord doctor` is read-only and checks daemon reachability, protocol compatibility, provider CLI availability, identity validity/mode, and registered worker liveness. Worker logs and registry records default to `~/.agent-viewer/coordinator/workers/`; set `AGENT_VIEWER_COORD_HOME` to relocate them.
+`coord doctor` is read-only and checks daemon reachability, protocol compatibility, provider CLI availability, identity validity/mode, and registered worker liveness. Provider probes run concurrently, and worker detail is bounded by `--limit` while the summary still covers the full registry. `coord workers --status stale` selects dead supervisors whose last persisted lifecycle state was active; `--status running` returns only live supervisors. Worker logs and registry records default to `~/.agent-viewer/coordinator/workers/`; set `AGENT_VIEWER_COORD_HOME` to relocate them.
 
 Provider exits are classified as rate limit, authentication, context exhaustion, approval blockage, missing CLI, transient transport, or generic provider failure. A durable classified failure while a worker owns a task calls `coord_handoff_task`: it records a checkpoint, releases locks, returns the task to pending, marks the worker blocked, and sends the lead an urgent durable handoff. Transient transport failures retain bounded exponential retry behavior; an unclassified failure is handed off after three consecutive attempts.
 

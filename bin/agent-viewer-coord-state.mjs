@@ -18,6 +18,11 @@ export function workerLogPath(identityFile) {
   return path.join(coordinatorStateRoot(), 'workers', `${key}.worker.log`)
 }
 
+export function workerProcessMarker(identityFile) {
+  const key = Buffer.from(path.resolve(identityFile)).toString('base64url').slice(0, 24)
+  return `agent-viewer-coord-worker:${key}`
+}
+
 const workerRecordWrites = new Map()
 const WORKER_RETENTION_MS = Math.max(
   1,
@@ -106,11 +111,15 @@ function readProcessDetails(pid) {
 export function managedWorkerProcess(pid, record = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return false
   const details = readProcessDetails(pid)
-  const commandMatches = details.commandLine.includes('agent-viewer-coord-worker.mjs')
+  const durableMarker = typeof record.identityFile === 'string'
+    ? workerProcessMarker(record.identityFile)
+    : null
+  const markerMatches = Boolean(durableMarker && details.commandLine.includes(durableMarker))
+  const commandMatches = markerMatches || details.commandLine.includes('agent-viewer-coord-worker.mjs')
     || (details.commandLine.includes('agent-viewer.mjs') && details.commandLine.includes('coord') && details.commandLine.includes('worker'))
   if (!commandMatches) return false
   const recordedStartedAt = Date.parse(String(record.startedAt || ''))
-  if (Number.isFinite(recordedStartedAt) && details.startedAt !== null) {
+  if (!markerMatches && Number.isFinite(recordedStartedAt) && details.startedAt !== null) {
     // Process launch and record persistence are not atomic, but should be
     // within a minute even on a heavily loaded machine.
     if (Math.abs(details.startedAt - recordedStartedAt) > 60_000) return false

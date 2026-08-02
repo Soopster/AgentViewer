@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import {
   coordinatorStateRoot,
   workerLogPath,
+  workerProcessMarker,
   writeWorkerRecord,
 } from './agent-viewer-coord-state.mjs'
 import {
@@ -23,7 +24,10 @@ const PROVIDER_INACTIVITY_TIMEOUT_MS = Math.max(100, Number(process.env.AGENT_VI
 const RUN_CHECK_INTERVAL_MS = Math.max(100, Number(process.env.AGENT_VIEWER_COORD_RUN_CHECK_INTERVAL_MS) || 5_000)
 const PROVIDER_FRAME_MAX_BYTES = Math.max(1_024, Number(process.env.AGENT_VIEWER_COORD_PROVIDER_FRAME_MAX_BYTES) || 1024 * 1024)
 const WORKER_LOG_MAX_BYTES = Math.max(4_096, Number(process.env.AGENT_VIEWER_COORD_WORKER_LOG_MAX_BYTES) || 10 * 1024 * 1024)
-let logWriteChain = Promise.resolve()
+let logDrainPromise = null
+let logPendingChunks = []
+let logPendingBytes = 0
+let logDroppedBytes = 0
 let shutdownRequested = false
 let shutdownSignal = null
 let activeProviderChild = null
@@ -104,6 +108,10 @@ Options:
   --model <id>         Provider model override (e.g. sonnet, gpt-5.2-codex, openai-codex/gpt-5.2-codex)
   --playbook <name>    With --start: seed the board from a saved playbook
   --args <value>       With --playbook: args interpolated into task text (JSON or string)
+  --max-agents <n>     With --start: participant limit from 2 to 16 (default 6 or playbook value)
+  --gate-command <cmd> With --start: command every task must pass before completion
+  --require-plan-approval
+                       With --start: require lead approval before teammate edits
 
 Lifecycle environment (milliseconds):
   AGENT_VIEWER_COORD_PROVIDER_TURN_TIMEOUT_MS        Absolute provider-turn limit (default 1800000)
@@ -116,19 +124,46 @@ Lifecycle environment (milliseconds):
 
 function parseArgs(args) {
   const options = { provider: 'codex', providerExplicit: false, cwd: process.cwd(), shared: false, once: false }
+  const booleanOptions = new Map([
+    ['--shared', 'shared'],
+    ['--once', 'once'],
+    ['--require-plan-approval', 'requirePlanApproval'],
+  ])
+  const valueOptions = new Map([
+    ['--attach', 'attach'],
+    ['--cwd', 'cwd'],
+    ['--identity', 'identity'],
+    ['--name', 'name'],
+    ['--start', 'start'],
+    ['--join', 'join'],
+    ['--provider', 'provider'],
+    ['--model', 'model'],
+    ['--playbook', 'playbook'],
+    ['--args', 'args'],
+    ['--max-agents', 'maxAgents'],
+    ['--gate-command', 'gateCommand'],
+  ])
   for (let index = 0; index < args.length; index += 1) {
     const key = args[index]
-    if (key === '--shared') options.shared = true
-    else if (key === '--once') options.once = true
-    else if (key === '--help' || key === '-h') options.help = true
-    else if (key?.startsWith('--')) {
-      const value = args[index + 1]
-      if (!value || value.startsWith('--')) throw new Error(`${key} requires a value`)
-      const optionName = key.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())
-      options[optionName] = value
-      if (optionName === 'provider') options.providerExplicit = true
-      index += 1
-    } else throw new Error(`Unknown argument: ${key}`)
+    if (key === '--help' || key === '-h') {
+      options.help = true
+      continue
+    }
+    const equals = key?.indexOf('=') ?? -1
+    const optionKey = equals > 0 ? key.slice(0, equals) : key
+    const booleanName = booleanOptions.get(optionKey)
+    if (booleanName) {
+      if (equals > 0) throw new Error(`${optionKey} does not take a value`)
+      options[booleanName] = true
+      continue
+    }
+    const optionName = valueOptions.get(optionKey)
+    if (!optionName) throw new Error(`Unknown argument: ${key}`)
+    const value = equals > 0 ? key.slice(equals + 1) : args[index + 1]
+    if (!value || (equals < 0 && value.startsWith('--'))) throw new Error(`${optionKey} requires a value`)
+    options[optionName] = value
+    if (optionName === 'provider') options.providerExplicit = true
+    if (equals < 0) index += 1
   }
   return options
 }
@@ -178,13 +213,27 @@ async function isolatedWorktree(cwd, runId, name) {
   const branch = `agent-viewer/coord/${runId.slice(0, 8)}/${slug}`
   await mkdir(path.dirname(target), { recursive: true })
   await run('git', ['worktree', 'add', '-b', branch, target, 'HEAD'], { cwd, stdio: 'inherit' })
-  return target
+  return { target, branch }
+}
+
+async function rollbackIsolatedWorktree(cwd, checkout) {
+  if (!checkout) return
+  await run('git', ['worktree', 'remove', '--force', checkout.target], { cwd, stdio: 'ignore' }).catch(() => {})
+  await run('git', ['branch', '-D', checkout.branch], { cwd, stdio: 'ignore' }).catch(() => {})
+  await rm(checkout.target, { recursive: true, force: true }).catch(() => {})
 }
 
 async function saveState(file, state) {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
-  await writeFile(file, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
-  await chmod(file, 0o600)
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
+    await rename(temporary, file)
+    await chmod(file, 0o600)
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {})
+    throw error
+  }
 }
 
 function identityFileFor(state) {
@@ -203,31 +252,75 @@ function appendWorkerLog(state, chunk) {
   const data = requested.length > WORKER_LOG_MAX_BYTES
     ? requested.subarray(requested.length - WORKER_LOG_MAX_BYTES)
     : requested
-  const pending = logWriteChain.then(async () => {
+  logPendingChunks.push(data)
+  logPendingBytes += data.length
+  // Provider pipes can outpace a slow or full filesystem. Keep the newest
+  // bounded window instead of retaining an unbounded promise/Buffer chain.
+  while (logPendingBytes > WORKER_LOG_MAX_BYTES && logPendingChunks.length > 1) {
+    const dropped = logPendingChunks.shift()
+    logPendingBytes -= dropped.length
+    logDroppedBytes += dropped.length
+  }
+  if (logDrainPromise) return logDrainPromise
+  logDrainPromise = (async () => {
     await mkdir(path.dirname(state.logFile), { recursive: true, mode: 0o700 })
-    const currentSize = await stat(state.logFile).then((entry) => entry.size).catch(() => 0)
-    if (currentSize > 0 && currentSize + data.length > WORKER_LOG_MAX_BYTES) {
-      const rotated = `${state.logFile}.1`
-      await rm(rotated, { force: true })
-      await rename(state.logFile, rotated)
+    while (logPendingChunks.length > 0) {
+      const pendingChunks = logPendingChunks
+      const droppedBytes = logDroppedBytes
+      logPendingChunks = []
+      logPendingBytes = 0
+      logDroppedBytes = 0
+      const droppedNotice = droppedBytes > 0
+        ? Buffer.from(`[provider log truncated: dropped ${droppedBytes} queued bytes]\n`)
+        : Buffer.alloc(0)
+      const requestedBatch = Buffer.concat([droppedNotice, ...pendingChunks])
+      const batch = requestedBatch.length > WORKER_LOG_MAX_BYTES
+        ? requestedBatch.subarray(requestedBatch.length - WORKER_LOG_MAX_BYTES)
+        : requestedBatch
+      const currentSize = await stat(state.logFile).then((entry) => entry.size).catch(() => 0)
+      if (currentSize > 0 && currentSize + batch.length > WORKER_LOG_MAX_BYTES) {
+        const rotated = `${state.logFile}.1`
+        await rm(rotated, { force: true })
+        await rename(state.logFile, rotated)
+      }
+      await appendFile(state.logFile, batch, { mode: 0o600 })
+      await chmod(state.logFile, 0o600)
     }
-    await appendFile(state.logFile, data, { mode: 0o600 })
-    await chmod(state.logFile, 0o600)
-  })
-  logWriteChain = pending.catch(() => {})
-  return pending
+  })().finally(() => { logDrainPromise = null })
+  return logDrainPromise
 }
 
 function classifyProviderFailure(error) {
   const text = `${error?.message || error}\n${error?.providerOutput || ''}`.toLowerCase()
   if (error?.code === 'COORDINATOR_PROVIDER_TURN_TIMEOUT') return 'provider_timeout'
   if (error?.code === 'ENOENT' || /enoent|command not found|not recognized as/.test(text)) return 'cli_missing'
-  if (/rate.?limit|quota|usage limit|too many requests|429/.test(text)) return 'rate_limited'
+  if (/rate.?limit|quota|usage limit|credit balance|insufficient credits|billing|too many requests|429/.test(text)) return 'rate_limited'
   if (/unauthori[sz]ed|authentication|not logged in|invalid api key|401|403/.test(text)) return 'authentication_failed'
   if (/context (window|length)|maximum context|context.*exceed|too many tokens/.test(text)) return 'context_exhausted'
   if (/approval|permission.*denied|not approved|requires approval/.test(text)) return 'approval_blocked'
   if (/econnreset|econnrefused|timed? out|temporar|network|socket|transport/.test(text)) return 'transient_transport'
   return 'provider_failure'
+}
+
+function providerEventFailure(event) {
+  if (!event || typeof event !== 'object') return null
+  const failed = event.type === 'error'
+    || event.type === 'turn.failed'
+    || event.type === 'turn.error'
+    || event.type === 'agent.error'
+    || event.is_error === true
+    || event.isError === true
+    || event.stopReason === 'error'
+    || event.message?.stopReason === 'error'
+  if (!failed) return null
+  const detail = event.errorMessage
+    || event.message?.errorMessage
+    || event.error?.message
+    || event.message?.error?.message
+    || event.data?.error?.message
+  return typeof detail === 'string' && detail.trim()
+    ? detail.trim()
+    : `provider emitted ${event.type || 'an error event'}`
 }
 
 function isTerminalCoordinatorError(error) {
@@ -397,6 +490,7 @@ async function providerTick(state, baseUrl) {
     let buffered = ''
     let droppingOversizedFrame = false
     let providerOutput = ''
+    let providerReportedError = null
     let sessionStateSave = Promise.resolve()
     let turnTimedOut = false
     let providerTimeoutDetail = null
@@ -463,6 +557,7 @@ async function providerTick(state, baseUrl) {
         if (Buffer.byteLength(line) > PROVIDER_FRAME_MAX_BYTES) continue
         try {
           const event = JSON.parse(line)
+          providerReportedError ||= providerEventFailure(event)
           // codex: thread_id · claude: session_id · opencode: sessionID (also
           // nested under info/part) · copilot: sessionId
           const sessionId = event.thread_id || event.session_id || event.sessionID || event.sessionId
@@ -519,9 +614,11 @@ async function providerTick(state, baseUrl) {
       try {
         await sessionStateSave
         if (turnTimedOut) reject(providerTimeoutError())
-        else if (code === 0) resolve()
+        else if (code === 0 && !providerReportedError) resolve()
         else {
-          const error = new Error(`${command} exited ${code ?? signal}`)
+          const error = new Error(providerReportedError
+            ? `${command} reported an unsuccessful provider turn: ${providerReportedError}`
+            : `${command} exited ${code ?? signal}`)
           error.providerOutput = providerOutput
           reject(error)
         }
@@ -536,6 +633,17 @@ let options
 try { options = parseArgs(process.argv.slice(2)) } catch (error) { usage(error.message) }
 if (!options || options.help) usage()
 if (!['codex', 'claude', 'opencode', 'copilot', 'pi'].includes(options.provider)) usage('--provider must be codex, claude, opencode, copilot, or pi')
+if (options.maxAgents !== undefined) {
+  const maxAgents = Number(options.maxAgents)
+  if (!Number.isInteger(maxAgents) || maxAgents < 2 || maxAgents > 16) usage('--max-agents must be an integer from 2 to 16')
+  options.maxAgents = maxAgents
+}
+if (!options.start && (options.playbook || options.args !== undefined || options.maxAgents !== undefined || options.gateCommand || options.requirePlanApproval)) {
+  usage('--playbook, --args, --max-agents, --gate-command, and --require-plan-approval require --start')
+}
+if (options.args !== undefined && !options.playbook) usage('--args requires --playbook')
+if (options.shared && !options.join) usage('--shared requires --join; the lead always starts in its current checkout')
+if (options.identity && !options.start && !options.join && options.name) usage('--name cannot rename a resumed --identity worker')
 
 let baseUrl = normalizeUrl(options.attach || 'http://127.0.0.1:3000')
 let state
@@ -550,6 +658,8 @@ if (options.identity && !options.start && !options.join) {
     // different CLI. Preserve the Coordinator identity, but start a fresh
     // provider conversation for the failover supervisor.
     delete state.providerSessionId
+    delete state.lastFailureClass
+    delete state.lastError
   } else {
     state.provider ||= options.provider
   }
@@ -562,24 +672,40 @@ if (options.identity && !options.start && !options.join) {
     usage('Provide --name and exactly one of --start or --join')
   }
   let cwd = path.resolve(options.cwd)
+  const baseCwd = cwd
+  let isolatedCheckout = null
   // `--join latest` (or `auto`) discovers the newest joinable run server-side.
   const joinRunId = ['latest', 'auto'].includes(options.join ?? '') ? undefined : options.join
   if (options.join && !options.shared) {
-    cwd = await isolatedWorktree(cwd, joinRunId ?? `latest-${Date.now().toString(36)}`, options.name)
+    isolatedCheckout = await isolatedWorktree(cwd, joinRunId ?? `latest-${Date.now().toString(36)}`, options.name)
+    cwd = isolatedCheckout.target
   }
   let playbookArgs = options.args
   if (typeof playbookArgs === 'string') {
     try { playbookArgs = JSON.parse(playbookArgs) } catch { /* keep as plain string */ }
   }
-  const result = await api(baseUrl, options.start ? 'create_run' : 'join_run', {
-    ...(options.start
-      ? { prompt: options.start, playbookName: options.playbook, args: playbookArgs }
-      : { runId: joinRunId }),
-    name: options.name,
-    provider: options.provider,
-    cwd,
-    ...workerNegotiation(),
-  })
+  let result
+  try {
+    result = await api(baseUrl, options.start ? 'create_run' : 'join_run', {
+      ...(options.start
+        ? {
+            prompt: options.start,
+            playbookName: options.playbook,
+            args: playbookArgs,
+            maxAgents: options.maxAgents,
+            gateCommand: options.gateCommand,
+            requirePlanApproval: options.requirePlanApproval,
+          }
+        : { runId: joinRunId }),
+      name: options.name,
+      provider: options.provider,
+      cwd,
+      ...workerNegotiation(),
+    })
+  } catch (error) {
+    await rollbackIsolatedWorktree(baseCwd, isolatedCheckout)
+    throw error
+  }
   state = {
     ...result.participant,
     cwd,
@@ -591,6 +717,10 @@ if (options.identity && !options.start && !options.join) {
 }
 state.attach = baseUrl
 state.logFile ||= workerLogPath(state.identityFile)
+// Give process inspection a stable identity that survives wrappers, symlinks,
+// and packaged entrypoints. The state helper still checks launch time for
+// older workers that do not publish this marker.
+process.title = workerProcessMarker(state.identityFile)
 if (loadedIdentity) {
   const resumed = await api(baseUrl, 'resume', { ...state, ...workerNegotiation() })
   if (resumed?.participant) {
@@ -679,36 +809,52 @@ async function leaveRunBeforeExit(reason, status = 'stopped') {
   await workerLog(state, `${reason}; participant retired from the active roster`)
 }
 
-async function checkpointForSupervisorStop(detail) {
-  try {
-    const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 }, 10_000, true)
-    cursor = current.cursor
-    const ownedTask = current?.actionable?.myTask
-    if (isTerminal(current)) return
-    if (!ownedTask) {
-      await leaveRunBeforeExit(
-        `${state.provider} worker retired before supervisor shutdown: ${detail}`,
-      )
-      return
+async function checkpointBeforeExit(detail, unownedReason, allowDuringShutdown = false) {
+  let lastError = null
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 }, 10_000, allowDuringShutdown)
+      cursor = current.cursor
+      const ownedTask = current?.actionable?.myTask
+      if (isTerminal(current)) return true
+      if (!ownedTask) {
+        await leaveRunBeforeExit(unownedReason)
+        return true
+      }
+      const summary = `${state.provider} worker checkpointed ${ownedTask.id} before supervisor exit`
+      await api(baseUrl, 'handoff_task', {
+        ...state,
+        taskId: ownedTask.id,
+        summary,
+        detail,
+        failureClass: 'supervisor_stopped',
+        requestId: `worker-handoff-${ownedTask.id}-supervisor-stopped-${workerInstanceId}`,
+      }, 10_000, allowDuringShutdown)
+      finalStatus = 'handed_off'
+      await workerLog(state, `${summary}; task returned to board`)
+      return true
+    } catch (error) {
+      if (isTerminalCoordinatorError(error)) return true
+      lastError = error
+      await workerLog(state, `exit checkpoint failed attempt=${attempt}: ${error.message}`)
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)))
+      }
     }
-    const summary = `${state.provider} worker checkpointed ${ownedTask.id} before supervisor shutdown`
-    await api(baseUrl, 'handoff_task', {
-      ...state,
-      taskId: ownedTask.id,
-      summary,
-      detail,
-      failureClass: 'supervisor_stopped',
-      requestId: `worker-handoff-${ownedTask.id}-supervisor-stopped-${workerInstanceId}`,
-    }, 10_000, true)
-    finalStatus = 'handed_off'
-    await workerLog(state, `${summary}; task returned to board`)
-  } catch (error) {
-    if (isTerminalCoordinatorError(error)) return
-    state.lastFailureClass = 'transient_transport'
-    state.lastError = error.message
-    process.exitCode = 1
-    await workerLog(state, `supervisor shutdown could not verify or hand off owned work: ${error.message}`)
   }
+  state.lastFailureClass = 'transient_transport'
+  state.lastError = lastError?.message || 'Coordinator exit checkpoint failed'
+  process.exitCode = 1
+  await workerLog(state, `could not verify or hand off owned work before exit: ${state.lastError}`)
+  return false
+}
+
+async function checkpointForSupervisorStop(detail) {
+  await checkpointBeforeExit(
+    detail,
+    `${state.provider} worker retired before supervisor shutdown: ${detail}`,
+    true,
+  )
 }
 
 outer: for (;;) {
@@ -751,13 +897,52 @@ outer: for (;;) {
     // A broken provider CLI must not strand the supervisor forever after the
     // run was stopped or completed by another participant.
     let current
-    try {
-      current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
-      cursor = current.cursor
-      if (isTerminal(current)) break
-    } catch (waitError) {
-      if (isTerminalCoordinatorError(waitError)) break
-      // Retain the provider error and retry when the daemon is unavailable.
+    let ownershipReadFailures = 0
+    while (!current && !shutdownRequested) {
+      try {
+        current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
+        cursor = current.cursor
+        if (isTerminal(current)) break outer
+      } catch (waitError) {
+        if (isTerminalCoordinatorError(waitError)) break outer
+        ownershipReadFailures += 1
+        coordinatorFailures += 1
+        await workerLog(state, `ownership recheck failed attempt=${ownershipReadFailures}: ${waitError.message}`)
+        await writeWorkerRecord(state.identityFile, {
+          status: 'retrying',
+          failureClass: 'transient_transport',
+          failures: providerFailures + coordinatorFailures,
+          lastError: waitError.message,
+        })
+        // A bounded worker cannot wait forever for a missing daemon, but it
+        // also must not infer "no task" from an unavailable status read and
+        // retire while secretly owning work. Leave the participant intact for
+        // stale recovery/operator resume when the bounded recheck is exhausted.
+        if (options.once && ownershipReadFailures >= 3) break
+        const statusDelay = Math.min(30_000, 1_000 * 2 ** Math.min(ownershipReadFailures - 1, 5))
+        await retryDelay(statusDelay)
+      }
+    }
+    if (shutdownRequested) {
+      await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} while rechecking task ownership.`)
+      break
+    }
+    if (!current) {
+      finalStatus = 'failed'
+      state.lastFailureClass = 'transient_transport'
+      state.lastError = 'Coordinator unavailable while rechecking task ownership after provider failure'
+      process.exitCode = 1
+      console.error(state.lastError)
+      break
+    }
+    if (ownershipReadFailures > 0) {
+      await writeWorkerRecord(state.identityFile, {
+        status: 'retrying',
+        failureClass,
+        failures: providerFailures,
+        lastError: error.message,
+        recoveredAt: new Date().toISOString(),
+      })
     }
     // Transient transport failures deserve retries, but not an infinite lease
     // on owned work. After a bounded retry window, checkpoint exactly like a
@@ -814,32 +999,10 @@ outer: for (;;) {
     // A single model turn may claim work before returning. Exiting with that
     // lease still attached strands the task until stale recovery, so a bounded
     // worker must checkpoint it explicitly before it stops.
-    try {
-      const current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
-      cursor = current.cursor
-      const ownedTask = current?.actionable?.myTask
-      if (!isTerminal(current) && ownedTask) {
-        const summary = `${state.provider} worker checkpointed ${ownedTask.id} after its bounded --once turn`
-        await api(baseUrl, 'handoff_task', {
-          ...state,
-          taskId: ownedTask.id,
-          summary,
-          detail: 'The bounded supervisor completed its single provider turn while the task was still owned.',
-          failureClass: 'supervisor_stopped',
-          requestId: `worker-handoff-${ownedTask.id}-supervisor-stopped-${workerInstanceId}`,
-        })
-        finalStatus = 'handed_off'
-        await workerLog(state, `${summary}; task returned to board`)
-      } else if (!isTerminal(current)) {
-        await leaveRunBeforeExit(`${state.provider} worker completed its bounded --once turn without owned work`)
-      }
-    } catch (error) {
-      state.lastFailureClass = 'transient_transport'
-      state.lastError = error.message
-      await workerLog(state, `bounded worker could not verify or hand off owned work: ${error.message}`)
-      console.error(`Coordinator --once handoff check failed: ${error.message}`)
-      process.exitCode = 1
-    }
+    await checkpointBeforeExit(
+      'The bounded supervisor completed its single provider turn while the task was still owned.',
+      `${state.provider} worker completed its bounded --once turn without owned work`,
+    )
     break
   }
   try {

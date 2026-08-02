@@ -12,7 +12,7 @@ Communication is part of the work, not overhead. Every other participant runs in
 ## Enter the run
 
 1. For unattended work, prefer the bounded supervisor. It persists identity and provider sessions, heartbeats during turns, waits without token usage, and restarts failed ticks:
-   - Lead: `agent-viewer coord worker --start "<goal>" --name <name> --provider codex|claude|opencode|copilot|pi --attach <url>`
+   - Lead: `agent-viewer coord worker --start "<goal>" --playbook <name> --name <name> --provider codex|claude|opencode|copilot|pi --max-agents <n> --attach <url>`
    - Teammate: `agent-viewer coord worker --join <run-id> --name <name> --provider codex|claude|opencode|copilot|pi --attach <url>` (`--join latest` auto-discovers the newest joinable run)
    Mixing providers across teammates is encouraged — every worker speaks the same coord_* protocol, so a Claude lead can supervise Codex, OpenCode, Copilot, and Pi lanes (or any other combination) on one board.
    Joined teammates receive an isolated checkout by default; use `--shared` only when explicitly required.

@@ -119,7 +119,7 @@ Modes:
   web        Launch the Next.js web app
   mcp        Run the Claude/Codex stdio MCP bridge
   ahp        Run the AHP 0.7/0.6 JSON-RPC host over stdio, TCP, or WebSocket
-  coord worker  Run an autonomous bounded Codex/Claude Coordinator worker
+  coord worker  Run an autonomous bounded multi-provider Coordinator worker
   coord doctor  Diagnose daemon, CLI, identity, protocol, and worker health
   coord workers List persistent Coordinator worker registrations
   coord restart Restart a registered worker by name, id, or identity file
@@ -145,7 +145,7 @@ AHP host:
   agent-viewer ahp --ws 127.0.0.1:8765
 
 Autonomous Coordinator:
-  agent-viewer coord worker --start "goal" --name lead --provider codex --attach 3000
+  agent-viewer coord worker --start "goal" --playbook <name> --name lead --provider codex --max-agents 4 --attach 3000
   agent-viewer coord worker --join <run-id> --name claude-1 --provider claude --attach 3000
   agent-viewer coord doctor --json --attach 3000
   agent-viewer coord workers --json

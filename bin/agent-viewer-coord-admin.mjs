@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from 'node:child_process'
-import { open, readFile, stat } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { open, readFile, stat, watch } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -27,6 +27,46 @@ function option(name, fallback) {
   return inline ? inline.slice(name.length + 1) : fallback
 }
 
+const COMMAND_OPTIONS = {
+  doctor: { flags: new Set(['--json']), values: new Set(['--attach', '--identity', '--limit']), positionals: 0 },
+  workers: { flags: new Set(['--json']), values: new Set(['--run', '--status', '--limit']), positionals: 0 },
+  restart: { flags: new Set(), values: new Set(['--provider']), positionals: 1 },
+  logs: { flags: new Set(['-f', '--follow']), values: new Set(['-n']), positionals: 1 },
+}
+
+function validateCommandArgs() {
+  const spec = COMMAND_OPTIONS[command]
+  if (!spec) return
+  let positionals = 0
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index]
+    if (spec.flags.has(arg)) continue
+    const equals = arg.indexOf('=')
+    const optionName = equals > 0 ? arg.slice(0, equals) : arg
+    if (spec.values.has(optionName)) {
+      const value = equals > 0 ? arg.slice(equals + 1) : args[index + 1]
+      if (!value || (equals < 0 && value.startsWith('-'))) usage(`${optionName} requires a value`)
+      if (equals < 0) index += 1
+      continue
+    }
+    if (arg.startsWith('-')) usage(`Unknown ${command} option: ${arg}`)
+    positionals += 1
+    if (positionals > spec.positionals) usage(`Unexpected ${command} argument: ${arg}`)
+  }
+  if (positionals < spec.positionals) usage(`coord ${command} requires a worker selector`)
+}
+
+function boundedIntegerOption(name, fallback, minimum, maximum) {
+  const raw = option(name)
+  if (raw === undefined) return fallback
+  if (!/^\d+$/.test(raw)) usage(`${name} must be an integer from ${minimum} to ${maximum}`)
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    usage(`${name} must be an integer from ${minimum} to ${maximum}`)
+  }
+  return value
+}
+
 function normalizeUrl(value) {
   const input = String(value || 'http://127.0.0.1:3000').replace(/\/+$/, '')
   if (/^\d+$/.test(input)) return `http://127.0.0.1:${input}`
@@ -36,7 +76,7 @@ function normalizeUrl(value) {
 function usage(message) {
   if (message) console.error(message)
   console.log(`Usage:
-  agent-viewer coord doctor [--json] [--attach <url>] [--identity <file>]
+  agent-viewer coord doctor [--json] [--attach <url>] [--identity <file>] [--limit <n>]
   agent-viewer coord workers [--json] [--run <run-id>] [--status <status>] [--limit <n>]
   agent-viewer coord restart <agent-id|name|identity-file> [--provider codex|claude|opencode|copilot|pi]
   agent-viewer coord logs <agent-id|name|identity-file> [-n <lines>] [-f]
@@ -46,15 +86,38 @@ function usage(message) {
 
 function executableCheck(name, ...envNames) {
   const executable = envNames.map((envName) => process.env[envName]).find(Boolean) || name
-  const result = spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: PROVIDER_CHECK_TIMEOUT_MS })
-  const ok = !result.error && result.status === 0
-  return {
-    name,
-    executable,
-    ok,
-    version: ok ? String(result.stdout || result.stderr).trim().split('\n')[0] : undefined,
-    error: result.error?.message || (!ok ? String(result.stderr || '').trim() || `exit ${result.status}` : undefined),
-  }
+  return new Promise((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    let timedOut = false
+    let timer
+    const child = spawn(executable, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const finish = (status, error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      const ok = !error && !timedOut && status === 0
+      resolve({
+        name,
+        executable,
+        ok,
+        version: ok ? String(stdout || stderr).trim().split('\n')[0] : undefined,
+        error: timedOut
+          ? `ETIMEDOUT after ${PROVIDER_CHECK_TIMEOUT_MS}ms`
+          : error?.message || (!ok ? stderr.trim() || `exit ${status}` : undefined),
+      })
+    }
+    child.stdout?.on('data', (chunk) => { stdout = `${stdout}${chunk}`.slice(-16_000) })
+    child.stderr?.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-16_000) })
+    child.on('error', (error) => finish(null, error))
+    child.on('exit', (status) => finish(status))
+    timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGKILL')
+    }, PROVIDER_CHECK_TIMEOUT_MS)
+    timer.unref?.()
+  })
 }
 
 async function daemonCheck(baseUrl) {
@@ -97,25 +160,33 @@ async function protocolCheck(baseUrl, identityFile) {
 async function doctor() {
   const json = args.includes('--json')
   const identityFile = option('--identity', process.env.AGENT_VIEWER_COORD_IDENTITY_FILE)
+  const limit = boundedIntegerOption('--limit', 20, 1, 1_000)
   const records = await listWorkerRecords()
   const identity = identityFile ? await inspectIdentity(path.resolve(identityFile)) : null
   const scopedRecords = identity?.runId
     ? records.filter((record) => record.runId === identity.runId)
     : records
   const baseUrl = normalizeUrl(option('--attach', process.env.AGENT_VIEWER_ATTACH || identity?.attach))
-  const providerClis = [
+  const providerClis = await Promise.all([
     executableCheck('codex', 'CODEX_PATH'),
     executableCheck('claude', 'CLAUDE_PATH'),
     executableCheck('opencode', 'OPENCODE_PATH'),
     executableCheck('copilot', 'COPILOT_CLI_PATH', 'COPILOT_PATH'),
     executableCheck('pi', 'PI_PATH'),
-  ]
+  ])
+  const workerSummary = {
+    total: scopedRecords.length,
+    alive: scopedRecords.filter((record) => record.alive).length,
+    stale: scopedRecords.filter((record) => record.stale).length,
+    shown: Math.min(scopedRecords.length, limit),
+  }
   const checks = {
     daemon: await daemonCheck(baseUrl),
     protocol: await protocolCheck(baseUrl, identityFile ? path.resolve(identityFile) : null),
     providerClis,
     identity: identityFile ? { file: path.resolve(identityFile), ...identity, secureMode: identity?.mode === 0o600 } : null,
-    workers: scopedRecords.map(({ token: _token, ...record }) => record),
+    workerSummary,
+    workers: scopedRecords.slice(0, limit).map(({ token: _token, ...record }) => record),
   }
   const failures = [
     !checks.daemon.ok && 'daemon',
@@ -138,7 +209,7 @@ async function doctor() {
     console.log(`Daemon: ${checks.daemon.ok ? 'reachable' : `unreachable (${checks.daemon.error})`}`)
     for (const cli of checks.providerClis) console.log(`${cli.name}: ${cli.ok ? cli.version : `unavailable (${cli.error})`}`)
     if (checks.identity) console.log(`Identity: ${checks.identity.ok && checks.identity.secureMode ? 'valid 0600' : 'invalid or insecure'}`)
-    console.log(`Workers: ${scopedRecords.length} registered, ${scopedRecords.filter((record) => record.alive).length} alive, ${scopedRecords.filter((record) => record.stale).length} stale`)
+    console.log(`Workers: ${workerSummary.total} registered, ${workerSummary.alive} alive, ${workerSummary.stale} stale${workerSummary.shown < workerSummary.total ? ` (${workerSummary.shown} shown; use --limit)` : ''}`)
   }
   if (!report.ok) process.exitCode = 1
 }
@@ -146,11 +217,17 @@ async function doctor() {
 async function workers() {
   const runId = option('--run')
   const status = option('--status')
-  const requestedLimit = Number(option('--limit', '100'))
-  const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(Math.trunc(requestedLimit), 1_000)) : 100
+  const validStatuses = new Set(['running', 'starting', 'retrying', 'stopped', 'handed_off', 'failed', 'corrupt', 'stale'])
+  if (status && !validStatuses.has(status)) usage(`--status must be one of: ${[...validStatuses].join(', ')}`)
+  const limit = boundedIntegerOption('--limit', 100, 1, 1_000)
   const records = (await listWorkerRecords())
     .filter((record) => !runId || record.runId === runId)
-    .filter((record) => !status || record.status === status)
+    .filter((record) => {
+      if (!status) return true
+      if (status === 'stale') return record.stale
+      if (['running', 'starting', 'retrying'].includes(status)) return !record.stale && record.status === status
+      return record.status === status
+    })
     .slice(0, limit)
   if (args.includes('--json')) {
     console.log(JSON.stringify(records.map(({ token: _token, ...record }) => record), null, 2))
@@ -224,7 +301,7 @@ async function logs() {
   const record = await resolveWorkerRecord(selector)
   const file = record.logFile || workerLogPath(record.identityFile)
   const rotatedFile = `${file}.1`
-  const count = Math.max(1, Math.min(10_000, Number(option('-n', 100)) || 100))
+  const count = boundedIntegerOption('-n', 100, 1, 10_000)
   let offset = 0
   let activeIdentity = null
   async function printTail(initial) {
@@ -258,10 +335,27 @@ async function logs() {
   if (!args.includes('-f') && !args.includes('--follow')) return
   const handle = await open(file, 'r')
   await handle.close()
-  setInterval(() => { void printTail(false) }, 500)
+  const controller = new AbortController()
+  const stopFollowing = () => controller.abort()
+  process.once('SIGINT', stopFollowing)
+  process.once('SIGTERM', stopFollowing)
+  try {
+    const directory = path.dirname(file)
+    const activeName = path.basename(file)
+    const rotatedName = path.basename(rotatedFile)
+    for await (const event of watch(directory, { signal: controller.signal })) {
+      if (event.filename === activeName || event.filename === rotatedName) await printTail(false)
+    }
+  } catch (error) {
+    if (error?.name !== 'AbortError') throw error
+  } finally {
+    process.removeListener('SIGINT', stopFollowing)
+    process.removeListener('SIGTERM', stopFollowing)
+  }
 }
 
 try {
+  validateCommandArgs()
   if (command === 'doctor') await doctor()
   else if (command === 'workers') await workers()
   else if (command === 'restart') await restart()

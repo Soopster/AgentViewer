@@ -4,25 +4,45 @@ import { chmod, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/p
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn as nodeSpawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { writeWorkerRecord } from '../bin/agent-viewer-coord-state.mjs'
 
 process.env.AGENT_VIEWER_COORD_TRANSPORT = 'http'
 
 const testDir = await mkdtemp(path.join(tmpdir(), 'agent-viewer-coord-worker-'))
+const spawnedChildren = new Set()
+function spawn(...args) {
+  const child = nodeSpawn(...args)
+  spawnedChildren.add(child)
+  child.once('exit', () => spawnedChildren.delete(child))
+  return child
+}
+const smokeDeadline = setTimeout(() => {
+  for (const child of spawnedChildren) {
+    try { child.kill('SIGKILL') } catch {}
+  }
+  console.error('Coordinator worker smoke exceeded its 90s global deadline')
+  process.exit(1)
+}, 90_000)
 const fakeCodex = path.join(testDir, 'fake-codex.mjs')
 const failingCodex = path.join(testDir, 'failing-codex.mjs')
 const rateLimitedCodex = path.join(testDir, 'rate-limited-codex.mjs')
+const zeroExitErrorPi = path.join(testDir, 'zero-exit-error-pi.mjs')
 const continuationCodex = path.join(testDir, 'continuation-codex.mjs')
 const shutdownCodex = path.join(testDir, 'shutdown-codex.mjs')
 const oversizedCodex = path.join(testDir, 'oversized-codex.mjs')
 const slowVersionCli = path.join(testDir, 'slow-version-cli.mjs')
 const identityFile = path.join(testDir, 'identity.json')
+const startIdentityFile = path.join(testDir, 'start-identity.json')
 const terminalIdentityFile = path.join(testDir, 'terminal-identity.json')
 const onceFailureIdentityFile = path.join(testDir, 'once-failure-identity.json')
+const ownershipRecoveryIdentityFile = path.join(testDir, 'ownership-recovery-identity.json')
 const preclaimFailureIdentityFile = path.join(testDir, 'preclaim-failure-identity.json')
+const zeroExitErrorIdentityFile = path.join(testDir, 'zero-exit-error-identity.json')
 const onceFailedOwnedIdentityFile = path.join(testDir, 'once-failed-owned-identity.json')
 const onceOwnedIdentityFile = path.join(testDir, 'once-owned-identity.json')
+const onceCheckpointRecoveryIdentityFile = path.join(testDir, 'once-checkpoint-recovery-identity.json')
 const handoffIdentityFile = path.join(testDir, 'handoff-identity.json')
 const continuationIdentityFile = path.join(testDir, 'continuation-identity.json')
 const shutdownIdentityFile = path.join(testDir, 'shutdown-identity.json')
@@ -60,6 +80,14 @@ console.error('429 rate limit exceeded; quota window exhausted')
 process.exit(1)
 `)
 await chmod(rateLimitedCodex, 0o700)
+await writeFile(zeroExitErrorPi, `#!/usr/bin/env node
+console.log(JSON.stringify({
+  type: 'turn_end',
+  message: { stopReason: 'error', errorMessage: 'Your credit balance is too low to access the API.' },
+}))
+process.exit(0)
+`)
+await chmod(zeroExitErrorPi, 0o700)
 await writeFile(continuationCodex, `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs'
 let count = 0
@@ -105,6 +133,9 @@ let handoffMode = false
 let continuationMode = false
 let onceOwnedMode = false
 let onceFailedOwnedMode = false
+let ownershipRecoveryMode = false
+let ownershipWaitFailuresRemaining = 0
+let onceCheckpointRecoveryWaits = 0
 let shutdownMode = false
 let timeoutMode = false
 let inactivityMode = false
@@ -136,10 +167,20 @@ function runNode(args, env) {
     const child = spawn(process.execPath, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL')
+      reject(new Error(`command timed out: ${args.join(' ')}`))
+    }, 15_000)
     child.stdout.on('data', (chunk) => { stdout += chunk })
     child.stderr.on('data', (chunk) => { stderr += chunk })
-    child.on('error', reject)
-    child.on('exit', (code) => code === 0 ? resolve(stdout) : reject(new Error(`command exited ${code}: ${stderr || stdout}`)))
+    child.on('error', (error) => {
+      clearTimeout(timeout)
+      reject(error)
+    })
+    child.on('exit', (code) => {
+      clearTimeout(timeout)
+      code === 0 ? resolve(stdout) : reject(new Error(`command exited ${code}: ${stderr || stdout}`))
+    })
   })
 }
 const snapshot = {
@@ -154,6 +195,11 @@ const daemon = createServer(async (request, response) => {
   response.setHeader('Content-Type', 'application/json')
   response.setHeader('X-Agent-Viewer-Coord-Protocol', '2')
   if (body.action === 'join_run') {
+    if (body.name === 'rejected-worker') {
+      response.statusCode = 409
+      response.end(JSON.stringify({ error: 'run is full' }))
+      return
+    }
     response.end(JSON.stringify({
       participant: {
         runId: 'run-worker', agentId: 'lead-worker', token: 'worker-secret', name: body.name,
@@ -163,7 +209,31 @@ const daemon = createServer(async (request, response) => {
     }))
     return
   }
+  if (body.action === 'create_run') {
+    response.end(JSON.stringify({
+      participant: {
+        runId: 'run-worker', agentId: 'lead-worker', token: 'worker-secret', name: body.name,
+        role: 'lead', provider: body.provider, cwd: body.cwd,
+      },
+      snapshot,
+    }))
+    return
+  }
   if (body.action === 'wait') {
+    if (body.name === 'once-checkpoint-recovery-worker') {
+      onceCheckpointRecoveryWaits += 1
+      if (onceCheckpointRecoveryWaits === 1 || onceCheckpointRecoveryWaits === 2) {
+        response.statusCode = 503
+        response.end(JSON.stringify({ error: 'temporary checkpoint outage' }))
+        return
+      }
+    }
+    if (ownershipRecoveryMode && ownershipWaitFailuresRemaining > 0) {
+      ownershipWaitFailuresRemaining -= 1
+      response.statusCode = 503
+      response.end(JSON.stringify({ error: 'temporary Coordinator outage' }))
+      return
+    }
     if (deletedMode) {
       response.statusCode = 404
       response.end(JSON.stringify({ error: 'Coordinator run not found' }))
@@ -195,6 +265,8 @@ const daemon = createServer(async (request, response) => {
           ? { id: 'task-once-owned', status: 'in_progress', planState: 'approved' }
           : onceFailedOwnedMode
           ? { id: 'task-once-failed-owned', status: 'in_progress', planState: 'approved' }
+          : ownershipRecoveryMode
+          ? { id: 'task-ownership-recovery', status: 'in_progress', planState: 'approved' }
           : timeoutMode
           ? { id: 'task-timeout', status: 'in_progress', planState: 'approved' }
           : inactivityMode
@@ -228,6 +300,66 @@ if (!address || typeof address === 'string') throw new Error('worker smoke daemo
 
 const worker = fileURLToPath(new URL('../bin/agent-viewer-coord-worker.mjs', import.meta.url))
 const admin = fileURLToPath(new URL('../bin/agent-viewer-coord-admin.mjs', import.meta.url))
+
+let invalidOptionRejected = false
+try {
+  await runNode([worker, '--join', 'run-worker', '--name', 'typo-worker', '--provder', 'codex'], process.env)
+} catch (error) {
+  invalidOptionRejected = String(error).includes('Unknown argument: --provder')
+}
+if (!invalidOptionRejected) throw new Error('worker silently accepted an unknown option')
+
+let ignoredModeOptionRejected = false
+try {
+  await runNode([worker, '--start', 'smoke', '--name', 'lead', '--shared'], process.env)
+} catch (error) {
+  ignoredModeOptionRejected = String(error).includes('--shared requires --join')
+}
+if (!ignoredModeOptionRejected) throw new Error('worker silently accepted a mode option that has no effect')
+
+// Isolated joins create local git state before registration so the submitted
+// cwd is accurate. A rejected join must roll that state back completely.
+let rejectedJoinFailed = false
+try {
+  await runNode([
+    worker, '--join', 'run-worker', '--name', 'rejected-worker', '--provider', 'codex',
+    '--attach', String(address.port), '--cwd', testDir, '--once',
+  ], { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, CODEX_PATH: fakeCodex })
+} catch (error) {
+  rejectedJoinFailed = String(error).includes('run is full')
+}
+if (!rejectedJoinFailed) throw new Error('rejected isolated join did not surface the Coordinator error')
+const rejectedWorktree = path.join(testDir, '.agent-viewer-data', 'coord-worktrees', 'run-worker', 'rejected-worker')
+if (await stat(rejectedWorktree).then(() => true).catch(() => false)) {
+  throw new Error('rejected isolated join leaked its worktree')
+}
+const rejectedBranch = execFileSync('git', ['branch', '--list', 'agent-viewer/coord/run-work/rejected-worker'], { cwd: testDir, encoding: 'utf8' })
+if (rejectedBranch.trim()) throw new Error('rejected isolated join leaked its branch')
+
+await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [
+    worker, '--start', 'seeded smoke', '--name', 'start-worker', '--provider=codex',
+    '--attach', String(address.port), '--cwd', testDir, '--once', '--identity', startIdentityFile,
+    '--playbook', 'release-smoke', '--args', '{"release":"next"}', '--max-agents', '8',
+    '--gate-command', 'npm run verify', '--require-plan-approval',
+  ], {
+    env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, CODEX_PATH: fakeCodex, CODEX_ARGS_FILE: codexArgsFile },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stderr = ''
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  child.on('error', reject)
+  child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`start worker exited ${code}: ${stderr}`)))
+})
+const createRequest = requests.find((request) => request.action === 'create_run')
+if (createRequest?.maxAgents !== 8
+  || createRequest?.gateCommand !== 'npm run verify'
+  || createRequest?.requirePlanApproval !== true
+  || createRequest?.playbookName !== 'release-smoke'
+  || createRequest?.args?.release !== 'next') {
+  throw new Error('worker start controls were not forwarded to Coordinator run creation')
+}
+
 await new Promise((resolve, reject) => {
   const child = spawn(process.execPath, [
     worker, '--join', 'run-worker', '--name', 'worker-smoke', '--provider', 'codex',
@@ -246,8 +378,9 @@ const state = JSON.parse(await readFile(identityFile, 'utf8'))
 if (state.token !== 'worker-secret') throw new Error('worker did not persist its capability')
 if (state.providerSessionId !== '019-worker-smoke') throw new Error('worker did not persist the Codex session id')
 if ((await stat(identityFile)).mode & 0o077) throw new Error('worker identity is not mode 0600')
-if (requests[0]?.action !== 'join_run') throw new Error('worker did not join the Coordinator run')
-if (requests[0]?.client?.protocolVersion !== 2 || requests[0]?.capabilities?.unattended !== true) {
+const joinRequest = requests.find((request) => request.action === 'join_run' && request.name === 'worker-smoke')
+if (!joinRequest) throw new Error('worker did not join the Coordinator run')
+if (joinRequest.client?.protocolVersion !== 2 || joinRequest.capabilities?.unattended !== true) {
   throw new Error('worker did not negotiate protocol v2 with unattended capabilities')
 }
 if (!state.cwd.includes(`${path.sep}coord-worktrees${path.sep}`)) throw new Error('joined worker did not use an isolated worktree')
@@ -381,6 +514,33 @@ onceOwnedMode = false
 const onceOwnedHandoff = requests.find((request) => request.action === 'handoff_task' && request.taskId === 'task-once-owned')
 if (onceOwnedHandoff?.failureClass !== 'supervisor_stopped') {
   throw new Error('successful --once worker did not checkpoint newly owned work before exiting')
+}
+
+// The bounded exit checkpoint must survive a brief daemon outage instead of
+// leaving its task leased until stale recovery.
+onceOwnedMode = true
+await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [
+    worker, '--join', 'run-worker', '--name', 'once-checkpoint-recovery-worker', '--provider', 'codex',
+    '--attach', String(address.port), '--cwd', testDir, '--shared', '--once', '--identity', onceCheckpointRecoveryIdentityFile,
+  ], {
+    env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, CODEX_PATH: fakeCodex, CODEX_ARGS_FILE: codexArgsFile },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stderr = ''
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  child.on('error', reject)
+  child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`once checkpoint recovery worker exited ${code}: ${stderr}`)))
+})
+onceOwnedMode = false
+if (onceCheckpointRecoveryWaits < 3) {
+  throw new Error('bounded exit checkpoint did not retry transient Coordinator failures')
+}
+const recoveredOnceHandoff = requests.filter((request) => (
+  request.action === 'handoff_task' && request.taskId === 'task-once-owned'
+)).at(-1)
+if (recoveredOnceHandoff?.failureClass !== 'supervisor_stopped') {
+  throw new Error('bounded exit checkpoint did not hand off after Coordinator recovery')
 }
 
 // A long-lived supervisor must stop its active provider child and atomically
@@ -617,6 +777,35 @@ if (onceFailedOwnedHandoff?.failureClass !== 'provider_failure') {
   throw new Error('failed --once worker did not return newly owned work on its first provider failure')
 }
 
+// If the ownership read itself is temporarily unavailable after a provider
+// failure, never infer that the worker is unowned. Recover the authoritative
+// task state first, then checkpoint the task instead of retiring the agent.
+ownershipRecoveryMode = true
+ownershipWaitFailuresRemaining = 2
+await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [
+    worker, '--join', 'run-worker', '--name', 'ownership-recovery-worker', '--provider', 'codex',
+    '--attach', String(address.port), '--cwd', testDir, '--shared', '--once', '--identity', ownershipRecoveryIdentityFile,
+  ], {
+    env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, CODEX_PATH: failingCodex },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stderr = ''
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  child.on('error', reject)
+  child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`ownership recovery worker exited ${code}: ${stderr}`)))
+})
+ownershipRecoveryMode = false
+const ownershipRecoveryHandoff = requests.find((request) => (
+  request.action === 'handoff_task' && request.taskId === 'task-ownership-recovery'
+))
+if (ownershipRecoveryHandoff?.failureClass !== 'provider_failure') {
+  throw new Error('worker did not preserve and hand off ownership after transient status-read failures')
+}
+if (requests.some((request) => request.action === 'leave_run' && request.name === 'ownership-recovery-worker')) {
+  throw new Error('worker retired after transient status-read failures despite owning a task')
+}
+
 // --once is a bounded automation primitive: an unowned provider failure must
 // return control immediately instead of entering the supervisor retry loop.
 await new Promise((resolve, reject) => {
@@ -638,6 +827,31 @@ await new Promise((resolve, reject) => {
 })
 if (!requests.some((request) => request.action === 'leave_run' && request.name === 'once-failure-worker')) {
   throw new Error('failed unowned --once worker left a live roster participant behind')
+}
+
+// Some provider CLIs (notably Pi) report a terminal API error in JSON but exit
+// with status 0. The supervisor must treat the structured turn as failed or it
+// will immediately spend another provider turn forever on unchanged work.
+await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [
+    worker, '--join', 'run-worker', '--name', 'zero-exit-error-worker', '--provider', 'pi',
+    '--attach', String(address.port), '--cwd', testDir, '--shared', '--once', '--identity', zeroExitErrorIdentityFile,
+  ], {
+    env: { ...process.env, AGENT_VIEWER_COORD_HOME: coordHome, PI_PATH: zeroExitErrorPi },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stderr = ''
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  child.on('error', reject)
+  child.on('exit', (code) => {
+    if (code !== 1) reject(new Error(`zero-exit provider error worker exited ${code}: ${stderr}`))
+    else if (!stderr.includes('worker retired after rate_limited')) {
+      reject(new Error(`zero-exit provider error was not classified: ${stderr}`))
+    } else resolve()
+  })
+})
+if (!requests.some((request) => request.action === 'leave_run' && request.name === 'zero-exit-error-worker')) {
+  throw new Error('zero-exit provider error left a misleading live participant behind')
 }
 
 // A durable startup/provider failure before claim must retire the participant
@@ -695,7 +909,7 @@ const adminEnv = {
   ...process.env,
   AGENT_VIEWER_COORD_HOME: coordHome,
   CODEX_PATH: fakeCodex,
-  CLAUDE_PATH: fakeCodex,
+  CLAUDE_PATH: slowVersionCli,
   OPENCODE_PATH: fakeCodex,
   COPILOT_PATH: fakeCodex,
   COPILOT_CLI_PATH: fakeCodex,
@@ -703,12 +917,49 @@ const adminEnv = {
   AGENT_VIEWER_COORD_CLI_TIMEOUT_MS: '1000',
   CODEX_ARGS_FILE: codexArgsFile,
 }
+async function expectAdminFailure(commandArgs, marker) {
+  try {
+    await runNode([launcher, 'coord', ...commandArgs], adminEnv)
+  } catch (error) {
+    if (String(error).includes(marker)) return
+    throw error
+  }
+  throw new Error(`coord ${commandArgs[0]} unexpectedly accepted invalid arguments`)
+}
+await expectAdminFailure(['workers', '--limt', '3'], 'Unknown workers option: --limt')
+await expectAdminFailure(['doctor', '--limit', 'many'], '--limit must be an integer from 1 to 1000')
+await expectAdminFailure(['workers', '--status', 'strale'], '--status must be one of:')
+process.env.AGENT_VIEWER_COORD_HOME = coordHome
+await writeWorkerRecord(path.join(testDir, 'stale-worker.json'), {
+  runId: 'stale-run',
+  agentId: 'stale-worker',
+  name: 'stale-worker',
+  provider: 'codex',
+  cwd: testDir,
+  pid: 999_999,
+  status: 'running',
+  heartbeatAt: new Date(0).toISOString(),
+})
 const workerList = JSON.parse(execFileSync(process.execPath, [launcher, 'coord', 'workers', '--json'], {
   env: adminEnv,
   encoding: 'utf8',
 }))
 if (!workerList.some((record) => record.identityFile === identityFile && record.logFile)) {
   throw new Error('coord workers omitted the persistent worker registration')
+}
+const staleWorkers = JSON.parse(execFileSync(process.execPath, [launcher, 'coord', 'workers', '--json', '--status', 'stale'], {
+  env: adminEnv,
+  encoding: 'utf8',
+}))
+if (staleWorkers.length !== 1 || staleWorkers[0]?.name !== 'stale-worker') {
+  throw new Error('coord workers --status stale did not use computed worker liveness')
+}
+const runningWorkers = JSON.parse(execFileSync(process.execPath, [launcher, 'coord', 'workers', '--json', '--status', 'running'], {
+  env: adminEnv,
+  encoding: 'utf8',
+}))
+if (runningWorkers.some((record) => record.name === 'stale-worker')) {
+  throw new Error('coord workers --status running included a dead stale registration')
 }
 const logOutput = execFileSync(process.execPath, [launcher, 'coord', 'logs', identityFile, '-n', '20'], {
   env: adminEnv,
@@ -724,17 +975,30 @@ const rotatedLogOutput = execFileSync(process.execPath, [launcher, 'coord', 'log
 if (!rotatedLogOutput.includes('rotation-gap-marker') || !rotatedLogOutput.includes('new-active-marker')) {
   throw new Error('coord logs did not combine the retained rotated and active worker logs')
 }
+const doctorStartedAt = Date.now()
 const doctor = JSON.parse(await runNode([
-  launcher, 'coord', 'doctor', '--json', '--attach', String(address.port), '--identity', identityFile,
+  launcher, 'coord', 'doctor', '--json', '--attach', String(address.port), '--identity', identityFile, '--limit', '1',
 ], adminEnv))
+if (Date.now() - doctorStartedAt > 1_800) {
+  throw new Error('coord doctor checked unavailable provider CLIs sequentially')
+}
 if (!doctor.ok || doctor.checks?.protocol?.serverExpected !== 2) {
   throw new Error('coord doctor did not report a healthy negotiated setup')
+}
+if (doctor.checks?.workers?.length !== 1 || doctor.checks?.workerSummary?.total <= doctor.checks.workers.length) {
+  throw new Error('coord doctor did not bound worker detail while preserving the full summary')
 }
 const piDoctor = doctor.checks?.providerClis?.find((entry) => entry.name === 'pi')
 if (piDoctor?.ok !== false || !String(piDoctor?.error ?? '').includes('ETIMEDOUT')) {
   throw new Error('coord doctor reported a timed-out provider CLI as healthy')
 }
 snapshot.run.status = 'completed'
+const preFailoverIdentity = JSON.parse(await readFile(identityFile, 'utf8'))
+await writeFile(identityFile, `${JSON.stringify({
+  ...preFailoverIdentity,
+  lastFailureClass: 'rate_limited',
+  lastError: 'previous provider exhausted its quota',
+}, null, 2)}\n`, { mode: 0o600 })
 const restartOutput = execFileSync(process.execPath, [
   launcher, 'coord', 'restart', identityFile, '--provider', 'copilot',
 ], {
@@ -743,10 +1007,15 @@ const restartOutput = execFileSync(process.execPath, [
 })
 if (!restartOutput.includes('Restarted')) throw new Error('coord restart did not relaunch the selected worker')
 await new Promise((resolve) => setTimeout(resolve, 750))
-if (JSON.parse(await readFile(identityFile, 'utf8')).provider !== 'copilot') {
+const failedOverIdentity = JSON.parse(await readFile(identityFile, 'utf8'))
+if (failedOverIdentity.provider !== 'copilot') {
   throw new Error('coord restart did not persist the requested provider failover')
+}
+if (failedOverIdentity.lastFailureClass || failedOverIdentity.lastError) {
+  throw new Error('coord restart retained stale failure metadata from the previous provider')
 }
 
 daemon.close()
+clearTimeout(smokeDeadline)
 
 console.log('Coordinator worker smoke passed')
