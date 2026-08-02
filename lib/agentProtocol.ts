@@ -388,11 +388,15 @@ export type ProtocolRunSnapshot = {
 export type StartProtocolRunParams = {
   prompt: string
   baseCwd: string
+  /** Saved playbook to seed before teammate sessions start. */
+  playbookName?: string
+  /** Value interpolated into {{args}} / {{args.key}} placeholders. */
+  playbookArgs?: unknown
   /** Provider used by the lead that plans, coordinates, and synthesizes. */
   provider: AgentProvider
   /** Provider pool assigned round-robin to teammates. Defaults to the lead provider. */
   teammateProviders?: AgentProvider[]
-  maxAgents: number
+  maxAgents?: number
   title?: string
   model?: string
   effort?: string
@@ -622,6 +626,10 @@ export type PlaybookSummary = {
   path: string
   phaseCount: number
   taskCount: number
+  expectsArgs: boolean
+  maxAgents?: number
+  gateCommand?: string
+  requirePlanApproval?: boolean
 }
 
 export type ProtocolPhaseRollup = {
@@ -1251,7 +1259,7 @@ export function buildTeammatePlanPreamble(params: {
 /** A teammate turn: first assignment or a follow-up dispatch in the work loop. */
 export function buildTeammateTurnPreamble(params: {
   runId: string
-  agent: Pick<ProtocolAgent, 'id' | 'name'>
+  agent: Pick<ProtocolAgent, 'id' | 'name' | 'role'>
   roster: ProtocolAgent[]
   task: ProtocolTask | null
   allTasks: ProtocolTask[]
@@ -1266,7 +1274,9 @@ export function buildTeammateTurnPreamble(params: {
     ? params.task.paths.map((path) => `- ${path}`).join('\n')
     : '- (none granted yet — request with `lock.requested` before writing)'
   return [
-    `You are teammate "${params.agent.name}" in a coordinated multi-agent run (protocol ${AGENT_PROTOCOL_VERSION}).`,
+    params.agent.role === 'lead'
+      ? `You are the TEAM LEAD in a coordinated multi-agent run (protocol ${AGENT_PROTOCOL_VERSION}), now executing an explicit lead-owned integration task.`
+      : `You are teammate "${params.agent.name}" in a coordinated multi-agent run (protocol ${AGENT_PROTOCOL_VERSION}).`,
     `Run ID: ${params.runId} · Your agent ID: ${params.agent.id}`,
     params.useWorktrees
       ? 'You work in an isolated git worktree; your changes merge back later. Never edit files outside your granted paths.'
@@ -1304,7 +1314,9 @@ export function buildTeammateTurnPreamble(params: {
     '- Inbox items tagged `[reply-required]` above need a `message` reply this turn, before other work — that reply is the sender\'s only signal their request landed. Silence reads as dropped, not busy.',
     '- Share what you find: `finding` for facts others need, `learning` for reusable context — teammates and the lead see them.',
     '- If blocked, emit `agent.blocked` with the exact blocker; this automatically alerts the lead. Also `message` the specific teammate best placed to unblock you, then read your inbox and resume with `agent.unblocked` when guidance clears it. Do not silently stop.',
-    '- After completing, you may immediately `task.claim` the next pending unblocked task in this same turn, or end the turn — the coordinator will re-dispatch you.',
+    params.agent.role === 'lead'
+      ? '- After completing, claim only another explicit lead-owned task. Do not absorb teammate lanes while live teammates are available.'
+      : '- After completing, you may immediately `task.claim` the next pending unblocked task in this same turn, or end the turn — the coordinator will re-dispatch you.',
     '- Do not repeat work another agent owns; the board and locks are authoritative.',
     '',
     protocolGrammar(params.runId, params.agent.id),

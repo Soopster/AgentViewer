@@ -110,6 +110,7 @@ import {
   readTuiSlashCommands,
   readTuiComposerOptions,
   listTuiProtocolRuns,
+  listTuiRunPlaybooks,
   readTuiProtocolRun,
   startTuiProtocolRun,
   stopTuiProtocolRun,
@@ -142,7 +143,7 @@ import {
   type TuiTranscriptWidth,
 } from '../../lib/tui/service'
 import type { MessageBookmark } from '../../lib/messageBookmarks'
-import type { ProtocolAgent, ProtocolRun, ProtocolRunSnapshot } from '../../lib/agentProtocol'
+import type { PlaybookSummary, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot } from '../../lib/agentProtocol'
 import {
   extractClaudeStreamToolInputDelta,
   extractClaudeStreamToolResults,
@@ -163,6 +164,7 @@ import type { AgentProvider, ContextUsage, ProviderSelection, ReasoningEffortLev
 import { AttentionInboxPopover, attentionItemNeedsInput, type AttentionItem } from './AttentionInboxPopover'
 import { CheckpointPopover } from './CheckpointPopover'
 import { CoordinationPopover } from './CoordinationPopover'
+import { PlaybookManagerPopover } from './PlaybookManagerPopover'
 import { getContinueInCliCommand } from '../../lib/cliContinue'
 import { commandResultExpectsTranscript, isNativeComposerCommandText } from '../../lib/composerCommands'
 import { deliverComposerSteer } from '../../lib/composerSteering'
@@ -4344,7 +4346,7 @@ const PROVIDER_SELECT_OPTIONS: SelectOption[] = PROVIDERS.map((provider) => ({
 }))
 
 const COORD_RUN_PROVIDERS: AgentProvider[] = ['claude', 'codex', 'opencode', 'copilot', 'pi']
-const COORD_MODAL_FOCUS_ORDER = ['prompt', 'provider', 'pool', 'agents', 'worktrees', 'gate', 'plans', 'launch'] as const
+const COORD_MODAL_FOCUS_ORDER = ['prompt', 'playbook', 'playbookArgs', 'provider', 'pool', 'agents', 'worktrees', 'gate', 'plans', 'launch'] as const
 type CoordModalFocus = (typeof COORD_MODAL_FOCUS_ORDER)[number]
 
 function moveCoordModalFocus(current: CoordModalFocus, direction: 1 | -1): CoordModalFocus {
@@ -6963,6 +6965,11 @@ export default function OpenTuiApp() {
   const [coordModalOpen, setCoordModalOpen] = useState(false)
   const [coordBoardOpen, setCoordBoardOpen] = useState(false)
   const [coordDraft, setCoordDraft] = useState('')
+  const [coordPlaybooks, setCoordPlaybooks] = useState<PlaybookSummary[]>([])
+  const [coordPlaybookName, setCoordPlaybookName] = useState<string | null>(null)
+  const [coordPlaybookArgsDraft, setCoordPlaybookArgsDraft] = useState('')
+  const [playbookManagerOpen, setPlaybookManagerOpen] = useState(false)
+  const playbookManagerKeyHandlerRef = useRef<((key: { name: string; ctrl: boolean; shift: boolean; sequence: string }) => boolean) | null>(null)
   // Total agent budget for the next run, including the lead.
   const [coordMaxAgents, setCoordMaxAgents] = useState(3)
   // Quality gate command (TaskCompleted-hook equivalent) for the next run.
@@ -11448,14 +11455,54 @@ export default function OpenTuiApp() {
     setCoordBoardOpen(true)
   })
 
+  const selectCoordPlaybook = useEffectEvent((name: string | null, available = coordPlaybooks) => {
+    setCoordPlaybookName(name)
+    setCoordPlaybookArgsDraft('')
+    if (!name) return
+    const selected = available.find((entry) => entry.name === name)
+    if (!selected) return
+    if (selected.maxAgents) setCoordMaxAgents(Math.min(6, Math.max(2, selected.maxAgents)))
+    if (selected.gateCommand !== undefined) setCoordGateDraft(selected.gateCommand)
+    if (selected.requirePlanApproval !== undefined) setCoordRequirePlanApproval(selected.requirePlanApproval)
+  })
+
+  const loadCoordPlaybooks = useEffectEvent(async (cwd: string, preferredName?: string) => {
+    try {
+      const listing = await listTuiRunPlaybooks(cwd)
+      setCoordPlaybooks(listing.playbooks)
+      if (preferredName && listing.playbooks.some((entry) => entry.name === preferredName)) {
+        selectCoordPlaybook(preferredName, listing.playbooks)
+      } else if (coordPlaybookName && !listing.playbooks.some((entry) => entry.name === coordPlaybookName)) {
+        selectCoordPlaybook(null, listing.playbooks)
+      }
+      if (listing.invalid.length > 0) setCoordError(`${listing.invalid.length} invalid playbook file${listing.invalid.length === 1 ? '' : 's'} — open Manage to inspect them`)
+    } catch (err) {
+      setCoordError(err instanceof Error ? err.message : 'Failed to load playbooks')
+    }
+  })
+
+  const handleCoordPlaybooksChanged = useEffectEvent((playbooks: PlaybookSummary[], preferredName?: string) => {
+    setCoordPlaybooks(playbooks)
+    if (preferredName && playbooks.some((entry) => entry.name === preferredName)) {
+      selectCoordPlaybook(preferredName, playbooks)
+    } else if (coordPlaybookName && !playbooks.some((entry) => entry.name === coordPlaybookName)) {
+      selectCoordPlaybook(null, playbooks)
+    }
+  })
+
   const openNewWorkflowModal = useEffectEvent(() => {
+    const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
     setCoordDraft(composerDraft.trim() || selectedSession?.firstPrompt || '')
     setCoordError(null)
+    setCoordPlaybookName(null)
+    setCoordPlaybookArgsDraft('')
+    setPlaybookManagerOpen(false)
     setCoordProviderOverride(null)
     setCoordTeammateProviderOverride(null)
     setCoordProviderPoolIndex(0)
     setCoordModalFocus('prompt')
     setCoordModalOpen(true)
+    void loadCoordPlaybooks(baseCwd)
   })
 
   const openNewSessionModal = useEffectEvent(() => {
@@ -11562,7 +11609,15 @@ export default function OpenTuiApp() {
   const submitCoordinatedRun = useEffectEvent(async () => {
     // The textarea is the source of truth — onContentChange can lag onSubmit.
     const prompt = (coordTextareaRef.current?.plainText ?? coordDraft).trim()
-    if (!prompt || coordStartInFlightRef.current) return
+    const selectedPlaybook = coordPlaybookName
+      ? coordPlaybooks.find((entry) => entry.name === coordPlaybookName)
+      : null
+    const playbookArgsText = coordPlaybookArgsDraft.trim()
+    if ((!prompt && !selectedPlaybook) || (selectedPlaybook?.expectsArgs && !playbookArgsText) || coordStartInFlightRef.current) return
+    let playbookArgs: unknown = undefined
+    if (playbookArgsText) {
+      try { playbookArgs = JSON.parse(playbookArgsText) } catch { playbookArgs = playbookArgsText }
+    }
     coordStartInFlightRef.current = true
     setCoordBusy(true)
     setCoordError(null)
@@ -11574,10 +11629,12 @@ export default function OpenTuiApp() {
       const result = await startTuiProtocolRun({
         prompt,
         baseCwd,
+        playbookName: selectedPlaybook?.name,
+        playbookArgs,
         provider: targetProvider,
         teammateProviders,
         maxAgents: coordMaxAgents,
-        title: prompt.slice(0, 40),
+        title: (prompt || selectedPlaybook?.name || 'Coordinated run').slice(0, 40),
         model: tuiModelOverride[selectedSessionKey ?? ''] || undefined,
         effort: tuiEffort === 'auto' ? undefined : tuiEffort,
         gateCommand: coordGateDraft.trim() || undefined,
@@ -11607,6 +11664,8 @@ export default function OpenTuiApp() {
       setCoordBoardRunId(result.snapshot.run.id)
       setCoordBoardOpen(true)
       setCoordDraft('')
+      setCoordPlaybookName(null)
+      setCoordPlaybookArgsDraft('')
       setCoordGateDraft('')
       setCoordProviderOverride(null)
       setCoordTeammateProviderOverride(null)
@@ -11620,7 +11679,13 @@ export default function OpenTuiApp() {
       })
       setCoordWatchIds((prev) => [...prev, result.snapshot.run.id])
       await refreshSessions(provider, true, false)
-      showNotice('info', 'Coordinated run started — lead is planning the task board', 5000)
+      showNotice(
+        'info',
+        selectedPlaybook
+          ? `Playbook ${selectedPlaybook.name} started — task board seeded without a planning turn`
+          : 'Coordinated run started — lead is planning the task board',
+        5000,
+      )
     } catch (err) {
       setCoordError(err instanceof Error ? err.message : 'Failed to start coordinated run')
       showNotice('error', err instanceof Error ? err.message : 'Failed to start coordinated run')
@@ -15315,11 +15380,18 @@ export default function OpenTuiApp() {
       return
     }
 
+    if (playbookManagerOpen) {
+      if (playbookManagerKeyHandlerRef.current?.(key) !== false) handled(() => {})
+      return
+    }
+
     if (coordModalOpen) {
       if (key.name === 'escape') {
         handled(() => {
           setCoordModalOpen(false)
           setCoordDraft('')
+          setCoordPlaybookName(null)
+          setCoordPlaybookArgsDraft('')
           setCoordGateDraft('')
           setCoordProviderOverride(null)
           setCoordTeammateProviderOverride(null)
@@ -15337,6 +15409,15 @@ export default function OpenTuiApp() {
           showToggleOutcome('Plan approval', next)
           return next
         }))
+      } else if ((key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down') && coordModalFocus === 'playbook') {
+        const direction = key.name === 'left' || key.name === 'up' ? -1 : 1
+        handled(() => {
+          const options = [null, ...coordPlaybooks.map((entry) => entry.name)]
+          const index = Math.max(0, options.indexOf(coordPlaybookName))
+          selectCoordPlaybook(options[(index + direction + options.length) % options.length] ?? null)
+        })
+      } else if ((key.name === 'return' || key.name === 'm') && coordModalFocus === 'playbook') {
+        handled(() => setPlaybookManagerOpen(true))
       } else if ((key.name === 'left' || key.name === 'right' || key.name === 'up' || key.name === 'down') && coordModalFocus === 'provider') {
         const direction = key.name === 'left' || key.name === 'up' ? -1 : 1
         handled(() => {
@@ -15375,6 +15456,8 @@ export default function OpenTuiApp() {
         }))
       } else if (key.name === 'return' && coordModalFocus === 'launch') {
         handled(() => { void submitCoordinatedRun() })
+      } else if (key.name === 'return' && coordModalFocus === 'playbookArgs') {
+        handled(() => setCoordModalFocus('provider'))
       } else if (key.name === 'return' && coordModalFocus !== 'prompt') {
         handled(() => setCoordModalFocus((current) => moveCoordModalFocus(current, 1)))
       }
@@ -19370,15 +19453,27 @@ export default function OpenTuiApp() {
           ? Math.max(10, Math.floor(bodyHeight * 0.48))
           : Math.max(compact ? 5 : 7, bodyHeight - 12 - (compact ? 4 : 5))
         const lowerHeight = Math.max(bodyHeight - briefHeight, 12)
-        const runtimeHeight = splitLayout ? lowerHeight : 12
+        const runtimeHeight = splitLayout ? lowerHeight : 15
         const summaryHeight = splitLayout ? lowerHeight : (compact ? 4 : 5)
         const suggestedProvider = provider === 'all' ? (selectedSession?.provider ?? 'claude') : provider
         const targetProvider = coordProviderOverride ?? suggestedProvider
         const teammateProviders = coordTeammateProviderOverride ?? [targetProvider]
         const baseCwdLabel = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
         const workspaceLabel = basename(baseCwdLabel) || baseCwdLabel
+        const selectedPlaybook = coordPlaybookName
+          ? coordPlaybooks.find((entry) => entry.name === coordPlaybookName) ?? null
+          : null
+        const playbookArgsReady = !selectedPlaybook?.expectsArgs || coordPlaybookArgsDraft.trim().length > 0
+        const launchReady = Boolean(coordDraft.trim() || selectedPlaybook) && playbookArgsReady
+        const playbookArgsHint = selectedPlaybook?.argsHint?.trim()
+        const playbookArgsPlaceholder = selectedPlaybook
+          ? playbookArgsHint && playbookArgsHint.toLowerCase() !== 'none'
+            ? playbookArgsHint
+            : selectedPlaybook.expectsArgs ? 'Enter required JSON or text' : 'Add optional JSON or text'
+          : 'Select a playbook first'
         const promptLineCount = coordDraft.length === 0 ? 1 : coordDraft.split('\n').length
-        const briefPreview = coordDraft.trim().split('\n')[0] || 'Add a workflow brief to continue'
+        const briefPreview = coordDraft.trim().split('\n')[0]
+          || (selectedPlaybook ? `Playbook: ${selectedPlaybook.name}` : 'Add a workflow brief to continue')
         const focusColor = (focus: CoordModalFocus) => coordModalFocus === focus ? theme.cyan : theme.border
         const focusBackground = (focus: CoordModalFocus) => coordModalFocus === focus ? theme.surface3 : theme.surface2
         return (
@@ -19455,25 +19550,64 @@ export default function OpenTuiApp() {
               borderColor={theme.border}
             >
               <text fg={theme.cyan} wrapMode="none">02  RUNTIME AND CONTROLS</text>
+              <text fg={theme.violet} wrapMode="none">WORKFLOW</text>
+              <box height={1} flexDirection="row" backgroundColor={focusBackground('playbook')}>
+                <text fg={coordModalFocus === 'playbook' ? theme.text : theme.dim} wrapMode="none">{'Playbook      '}</text>
+                <text fg={selectedPlaybook ? theme.violet : theme.dim} wrapMode="none">{`‹ ${selectedPlaybook?.name ?? 'none'} ›`}</text>
+                <box flexGrow={1} />
+                <text fg={coordModalFocus === 'playbook' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'playbook' ? '←/→ select · Enter/M manage' : selectedPlaybook ? `${selectedPlaybook.phaseCount} phases · ${selectedPlaybook.taskCount} tasks` : `${coordPlaybooks.length} available`}</text>
+              </box>
+              <box height={2} flexDirection="column" backgroundColor={focusBackground('playbookArgs')}>
+                <box height={1} flexDirection="row">
+                  <text fg={coordModalFocus === 'playbookArgs' ? theme.text : theme.dim} wrapMode="none">Arguments</text>
+                  <text fg={selectedPlaybook?.expectsArgs ? theme.amber : selectedPlaybook ? theme.cyan : theme.dim} wrapMode="none">
+                    {selectedPlaybook ? `  ${selectedPlaybook.expectsArgs ? 'required' : 'optional'}` : ''}
+                  </text>
+                  <box flexGrow={1} />
+                  <text fg={coordModalFocus === 'playbookArgs' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'playbookArgs' && selectedPlaybook ? 'type JSON or plain text · Enter next' : ''}</text>
+                </box>
+                <box height={1} flexDirection="row">
+                  <text fg={coordModalFocus === 'playbookArgs' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'playbookArgs' ? '› ' : '  '}</text>
+                  <box flexGrow={1} backgroundColor={coordModalFocus === 'playbookArgs' ? theme.surface3 : theme.surface2}>
+                  {coordModalFocus === 'playbookArgs'
+                    ? <input
+                        width="100%"
+                        focused
+                        value={coordPlaybookArgsDraft}
+                        placeholder={playbookArgsPlaceholder}
+                        maxLength={500}
+                        onInput={(value: string) => setCoordPlaybookArgsDraft(value)}
+                        onSubmit={() => setCoordModalFocus('provider')}
+                      />
+                    : <text fg={coordPlaybookArgsDraft ? theme.text : theme.dim} wrapMode="none">{fitText(coordPlaybookArgsDraft || playbookArgsPlaceholder, Math.max(12, runtimePaneWidth - 4))}</text>}
+                  </box>
+                </box>
+              </box>
+              <text fg={theme.violet} wrapMode="none">TEAM</text>
               <box height={1} flexDirection="row" backgroundColor={focusBackground('provider')}>
                 <text fg={coordModalFocus === 'provider' ? theme.text : theme.dim} wrapMode="none">{'Lead provider  '}</text>
                 <text fg={getProviderAccent(targetProvider)} wrapMode="none">{`‹ ${targetProvider.toUpperCase()} ›`}</text>
                 <box flexGrow={1} />
-                <text fg={focusColor('provider')} wrapMode="none">{coordModalFocus === 'provider' ? '←/→ choose' : 'coordinates the team'}</text>
+                <text fg={coordModalFocus === 'provider' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'provider' ? '←/→ choose' : 'coordinates the team'}</text>
               </box>
               <box height={2} flexDirection="column" backgroundColor={focusBackground('pool')} overflow="hidden">
                 <box height={1} flexDirection="row">
                   <text fg={coordModalFocus === 'pool' ? theme.text : theme.dim} wrapMode="none">Teammate provider pool</text>
                   <box flexGrow={1} />
-                  <text fg={focusColor('pool')} wrapMode="none">{coordModalFocus === 'pool' ? '←/→ · Space' : 'round-robin'}</text>
+                  <text fg={coordModalFocus === 'pool' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'pool' ? '←/→ · Space' : 'round-robin'}</text>
                 </box>
                 <box height={1} flexDirection="row" overflow="hidden">
                   {COORD_RUN_PROVIDERS.map((providerName, index) => {
                     const selected = teammateProviders.includes(providerName)
                     const cursor = coordModalFocus === 'pool' && coordProviderPoolIndex === index
                     return (
-                      <text key={providerName} fg={selected ? getProviderAccent(providerName) : theme.dim} bg={cursor ? theme.surface3 : undefined} wrapMode="none">
-                        {`${selected ? '[x]' : '[ ]'}${providerName.toUpperCase()} `}
+                      <text
+                        key={providerName}
+                        fg={cursor ? theme.surface : selected ? getProviderAccent(providerName) : theme.dim}
+                        bg={cursor ? theme.cyan : undefined}
+                        wrapMode="none"
+                      >
+                        {`${cursor ? '›' : ' '}${selected ? '[x]' : '[ ]'}${providerName.toUpperCase()}${cursor ? '‹' : ' '} `}
                       </text>
                     )
                   })}
@@ -19483,46 +19617,59 @@ export default function OpenTuiApp() {
                 <text fg={coordModalFocus === 'agents' ? theme.text : theme.dim} wrapMode="none">{'Agent limit   '}</text>
                 <text fg={theme.cyan} wrapMode="none">{`−  ${coordMaxAgents} total  +`}</text>
                 <box flexGrow={1} />
-                <text fg={focusColor('agents')} wrapMode="none">{coordModalFocus === 'agents' ? '←/→ adjust' : 'includes the lead'}</text>
+                <text fg={coordModalFocus === 'agents' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'agents' ? '←/→ adjust' : 'includes the lead'}</text>
               </box>
+              <text fg={theme.violet} wrapMode="none">EXECUTION</text>
               <box height={1} flexDirection="row" backgroundColor={focusBackground('worktrees')}>
                 <text fg={coordUseWorktrees ? theme.green : theme.amber} wrapMode="none">{coordUseWorktrees ? '[x]' : '[ ]'}</text>
                 <text fg={coordModalFocus === 'worktrees' ? theme.text : theme.dim} wrapMode="none">{' Use separate teammate checkouts'}</text>
                 <box flexGrow={1} />
-                <text fg={focusColor('worktrees')} wrapMode="none">{coordUseWorktrees ? 'isolated' : 'shared checkout'}</text>
+                <text fg={coordModalFocus === 'worktrees' ? theme.cyan : theme.dim} wrapMode="none">{coordUseWorktrees ? 'isolated' : 'shared checkout'}</text>
               </box>
-              <box height={2} flexDirection="row" backgroundColor={focusBackground('gate')}>
-                <text fg={coordModalFocus === 'gate' ? theme.text : theme.dim} wrapMode="none">{'Completion gate  '}</text>
-                <box flexGrow={1} border={['bottom']} borderStyle="single" borderColor={focusColor('gate')}>
-                <input
-                  focused={coordModalFocus === 'gate'}
-                  value={coordGateDraft}
-                    placeholder="Optional, e.g. npx tsc --noEmit"
-                  maxLength={200}
-                  onInput={(value: string) => setCoordGateDraft(value)}
-                    onSubmit={() => setCoordModalFocus('plans')}
-                />
+              <box height={2} flexDirection="column" backgroundColor={focusBackground('gate')}>
+                <box height={1} flexDirection="row">
+                  <text fg={coordModalFocus === 'gate' ? theme.text : theme.dim} wrapMode="none">Completion gate</text>
+                  <text fg={theme.dim} wrapMode="none">  optional</text>
+                  <box flexGrow={1} />
+                  <text fg={coordModalFocus === 'gate' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'gate' ? 'shell command · Enter next' : ''}</text>
+                </box>
+                <box height={1} flexDirection="row">
+                  <text fg={coordModalFocus === 'gate' ? theme.cyan : theme.dim} wrapMode="none">{coordModalFocus === 'gate' ? '› ' : '  '}</text>
+                  <box flexGrow={1} backgroundColor={coordModalFocus === 'gate' ? theme.surface3 : theme.surface2}>
+                    {coordModalFocus === 'gate'
+                      ? <input
+                          width="100%"
+                          focused
+                          value={coordGateDraft}
+                          placeholder="Example: npx tsc --noEmit"
+                          maxLength={200}
+                          onInput={(value: string) => setCoordGateDraft(value)}
+                          onSubmit={() => setCoordModalFocus('plans')}
+                        />
+                      : <text fg={coordGateDraft ? theme.text : theme.dim} wrapMode="none">{fitText(coordGateDraft || 'Example: npx tsc --noEmit', Math.max(12, runtimePaneWidth - 4))}</text>}
+                  </box>
                 </box>
               </box>
               <box height={1} flexDirection="row" backgroundColor={focusBackground('plans')}>
                 <text fg={coordRequirePlanApproval ? theme.amber : theme.dim} wrapMode="none">{coordRequirePlanApproval ? '[x]' : '[ ]'}</text>
                 <text fg={coordModalFocus === 'plans' ? theme.text : theme.dim} wrapMode="none">{' Review the lead plan before implementation'}</text>
                 <box flexGrow={1} />
-                <text fg={focusColor('plans')} wrapMode="none">{coordRequirePlanApproval ? 'required' : 'automatic'}</text>
+                <text fg={coordModalFocus === 'plans' ? theme.cyan : theme.dim} wrapMode="none">{coordRequirePlanApproval ? 'required' : 'automatic'}</text>
               </box>
-              <text fg={theme.dim} wrapMode="none">ROLE GUIDE</text>
-              <text fg={theme.dim} wrapMode="none">{fitText('Lead  Plans, delegates, resolves blockers, and synthesizes.', runtimePaneWidth - 2)}</text>
-              <text fg={theme.dim} wrapMode="none">{fitText('Team  Claims worker/verification lanes and messages peers.', runtimePaneWidth - 2)}</text>
             </box>
 
             <box height={summaryHeight} width={splitLayout ? sidePaneWidth : undefined} flexGrow={splitLayout ? 1 : 0} paddingX={1} backgroundColor={theme.surface} flexDirection="column">
               <text fg={theme.cyan} wrapMode="none">03  LAUNCH SUMMARY</text>
               {splitLayout ? (
                 <>
+                  {lowerHeight >= 18 ? <text fg={theme.violet} wrapMode="none">CONTEXT</text> : null}
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Workspace</text><box flexGrow={1} /><text fg={theme.text}>{fitText(workspaceLabel, Math.max(sidePaneWidth - 16, 12))}</text></box>
+                  <box height={1} flexDirection="row"><text fg={theme.dim}>Playbook</text><box flexGrow={1} /><text fg={selectedPlaybook ? theme.violet : theme.dim}>{fitText(selectedPlaybook?.name ?? 'Lead plans board', Math.max(sidePaneWidth - 16, 12))}</text></box>
+                  {lowerHeight >= 18 ? <text fg={theme.violet} wrapMode="none">TEAM</text> : null}
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Lead</text><box flexGrow={1} /><text fg={getProviderAccent(targetProvider)}>{targetProvider.toUpperCase()}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Teammate pool</text><box flexGrow={1} /><text fg={theme.violet}>{fitText(teammateProviders.map((entry) => entry.toUpperCase()).join(' + '), Math.max(sidePaneWidth - 20, 12))}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Agent limit</text><box flexGrow={1} /><text fg={theme.cyan}>{`${coordMaxAgents} total`}</text></box>
+                  {lowerHeight >= 18 ? <text fg={theme.violet} wrapMode="none">EXECUTION</text> : null}
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Checkout mode</text><box flexGrow={1} /><text fg={coordUseWorktrees ? theme.green : theme.amber}>{coordUseWorktrees ? 'Isolated checkouts' : 'Shared checkout'}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Plan review</text><box flexGrow={1} /><text fg={coordRequirePlanApproval ? theme.amber : theme.green}>{coordRequirePlanApproval ? 'Required' : 'Automatic'}</text></box>
                   <box height={1} flexDirection="row"><text fg={theme.dim}>Completion gate</text><box flexGrow={1} /><text fg={coordGateDraft.trim() ? theme.amber : theme.dim}>{fitText(coordGateDraft.trim() || 'Not configured', Math.max(sidePaneWidth - 23, 12))}</text></box>
@@ -19533,6 +19680,8 @@ export default function OpenTuiApp() {
                   <text fg={theme.dim} wrapMode="none">
                     {renderInlineTextSegments([
                       { text: `workspace ${workspaceLabel}`, fg: theme.text },
+                      { text: '  ·  ', fg: theme.dim },
+                      { text: selectedPlaybook?.name ?? 'lead-planned', fg: selectedPlaybook ? theme.violet : theme.dim },
                       { text: '  ·  ', fg: theme.dim },
                       { text: targetProvider.toUpperCase(), fg: getProviderAccent(targetProvider) },
                       { text: '  ·  ', fg: theme.dim },
@@ -19547,11 +19696,11 @@ export default function OpenTuiApp() {
                 </>
               )}
               <box height={1} flexDirection="row" backgroundColor={focusBackground('launch')}>
-                <text fg={coordDraft.trim() ? (coordModalFocus === 'launch' ? theme.surface : theme.green) : theme.dim} bg={coordDraft.trim() && coordModalFocus === 'launch' ? theme.green : undefined} wrapMode="none">
+                <text fg={launchReady ? (coordModalFocus === 'launch' ? theme.surface : theme.green) : theme.dim} bg={launchReady && coordModalFocus === 'launch' ? theme.green : undefined} wrapMode="none">
                   {coordBusy ? ' ◇ LAUNCHING WORKFLOW… ' : ' ▶ LAUNCH WORKFLOW '}
                 </text>
                 <box flexGrow={1} />
-                {!splitLayout ? <text fg={theme.dim} wrapMode="none">{coordDraft.trim() ? 'lead · task board · live activity' : 'brief required'}</text> : null}
+                {!splitLayout ? <text fg={theme.dim} wrapMode="none">{launchReady ? 'lead · task board · live activity' : selectedPlaybook?.expectsArgs && !playbookArgsReady ? 'playbook args required' : 'brief or playbook required'}</text> : null}
               </box>
             </box>
             </box>
@@ -19587,6 +19736,22 @@ export default function OpenTuiApp() {
         )
       })() : null}
 
+      {playbookManagerOpen ? (
+        <PlaybookManagerPopover
+          theme={theme}
+          width={width}
+          height={height}
+          cwd={selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()}
+          onClose={() => {
+            setPlaybookManagerOpen(false)
+            setCoordModalFocus('playbook')
+          }}
+          onChanged={handleCoordPlaybooksChanged}
+          onNotice={showNotice}
+          onKeyHandlerReady={(handler) => { playbookManagerKeyHandlerRef.current = handler }}
+        />
+      ) : null}
+
       {coordBoardOpen ? (
         <CoordinationPopover
           theme={theme}
@@ -19595,13 +19760,17 @@ export default function OpenTuiApp() {
           initialRunId={coordBoardRunId}
           onOpenSession={openCoordinationAgentSession}
           onNewRun={() => {
+            const baseCwd = selectedSession?.cwd ?? sessionDetail?.info?.cwd ?? process.cwd()
             setCoordDraft('')
             setCoordError(null)
+            setCoordPlaybookName(null)
+            setCoordPlaybookArgsDraft('')
             setCoordProviderOverride(null)
             setCoordTeammateProviderOverride(null)
             setCoordProviderPoolIndex(0)
             setCoordModalFocus('prompt')
             setCoordModalOpen(true)
+            void loadCoordPlaybooks(baseCwd)
           }}
           onClose={() => setCoordBoardOpen(false)}
           onNotice={showNotice}

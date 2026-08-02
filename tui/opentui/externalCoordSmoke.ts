@@ -842,6 +842,7 @@ const playbookLead = playbookRun.participant
 const seeded = playbookRun.snapshot.tasks
 assert.equal(seeded.length, 2)
 assert.equal(seeded[0].title, 'Survey third.txt')
+assert.match(seeded[0].prompt, /Playbook arguments:\n\{\n  "target": "third.txt"\n\}/)
 assert.equal(seeded[0].phase, 'Survey')
 assert.equal(seeded[0].targetRole, 'teammate')
 assert.equal(seeded[1].phase, 'Fix')
@@ -877,6 +878,41 @@ assert.ok(saved.path.endsWith('smoke-audit-saved.json'))
 const listed = await coordination.listRunPlaybooks(testCwd)
 assert.ok(listed.playbooks.some((entry) => entry.name === 'smoke-audit-saved' && entry.taskCount === 2))
 assert.equal(listed.invalid.length, 0)
+
+// The manager backend owns create, edit/rename, and delete semantics. A rename
+// removes the old file only after the replacement has been written.
+const managed = await coordination.writeRunPlaybook(testCwd, {
+  name: 'manager-smoke',
+  description: 'Created by the playbook manager smoke',
+  argsHint: 'target',
+  maxAgents: 2,
+  phases: [{
+    title: 'Managed',
+    tasks: [{ key: 'managed', title: 'Manage {{args}}', detail: 'Manage {{args}}.' }],
+  }],
+})
+assert.equal(managed.playbook.name, 'manager-smoke')
+const managedSummary = (await coordination.listRunPlaybooks(testCwd)).playbooks
+  .find((entry) => entry.name === 'manager-smoke')
+assert.equal(managedSummary?.expectsArgs, true)
+assert.equal(managedSummary?.maxAgents, 2)
+
+const renamed = await coordination.writeRunPlaybook(testCwd, {
+  ...managed.playbook,
+  name: 'manager-smoke-renamed',
+  description: 'Edited and renamed by the playbook manager smoke',
+}, 'manager-smoke')
+assert.equal(renamed.playbook.name, 'manager-smoke-renamed')
+await assert.rejects(coordination.loadRunPlaybook(testCwd, 'manager-smoke'), /not found/)
+assert.equal(
+  (await coordination.loadRunPlaybook(testCwd, 'manager-smoke-renamed')).description,
+  'Edited and renamed by the playbook manager smoke',
+)
+await coordination.deleteRunPlaybook(testCwd, 'manager-smoke-renamed')
+assert.equal(
+  (await coordination.listRunPlaybooks(testCwd)).playbooks.some((entry) => entry.name === 'manager-smoke-renamed'),
+  false,
+)
 
 // The saved playbook reloads and reseeds an identical phased board.
 const reloaded = await coordination.loadRunPlaybook(testCwd, 'smoke-audit-saved')

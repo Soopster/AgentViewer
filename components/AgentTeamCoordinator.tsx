@@ -7,6 +7,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowLeft,
+  BookOpen,
   Bot,
   CircleStop,
   CheckCircle2,
@@ -22,10 +23,12 @@ import {
   Minus,
   MoreVertical,
   Play,
+  Pencil,
   Plus,
   Radio,
   RefreshCw,
   Search,
+  Save,
   Send,
   ShieldCheck,
   Sparkles,
@@ -45,7 +48,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { AGENT_PROTOCOL_VERSION } from '@/lib/agentProtocol'
-import type { AgentProtocolEvent, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot, ProtocolTask } from '@/lib/agentProtocol'
+import type { AgentProtocolEvent, PlaybookPhase, PlaybookSummary, PlaybookTask, ProtocolAgent, ProtocolRun, ProtocolRunSnapshot, ProtocolTask, RunPlaybook } from '@/lib/agentProtocol'
 import type { AgentProvider, ProviderSelection, Session } from '@/lib/types'
 import type { WorktreeTask } from '@/lib/worktreeTasks'
 
@@ -60,6 +63,7 @@ type Props = {
 
 type WorktreeResponse = { tasks?: WorktreeTask[]; error?: string }
 type RunsResponse = { runs?: ProtocolRun[]; error?: string }
+type PlaybooksResponse = { playbooks: PlaybookSummary[]; invalid: Array<{ file: string; error: string }> }
 type PendingAction =
   | { kind: 'stop' }
   | { kind: 'delete-run' }
@@ -79,6 +83,34 @@ const TASK_ROW_HEIGHT = 60
 const TASK_ROW_GAP = 7
 const TASK_GROUP_BOTTOM = 12
 const TASK_BOARD_PADDING_TOP = 8
+
+const NEW_PLAYBOOK_TEMPLATE: RunPlaybook = {
+  name: 'new-playbook',
+  description: 'Describe when this workflow should be used',
+  argsHint: 'Describe the target or outcome',
+  maxAgents: 3,
+  phases: [
+    {
+      title: 'Execute',
+      tasks: [{
+        key: 'work',
+        title: 'Implement {{args}}',
+        detail: 'Complete {{args}} with focused changes and proportionate verification.',
+        role: 'teammate',
+      }],
+    },
+    {
+      title: 'Integrate',
+      tasks: [{
+        key: 'integrate',
+        title: 'Review and integrate',
+        detail: 'Review the completed lane, run final verification, and synthesize the result.',
+        role: 'lead',
+        dependsOn: ['work'],
+      }],
+    },
+  ],
+}
 
 type TaskFilter = 'all' | 'attention' | 'active' | 'done'
 type EventFilter = 'all' | 'attention' | 'messages' | 'tasks'
@@ -175,9 +207,309 @@ function eventTone(event: AgentProtocolEvent): 'good' | 'warn' | 'bad' | 'info' 
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
+  if (!response.ok) {
+    const failure = await response.json().catch(() => ({})) as { error?: string }
+    throw new Error(failure.error ?? `HTTP ${response.status}`)
+  }
   const data = await response.json().catch(() => ({})) as T & { error?: string }
-  if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
+  if (data.error) throw new Error(data.error)
   return data
+}
+
+function clonePlaybook(playbook: RunPlaybook): RunPlaybook {
+  return structuredClone(playbook)
+}
+
+function splitPlaybookList(value: string): string[] | undefined {
+  const entries = value.split(',').map((entry) => entry.trim()).filter(Boolean)
+  return entries.length > 0 ? entries : undefined
+}
+
+function StructuredPlaybookEditor({
+  value,
+  busy,
+  onChange,
+  onSave,
+}: {
+  value: RunPlaybook
+  busy: boolean
+  onChange: (value: RunPlaybook) => void
+  onSave: () => void
+}) {
+  const update = (patch: Partial<RunPlaybook>) => onChange({ ...value, ...patch })
+  const updatePhase = (phaseIndex: number, patch: Partial<PlaybookPhase>) => update({
+    phases: value.phases.map((phase, index) => index === phaseIndex ? { ...phase, ...patch } : phase),
+  })
+  const updateTask = (phaseIndex: number, taskIndex: number, patch: Partial<PlaybookTask>) => {
+    const phase = value.phases[phaseIndex]
+    if (!phase) return
+    updatePhase(phaseIndex, {
+      tasks: phase.tasks.map((task, index) => index === taskIndex ? { ...task, ...patch } : task),
+    })
+  }
+  const addPhase = () => update({
+    phases: [...value.phases, {
+      title: `Phase ${value.phases.length + 1}`,
+      tasks: [{ key: `task-${value.phases.length + 1}`, title: 'New task', detail: 'Describe the task outcome.', role: 'teammate' }],
+    }],
+  })
+  const removePhase = (phaseIndex: number) => {
+    if (value.phases.length <= 1) return
+    update({ phases: value.phases.filter((_, index) => index !== phaseIndex) })
+  }
+  const addTask = (phaseIndex: number) => {
+    const phase = value.phases[phaseIndex]
+    if (!phase) return
+    updatePhase(phaseIndex, {
+      tasks: [...phase.tasks, {
+        key: `task-${phaseIndex + 1}-${phase.tasks.length + 1}`,
+        title: 'New task',
+        detail: 'Describe the task outcome.',
+        role: 'teammate',
+      }],
+    })
+  }
+  const removeTask = (phaseIndex: number, taskIndex: number) => {
+    const phase = value.phases[phaseIndex]
+    if (!phase || phase.tasks.length <= 1) return
+    updatePhase(phaseIndex, { tasks: phase.tasks.filter((_, index) => index !== taskIndex) })
+  }
+
+  return (
+    <div className="av-coord-structured-editor">
+      <div className="av-coord-playbook-editor-head">
+        <div><strong>Playbook settings</strong><small>Saved as validated repository JSON.</small></div>
+        <Button type="button" size="sm" disabled={busy} onClick={onSave}><Save data-icon="inline-start" aria-hidden="true" /> {busy ? 'Saving…' : 'Save playbook'}</Button>
+      </div>
+      <div className="av-coord-playbook-settings-grid">
+        <div className="av-coord-field"><Label htmlFor="playbook-name">Name</Label><Input id="playbook-name" value={value.name} onChange={(event) => update({ name: event.target.value })} placeholder="lowercase-slug" /></div>
+        <div className="av-coord-field"><Label htmlFor="playbook-agents">Agent limit</Label><Input id="playbook-agents" type="number" min={2} max={6} value={value.maxAgents ?? 3} onChange={(event) => update({ maxAgents: Math.min(6, Math.max(2, Number(event.target.value) || 2)) })} /></div>
+        <div className="av-coord-field av-coord-wide"><Label htmlFor="playbook-description">Description</Label><Textarea id="playbook-description" rows={3} value={value.description ?? ''} onChange={(event) => update({ description: event.target.value || undefined })} placeholder="When should this workflow be used?" /></div>
+        <div className="av-coord-field"><Label htmlFor="playbook-args-hint">Argument guidance <em>optional</em></Label><Textarea id="playbook-args-hint" rows={2} value={value.argsHint ?? ''} onChange={(event) => update({ argsHint: event.target.value || undefined })} placeholder="Example: target path or objective" /></div>
+        <div className="av-coord-field"><Label htmlFor="playbook-gate">Completion gate <em>optional</em></Label><Input id="playbook-gate" value={value.gateCommand ?? ''} onChange={(event) => update({ gateCommand: event.target.value || undefined })} placeholder="npx tsc --noEmit" /></div>
+        <div className="av-coord-plan-control av-coord-wide">
+          <Checkbox id="playbook-plan-approval" checked={value.requirePlanApproval === true} onCheckedChange={(checked) => update({ requirePlanApproval: checked === true })} />
+          <div><Label htmlFor="playbook-plan-approval">Require teammate plan approval</Label><small>Workers submit a plan before implementation; explicit lead tasks execute directly.</small></div>
+        </div>
+      </div>
+
+      <div className="av-coord-playbook-phases">
+        <div className="av-coord-playbook-section-head"><div><strong>Workflow phases</strong><small>Phases are barriers; every task waits for the preceding phase.</small></div><Button type="button" variant="outline" size="sm" onClick={addPhase}><Plus data-icon="inline-start" aria-hidden="true" /> Add phase</Button></div>
+        {value.phases.map((phase, phaseIndex) => (
+          <Card key={`phase-${phaseIndex}`} className="av-coord-playbook-phase">
+            <CardHeader>
+              <div className="av-coord-playbook-phase-head">
+                <span>{String(phaseIndex + 1).padStart(2, '0')}</span>
+                <Input value={phase.title} aria-label={`Phase ${phaseIndex + 1} title`} onChange={(event) => updatePhase(phaseIndex, { title: event.target.value })} />
+                <Button type="button" variant="ghost" size="icon" aria-label={`Delete phase ${phaseIndex + 1}`} disabled={value.phases.length <= 1} onClick={() => removePhase(phaseIndex)}><Trash2 aria-hidden="true" /></Button>
+              </div>
+            </CardHeader>
+            <CardContent className="av-coord-playbook-task-list">
+              {phase.tasks.map((task, taskIndex) => (
+                <fieldset key={`task-${taskIndex}`} className="av-coord-playbook-task">
+                  <legend>Task {taskIndex + 1}</legend>
+                  <div className="av-coord-playbook-task-grid">
+                    <div className="av-coord-field"><Label>Key <em>optional</em></Label><Input value={task.key ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { key: event.target.value || undefined })} placeholder="stable-key" /></div>
+                    <div className="av-coord-field"><Label>Assigned role</Label><NativeSelect value={task.role ?? 'teammate'} onChange={(event) => updateTask(phaseIndex, taskIndex, { role: event.target.value as PlaybookTask['role'] })}><NativeSelectOption value="teammate">Teammate</NativeSelectOption><NativeSelectOption value="lead">Lead</NativeSelectOption><NativeSelectOption value="any">Any available agent</NativeSelectOption></NativeSelect></div>
+                    <div className="av-coord-field av-coord-wide"><Label>Title</Label><Input value={task.title} onChange={(event) => updateTask(phaseIndex, taskIndex, { title: event.target.value })} placeholder="Task outcome" /></div>
+                    <div className="av-coord-field av-coord-wide"><Label>Instructions</Label><Textarea value={task.detail} rows={4} onChange={(event) => updateTask(phaseIndex, taskIndex, { detail: event.target.value })} placeholder="Full task instructions and acceptance checks" /></div>
+                    <div className="av-coord-field"><Label>Write paths <em>comma-separated</em></Label><Input value={task.paths?.join(', ') ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { paths: splitPlaybookList(event.target.value) })} placeholder="lib/example.ts, app/api" /></div>
+                    <div className="av-coord-field"><Label>Dependencies <em>task keys</em></Label><Input value={task.dependsOn?.join(', ') ?? ''} onChange={(event) => updateTask(phaseIndex, taskIndex, { dependsOn: splitPlaybookList(event.target.value) })} placeholder="survey, implement" /></div>
+                  </div>
+                  <Button type="button" variant="ghost" size="sm" disabled={phase.tasks.length <= 1} onClick={() => removeTask(phaseIndex, taskIndex)}><Trash2 data-icon="inline-start" aria-hidden="true" /> Delete task</Button>
+                </fieldset>
+              ))}
+              <Button type="button" variant="outline" size="sm" onClick={() => addTask(phaseIndex)}><Plus data-icon="inline-start" aria-hidden="true" /> Add task</Button>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function PlaybookManager({
+  cwd,
+  onClose,
+  onChanged,
+  onNotice,
+}: {
+  cwd: string
+  onClose: () => void
+  onChanged: (playbooks: PlaybookSummary[], preferredName?: string) => void
+  onNotice: (message: string) => void
+}) {
+  const [playbooks, setPlaybooks] = useState<PlaybookSummary[]>([])
+  const [invalid, setInvalid] = useState<Array<{ file: string; error: string }>>([])
+  const [selectedName, setSelectedName] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState<string | null>(null)
+  const [draft, setDraft] = useState<RunPlaybook | null>(null)
+  const [deleteName, setDeleteName] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async (preferredName?: string) => {
+    const query = new URLSearchParams({ cwd }).toString()
+    const listing = await jsonFetch<PlaybooksResponse>(`/api/agent-protocol/playbooks?${query}`)
+    setPlaybooks(listing.playbooks)
+    setInvalid(listing.invalid)
+    setSelectedName((current) => preferredName
+      ?? (current && listing.playbooks.some((entry) => entry.name === current) ? current : listing.playbooks[0]?.name ?? null))
+    onChanged(listing.playbooks, preferredName)
+  }, [cwd, onChanged])
+
+  useEffect(() => {
+    let cancelled = false
+    const query = new URLSearchParams({ cwd }).toString()
+    void jsonFetch<PlaybooksResponse>(`/api/agent-protocol/playbooks?${query}`).then((listing) => {
+      if (cancelled) return
+      setPlaybooks(listing.playbooks)
+      setInvalid(listing.invalid)
+      setSelectedName(listing.playbooks[0]?.name ?? null)
+      onChanged(listing.playbooks)
+    }).catch((caught) => {
+      if (!cancelled) setError(caught instanceof Error ? caught.message : 'Failed to load playbooks')
+    })
+    return () => { cancelled = true }
+  }, [cwd, onChanged])
+
+  const editSelected = useCallback(async () => {
+    if (!selectedName || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const query = new URLSearchParams({ cwd, name: selectedName }).toString()
+      const result = await jsonFetch<{ playbook: RunPlaybook }>(`/api/agent-protocol/playbooks?${query}`)
+      setEditingName(selectedName)
+      setDraft(clonePlaybook(result.playbook))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to open playbook')
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, cwd, selectedName])
+
+  const createPlaybook = useCallback(() => {
+    setEditingName(null)
+    setDraft(clonePlaybook(NEW_PLAYBOOK_TEMPLATE))
+    setError(null)
+  }, [])
+
+  const savePlaybook = useCallback(async () => {
+    if (busy) return
+    if (!draft) return
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await jsonFetch<{ playbook: RunPlaybook }>('/api/agent-protocol/playbooks', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd, playbook: draft, previousName: editingName ?? undefined }),
+      })
+      await load(result.playbook.name)
+      setEditingName(null)
+      setDraft(null)
+      onNotice(`Saved playbook ${result.playbook.name}`)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to save playbook')
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, cwd, draft, editingName, load, onNotice])
+
+  const deletePlaybook = useCallback(async () => {
+    if (!deleteName || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await jsonFetch('/api/agent-protocol/playbooks', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd, name: deleteName }),
+      })
+      const deleted = deleteName
+      setDeleteName(null)
+      await load()
+      onNotice(`Deleted playbook ${deleted}`)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to delete playbook')
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, cwd, deleteName, load, onNotice])
+
+  const selected = playbooks.find((entry) => entry.name === selectedName) ?? null
+
+  return (
+    <Card className="av-coord-playbook-manager">
+      <CardHeader>
+        <div className="av-coord-playbook-manager-head">
+          <div>
+            <CardTitle>Playbook manager</CardTitle>
+            <CardDescription>Create and maintain reusable Coordinator task graphs stored in this workspace.</CardDescription>
+          </div>
+          <Button type="button" variant="ghost" size="sm" onClick={onClose}><ArrowLeft data-icon="inline-start" aria-hidden="true" /> Back to workflow</Button>
+        </div>
+      </CardHeader>
+      <CardContent className="av-coord-playbook-manager-layout">
+        <section className="av-coord-playbook-list" aria-label="Saved playbooks">
+          <div className="av-coord-playbook-list-head">
+            <div><strong>Saved playbooks</strong><small>{playbooks.length} reusable workflow{playbooks.length === 1 ? '' : 's'}</small></div>
+            <div className="av-coord-playbook-actions">
+              <Button type="button" size="sm" onClick={createPlaybook}><Plus data-icon="inline-start" aria-hidden="true" /> New</Button>
+              <Button type="button" variant="outline" size="sm" disabled={!selected || busy} onClick={() => void editSelected()}><Pencil data-icon="inline-start" aria-hidden="true" /> Edit</Button>
+            </div>
+          </div>
+          {playbooks.length === 0 ? <p>No playbooks yet. Create one to seed a workflow without a planning turn.</p> : playbooks.map((entry) => (
+            <button
+              key={entry.name}
+              type="button"
+              className={cn('av-coord-playbook-row', entry.name === selectedName && 'av-selected')}
+              onClick={() => setSelectedName(entry.name)}
+            >
+              <strong>{entry.name}</strong>
+              <span>{entry.phaseCount} phases · {entry.taskCount} tasks</span>
+            </button>
+          ))}
+          {invalid.length > 0 ? <p className="av-coord-playbook-invalid">{invalid.length} invalid playbook file{invalid.length === 1 ? '' : 's'} detected.</p> : null}
+        </section>
+
+        <section className="av-coord-playbook-editor">
+          {draft ? (
+            <>
+              <div className="av-coord-playbook-editor-head">
+                <div><strong>{editingName ? `Edit ${editingName}` : 'Create playbook'}</strong><small>Change the name to rename its repository file.</small></div>
+              </div>
+              <StructuredPlaybookEditor value={draft} busy={busy} onChange={setDraft} onSave={() => void savePlaybook()} />
+            </>
+          ) : selected ? (
+            <>
+              <div className="av-coord-playbook-detail">
+                <BookOpen aria-hidden="true" />
+                <div><strong>{selected.name}</strong><p>{selected.description ?? 'No description'}</p></div>
+              </div>
+              <dl>
+                <div><dt>Phases</dt><dd>{selected.phaseCount}</dd></div>
+                <div><dt>Tasks</dt><dd>{selected.taskCount}</dd></div>
+                <div><dt>Arguments</dt><dd>{selected.expectsArgs ? selected.argsHint ?? 'Required' : 'Not required'}</dd></div>
+                <div><dt>Agents</dt><dd>{selected.maxAgents ?? 'Launcher default'}</dd></div>
+                <div><dt>Completion gate</dt><dd>{selected.gateCommand ?? 'Not configured'}</dd></div>
+              </dl>
+              {deleteName === selected.name ? (
+                <div className="av-coord-playbook-delete" role="alert">
+                  <span>Delete {selected.name}? This removes its repository JSON file.</span>
+                  <div><Button type="button" variant="destructive" size="sm" disabled={busy} onClick={() => void deletePlaybook()}>Delete</Button><Button type="button" variant="outline" size="sm" onClick={() => setDeleteName(null)}>Cancel</Button></div>
+                </div>
+              ) : (
+                <Button type="button" variant="outline" size="sm" onClick={() => setDeleteName(selected.name)}><Trash2 data-icon="inline-start" aria-hidden="true" /> Delete playbook</Button>
+              )}
+            </>
+          ) : <p>Select a playbook or create a new one.</p>}
+        </section>
+      </CardContent>
+      {error ? <CardFooter><p className="av-coord-playbook-invalid" role="alert">{error}</p></CardFooter> : null}
+    </Card>
+  )
 }
 
 export default function AgentTeamCoordinator({
@@ -201,6 +533,10 @@ export default function AgentTeamCoordinator({
   const [messageDraft, setMessageDraft] = useState('')
   const [startOpen, setStartOpen] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
+  const [playbooks, setPlaybooks] = useState<PlaybookSummary[]>([])
+  const [playbookName, setPlaybookName] = useState('')
+  const [playbookArgs, setPlaybookArgs] = useState('')
+  const [playbookManagerOpen, setPlaybookManagerOpen] = useState(false)
   const [maxAgents, setMaxAgents] = useState(3)
   const [runProviderOverride, setRunProviderOverride] = useState<AgentProvider | null>(null)
   const [teammateProviderOverride, setTeammateProviderOverride] = useState<AgentProvider[] | null>(null)
@@ -243,6 +579,13 @@ export default function AgentTeamCoordinator({
   const targetProvider = runProviderOverride ?? suggestedProvider
   const teammateProviders = teammateProviderOverride ?? [targetProvider]
   const baseCwd = selectedSession?.cwd ?? run?.baseCwd ?? ''
+  const selectedPlaybook = playbooks.find((entry) => entry.name === playbookName) ?? null
+  const playbookArgsReady = !selectedPlaybook?.expectsArgs || playbookArgs.trim().length > 0
+  const launchReady = Boolean(promptDraft.trim() || selectedPlaybook) && playbookArgsReady
+  const playbookArgsHint = selectedPlaybook?.argsHint?.trim()
+  const playbookArgsPlaceholder = playbookArgsHint && playbookArgsHint.toLowerCase() !== 'none'
+    ? playbookArgsHint
+    : selectedPlaybook?.expectsArgs ? 'Enter required JSON or text' : 'Add optional JSON or text'
   const filteredRuns = useMemo(() => {
     const query = runQuery.trim().toLowerCase()
     return runs.filter((entry) => {
@@ -384,6 +727,42 @@ export default function AgentTeamCoordinator({
     setNotice(text)
     window.setTimeout(() => setNotice((current) => current === text ? null : current), 5000)
   }, [])
+
+  const selectPlaybook = useCallback((name: string, available = playbooks) => {
+    setPlaybookName(name)
+    setPlaybookArgs('')
+    const selected = available.find((entry) => entry.name === name)
+    if (!selected) return
+    if (selected.maxAgents) setMaxAgents(Math.min(6, Math.max(2, selected.maxAgents)))
+    if (selected.gateCommand !== undefined) setGateCommand(selected.gateCommand)
+    if (selected.requirePlanApproval !== undefined) setRequirePlanApproval(selected.requirePlanApproval)
+  }, [playbooks])
+
+  const handlePlaybooksChanged = useCallback((next: PlaybookSummary[], preferredName?: string) => {
+    setPlaybooks(next)
+    setPlaybookName((current) => {
+      const target = preferredName ?? current
+      return target && next.some((entry) => entry.name === target) ? target : ''
+    })
+    if (preferredName) {
+      const selected = next.find((entry) => entry.name === preferredName)
+      if (selected?.maxAgents) setMaxAgents(Math.min(6, Math.max(2, selected.maxAgents)))
+      if (selected?.gateCommand !== undefined) setGateCommand(selected.gateCommand)
+      if (selected?.requirePlanApproval !== undefined) setRequirePlanApproval(selected.requirePlanApproval)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!startOpen && run) return
+    let cancelled = false
+    const query = new URLSearchParams({ cwd: baseCwd }).toString()
+    void jsonFetch<PlaybooksResponse>(`/api/agent-protocol/playbooks?${query}`).then((listing) => {
+      if (!cancelled) handlePlaybooksChanged(listing.playbooks)
+    }).catch((caught) => {
+      if (!cancelled) setLoadError(caught instanceof Error ? caught.message : 'Failed to load playbooks')
+    })
+    return () => { cancelled = true }
+  }, [baseCwd, handlePlaybooksChanged, run, startOpen])
 
   const loadRuns = useCallback(async () => {
     const data = await jsonFetch<RunsResponse>('/api/agent-protocol/runs?limit=10')
@@ -547,7 +926,11 @@ export default function AgentTeamCoordinator({
 
   const startRun = useCallback(async () => {
     const prompt = promptDraft.trim()
-    if (!prompt || busyAction) return
+    if ((!prompt && !selectedPlaybook) || !playbookArgsReady || busyAction) return
+    let parsedPlaybookArgs: unknown = undefined
+    if (playbookArgs.trim()) {
+      try { parsedPlaybookArgs = JSON.parse(playbookArgs) } catch { parsedPlaybookArgs = playbookArgs.trim() }
+    }
     setBusyAction('start')
     try {
       const result = await jsonFetch<{ snapshot: ProtocolRunSnapshot; sessions: Array<{ sessionId: string; provider: Session['provider']; cwd: string; summary: string; isPending: boolean }> }>('/api/agent-protocol/runs', {
@@ -556,10 +939,12 @@ export default function AgentTeamCoordinator({
         body: JSON.stringify({
           prompt,
           baseCwd: baseCwd || undefined,
+          playbookName: selectedPlaybook?.name,
+          playbookArgs: parsedPlaybookArgs,
           provider: targetProvider,
           teammateProviders,
           maxAgents,
-          title: prompt.slice(0, 40),
+          title: (prompt || selectedPlaybook?.name || 'Coordinated run').slice(0, 40),
           gateCommand: gateCommand.trim() || undefined,
           requirePlanApproval,
           useWorktrees,
@@ -570,6 +955,8 @@ export default function AgentTeamCoordinator({
       setRuns((prev) => [result.snapshot.run, ...prev.filter((entry) => entry.id !== result.snapshot.run.id)].slice(0, 10))
       setStartOpen(false)
       setPromptDraft('')
+      setPlaybookName('')
+      setPlaybookArgs('')
       setGateCommand('')
       setRunProviderOverride(null)
       setTeammateProviderOverride(null)
@@ -586,13 +973,15 @@ export default function AgentTeamCoordinator({
         })
       }
       onSessionsChanged()
-      showNotice('Coordinated run started')
+      showNotice(selectedPlaybook
+        ? `Playbook ${selectedPlaybook.name} started without a planning turn`
+        : 'Coordinated run started')
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Failed to start run')
     } finally {
       setBusyAction(null)
     }
-  }, [baseCwd, busyAction, gateCommand, maxAgents, onOpenSession, onSessionsChanged, promptDraft, requirePlanApproval, showNotice, targetProvider, teammateProviders, useWorktrees])
+  }, [baseCwd, busyAction, gateCommand, maxAgents, onOpenSession, onSessionsChanged, playbookArgs, playbookArgsReady, promptDraft, requirePlanApproval, selectedPlaybook, showNotice, targetProvider, teammateProviders, useWorktrees])
 
   const sendMessage = useCallback(async () => {
     const body = messageDraft.trim()
@@ -851,11 +1240,19 @@ export default function AgentTeamCoordinator({
           <main className="av-coord-main">
             {startOpen || !run ? (
               <section className="av-coord-start">
+                {playbookManagerOpen ? (
+                  <PlaybookManager
+                    cwd={baseCwd}
+                    onClose={() => setPlaybookManagerOpen(false)}
+                    onChanged={handlePlaybooksChanged}
+                    onNotice={showNotice}
+                  />
+                ) : (
                 <form
                   className="av-coord-start-form"
                   onSubmit={(event) => { event.preventDefault(); void startRun() }}
                   onKeyDown={(event) => {
-                    if (!(event.metaKey || event.ctrlKey) || event.key !== 'Enter' || !promptDraft.trim() || busyAction === 'start') return
+                    if (!(event.metaKey || event.ctrlKey) || event.key !== 'Enter' || !launchReady || busyAction === 'start') return
                     event.preventDefault()
                     void startRun()
                   }}
@@ -878,7 +1275,7 @@ export default function AgentTeamCoordinator({
                     <div className="av-coord-start-primary">
                       <Card className="av-coord-start-card av-coord-start-brief">
                         <CardHeader>
-                          <div className="av-coord-start-card-heading"><span>01</span><div><CardTitle>Workflow brief</CardTitle><CardDescription>Give the lead enough context to build and assign a useful task board.</CardDescription></div></div>
+                          <div className="av-coord-start-card-heading"><span>01</span><div><CardTitle>Workflow brief</CardTitle><CardDescription>{selectedPlaybook ? 'Add run-specific context, or rely on the selected playbook and its arguments.' : 'Give the lead enough context to build and assign a useful task board.'}</CardDescription></div></div>
                         </CardHeader>
                         <CardContent>
                           <div className="av-coord-field">
@@ -887,7 +1284,7 @@ export default function AgentTeamCoordinator({
                               id="coord-run-prompt"
                               name="run-prompt"
                               autoComplete="off"
-                              required
+                              required={!selectedPlaybook}
                               aria-invalid={promptDraft.length > 0 && !promptDraft.trim()}
                               value={promptDraft}
                               onChange={(event) => setPromptDraft(event.target.value)}
@@ -908,6 +1305,41 @@ export default function AgentTeamCoordinator({
                           <div className="av-coord-start-card-heading"><span>02</span><div><CardTitle>Runtime and controls</CardTitle><CardDescription>Choose who runs the work and how completion is verified.</CardDescription></div></div>
                         </CardHeader>
                         <CardContent className="av-coord-runtime-grid">
+                          <div className="av-coord-field av-coord-wide">
+                            <Label htmlFor="coord-run-playbook">Playbook</Label>
+                            <div className="av-coord-playbook-picker">
+                              <NativeSelect
+                                id="coord-run-playbook"
+                                name="run-playbook"
+                                value={playbookName}
+                                onChange={(event) => selectPlaybook(event.target.value)}
+                                className="av-coord-start-select"
+                              >
+                                <NativeSelectOption value="">No playbook — lead plans the board</NativeSelectOption>
+                                {playbooks.map((entry) => <NativeSelectOption key={entry.name} value={entry.name}>{entry.name} · {entry.phaseCount} phases · {entry.taskCount} tasks</NativeSelectOption>)}
+                              </NativeSelect>
+                              <Button type="button" variant="outline" className="av-coord-playbook-manage" onClick={() => setPlaybookManagerOpen(true)}><BookOpen data-icon="inline-start" aria-hidden="true" /> Manage playbooks</Button>
+                            </div>
+                            <small>{selectedPlaybook?.description ?? 'Choose a reusable task graph or let the lead create one from the workflow brief.'}</small>
+                          </div>
+
+                          {selectedPlaybook ? (
+                            <div className="av-coord-field av-coord-wide" data-invalid={selectedPlaybook.expectsArgs && !playbookArgs.trim() ? '' : undefined}>
+                              <Label htmlFor="coord-run-playbook-args">Playbook arguments {selectedPlaybook.expectsArgs ? <em>required</em> : <em>optional</em>}</Label>
+                              <Input
+                                id="coord-run-playbook-args"
+                                value={playbookArgs}
+                                name="run-playbook-args"
+                                autoComplete="off"
+                                aria-invalid={selectedPlaybook.expectsArgs && !playbookArgs.trim()}
+                                onChange={(event) => setPlaybookArgs(event.target.value)}
+                                placeholder={playbookArgsPlaceholder}
+                                className="av-coord-input"
+                              />
+                              <small>Arguments are added to every task. Plain text fills {'{{args}}'}; JSON objects also support named placeholders such as {'{{args.path}}'}.</small>
+                            </div>
+                          ) : null}
+
                           <div className="av-coord-field">
                             <Label htmlFor="coord-run-provider">Lead provider</Label>
                             <NativeSelect
@@ -1011,6 +1443,7 @@ export default function AgentTeamCoordinator({
                       </CardHeader>
                       <CardContent className="av-coord-launch-summary">
                         <div><span>Workspace</span><strong title={baseCwd}>{baseCwd.split('/').at(-1) || 'agentViewer'}</strong></div>
+                        <div><span>Playbook</span><strong>{selectedPlaybook?.name ?? 'Lead-planned board'}</strong></div>
                         <div><span>Lead provider</span><strong className={`av-provider-${targetProvider}`}>{String(targetProvider).toUpperCase()}</strong></div>
                         <div><span>Teammate providers</span><strong>{teammateProviders.map((entry) => entry.toUpperCase()).join(' · ')}</strong></div>
                         <div><span>Agent limit</span><strong>{maxAgents} total</strong></div>
@@ -1019,24 +1452,25 @@ export default function AgentTeamCoordinator({
                         <div><span>Completion gate</span><strong title={gateCommand}>{gateCommand.trim() || 'Not configured'}</strong></div>
                         <div className="av-coord-launch-preview">
                           <span>Brief preview</span>
-                          <p>{promptDraft.trim() ? firstLine(promptDraft) : 'Your workflow outcome will appear here.'}</p>
+                          <p>{promptDraft.trim() ? firstLine(promptDraft) : selectedPlaybook ? `Run ${selectedPlaybook.name}` : 'Your workflow outcome will appear here.'}</p>
                         </div>
                         <div className="av-coord-launch-checks">
                           <span><CheckCircle2 aria-hidden="true" /> Lead session created</span>
                           <span><CheckCircle2 aria-hidden="true" /> Teammates assigned by provider pool</span>
                           <span><CheckCircle2 aria-hidden="true" /> {useWorktrees ? 'Separate teammate checkouts' : 'Shared checkout selected'}</span>
-                          <span><CheckCircle2 aria-hidden="true" /> Task board and live activity enabled</span>
+                          <span><CheckCircle2 aria-hidden="true" /> {selectedPlaybook ? 'Playbook board seeded without a planning turn' : 'Lead planning and live activity enabled'}</span>
                         </div>
                       </CardContent>
                       <CardFooter className="av-coord-launch-actions">
-                        <Button type="submit" size="lg" disabled={!promptDraft.trim() || busyAction === 'start'} className="av-coord-btn av-coord-primary">
+                        <Button type="submit" size="lg" disabled={!launchReady || busyAction === 'start'} className="av-coord-btn av-coord-primary">
                           {busyAction === 'start' ? <RefreshCw data-icon="inline-start" aria-hidden="true" /> : <Play data-icon="inline-start" aria-hidden="true" />} {busyAction === 'start' ? 'Launching workflow…' : 'Launch workflow'}
                         </Button>
-                        <small>{promptDraft.trim() ? <><kbd>⌘</kbd><kbd>Enter</kbd> to launch</> : 'Add a workflow brief to continue'}</small>
+                        <small>{launchReady ? <><kbd>⌘</kbd><kbd>Enter</kbd> to launch</> : selectedPlaybook?.expectsArgs && !playbookArgsReady ? 'Add playbook arguments to continue' : 'Add a workflow brief or select a playbook'}</small>
                       </CardFooter>
                     </Card>
                   </div>
                 </form>
+                )}
               </section>
             ) : (
               <>

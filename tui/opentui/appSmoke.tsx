@@ -113,7 +113,7 @@ act(() => {
 })
 await act(async () => {
   await setup.flush()
-  await new Promise((resolve) => setTimeout(resolve, 200))
+  await new Promise((resolve) => setTimeout(resolve, 350))
 })
 coordinationFrame = captureCharFrame()
 if (!coordinationFrame.includes('NEW WORKFLOW')) {
@@ -122,8 +122,121 @@ if (!coordinationFrame.includes('NEW WORKFLOW')) {
 if (!coordinationFrame.includes('Use separate teammate checkouts')) {
   throw new Error(`New Workflow is missing the optional worktree control:\n${coordinationFrame}`)
 }
+if (!coordinationFrame.includes('2 available')) {
+  throw new Error(`New Workflow did not expose the saved playbook selector:\n${coordinationFrame}`)
+}
 
-console.log('Full App smoke render, Agent Operations N launch, and split chord passed')
+// Prompt -> playbook is one Tab. Select the first playbook, then move into its
+// argument field and assert spaces remain spaces (a one-row bottom border once
+// rendered through them as hyphens).
+act(() => {
+  setup.mockInput.pressTab()
+})
+await act(async () => {
+  await setup.flush()
+})
+act(() => {
+  setup.mockInput.pressArrow('right')
+})
+await act(async () => {
+  await setup.flush()
+})
+act(() => {
+  setup.mockInput.pressTab()
+})
+await act(async () => {
+  await setup.flush()
+})
+coordinationFrame = captureCharFrame()
+if (!coordinationFrame.includes('What to audit') || coordinationFrame.includes('What-to-audit')) {
+  throw new Error(`Playbook argument input rendered spaces incorrectly:\n${coordinationFrame}`)
+}
+
+// The provider pool uses checkboxes for membership and a separate, strongly
+// marked cursor for Left/Right navigation.
+for (let index = 0; index < 2; index += 1) {
+  act(() => { setup.mockInput.pressTab() })
+  await act(async () => { await setup.flush() })
+}
+coordinationFrame = captureCharFrame()
+if (!coordinationFrame.includes('›[x]CLAUDE‹')) {
+  throw new Error(`Provider pool did not mark its keyboard cursor:\n${coordinationFrame}`)
+}
+act(() => { setup.mockInput.pressArrow('right') })
+await act(async () => { await setup.flush() })
+coordinationFrame = captureCharFrame()
+if (!coordinationFrame.includes('›[ ]CODEX‹')) {
+  throw new Error(`Provider pool cursor did not move independently of membership:\n${coordinationFrame}`)
+}
+
+// Return to the playbook row. Opening the manager proves the launcher hands
+// keyboard ownership to the CRUD surface.
+for (let index = 0; index < 3; index += 1) {
+  act(() => { setup.mockInput.pressTab({ shift: true }) })
+  await act(async () => { await setup.flush() })
+}
+act(() => {
+  setup.mockInput.pressKey('m')
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 250))
+})
+coordinationFrame = captureCharFrame()
+if (!coordinationFrame.includes('PLAYBOOK MANAGER') || !coordinationFrame.includes('audit')) {
+  throw new Error(`New Workflow did not open the playbook manager:\n${coordinationFrame}`)
+}
+act(() => {
+  setup.mockInput.pressKey('n')
+})
+await act(async () => {
+  await setup.flush()
+  await new Promise((resolve) => setTimeout(resolve, 150))
+})
+coordinationFrame = captureCharFrame()
+if (!coordinationFrame.includes('PLAYBOOK SETTINGS') || !coordinationFrame.includes('WORKFLOW STRUCTURE') || !coordinationFrame.includes('Task instructions')) {
+  throw new Error(`New playbook did not open the structured editor:\n${coordinationFrame}`)
+}
+if (coordinationFrame.includes('"name": "new-playbook"')) {
+  throw new Error(`New playbook unexpectedly exposed the raw JSON editor:\n${coordinationFrame}`)
+}
+if (!coordinationFrame.includes('Describe when this workflow should be used') || coordinationFrame.includes('Describe-when-this-workflow')) {
+  throw new Error(`Structured playbook fields rendered spaces incorrectly:\n${coordinationFrame}`)
+}
+act(() => { setup.mockInput.pressArrow('left') })
+await act(async () => {
+  await setup.mockInput.typeText('x')
+  await setup.flush()
+})
+coordinationFrame = captureCharFrame()
+if (!coordinationFrame.includes('new-playbooxk')) {
+  throw new Error(`Left arrow did not move within the structured text field:\n${coordinationFrame}`)
+}
+act(() => { setup.mockInput.pressArrow('right') })
+await act(async () => {
+  await setup.mockInput.typeText('y')
+  await setup.flush()
+})
+coordinationFrame = captureCharFrame()
+if (!coordinationFrame.includes('new-playbooxky')) {
+  throw new Error(`Right arrow did not move within the structured text field:\n${coordinationFrame}`)
+}
+act(() => { setup.mockInput.pressTab() })
+await act(async () => { await setup.flush() })
+act(() => {
+  setup.mockInput.pressKey('END')
+  setup.mockInput.pressEnter()
+})
+await act(async () => {
+  await setup.mockInput.typeText('Second line')
+  await setup.flush()
+})
+coordinationFrame = captureCharFrame()
+if (!coordinationFrame.includes('Second line') || !coordinationFrame.includes('Enter newline')) {
+  throw new Error(`Structured description did not support multiline editing:\n${coordinationFrame}`)
+}
+
+console.log('Full App smoke render, playbook manager launch, Agent Operations N launch, and split chord passed')
 // Boot effects leave live timers (session polls, registry reconcile) — exit
 // explicitly instead of waiting for them.
 process.exit(0)

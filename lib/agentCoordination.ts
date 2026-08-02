@@ -14,7 +14,7 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   AGENT_PROTOCOL_VERSION,
@@ -1147,6 +1147,9 @@ function seedPlaybookTasksSync(
   playbook: RunPlaybook,
   args: unknown,
 ): void {
+  const argumentContext = args === undefined
+    ? ''
+    : `\n\nPlaybook arguments:\n${typeof args === 'string' ? args : JSON.stringify(args, null, 2)}`
   // Pre-assign every task id in insertion order so key references resolve
   // regardless of declaration order within a phase. (Later-phase references
   // are rejected at parse time — they would deadlock against the barrier.)
@@ -1170,7 +1173,7 @@ function seedPlaybookTasksSync(
       })
       const task = insertTaskSync(db, runId, {
         title: interpolatePlaybookText(entry.title, args),
-        prompt: interpolatePlaybookText(entry.detail, args),
+        prompt: `${interpolatePlaybookText(entry.detail, args)}${argumentContext}`,
         paths: (entry.paths ?? []).map((lockPath) => interpolatePlaybookText(lockPath, args)),
         blockedBy: [...new Set([...previousPhaseIds, ...explicitDeps])],
         phase: phase.title,
@@ -2753,12 +2756,59 @@ export async function listRunPlaybooks(cwd: string): Promise<RunPlaybookListing>
         path: file,
         phaseCount: playbook.phases.length,
         taskCount: playbook.phases.reduce((total, phase) => total + phase.tasks.length, 0),
+        expectsArgs: playbookExpectsArgs(playbook),
+        maxAgents: playbook.maxAgents,
+        gateCommand: playbook.gateCommand,
+        requirePlanApproval: playbook.requirePlanApproval,
       })
     } catch (error) {
       invalid.push({ file, error: error instanceof Error ? error.message : 'invalid playbook' })
     }
   }
   return { playbooks, invalid }
+}
+
+export async function writeRunPlaybook(
+  cwd: string,
+  value: unknown,
+  previousName?: string,
+): Promise<{ playbook: RunPlaybook; path: string }> {
+  const playbook = parseRunPlaybook(value)
+  if (previousName !== undefined && !isValidPlaybookName(previousName)) {
+    throw new Error('previous playbook name must be a lowercase slug (a-z, 0-9, hyphens, max 64 chars)')
+  }
+  const dir = playbooksDir(cwd)
+  const file = path.join(dir, `${playbook.name}.json`)
+  const previousFile = previousName ? path.join(dir, `${previousName}.json`) : null
+  const targetExists = await lstat(file).then(() => true).catch(() => false)
+  if (!previousName && targetExists) throw new Error(`Playbook already exists: ${playbook.name}`)
+  if (previousName && previousName !== playbook.name && targetExists) {
+    throw new Error(`Playbook already exists: ${playbook.name}`)
+  }
+  if (previousFile && !(await lstat(previousFile).then(() => true).catch(() => false))) {
+    throw new Error(`Playbook not found: ${previousName}`)
+  }
+  await mkdir(dir, { recursive: true })
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, `${JSON.stringify(playbook, null, 2)}\n`, 'utf8')
+    await rename(temporary, file)
+    if (previousFile && previousFile !== file) await rm(previousFile, { force: true })
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {})
+    throw error
+  }
+  return { playbook, path: file }
+}
+
+export async function deleteRunPlaybook(cwd: string, name: string): Promise<{ deleted: true; name: string }> {
+  if (!isValidPlaybookName(name)) {
+    throw new Error('playbook name must be a lowercase slug (a-z, 0-9, hyphens, max 64 chars)')
+  }
+  const file = path.join(playbooksDir(cwd), `${name}.json`)
+  if (!(await lstat(file).then(() => true).catch(() => false))) throw new Error(`Playbook not found: ${name}`)
+  await rm(file)
+  return { deleted: true, name }
 }
 
 /**
@@ -4509,8 +4559,8 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
 
 /** Event application with coordinator-side gating (doc: TaskCompleted hook semantics). */
 async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, event: AgentProtocolEvent): Promise<void> {
-  if (event.type === 'task.completed' && agent.role === 'teammate' && event.taskId) {
-    if (controller.requirePlanApproval) {
+  if (event.type === 'task.completed' && event.taskId) {
+    if (agent.role === 'teammate' && controller.requirePlanApproval) {
       const db = await getDatabase()
       if (!taskPlanApprovedSync(db, controller.runId, event.taskId)) {
         const note = `Completion of ${event.taskId} was REJECTED: this run requires lead plan approval before implementation. Emit \`task.planned\` with your approach and wait for \`plan.approved\` before completing.`
@@ -4527,7 +4577,9 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
         return
       }
     }
-    const uncovered = await completionGateFailure(controller.runId, agent.id, agent.worktreePath)
+    const uncovered = agent.role === 'teammate'
+      ? await completionGateFailure(controller.runId, agent.id, agent.worktreePath)
+      : null
     if (uncovered) {
       const note = `Completion of ${event.taskId} was REJECTED: your worktree has changes outside your locked paths (${uncovered.slice(0, 6).join(', ')}). Request the locks with \`lock.requested\` or revert those files, then complete again.`
       controller.dispatchNotes.set(agent.id, note)
@@ -4544,12 +4596,13 @@ async function applyAgentEvent(controller: RunController, agent: ProtocolAgent, 
       return
     }
     // Run-level quality gate (the doc's TaskCompleted hook): the configured
-    // command must pass in the teammate's worktree or the completion bounces
-    // back with the failure output.
+    // command must pass in the assigned agent's checkout or completion bounces
+    // back with the failure output. Explicit lead integration tasks run this
+    // in the main checkout after teammate work has landed.
     if (controller.gateCommand) {
       const failure = await runGateCommand(controller.gateCommand, agent.worktreePath)
       if (failure) {
-        const note = `Completion of ${event.taskId} was REJECTED by the quality gate \`${controller.gateCommand}\`:\n${failure}\nFix the failures, re-run the gate yourself, then complete again.`
+        const note = `Completion of ${event.taskId} was REJECTED by the quality gate \`${controller.gateCommand}\` in your checkout:\n${failure}\nFix the failures, re-run the gate yourself, then complete again.`
         controller.dispatchNotes.set(agent.id, note)
         await appendProtocolEvent({
           version: AGENT_PROTOCOL_VERSION,
@@ -4651,7 +4704,7 @@ async function dispatchAgentTurn(
   }
 }
 
-/** Compose and dispatch a teammate turn from current ledger state. */
+/** Compose and dispatch an assigned work turn (teammate or explicit lead task). */
 async function dispatchTeammateWork(controller: RunController, agentId: string): Promise<void> {
   const db = await getDatabase()
   const agents = listAgentsSync(db, controller.runId)
@@ -4666,7 +4719,7 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
     && (entry.status === 'claimed' || entry.status === 'planning' || entry.status === 'planned' || entry.status === 'in_progress' || entry.status === 'blocked')) ?? null
   const note = controller.dispatchNotes.get(agentId)
 
-  if (task && shouldPlanTaskSync(db, controller, task)) {
+  if (task && agent.role === 'teammate' && shouldPlanTaskSync(db, controller, task)) {
     const planState = taskPlanStateSync(db, controller.runId, task.id)
     if (planState === 'awaiting' || task.status === 'planned') return
     const inbox = await enqueueWrite((tx) => takeInboxSync(tx, controller.runId, agentId))
@@ -4801,7 +4854,20 @@ async function handleAgentTurnEnd(controller: RunController, agentId: string): P
     to: 'lead',
     summary: `${agent.name} finished — no claimable tasks remain.`,
   })
+  await dispatchClaimableLeadTask(controller)
   await maybeStartSynthesis(controller)
+}
+
+/** Claim and run a playbook's explicit lead lane once its phase barrier opens. */
+async function dispatchClaimableLeadTask(controller: RunController): Promise<boolean> {
+  if (controller.stopped || controller.synthesisStarted || controller.turnInFlight.has('lead')) return false
+  const db = await getDatabase()
+  const lead = listAgentsSync(db, controller.runId).find((agent) => agent.role === 'lead')
+  if (!lead) return false
+  const task = await enqueueWrite((tx) => claimTaskSync(tx, controller.runId, lead.id))
+  if (!task) return false
+  await dispatchTeammateWork(controller, lead.id)
+  return true
 }
 
 async function maybeStartSynthesis(controller: RunController): Promise<void> {
@@ -4861,6 +4927,30 @@ async function handleLeadTurnEnd(controller: RunController): Promise<void> {
   }
 
   if (run.status === 'running') {
+    const leadId = run.leadAgentId ?? 'lead'
+    const owned = listTasksSync(db, controller.runId).find((task) => (
+      task.ownerAgentId === leadId
+      && ['claimed', 'in_progress', 'blocked'].includes(task.status)
+    ))
+    if (owned) {
+      const nudgeKey = `${leadId}:${owned.id}`
+      const used = controller.nudges.get(nudgeKey) ?? 0
+      if (used < MAX_TURN_NUDGES) {
+        controller.nudges.set(nudgeKey, used + 1)
+        controller.dispatchNotes.set(leadId, `Your previous turn ended while explicit lead task ${owned.id} was still open. Complete it, or emit task.failed / agent.blocked with the exact reason.`)
+        await dispatchTeammateWork(controller, leadId)
+        return
+      }
+      await appendProtocolEvent({
+        version: AGENT_PROTOCOL_VERSION,
+        runId: controller.runId,
+        agentId: leadId,
+        type: 'task.failed',
+        taskId: owned.id,
+        summary: `${owned.id} auto-failed: the lead integration task stalled after ${MAX_TURN_NUDGES + 1} turns`,
+      })
+    }
+    if (await dispatchClaimableLeadTask(controller)) return
     // An intervention turn ended: the lead goes back to standby, and its
     // decisions (task.failed / task.created) may have finished the board.
     await enqueueWrite((tx) => {
@@ -4993,6 +5083,7 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
   for (const agent of spawned) {
     await dispatchTeammateWork(controller, agent.id)
   }
+  await dispatchClaimableLeadTask(controller)
 }
 
 /**
@@ -5002,18 +5093,24 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
  * lead synthesizes when the board is done.
  */
 export async function startProtocolRun(params: StartProtocolRunParams): Promise<StartProtocolRunResult> {
-  const prompt = params.prompt.trim()
+  const playbook = params.playbookName ? await loadRunPlaybook(params.baseCwd, params.playbookName) : undefined
+  if (playbook && params.playbookArgs === undefined && playbookExpectsArgs(playbook)) {
+    throw new Error(
+      `Playbook "${playbook.name}" expects args (${playbook.argsHint ?? 'see the {{args}} placeholders in its task text'})`,
+    )
+  }
+  const prompt = params.prompt.trim() || (playbook ? `Playbook run: ${playbook.name}` : '')
   if (!prompt) throw new Error('prompt is required')
   const runId = randomUUID()
   const ts = nowIso()
-  const maxAgents = Math.max(2, Math.min(params.maxAgents, 6))
+  const maxAgents = Math.max(2, Math.min(params.maxAgents ?? playbook?.maxAgents ?? 3, 6))
   const teammateProviders = [...new Set(params.teammateProviders?.filter(Boolean) ?? [])]
   if (teammateProviders.length === 0) teammateProviders.push(params.provider)
 
   const leadSession = await createNewViewSession({
     provider: params.provider,
     cwd: params.baseCwd,
-    title: `${params.title ?? 'Coordinated run'} · lead`,
+    title: `${params.title ?? playbook?.name ?? 'Coordinated run'} · lead`,
   })
 
   const controller: RunController = {
@@ -5023,11 +5120,11 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     teammateProviders,
     baseCwd: params.baseCwd,
     maxAgents,
-    title: params.title,
+    title: params.title ?? playbook?.name,
     model: params.model,
     effort: params.effort,
-    gateCommand: params.gateCommand?.trim() || undefined,
-    requirePlanApproval: params.requirePlanApproval === true,
+    gateCommand: (params.gateCommand ?? playbook?.gateCommand)?.trim() || undefined,
+    requirePlanApproval: (params.requirePlanApproval ?? playbook?.requirePlanApproval) === true,
     useWorktrees: params.useWorktrees !== false,
     stopped: false,
     synthesisStarted: false,
@@ -5068,6 +5165,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
           id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at
         ) VALUES ('lead', ?, 'lead', 'lead', ?, ?, ?, '', NULL, 'working', NULL, ?, ?)
       `).run(runId, leadSession.provider, leadSession.sessionId, params.baseCwd, ts, ts)
+      if (playbook) seedPlaybookTasksSync(db, runId, 'lead', playbook, params.playbookArgs)
       db.exec('COMMIT')
       const next = readSnapshotSync(db, runId)
       if (!next) throw new Error('Failed to read created run')
@@ -5078,22 +5176,34 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     }
   })
 
-  const planMessage = buildLeadPlanPreamble({
-    runId,
-    agent: { id: 'lead', name: 'lead' },
-    prompt,
-    teammateCount: maxAgents - 1,
-    useWorktrees: controller.useWorktrees,
-  })
-  void dispatchAgentTurn(controller, 'lead', planMessage).catch(async (err) => {
-    await appendProtocolEvent({
-      version: AGENT_PROTOCOL_VERSION,
+  if (playbook) {
+    void beginExecutionPhase(controller).catch(async (err) => {
+      await appendProtocolEvent({
+        version: AGENT_PROTOCOL_VERSION,
+        runId,
+        agentId: 'lead',
+        type: 'agent.blocked',
+        summary: err instanceof Error ? err.message : 'Failed to launch playbook teammates',
+      }).catch(() => {})
+    })
+  } else {
+    const planMessage = buildLeadPlanPreamble({
       runId,
-      agentId: 'lead',
-      type: 'agent.blocked',
-      summary: err instanceof Error ? err.message : 'Failed to launch lead',
-    }).catch(() => {})
-  })
+      agent: { id: 'lead', name: 'lead' },
+      prompt,
+      teammateCount: maxAgents - 1,
+      useWorktrees: controller.useWorktrees,
+    })
+    void dispatchAgentTurn(controller, 'lead', planMessage).catch(async (err) => {
+      await appendProtocolEvent({
+        version: AGENT_PROTOCOL_VERSION,
+        runId,
+        agentId: 'lead',
+        type: 'agent.blocked',
+        summary: err instanceof Error ? err.message : 'Failed to launch lead',
+      }).catch(() => {})
+    })
+  }
 
   return {
     snapshot,

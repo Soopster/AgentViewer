@@ -22,16 +22,20 @@ export async function POST(request: NextRequest) {
   const teammateProviders = Array.isArray(body.teammateProviders)
     ? [...new Set(body.teammateProviders.filter(isAgentProvider))]
     : undefined
-  const maxAgents = Math.min(Math.max(Number(body.maxAgents) || 3, 2), 6)
+  const maxAgents = Number.isFinite(Number(body.maxAgents))
+    ? Math.min(Math.max(Number(body.maxAgents), 2), 6)
+    : undefined
   const title = typeof body.title === 'string' ? body.title : undefined
   const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined
   const effort = typeof body.effort === 'string' && body.effort.trim() ? body.effort.trim() : undefined
   const gateCommand = typeof body.gateCommand === 'string' && body.gateCommand.trim() ? body.gateCommand.trim() : undefined
-  const requirePlanApproval = body.requirePlanApproval === true
+  const requirePlanApproval = typeof body.requirePlanApproval === 'boolean' ? body.requirePlanApproval : undefined
   const useWorktrees = body.useWorktrees !== false
+  const playbookName = typeof body.playbookName === 'string' && body.playbookName.trim() ? body.playbookName.trim() : undefined
+  const playbookArgs = body.playbookArgs
 
   try {
-    const result = await startProtocolRun({ prompt, baseCwd, provider, teammateProviders, maxAgents, title, model, effort, gateCommand, requirePlanApproval, useWorktrees })
+    const result = await startProtocolRun({ prompt, baseCwd, provider, teammateProviders, maxAgents, title, model, effort, gateCommand, requirePlanApproval, useWorktrees, playbookName, playbookArgs })
     return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'

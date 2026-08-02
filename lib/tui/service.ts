@@ -107,16 +107,20 @@ import {
 import {
   appendProtocolEvent,
   cleanupProtocolRunWorktrees,
+  deleteRunPlaybook,
   deleteProtocolRun,
   drainCooperativeInbox,
   listProtocolRuns,
+  listRunPlaybooks,
+  loadRunPlaybook,
   observeCoordinatorSessionTurn,
   readProtocolRun,
   startProtocolRun,
   stopProtocolRun,
   validateWorktreeTaskLocks,
+  writeRunPlaybook,
 } from '../agentCoordination'
-import type { AgentProtocolEvent, ProtocolRun, ProtocolRunSnapshot, StartProtocolRunParams, StartProtocolRunResult } from '../agentProtocol'
+import type { AgentProtocolEvent, PlaybookSummary, ProtocolRun, ProtocolRunSnapshot, RunPlaybook, StartProtocolRunParams, StartProtocolRunResult } from '../agentProtocol'
 import type { AgentProvider, ContextUsage, ProviderSelection, Session, SessionDiagnosticSection, SessionInfo, SessionMessage, SessionModelInfo } from '../types'
 import type { TuiDensity, TuiThemeMode, TuiTranscriptView } from '../../tui/theme'
 import { queueClaudeReadStateSeeds } from '../claudePool'
@@ -551,6 +555,44 @@ export async function startTuiProtocolRun(params: StartProtocolRunParams): Promi
     })
   }
   return startProtocolRun(params)
+}
+
+export async function listTuiRunPlaybooks(cwd: string): Promise<{ playbooks: PlaybookSummary[]; invalid: Array<{ file: string; error: string }> }> {
+  if (isRemoteAttached()) {
+    const query = new URLSearchParams({ cwd }).toString()
+    return remoteJson(`/api/agent-protocol/playbooks?${query}`)
+  }
+  return listRunPlaybooks(cwd)
+}
+
+export async function readTuiRunPlaybook(cwd: string, name: string): Promise<RunPlaybook> {
+  if (isRemoteAttached()) {
+    const query = new URLSearchParams({ cwd, name }).toString()
+    const result = await remoteJson<{ playbook: RunPlaybook }>(`/api/agent-protocol/playbooks?${query}`)
+    return result.playbook
+  }
+  return loadRunPlaybook(cwd, name)
+}
+
+export async function writeTuiRunPlaybook(cwd: string, playbook: unknown, previousName?: string): Promise<{ playbook: RunPlaybook; path: string }> {
+  if (isRemoteAttached()) {
+    return remoteJson('/api/agent-protocol/playbooks', {
+      method: 'PUT',
+      body: JSON.stringify({ cwd, playbook, previousName }),
+    })
+  }
+  return writeRunPlaybook(cwd, playbook, previousName)
+}
+
+export async function deleteTuiRunPlaybook(cwd: string, name: string): Promise<void> {
+  if (isRemoteAttached()) {
+    await remoteJson('/api/agent-protocol/playbooks', {
+      method: 'DELETE',
+      body: JSON.stringify({ cwd, name }),
+    })
+    return
+  }
+  await deleteRunPlaybook(cwd, name)
 }
 
 export async function readTuiProtocolRun(runId: string): Promise<ProtocolRunSnapshot | null> {
