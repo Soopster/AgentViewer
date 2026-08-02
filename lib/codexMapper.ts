@@ -166,6 +166,8 @@ function mapItemToMessages(
           status: item.status,
           source: item.source,
           processId: item.processId,
+          pluginId: item.pluginId,
+          scriptPath: item.scriptPath,
         },
       }], turnId, timestamp)
       const resultText = [
@@ -338,6 +340,7 @@ export function mapCodexThreadToSession(thread: CodexThread, tag: string | null)
     createdAt: thread.createdAt * 1000,
     provider: 'codex',
     capabilities: CODEX_CAPABILITIES,
+    isPinned: thread.isPinned,
     isPending: isPendingCodexThread(thread) ? true : undefined,
   }
 }
@@ -355,6 +358,7 @@ export function mapCodexThreadToSessionInfo(thread: CodexThread, tag: string | n
     createdAt: thread.createdAt * 1000,
     provider: 'codex',
     capabilities: CODEX_CAPABILITIES,
+    isPinned: thread.isPinned,
     currentModel: currentModel ?? undefined,
   }
 }

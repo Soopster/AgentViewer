@@ -2298,6 +2298,74 @@ function appendCodexLiveToolOutput(
   ]
 }
 
+function codexQuestionMessageUuid(permissionId: string): string {
+  return `live-tool:codex-question:${permissionId}`
+}
+
+function codexQuestionLiveMessage(
+  permission: PendingPermission,
+  targetSession: Session,
+): ThreadedMessage | null {
+  const questions = permission.questions ?? []
+  if (
+    permission.provider !== 'codex'
+    || permission.toolName !== 'item/tool/requestUserInput'
+    || questions.length === 0
+  ) return null
+
+  const toolUseId = `${codexQuestionMessageUuid(permission.id)}:tool`
+  return {
+    role: 'assistant',
+    uuid: codexQuestionMessageUuid(permission.id),
+    sessionId: permission.sessionId ?? targetSession.sessionId,
+    provider: 'codex',
+    blocks: [{
+      type: 'tool_thread',
+      toolUse: {
+        type: 'tool_use',
+        id: toolUseId,
+        name: 'AskUserQuestion',
+        input: {
+          questions: questions.map((question) => ({
+            id: question.id,
+            header: question.header,
+            question: question.question,
+            multiSelect: question.multiSelect,
+            options: question.options,
+          })),
+        },
+      },
+      result: null,
+    }],
+  }
+}
+
+function completeCodexQuestionLiveMessage(
+  messages: ThreadedMessage[],
+  permission: PendingPermission,
+  answers: PendingQuestionAnswers | null,
+): ThreadedMessage[] {
+  if (permission.provider !== 'codex' || permission.toolName !== 'item/tool/requestUserInput') return messages
+  const messageUuid = codexQuestionMessageUuid(permission.id)
+  const toolUseId = `${messageUuid}:tool`
+  const displayAnswers = Object.fromEntries((permission.questions ?? []).flatMap((question) => {
+    const values = answers?.[question.id ?? question.question]
+    return values && values.length > 0 ? [[question.question, values.join(', ')]] : []
+  }))
+  return messages.map((message) => message.uuid !== messageUuid ? message : {
+    ...message,
+    blocks: message.blocks.map((block) => block.type !== 'tool_thread' || block.toolUse.id !== toolUseId ? block : {
+      ...block,
+      result: {
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content: answers ? JSON.stringify({ answers: displayAnswers }) : 'Question skipped by user.',
+        is_error: answers ? undefined : true,
+      },
+    }),
+  })
+}
+
 function liveMessageSessionKey(message: ThreadedMessage): string | null {
   if (!message.sessionId) return null
   return `${message.provider ?? 'claude'}:${message.sessionId}`
@@ -11046,6 +11114,9 @@ export default function OpenTuiApp() {
         { ...target, sessionId: permission.sessionId ?? target.sessionId },
         { action: 'respondPermission', permissionId: permission.id, response, provider: target.provider },
       )
+      if (permission.provider === 'codex' && permission.questions?.length) {
+        setLiveTranscriptMessages((prev) => completeCodexQuestionLiveMessage(prev, permission, null))
+      }
       setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
       setPermissionOptionIndex(0)
     } catch (err) {
@@ -11114,6 +11185,7 @@ export default function OpenTuiApp() {
         { ...target, sessionId: permission.sessionId ?? target.sessionId },
         { action: 'respondQuestion', permissionId: permission.id, answers, provider: target.provider },
       )
+      setLiveTranscriptMessages((prev) => completeCodexQuestionLiveMessage(prev, permission, answers))
       setPendingPermissions((prev) => prev.filter((entry) => entry.id !== permission.id))
       setQuestionSelections({})
       setQuestionFreeformAnswers({})
@@ -12309,6 +12381,11 @@ export default function OpenTuiApp() {
         const pendingPermission = extractPendingPermission(parsed)
         if (pendingPermission) {
           noteFirstOutput()
+          const codexQuestionMessage = codexQuestionLiveMessage(pendingPermission, targetSession)
+          if (codexQuestionMessage) {
+            composerTurnProducedOutputRef.current = true
+            setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, codexQuestionMessage))
+          }
           setPendingPermissions((prev) => {
             const next = [...prev.filter((entry) => entry.id !== pendingPermission.id), pendingPermission]
             setPermissionOptionIndex(0)

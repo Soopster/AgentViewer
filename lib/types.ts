@@ -105,6 +105,8 @@ export type Session = {
   createdAt?: string | number
   provider?: AgentProvider
   capabilities?: SessionCapabilities
+  /** Provider-native pinned state when the session backend exposes it. */
+  isPinned?: boolean
   /**
    * When this session was spawned as a subagent by another session, the id of
    * the parent. OpenCode subagents (spawned by the `task` tool) populate this
@@ -202,6 +204,7 @@ export type SessionInfo = {
   createdAt?: number
   provider: AgentProvider
   capabilities: SessionCapabilities
+  isPinned?: boolean
   currentModel?: string
   parentSessionId?: string
 }
