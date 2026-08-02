@@ -1554,7 +1554,14 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
     const status = toolStringParam(input, ['status']) ?? (normalizedThread.result ? 'completed' : 'pending')
     return [
       line(`agent switch: ${name}`, 'tool'),
-      line(normalizedThread.result?.is_error ? '✗ ERROR' : `✓ ${status}`, normalizedThread.result?.is_error ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim'),
+      line(
+        normalizedThread.result?.is_error
+          ? '✗ ERROR'
+          : normalizedThread.result
+            ? `✓ ${status}`
+            : `… ${status}`,
+        normalizedThread.result?.is_error ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim',
+      ),
     ]
   }
 
@@ -1585,7 +1592,10 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
 
     return [
       line(`tool ${toolName}${filePath ? `: ${filePath}` : ''}`, 'tool'),
-      line(isError ? '✗ ERROR' : `✓ ${summary}`, isError ? 'result_error' : 'result_ok'),
+      line(
+        isError ? '✗ ERROR' : normalizedThread.result ? `✓ ${summary}` : `… pending · ${summary}`,
+        isError ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim',
+      ),
     ]
   }
 
@@ -1655,7 +1665,12 @@ function previewTool(thread: ToolThread, activeForms?: TaskActiveForms, taskRegi
 
   return [
     line(`tool ${toolName}${target ? `: ${target}` : ''}`, 'tool'),
-    line(`result ${normalizedThread.result?.is_error ? 'error' : 'ok'}: ${resultText || 'empty'}`, normalizedThread.result?.is_error ? 'result_error' : 'result_ok'),
+    line(
+      normalizedThread.result
+        ? `result ${normalizedThread.result.is_error ? 'error' : 'ok'}: ${resultText || 'empty'}`
+        : '… pending',
+      normalizedThread.result?.is_error ? 'result_error' : normalizedThread.result ? 'result_ok' : 'dim',
+    ),
   ]
 }
 
@@ -1830,6 +1845,12 @@ export type TuiTranscriptCard = {
   hasMermaidDiagrams?: boolean
   /** Spawn-chain depth for subagent messages (1 = spawned by main loop). */
   subagentDepth?: number
+  /**
+   * A tool on this card has been called but hasn't reported a result yet —
+   * true only while a turn streams. Renderers use it to mark the card as
+   * still running rather than complete.
+   */
+  pending?: boolean
 }
 
 function cardLineLimit(density: TuiDensity): number {
@@ -2051,6 +2072,7 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
       : undefined,
     hasMermaidDiagrams,
     subagentDepth: subagentDepth > 0 ? subagentDepth : undefined,
+    pending: message.blocks.some((block) => block.type === 'tool_thread' && !block.result) || undefined,
   }
 }
 

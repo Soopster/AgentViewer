@@ -145,6 +145,7 @@ import type { MessageBookmark } from '../../lib/messageBookmarks'
 import type { ProtocolAgent, ProtocolRun, ProtocolRunSnapshot } from '../../lib/agentProtocol'
 import {
   extractClaudeStreamToolInputDelta,
+  extractClaudeStreamToolResults,
   extractClaudeStreamToolUse,
   normalizeClaudeStreamThreadedMessage,
   parseClaudeStreamToolInput,
@@ -1501,6 +1502,7 @@ const COMPOSER_DOCK_CHROME_HEIGHT = 3
 const COMPOSER_WINDOW_MAX_WIDTH = 88
 const COMPOSER_WINDOW_MAX_HEIGHT = 24
 const CODEX_LIVE_ASSISTANT_UUID = 'live-codex-assistant'
+const CLAUDE_LIVE_ASSISTANT_UUID_PREFIX = 'live-claude-assistant:'
 type ComposerKeyBinding = { name: string; action: TextareaAction; shift?: boolean; alt?: boolean; meta?: boolean; ctrl?: boolean }
 const TUI_SLASH_HINTS: Record<string, string[]> = {
   claude: ['/clear', '/compact', '/help', '/model', '/cost', '/review'],
@@ -2121,24 +2123,19 @@ function upsertThreadedMessage(messages: ThreadedMessage[], nextMessage: Threade
   return messages.map((message, index) => index === existingIndex ? nextMessage : message)
 }
 
-function completeLiveToolThread(messages: ThreadedMessage[], key: string): ThreadedMessage[] {
-  const targetUuid = `live-tool:${key}`
+// Attach a tool's real result to its live card. Until this lands the card
+// keeps `result: null`, which the formatters render as a compact running
+// state — a streaming tool is genuinely still running once its input has
+// finished streaming, so it must not be dressed up as complete.
+function applyLiveToolResult(messages: ThreadedMessage[], result: ToolResultBlock): ThreadedMessage[] {
+  const targetUuid = `live-tool:${result.tool_use_id}`
   return messages.map((message) => {
     if (message.uuid !== targetUuid) return message
     return {
       ...message,
-      blocks: message.blocks.map((block) => {
-        if (block.type !== 'tool_thread') return block
-        if (block.result) return block
-        return {
-          ...block,
-          result: {
-            type: 'tool_result',
-            tool_use_id: block.toolUse.id,
-            content: 'Tool call emitted in live stream. Final output will appear when the transcript syncs.',
-          },
-        }
-      }),
+      blocks: message.blocks.map((block) => block.type === 'tool_thread' && !block.result
+        ? { ...block, result }
+        : block),
     }
   })
 }
@@ -2310,6 +2307,11 @@ function hasLiveAssistantMessage(messages: ThreadedMessage[], key: string): bool
   return messages.some((message) => liveMessageSessionKey(message) === key && message.role === 'assistant')
 }
 
+function isLiveAssistantTextMessage(message: ThreadedMessage): boolean {
+  return message.role === 'assistant'
+    && message.blocks.some((block) => block.type === 'text' && block.text.length > 0)
+}
+
 function hasPersistedAssistantAfterBaseline(rawMessages: import('../../lib/types').SessionMessage[], baselineCount: number): boolean {
   const durableCount = summarizeDurableSessionMessages(rawMessages).count
   const start = durableCount > baselineCount
@@ -2354,6 +2356,49 @@ function makeLiveAssistantTextMessage(session: Session, text: string, uuid: stri
     timestamp,
     blocks: [{ type: 'text', text }],
   }
+}
+
+function liveAssistantTextKey(payload: Record<string, unknown>, provider: ProviderSelection | undefined): string {
+  if (provider === 'opencode') {
+    const event = payload.event && typeof payload.event === 'object'
+      ? payload.event as Record<string, unknown>
+      : {}
+    const properties = event.properties && typeof event.properties === 'object'
+      ? event.properties as Record<string, unknown>
+      : {}
+    const part = properties.part && typeof properties.part === 'object'
+      ? properties.part as Record<string, unknown>
+      : {}
+    const id = typeof properties.partID === 'string' && properties.partID
+      ? properties.partID
+      : typeof part.id === 'string' && part.id
+        ? part.id
+        : typeof properties.messageID === 'string' && properties.messageID
+          ? properties.messageID
+          : 'assistant'
+    return `live-opencode:${id}`
+  }
+
+  if (provider === 'copilot') {
+    const event = payload.event && typeof payload.event === 'object'
+      ? payload.event as Record<string, unknown>
+      : {}
+    const data = event.data && typeof event.data === 'object'
+      ? event.data as Record<string, unknown>
+      : {}
+    const id = typeof data.messageId === 'string' && data.messageId
+      ? data.messageId
+      : typeof event.id === 'string' && event.id
+        ? event.id
+        : 'assistant'
+    return `live-copilot:${id}`
+  }
+
+  if (provider === 'pi') {
+    return 'live-pi:assistant'
+  }
+
+  return `live-${provider ?? 'assistant'}-assistant`
 }
 
 function extractCopilotFinalAssistantMessage(payload: unknown, session: Session): ThreadedMessage | null {
@@ -2955,13 +3000,18 @@ function streamContinuationMarker(line: TuiTranscriptCardLine): string {
 
 function streamToolGroupMarker(cards: TuiTranscriptCard[]): string {
   let hasWarning = false
+  let hasPending = false
   for (const card of cards) {
+    if (card.pending) hasPending = true
     for (const line of [...card.lines, ...card.expandedLines]) {
       if (line.tone === 'result_error') return '×'
       if (line.tone === 'system') hasWarning = true
     }
   }
-  return hasWarning ? '▲' : '●'
+  if (hasWarning) return '▲'
+  // A called-but-unfinished tool reads as an open circle until its result
+  // lands, so a streaming turn shows what is still running at a glance.
+  return hasPending ? '○' : '●'
 }
 
 function streamToolCardMarker(card: TuiTranscriptCard): string {
@@ -2973,6 +3023,7 @@ function streamStatusColor(marker: string, theme: TuiThemePalette): string {
   if (marker === '×') return theme.red
   if (marker === '▲') return theme.amber
   if (marker === '●') return theme.green
+  if (marker === '○') return theme.amber
   return theme.dim
 }
 
@@ -6293,7 +6344,12 @@ function SplitTranscriptPaneInner({
   // cards win over persisted ones with the same key, so the poll that finally
   // lands the message doesn't render it twice.
   const liveCards = useMemo(
-    () => liveMessages.map((message) => formatTranscriptCard(message, density)),
+    () => liveMessages.map((message) => {
+      const formatted = formatTranscriptCard(message, density)
+      return isLiveAssistantTextMessage(message)
+        ? { ...formatted, markdownContent: undefined }
+        : formatted
+    }),
     [liveMessages, density],
   )
   const tailCards = useMemo(() => {
@@ -7855,8 +7911,8 @@ export default function OpenTuiApp() {
     const seen = new Set(live.map((m) => m.uuid))
     return [...live, ...persisted.filter((m) => !seen.has(m.uuid))]
   }, [sessionDetail?.threadedMessages, liveTranscriptMessagesForSession])
-  const codexLiveAssistantTextVisible = useMemo(
-    () => liveTranscriptMessagesForSession.some((message) => message.uuid === CODEX_LIVE_ASSISTANT_UUID),
+  const liveAssistantTextCardVisible = useMemo(
+    () => liveTranscriptMessagesForSession.some(isLiveAssistantTextMessage),
     [liveTranscriptMessagesForSession],
   )
 
@@ -7996,8 +8052,19 @@ export default function OpenTuiApp() {
       const timestampedMessage = message.timestamp
         ? message
         : { ...message, timestamp: new Date(liveTimestampBase + index).toISOString() }
+      const formatted = formatTranscriptCard(
+        timestampedMessage,
+        density,
+        baseTaskContext.activeForms,
+        baseTaskContext.taskRegistry,
+      )
       return {
-        ...formatTranscriptCard(timestampedMessage, density, baseTaskContext.activeForms, baseTaskContext.taskRegistry),
+        ...formatted,
+        // Live prose changes every few milliseconds. Render its already-
+        // formatted text lines synchronously while it grows; the markdown
+        // renderer is intentionally restored when the durable card replaces
+        // this overlay, avoiding a blank async-markdown frame per new block.
+        markdownContent: isLiveAssistantTextMessage(message) ? undefined : formatted.markdownContent,
         key: `live:${message.uuid}`,
       }
     })
@@ -9108,7 +9175,7 @@ export default function OpenTuiApp() {
     if (hasComposerStatusMessage) {
       const streamingResponse = composerSendState === 'sending' && composerLiveText && !composerError
       rows += streamingResponse
-        ? transcriptView === 'stream' ? 0 : LIVE_PREVIEW_HEIGHT
+        ? transcriptView === 'stream' || liveAssistantTextCardVisible ? 0 : LIVE_PREVIEW_HEIGHT
         : 2
     }
     if (awaitingPersistedTurn) rows += 2
@@ -12069,6 +12136,8 @@ export default function OpenTuiApp() {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
     let replyAccumulator = ''
     let codexLiveMessageAccumulator = ''
+    const claudeLiveTextByIndex = new Map<number, string>()
+    const providerLiveTextByKey = new Map<string, string>()
     let copilotFinalMessageSeen = false
     let commandResultWithoutTranscript = false
 
@@ -12388,13 +12457,22 @@ export default function OpenTuiApp() {
             if (finalInput) {
               setLiveTranscriptMessages((prev) => updateLiveToolThreadInput(prev, toolKey, finalInput))
             }
-            setLiveToolActivities((prev) => prev.map((a) =>
-              a.key === toolKey ? { ...a, status: 'done' } : a
-            ))
-            setLiveTranscriptMessages((prev) => completeLiveToolThread(prev, toolKey))
+            // content_block_stop only means the call finished streaming — the
+            // tool itself runs after this, so the card stays running until its
+            // tool_result arrives below.
           }
           liveToolInputJsonRef.current.delete(stopIndex)
           liveToolIndexesRef.current.delete(stopIndex)
+        }
+
+        // Real tool output for a live Claude card: fills in exit code, line
+        // counts, diffs and errors while the turn is still running.
+        const claudeToolResults = extractClaudeStreamToolResults(parsed)
+        if (claudeToolResults.length > 0) {
+          setLiveTranscriptMessages((prev) => claudeToolResults.reduce(applyLiveToolResult, prev))
+          setLiveToolActivities((prev) => prev.map((activity) => claudeToolResults.some((r) => r.tool_use_id === activity.key)
+            ? { ...activity, status: 'done' }
+            : activity))
         }
 
         const openCodeToolThread = extractOpenCodeLiveToolThread(parsed, targetSession)
@@ -12470,7 +12548,13 @@ export default function OpenTuiApp() {
             if (finalText) replyAccumulator = finalText
             pendingLiveTextRef.current = ''
             setComposerLiveText('')
-            setLiveTranscriptMessages((prev) => upsertThreadedMessage(prev, threaded))
+            setLiveTranscriptMessages((prev) => upsertThreadedMessage(
+              prev.filter((message) => (
+                liveMessageSessionKey(message) !== targetKey
+                || !isLiveAssistantTextMessage(message)
+              )),
+              threaded,
+            ))
             return
           }
         }
@@ -12515,7 +12599,21 @@ export default function OpenTuiApp() {
 
         const replace = shouldReplaceLiveAssistantText(parsed)
         replyAccumulator = replace ? delta : `${replyAccumulator}${delta}`
-        if (targetSession.provider === 'codex') {
+        if (targetSession.provider === 'claude') {
+          const textBlockIndex = streamEventIndex(parsed, 'content_block_delta')
+          if (textBlockIndex != null) {
+            const blockText = `${claudeLiveTextByIndex.get(textBlockIndex) ?? ''}${delta}`
+            claudeLiveTextByIndex.set(textBlockIndex, blockText)
+            setLiveTranscriptMessages((prev) => upsertThreadedMessage(
+              prev,
+              makeLiveAssistantTextMessage(
+                targetSession,
+                blockText,
+                `${CLAUDE_LIVE_ASSISTANT_UUID_PREFIX}${textBlockIndex}`,
+              ),
+            ))
+          }
+        } else if (targetSession.provider === 'codex') {
           const visibleText = extractCodexVisibleAssistantText(parsed)
           if (visibleText) {
             codexLiveMessageAccumulator = shouldReplaceCodexVisibleAssistantText(parsed)
@@ -12530,6 +12628,16 @@ export default function OpenTuiApp() {
               ),
             ))
           }
+        } else {
+          const liveMessageKey = liveAssistantTextKey(parsedRecord, targetSession.provider)
+          const liveMessageText = replace
+            ? delta
+            : `${providerLiveTextByKey.get(liveMessageKey) ?? ''}${delta}`
+          providerLiveTextByKey.set(liveMessageKey, liveMessageText)
+          setLiveTranscriptMessages((prev) => upsertThreadedMessage(
+            prev,
+            makeLiveAssistantTextMessage(targetSession, liveMessageText, liveMessageKey),
+          ))
         }
         pendingLiveTextRef.current = replace ? delta : `${pendingLiveTextRef.current}${delta}`
         liveTextTargetSessionRef.current = targetSession
@@ -12589,7 +12697,10 @@ export default function OpenTuiApp() {
 
       if (targetSession.provider === 'copilot' && !copilotFinalMessageSeen && replyAccumulator.trim()) {
         setLiveTranscriptMessages((prev) => upsertThreadedMessage(
-          prev,
+          prev.filter((message) => (
+            liveMessageSessionKey(message) !== targetKey
+            || !isLiveAssistantTextMessage(message)
+          )),
           makeLiveAssistantTextMessage(
             targetSession,
             replyAccumulator,
@@ -17523,7 +17634,7 @@ export default function OpenTuiApp() {
                   ) : transcriptChildren}
                 </TuiErrorBoundary>
 
-                {composerSendState === 'sending' && composerLiveText && !codexLiveAssistantTextVisible ? (
+                {composerSendState === 'sending' && composerLiveText && !liveAssistantTextCardVisible ? (
                   transcriptView === 'stream' ? (
                     <box
                       key="live-stream-text"
@@ -17621,6 +17732,7 @@ export default function OpenTuiApp() {
                 && composerLiveText
                 && composerTargetSession
                 && sessionKey(composerTargetSession) === sessionKey(splitSession)
+                && !(splitPaneLiveMessages.get(sessionKey(splitSession)) ?? []).some(isLiveAssistantTextMessage)
                   ? composerLiveText
                   : null
               }
@@ -18463,7 +18575,7 @@ export default function OpenTuiApp() {
 
       {composerStatusMessage ? (
         composerSendState === 'sending' && composerLiveText && !composerError ? (
-          transcriptView === 'stream' ? null : (
+          transcriptView === 'stream' || liveAssistantTextCardVisible ? null : (
             <LivePreviewCard
               title={`● ASSISTANT · ${String(composerProvider ?? 'agent').toUpperCase()} · STREAMING`}
               lines={liveAssistantPreviewLines}

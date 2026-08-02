@@ -370,6 +370,30 @@ export function extractClaudeStreamToolUse(value: unknown): ToolUseBlock | null 
   }
 }
 
+/**
+ * Tool results the SDK reports mid-turn, as `user` messages carrying
+ * `tool_result` blocks. Live renderers pair these with the `tool_use` blocks
+ * from `extractClaudeStreamToolUse` so a streaming card shows the real
+ * outcome (exit code, output, error) instead of waiting for the transcript
+ * to sync. Sub-agent results (`parent_tool_use_id`) are skipped — they belong
+ * to a nested transcript, not the top-level cards.
+ */
+export function extractClaudeStreamToolResults(value: unknown): ToolResultBlock[] {
+  const record = asObject(value)
+  if (record.type !== 'user' || record.parent_tool_use_id) return []
+
+  const content = asObject(record.message).content
+  const contentResults = Array.isArray(content)
+    ? content
+        .map((entry) => toolResultBlock(entry, record.tool_result_meta))
+        .filter((result): result is ToolResultBlock => Boolean(result))
+    : []
+  if (contentResults.length > 0) return contentResults
+
+  // Some SDK messages expose the result only through the structured sidecar.
+  return toolResultBlocks(record.tool_use_result, record.tool_result_meta)
+}
+
 export function extractClaudeStreamToolInputDelta(value: unknown): { index: number; partialJson: string } | null {
   const record = asObject(value)
   if (record.type !== 'stream_event') return null
