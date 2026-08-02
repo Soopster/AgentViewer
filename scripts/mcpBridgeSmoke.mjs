@@ -4,8 +4,8 @@ import { mkdtemp, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { Client } from '@modelcontextprotocol/client'
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 
 const seen = []
 let coordinatorTask = null
@@ -146,10 +146,34 @@ const transport = new StdioClientTransport({
     AGENT_VIEWER_COORD_TRANSPORT: 'http',
   },
 })
-const client = new Client({ name: 'agent-viewer-mcp-smoke', version: '1.0.0' })
+const client = new Client(
+  { name: 'agent-viewer-mcp-smoke', version: '1.0.0' },
+  {
+    capabilities: {
+      extensions: {
+        'io.modelcontextprotocol/ui': { mimeTypes: ['text/html;profile=mcp-app'] },
+        'io.modelcontextprotocol/skills': {},
+      },
+    },
+    versionNegotiation: { mode: { pin: '2026-07-28' } },
+  },
+)
 
 try {
   await client.connect(transport)
+  if (client.getProtocolEra() !== 'modern' || client.getNegotiatedProtocolVersion() !== '2026-07-28') {
+    throw new Error('Bridge did not negotiate the MCP 2026-07-28 protocol era')
+  }
+  if (client.getServerVersion()?.websiteUrl !== 'https://github.com/Soopster/AgentViewer') {
+    throw new Error('Bridge server identity did not advertise the Agent Viewer repository')
+  }
+  const extensions = client.getServerCapabilities()?.extensions
+  if (!extensions?.['io.modelcontextprotocol/ui'] || !extensions?.['io.modelcontextprotocol/skills']) {
+    throw new Error('Bridge did not advertise the MCP Apps and Skills extensions through server/discover')
+  }
+  if (extensions?.['io.modelcontextprotocol/tasks']) {
+    throw new Error('Bridge advertised the experimental Tasks extension without a supported tasks runtime')
+  }
   const listed = await client.listTools()
   const names = new Set(listed.tools.map((tool) => tool.name))
   const requiredTools = [
@@ -162,6 +186,40 @@ try {
   const missingTools = requiredTools.filter((name) => !names.has(name))
   if (missingTools.length > 0) {
     throw new Error(`Bridge tools missing: ${missingTools.join(',')}`)
+  }
+  const statusTool = listed.tools.find((tool) => tool.name === 'coord_status')
+  if (statusTool?._meta?.ui?.resourceUri !== 'ui://agent-viewer/coordinator-dashboard.html') {
+    throw new Error('coord_status did not advertise its MCP App resource')
+  }
+
+  const resources = await client.listResources()
+  const resourceUris = new Set(resources.resources.map((resource) => resource.uri))
+  for (const uri of [
+    'skill://index.json',
+    'skill://coordinate-agents/SKILL.md',
+    'ui://agent-viewer/coordinator-dashboard.html',
+  ]) {
+    if (!resourceUris.has(uri)) throw new Error(`Bridge resource missing: ${uri}`)
+  }
+  const skill = await client.readResource({ uri: 'skill://coordinate-agents/SKILL.md' })
+  if (!skill.contents.some((entry) => (
+    entry.text?.includes('## Multi-agent startup invariant')
+    && entry.text?.includes('## Shared-checkout guardrails')
+    && entry.text?.includes('## Autonomous coordination loop')
+    && entry.text?.includes('## MCP discovery and host features')
+    && entry.text?.includes('structuredContent')
+    && entry.text?.includes('ui://agent-viewer/coordinator-dashboard.html')
+    && entry.text?.includes('tasks/get')
+  ))) {
+    throw new Error('Coordinator skill resource did not expose the canonical Agent Viewer workflow')
+  }
+  const app = await client.readResource({ uri: 'ui://agent-viewer/coordinator-dashboard.html' })
+  if (!app.contents.some((entry) => entry.mimeType === 'text/html;profile=mcp-app' && entry.text?.includes('ui/initialize'))) {
+    throw new Error('Coordinator MCP App resource was not readable as a self-contained view')
+  }
+  const prompts = await client.listPrompts()
+  if (!prompts.prompts.some((prompt) => prompt.name === 'coordinate_agents')) {
+    throw new Error('Coordinator workflow prompt was not discoverable')
   }
 
   const search = await client.callTool({
@@ -233,6 +291,9 @@ try {
 
   const waited = await client.callTool({ name: 'coord_wait', arguments: { timeout_ms: 0 } })
   const waitedPayload = JSON.parse(waited.content?.[0]?.text ?? '{}')
+  if (waited.structuredContent?.cursor !== waitedPayload.cursor) {
+    throw new Error('Coordinator result did not provide structuredContent alongside its text fallback')
+  }
   if (waitedPayload.cursor !== 'event-1') throw new Error('Coordinator wait cursor did not round-trip')
   if ('snapshot' in waitedPayload) throw new Error('Coordinator wait leaked the full board snapshot into the MCP result')
 
@@ -247,7 +308,10 @@ try {
       AGENT_VIEWER_COORD_TRANSPORT: 'http',
     },
   })
-  const secondClient = new Client({ name: 'agent-viewer-mcp-smoke-claude', version: '1.0.0' })
+  const secondClient = new Client(
+    { name: 'agent-viewer-mcp-smoke-claude', version: '1.0.0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  )
   try {
     await secondClient.connect(secondTransport)
     const joined = await secondClient.callTool({
@@ -314,6 +378,28 @@ try {
     }
   } finally {
     await secondClient.close().catch(() => {})
+  }
+
+  const legacyTransport = new StdioClientTransport({
+    command: process.execPath,
+    args: [launcher, 'mcp', '--attach', String(address.port)],
+    stderr: 'pipe',
+    env: {
+      ...process.env,
+      AGENT_VIEWER_COORD_IDENTITY_FILE: path.join(identityDir, 'legacy.json'),
+      AGENT_VIEWER_COORD_TRANSPORT: 'http',
+    },
+  })
+  const legacyClient = new Client({ name: 'agent-viewer-mcp-legacy-smoke', version: '1.0.0' })
+  try {
+    await legacyClient.connect(legacyTransport)
+    if (legacyClient.getProtocolEra() !== 'legacy') throw new Error('Bridge did not preserve legacy MCP clients')
+    const legacyTools = await legacyClient.listTools()
+    if (!legacyTools.tools.some((tool) => tool.name === 'coord_status')) {
+      throw new Error('Legacy MCP client could not discover Coordinator tools')
+    }
+  } finally {
+    await legacyClient.close().catch(() => {})
   }
 } finally {
   await client.close().catch(() => {})

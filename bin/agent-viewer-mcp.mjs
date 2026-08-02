@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { McpServer } from '@modelcontextprotocol/server'
+import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -14,6 +14,15 @@ import {
 
 const PROVIDERS = ['claude', 'codex', 'opencode', 'copilot', 'pi']
 const EXTERNAL_COORD_PROTOCOL_VERSION = 2
+const MCP_UI_EXTENSION = 'io.modelcontextprotocol/ui'
+const MCP_SKILLS_EXTENSION = 'io.modelcontextprotocol/skills'
+const COORDINATOR_APP_URI = 'ui://agent-viewer/coordinator-dashboard.html'
+const COORDINATOR_SKILL_INDEX_URI = 'skill://index.json'
+const COORDINATOR_SKILL_URI = 'skill://coordinate-agents/SKILL.md'
+const coordinatorAppHtml = await readFile(new URL('./agent-viewer-coordinator-app.html', import.meta.url), 'utf8')
+const coordinatorSkillMarkdown = await readFile(new URL('../.agents/skills/coordinate-agents/SKILL.md', import.meta.url), 'utf8')
+const coordinatorSkillDescription = coordinatorSkillMarkdown.match(/^description:\s*(.+)$/m)?.[1]?.trim()
+  ?? 'Operate an Agent Viewer Coordinator run through the agent-viewer MCP.'
 const IDEMPOTENT_COORDINATOR_ACTIONS = new Set([
   'claim_task',
   'complete_task',
@@ -80,7 +89,12 @@ function normalizeBaseUrl(value) {
 }
 
 function textResult(value) {
-  return { content: [{ type: 'text', text: JSON.stringify(value) }] }
+  return {
+    content: [{ type: 'text', text: JSON.stringify(value) }],
+    ...(value && typeof value === 'object' && !Array.isArray(value)
+      ? { structuredContent: value }
+      : {}),
+  }
 }
 
 async function requestJson(path, init, timeoutMs = 10_000) {
@@ -224,9 +238,29 @@ async function coordinatorRequest(action, payload = {}, requireIdentity = true) 
   return result
 }
 
+function createMcpServer() {
 const server = new McpServer(
-  { name: 'agent-viewer', version: '1.3.0' },
   {
+    name: 'agent-viewer',
+    title: 'Agent Viewer Coordinator',
+    version: '2.0.0',
+    description: 'Durable multi-provider task coordination, mailboxes, path locks, session search, and transcript access.',
+    websiteUrl: 'https://github.com/Soopster/AgentViewer',
+  },
+  {
+    capabilities: {
+      extensions: {
+        [MCP_UI_EXTENSION]: { mimeTypes: ['text/html;profile=mcp-app'] },
+        [MCP_SKILLS_EXTENSION]: {},
+      },
+    },
+    cacheHints: {
+      'server/discover': { ttlMs: 60_000, cacheScope: 'public' },
+      'resources/list': { ttlMs: 60_000, cacheScope: 'public' },
+      'resources/read': { ttlMs: 60_000, cacheScope: 'public' },
+      'prompts/list': { ttlMs: 60_000, cacheScope: 'public' },
+      'tools/list': { ttlMs: 5_000, cacheScope: 'private' },
+    },
     instructions: [
       'Agent Viewer Coordinator is a shared multi-CLI task board and mailbox for agents from any provider (Claude, Codex, OpenCode, Copilot, Pi).',
       'Create or join a run, then read status and inbox; claim one task, lock paths before editing, report progress, and complete it or release unfinished work.',
@@ -240,6 +274,71 @@ const server = new McpServer(
     ].join(' '),
   },
 )
+
+server.registerResource('Agent Viewer Coordinator skill index', COORDINATOR_SKILL_INDEX_URI, {
+  title: 'Agent Viewer Coordinator skills',
+  description: 'SEP-2640-compatible index of Agent Viewer skills available over MCP Resources.',
+  mimeType: 'application/json',
+  cacheHint: { ttlMs: 60_000, cacheScope: 'public' },
+}, async (uri) => ({
+  contents: [{
+    uri: uri.href,
+    mimeType: 'application/json',
+    text: JSON.stringify([{
+      name: 'coordinate-agents',
+      description: coordinatorSkillDescription,
+      type: 'skill-md',
+      url: COORDINATOR_SKILL_URI,
+    }]),
+  }],
+}))
+
+server.registerResource('Coordinate agents skill', COORDINATOR_SKILL_URI, {
+  title: 'Coordinate agents',
+  description: 'Progressively disclosed operating instructions for Agent Viewer Coordinator.',
+  mimeType: 'text/markdown',
+  cacheHint: { ttlMs: 60_000, cacheScope: 'public' },
+  _meta: {
+    'io.modelcontextprotocol.skills/frontmatter': {
+      name: 'coordinate-agents',
+      description: coordinatorSkillDescription,
+    },
+  },
+}, async (uri) => ({
+  contents: [{ uri: uri.href, mimeType: 'text/markdown', text: coordinatorSkillMarkdown }],
+}))
+
+server.registerResource('Agent Viewer Coordinator dashboard', COORDINATOR_APP_URI, {
+  title: 'Coordinator dashboard',
+  description: 'Interactive MCP App for inspecting the current Coordinator board returned by coord_status.',
+  mimeType: 'text/html;profile=mcp-app',
+  cacheHint: { ttlMs: 60_000, cacheScope: 'public' },
+}, async (uri) => ({
+  contents: [{
+    uri: uri.href,
+    mimeType: 'text/html;profile=mcp-app',
+    text: coordinatorAppHtml,
+    _meta: { ui: { prefersBorder: true, csp: {} } },
+  }],
+}))
+
+server.registerPrompt('coordinate_agents', {
+  title: 'Coordinate agents',
+  description: 'Start or resume a reliable Agent Viewer Coordinator workflow.',
+  argsSchema: z.object({
+    objective: z.string().min(1).describe('The overall objective for the coordinated run'),
+    role: z.enum(['lead', 'teammate']).optional().describe('Defaults to lead'),
+  }),
+}, ({ objective, role }) => ({
+  description: 'Coordinator workflow prompt backed by the coordinate-agents skill resource.',
+  messages: [{
+    role: 'user',
+    content: {
+      type: 'text',
+      text: `${role === 'teammate' ? 'Join' : 'Lead'} an Agent Viewer Coordinator run for this objective:\n\n${objective}\n\nRead ${COORDINATOR_SKILL_URI} first, then follow its task, mailbox, lock, progress, and completion rules.`,
+    },
+  }],
+}))
 
 server.registerTool('search_sessions', {
   description: 'Search Agent Viewer\'s persistent cross-provider session index. Returns session IDs and matching transcript snippets.',
@@ -473,6 +572,7 @@ server.registerTool('coord_resume', {
 server.registerTool('coord_status', {
   description: 'Read the shared task board, roster, locks, recent events, and an `actionable` digest (claimable tasks, inbox count, plans awaiting review, own task state) for this participant.',
   annotations: { readOnlyHint: true },
+  _meta: { ui: { resourceUri: COORDINATOR_APP_URI, visibility: ['model', 'app'] } },
 }, async () => textResult(await coordinatorRequest('status')))
 
 server.registerTool('coord_wait', {
@@ -697,5 +797,10 @@ server.registerTool('coord_finalize_run', {
   inputSchema: { summary: z.string().min(1).max(16000), request_id: requestIdField },
 }, async ({ summary, request_id }) => textResult(await coordinatorRequest('finalize_run', { summary, requestId: request_id })))
 
-const transport = new StdioServerTransport()
-await server.connect(transport)
+return server
+}
+
+void serveStdio(createMcpServer, {
+  legacy: 'serve',
+  onerror: (error) => console.error(`[agent-viewer-mcp] ${error.message}`),
+})

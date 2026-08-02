@@ -76,6 +76,13 @@ minimumReleaseAgeExclude:
   - '@earendil-works/pi-coding-agent@0.83.0'
   - '@earendil-works/pi-tui@0.83.0'
   - '@modelcontextprotocol/sdk@1.30.0'
+  # 2026-08-02 MCP 2026-07-28 adoption: the official v2 SDK packages were
+  # released today. Registry integrity was captured by npm before syncing the
+  # Bun/pnpm lockfiles; pin these exact releases while later versions remain
+  # behind the seven-day quarantine.
+  - '@modelcontextprotocol/client@2.0.0'
+  - '@modelcontextprotocol/core@2.0.0'
+  - '@modelcontextprotocol/server@2.0.0'
   - '@opencode-ai/sdk@1.18.9'
   - '@pierre/theming@1.0.0'
   - '@pierre/trees@1.0.0-beta.6'

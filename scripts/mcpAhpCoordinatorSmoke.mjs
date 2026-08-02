@@ -6,8 +6,8 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { Client } from '@modelcontextprotocol/client'
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 
 const repoRoot = process.cwd()
 const testCwd = await mkdtemp(path.join(tmpdir(), 'agent-viewer-mcp-ahp-'))
@@ -98,7 +98,10 @@ function createMcpClient(name, identityFile) {
     },
   })
   return {
-    client: new Client({ name, version: '1.0.0' }),
+    client: new Client(
+      { name, version: '1.0.0' },
+      { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+    ),
     transport,
   }
 }

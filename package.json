@@ -7,6 +7,7 @@
     "agent-viewer": "./bin/agent-viewer.mjs"
   },
   "files": [
+    ".agents/skills/coordinate-agents",
     "README.md",
     "app",
     "bin",
@@ -58,7 +59,8 @@
     "@hono/node-server": "^2.0.12",
     "@inkjs/ui": "^2.0.0",
     "@microsoft/agent-host-protocol": "^0.6.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@opencode-ai/sdk": "^1.18.10",
     "@opentui/core": "^0.4.5",
     "@opentui/react": "^0.4.5",

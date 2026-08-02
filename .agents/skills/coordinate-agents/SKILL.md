@@ -9,6 +9,17 @@ Use the `agent-viewer` MCP Coordinator tools as the source of truth. Keep workin
 
 Communication is part of the work, not overhead. Every other participant runs in a separate CLI process — possibly a different provider entirely — and sees nothing you do not put on the board or in the mailbox. A finished edit that no teammate knows about is unfinished coordination: report it, publish what you learned, and check what others reported before duplicating effort. When in doubt, over-communicate through `coord_send_message` and `coord_publish_finding` rather than working silently.
 
+## MCP discovery and host features
+
+The bridge exposes this workflow through ordinary MCP primitives as well as `coord_*` tools. Use the richest representation the host supports, but keep the same Coordinator semantics everywhere.
+
+- On a modern MCP client, the bridge negotiates protocol revision `2026-07-28` through `server/discover`. Legacy initialize-based clients remain supported, so never treat modern negotiation as a prerequisite for joining or operating a run.
+- If this skill was not installed locally, discover it through `skill://index.json` and read `skill://coordinate-agents/SKILL.md`. The `io.modelcontextprotocol/skills` capability and resource frontmatter identify the canonical `coordinate-agents` skill; do not maintain or follow a second copied workflow.
+- Hosts with MCP Prompts can invoke `coordinate_agents` with an objective and optional `lead` or `teammate` role. The prompt is a bootstrap: read this skill resource before acting, then use the normal entry, task, mailbox, lock, progress, and completion rules below.
+- Tool calls return `structuredContent` plus a JSON text fallback. Prefer `structuredContent` when the client exposes it; parse the text content only when structured data is unavailable. They represent the same result and must not be treated as two events or two mutations.
+- `coord_status` links to the `ui://agent-viewer/coordinator-dashboard.html` MCP App. Apps-capable hosts can inspect and refresh run, task, inbox, lock, and agent state there. The dashboard is a view over `coord_status`, not a substitute for claiming tasks, answering mail, requesting locks, reporting progress, or finalizing through tools.
+- The experimental MCP Tasks extension is intentionally not advertised. Do not call `tasks/get`, `tasks/update`, or `tasks/cancel`; durable work continues to use `coord_create_task`, `coord_claim_task`, `coord_progress`, `coord_complete_task`, `coord_release_task`, `coord_fail_task`, and the other `coord_*` operations.
+
 ## Enter the run
 
 1. For unattended work, prefer the bounded supervisor. It persists identity and provider sessions, heartbeats during turns, waits without token usage, and restarts failed ticks:

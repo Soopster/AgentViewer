@@ -8,9 +8,8 @@
 // AGENTVIEWER_CHANNEL_PORT (default 8790); this process forwards messages into
 // the CLI session over MCP/stdio and streams replies + permission prompts back
 // out over SSE on /events.
-import { Server } from '@modelcontextprotocol/sdk/server/index.js'
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { McpServer } from '@modelcontextprotocol/server'
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import { z } from 'zod'
 
 const PORT = Number(process.env.AGENTVIEWER_CHANNEL_PORT ?? 8790)
@@ -24,7 +23,7 @@ function broadcast(event: Record<string, unknown>) {
   for (const emit of listeners) emit(chunk)
 }
 
-const mcp = new Server(
+const mcp = new McpServer(
   { name: 'agentviewer', version: '0.0.1' },
   {
     capabilities: {
@@ -44,26 +43,13 @@ const mcp = new Server(
   },
 )
 
-mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: 'reply',
-      description: 'Send a message back to the agentViewer composer that pushed this event',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          chat_id: { type: 'string', description: 'The chat_id from the inbound <channel> tag' },
-          text: { type: 'string', description: 'The message to display in agentViewer' },
-        },
-        required: ['chat_id', 'text'],
-      },
-    },
-  ],
-}))
-
-mcp.setRequestHandler(CallToolRequestSchema, async req => {
-  if (req.params.name !== 'reply') throw new Error(`unknown tool: ${req.params.name}`)
-  const { chat_id, text } = req.params.arguments as { chat_id: string; text: string }
+mcp.registerTool('reply', {
+  description: 'Send a message back to the agentViewer composer that pushed this event',
+  inputSchema: z.object({
+    chat_id: z.string().describe('The chat_id from the inbound <channel> tag'),
+    text: z.string().describe('The message to display in agentViewer'),
+  }),
+}, async ({ chat_id, text }) => {
   broadcast({ type: 'reply', chat_id, text })
   return { content: [{ type: 'text', text: 'sent to agentViewer' }] }
 })
@@ -81,7 +67,7 @@ const PermissionRequestSchema = z.object({
   }),
 })
 
-mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
+mcp.server.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
   broadcast({ type: 'permission_request', ...params })
 })
 
@@ -144,7 +130,7 @@ function startBridge() {
         if (req.method === 'POST' && url.pathname === '/message') {
           const { text, chat_id } = (await req.json()) as { text: string; chat_id?: string }
           const id = chat_id ?? String(nextChatId++)
-          await mcp.notification({
+          await mcp.server.notification({
             method: 'notifications/claude/channel',
             params: { content: text, meta: { chat_id: id } },
           })
@@ -157,7 +143,7 @@ function startBridge() {
             request_id: string
             behavior: 'allow' | 'deny'
           }
-          await mcp.notification({
+          await mcp.server.notification({
             method: 'notifications/claude/channel/permission',
             params: { request_id, behavior },
           })
