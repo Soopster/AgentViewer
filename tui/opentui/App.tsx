@@ -9119,14 +9119,40 @@ export default function OpenTuiApp() {
     if (composerSendState !== 'sending' && reattachedRunning && !awaitingPersistedTurn) rows += 2
     if (pendingPermissions.length > 0) {
       const permission = pendingPermissions[0]!
-      // border(2) + outer padding(1) + title(1) + options(1) + hint(1)
-      let permRows = 6
-      if (permission.reason) permRows += 1
-      if (permission.command) permRows += 1
-      if (permission.url) permRows += 1
-      if (permission.paths && permission.paths.length > 0) permRows += 1
-      if (permission.diff) permRows += Math.min(permission.diff.split('\n').length, 12)
-      rows += permRows
+      const questions = permission.questions ?? []
+      if (questions.length > 0) {
+        // The AskUserQuestion picker renders one row per question plus one per
+        // option, so it must be measured question-by-question — the flat
+        // permission budget below leaves it too few rows and the option lines
+        // composite on top of the question line.
+        // border(2) + outer padding(1) + title(1) + hint(1)
+        let questionRows = 5
+        for (const question of questions) {
+          // Questions after the first carry a blank marginTop row.
+          questionRows += 1 + question.options.length + (question.allowFreeform ? 1 : 0)
+        }
+        questionRows += questions.length - 1
+        rows += questionRows
+      } else {
+        const permInnerWidth = Math.max(width - 8, 20)
+        // border(2) + outer padding(1) + title(1) + options marginTop(1)
+        // + options(1) + hint(1)
+        let permRows = 7
+        if (permission.toolName === 'ExitPlanMode') {
+          const planLines = permission.plan ? permission.plan.split('\n') : []
+          permRows += Math.min(planLines.length, 16)
+          if (planLines.length > 16) permRows += 1
+          if (permission.allowedPrompts && permission.allowedPrompts.length > 0) permRows += 1
+        } else {
+          // The reason renders with word wrap, so it can take several rows.
+          if (permission.reason) permRows += Math.max(Math.ceil(permission.reason.length / permInnerWidth), 1)
+          if (permission.command) permRows += Math.min(permission.command.split('\n').length, 12)
+          if (permission.url) permRows += 1
+          if (permission.paths && permission.paths.length > 0) permRows += 1
+          if (permission.diff) permRows += Math.min(permission.diff.split('\n').length, 12)
+        }
+        rows += permRows
+      }
     }
     return rows
   })()
@@ -18191,7 +18217,7 @@ export default function OpenTuiApp() {
                 const selected = questionSelections[qi] ?? []
                 return (
                   <box key={`q:${qi}`} flexDirection="column" marginTop={qi === 0 ? 0 : 1}>
-                    <text fg={focused ? theme.text : theme.dim} wrapMode="word">
+                    <text fg={focused ? theme.text : theme.dim} wrapMode="none">
                       {fitText(`${questions.length > 1 ? `${focused ? '▶ ' : '  '}` : ''}${q.header ? `[${q.header}] ` : ''}${q.question}${q.multiSelect ? ' (multi)' : ''}`, innerWidth)}
                     </text>
                     {q.options.map((opt, oi) => {
