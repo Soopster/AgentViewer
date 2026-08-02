@@ -3492,9 +3492,11 @@ export default function MessageView({
     const cwd = session?.cwd
     const isPending = session?.isPending === true
     if (!sessionId) return
-    // Pending Claude/Codex/Copilot sessions do not have a resumable provider
-    // identity yet. Pi can warm its expensive cold open against the reserved id.
-    if (isPending && provider !== 'pi') return
+    // Pending Codex/Copilot sessions do not have a resumable provider identity
+    // yet. Pi warms its expensive cold open against the reserved id, and
+    // Claude forces the SDK to adopt the reserved id as its real session id
+    // (see prewarmViewSession), so both benefit from prewarming while pending.
+    if (isPending && provider !== 'pi' && provider !== 'claude') return
     const effort = selectedEffort === 'auto' ? undefined : selectedEffort
     const key = [
       provider ?? 'claude',

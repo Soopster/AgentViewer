@@ -8,7 +8,9 @@ import { subscribeToLiveSessionEvents } from '@/lib/liveSessionHarness'
 import type { AgentProvider, SessionMessage } from '@/lib/types'
 import type { ErrorNotification, TurnPlanUpdatedNotification } from '@/lib/codex-schema/v2'
 
-export const maxDuration = 300
+// Vercel-only knob (no-op on the self-hosted Node server) — generous so a
+// long-running turn's live event stream isn't truncated on that platform.
+export const maxDuration = 3600
 
 const DEFAULT_STREAM_LIMIT = 220
 const MAX_STREAM_LIMIT = 500

@@ -241,7 +241,11 @@ import {
   type PersistedIndexStats,
 } from './sessionPersistence'
 
-export const maxDuration = 300
+// Only meaningful when deployed as a Vercel serverless/edge function (ignored
+// by the self-hosted `npm run start` Node server this app normally runs as).
+// Set generously so a Claude turn that legitimately runs long — a big test
+// suite, a multi-file refactor — isn't truncated mid-stream on that platform.
+export const maxDuration = 3600
 
 // Session info rarely changes between polls — cache for 20 s to avoid repeating
 // filesystem I/O on every 5-second session list refresh. Bounded by LRU so the
@@ -3587,7 +3591,18 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   // run the legacy single-shot query() and let the pool catch up on turn 2.
   // manualPermissions is no longer a cold-path trigger — the pool supports
   // per-turn bridges via the bridgeBox delegation pattern.
-  const useColdPath = isPendingSession || forkSessionOnSend || Boolean(resumeSessionAt)
+  //
+  // Exception: a pending session that was already prewarmed (composer focus
+  // triggers acquireClaudeSession with a forced `sessionId` — see
+  // prewarmViewSession) has a warm entry sitting in the pool under this exact
+  // id already. Route straight to the pooled path so the first real send
+  // reuses it instead of cold-spawning a redundant second subprocess. If
+  // prewarm hasn't completed yet (or never ran), peek finds nothing and this
+  // falls through to the cold path exactly as before.
+  const pendingWarmEntry = isPendingSession && !forkSessionOnSend && !resumeSessionAt
+    ? peekClaudeSession(sessionId)
+    : null
+  const useColdPath = (isPendingSession && !pendingWarmEntry) || forkSessionOnSend || Boolean(resumeSessionAt)
 
   if (useColdPath) {
     return createClaudeStreamCold({
@@ -3625,6 +3640,13 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
     taskBudgetTotal,
     turnRequestId,
     fallbackModel,
+    // Threaded through even though the common case (prewarm already spawned
+    // a compatible entry) never uses it — if the warm entry turns out
+    // incompatible (cwd/effort/taskBudget changed since prewarm) or died,
+    // acquireClaudeSession recycles and respawns; a pending session has
+    // nothing on disk yet, so that respawn must still force `sessionId`
+    // instead of trying to `resume` a conversation that doesn't exist.
+    isPendingSession: isPendingSession && Boolean(pendingWarmEntry),
   })
 }
 
@@ -3989,6 +4011,8 @@ type ClaudeStreamPooledArgs = {
   taskBudgetTotal: number | undefined
   turnRequestId: string | undefined
   fallbackModel: string | undefined
+  /** See ClaudePoolAcquireOptions.isPendingSession. Only relevant if the entry needs a fresh spawn. */
+  isPendingSession?: boolean
 }
 
 async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<Response> {
@@ -4004,6 +4028,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
     effort,
     cwdOverride,
     taskBudgetTotal,
+    isPendingSession,
     turnRequestId,
     fallbackModel,
   } = args
@@ -4108,6 +4133,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               permissionMode,
               effort,
               taskBudgetTokens: taskBudgetTotal,
+              isPendingSession,
             })
           } catch (err) {
             if (!signal.aborted) {
@@ -6342,19 +6368,22 @@ export async function prewarmViewSession(params: {
 }): Promise<void> {
   const provider = await resolveProvider(params.provider)
   if (provider === 'claude') {
-    // A pending (not-yet-created) Claude session runs the cold path on first
-    // send, which spawns its own query and only adopts into the pool afterward.
-    // A prewarmed pool entry keyed on the client UUID would not be consulted by
-    // that path, so prewarming a pending Claude session has no effect — skip it
-    // rather than spawn a subprocess that the first send abandons.
-    if (params.isPending) return
     if (peekClaudeSession(params.sessionId)) return
+    // The SDK's `sessionId` create-time option forces the CLI to adopt the
+    // client's own pending UUID as its real session id — spawning now (while
+    // the user is still typing their first message) runs the CLI's
+    // SessionStart hooks and MCP init in the background instead of eating
+    // the delay synchronously after they hit send. createClaudeStream picks
+    // this warm entry up via the pooled path once a message actually arrives
+    // (see the pendingWarm check there); if it isn't ready in time, the cold
+    // path spawns fresh exactly as before — no regression either way.
     acquireClaudeSession({
       sessionId: params.sessionId,
       cwd: params.cwd,
-      model: params.model,
+      model: params.model ?? (params.isPending ? 'claude-sonnet-4-6' : undefined),
       fallbackModel: claudeFallbackModelChain(),
       effort: params.effort,
+      isPendingSession: params.isPending,
     })
     return
   }

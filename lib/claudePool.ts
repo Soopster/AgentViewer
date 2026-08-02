@@ -137,7 +137,13 @@ export function logClaudeSubprocessStderr(sessionId: string, data: string): void
 }
 
 export type ClaudePoolAcquireOptions = {
-  /** Real session id. Callers must NOT pool pending sessions in phase 1. */
+  /**
+   * Session id. For an ordinary send this is a real, already-resumable id
+   * (passed as `resume`). For a brand-new conversation's prewarm/first-turn,
+   * pass `isPendingSession: true` alongside the client's pending UUID — the
+   * SDK's `sessionId` create-time option forces the CLI to adopt exactly this
+   * id as its own, so there is no separate "realized id" to hand off.
+   */
   sessionId: string
   /** Working directory. Recycles the entry on change. */
   cwd?: string
@@ -155,6 +161,13 @@ export type ClaudePoolAcquireOptions = {
   forkSession?: boolean
   /** Task budget in total tokens. Recycles on change. */
   taskBudgetTokens?: number
+  /**
+   * Brand-new conversation: spawn with `sessionId: opts.sessionId` (forcing
+   * the CLI to adopt this exact id) instead of `resume: opts.sessionId`.
+   * Only meaningful at spawn time — irrelevant once an entry exists, so it
+   * does not participate in `compatible()`.
+   */
+  isPendingSession?: boolean
 }
 
 export type ClaudePoolEntry = {
@@ -308,7 +321,9 @@ class ClaudePool {
       options: {
         env: CLAUDE_QUERY_ENV,
         stderr: (data) => logClaudeSubprocessStderr(opts.sessionId, data),
-        ...(opts.forkSession ? {} : { resume: opts.sessionId }),
+        ...(opts.isPendingSession
+          ? { sessionId: opts.sessionId }
+          : opts.forkSession ? {} : { resume: opts.sessionId }),
         ...(opts.cwd ? { cwd: opts.cwd } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.fallbackModel ? { fallbackModel: opts.fallbackModel } : {}),
@@ -677,9 +692,23 @@ class ClaudePool {
       }, TURN_TAIL_DRAIN_MS)
     }
 
-    const hardTimer = setTimeout(() => {
+    // Inactivity watchdog, not an absolute turn-duration cap: a healthy turn
+    // that keeps producing messages (partial deltas, tool progress, etc.) can
+    // legitimately run far longer than TURN_HARD_TIMEOUT_MS — a large test
+    // run or multi-step refactor easily exceeds 10 minutes of wall clock
+    // while still making progress every few seconds. What must never happen
+    // is the mutex getting stranded on a subprocess that has gone silent, so
+    // the timer resets on every message received and only fires after the
+    // session produces nothing at all for the full window.
+    let hardTimer = setTimeout(() => {
       rejectTurn(new Error('Claude turn exceeded hard timeout'))
     }, TURN_HARD_TIMEOUT_MS)
+    const resetHardTimer = () => {
+      clearTimeout(hardTimer)
+      hardTimer = setTimeout(() => {
+        rejectTurn(new Error('Claude turn exceeded hard timeout'))
+      }, TURN_HARD_TIMEOUT_MS)
+    }
 
     const subscriber: Subscriber = {
       push: (msg) => {
@@ -688,6 +717,7 @@ class ClaudePool {
           rejectTurn(new Error('Claude pool entry was recycled mid-turn'))
           return
         }
+        resetHardTimer()
         try { options.onMessage(msg) } catch { /* don't let consumer errors strand the mutex */ }
         if (msg.type === 'result') {
           resultSeen = true

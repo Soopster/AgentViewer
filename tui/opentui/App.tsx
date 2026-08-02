@@ -8797,11 +8797,13 @@ export default function OpenTuiApp() {
     if (!target || !committedSessionKey) return
     const fullSession = sessionsByKeyRef.current.get(committedSessionKey)
     const isPending = fullSession?.isPending === true
-    // A pending session's only warmable provider is Pi (its ~19s cold open is
-    // exactly what prewarm hides; createPiAgentSession is idempotent on the id).
-    // Claude/Codex/Copilot pending sessions run a cold path that abandons any
-    // prewarmed entry, so prewarmViewSession no-ops them — skip the work here too.
-    if (isPending && target.provider !== 'pi') return
+    // Pi's ~19s cold open is what prewarm hides for a pending session
+    // (createPiAgentSession is idempotent on the id). Claude also benefits:
+    // prewarmViewSession forces the SDK to adopt the reserved id as its real
+    // session id, so the first real send finds a warm pool entry instead of
+    // cold-spawning. Pending Codex/Copilot sessions still have no resumable
+    // identity yet, so prewarmViewSession no-ops them — skip the work here too.
+    if (isPending && target.provider !== 'pi' && target.provider !== 'claude') return
     const needsAffordances = !isPending && (() => {
       const cached = composerAffordancesCacheRef.current.get(committedSessionKey)
       return !cached || Date.now() - cached.ts >= COMPOSER_AFFORDANCES_TTL_MS
