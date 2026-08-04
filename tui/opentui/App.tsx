@@ -38,7 +38,7 @@ import {
 } from './pierreDiffView'
 import type { SelectedLineRange } from '@pierre/diffs'
 import { RGBA, SyntaxStyle, MacOSScrollAccel, TextAttributes } from '@opentui/core'
-import type { BaseRenderable, BoxRenderable, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
+import type { BaseRenderable, BoxRenderable, CliRenderer, MarkdownRenderable, MouseEvent, ScrollBoxRenderable, SelectOption, TabSelectOption, TabSelectRenderable, TextareaRenderable, TextareaAction } from '@opentui/core'
 import { useKeyboard, usePaste, useRenderer, useSelectionHandler, useTerminalDimensions } from '@opentui/react'
 import {
   formatProviderLabel,
@@ -1062,7 +1062,17 @@ async function readClipboardImage(): Promise<ClipboardImage | null> {
   return null
 }
 
-async function writeClipboard(text: string): Promise<void> {
+// Local desktop clipboard tools (pbcopy, xclip, ...) aren't installed in a
+// lot of remote/SSH/container environments this TUI runs in. OSC 52 is a
+// terminal escape sequence that asks the *local* terminal emulator (the one
+// the user is actually looking at) to set its clipboard, so it works over
+// SSH/tmux/mosh with no server-side clipboard binary at all — it's the
+// fallback for exactly the case the shell commands can't cover, so it only
+// gets tried once every shell candidate has failed. renderer.isOsc52Supported()
+// depends on a terminal capability probe that resolves shortly after startup,
+// so a renderer passed in before that probe lands just means we skip the
+// fallback and surface the original shell-command error, same as today.
+async function writeClipboard(text: string, renderer?: CliRenderer): Promise<void> {
   const tryCommand = (command: string, args: readonly string[] = []): Promise<void> => (
     new Promise((resolve, reject) => {
       const child = spawn(command, [...args], {
@@ -1105,6 +1115,8 @@ async function writeClipboard(text: string): Promise<void> {
       lastError = err instanceof Error ? err : new Error(String(err))
     }
   }
+
+  if (renderer?.isOsc52Supported() && renderer.copyToClipboardOSC52(text)) return
 
   throw lastError ?? new Error('No clipboard command available')
 }
@@ -14525,7 +14537,7 @@ export default function OpenTuiApp() {
       && terminalSelection.text.trim()
     ) {
       try {
-        await writeClipboard(terminalSelection.text)
+        await writeClipboard(terminalSelection.text, renderer)
         terminalSelectionRef.current = null
         showNotice('info', 'Copied terminal selection to clipboard')
       } catch (err) {
@@ -14545,7 +14557,7 @@ export default function OpenTuiApp() {
       return
     }
     try {
-      await writeClipboard(text)
+      await writeClipboard(text, renderer)
       showNotice('info', 'Copied selected message to clipboard')
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Failed to copy to clipboard')
@@ -14748,7 +14760,7 @@ export default function OpenTuiApp() {
     const cmd = getContinueInCliCommand(session.provider ?? 'claude', session.sessionId, cwd)
     if (!cmd) { showNotice('error', `No CLI resume command for ${session.provider}`); return }
     try {
-      await writeClipboard(cmd)
+      await writeClipboard(cmd, renderer)
       showNotice('info', `Copied: ${cmd}`)
     } catch (err) {
       showNotice('error', err instanceof Error ? err.message : 'Failed to copy')
@@ -19046,7 +19058,7 @@ export default function OpenTuiApp() {
           onClose={() => setHandoffBriefOpen(false)}
           onCopy={async (text) => {
             try {
-              await writeClipboard(text)
+              await writeClipboard(text, renderer)
               showNotice('info', 'Copied handoff brief to clipboard')
             } catch (err) {
               showNotice('error', err instanceof Error ? err.message : 'Failed to copy handoff brief')
