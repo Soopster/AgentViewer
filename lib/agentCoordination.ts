@@ -3943,6 +3943,13 @@ async function sweepIdleTeammates(runId: string): Promise<void> {
 
 const TEAM_IDLE_PING_PREFIX = 'Team idle:'
 const TEAM_IDLE_PING_COOLDOWN_MS = 2 * 60_000
+/**
+ * Claiming a task is itself an async round-trip (join → ready → claim), and
+ * this check runs on the 5s mailbox sweep — without a grace window, a team
+ * that just reached `ready` reads as "idle with unfinished work" and gets
+ * pinged before it has had a realistic chance to claim anything.
+ */
+const TEAM_IDLE_GRACE_MS = Math.max(0, Number(process.env.AGENT_VIEWER_COORD_TEAM_IDLE_GRACE_MS) || 20_000)
 const SUPERVISION_PING_PREFIX = 'Supervision checkpoint:'
 
 /**
@@ -3968,6 +3975,10 @@ async function pingLeadIfTeamIdle(runId: string): Promise<void> {
   if (teammates.length === 0) return
   const anyActive = teammates.some((agent) => Boolean(agent.taskId) || agent.status === 'working' || agent.status === 'blocked')
   if (anyActive) return
+  const mostRecentActivity = Math.max(
+    ...teammates.map((agent) => Date.parse(agent.lastSeenAt ?? agent.updatedAt) || 0),
+  )
+  if (Date.now() - mostRecentActivity < TEAM_IDLE_GRACE_MS) return
   const tasks = listTasksSync(db, runId)
   const unfinished = tasks.filter((task) => !['completed', 'failed', 'cancelled'].includes(task.status))
   if (unfinished.length === 0) return

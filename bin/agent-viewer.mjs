@@ -352,6 +352,22 @@ if (command === '-h' || command === '--help' || command === 'help') {
   child.on('error', (error) => { throw error })
   forwardSignals(child)
   trackExit(child)
+} else if (command === 'coord') {
+  const sub = args[1]
+  if (sub && sub !== '-h' && sub !== '--help') {
+    console.error(`Unknown coord subcommand: ${sub}`)
+    process.exitCode = 1
+  } else {
+    process.exitCode = 0
+  }
+  console.log(`Usage:
+  agent-viewer coord worker  Run an autonomous bounded multi-provider Coordinator worker
+  agent-viewer coord doctor  Diagnose daemon, CLI, identity, protocol, and worker health
+  agent-viewer coord workers List persistent Coordinator worker registrations
+  agent-viewer coord restart Restart a registered worker by name, id, or identity file
+  agent-viewer coord logs    Read or follow a registered worker log
+
+Run \`agent-viewer coord <subcommand> --help\` for subcommand-specific options.`)
 } else if (command === 'web') {
   const { forwarded, port, legacy, ahpPort, noAhp, production } = parseArgs(args.slice(1))
   if (legacy) {

@@ -34,6 +34,8 @@ const COMMAND_OPTIONS = {
   logs: { flags: new Set(['-f', '--follow']), values: new Set(['-n']), positionals: 1 },
 }
 
+if (command in COMMAND_OPTIONS && (args.includes('--help') || args.includes('-h'))) usage()
+
 function validateCommandArgs() {
   const spec = COMMAND_OPTIONS[command]
   if (!spec) return

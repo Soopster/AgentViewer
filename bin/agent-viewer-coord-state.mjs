@@ -147,7 +147,7 @@ export async function listWorkerRecords(root = coordinatorStateRoot()) {
       const stale = !alive && ['running', 'starting', 'retrying'].includes(record.status)
       const updatedAt = Date.parse(String(record.updatedAt || ''))
       const terminal = ['stopped', 'handed_off', 'failed'].includes(record.status)
-      if (terminal && Number.isFinite(updatedAt) && Date.now() - updatedAt > WORKER_RETENTION_MS) {
+      if ((terminal || stale) && Number.isFinite(updatedAt) && Date.now() - updatedAt > WORKER_RETENTION_MS) {
         const logFile = path.resolve(record.logFile || workerLogPath(record.identityFile))
         const identityFile = typeof record.identityFile === 'string' ? path.resolve(record.identityFile) : null
         const stateRoot = path.resolve(root)

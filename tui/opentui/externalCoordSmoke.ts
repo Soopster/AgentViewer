@@ -59,6 +59,7 @@ process.env.AGENT_VIEWER_COORD_LIVE_NOISE_WINDOW = '8'
 process.env.AGENT_VIEWER_COORD_RETENTION_DAYS = '1'
 process.env.AGENT_VIEWER_COORD_PRUNE_INTERVAL_MS = '100'
 process.env.AGENT_VIEWER_COORD_DB_BUSY_TIMEOUT_MS = '1000'
+process.env.AGENT_VIEWER_COORD_TEAM_IDLE_GRACE_MS = '100'
 const coordination = await import('../../lib/agentCoordination')
 const sessionRuntime = await import('../../lib/sessionRuntime')
 
