@@ -112,7 +112,7 @@ Both TUIs depend on the same `lib/` provider layer — changes to `sessionBacken
 ### Stack notes
 
 - Tailwind v4 + shadcn UI (`components/ui/`); `components.json` is the registry config — use `npx shadcn add <component>` rather than hand-writing.
-- React 19 with View Transitions (`experimental.viewTransition: true` in `next.config.ts`).
+- React 19 with View Transitions (stable `ViewTransition` from `'react'`, used directly in `components/RouteTransition.tsx`/`TabBar.tsx`/`app/page.tsx` — no `next.config.ts` flag needed as of Next 16.3, which dropped `experimental.viewTransition`).
 - Fonts: Oxanium (display), IBM Plex Sans (body), IBM Plex Mono (code).
 - TypeScript path alias: `@/*` → repo root.
 
