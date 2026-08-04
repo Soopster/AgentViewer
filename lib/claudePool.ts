@@ -353,6 +353,10 @@ class ClaudePool {
         taskBudget: opts.taskBudgetTokens ? { total: opts.taskBudgetTokens } : undefined,
       },
     })
+    // The native `claude` CLI runs fast mode by default; an SDK query() starts
+    // with it off (fast_mode_state reports 'off'/'sdk_opt_in_required') unless
+    // a flag-settings control request explicitly enables it.
+    void q.applyFlagSettings({ fastMode: true }).catch(() => {})
 
     const entry: InternalEntry = {
       sessionId: opts.sessionId,
