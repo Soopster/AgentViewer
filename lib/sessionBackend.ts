@@ -3529,6 +3529,23 @@ function claudeResultErrorMessage(msg: Record<string, unknown>): string | null {
   return null
 }
 
+// Pool-internal failures surface with implementation-detail wording
+// ("Claude pool entry was recycled mid-turn", "Claude turn exceeded hard
+// timeout") that reads as a cryptic app error rather than what actually
+// happened — the subprocess died or stalled. Map the known ones to plain
+// language; anything else (a real SDK/API error) passes through unchanged
+// since its message is already meant for a user.
+function friendlyClaudePoolError(err: unknown): string {
+  const message = err instanceof Error ? err.message : 'Unknown error'
+  if (message.includes('exceeded hard timeout')) {
+    return 'Claude stopped responding and the turn was cancelled after 10 minutes of silence. Please try again.'
+  }
+  if (message.includes('recycled mid-turn') || message.includes('recycled before turn could start') || message.includes('entry was recycled')) {
+    return 'Lost connection to Claude mid-turn. Please try again.'
+  }
+  return message
+}
+
 // Heartbeat cadence for the Claude POST send stream. Unlike the GET events SSE,
 // the send stream can legitimately go quiet for long stretches (waiting on the
 // first token, a slow tool call) with no frames. A periodic heartbeat keeps
@@ -3963,7 +3980,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
         }
       } catch (err) {
         if (!abortController.signal.aborted && !clientDetached) {
-          safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`)
+          safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: friendlyClaudePoolError(err) })}\n\n`)
         }
       } finally {
         clearInterval(heartbeat)
@@ -4223,21 +4240,17 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               /* downstream closed; ignore — the turn keeps running in the pool */
             }
           }
-          const onTurnError = (err: Error) => {
-            // A respawn we triggered ourselves: stay silent and let the
-            // retry below reconnect on a fresh subprocess.
+          const onTurnError = (_err: Error) => {
+            // A respawn we triggered ourselves already recycled the entry.
             if (respawnRequested) return
-            // If the pool entry died mid-turn, drop it so the next acquire
-            // gets a fresh subprocess.
+            // Drop the dead entry so the next acquire — whether the retry
+            // below or a later turn — gets a fresh subprocess. run() always
+            // rejects with this same error right after calling onError, so
+            // the outer catch below is the single place that decides
+            // whether to retry silently or surface something to the client;
+            // surfacing here too would leak a raw pool-internal message even
+            // on attempts that go on to retry invisibly.
             recycleClaudeSession(sessionId)
-            if (signal.aborted) return
-            try {
-              controller.enqueue(encoder.encode(
-                `event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`,
-              ))
-            } catch {
-              /* ignore */
-            }
           }
 
           try {
@@ -4277,17 +4290,24 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
             }
             break
           } catch (err) {
-            // Transparent recovery: a reused warm subprocess that answered no
-            // control RPC and produced no frames is dead — respawn once. The
-            // client only ever saw heartbeats, so this is invisible aside from
-            // a small first-token delay.
-            if (respawnRequested && !sawActivity && attempt <= CLAUDE_WARM_MAX_RESPAWN) {
+            // Transparent recovery: nothing was ever shown to the client for
+            // this attempt, so a fresh acquire+retry is invisible to them
+            // aside from a small added delay. Covers both our own proactive
+            // dead-entry respawn (respawnRequested) and a reused/fresh entry
+            // that simply threw on its own (unexpected subprocess death, the
+            // inactivity hard-timeout firing before any output, etc.) — the
+            // failure mode doesn't matter when there's nothing to lose by
+            // retrying once. Once activity was seen, a retry could duplicate
+            // or contradict what the client already rendered, so that case
+            // always surfaces (below) instead.
+            if (!sawActivity && attempt <= CLAUDE_WARM_MAX_RESPAWN) {
+              if (!respawnRequested) recycleClaudeSession(sessionId)
               continue
             }
             if (!signal.aborted) {
               try {
                 controller.enqueue(encoder.encode(
-                  `event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' })}\n\n`,
+                  `event: error\ndata: ${JSON.stringify({ error: friendlyClaudePoolError(err) })}\n\n`,
                 ))
               } catch {
                 /* ignore */
