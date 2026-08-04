@@ -1501,6 +1501,45 @@ assert.equal(
   `Lane B blocked by lane A's edits: ${laneBResult.reason ?? ''}`,
 )
 
+// A lead or isolated worker can start from a checkout that is already dirty.
+// If another actor commits that exact pre-existing content while the task is
+// running, the file becomes clean and moves into the HEAD range. That must not
+// be misattributed to this task by the outside-paths completion gate.
+const baselineCwd = mkdtempSync(path.join(tmpdir(), 'agent-viewer-coord-baseline-'))
+execFileSync('git', ['init', '-q'], { cwd: baselineCwd })
+execFileSync('git', ['config', 'user.email', 'coord-smoke@example.test'], { cwd: baselineCwd })
+execFileSync('git', ['config', 'user.name', 'Coordinator Smoke'], { cwd: baselineCwd })
+writeFileSync(path.join(baselineCwd, 'README.md'), 'clean baseline\n')
+execFileSync('git', ['add', 'README.md'], { cwd: baselineCwd })
+execFileSync('git', ['commit', '-qm', 'baseline'], { cwd: baselineCwd })
+writeFileSync(path.join(baselineCwd, 'README.md'), 'pre-existing dirty content\n')
+const baselineRun = await coordination.createExternalProtocolRun({
+  prompt: 'Do not blame a concurrently committed pre-existing dirty file',
+  provider: 'codex',
+  baseCwd: baselineCwd,
+  participantName: 'Baseline lead',
+  maxAgents: 2,
+})
+const baselineTask = (await coordination.createExternalProtocolTask(baselineRun.participant, {
+  title: 'Write the owned file only',
+  detail: 'Write owned-after-baseline.txt and do not touch README.md.',
+  paths: ['owned-after-baseline.txt'],
+  targetRole: 'lead',
+})).task!
+await coordination.claimExternalProtocolTask(baselineRun.participant, baselineTask.id)
+execFileSync('git', ['add', 'README.md'], { cwd: baselineCwd })
+execFileSync('git', ['commit', '-qm', 'commit pre-existing content elsewhere'], { cwd: baselineCwd })
+writeFileSync(path.join(baselineCwd, 'owned-after-baseline.txt'), 'owned task work\n')
+const baselineCompletion = await coordination.completeExternalProtocolTask(baselineRun.participant, {
+  taskId: baselineTask.id,
+  summary: 'Owned file completed without touching the pre-existing dirty path.',
+})
+assert.equal(
+  baselineCompletion.accepted,
+  true,
+  `Pre-existing dirty path was misattributed after a concurrent commit: ${baselineCompletion.reason ?? ''}`,
+)
+
 // Stopping a run is an observable terminal transition. Long-polling external
 // supervisors must wake immediately instead of discovering it only after their
 // 55-second timeout expires.

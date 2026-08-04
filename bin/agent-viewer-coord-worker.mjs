@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -349,6 +349,18 @@ function mcpConfig(state, baseUrl) {
   }
 }
 
+function gitCommonDir(cwd) {
+  if (!cwd) return null
+  const result = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 5_000,
+  })
+  if (result.status !== 0) return null
+  const resolved = String(result.stdout || '').trim()
+  return resolved ? path.resolve(cwd, resolved) : null
+}
+
 function tickPrompt(state) {
   const skillPath = path.join(state.cwd, '.agents', 'skills', 'coordinate-agents', 'SKILL.md')
   const checkoutGuidance = state.checkoutMode === 'isolated'
@@ -378,6 +390,14 @@ async function providerTick(state, baseUrl) {
   const config = mcpConfig(state, baseUrl)
   const prompt = tickPrompt(state)
   const previousProviderSessionId = state.providerSessionId
+  // A linked worktree's checkout lives under state.cwd, but commits also write
+  // its branch, index, and objects through the parent repository's common Git
+  // directory. Native interactive CLIs can request that path when prompted;
+  // unattended workers cannot, so grant only that repository-local metadata
+  // directory up front. Without this, valid `git add`/`git commit` calls fail
+  // at .git/worktrees/<name>/index.lock and accepted tasks remain unmergeable.
+  const isolatedGitDir = state.checkoutMode === 'isolated' ? gitCommonDir(state.cwd) : null
+  const gitDirectoryArgs = isolatedGitDir ? ['--add-dir', isolatedGitDir] : []
   let command
   let args
   const extraEnv = {}
@@ -389,6 +409,7 @@ async function providerTick(state, baseUrl) {
       // pre-allow, permission-mode auto stalls every coordinator tool call
       // and the tick burns its whole turn asking nobody for access.
       '--allowedTools', 'mcp__agent-viewer__*',
+      ...gitDirectoryArgs,
       ...(state.model ? ['--model', state.model] : []),
       '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: { 'agent-viewer': config } }),
       state.providerSessionId ? '--resume' : '--session-id', state.providerSessionId || randomUUID(),
@@ -459,6 +480,7 @@ async function providerTick(state, baseUrl) {
       '-c', 'mcp_servers.agent-viewer.default_tools_approval_mode="approve"',
       '-c', 'approval_policy="never"',
       '-c', 'sandbox_mode="workspace-write"',
+      ...gitDirectoryArgs,
       ...(state.model ? ['-c', `model=${JSON.stringify(state.model)}`] : []),
     ]
     args = state.providerSessionId

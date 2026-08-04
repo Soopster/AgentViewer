@@ -1,6 +1,6 @@
 import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
-import { chmod, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -391,6 +391,11 @@ if (!codexArgs.some((arg) => typeof arg === 'string' && arg.includes(path.join(s
 const approvalConfigIndex = codexArgs.indexOf('mcp_servers.agent-viewer.default_tools_approval_mode="approve"')
 if (approvalConfigIndex < 1 || codexArgs[approvalConfigIndex - 1] !== '-c') {
   throw new Error('worker did not pre-approve Agent Viewer MCP tools for unattended Codex ticks')
+}
+const gitCommonDirIndex = codexArgs.indexOf('--add-dir')
+const grantedGitDir = gitCommonDirIndex >= 0 ? codexArgs[gitCommonDirIndex + 1] : null
+if (!grantedGitDir || await realpath(grantedGitDir) !== await realpath(path.join(testDir, '.git'))) {
+  throw new Error('isolated Codex worker did not grant its repository Git metadata directory')
 }
 
 // Provider output is hostile input: oversized unterminated/JSON frames must not

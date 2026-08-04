@@ -193,6 +193,8 @@ type RunController = {
   nudges: Map<string, number>
   /** agentId → coordinator note to prepend to the next dispatched turn. */
   dispatchNotes: Map<string, string>
+  /** Providers that failed durably for each agent; prevents failover loops. */
+  failedProviders: Map<string, Set<ProtocolRun['provider']>>
 }
 
 const controllers = new Map<string, RunController>()
@@ -4200,6 +4202,70 @@ function parseProtocolEventsFromWire(text: string): AgentProtocolEvent[] {
 
 const SESSION_EVENT_RE = /event: session\s*\ndata: (\{[^\n]*\})/
 
+type ProviderTurnFailure = {
+  kind: 'rate_limited' | 'authentication_failed' | 'provider_failure'
+  detail: string
+}
+
+function classifyProviderTurnFailure(detail: string): ProviderTurnFailure {
+  const normalized = detail.toLowerCase()
+  const kind = /session limit|usage limit|rate.?limit|quota|insufficient (?:credits|balance)|too many requests|\b429\b/.test(normalized)
+    ? 'rate_limited'
+    : /authentication|not authenticated|unauthorized|invalid api key|expired (?:token|credential)|\b401\b|\b403\b/.test(normalized)
+      ? 'authentication_failed'
+      : 'provider_failure'
+  return { kind, detail: detail.trim().slice(0, 1200) || 'Provider turn failed' }
+}
+
+function allStrings(value: unknown, out: string[], depth = 0): void {
+  if (depth > 8) return
+  if (typeof value === 'string') {
+    out.push(value)
+    return
+  }
+  if (!value || typeof value !== 'object') return
+  if (Array.isArray(value)) {
+    for (const item of value) allStrings(item, out, depth + 1)
+    return
+  }
+  for (const item of Object.values(value as Record<string, unknown>)) allStrings(item, out, depth + 1)
+}
+
+/** Detect canonical SSE errors plus Claude quota/auth failures emitted as ordinary assistant text. */
+function providerTurnFailureFromWire(text: string, provider: ProtocolRun['provider']): ProviderTurnFailure | null {
+  for (const match of text.matchAll(/event: error\s*\ndata: ([^\n]+)/g)) {
+    try {
+      const parsed = JSON.parse(match[1]!) as { error?: unknown }
+      const values: string[] = []
+      allStrings(parsed.error, values)
+      return classifyProviderTurnFailure(values.join(' ') || 'Provider turn failed')
+    } catch {
+      return classifyProviderTurnFailure(match[1]!)
+    }
+  }
+  if (provider !== 'claude') return null
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('data:')) continue
+    const raw = line.slice('data:'.length).trim()
+    if (!raw || raw === '[DONE]') continue
+    try {
+      const record = JSON.parse(raw) as Record<string, unknown>
+      const isAssistant = record.type === 'assistant'
+      const isErrorResult = record.type === 'result' && record.is_error === true
+      if (!isAssistant && !isErrorResult) continue
+      const values: string[] = []
+      allStrings(isAssistant ? record.message : record, values)
+      const detail = values.join(' ')
+      if (isErrorResult || /session limit|usage limit|rate.?limit|quota|insufficient (?:credits|balance)|too many requests|authentication|not authenticated|unauthorized|invalid api key|expired (?:token|credential)/i.test(detail)) {
+        return classifyProviderTurnFailure(detail)
+      }
+    } catch {
+      // An incomplete SSE line will be retried with the next accumulated chunk.
+    }
+  }
+  return null
+}
+
 /**
  * Shared lookup for "does this real (non-`external:`) session id belong to a
  * live Coordinator agent right now" — used by observeCoordinatorSessionTurn
@@ -4469,15 +4535,23 @@ async function completionGateFailure(
       // fail open rather than rejecting completions for pre-existing changes.
       if (baseline.__baselineUnavailable === '1') return null
       const current = await worktreeChangeSnapshot(worktreePath).catch(() => ({} as Record<string, string>))
-      const changedSinceClaim = Object.keys(current)
-        .filter((file) => file !== '__head__' && current[file] !== baseline[file])
       const baselineHead = baseline.__head__
       const currentHead = current.__head__
+      const candidates = new Set(Object.keys(current).filter((file) => file !== '__head__'))
       if (baselineHead && currentHead && baselineHead !== currentHead) {
         const committed = await changedPathsBetween(worktreePath, baselineHead, currentHead).catch(() => [] as string[])
-        changedSinceClaim.push(...committed)
+        for (const file of committed) candidates.add(file)
       }
-      files = [...new Set(changedSinceClaim)]
+      // A baseline records dirty paths only. If a pre-existing dirty file is
+      // committed by another actor while this task is running, it disappears
+      // from `git status` and its path appears in the HEAD range. Comparing the
+      // live file fingerprint to the claim-time fingerprint distinguishes that
+      // harmless cleanup from an actual task-local modification.
+      const changedSinceClaim = await Promise.all([...candidates].map(async (file) => {
+        const fingerprint = current[file] ?? await pathFingerprint(worktreePath, file)
+        return fingerprint !== baseline[file] ? file : null
+      }))
+      files = changedSinceClaim.filter((file): file is string => file !== null)
     }
   }
   const uncovered = files.filter((file) => (
@@ -4507,12 +4581,14 @@ function sharesCheckoutWithAnotherAgentSync(
   return rows.some((row) => normalize(String(row.worktree_path ?? '')) === mine)
 }
 
-async function drainAgentStream(controller: RunController, agent: ProtocolAgent, response: Response): Promise<void> {
+async function drainAgentStream(controller: RunController, agent: ProtocolAgent, response: Response): Promise<ProviderTurnFailure | null> {
   const reader = response.body?.getReader()
-  if (!reader) return
+  if (!reader) return classifyProviderTurnFailure('Provider response had no stream body')
   const decoder = new TextDecoder()
   let buffer = ''
   let realized = false
+  let failure: ProviderTurnFailure | null = null
+  let terminalEventObserved = false
   const seen = new Set<string>()
   try {
     for (;;) {
@@ -4554,18 +4630,32 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
         if (seen.has(key)) continue
         seen.add(key)
         if (event.runId !== controller.runId || event.agentId !== agent.id) continue
-        await applyAgentEvent(controller, agent, event)
+        try {
+          await applyAgentEvent(controller, agent, event)
+        } catch (error) {
+          // A malformed or out-of-order model control event is not a provider
+          // outage. Reject that event and keep draining the healthy turn; the
+          // normal work loop will redispatch the authoritative board state.
+          await appendProtocolEvent({
+            version: AGENT_PROTOCOL_VERSION,
+            runId: controller.runId,
+            agentId: agent.id,
+            type: 'agent.blocked',
+            summary: `Coordinator rejected ${event.type}`,
+            detail: error instanceof Error ? error.message : String(error),
+          }).catch(() => {})
+          continue
+        }
+        if (event.type === 'task.completed' || event.type === 'task.failed' || event.type === 'finding') {
+          terminalEventObserved = true
+        }
       }
+      failure ??= providerTurnFailureFromWire(buffer, agent.provider)
     }
   } catch (err) {
-    await appendProtocolEvent({
-      version: AGENT_PROTOCOL_VERSION,
-      runId: controller.runId,
-      agentId: agent.id,
-      type: 'agent.blocked',
-      summary: err instanceof Error ? err.message : 'Worker stream failed',
-    }).catch(() => {})
+    failure = classifyProviderTurnFailure(err instanceof Error ? err.message : 'Worker stream failed')
   }
+  return terminalEventObserved ? null : failure
 }
 
 /** Event application with coordinator-side gating (doc: TaskCompleted hook semantics). */
@@ -4650,6 +4740,104 @@ function runGateCommand(command: string, cwd: string): Promise<string | null> {
   })
 }
 
+async function handleProviderTurnFailure(
+  controller: RunController,
+  agent: ProtocolAgent,
+  failure: ProviderTurnFailure,
+): Promise<'retry' | 'terminal'> {
+  const failed = controller.failedProviders.get(agent.id) ?? new Set<ProtocolRun['provider']>()
+  failed.add(agent.provider)
+  controller.failedProviders.set(agent.id, failed)
+  const candidates = [...new Set([...controller.teammateProviders, controller.provider])]
+    .filter((provider) => provider !== agent.provider && !failed.has(provider))
+
+  for (const provider of candidates) {
+    try {
+      const session = await createNewViewSession({
+        provider,
+        cwd: agent.worktreePath,
+        title: `${controller.title ?? 'Coordinated run'} · ${agent.name} failover`,
+      })
+      controller.sessionIds.set(agent.id, session.sessionId)
+      if (session.isPending) controller.pendingSessions.add(agent.id)
+      else controller.pendingSessions.delete(agent.id)
+      // Provider-specific model/effort identifiers are unsafe after a
+      // cross-provider handoff. Let the replacement use its native defaults.
+      controller.model = undefined
+      controller.effort = undefined
+      if (agent.role === 'lead') controller.provider = provider
+      await enqueueWrite((tx) => {
+        const ts = nowIso()
+        tx.prepare('UPDATE protocol_agents SET provider = ?, session_id = ?, status = ?, updated_at = ? WHERE id = ? AND run_id = ?')
+          .run(provider, session.sessionId, 'working', ts, agent.id, controller.runId)
+        if (agent.role === 'lead') {
+          tx.prepare('UPDATE protocol_runs SET provider = ?, updated_at = ? WHERE id = ?')
+            .run(provider, ts, controller.runId)
+        }
+        insertEventSync(tx, {
+          version: AGENT_PROTOCOL_VERSION,
+          runId: controller.runId,
+          agentId: agent.id,
+          type: 'learning',
+          summary: `${agent.name} failed over from ${agent.provider} to ${provider}`,
+          detail: failure.detail,
+          payload: { failureClass: failure.kind, fromProvider: agent.provider, toProvider: provider },
+          timestamp: ts,
+        })
+      })
+      return 'retry'
+    } catch (error) {
+      failed.add(provider)
+      await appendProtocolEvent({
+        version: AGENT_PROTOCOL_VERSION,
+        runId: controller.runId,
+        agentId: agent.id,
+        type: 'learning',
+        summary: `Provider failover to ${provider} could not start`,
+        detail: error instanceof Error ? error.message : String(error),
+        payload: { failureClass: 'provider_failure', fromProvider: agent.provider, toProvider: provider },
+      }).catch(() => {})
+    }
+  }
+
+  const detail = `${agent.provider} ${failure.kind}: ${failure.detail}`
+  if (agent.role === 'lead') {
+    controller.stopped = true
+    await enqueueWrite((tx) => {
+      const ts = nowIso()
+      tx.prepare("UPDATE protocol_runs SET status = 'failed', summary = ?, updated_at = ? WHERE id = ?")
+        .run(`Lead provider failed and no configured failover was available. ${detail}`, ts, controller.runId)
+      tx.prepare("UPDATE protocol_agents SET status = CASE WHEN id = ? THEN 'failed' ELSE 'stopped' END, updated_at = ? WHERE run_id = ?")
+        .run(agent.id, ts, controller.runId)
+      insertEventSync(tx, {
+        version: AGENT_PROTOCOL_VERSION,
+        runId: controller.runId,
+        agentId: agent.id,
+        type: 'run.status',
+        summary: 'Run failed: lead provider unavailable and failover exhausted',
+        detail,
+        payload: { status: 'failed', failureClass: failure.kind },
+        timestamp: ts,
+      })
+    })
+    controllers.delete(controller.runId)
+    return 'terminal'
+  }
+
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: controller.runId,
+    agentId: agent.id,
+    type: 'agent.blocked',
+    taskId: agent.taskId,
+    summary: `${agent.name} provider failed and no configured failover was available`,
+    detail,
+    payload: { failureClass: failure.kind },
+  })
+  await dispatchLeadIntervention(controller, { force: true })
+  return 'terminal'
+}
+
 async function dispatchAgentTurn(
   controller: RunController,
   agentId: string,
@@ -4658,12 +4846,16 @@ async function dispatchAgentTurn(
 ): Promise<void> {
   if (controller.stopped || controller.turnInFlight.has(agentId)) return
   controller.turnInFlight.add(agentId)
+  let retryAfterFailover = false
+  let providerFailureHandled = false
+  let activeAgent: ProtocolAgent | null = null
   for (const messageId of opts.inboxMessageIds ?? []) inboxDispatchInFlight.add(messageId)
   try {
     const db = await getDatabase()
     const agentRow = db.prepare('SELECT * FROM protocol_agents WHERE id = ? AND run_id = ?').get(agentId, controller.runId) as Row | undefined
     if (!agentRow) return
     const agent = rowToAgent(agentRow)
+    activeAgent = agent
     const sessionId = controller.sessionIds.get(agent.id) ?? agent.sessionId
     const isPending = controller.pendingSessions.has(agent.id)
     controller.pendingSessions.delete(agent.id)
@@ -4683,14 +4875,12 @@ async function dispatchAgentTurn(
       },
     })
     if (!response.ok) {
-      await appendProtocolEvent({
-        version: AGENT_PROTOCOL_VERSION,
-        runId: controller.runId,
-        agentId: agent.id,
-        type: 'agent.blocked',
-        taskId: agent.taskId,
-        summary: `Failed to start turn: HTTP ${response.status}`,
-      })
+      providerFailureHandled = true
+      retryAfterFailover = await handleProviderTurnFailure(
+        controller,
+        agent,
+        classifyProviderTurnFailure(`Failed to start turn: HTTP ${response.status} ${response.statusText}`),
+      ) === 'retry'
       return
     }
     // The provider accepted the turn containing this exact inbox batch. Only
@@ -4699,19 +4889,38 @@ async function dispatchAgentTurn(
     if (opts.inboxMessageIds?.length) {
       await enqueueWrite((tx) => acknowledgeInboxSync(tx, controller.runId, agent.id, opts.inboxMessageIds!))
     }
-    await drainAgentStream(controller, agent, response)
+    const failure = await drainAgentStream(controller, agent, response)
+    if (failure) {
+      providerFailureHandled = true
+      retryAfterFailover = await handleProviderTurnFailure(controller, agent, failure) === 'retry'
+    }
   } catch (error) {
-    await appendProtocolEvent({
-      version: AGENT_PROTOCOL_VERSION,
-      runId: controller.runId,
-      agentId,
-      type: 'agent.blocked',
-      summary: `Coordinator dispatch failed: ${error instanceof Error ? error.message : String(error)}`,
-    }).catch(() => {})
+    if (activeAgent && !providerFailureHandled) {
+      providerFailureHandled = true
+      try {
+        retryAfterFailover = await handleProviderTurnFailure(
+          controller,
+          activeAgent,
+          classifyProviderTurnFailure(error instanceof Error ? error.message : String(error)),
+        ) === 'retry'
+      } catch (failoverError) {
+        await appendProtocolEvent({
+          version: AGENT_PROTOCOL_VERSION,
+          runId: controller.runId,
+          agentId,
+          type: 'agent.blocked',
+          summary: `Coordinator dispatch and failover failed: ${failoverError instanceof Error ? failoverError.message : String(failoverError)}`,
+        }).catch(() => {})
+      }
+    }
   } finally {
     for (const messageId of opts.inboxMessageIds ?? []) inboxDispatchInFlight.delete(messageId)
     controller.turnInFlight.delete(agentId)
-    await handleAgentTurnEnd(controller, agentId).catch(() => {})
+    if (retryAfterFailover && !controller.stopped) {
+      void dispatchAgentTurn(controller, agentId, message, { permissionMode: opts.permissionMode })
+    } else if (!providerFailureHandled) {
+      await handleAgentTurnEnd(controller, agentId).catch(() => {})
+    }
   }
 }
 
@@ -5006,15 +5215,31 @@ async function handleLeadTurnEnd(controller: RunController): Promise<void> {
     const summary = findingRow
       ? [findingRow.summary, findingRow.detail].filter((part) => typeof part === 'string' && part).join('\n\n')
       : undefined
+    const completed = Boolean(summary)
+    const finalSummary = summary || 'Lead synthesis ended without a final finding; the run was not completed.'
     await enqueueWrite((tx) => {
       const ts = nowIso()
       tx.prepare('UPDATE protocol_runs SET status = ?, summary = ?, updated_at = ? WHERE id = ?')
-        .run('completed', summary ?? null, ts, controller.runId)
-      tx.prepare("UPDATE protocol_agents SET status = 'done', updated_at = ? WHERE run_id = ? AND status NOT IN ('failed', 'stopped')")
-        .run(ts, controller.runId)
+        .run(completed ? 'completed' : 'failed', finalSummary, ts, controller.runId)
+      if (completed) {
+        tx.prepare("UPDATE protocol_agents SET status = 'done', updated_at = ? WHERE run_id = ? AND status NOT IN ('failed', 'stopped')")
+          .run(ts, controller.runId)
+      } else {
+        tx.prepare("UPDATE protocol_agents SET status = CASE WHEN id = ? THEN 'failed' ELSE 'stopped' END, updated_at = ? WHERE run_id = ? AND status NOT IN ('failed', 'stopped')")
+          .run(run.leadAgentId ?? 'lead', ts, controller.runId)
+        insertEventSync(tx, {
+          version: AGENT_PROTOCOL_VERSION,
+          runId: controller.runId,
+          agentId: run.leadAgentId ?? 'lead',
+          type: 'run.status',
+          summary: 'Run failed: lead synthesis produced no final finding',
+          payload: { status: 'failed' },
+          timestamp: ts,
+        })
+      }
     })
     controllers.delete(controller.runId)
-    void cleanupProtocolRunWorktrees(controller.runId).catch(() => {})
+    if (completed) void cleanupProtocolRunWorktrees(controller.runId).catch(() => {})
   }
 }
 
@@ -5147,6 +5372,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     pendingSessions: new Set(leadSession.isPending ? ['lead'] : []),
     nudges: new Map(),
     dispatchNotes: new Map(),
+    failedProviders: new Map(),
   }
   controllers.set(runId, controller)
 

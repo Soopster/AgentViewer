@@ -874,7 +874,7 @@ function sanitizeA2AStreamResponse(value: unknown): AgentProtocolEvent | null {
   const metadata = extensionFromMetadata(
     kind === 'message' ? body.metadata
       : kind === 'artifactUpdate' ? body.metadata ?? artifact?.metadata
-        : body.metadata,
+        : body.metadata ?? statusMessage?.metadata,
   )
   if (!metadata) return null
 
@@ -948,7 +948,7 @@ export function parseAgentProtocolEvents(text: string): AgentProtocolEvent[] {
     const raw = match[1]?.trim()
     if (!raw) continue
     try {
-      const parsed = JSON.parse(raw) as unknown
+      const parsed = parseProtocolBlockJson(raw)
       const event = sanitizeProtocolEvent(parsed)
       if (event) events.push(event)
     } catch {
@@ -956,6 +956,45 @@ export function parseAgentProtocolEvents(text: string): AgentProtocolEvent[] {
     }
   }
   return events
+}
+
+/**
+ * Models occasionally close the outer StreamResponse immediately after its
+ * `task` member, then append `artifacts`/`metadata` as trailing siblings. The
+ * leading object is still a complete A2A Task and its status message carries
+ * the coordination extension. Recover only that balanced leading JSON object;
+ * normal JSON remains strict and all recovered values still pass the full A2A
+ * sanitizer before they can mutate the Coordinator ledger.
+ */
+function parseProtocolBlockJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown
+  } catch (originalError) {
+    const start = raw.search(/[\[{]/)
+    if (start < 0) throw originalError
+    const opener = raw[start]
+    const closer = opener === '{' ? '}' : ']'
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let index = start; index < raw.length; index += 1) {
+      const char = raw[index]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (char === '\\') escaped = true
+        else if (char === '"') inString = false
+        continue
+      }
+      if (char === '"') {
+        inString = true
+        continue
+      }
+      if (char === opener) depth += 1
+      else if (char === closer) depth -= 1
+      if (depth === 0) return JSON.parse(raw.slice(start, index + 1)) as unknown
+    }
+    throw originalError
+  }
 }
 
 function a2aStateForEvent(type: ProtocolEventType): A2ATaskState {

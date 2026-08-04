@@ -161,6 +161,18 @@ assert.equal(parsedCompletion?.type, completedEvent.type)
 assert.equal(parsedCompletion?.summary, completedEvent.summary)
 assert.equal(parsedCompletion?.taskId, completedEvent.taskId)
 
+// Real providers sometimes close the outer response after `task`, then append
+// task-level artifacts/metadata outside it. The status message still contains
+// the authoritative extension, so recover the balanced Task instead of silently
+// discarding completion and redispatching already-finished work.
+const misplacedTaskFields = `\`\`\`a2a
+{"task":{"id":"task-1","contextId":"run-1","status":{"state":"TASK_STATE_COMPLETED","message":{"messageId":"completion-1","contextId":"run-1","role":"ROLE_AGENT","parts":[{"text":"Committed successfully.","mediaType":"text/plain"}],"metadata":{"https://agent-viewer.dev/extensions/coordination/v1":{"agentId":"agent-1","operation":"task.completed","taskId":"task-1","summary":"Committed successfully."}},"extensions":["https://agent-viewer.dev/extensions/coordination/v1"]}}}},"artifacts":[]}
+\`\`\``
+const recoveredCompletion = parseAgentProtocolEvents(misplacedTaskFields)[0]
+assert.equal(recoveredCompletion?.type, 'task.completed')
+assert.equal(recoveredCompletion?.taskId, 'task-1')
+assert.equal(recoveredCompletion?.summary, 'Committed successfully.')
+
 const legacy = parseAgentProtocolEvents(`\`\`\`agent-protocol\n${JSON.stringify({
   version: 'AVP/2',
   runId: 'legacy-run',
