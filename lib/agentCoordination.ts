@@ -75,7 +75,48 @@ import {
   type StartProtocolRunParams,
   type StartProtocolRunResult,
 } from './agentProtocol'
-import { registerCoordinatorMcpServer, unregisterCoordinatorMcpServer } from './agentCoordinationSdkTools'
+import {
+  registerCoordinatorMcpServer,
+  unregisterCoordinatorMcpServer,
+  registerCoordinatorPiTools,
+  unregisterCoordinatorPiTools,
+  registerCoordinatorCopilotTools,
+  unregisterCoordinatorCopilotTools,
+  registerCoordinatorCodexTools,
+  unregisterCoordinatorCodexTools,
+  buildCoordinatorCodexDynamicTools,
+} from './agentCoordinationSdkTools'
+
+// Providers whose SDK supports registering real in-process tools for a
+// pooled session (see lib/agentCoordinationSdkTools.ts) — presence in
+// controller.sdkIdentities is the switch that sends the short
+// buildSdkToolsTickPrompt instead of the old fenced ```a2a preamble.
+// OpenCode's installed SDK only supports subprocess/remote MCP servers (no
+// in-process plugin API without adding @opencode-ai/plugin as a dependency),
+// so it stays on the fenced-block path.
+const IN_PROCESS_TOOL_PROVIDERS = new Set<ProtocolRun['provider']>(['claude', 'pi', 'copilot', 'codex'])
+
+function registerCoordinatorToolsForProvider(provider: ProtocolRun['provider'], sessionId: string, identity: ExternalProtocolIdentity): void {
+  if (provider === 'claude') registerCoordinatorMcpServer(sessionId, identity)
+  else if (provider === 'pi') registerCoordinatorPiTools(sessionId, identity)
+  else if (provider === 'copilot') registerCoordinatorCopilotTools(sessionId, identity)
+  else if (provider === 'codex') registerCoordinatorCodexTools(sessionId, identity)
+}
+
+function unregisterCoordinatorToolsForProvider(provider: ProtocolRun['provider'], sessionId: string): void {
+  if (provider === 'claude') unregisterCoordinatorMcpServer(sessionId)
+  else if (provider === 'pi') unregisterCoordinatorPiTools(sessionId)
+  else if (provider === 'copilot') unregisterCoordinatorCopilotTools(sessionId)
+  else if (provider === 'codex') unregisterCoordinatorCodexTools(sessionId)
+}
+
+// stopProtocolRun/deleteProtocolRun only know session ids, not the provider
+// each belonged to (a failed-over agent may have started as one provider and
+// ended as another) — unregister from every provider's registry to be safe;
+// the ones a given session id was never registered in are cheap no-ops.
+function unregisterCoordinatorToolsForSession(sessionId: string): void {
+  for (const provider of IN_PROCESS_TOOL_PROVIDERS) unregisterCoordinatorToolsForProvider(provider, sessionId)
+}
 import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
 import { getRunningSessionInfo, interruptRunningSession, steerRunningSession } from './sessionRuntime'
 import { createWorktreeTask, findRepoRoot, findWorktreeTaskForCwd, removeWorktreeTask, type WorktreeTask } from './worktreeTasks'
@@ -4954,6 +4995,7 @@ async function handleProviderTurnFailure(
         provider,
         cwd: agent.worktreePath,
         title: `${controller.title ?? 'Coordinated run'} · ${agent.name} failover`,
+        codexDynamicTools: provider === 'codex' ? buildCoordinatorCodexDynamicTools() : undefined,
       })
       // The old session's coord_* tool binding (if any) is dead the moment its
       // session id stops being used — candidates always exclude agent.provider,
@@ -4962,7 +5004,7 @@ async function handleProviderTurnFailure(
       // stale identity that would send a tool-calling tick prompt to a
       // provider with no coord_* tools actually registered.
       const oldSessionId = controller.sessionIds.get(agent.id)
-      if (oldSessionId) unregisterCoordinatorMcpServer(oldSessionId)
+      if (oldSessionId) unregisterCoordinatorToolsForProvider(agent.provider, oldSessionId)
       controller.sdkIdentities.delete(agent.id)
       controller.sessionIds.set(agent.id, session.sessionId)
       if (session.isPending) controller.pendingSessions.add(agent.id)
@@ -4990,11 +5032,11 @@ async function handleProviderTurnFailure(
           payload: { failureClass: failure.kind, fromProvider: agent.provider, toProvider: provider },
           timestamp: ts,
         })
-        return provider === 'claude' ? issueParticipantTokenSync(tx, controller.runId, agent.id, undefined, ts) : undefined
+        return IN_PROCESS_TOOL_PROVIDERS.has(provider) ? issueParticipantTokenSync(tx, controller.runId, agent.id, undefined, ts) : undefined
       })
       if (token) {
         const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId: agent.id, token }
-        registerCoordinatorMcpServer(session.sessionId, identity)
+        registerCoordinatorToolsForProvider(provider, session.sessionId, identity)
         controller.sdkIdentities.set(agent.id, identity)
       }
       controller.sameProviderRetries.delete(agent.id)
@@ -5502,10 +5544,12 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
       workspace = controller.useWorktrees
         ? await createWorktreeTask(controller.baseCwd, `${controller.title ?? 'coord'}-${name}`)
         : { path: controller.baseCwd, branch: '' }
+      const teammateProvider = controller.teammateProviders[index % controller.teammateProviders.length] ?? controller.provider
       session = await createNewViewSession({
-        provider: controller.teammateProviders[index % controller.teammateProviders.length] ?? controller.provider,
+        provider: teammateProvider,
         cwd: workspace.path,
         title: `${controller.title ?? 'Coordinated run'} · ${name}`,
+        codexDynamicTools: teammateProvider === 'codex' ? buildCoordinatorCodexDynamicTools() : undefined,
       })
     } catch (err) {
       // Session creation happens after the isolated checkout is registered.
@@ -5533,11 +5577,11 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
         ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, ?, NULL, 'idle', NULL, ?, ?)
       `).run(agentId, controller.runId, name, session.provider, session.sessionId, workspace.path, workspace.branch, ts, ts)
       claimTaskSync(tx, controller.runId, agentId)
-      return session.provider === 'claude' ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
+      return IN_PROCESS_TOOL_PROVIDERS.has(session.provider) ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
     })
     if (token) {
       const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId, token }
-      registerCoordinatorMcpServer(session.sessionId, identity)
+      registerCoordinatorToolsForProvider(session.provider, session.sessionId, identity)
       controller.sdkIdentities.set(agentId, identity)
     }
     if (session.isPending) controller.pendingSessions.add(agentId)
@@ -5583,6 +5627,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     provider: params.provider,
     cwd: params.baseCwd,
     title: `${params.title ?? playbook?.name ?? 'Coordinated run'} · lead`,
+    codexDynamicTools: params.provider === 'codex' ? buildCoordinatorCodexDynamicTools() : undefined,
   })
 
   const controller: RunController = {
@@ -5615,9 +5660,10 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
   }
   controllers.set(runId, controller)
 
-  // Only Claude's SDK supports in-process (function-call, no subprocess) MCP
-  // servers — see lib/agentCoordinationSdkTools.ts. Other providers keep the
-  // fenced ```a2a text protocol for now.
+  // Claude/Pi/Copilot/Codex SDKs each support in-process (no subprocess)
+  // custom tools — see lib/agentCoordinationSdkTools.ts. OpenCode's installed
+  // SDK only supports subprocess/remote MCP config, so it keeps the fenced
+  // ```a2a text protocol for now.
   let leadToken: string | undefined
   const snapshot = await enqueueWrite((db) => {
     db.exec('BEGIN IMMEDIATE')
@@ -5646,7 +5692,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
         ) VALUES ('lead', ?, 'lead', 'lead', ?, ?, ?, '', NULL, 'working', NULL, ?, ?)
       `).run(runId, leadSession.provider, leadSession.sessionId, params.baseCwd, ts, ts)
       if (playbook) seedPlaybookTasksSync(db, runId, 'lead', playbook, params.playbookArgs)
-      if (params.provider === 'claude') leadToken = issueParticipantTokenSync(db, runId, 'lead', undefined, ts)
+      if (IN_PROCESS_TOOL_PROVIDERS.has(params.provider)) leadToken = issueParticipantTokenSync(db, runId, 'lead', undefined, ts)
       db.exec('COMMIT')
       const next = readSnapshotSync(db, runId)
       if (!next) throw new Error('Failed to read created run')
@@ -5659,7 +5705,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
 
   if (leadToken) {
     const identity: ExternalProtocolIdentity = { runId, agentId: 'lead', token: leadToken }
-    registerCoordinatorMcpServer(leadSession.sessionId, identity)
+    registerCoordinatorToolsForProvider(leadSession.provider, leadSession.sessionId, identity)
     controller.sdkIdentities.set('lead', identity)
   }
 
@@ -5717,7 +5763,7 @@ export async function stopProtocolRun(runId: string): Promise<ProtocolRunSnapsho
   const db = await getDatabase()
   const agents = listAgentsSync(db, runId)
   controllers.delete(runId)
-  if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorMcpServer(sessionId)
+  if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorToolsForSession(sessionId)
   const snapshot = await enqueueWrite((tx) => {
     const ts = nowIso()
     const updated = tx.prepare('UPDATE protocol_runs SET status = ?, updated_at = ? WHERE id = ?').run('stopped', ts, runId) as { changes?: number | bigint } | undefined
@@ -5764,7 +5810,7 @@ export async function deleteProtocolRun(runId: string): Promise<{ deleted: boole
   const db = await getDatabase()
   const agents = listAgentsSync(db, runId)
   controllers.delete(runId)
-  if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorMcpServer(sessionId)
+  if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorToolsForSession(sessionId)
   // Remove the durable run first. External supervisors treat the missing run
   // as terminal and can stop their provider process even when an in-process
   // SDK interrupt is wedged. Cleanup below remains bounded and best effort.

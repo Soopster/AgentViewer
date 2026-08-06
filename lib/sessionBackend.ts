@@ -58,7 +58,7 @@ import {
 } from './claudeHarness'
 import { getClaudeCommandsOverride, noteClaudeCommandsChanged } from './claudeCommandsStore'
 import { createClaudeViewerQueryExtensions } from './claudeViewerIntegration'
-import { getCoordinatorMcpServers } from './agentCoordinationSdkTools'
+import { getCoordinatorMcpServers, dispatchCoordinatorCodexToolCall } from './agentCoordinationSdkTools'
 import {
   broadcastLiveSessionActivity,
   broadcastLiveSessionRecycled,
@@ -141,6 +141,7 @@ import type {
   CodexThreadTokenUsage,
 } from './codexProtocol'
 import type {
+  DynamicToolSpec,
   ErrorNotification,
   ThreadStatusChangedNotification,
   ThreadTokenUsageUpdatedNotification,
@@ -4799,9 +4800,35 @@ async function createCodexStream(sessionId: string, signal: AbortSignal, body: R
         safeEnqueue(`data: ${codexApprovalRequestedEvent(sessionId, request)}\n\n`)
         return true
       })
+      // Coordinator agents get their coord_* tools declared as Codex
+      // dynamicTools at thread/start (see createNewViewSession's codex
+      // branch) — the model calling one arrives here as a server→client
+      // item/tool/call request that blocks the turn until we respond.
+      const unsubscribeCoordinatorTools = client.subscribeServerRequests((request) => {
+        if (consumeAborted) return false
+        if (request.method !== 'item/tool/call') return false
+        const params = request.params as { threadId?: string; tool?: string; arguments?: unknown }
+        if (params.threadId && params.threadId !== sessionId) return false
+        void (async () => {
+          const args = params.arguments && typeof params.arguments === 'object' && !Array.isArray(params.arguments)
+            ? params.arguments as Record<string, unknown>
+            : {}
+          const result = await dispatchCoordinatorCodexToolCall(sessionId, String(params.tool ?? ''), args)
+          if (!result) {
+            client.respondError(request.id, -32601, `Unknown dynamic tool: ${params.tool}`)
+            return
+          }
+          client.respond(request.id, {
+            contentItems: [{ type: 'inputText', text: result.text }],
+            success: !result.isError,
+          })
+        })()
+        return true
+      })
       const unsubscribe = () => {
         consumeAborted = true
         unsubscribeApprovals()
+        unsubscribeCoordinatorTools()
         declinePendingCodexApprovals(sessionId)
         subscription.close()
       }
@@ -6542,10 +6569,18 @@ export async function createNewViewSession({
   provider: providerOverride,
   cwd,
   title,
+  codexDynamicTools,
 }: {
   provider?: AgentProvider
   cwd?: string
   title?: string
+  // Codex has no equivalent of Claude's per-query mcpServers lookup — custom
+  // tools are declared once at thread/start and can't be added afterward
+  // (see lib/agentCoordinationSdkTools.ts's Codex section), so a coordinator
+  // caller must pass its static coord_* tool specs through session creation
+  // itself rather than registering them after the fact like every other
+  // provider.
+  codexDynamicTools?: DynamicToolSpec[]
 }): Promise<{ sessionId: string; provider: AgentProvider; cwd: string; isPending: boolean }> {
   const provider = await resolveProvider(providerOverride)
   const resolvedCwd = (cwd && cwd.trim()) ? cwd : process.cwd()
@@ -6558,6 +6593,7 @@ export async function createNewViewSession({
   if (provider === 'codex') {
     const client = getCodexClient()
     const response = await client.request('thread/start', {
+      ...(codexDynamicTools?.length ? { dynamicTools: codexDynamicTools } : {}),
       cwd: resolvedCwd,
     })
     const newId = response.thread.id

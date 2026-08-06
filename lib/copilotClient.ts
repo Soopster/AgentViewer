@@ -11,6 +11,7 @@ import {
   type CustomAgentConfig,
   type ElicitationHandler,
 } from '@github/copilot-sdk'
+import { getCoordinatorCopilotTools } from './agentCoordinationSdkTools'
 
 function normalizedEnv(value: string | undefined): string | undefined {
   const trimmed = value?.trim()
@@ -93,11 +94,19 @@ function createClientOptions(): CopilotClientOptions {
 // they change what the agent can do; enableCitations is safe to default on,
 // since it's a no-op for providers that don't support it and copilotMapper's
 // applyCitations already renders the result as a plain sources footer.
-export function copilotSessionConfigOverrides(): Partial<SessionConfigBase> {
+export function copilotSessionConfigOverrides(sessionId?: string): Partial<SessionConfigBase> {
   const overrides: Partial<SessionConfigBase> = {
     enableCitations: true,
     enableConfigDiscovery: true,
   }
+
+  // Coordinator sessions get their coord_* tools registered by session id
+  // (see lib/agentCoordinationSdkTools.ts) right after beginExecutionPhase
+  // creates them, before the first resumeSession call — every other Copilot
+  // session (sessionId omitted at the initial createSession call, or simply
+  // not a coordinator participant) gets none.
+  const coordinatorTools = sessionId ? getCoordinatorCopilotTools(sessionId) : undefined
+  if (coordinatorTools?.length) overrides.tools = coordinatorTools as SessionConfigBase['tools']
 
   const customAgents = readCustomAgents()
   if (customAgents) overrides.customAgents = customAgents
@@ -235,7 +244,7 @@ async function resumeCopilotSession(
       // We're a read-mostly observer; suppress duplicate telemetry events
       // that would otherwise fire on every resume from session list polls.
       enableSessionTelemetry: false,
-      ...copilotSessionConfigOverrides(),
+      ...copilotSessionConfigOverrides(sessionId),
       ...overrides,
     })
   } catch (error) {

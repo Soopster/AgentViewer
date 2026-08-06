@@ -5,6 +5,7 @@ import type {
   AgentSession,
 } from '@earendil-works/pi-coding-agent'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
+import { getCoordinatorPiTools } from './agentCoordinationSdkTools'
 
 // The Pi SDK is ~86MB resident once loaded (measured) — by far the heaviest
 // provider SDK. Import it lazily and cache the module so a Claude/Codex/etc.
@@ -174,7 +175,12 @@ export async function createPiAgentSession(cwd: string, options: { id?: string }
       const sessionManager = options.id
         ? SessionManager.create(cwd, process.env.PI_SESSION_DIR, { id: options.id })
         : undefined
-      const result = await createAgentSession(sessionManager ? { sessionManager } : { cwd })
+      const customTools = options.id ? getCoordinatorPiTools(options.id) : undefined
+      const result = await createAgentSession(
+        sessionManager
+          ? { sessionManager, ...(customTools ? { customTools } : {}) }
+          : { cwd, ...(customTools ? { customTools } : {}) },
+      )
       const id = result.session.sessionId
       const file = result.session.sessionFile
       if (file) {
@@ -310,7 +316,8 @@ export async function openPiAgentSession(sessionId: string): Promise<AgentSessio
     const sm = await openPiSessionManager(sessionId)
     try {
       const { createAgentSession } = await loadPiSdk()
-      const result = await createAgentSession({ sessionManager: sm })
+      const customTools = getCoordinatorPiTools(sessionId)
+      const result = await createAgentSession({ sessionManager: sm, ...(customTools ? { customTools } : {}) })
       const entry: PiPoolEntry = {
         session: result.session,
         lastUsed: Date.now(),
