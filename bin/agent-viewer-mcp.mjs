@@ -966,7 +966,8 @@ server.registerTool('coord_await_run', {
 })
 
 server.registerTool('coord_create_task', {
-  description: 'Add a task with dependencies and expected write paths to the shared board. Any participant may add discovered work; the lead may also add tasks during synthesis, which reopens the run. On playbook boards, pass the phase title the task belongs to so progress rollups stay accurate.',
+  description: 'Add a task with dependencies and expected write paths to the shared board. Any participant may add discovered work; the lead may also add tasks during synthesis, which reopens the run. On playbook boards, pass the phase title the task belongs to so progress rollups stay accurate. '
+    + 'Use role_name/role_description to give the lane a specialization — a persona the claiming teammate should adopt for this task (e.g. "Explorer" / "read-only research, report findings, propose no edits"). This is invented per task as you distribute work, not a fixed role: the same run can have an Explorer lane, a Refactorer lane, and a Reviewer lane at once, and later tasks can define new specializations entirely.',
   inputSchema: {
     title: z.string().min(1).max(160),
     detail: z.string().min(1).max(8000),
@@ -974,15 +975,19 @@ server.registerTool('coord_create_task', {
     depends_on: z.array(z.string().min(1)).max(100).optional(),
     phase: z.string().min(1).max(120).optional().describe('Playbook phase title this task belongs to (rollup grouping; barriers are not re-derived mid-run)'),
     role: z.enum(['lead', 'teammate', 'any']).optional().describe('Participant role responsible for this task; defaults to teammate'),
+    role_name: z.string().min(1).max(80).optional().describe('Specialization label the claiming teammate should adopt for this task, e.g. "Explorer" or "Refactorer" — your own invented persona, not a fixed enum'),
+    role_description: z.string().min(1).max(1000).optional().describe('What this specialization means: scope, approach, constraints. Shown to the teammate when it works this task.'),
     request_id: requestIdField,
   },
-}, async ({ title, detail, paths, depends_on, phase, role, request_id }) => textResult(await coordinatorRequest('create_task', {
+}, async ({ title, detail, paths, depends_on, phase, role, role_name, role_description, request_id }) => textResult(await coordinatorRequest('create_task', {
   title,
   detail,
   paths,
   dependsOn: depends_on,
   phase,
   targetRole: role,
+  roleName: role_name,
+  roleDescription: role_description,
   requestId: request_id,
 })))
 

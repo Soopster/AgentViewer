@@ -322,6 +322,15 @@ export type ProtocolTask = {
   ownerAgentId?: string
   /** Which participant role should claim this lane. Defaults to teammate. */
   targetRole: ProtocolTaskTargetRole
+  /**
+   * Lead-defined specialization for whoever claims this task — e.g. "Explorer"
+   * / "read-only research, report findings, no edits". Unlike targetRole (a
+   * fixed structural lead/teammate/any gate), this is a free-form persona the
+   * lead invents per task as it distributes work, so it naturally varies task
+   * to task and run to run.
+   */
+  roleName?: string
+  roleDescription?: string
   paths: string[]
   blockedBy: string[]
   /** Playbook phase this task belongs to (display + barrier grouping). */
@@ -1122,6 +1131,15 @@ export function makeProtocolBlock(event: AgentProtocolEvent): string {
 // roster/team config, self-claiming, idle notification) is reproduced as
 // plain-text sections every agent receives at the top of each turn.
 
+/** Lead-defined specialization framing for a task, or [] when none was set. */
+function taskRoleLines(task: Pick<ProtocolTask, 'roleName' | 'roleDescription'> | null | undefined): string[] {
+  if (!task?.roleName) return []
+  return [
+    `Role for this task: ${task.roleName}${task.roleDescription ? ` — ${task.roleDescription}` : ''}`,
+    '',
+  ]
+}
+
 export function formatTaskBoard(tasks: ProtocolTask[]): string {
   if (tasks.length === 0) return '- (no tasks yet)'
   return tasks.map((task) => {
@@ -1133,7 +1151,8 @@ export function formatTaskBoard(tasks: ProtocolTask[]): string {
     const result = task.resultSummary
       ? `\n  result: ${task.resultSummary}${resultDetail ? ` — ${resultDetail}` : ''}`
       : ''
-    return `- ${task.id} [${task.status}] role:${task.targetRole}${owner}${deps} ${task.title}${result}`
+    const spec = task.roleName ? ` spec:${task.roleName}` : ''
+    return `- ${task.id} [${task.status}] role:${task.targetRole}${spec}${owner}${deps} ${task.title}${result}`
   }).join('\n')
 }
 
@@ -1266,6 +1285,7 @@ export function buildTeammatePlanPreamble(params: {
     'THIS TURN IS PLAN-ONLY. Do not edit files, run destructive commands, or mark the task complete.',
     'Study the repo read-only and propose the approach. The team lead must approve before you implement.',
     '',
+    ...taskRoleLines(params.task),
     ...(params.note ? [`Coordinator note: ${params.note}`, ''] : []),
     'Team roster (message anyone by name):',
     formatRoster(params.roster),
@@ -1321,6 +1341,7 @@ export function buildTeammateTurnPreamble(params: {
       ? 'You work in an isolated git worktree; your changes merge back later. Never edit files outside your granted paths.'
       : 'You work in the shared checkout. Never edit files outside your granted paths, overwrite another participant\'s changes, or reset or clean existing files.',
     '',
+    ...taskRoleLines(params.task),
     ...(params.note ? [`Coordinator note: ${params.note}`, ''] : []),
     'Team roster (message anyone by name):',
     formatRoster(params.roster),
@@ -1454,6 +1475,34 @@ export function buildLeadSynthesisPreamble(params: {
     '',
     protocolGrammar(params.runId, params.agent.id),
   ].join('\n')
+}
+
+/**
+ * Turn prompt for an agent dispatched with real coord_* tool calls
+ * (lib/agentCoordinationSdkTools.ts) instead of the fenced ```a2a text
+ * protocol. Mirrors bin/agent-viewer-coord-worker.mjs's tickPrompt() — short
+ * and role-generic, because the agent pulls roster/board/inbox itself via
+ * coord_status/coord_read_inbox rather than having them dumped into every
+ * dispatch. The coordinator note (blocked-task nudge, intervention reason,
+ * synthesis request) is the only per-dispatch content that actually varies.
+ */
+export function buildSdkToolsTickPrompt(params: {
+  runId: string
+  agent: Pick<ProtocolAgent, 'id' | 'name' | 'role'>
+  note?: string
+}): string {
+  const roleGuidance = params.agent.role === 'lead'
+    ? 'You are the lead: supervise and delegate before implementing. Never claim a teammate lane merely because it is claimable; claim only an explicit lead integration/review task, decompose the board with coord_create_task when it is empty, and finalize the run with coord_finalize_run once every task is terminal.'
+    : 'You are a teammate: answer reply-required mail first, then continue your owned task or claim one unblocked lane with coord_claim_task. Complete, release, or hand off owned work before ending your turn.'
+  return [
+    `Continue Coordinator run ${params.runId} as ${params.agent.name} (${params.agent.role}). You are ALREADY bound to this run — start with coord_status and act on the board and your inbox.`,
+    roleGuidance,
+    'Drain the inbox with coord_read_inbox, then perform every immediately actionable step, including implementation and verification.',
+    'Coordinate actively — teammates cannot see your terminal: answer reply-required mail first, publish reusable discoveries with coord_publish_finding, and message teammates your progress affects with coord_send_message.',
+    'If blocked, report it with coord_progress(status="blocked") and the exact obstacle, then message whoever can unblock you.',
+    'If nothing is immediately actionable, end your turn rather than waiting — the coordinator re-dispatches you when the board changes.',
+    ...(params.note ? [`Coordinator note: ${params.note}`] : []),
+  ].join(' ')
 }
 
 /**

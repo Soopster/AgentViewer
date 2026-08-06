@@ -58,6 +58,7 @@ import {
 } from './claudeHarness'
 import { getClaudeCommandsOverride, noteClaudeCommandsChanged } from './claudeCommandsStore'
 import { createClaudeViewerQueryExtensions } from './claudeViewerIntegration'
+import { getCoordinatorMcpServers } from './agentCoordinationSdkTools'
 import {
   broadcastLiveSessionActivity,
   broadcastLiveSessionRecycled,
@@ -3825,6 +3826,10 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           forwardSubagentText: true,
           systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true },
           taskBudget: taskBudgetTotal ? { total: taskBudgetTotal } : undefined,
+          // See lib/claudePool.ts's spawn() for why this needs no compat-check
+          // entry: a Coordinator-owned session's tools are bound once here, on
+          // its first (cold) turn, and never change for its lifetime.
+          mcpServers: getCoordinatorMcpServers(sessionId),
         },
       })
       // Mirror the native CLI, which runs fast mode by default — an SDK

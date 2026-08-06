@@ -1685,7 +1685,10 @@ export default function AgentTeamCoordinator({
                               <button key={task.id} type="button" className={cn('av-coord-task-row', taskIndex === groupedTasks[group].length - 1 ? 'av-last' : '', displayedTask?.id === task.id ? 'av-selected' : '')} onClick={() => selectTask(task)}>
                                 <span className="av-coord-task-branch" aria-hidden="true" />
                                 <span className={cn('av-coord-status', `av-tone-${statusTone(task.status)}`)}>{task.status}</span>
-                                <span className="av-coord-task-title"><strong>{task.title}</strong><small>{task.paths[0] ?? task.id}</small></span>
+                                <span className="av-coord-task-title" title={task.roleDescription}>
+                                  <strong>{task.title}</strong>
+                                  <small>{task.roleName ? `${task.roleName} · ${task.paths[0] ?? task.id}` : (task.paths[0] ?? task.id)}</small>
+                                </span>
                                 <strong>{owner?.name ?? 'unassigned'}</strong>
                                 <span className={`av-coord-provider-name av-provider-${owner?.provider ?? run.provider}`}>{String(owner?.provider ?? run.provider).toUpperCase()}</span>
                                 <span>{formatAge(task.createdAt)}</span>

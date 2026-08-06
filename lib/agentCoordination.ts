@@ -23,6 +23,7 @@ import {
   buildLeadInterventionPreamble,
   buildLeadPlanPreamble,
   buildLeadSynthesisPreamble,
+  buildSdkToolsTickPrompt,
   buildTeammatePlanPreamble,
   buildTeammateTurnPreamble,
   fallbackTaskTemplates,
@@ -74,6 +75,7 @@ import {
   type StartProtocolRunParams,
   type StartProtocolRunResult,
 } from './agentProtocol'
+import { registerCoordinatorMcpServer, unregisterCoordinatorMcpServer } from './agentCoordinationSdkTools'
 import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
 import { getRunningSessionInfo, interruptRunningSession, steerRunningSession } from './sessionRuntime'
 import { createWorktreeTask, findRepoRoot, findWorktreeTaskForCwd, removeWorktreeTask, type WorktreeTask } from './worktreeTasks'
@@ -121,6 +123,23 @@ const DATABASE_BUSY_TIMEOUT_MS = Math.max(
 const SESSION_INTERRUPT_TIMEOUT_MS = Math.max(
   100,
   Number(process.env.AGENT_VIEWER_COORD_SESSION_INTERRUPT_TIMEOUT_MS) || 5_000,
+)
+// In-process turns (lead/teammate sessions the TUI/web app hosts directly, as
+// opposed to an external `coord worker` CLI) stream through drainAgentStream
+// below. Unlike the external worker — which has always paired its provider
+// tick with PROVIDER_TURN_TIMEOUT_MS/PROVIDER_INACTIVITY_TIMEOUT_MS — this
+// path had no watchdog: a wedged pool subprocess that stops emitting chunks
+// without closing its stream left turnInFlight set forever, and
+// sweepIdleTeammates treats turnInFlight as "busy," so nothing ever reaped
+// it. Same env vars as bin/agent-viewer-coord-worker.mjs so one setting
+// governs both spawn paths.
+const AGENT_TURN_TIMEOUT_MS = Math.max(
+  100,
+  Number(process.env.AGENT_VIEWER_COORD_PROVIDER_TURN_TIMEOUT_MS) || 30 * 60_000,
+)
+const AGENT_TURN_INACTIVITY_TIMEOUT_MS = Math.max(
+  100,
+  Number(process.env.AGENT_VIEWER_COORD_PROVIDER_INACTIVITY_TIMEOUT_MS) || 10 * 60_000,
 )
 const EXTERNAL_AGENT_STALE_MS = Math.max(60_000, Number(process.env.AGENT_VIEWER_COORD_STALE_MS) || 5 * 60_000)
 // Interactive CLI participants (an MCP-bridged chat session, not a `coord
@@ -195,6 +214,29 @@ type RunController = {
   dispatchNotes: Map<string, string>
   /** Providers that failed durably for each agent; prevents failover loops. */
   failedProviders: Map<string, Set<ProtocolRun['provider']>>
+  /**
+   * agentId → Coordinator identity for agents dispatched with real coord_*
+   * tool calls (lib/agentCoordinationSdkTools.ts) instead of the fenced
+   * ```a2a text protocol. Currently Claude-provider agents only — other
+   * providers' in-process SDKs don't support in-process MCP servers, so they
+   * keep using the fenced-block path. Presence in this map is the switch:
+   * dispatch sends a short tick prompt instead of the full board/roster/inbox
+   * preamble, and drainAgentStream's fenced-block parsing simply finds
+   * nothing to parse (the agent already applied every mutation directly).
+   */
+  sdkIdentities: Map<string, ExternalProtocolIdentity>
+  /**
+   * Set once beginExecutionPhase has been entered for this run. SDK-tool
+   * leads can flip protocol_runs.status from 'planning' to 'running' mid-turn
+   * (createExternalProtocolTask does this on the lead's first coord_create_task
+   * call, a behavior kept for external MCP leads whose turn-end isn't hooked
+   * to handleLeadTurnEnd). Gating teammate spawn on this flag instead of a
+   * status read means handleLeadTurnEnd still spawns teammates even when the
+   * status already reads 'running' by the time the lead's first turn ends.
+   */
+  executionStarted: boolean
+  /** agentId → same-provider retries used since its last successful turn or failover. Reset on either. */
+  sameProviderRetries: Map<string, number>
 }
 
 const controllers = new Map<string, RunController>()
@@ -301,6 +343,8 @@ function initializeSchema(db: SqliteDatabase): void {
       status TEXT NOT NULL,
       owner_agent_id TEXT,
       target_role TEXT NOT NULL DEFAULT 'teammate',
+      role_name TEXT,
+      role_description TEXT,
       paths_json TEXT NOT NULL,
       blocked_by_json TEXT NOT NULL,
       phase TEXT,
@@ -492,6 +536,8 @@ function migrateSchema(db: SqliteDatabase): void {
   for (const statement of [
     'ALTER TABLE protocol_tasks ADD COLUMN result_summary TEXT',
     'ALTER TABLE protocol_tasks ADD COLUMN result_detail TEXT',
+    'ALTER TABLE protocol_tasks ADD COLUMN role_name TEXT',
+    'ALTER TABLE protocol_tasks ADD COLUMN role_description TEXT',
   ]) {
     try {
       db.exec(statement)
@@ -728,6 +774,8 @@ function rowToTask(row: Row): ProtocolTask {
     status: String(row.status) as ProtocolTaskStatus,
     ownerAgentId: typeof row.owner_agent_id === 'string' ? row.owner_agent_id : undefined,
     targetRole: row.target_role === 'lead' || row.target_role === 'any' ? row.target_role : 'teammate',
+    roleName: typeof row.role_name === 'string' && row.role_name ? row.role_name : undefined,
+    roleDescription: typeof row.role_description === 'string' && row.role_description ? row.role_description : undefined,
     paths: parseJsonArray(row.paths_json),
     blockedBy: parseJsonArray(row.blocked_by_json),
     phase: typeof row.phase === 'string' && row.phase ? row.phase : undefined,
@@ -1070,6 +1118,29 @@ async function participantWorktree(cwd: string): Promise<{ cwd: string; branch: 
   return { cwd: worktree?.path ?? resolved, branch: worktree?.branch ?? '' }
 }
 
+/**
+ * Mint (and persist) a Coordinator participant capability token for an
+ * EXISTING protocol_agents row — the same token mechanism issueParticipant
+ * uses for a freshly-joined external participant, factored out so an
+ * in-process agent (real session id, inserted by beginExecutionPhase/
+ * startProtocolRun, not the synthetic `external:*` session id an external
+ * join assigns) can get a real identity without going through the whole
+ * external-join flow.
+ */
+function issueParticipantTokenSync(
+  db: SqliteDatabase,
+  runId: string,
+  agentId: string,
+  token: string = randomBytes(32).toString('base64url'),
+  ts: string = nowIso(),
+): string {
+  db.prepare(`
+    INSERT INTO protocol_participant_tokens (run_id, agent_id, token_hash, created_at)
+    VALUES (?, ?, ?, ?)
+  `).run(runId, agentId, hashParticipantToken(token).toString('hex'), ts)
+  return token
+}
+
 function issueParticipant(
   db: SqliteDatabase,
   params: {
@@ -1111,10 +1182,7 @@ function issueParticipant(
     ts,
     ts,
   )
-  db.prepare(`
-    INSERT INTO protocol_participant_tokens (run_id, agent_id, token_hash, created_at)
-    VALUES (?, ?, ?, ?)
-  `).run(params.runId, agentId, hashParticipantToken(token).toString('hex'), ts)
+  issueParticipantTokenSync(db, params.runId, agentId, token, ts)
   insertEventSync(db, {
     version: AGENT_PROTOCOL_VERSION,
     runId: params.runId,
@@ -1755,7 +1823,16 @@ export async function runExternalProtocolIdempotent<T>(
 
 export async function createExternalProtocolTask(
   identity: ExternalProtocolIdentity,
-  params: { title: string; detail: string; paths?: string[]; dependsOn?: string[]; phase?: string; targetRole?: ProtocolTaskTargetRole },
+  params: {
+    title: string
+    detail: string
+    paths?: string[]
+    dependsOn?: string[]
+    phase?: string
+    targetRole?: ProtocolTaskTargetRole
+    roleName?: string
+    roleDescription?: string
+  },
 ): Promise<ExternalProtocolMutationResult> {
   const result = await enqueueWrite((db) => {
     const agent = requireExternalParticipantSync(db, identity)
@@ -1763,9 +1840,11 @@ export async function createExternalProtocolTask(
     if (!runRow) throw new Error('Coordinator run not found')
     // Any participant may add discovered work while the run is live. The lead
     // may also add tasks during synthesis — its review found follow-up work —
-    // which reopens the board.
+    // which reopens the board. The lead may also create tasks during planning
+    // (external MCP lead driving the planning turn), which advances to running.
     const reopening = runRow.status === 'synthesizing' && agent.role === 'lead'
-    if (runRow.status !== 'running' && !reopening) throw new Error('Coordinator run is not accepting tasks')
+    const planning = runRow.status === 'planning' && agent.role === 'lead'
+    if (runRow.status !== 'running' && !reopening && !planning) throw new Error('Coordinator run is not accepting tasks')
     const title = params.title.trim()
     const detail = params.detail.trim()
     if (!title || !detail) throw new Error('task title and detail are required')
@@ -1773,6 +1852,7 @@ export async function createExternalProtocolTask(
     try {
       const blockedBy = [...new Set((params.dependsOn ?? []).map((entry) => entry.trim()).filter(Boolean))]
       validateTaskDependenciesSync(db, identity.runId, nextTaskIdSync(db, identity.runId), blockedBy)
+      const roleName = params.roleName?.trim() || undefined
       const task = insertTaskSync(db, identity.runId, {
         title,
         prompt: detail,
@@ -1780,6 +1860,8 @@ export async function createExternalProtocolTask(
         blockedBy,
         phase: params.phase?.trim() || undefined,
         targetRole: params.targetRole ?? (reopening ? 'lead' : 'teammate'),
+        roleName,
+        roleDescription: roleName ? params.roleDescription?.trim() || undefined : undefined,
       })
       insertEventSync(db, {
         version: AGENT_PROTOCOL_VERSION,
@@ -1791,16 +1873,22 @@ export async function createExternalProtocolTask(
         detail,
         paths: task.paths,
         dependsOn: task.blockedBy,
-        payload: { ...(task.phase ? { phase: task.phase } : {}), targetRole: task.targetRole },
+        payload: {
+          ...(task.phase ? { phase: task.phase } : {}),
+          targetRole: task.targetRole,
+          ...(task.roleName ? { roleName: task.roleName, roleDescription: task.roleDescription } : {}),
+        },
       })
-      if (reopening) {
+      if (reopening || planning) {
         db.prepare("UPDATE protocol_runs SET status = 'running' WHERE id = ?").run(identity.runId)
         insertEventSync(db, {
           version: AGENT_PROTOCOL_VERSION,
           runId: identity.runId,
           agentId: identity.agentId,
           type: 'run.status',
-          summary: `Run reopened: the lead added ${task.id} during synthesis`,
+          summary: reopening
+            ? `Run reopened: the lead added ${task.id} during synthesis`
+            : `Run started: the lead added ${task.id} during planning`,
           payload: { status: 'running' },
         })
       }
@@ -3139,6 +3227,8 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
   blockedBy: string[]
   phase?: string
   targetRole?: ProtocolTaskTargetRole
+  roleName?: string
+  roleDescription?: string
 }): ProtocolTask {
   const ts = nowIso()
   const task: ProtocolTask = {
@@ -3148,6 +3238,8 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
     prompt: params.prompt,
     status: 'pending',
     targetRole: params.targetRole ?? 'teammate',
+    roleName: params.roleName,
+    roleDescription: params.roleName ? params.roleDescription : undefined,
     paths: params.paths.map(normalizeLockPath).filter((entry) => entry !== '**' || params.paths.length === 1),
     blockedBy: params.blockedBy,
     phase: params.phase,
@@ -3156,9 +3248,13 @@ function insertTaskSync(db: SqliteDatabase, runId: string, params: {
   }
   db.prepare(`
     INSERT INTO protocol_tasks (
-      id, run_id, title, prompt, status, owner_agent_id, target_role, paths_json, blocked_by_json, phase, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(task.id, runId, task.title, task.prompt, 'pending', null, task.targetRole, JSON.stringify(task.paths), JSON.stringify(task.blockedBy), task.phase ?? null, ts, ts)
+      id, run_id, title, prompt, status, owner_agent_id, target_role, role_name, role_description, paths_json, blocked_by_json, phase, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    task.id, runId, task.title, task.prompt, 'pending', null, task.targetRole,
+    task.roleName ?? null, task.roleDescription ?? null,
+    JSON.stringify(task.paths), JSON.stringify(task.blockedBy), task.phase ?? null, ts, ts,
+  )
   return task
 }
 
@@ -4129,18 +4225,26 @@ async function dispatchLeadIntervention(controller: RunController, opts: { force
     if (!reviewingPlans) controller.interventionsUsed += 1
   }
   const inbox = await enqueueWrite((tx) => takeInboxSync(tx, controller.runId, lead.id))
-  const message = buildLeadInterventionPreamble({
-    runId: controller.runId,
-    agent: lead,
-    roster: agents,
-    tasks,
-    inbox,
-    agentsById: new Map(agents.map((agent) => [agent.id, agent])),
-    interventionsLeft: MAX_LEAD_INTERVENTIONS - controller.interventionsUsed,
-    requirePlanApproval: controller.requirePlanApproval,
-    reviewingPlans,
-    supervisionUpdate: opts.supervision === true,
-  })
+  const message = controller.sdkIdentities.has(lead.id)
+    ? buildSdkToolsTickPrompt({
+        runId: controller.runId,
+        agent: lead,
+        note: opts.supervision
+          ? 'Routine supervision checkpoint — check coord_status for every teammate and unblock, reassign, or add work if the board shows a real need; otherwise stand by.'
+          : `Woken mid-run — a teammate needs help, is stuck, or messaged you. ${reviewingPlans ? 'A submitted plan is waiting on coord_review_plan.' : ''} Check coord_status and your inbox and act.`,
+      })
+    : buildLeadInterventionPreamble({
+        runId: controller.runId,
+        agent: lead,
+        roster: agents,
+        tasks,
+        inbox,
+        agentsById: new Map(agents.map((agent) => [agent.id, agent])),
+        interventionsLeft: MAX_LEAD_INTERVENTIONS - controller.interventionsUsed,
+        requirePlanApproval: controller.requirePlanApproval,
+        reviewingPlans,
+        supervisionUpdate: opts.supervision === true,
+      })
   void dispatchAgentTurn(controller, lead.id, message, { inboxMessageIds: inbox.map((entry) => entry.id) })
 }
 
@@ -4202,8 +4306,14 @@ function parseProtocolEventsFromWire(text: string): AgentProtocolEvent[] {
 
 const SESSION_EVENT_RE = /event: session\s*\ndata: (\{[^\n]*\})/
 
+// Mirrors bin/agent-viewer-coord-worker.mjs's classifyProviderFailure: a
+// richer failure taxonomy than a flat 'provider_failure' bucket lets
+// handleProviderTurnFailure decide which failures are worth a same-provider
+// retry (transient_transport, plain provider_failure) versus which never are
+// (rate/auth/context exhaustion — retrying the identical provider/session
+// cannot fix any of those).
 type ProviderTurnFailure = {
-  kind: 'rate_limited' | 'authentication_failed' | 'provider_failure'
+  kind: 'rate_limited' | 'authentication_failed' | 'context_exhausted' | 'transient_transport' | 'provider_failure'
   detail: string
 }
 
@@ -4213,8 +4323,22 @@ function classifyProviderTurnFailure(detail: string): ProviderTurnFailure {
     ? 'rate_limited'
     : /authentication|not authenticated|unauthorized|invalid api key|expired (?:token|credential)|\b401\b|\b403\b/.test(normalized)
       ? 'authentication_failed'
-      : 'provider_failure'
+      : /context (?:window|length)|maximum context|context.*exceed|too many tokens/.test(normalized)
+        ? 'context_exhausted'
+        : /econnreset|econnrefused|epipe|timed? out|temporar|network|socket|transport/.test(normalized)
+          ? 'transient_transport'
+          : 'provider_failure'
   return { kind, detail: detail.trim().slice(0, 1200) || 'Provider turn failed' }
+}
+
+/** Same-provider retry budget before handleProviderTurnFailure gives up and fails over to a different provider. Mirrors the worker's durableFailure thresholds (3 for generic failures, 5 for transient transport; rate/auth/context-exhaustion never retry). */
+const SAME_PROVIDER_RETRY_LIMITS: Partial<Record<ProviderTurnFailure['kind'], number>> = {
+  provider_failure: 3,
+  transient_transport: 5,
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function allStrings(value: unknown, out: string[], depth = 0): void {
@@ -4590,10 +4714,48 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
   let failure: ProviderTurnFailure | null = null
   let terminalEventObserved = false
   const seen = new Set<string>()
+  const turnStartedAt = Date.now()
+  let lastActivityAt = turnStartedAt
+  // External participants heartbeat via their own coord_progress('heartbeat')
+  // calls (bin/agent-viewer-coord-worker.mjs), which recoverStaleExternalParticipantsSync
+  // reads to distinguish "alive, mid-turn" from "actually dead." An in-process
+  // turn had no equivalent — last_seen_at only moved at turn start/end — so a
+  // long-running turn looked identical to a dead one to anything reading
+  // last_seen_at (status displays, external tooling). Touch it periodically
+  // here, throttled well below AGENT_TURN_INACTIVITY_TIMEOUT_MS so it reflects
+  // genuine stream activity rather than papering over a real stall.
+  let lastHeartbeatWriteAt = turnStartedAt
+  const HEARTBEAT_WRITE_INTERVAL_MS = 15_000
+  let stalled = false
+  const stallReason = (): string => Date.now() - turnStartedAt >= AGENT_TURN_TIMEOUT_MS
+    ? `turn exceeded the ${AGENT_TURN_TIMEOUT_MS}ms Coordinator turn deadline`
+    : `turn produced no output for ${AGENT_TURN_INACTIVITY_TIMEOUT_MS}ms`
   try {
     for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
+      const remaining = Math.min(
+        AGENT_TURN_TIMEOUT_MS - (Date.now() - turnStartedAt),
+        AGENT_TURN_INACTIVITY_TIMEOUT_MS - (Date.now() - lastActivityAt),
+      )
+      if (remaining <= 0) { stalled = true; break }
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const { done, value } = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true; value: undefined }>((resolve) => {
+          timer = setTimeout(() => resolve({ done: true, value: undefined }), remaining)
+        }),
+      ]).finally(() => { if (timer) clearTimeout(timer) })
+      if (done) {
+        if (Date.now() - lastActivityAt >= AGENT_TURN_INACTIVITY_TIMEOUT_MS || Date.now() - turnStartedAt >= AGENT_TURN_TIMEOUT_MS) stalled = true
+        break
+      }
+      lastActivityAt = Date.now()
+      if (lastActivityAt - lastHeartbeatWriteAt >= HEARTBEAT_WRITE_INTERVAL_MS) {
+        lastHeartbeatWriteAt = lastActivityAt
+        enqueueWrite((tx) => {
+          tx.prepare('UPDATE protocol_agents SET last_seen_at = ? WHERE id = ? AND run_id = ?')
+            .run(nowIso(), agent.id, controller.runId)
+        }).catch(() => {})
+      }
       buffer += decoder.decode(value, { stream: true })
       if (buffer.length > 250_000) buffer = buffer.slice(-120_000)
 
@@ -4654,6 +4816,22 @@ async function drainAgentStream(controller: RunController, agent: ProtocolAgent,
     }
   } catch (err) {
     failure = classifyProviderTurnFailure(err instanceof Error ? err.message : 'Worker stream failed')
+  }
+  if (stalled && !terminalEventObserved) {
+    failure ??= classifyProviderTurnFailure(`Provider ${stallReason()}`)
+    // The abandoned reader.read() may still resolve later against a stream
+    // that never ends; cancel it so the underlying connection actually closes
+    // instead of leaking. Race the session interrupt the same way
+    // stopProtocolRun does — a wedged provider SDK/socket must not block
+    // reporting the failure back to the work loop.
+    await reader.cancel().catch(() => {})
+    const sessionId = controller.sessionIds.get(agent.id) ?? agent.sessionId
+    if (sessionId) {
+      await Promise.race([
+        interruptRunningSession(sessionId).catch(() => {}),
+        new Promise<void>((resolve) => setTimeout(resolve, SESSION_INTERRUPT_TIMEOUT_MS)),
+      ])
+    }
   }
   return terminalEventObserved ? null : failure
 }
@@ -4745,6 +4923,25 @@ async function handleProviderTurnFailure(
   agent: ProtocolAgent,
   failure: ProviderTurnFailure,
 ): Promise<'retry' | 'terminal'> {
+  const retryLimit = SAME_PROVIDER_RETRY_LIMITS[failure.kind]
+  if (retryLimit !== undefined) {
+    const used = controller.sameProviderRetries.get(agent.id) ?? 0
+    if (used < retryLimit) {
+      controller.sameProviderRetries.set(agent.id, used + 1)
+      const delayMs = Math.min(30_000, 1_000 * 2 ** used)
+      await appendProtocolEvent({
+        version: AGENT_PROTOCOL_VERSION,
+        runId: controller.runId,
+        agentId: agent.id,
+        type: 'learning',
+        summary: `${agent.name} hit a ${failure.kind} error on ${agent.provider}; retrying the same provider (${used + 1}/${retryLimit}) in ${delayMs}ms`,
+        detail: failure.detail,
+        payload: { failureClass: failure.kind, provider: agent.provider, attempt: used + 1, retryLimit },
+      }).catch(() => {})
+      await sleep(delayMs)
+      return 'retry'
+    }
+  }
   const failed = controller.failedProviders.get(agent.id) ?? new Set<ProtocolRun['provider']>()
   failed.add(agent.provider)
   controller.failedProviders.set(agent.id, failed)
@@ -4758,6 +4955,15 @@ async function handleProviderTurnFailure(
         cwd: agent.worktreePath,
         title: `${controller.title ?? 'Coordinated run'} · ${agent.name} failover`,
       })
+      // The old session's coord_* tool binding (if any) is dead the moment its
+      // session id stops being used — candidates always exclude agent.provider,
+      // so failover always lands on a different provider than whatever this
+      // was bound for. Rebind for the new session below instead of leaving a
+      // stale identity that would send a tool-calling tick prompt to a
+      // provider with no coord_* tools actually registered.
+      const oldSessionId = controller.sessionIds.get(agent.id)
+      if (oldSessionId) unregisterCoordinatorMcpServer(oldSessionId)
+      controller.sdkIdentities.delete(agent.id)
       controller.sessionIds.set(agent.id, session.sessionId)
       if (session.isPending) controller.pendingSessions.add(agent.id)
       else controller.pendingSessions.delete(agent.id)
@@ -4766,7 +4972,7 @@ async function handleProviderTurnFailure(
       controller.model = undefined
       controller.effort = undefined
       if (agent.role === 'lead') controller.provider = provider
-      await enqueueWrite((tx) => {
+      const token = await enqueueWrite((tx) => {
         const ts = nowIso()
         tx.prepare('UPDATE protocol_agents SET provider = ?, session_id = ?, status = ?, updated_at = ? WHERE id = ? AND run_id = ?')
           .run(provider, session.sessionId, 'working', ts, agent.id, controller.runId)
@@ -4784,7 +4990,14 @@ async function handleProviderTurnFailure(
           payload: { failureClass: failure.kind, fromProvider: agent.provider, toProvider: provider },
           timestamp: ts,
         })
+        return provider === 'claude' ? issueParticipantTokenSync(tx, controller.runId, agent.id, undefined, ts) : undefined
       })
+      if (token) {
+        const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId: agent.id, token }
+        registerCoordinatorMcpServer(session.sessionId, identity)
+        controller.sdkIdentities.set(agent.id, identity)
+      }
+      controller.sameProviderRetries.delete(agent.id)
       return 'retry'
     } catch (error) {
       failed.add(provider)
@@ -4893,6 +5106,8 @@ async function dispatchAgentTurn(
     if (failure) {
       providerFailureHandled = true
       retryAfterFailover = await handleProviderTurnFailure(controller, agent, failure) === 'retry'
+    } else {
+      controller.sameProviderRetries.delete(agent.id)
     }
   } catch (error) {
     if (activeAgent && !providerFailureHandled) {
@@ -4950,17 +5165,23 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
         .run(ts, task.id, controller.runId)
       setAgentStatusSync(tx, controller.runId, agent.id, 'working', ts)
     })
-    const message = buildTeammatePlanPreamble({
-      runId: controller.runId,
-      agent,
-      roster: agents,
-      task,
-      allTasks: tasks,
-      inbox,
-      agentsById,
-      note,
-      useWorktrees: controller.useWorktrees,
-    })
+    const message = controller.sdkIdentities.has(agentId)
+      ? buildSdkToolsTickPrompt({
+          runId: controller.runId,
+          agent,
+          note: `THIS TURN IS PLAN-ONLY for ${task.id} — ${task.title}. Do not edit files. Study the repo read-only, then call coord_submit_plan with your approach; wait for lead approval before implementing.${note ? ` ${note}` : ''}`,
+        })
+      : buildTeammatePlanPreamble({
+          runId: controller.runId,
+          agent,
+          roster: agents,
+          task,
+          allTasks: tasks,
+          inbox,
+          agentsById,
+          note,
+          useWorktrees: controller.useWorktrees,
+        })
     void dispatchAgentTurn(controller, agentId, message, {
       permissionMode: 'plan',
       inboxMessageIds: inbox.map((entry) => entry.id),
@@ -4970,19 +5191,21 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
 
   const inbox = await enqueueWrite((tx) => takeInboxSync(tx, controller.runId, agentId))
   controller.dispatchNotes.delete(agentId)
-  const message = buildTeammateTurnPreamble({
-    runId: controller.runId,
-    agent,
-    roster: agents,
-    task,
-    allTasks: tasks,
-    inbox,
-    agentsById,
-    note,
-    gateCommand: controller.gateCommand,
-    requirePlanApproval: controller.requirePlanApproval,
-    useWorktrees: controller.useWorktrees,
-  })
+  const message = controller.sdkIdentities.has(agentId)
+    ? buildSdkToolsTickPrompt({ runId: controller.runId, agent, note })
+    : buildTeammateTurnPreamble({
+        runId: controller.runId,
+        agent,
+        roster: agents,
+        task,
+        allTasks: tasks,
+        inbox,
+        agentsById,
+        note,
+        gateCommand: controller.gateCommand,
+        requirePlanApproval: controller.requirePlanApproval,
+        useWorktrees: controller.useWorktrees,
+      })
   void dispatchAgentTurn(controller, agentId, message, { inboxMessageIds: inbox.map((entry) => entry.id) })
 }
 
@@ -5118,20 +5341,26 @@ async function maybeStartSynthesis(controller: RunController): Promise<void> {
   const knowledgeRows = db.prepare(
     "SELECT * FROM protocol_events WHERE run_id = ? AND type IN ('finding', 'learning') ORDER BY created_at ASC LIMIT 120",
   ).all(controller.runId) as Row[]
-  const message = buildLeadSynthesisPreamble({
-    runId: controller.runId,
-    agent: lead,
-    prompt: run.prompt,
-    tasks,
-    knowledge: knowledgeRows.map((row) => ({
-      agentId: String(row.agent_id),
-      type: String(row.type),
-      summary: typeof row.summary === 'string' ? row.summary : undefined,
-      detail: typeof row.detail === 'string' ? row.detail : undefined,
-    })),
-    agentsById,
-    useWorktrees: controller.useWorktrees,
-  })
+  const message = controller.sdkIdentities.has(lead.id)
+    ? buildSdkToolsTickPrompt({
+        runId: controller.runId,
+        agent: lead,
+        note: `All tasks are terminal. Review coord_status (task results and every finding/learning) against the original objective — "${run.prompt}" — reconcile findings, run any final integration checks, then call coord_finalize_run with a concise synthesis: what was done, what was learned, what remains, and any risks.`,
+      })
+    : buildLeadSynthesisPreamble({
+        runId: controller.runId,
+        agent: lead,
+        prompt: run.prompt,
+        tasks,
+        knowledge: knowledgeRows.map((row) => ({
+          agentId: String(row.agent_id),
+          type: String(row.type),
+          summary: typeof row.summary === 'string' ? row.summary : undefined,
+          detail: typeof row.detail === 'string' ? row.detail : undefined,
+        })),
+        agentsById,
+        useWorktrees: controller.useWorktrees,
+      })
   void dispatchAgentTurn(controller, lead.id, message)
 }
 
@@ -5141,7 +5370,7 @@ async function handleLeadTurnEnd(controller: RunController): Promise<void> {
   if (!runRow) return
   const run = rowToRun(runRow)
 
-  if (run.status === 'planning') {
+  if (run.status === 'planning' || (!controller.executionStarted && run.status === 'running')) {
     await beginExecutionPhase(controller)
     return
   }
@@ -5248,7 +5477,8 @@ async function handleLeadTurnEnd(controller: RunController): Promise<void> {
 
 /** Spawn teammates against the (lead-authored or fallback) task board and start the loop. */
 async function beginExecutionPhase(controller: RunController): Promise<void> {
-  if (controller.stopped) return
+  if (controller.stopped || controller.executionStarted) return
+  controller.executionStarted = true
   const db = await getDatabase()
   let tasks = listTasksSync(db, controller.runId)
   if (tasks.length === 0) {
@@ -5296,14 +5526,20 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
     }
     if (!workspace) continue
     const agentId = `agent-${index + 1}`
-    await enqueueWrite((tx) => {
+    const token = await enqueueWrite((tx) => {
       tx.prepare(`
         INSERT INTO protocol_agents (
           id, run_id, name, role, provider, session_id, worktree_path, worktree_branch, task_id, status, last_seen_at, created_at, updated_at
         ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, ?, NULL, 'idle', NULL, ?, ?)
       `).run(agentId, controller.runId, name, session.provider, session.sessionId, workspace.path, workspace.branch, ts, ts)
       claimTaskSync(tx, controller.runId, agentId)
+      return session.provider === 'claude' ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
     })
+    if (token) {
+      const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId, token }
+      registerCoordinatorMcpServer(session.sessionId, identity)
+      controller.sdkIdentities.set(agentId, identity)
+    }
     if (session.isPending) controller.pendingSessions.add(agentId)
     controller.sessionIds.set(agentId, session.sessionId)
   }
@@ -5373,9 +5609,16 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
     nudges: new Map(),
     dispatchNotes: new Map(),
     failedProviders: new Map(),
+    sdkIdentities: new Map(),
+    executionStarted: false,
+    sameProviderRetries: new Map(),
   }
   controllers.set(runId, controller)
 
+  // Only Claude's SDK supports in-process (function-call, no subprocess) MCP
+  // servers — see lib/agentCoordinationSdkTools.ts. Other providers keep the
+  // fenced ```a2a text protocol for now.
+  let leadToken: string | undefined
   const snapshot = await enqueueWrite((db) => {
     db.exec('BEGIN IMMEDIATE')
     try {
@@ -5403,6 +5646,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
         ) VALUES ('lead', ?, 'lead', 'lead', ?, ?, ?, '', NULL, 'working', NULL, ?, ?)
       `).run(runId, leadSession.provider, leadSession.sessionId, params.baseCwd, ts, ts)
       if (playbook) seedPlaybookTasksSync(db, runId, 'lead', playbook, params.playbookArgs)
+      if (params.provider === 'claude') leadToken = issueParticipantTokenSync(db, runId, 'lead', undefined, ts)
       db.exec('COMMIT')
       const next = readSnapshotSync(db, runId)
       if (!next) throw new Error('Failed to read created run')
@@ -5412,6 +5656,12 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
       throw err
     }
   })
+
+  if (leadToken) {
+    const identity: ExternalProtocolIdentity = { runId, agentId: 'lead', token: leadToken }
+    registerCoordinatorMcpServer(leadSession.sessionId, identity)
+    controller.sdkIdentities.set('lead', identity)
+  }
 
   if (playbook) {
     void beginExecutionPhase(controller).catch(async (err) => {
@@ -5424,13 +5674,19 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
       }).catch(() => {})
     })
   } else {
-    const planMessage = buildLeadPlanPreamble({
-      runId,
-      agent: { id: 'lead', name: 'lead' },
-      prompt,
-      teammateCount: maxAgents - 1,
-      useWorktrees: controller.useWorktrees,
-    })
+    const planMessage = leadToken
+      ? buildSdkToolsTickPrompt({
+          runId,
+          agent: { id: 'lead', name: 'lead', role: 'lead' },
+          note: `THIS TURN IS PLAN-ONLY: decompose this objective into ${Math.max((maxAgents - 1) * 2, 4)}-${(maxAgents - 1) * 5} small, self-contained tasks with coord_create_task (non-overlapping write paths). Do not call coord_claim_task or implement anything yourself this turn — teammates are spawned right after this turn ends specifically to claim these tasks, and a task you grab now is one they can't. End your turn once the board is decomposed; you'll be dispatched again later for lead-only integration work. Objective: ${prompt}`,
+        })
+      : buildLeadPlanPreamble({
+          runId,
+          agent: { id: 'lead', name: 'lead' },
+          prompt,
+          teammateCount: maxAgents - 1,
+          useWorktrees: controller.useWorktrees,
+        })
     void dispatchAgentTurn(controller, 'lead', planMessage).catch(async (err) => {
       await appendProtocolEvent({
         version: AGENT_PROTOCOL_VERSION,
@@ -5461,6 +5717,7 @@ export async function stopProtocolRun(runId: string): Promise<ProtocolRunSnapsho
   const db = await getDatabase()
   const agents = listAgentsSync(db, runId)
   controllers.delete(runId)
+  if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorMcpServer(sessionId)
   const snapshot = await enqueueWrite((tx) => {
     const ts = nowIso()
     const updated = tx.prepare('UPDATE protocol_runs SET status = ?, updated_at = ? WHERE id = ?').run('stopped', ts, runId) as { changes?: number | bigint } | undefined
@@ -5507,6 +5764,7 @@ export async function deleteProtocolRun(runId: string): Promise<{ deleted: boole
   const db = await getDatabase()
   const agents = listAgentsSync(db, runId)
   controllers.delete(runId)
+  if (controller) for (const sessionId of controller.sessionIds.values()) unregisterCoordinatorMcpServer(sessionId)
   // Remove the durable run first. External supervisors treat the missing run
   // as terminal and can stop their provider process even when an in-process
   // SDK interrupt is wedged. Cleanup below remains bounded and best effort.

@@ -156,6 +156,8 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       dependsOn: strings(body.dependsOn),
       phase: optionalText(body.phase),
       targetRole: targetRole as ProtocolTaskTargetRole,
+      roleName: optionalText(body.roleName),
+      roleDescription: optionalText(body.roleDescription),
     }))
   }
   if (action === 'claim_task') return mutate(() => claimExternalProtocolTask(participantIdentity!, optionalText(body.taskId)))

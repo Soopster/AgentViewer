@@ -11,6 +11,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk'
 import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
+import { getCoordinatorMcpServers } from './agentCoordinationSdkTools'
 
 // Per-turn MCP elicitation handler. Mirrors the canUseTool bridge: the warm
 // Query's onElicitation delegates to this so the long-lived subprocess can route
@@ -351,6 +352,12 @@ class ClaudePool {
         forwardSubagentText: true,
         systemPrompt: { type: 'preset', preset: 'claude_code', excludeDynamicSections: true },
         taskBudget: opts.taskBudgetTokens ? { total: opts.taskBudgetTokens } : undefined,
+        // Coordinator-owned sessions get their coord_* tools bound in-process at
+        // spawn time (see lib/agentCoordinationSdkTools.ts) — immutable for the
+        // session's lifetime, so this needs no entry in compatible()/EntryState;
+        // a pool entry only ever exists for a session id that was already
+        // spawned with this same lookup.
+        mcpServers: getCoordinatorMcpServers(opts.sessionId),
       },
     })
     // The native `claude` CLI runs fast mode by default; an SDK query() starts

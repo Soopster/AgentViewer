@@ -678,6 +678,7 @@ export function CoordinationControlCenter({
                 const lockContention = taskLockContentionById.get(task.id) ?? []
                 const taskDetail = [
                   task.id,
+                  task.roleName ? `role: ${task.roleName}` : '',
                   task.paths[0] ?? task.status,
                   dependencies.length > 0 ? `← ${dependencies.join(',')}` : '',
                   dependents.length > 0 ? `→ ${dependents.join(',')}` : '',
