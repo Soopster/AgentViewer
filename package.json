@@ -61,6 +61,7 @@
     "@microsoft/agent-host-protocol": "^0.6.0",
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
+    "@opencode-ai/plugin": "^1.18.14",
     "@opencode-ai/sdk": "^1.18.12",
     "@opentui/core": "^0.5.1",
     "@opentui/react": "^0.5.1",
