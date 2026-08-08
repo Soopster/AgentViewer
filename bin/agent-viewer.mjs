@@ -119,6 +119,7 @@ Modes:
   web        Launch the Next.js web app
   mcp        Run the Claude/Codex stdio MCP bridge
   ahp        Run the published AHP JSON-RPC host over stdio, TCP, or WebSocket
+  acp        Run an ACP (agentclientprotocol.com) Agent over stdio
   coord worker  Run an autonomous bounded multi-provider Coordinator worker
   coord doctor  Diagnose daemon, CLI, identity, protocol, and worker health
   coord workers List persistent Coordinator worker registrations
@@ -143,6 +144,10 @@ AHP host:
   agent-viewer ahp
   agent-viewer ahp --listen 127.0.0.1:8765
   agent-viewer ahp --ws 127.0.0.1:8765
+
+ACP agent (for Zed and other ACP clients — one process per provider):
+  agent-viewer acp
+  agent-viewer acp --provider codex
 
 Autonomous Coordinator:
   agent-viewer coord worker --start "goal" --playbook <name> --name lead --provider codex --max-agents 4 --attach 3000
@@ -323,6 +328,25 @@ if (command === '-h' || command === '--help' || command === 'help') {
   trackExit(child)
 } else if (command === 'ahp') {
   const entrypoint = fileURLToPath(new URL('./agent-viewer-ahp.ts', import.meta.url))
+  const bunLauncher = resolveBunLauncher()
+  if (!bunLauncher.command) {
+    failMissingBun()
+  } else {
+    const child = spawn(bunLauncher.command, [...bunLauncher.args, 'run', entrypoint, ...args.slice(1)], {
+      stdio: 'inherit',
+    })
+    child.on('error', (error) => {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+        failMissingBun()
+        return
+      }
+      throw error
+    })
+    forwardSignals(child)
+    trackExit(child)
+  }
+} else if (command === 'acp') {
+  const entrypoint = fileURLToPath(new URL('./agent-viewer-acp.ts', import.meta.url))
   const bunLauncher = resolveBunLauncher()
   if (!bunLauncher.command) {
     failMissingBun()

@@ -7,7 +7,7 @@ description: Start, join, and operate an Agent Viewer Coordinator run through th
 
 Use the `agent-viewer` MCP Coordinator tools as the source of truth. Keep working until the run is terminal or the user interrupts.
 
-Communication is part of the work, not overhead. Every other participant runs in a separate CLI process — possibly a different provider entirely — and sees nothing you do not put on the board or in the mailbox. A finished edit that no teammate knows about is unfinished coordination: report it, publish what you learned, and check what others reported before duplicating effort. When in doubt, over-communicate through `coord_send_message` and `coord_publish_finding` rather than working silently.
+Communication is part of the work, not overhead. Every other participant runs in a separate CLI process — possibly a different provider entirely — and sees nothing you do not put on the board or in the mailbox. A finished edit that no teammate knows about is unfinished coordination: report it, publish what you learned, and check what others reported before duplicating effort — `coord_query_context` before assuming something hasn't been tried, `coord_publish_finding` after you learn it. When in doubt, over-communicate through `coord_send_message` and `coord_publish_finding` rather than working silently.
 
 ## MCP discovery and host features
 
@@ -71,6 +71,14 @@ A playbook is a saved run definition — the plan held in an artifact instead of
 - Status responses include a `phases` rollup (per-phase task counts) — use it to report progress phase by phase.
 - A single CLI can kick off a playbook run alone and then staff it either way: spawn unattended workers with `agent-viewer coord worker --join latest --name <name> --provider codex|claude|opencode|copilot|pi` (one per lane, via the shell) and supervise as lead, or — when no teammates are expected — claim and work teammate tasks itself phase by phase. Once a live teammate exists, role affinity is enforced: teammates claim `teammate`/`any` lanes and leads claim `lead`/`any` lanes. Phase barriers still enforce order.
 
+## Project memory, context search, and reusable roles
+
+Some Coordinator state lives at the repo root under `<checkout>/.agent-viewer/` and outlives a single run — unlike the task board, mailbox, and findings, which are scoped to one run and gone once it finalizes.
+
+- `coord_remember(summary, detail?)` records a durable fact into `.agent-viewer/memory.md` — an architecture decision, a gotcha, an established pattern. Every future Coordinator run in this project starts with a tail of it already in the initial instructions. Use it sparingly for genuinely durable context; routine progress still belongs in `coord_publish_finding`, which is run-scoped and does not persist.
+- `coord_query_context(query, limit?)` is a lexical search over this run's findings, learnings, task outcomes, and the project's durable memory. Reach for it instead of re-reading all of `coord_status` when you only need context on one topic — after rejoining a long-running run, or picking up a task another lane already touched.
+- `coord_save_role(name, description)` / `coord_list_roles()` save and list reusable `role_name`/`role_description` personas at `.agent-viewer/roles/`. Invent a persona once and save it; later `coord_create_task` calls only need to pass `role_name` — the saved `role_description` fills in automatically whenever the inline description is omitted, this run or a future one.
+
 ## Lead workflow
 
 When the participant role is `lead`:
@@ -81,13 +89,14 @@ When the participant role is `lead`:
    - the narrowest expected write paths;
    - explicit dependencies when another task must finish first.
    - an explicit role: `teammate` for execution lanes, `lead` for integration/synthesis, or `any` only for intentional fallback work.
-   - optionally, a `role_name`/`role_description` specialization — a persona you invent per task as you see how the work splits (e.g. "Explorer" for read-only research, "Refactorer" for a scoped rewrite, "Reviewer" for an integration pass). This is not a fixed set: define whatever specializations fit the current run, one task at a time, and reuse a name across tasks when the same persona should keep claiming that kind of work.
+   - optionally, a `role_name`/`role_description` specialization — a persona you invent per task as you see how the work splits (e.g. "Explorer" for read-only research, "Refactorer" for a scoped rewrite, "Reviewer" for an integration pass). This is not a fixed set: define whatever specializations fit the current run, one task at a time, and reuse a name across tasks when the same persona should keep claiming that kind of work. Save a persona worth reusing with `coord_save_role` so later tasks — this run or a future one — need only pass `role_name`.
+   - Check the response's `similarTasks` field. A non-empty list is a heads-up that this task may duplicate existing work, not a block — read the listed task(s) before assuming this one is new.
 3. Match the configured checkout mode. In isolated mode, keep each external CLI in its assigned clean checkout. In shared mode, keep every write lane disjoint and make ownership explicit before editing.
 4. Keep one integration or review task for the lead when useful; make it depend on teammate lanes so the lead cannot absorb their work before they participate.
 5. Send important context or changed priorities through `coord_send_message`; do not assume another CLI sees local terminal output. Use `priority: urgent` only when it should wake a worker, `priority: status` for batchable progress, and `reply_required` for a request that must stay actionable until answered. Check the returned `delivery` field for each recipient's liveness (`fresh`/`stale`/`dead` + age) — if `stale` or `dead`, do not wait on a reply that may never come; escalate directly, reassign the work, or route around them.
 6. Review submitted plans promptly when plan approval is enabled.
 7. Monitor status, inbox, findings, blocked tasks, and expired or conflicting locks. Respond to blockers with a message or a new task. Requeue a wedged or failed task with `coord_release_task` so another participant can claim it.
-8. When all tasks are terminal, inspect the board, verify the requested participation count using task/finding/message evidence, reconcile findings, run any final integration checks, and call `coord_finalize_run` with a concise synthesis. If participation is short or review uncovers follow-up work, call `coord_create_task` instead — during synthesis this reopens the run.
+8. When all tasks are terminal, inspect the board, verify the requested participation count using task/finding/message evidence, reconcile findings, run any final integration checks, and call `coord_finalize_run` with a concise synthesis. If participation is short or review uncovers follow-up work, call `coord_create_task` instead — during synthesis this reopens the run. Before finalizing, call `coord_remember` for anything genuinely durable the run discovered (an architecture decision, a gotcha, a pattern worth reusing) — findings and the synthesis itself do not survive past this run, `coord_remember` does.
 
 ## Teammate workflow
 
@@ -98,7 +107,7 @@ When the participant role is `teammate`:
 3. If plan approval is required, call `coord_submit_plan` and wait for approval before modifying files.
 4. Request any additional write paths with `coord_request_locks` before editing. Stay inside granted paths.
 5. Call `coord_progress` with `working`, perform the task, and run proportionate verification. On anything running longer than ~2 minutes, call `coord_progress(status="heartbeat")` every ~2 minutes with a one-line summary — the lead reads silence past that window as stalled, not just slow.
-6. Publish reusable discoveries with `coord_publish_finding`. Add newly discovered work to the board with `coord_create_task` (any participant may create tasks). Answer reply-required mail with a `response` carrying `in_reply_to`; use typed status messages for progress that can be batched. Check `coord_send_message`'s `delivery` field the same way the lead does — a `stale`/`dead` recipient means route around them rather than waiting.
+6. Publish reusable discoveries with `coord_publish_finding`. Add newly discovered work to the board with `coord_create_task` (any participant may create tasks — check the response's `similarTasks` field first; a non-empty list is a heads-up, not a block, but read it before assuming the work is new). Answer reply-required mail with a `response` carrying `in_reply_to`; use typed status messages for progress that can be batched. Check `coord_send_message`'s `delivery` field the same way the lead does — a `stale`/`dead` recipient means route around them rather than waiting.
 7. Call `coord_complete_task` only after verification. If completion is rejected, address the stated gate failure and retry (the same `request_id` is safe — rejections are never replayed from cache); never bypass the gate or claim work that was not performed.
 8. If you cannot finish a claimed task but it remains achievable, hand it back with `coord_release_task` and a reason so someone else can claim it. Call `coord_fail_task` only when the task genuinely cannot be completed, with a useful reason and recovery detail.
 9. After a provider-level failure, checkpoint and return resumable work with `coord_handoff_task` plus the classified failure. This releases locks and alerts the lead without incorrectly marking the task failed.

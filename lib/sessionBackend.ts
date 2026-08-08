@@ -4337,7 +4337,14 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
   })
 }
 
-async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    if (typeof timer === 'object' && timer && 'unref' in timer) (timer as { unref: () => void }).unref()
+  })
+}
+
+async function readClaudeSupportedModelsOnce(): Promise<SessionModelInfo[]> {
   // Prefer the pre-warmed slot primed by instrumentation.ts → skips the
   // ~1–3s subprocess spawn for the first call after boot. The slot
   // automatically re-warms in the background after consumption so the next
@@ -4374,6 +4381,27 @@ async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
   } finally {
     q.close()
   }
+}
+
+// Retry delays for a not-yet-ready model list, not a genuinely model-less
+// install. On some systems — custom model configuration especially (a
+// non-default ANTHROPIC_MODEL, a custom base URL, Bedrock/Vertex — anything
+// where the CLI enumerates models from somewhere other than its own static
+// table) — the very first query right after a fresh subprocess spawn can
+// come back before that recognition has finished, both on
+// initializationResult() and supportedModels(). A real zero-model install
+// doesn't happen in practice, so treat an empty result as "not ready yet"
+// and retry with backoff rather than caching/returning it as final.
+const CLAUDE_MODELS_RETRY_DELAYS_MS = [300, 800, 1500, 3000]
+
+async function readClaudeSupportedModels(): Promise<SessionModelInfo[]> {
+  let models = await readClaudeSupportedModelsOnce()
+  for (const wait of CLAUDE_MODELS_RETRY_DELAYS_MS) {
+    if (models.length > 0) break
+    await delay(wait)
+    models = await readClaudeSupportedModelsOnce()
+  }
+  return models
 }
 
 function formatCodexNotification(notification: CodexNotification): string | null {
