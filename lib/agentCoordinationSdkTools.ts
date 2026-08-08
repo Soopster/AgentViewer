@@ -155,7 +155,7 @@ const COORD_TOOL_SPECS: ToolSpec[] = [
   },
   {
     name: 'coord_create_task',
-    description: 'Add a task with dependencies and expected write paths to the shared board. Optionally give it a role_name/role_description specialization for whoever claims it.',
+    description: 'Add a task with dependencies and expected write paths to the shared board. Optionally give it a role_name/role_description specialization for whoever claims it. The result includes `similarTasks` when this looks like it may duplicate existing work — not blocking, but check before assuming it\'s new.',
     fields: {
       title: { t: 'string', min: 1, max: 160 },
       detail: { t: 'string', min: 1, max: 8000 },
@@ -225,6 +225,16 @@ const COORD_TOOL_SPECS: ToolSpec[] = [
     },
     action: 'finding',
     mapArgs: (a) => ({ kind: a.kind, summary: a.summary, detail: a.detail, taskId: a.task_id }),
+  },
+  {
+    name: 'coord_query_context',
+    description: 'Search this run\'s findings, learnings, and task outcomes for text relevant to a question — a lexical lookup, not full recall. Use this instead of re-reading all of coord_status when you only need context on one topic (e.g. "what did we decide about auth?"), especially after rejoining a long-running run.',
+    fields: {
+      query: { t: 'string', min: 1, max: 300 },
+      limit: { t: 'number', int: true, min: 1, max: 20, optional: true },
+    },
+    action: 'query_context',
+    mapArgs: (a) => ({ query: a.query, limit: a.limit }),
   },
   {
     name: 'coord_submit_plan',
@@ -499,14 +509,50 @@ export function unregisterCoordinatorCodexTools(threadId: string): void {
   codexRegistry.delete(threadId)
 }
 
+async function dispatchByRegistry(
+  registry: Map<string, ExternalProtocolIdentity>,
+  sessionId: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<{ text: string; isError: boolean } | null> {
+  const identity = registry.get(sessionId)
+  const spec = COORD_TOOL_SPECS.find((entry) => entry.name === toolName)
+  if (!identity || !spec) return null
+  return callJson(identity, spec.action, spec.mapArgs(args))
+}
+
 /** Dispatch a codex item/tool/call for a registered thread. Returns null if the tool name isn't one of ours. */
-export async function dispatchCoordinatorCodexToolCall(
+export function dispatchCoordinatorCodexToolCall(
   threadId: string,
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<{ text: string; isError: boolean } | null> {
-  const identity = codexRegistry.get(threadId)
-  const spec = COORD_TOOL_SPECS.find((entry) => entry.name === toolName)
-  if (!identity || !spec) return null
-  return callJson(identity, spec.action, spec.mapArgs(args))
+  return dispatchByRegistry(codexRegistry, threadId, toolName, args)
+}
+
+// ---- OpenCode (plugin file + local HTTP bridge) ----------------------------
+
+// OpenCode's server is a genuinely separate OS process (createOpencodeServer
+// shells out via cross-spawn — lib/opencodeClient.ts), and its plugin API has
+// no per-session tool registration hook (Hooks.tool is one static map for the
+// whole server) — so identity resolution has to happen here, keyed by
+// sessionID, when the plugin's HTTP bridge call for a tool arrives (see
+// lib/coordinatorBridgeServer.ts and lib/opencodePlugin/agentViewerCoordinator.mjs).
+const opencodeRegistry = new Map<string, ExternalProtocolIdentity>()
+
+export function registerCoordinatorOpenCodeTools(sessionId: string, identity: ExternalProtocolIdentity): void {
+  opencodeRegistry.set(sessionId, identity)
+}
+
+export function unregisterCoordinatorOpenCodeTools(sessionId: string): void {
+  opencodeRegistry.delete(sessionId)
+}
+
+/** Dispatch an OpenCode coordinator-plugin tool call for a registered session. Returns null if the session isn't a coordinator participant or the tool name isn't one of ours. */
+export function dispatchCoordinatorOpenCodeToolCall(
+  sessionId: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<{ text: string; isError: boolean } | null> {
+  return dispatchByRegistry(opencodeRegistry, sessionId, toolName, args)
 }

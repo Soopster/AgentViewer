@@ -3833,9 +3833,6 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           mcpServers: getCoordinatorMcpServers(sessionId),
         },
       })
-      // Mirror the native CLI, which runs fast mode by default — an SDK
-      // query() starts with it off unless explicitly enabled per session.
-      void q.applyFlagSettings({ fastMode: true }).catch(() => {})
 
       // Must be set BEFORE the for-await below, not before query() above —
       // the iterator drives SDK processing, so no tool call can arrive until

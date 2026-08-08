@@ -12,6 +12,7 @@ import {
   listRunPlaybooks,
   loadRunPlaybook,
   publishExternalProtocolFinding,
+  queryExternalProtocolContext,
   readExternalProtocolInbox,
   readExternalProtocolStatus,
   releaseExternalProtocolTask,
@@ -225,6 +226,12 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       detail: optionalText(body.detail),
       taskId: optionalText(body.taskId),
     }))
+  }
+  if (action === 'query_context') {
+    return queryExternalProtocolContext(participantIdentity!, {
+      query: text(body.query),
+      limit: Number(body.limit) || undefined,
+    })
   }
   if (action === 'submit_plan') {
     return mutate(() => submitExternalProtocolPlan(participantIdentity!, {

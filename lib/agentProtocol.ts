@@ -569,6 +569,30 @@ export type ExternalProtocolClaimResult = ExternalProtocolMutationResult & {
   task: ProtocolTask
 }
 
+/**
+ * coord_create_task's result: existing tasks whose title/detail closely
+ * overlap the new one, surfaced as a heads-up (not a block) so a lead or
+ * self-tasking teammate can catch redundant work before it's claimed.
+ */
+export type ExternalProtocolTaskCreateResult = ExternalProtocolMutationResult & {
+  similarTasks?: Array<{ taskId: string; title: string; similarity: number }>
+}
+
+/** One match from coord_query_context's lexical search over findings/learnings/tasks. */
+export type ProtocolContextMatch = {
+  kind: 'finding' | 'learning' | 'handoff' | 'review.requested' | 'task.completed' | 'task.failed' | 'plan.approved' | 'plan.rejected' | 'task'
+  taskId?: string
+  agentId?: string
+  summary: string
+  detail?: string
+  timestamp: string
+  score: number
+}
+
+export type ExternalProtocolContextResult = {
+  results: ProtocolContextMatch[]
+}
+
 export type ProtocolAgentLivenessStatus = 'fresh' | 'stale' | 'dead'
 
 export type ProtocolDeliveryHint = {

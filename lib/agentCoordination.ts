@@ -50,12 +50,15 @@ import {
   type ExternalProtocolParticipantResult,
   type ExternalProtocolReleaseResult,
   type ExternalProtocolStatusResult,
+  type ExternalProtocolContextResult,
+  type ExternalProtocolTaskCreateResult,
   type ExternalProtocolWaitResult,
   type JoinExternalProtocolRunParams,
   type PlaybookSummary,
   type ProtocolAgent,
   type ProtocolAgentLivenessStatus,
   type ProtocolAgentStatus,
+  type ProtocolContextMatch,
   type ProtocolDeliveryHint,
   type ProtocolLock,
   type ProtocolLockStatus,
@@ -85,22 +88,27 @@ import {
   registerCoordinatorCodexTools,
   unregisterCoordinatorCodexTools,
   buildCoordinatorCodexDynamicTools,
+  registerCoordinatorOpenCodeTools,
+  unregisterCoordinatorOpenCodeTools,
 } from './agentCoordinationSdkTools'
 
 // Providers whose SDK supports registering real in-process tools for a
 // pooled session (see lib/agentCoordinationSdkTools.ts) — presence in
 // controller.sdkIdentities is the switch that sends the short
-// buildSdkToolsTickPrompt instead of the old fenced ```a2a preamble.
-// OpenCode's installed SDK only supports subprocess/remote MCP servers (no
-// in-process plugin API without adding @opencode-ai/plugin as a dependency),
-// so it stays on the fenced-block path.
-const IN_PROCESS_TOOL_PROVIDERS = new Set<ProtocolRun['provider']>(['claude', 'pi', 'copilot', 'codex'])
+// buildSdkToolsTickPrompt instead of the old fenced ```a2a preamble. OpenCode
+// only gets these tools when this app is hosting its own managed OpenCode
+// server (lib/opencodeClient.ts's startManagedServer path) — a session
+// attached to an externally-managed `opencode serve` never has the
+// coordinator plugin loaded, so it silently falls back to the fenced-block
+// protocol working exactly as before (no coord_* tools available).
+const IN_PROCESS_TOOL_PROVIDERS = new Set<ProtocolRun['provider']>(['claude', 'pi', 'copilot', 'codex', 'opencode'])
 
 function registerCoordinatorToolsForProvider(provider: ProtocolRun['provider'], sessionId: string, identity: ExternalProtocolIdentity): void {
   if (provider === 'claude') registerCoordinatorMcpServer(sessionId, identity)
   else if (provider === 'pi') registerCoordinatorPiTools(sessionId, identity)
   else if (provider === 'copilot') registerCoordinatorCopilotTools(sessionId, identity)
   else if (provider === 'codex') registerCoordinatorCodexTools(sessionId, identity)
+  else if (provider === 'opencode') registerCoordinatorOpenCodeTools(sessionId, identity)
 }
 
 function unregisterCoordinatorToolsForProvider(provider: ProtocolRun['provider'], sessionId: string): void {
@@ -108,6 +116,7 @@ function unregisterCoordinatorToolsForProvider(provider: ProtocolRun['provider']
   else if (provider === 'pi') unregisterCoordinatorPiTools(sessionId)
   else if (provider === 'copilot') unregisterCoordinatorCopilotTools(sessionId)
   else if (provider === 'codex') unregisterCoordinatorCodexTools(sessionId)
+  else if (provider === 'opencode') unregisterCoordinatorOpenCodeTools(sessionId)
 }
 
 // stopProtocolRun/deleteProtocolRun only know session ids, not the provider
@@ -117,7 +126,19 @@ function unregisterCoordinatorToolsForProvider(provider: ProtocolRun['provider']
 function unregisterCoordinatorToolsForSession(sessionId: string): void {
   for (const provider of IN_PROCESS_TOOL_PROVIDERS) unregisterCoordinatorToolsForProvider(provider, sessionId)
 }
+
+// OpenCode's coordinator plugin only loads on a server this app spawns and
+// owns (lib/opencodeClient.ts) — an attached externally-managed `opencode
+// serve` never has it, so an opencode agent there must stay on the
+// fenced-block path instead of being minted a token for tools that don't
+// exist on that server.
+async function inProcessToolsAvailable(provider: ProtocolRun['provider']): Promise<boolean> {
+  if (!IN_PROCESS_TOOL_PROVIDERS.has(provider)) return false
+  if (provider === 'opencode') return isOpenCodeManagedServer()
+  return true
+}
 import { createNewViewSession, streamViewSessionTurn } from './sessionBackend'
+import { isOpenCodeManagedServer } from './opencodeClient'
 import { getRunningSessionInfo, interruptRunningSession, steerRunningSession } from './sessionRuntime'
 import { createWorktreeTask, findRepoRoot, findWorktreeTaskForCwd, removeWorktreeTask, type WorktreeTask } from './worktreeTasks'
 import type { AgentProvider } from './types'
@@ -280,7 +301,25 @@ type RunController = {
   sameProviderRetries: Map<string, number>
 }
 
-const controllers = new Map<string, RunController>()
+declare global {
+  // Every other stateful singleton in this codebase (piSessionPool,
+  // copilotSessionPool, the OpenCode/Codex clients, etc.) is preserved
+  // across Next.js dev-mode module reloads via globalThis — this one wasn't,
+  // and it is the single most consequential state in the whole coordinator
+  // feature: a RunController holds every in-flight run's live session
+  // bindings, turnInFlight tracking, and dispatch state, with no persistence
+  // or recovery path if it's lost. A dev-mode Fast Refresh reload of this
+  // module (or anything importing it) silently re-initializes `controllers`
+  // to an empty Map, orphaning every in-flight run with no error surfaced
+  // anywhere — the run's DB rows just stop progressing forever. Confirmed
+  // via two live runs where the lead never resumed after teammates finished
+  // even though nothing in the dispatch logic itself was at fault.
+  // eslint-disable-next-line no-var
+  var __agentViewerCoordinatorControllers: Map<string, RunController> | undefined
+}
+
+const controllers = globalThis.__agentViewerCoordinatorControllers
+  ?? (globalThis.__agentViewerCoordinatorControllers = new Map<string, RunController>())
 
 // In-process change signal so coord_wait wakes in milliseconds instead of on
 // its fallback poll. All ledger writes flow through this process (web routes,
@@ -804,6 +843,55 @@ function rowToAgent(row: Row): ProtocolAgent {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
+}
+
+const SEARCH_STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'is', 'are', 'was', 'were',
+  'be', 'with', 'this', 'that', 'it', 'as', 'at', 'by', 'from', 'not', 'but', 'has', 'have',
+])
+
+function searchTokens(text: string): string[] {
+  return (text.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((token) => token.length > 1 && !SEARCH_STOPWORDS.has(token))
+}
+
+/** Symmetric 0..1 overlap between two token sets — used for near-duplicate task detection. */
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0
+  let intersection = 0
+  for (const token of a) if (b.has(token)) intersection += 1
+  const union = a.size + b.size - intersection
+  return union === 0 ? 0 : intersection / union
+}
+
+/** Asymmetric relevance score for a search query against a longer document — used by coord_query_context. */
+function queryOverlapScore(queryTokens: Set<string>, docTokens: Set<string>): number {
+  if (!queryTokens.size || !docTokens.size) return 0
+  let hits = 0
+  for (const token of queryTokens) if (docTokens.has(token)) hits += 1
+  return hits === 0 ? 0 : hits / Math.sqrt(docTokens.size)
+}
+
+const SIMILAR_TASK_THRESHOLD = 0.3
+
+function findSimilarTasksSync(
+  db: SqliteDatabase,
+  runId: string,
+  title: string,
+  detail: string,
+  excludeTaskId?: string,
+): Array<{ taskId: string; title: string; similarity: number }> {
+  const queryTokens = new Set(searchTokens(`${title} ${detail}`))
+  if (!queryTokens.size) return []
+  const existing = listTasksSync(db, runId).filter((task) => task.id !== excludeTaskId)
+  return existing
+    .map((task) => ({
+      taskId: task.id,
+      title: task.title,
+      similarity: jaccardSimilarity(queryTokens, new Set(searchTokens(`${task.title} ${task.prompt}`))),
+    }))
+    .filter((match) => match.similarity >= SIMILAR_TASK_THRESHOLD)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, 3)
 }
 
 function rowToTask(row: Row): ProtocolTask {
@@ -1802,7 +1890,13 @@ export async function waitForExternalProtocolChange(
   }
 }
 
-const externalIdempotencyInFlight = new Map<string, Promise<unknown>>()
+declare global {
+  // eslint-disable-next-line no-var
+  var __agentViewerCoordinatorExternalIdempotencyInFlight: Map<string, Promise<unknown>> | undefined
+}
+
+const externalIdempotencyInFlight = globalThis.__agentViewerCoordinatorExternalIdempotencyInFlight
+  ?? (globalThis.__agentViewerCoordinatorExternalIdempotencyInFlight = new Map<string, Promise<unknown>>())
 
 export async function runExternalProtocolIdempotent<T>(
   identity: ExternalProtocolIdentity,
@@ -1874,7 +1968,7 @@ export async function createExternalProtocolTask(
     roleName?: string
     roleDescription?: string
   },
-): Promise<ExternalProtocolMutationResult> {
+): Promise<ExternalProtocolTaskCreateResult> {
   const result = await enqueueWrite((db) => {
     const agent = requireExternalParticipantSync(db, identity)
     const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
@@ -1893,6 +1987,7 @@ export async function createExternalProtocolTask(
     try {
       const blockedBy = [...new Set((params.dependsOn ?? []).map((entry) => entry.trim()).filter(Boolean))]
       validateTaskDependenciesSync(db, identity.runId, nextTaskIdSync(db, identity.runId), blockedBy)
+      const similarTasks = findSimilarTasksSync(db, identity.runId, title, detail)
       const roleName = params.roleName?.trim() || undefined
       const task = insertTaskSync(db, identity.runId, {
         title,
@@ -1935,7 +2030,10 @@ export async function createExternalProtocolTask(
       }
       db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), identity.runId)
       db.exec('COMMIT')
-      return externalMutationResultSync(db, identity.runId, identity.agentId, task)
+      return {
+        ...externalMutationResultSync(db, identity.runId, identity.agentId, task),
+        ...(similarTasks.length ? { similarTasks } : {}),
+      }
     } catch (err) {
       db.exec('ROLLBACK')
       throw err
@@ -2339,6 +2437,72 @@ export async function publishExternalProtocolFinding(
     detail: params.detail?.trim() || undefined,
   })
   return externalMutationResult(identity)
+}
+
+const CONTEXT_SEARCH_EVENT_TYPES = [
+  'finding', 'learning', 'handoff', 'review.requested', 'task.completed', 'task.failed', 'plan.approved', 'plan.rejected',
+] as const
+
+/**
+ * Lexical search over this run's findings/learnings/task outcomes plus task
+ * title/prompt/result text — a lightweight substitute for a vector-search
+ * knowledge base. No embedding model or external dependency: a growing
+ * `coord_publish_finding` list is fine to skim at a dozen entries but not at
+ * a hundred, so late-joining or reawoken agents can pull relevant context on
+ * demand instead of scanning the full event log via coord_status.
+ */
+export async function queryExternalProtocolContext(
+  identity: ExternalProtocolIdentity,
+  params: { query: string; limit?: number },
+): Promise<ExternalProtocolContextResult> {
+  const db = await getDatabase()
+  requireExternalParticipantSync(db, identity)
+  const query = params.query.trim()
+  if (!query) throw new Error('query is required')
+  const limit = Math.min(Math.max(params.limit ?? 8, 1), 20)
+  const queryTokens = new Set(searchTokens(query))
+  if (!queryTokens.size) return { results: [] }
+
+  const matches: ProtocolContextMatch[] = []
+
+  const eventRows = db.prepare(
+    `SELECT * FROM protocol_events WHERE run_id = ? AND type IN (${CONTEXT_SEARCH_EVENT_TYPES.map(() => '?').join(',')}) ORDER BY created_at DESC LIMIT 500`,
+  ).all(identity.runId, ...CONTEXT_SEARCH_EVENT_TYPES) as Row[]
+  for (const row of eventRows) {
+    const event = rowToEvent(row)
+    const docText = [event.summary, event.detail].filter(Boolean).join('\n')
+    const score = queryOverlapScore(queryTokens, new Set(searchTokens(docText)))
+    if (score > 0) {
+      matches.push({
+        kind: event.type as ProtocolContextMatch['kind'],
+        taskId: event.taskId,
+        agentId: event.agentId,
+        summary: event.summary ?? '',
+        detail: event.detail,
+        timestamp: event.timestamp ?? row.created_at as string,
+        score,
+      })
+    }
+  }
+
+  for (const task of listTasksSync(db, identity.runId)) {
+    const docText = [task.title, task.prompt, task.resultSummary, task.resultDetail].filter(Boolean).join('\n')
+    const score = queryOverlapScore(queryTokens, new Set(searchTokens(docText)))
+    if (score > 0) {
+      matches.push({
+        kind: 'task',
+        taskId: task.id,
+        agentId: task.ownerAgentId,
+        summary: task.title,
+        detail: task.resultSummary ? `${task.prompt}\n\nResult: ${task.resultSummary}` : task.prompt,
+        timestamp: task.updatedAt,
+        score,
+      })
+    }
+  }
+
+  matches.sort((a, b) => b.score - a.score)
+  return { results: matches.slice(0, limit) }
 }
 
 export async function submitExternalProtocolPlan(
@@ -3882,8 +4046,17 @@ function formatMailboxDelivery(messageId: string, from: ProtocolAgent | undefine
 // a time; otherwise a slow successful steer can be duplicated before it gets
 // a chance to stamp delivered_at. External participants are pull-based, so
 // their cross-process durability remains in SQLite rather than this set.
-const liveDeliveryInFlight = new Set<string>()
-const inboxDispatchInFlight = new Set<string>()
+declare global {
+  // eslint-disable-next-line no-var
+  var __agentViewerCoordinatorLiveDeliveryInFlight: Set<string> | undefined
+  // eslint-disable-next-line no-var
+  var __agentViewerCoordinatorInboxDispatchInFlight: Set<string> | undefined
+}
+
+const liveDeliveryInFlight = globalThis.__agentViewerCoordinatorLiveDeliveryInFlight
+  ?? (globalThis.__agentViewerCoordinatorLiveDeliveryInFlight = new Set<string>())
+const inboxDispatchInFlight = globalThis.__agentViewerCoordinatorInboxDispatchInFlight
+  ?? (globalThis.__agentViewerCoordinatorInboxDispatchInFlight = new Set<string>())
 
 async function deliverMessagesLive(runId: string, messageIds: string[]): Promise<void> {
   const db = await getDatabase()
@@ -4963,8 +5136,19 @@ async function handleProviderTurnFailure(
   controller: RunController,
   agent: ProtocolAgent,
   failure: ProviderTurnFailure,
+  opts: { allowSameProviderRetry?: boolean } = {},
 ): Promise<'retry' | 'terminal'> {
-  const retryLimit = SAME_PROVIDER_RETRY_LIMITS[failure.kind]
+  // Same-provider retry resends the identical message text to the SAME
+  // session — safe only when the turn never produced any output, since a
+  // coord_* tool call already executes (mutates the board) the moment the
+  // model calls it, independent of whether the turn later fails. A retry
+  // after real output happened (a mid-drainAgentStream stall, or an
+  // ambiguous exception that might be mid-turn) risks the model re-issuing a
+  // non-idempotent call like coord_create_task a second time. Only the
+  // turn-never-started path (HTTP failed to accept the turn at all) can
+  // prove that didn't happen — every other call site defaults this off and
+  // falls through to the pre-existing failover-with-a-fresh-session behavior.
+  const retryLimit = opts.allowSameProviderRetry !== false ? SAME_PROVIDER_RETRY_LIMITS[failure.kind] : undefined
   if (retryLimit !== undefined) {
     const used = controller.sameProviderRetries.get(agent.id) ?? 0
     if (used < retryLimit) {
@@ -5014,6 +5198,7 @@ async function handleProviderTurnFailure(
       controller.model = undefined
       controller.effort = undefined
       if (agent.role === 'lead') controller.provider = provider
+      const canUseInProcessTools = await inProcessToolsAvailable(provider)
       const token = await enqueueWrite((tx) => {
         const ts = nowIso()
         tx.prepare('UPDATE protocol_agents SET provider = ?, session_id = ?, status = ?, updated_at = ? WHERE id = ? AND run_id = ?')
@@ -5032,7 +5217,7 @@ async function handleProviderTurnFailure(
           payload: { failureClass: failure.kind, fromProvider: agent.provider, toProvider: provider },
           timestamp: ts,
         })
-        return IN_PROCESS_TOOL_PROVIDERS.has(provider) ? issueParticipantTokenSync(tx, controller.runId, agent.id, undefined, ts) : undefined
+        return canUseInProcessTools ? issueParticipantTokenSync(tx, controller.runId, agent.id, undefined, ts) : undefined
       })
       if (token) {
         const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId: agent.id, token }
@@ -5147,7 +5332,7 @@ async function dispatchAgentTurn(
     const failure = await drainAgentStream(controller, agent, response)
     if (failure) {
       providerFailureHandled = true
-      retryAfterFailover = await handleProviderTurnFailure(controller, agent, failure) === 'retry'
+      retryAfterFailover = await handleProviderTurnFailure(controller, agent, failure, { allowSameProviderRetry: false }) === 'retry'
     } else {
       controller.sameProviderRetries.delete(agent.id)
     }
@@ -5159,6 +5344,11 @@ async function dispatchAgentTurn(
           controller,
           activeAgent,
           classifyProviderTurnFailure(error instanceof Error ? error.message : String(error)),
+          // Ambiguous origin — could be a pre-stream setup failure (safe to
+          // retry) or an exception thrown mid-drainAgentStream after real
+          // output (unsafe). Default conservative; see the allowSameProviderRetry
+          // doc comment on handleProviderTurnFailure.
+          { allowSameProviderRetry: false },
         ) === 'retry'
       } catch (failoverError) {
         await appendProtocolEvent({
@@ -5570,6 +5760,7 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
     }
     if (!workspace) continue
     const agentId = `agent-${index + 1}`
+    const canUseInProcessTools = await inProcessToolsAvailable(session.provider)
     const token = await enqueueWrite((tx) => {
       tx.prepare(`
         INSERT INTO protocol_agents (
@@ -5577,7 +5768,7 @@ async function beginExecutionPhase(controller: RunController): Promise<void> {
         ) VALUES (?, ?, ?, 'teammate', ?, ?, ?, ?, NULL, 'idle', NULL, ?, ?)
       `).run(agentId, controller.runId, name, session.provider, session.sessionId, workspace.path, workspace.branch, ts, ts)
       claimTaskSync(tx, controller.runId, agentId)
-      return IN_PROCESS_TOOL_PROVIDERS.has(session.provider) ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
+      return canUseInProcessTools ? issueParticipantTokenSync(tx, controller.runId, agentId, undefined, ts) : undefined
     })
     if (token) {
       const identity: ExternalProtocolIdentity = { runId: controller.runId, agentId, token }
@@ -5660,11 +5851,10 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
   }
   controllers.set(runId, controller)
 
-  // Claude/Pi/Copilot/Codex SDKs each support in-process (no subprocess)
-  // custom tools — see lib/agentCoordinationSdkTools.ts. OpenCode's installed
-  // SDK only supports subprocess/remote MCP config, so it keeps the fenced
-  // ```a2a text protocol for now.
+  // Claude/Pi/Copilot/Codex/OpenCode SDKs each support in-process (no
+  // subprocess) custom tools — see lib/agentCoordinationSdkTools.ts.
   let leadToken: string | undefined
+  const leadCanUseInProcessTools = await inProcessToolsAvailable(params.provider)
   const snapshot = await enqueueWrite((db) => {
     db.exec('BEGIN IMMEDIATE')
     try {
@@ -5692,7 +5882,7 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
         ) VALUES ('lead', ?, 'lead', 'lead', ?, ?, ?, '', NULL, 'working', NULL, ?, ?)
       `).run(runId, leadSession.provider, leadSession.sessionId, params.baseCwd, ts, ts)
       if (playbook) seedPlaybookTasksSync(db, runId, 'lead', playbook, params.playbookArgs)
-      if (IN_PROCESS_TOOL_PROVIDERS.has(params.provider)) leadToken = issueParticipantTokenSync(db, runId, 'lead', undefined, ts)
+      if (leadCanUseInProcessTools) leadToken = issueParticipantTokenSync(db, runId, 'lead', undefined, ts)
       db.exec('COMMIT')
       const next = readSnapshotSync(db, runId)
       if (!next) throw new Error('Failed to read created run')

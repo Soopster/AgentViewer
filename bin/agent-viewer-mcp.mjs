@@ -967,7 +967,8 @@ server.registerTool('coord_await_run', {
 
 server.registerTool('coord_create_task', {
   description: 'Add a task with dependencies and expected write paths to the shared board. Any participant may add discovered work; the lead may also add tasks during synthesis, which reopens the run. On playbook boards, pass the phase title the task belongs to so progress rollups stay accurate. '
-    + 'Use role_name/role_description to give the lane a specialization — a persona the claiming teammate should adopt for this task (e.g. "Explorer" / "read-only research, report findings, propose no edits"). This is invented per task as you distribute work, not a fixed role: the same run can have an Explorer lane, a Refactorer lane, and a Reviewer lane at once, and later tasks can define new specializations entirely.',
+    + 'Use role_name/role_description to give the lane a specialization — a persona the claiming teammate should adopt for this task (e.g. "Explorer" / "read-only research, report findings, propose no edits"). This is invented per task as you distribute work, not a fixed role: the same run can have an Explorer lane, a Refactorer lane, and a Reviewer lane at once, and later tasks can define new specializations entirely. '
+    + 'The result includes `similarTasks` when this looks like it may duplicate existing work — not blocking, but check before assuming it\'s new.',
   inputSchema: {
     title: z.string().min(1).max(160),
     detail: z.string().min(1).max(8000),
@@ -1108,6 +1109,15 @@ server.registerTool('coord_publish_finding', {
   taskId: task_id,
   requestId: request_id,
 })))
+
+server.registerTool('coord_query_context', {
+  description: 'Search this run\'s findings, learnings, and task outcomes for text relevant to a question — a lexical lookup, not full recall. Use this instead of re-reading all of coord_status when you only need context on one topic (e.g. "what did we decide about auth?"), especially after rejoining a long-running run.',
+  annotations: { readOnlyHint: true },
+  inputSchema: {
+    query: z.string().min(1).max(300),
+    limit: z.number().int().min(1).max(20).optional(),
+  },
+}, async ({ query, limit }) => textResult(await coordinatorRequest('query_context', { query, limit })))
 
 server.registerTool('coord_submit_plan', {
   description: 'Submit the plan for a claimed task when the run requires lead approval.',
