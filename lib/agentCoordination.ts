@@ -4741,6 +4741,7 @@ async function dispatchLeadIntervention(controller: RunController, opts: { force
     ? buildSdkToolsTickPrompt({
         runId: controller.runId,
         agent: lead,
+        cwd: lead.worktreePath,
         note: opts.supervision
           ? 'Routine supervision checkpoint — check coord_status for every teammate and unblock, reassign, or add work if the board shows a real need; otherwise stand by.'
           : `Woken mid-run — a teammate needs help, is stuck, or messaged you. ${reviewingPlans ? 'A submitted plan is waiting on coord_review_plan.' : ''} Check coord_status and your inbox and act.`,
@@ -4748,6 +4749,7 @@ async function dispatchLeadIntervention(controller: RunController, opts: { force
     : buildLeadInterventionPreamble({
         runId: controller.runId,
         agent: lead,
+        cwd: lead.worktreePath,
         roster: agents,
         tasks,
         inbox,
@@ -5699,11 +5701,13 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
       ? buildSdkToolsTickPrompt({
           runId: controller.runId,
           agent,
+          cwd: agent.worktreePath,
           note: `THIS TURN IS PLAN-ONLY for ${task.id} — ${task.title}. Do not edit files. Study the repo read-only, then call coord_submit_plan with your approach; wait for lead approval before implementing.${note ? ` ${note}` : ''}`,
         })
       : buildTeammatePlanPreamble({
           runId: controller.runId,
           agent,
+          cwd: agent.worktreePath,
           roster: agents,
           task,
           allTasks: tasks,
@@ -5722,10 +5726,11 @@ async function dispatchTeammateWork(controller: RunController, agentId: string):
   const inbox = await enqueueWrite((tx) => takeInboxSync(tx, controller.runId, agentId))
   controller.dispatchNotes.delete(agentId)
   const message = controller.sdkIdentities.has(agentId)
-    ? buildSdkToolsTickPrompt({ runId: controller.runId, agent, note })
+    ? buildSdkToolsTickPrompt({ runId: controller.runId, agent, cwd: agent.worktreePath, note })
     : buildTeammateTurnPreamble({
         runId: controller.runId,
         agent,
+        cwd: agent.worktreePath,
         roster: agents,
         task,
         allTasks: tasks,
@@ -5875,11 +5880,13 @@ async function maybeStartSynthesis(controller: RunController): Promise<void> {
     ? buildSdkToolsTickPrompt({
         runId: controller.runId,
         agent: lead,
+        cwd: lead.worktreePath,
         note: `All tasks are terminal. Review coord_status (task results and every finding/learning) against the original objective — "${run.prompt}" — reconcile findings, run any final integration checks, then call coord_finalize_run with a concise synthesis: what was done, what was learned, what remains, and any risks.`,
       })
     : buildLeadSynthesisPreamble({
         runId: controller.runId,
         agent: lead,
+        cwd: lead.worktreePath,
         prompt: run.prompt,
         tasks,
         knowledge: knowledgeRows.map((row) => ({
@@ -6212,11 +6219,13 @@ export async function startProtocolRun(params: StartProtocolRunParams): Promise<
       ? buildSdkToolsTickPrompt({
           runId,
           agent: { id: 'lead', name: 'lead', role: 'lead' },
+          cwd: leadSession.cwd,
           note: `THIS TURN IS PLAN-ONLY: decompose this objective into ${Math.max((maxAgents - 1) * 2, 4)}-${(maxAgents - 1) * 5} small, self-contained tasks with coord_create_task (non-overlapping write paths). Do not call coord_claim_task or implement anything yourself this turn — teammates are spawned right after this turn ends specifically to claim these tasks, and a task you grab now is one they can't. End your turn once the board is decomposed; you'll be dispatched again later for lead-only integration work. Objective: ${prompt}`,
         })
       : buildLeadPlanPreamble({
           runId,
           agent: { id: 'lead', name: 'lead' },
+          cwd: leadSession.cwd,
           prompt,
           teammateCount: maxAgents - 1,
           useWorktrees: controller.useWorktrees,

@@ -51,6 +51,7 @@ function prompts(useWorktrees: boolean): string[] {
     buildLeadPlanPreamble({
       runId: 'run-1',
       agent: { id: 'lead', name: 'lead' },
+      cwd: '/repo',
       prompt: 'Coordinate the change.',
       teammateCount: 1,
       useWorktrees,
@@ -58,6 +59,7 @@ function prompts(useWorktrees: boolean): string[] {
     buildTeammatePlanPreamble({
       runId: 'run-1',
       agent,
+      cwd: agent.worktreePath,
       roster,
       task,
       allTasks: [task],
@@ -68,6 +70,7 @@ function prompts(useWorktrees: boolean): string[] {
     buildTeammateTurnPreamble({
       runId: 'run-1',
       agent,
+      cwd: agent.worktreePath,
       roster,
       task,
       allTasks: [task],
@@ -79,6 +82,7 @@ function prompts(useWorktrees: boolean): string[] {
     buildLeadSynthesisPreamble({
       runId: 'run-1',
       agent: { id: 'lead', name: 'lead' },
+      cwd: '/repo',
       prompt: 'Coordinate the change.',
       tasks: [task],
       knowledge: [],
@@ -100,6 +104,7 @@ assert.match(sharedCheckoutPrompts[0]!, /test needs new exports or dependency in
 const interventionPrompt = buildLeadInterventionPreamble({
   runId: 'run-1',
   agent: { id: 'lead', name: 'lead' },
+  cwd: '/repo',
   roster: [agent],
   tasks: [task],
   inbox: [],

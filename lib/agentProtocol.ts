@@ -1214,6 +1214,22 @@ export function formatInbox(messages: ProtocolMessage[], agentsById: Map<string,
   }).join('\n')
 }
 
+/**
+ * Points a spawned agent at the coordinate-agents skill for the depth this
+ * inline preamble doesn't cover (playbooks, project memory/reusable roles,
+ * shared-checkout guardrails, cooperative participants, the multi-agent
+ * startup invariant). Mirrors bin/agent-viewer-coord-worker.mjs's tickPrompt,
+ * which grounds its unattended workers the same way — TUI/web-launched runs
+ * previously skipped this because they never go through that script. No
+ * `node:path` here (this module is Node-API-free so it loads everywhere);
+ * a plain forward-slash join is fine since this only ever renders into a
+ * human/model-facing instruction string, never touches the filesystem.
+ */
+function skillGroundingLine(cwd: string): string {
+  const skillPath = `${cwd.replace(/\/+$/, '')}/.agents/skills/coordinate-agents/SKILL.md`
+  return `Read and follow the coordinate-agents skill at ${skillPath} if it exists, then use the agent-viewer coord_* MCP tools now. Do not search outside this checkout for the skill; these instructions are sufficient if the file is absent.`
+}
+
 function protocolGrammar(runId: string, agentId: string): string {
   const example = makeA2AStreamResponse({
     version: AGENT_PROTOCOL_VERSION,
@@ -1255,10 +1271,12 @@ export function buildLeadPlanPreamble(params: {
   prompt: string
   teammateCount: number
   useWorktrees: boolean
+  cwd: string
 }): string {
   return [
     `You are the TEAM LEAD of a coordinated multi-agent run (protocol ${AGENT_PROTOCOL_VERSION}).`,
     `Run ID: ${params.runId} · Your agent ID: ${params.agent.id} · Your name: ${params.agent.name}`,
+    skillGroundingLine(params.cwd),
     '',
     `Up to ${params.teammateCount} teammates will be spawned to execute the task list you produce.`,
     params.useWorktrees
@@ -1295,6 +1313,7 @@ export function buildTeammatePlanPreamble(params: {
   agentsById: Map<string, ProtocolAgent>
   note?: string
   useWorktrees: boolean
+  cwd: string
 }): string {
   const pathList = params.task.paths.length > 0
     ? params.task.paths.map((path) => `- ${path}`).join('\n')
@@ -1302,6 +1321,7 @@ export function buildTeammatePlanPreamble(params: {
   return [
     `You are teammate "${params.agent.name}" in a coordinated multi-agent run (protocol ${AGENT_PROTOCOL_VERSION}).`,
     `Run ID: ${params.runId} · Your agent ID: ${params.agent.id}`,
+    skillGroundingLine(params.cwd),
     params.useWorktrees
       ? 'Your task will run in an isolated git worktree. Plan only for your granted paths; integration happens after the task is complete.'
       : 'Your task will run in the shared checkout. Plan only for your granted paths, preserve existing changes, and avoid every path owned by another participant.',
@@ -1352,6 +1372,7 @@ export function buildTeammateTurnPreamble(params: {
   gateCommand?: string
   requirePlanApproval?: boolean
   useWorktrees: boolean
+  cwd: string
 }): string {
   const pathList = params.task && params.task.paths.length > 0
     ? params.task.paths.map((path) => `- ${path}`).join('\n')
@@ -1361,6 +1382,7 @@ export function buildTeammateTurnPreamble(params: {
       ? `You are the TEAM LEAD in a coordinated multi-agent run (protocol ${AGENT_PROTOCOL_VERSION}), now executing an explicit lead-owned integration task.`
       : `You are teammate "${params.agent.name}" in a coordinated multi-agent run (protocol ${AGENT_PROTOCOL_VERSION}).`,
     `Run ID: ${params.runId} · Your agent ID: ${params.agent.id}`,
+    skillGroundingLine(params.cwd),
     params.useWorktrees
       ? 'You work in an isolated git worktree; your changes merge back later. Never edit files outside your granted paths.'
       : 'You work in the shared checkout. Never edit files outside your granted paths, overwrite another participant\'s changes, or reset or clean existing files.',
@@ -1422,10 +1444,12 @@ export function buildLeadInterventionPreamble(params: {
   requirePlanApproval?: boolean
   reviewingPlans?: boolean
   supervisionUpdate?: boolean
+  cwd: string
 }): string {
   return [
     `You are the TEAM LEAD (protocol ${AGENT_PROTOCOL_VERSION}). Teammates need your help mid-run.`,
     `Run ID: ${params.runId} · Your agent ID: ${params.agent.id}`,
+    skillGroundingLine(params.cwd),
     '',
     'Your inbox:',
     formatInbox(params.inbox, params.agentsById),
@@ -1470,6 +1494,7 @@ export function buildLeadSynthesisPreamble(params: {
   knowledge: Array<{ agentId: string; type: string; summary?: string; detail?: string }>
   agentsById: Map<string, ProtocolAgent>
   useWorktrees: boolean
+  cwd: string
 }): string {
   const knowledgeList = params.knowledge.length > 0
     ? params.knowledge.map((item) => {
@@ -1480,6 +1505,7 @@ export function buildLeadSynthesisPreamble(params: {
   return [
     `You are the TEAM LEAD (protocol ${AGENT_PROTOCOL_VERSION}). All teammate tasks have finished.`,
     `Run ID: ${params.runId} · Your agent ID: ${params.agent.id}`,
+    skillGroundingLine(params.cwd),
     '',
     'Original request:',
     params.prompt,
@@ -1514,12 +1540,14 @@ export function buildSdkToolsTickPrompt(params: {
   runId: string
   agent: Pick<ProtocolAgent, 'id' | 'name' | 'role'>
   note?: string
+  cwd: string
 }): string {
   const roleGuidance = params.agent.role === 'lead'
     ? 'You are the lead: supervise and delegate before implementing. Never claim a teammate lane merely because it is claimable; claim only an explicit lead integration/review task, decompose the board with coord_create_task when it is empty, and finalize the run with coord_finalize_run once every task is terminal.'
     : 'You are a teammate: answer reply-required mail first, then continue your owned task or claim one unblocked lane with coord_claim_task. Complete, release, or hand off owned work before ending your turn.'
   return [
     `Continue Coordinator run ${params.runId} as ${params.agent.name} (${params.agent.role}). You are ALREADY bound to this run — start with coord_status and act on the board and your inbox.`,
+    skillGroundingLine(params.cwd),
     roleGuidance,
     'Drain the inbox with coord_read_inbox, then perform every immediately actionable step, including implementation and verification.',
     'Coordinate actively — teammates cannot see your terminal: answer reply-required mail first, publish reusable discoveries with coord_publish_finding, and message teammates your progress affects with coord_send_message.',
