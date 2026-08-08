@@ -1119,6 +1119,37 @@ server.registerTool('coord_query_context', {
   },
 }, async ({ query, limit }) => textResult(await coordinatorRequest('query_context', { query, limit })))
 
+server.registerTool('coord_remember', {
+  description: 'Record a durable fact into this project\'s persistent memory (.agent-viewer/memory.md) — unlike coord_publish_finding, this outlives the run: every future coordinator run in this project starts with it in view. Use for genuinely durable context (architecture decisions, gotchas, established patterns), not routine progress.',
+  inputSchema: {
+    summary: z.string().min(1).max(2000),
+    detail: z.string().max(8000).optional(),
+    request_id: requestIdField,
+  },
+}, async ({ summary, detail, request_id }) => textResult(await coordinatorRequest('remember', {
+  summary,
+  detail,
+  requestId: request_id,
+})))
+
+server.registerTool('coord_save_role', {
+  description: 'Save a role_name/role_description pairing for reuse across coord_create_task calls (this run and future ones) — invent the persona once, then pass just role_name and it will be filled in automatically.',
+  inputSchema: {
+    name: z.string().min(1).max(80),
+    description: z.string().min(1).max(1000),
+    request_id: requestIdField,
+  },
+}, async ({ name, description, request_id }) => textResult(await coordinatorRequest('save_role', {
+  name,
+  description,
+  requestId: request_id,
+})))
+
+server.registerTool('coord_list_roles', {
+  description: 'List saved role templates (name + description) available for coord_create_task\'s role_name in this project.',
+  annotations: { readOnlyHint: true },
+}, async () => textResult(await coordinatorRequest('list_roles')))
+
 server.registerTool('coord_submit_plan', {
   description: 'Submit the plan for a claimed task when the run requires lead approval.',
   inputSchema: {

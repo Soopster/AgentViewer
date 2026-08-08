@@ -1219,7 +1219,7 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
   }
 }
 
-function externalParticipantInstructions(participant: ExternalProtocolParticipant): string {
+function externalParticipantInstructions(participant: ExternalProtocolParticipant, projectMemoryTail?: string | null): string {
   const roleInstructions = participant.role === 'lead'
     ? [
         'You are the lead: decompose the objective, seed independent teammate lanes, supervise the roster, resolve blockers, and finalize only after reviewing durable task results.',
@@ -1229,7 +1229,7 @@ function externalParticipantInstructions(participant: ExternalProtocolParticipan
         'You are a teammate: claim one unblocked teammate task, request locks before editing, and stay inside the returned task paths.',
         'Complete, release, or hand off owned work before going idle; do not take over the lead\'s integration or synthesis role.',
       ]
-  return [
+  const parts = [
     `You are ${participant.name} (${participant.role}) in Coordinator run ${participant.runId}.`,
     'Read the board before acting.',
     ...roleInstructions,
@@ -1238,7 +1238,12 @@ function externalParticipantInstructions(participant: ExternalProtocolParticipan
     'Narrate every mailbox exchange to your own terminal: "<- <sender>: <message>" on receipt, "-> <recipient>: <message>" after sending — your human is watching this terminal, not the board.',
     'If a Coordinator tool call throws (network error, timeout, daemon unreachable), wait ~2s and retry the same call — never give up after one failure, and keep this same identity rather than re-joining.',
     `Work from ${participant.cwd}. If another participant uses the same checkout, coordinate non-overlapping paths before editing.`,
-  ].join(' ')
+    'Record genuinely durable facts (architecture decisions, gotchas, established patterns — not routine progress) with coord_remember so future runs in this project start with them in view; search past ones with coord_query_context.',
+  ]
+  const instructions = parts.join(' ')
+  return projectMemoryTail
+    ? `${instructions}\n\nProject memory (persists across runs):\n${projectMemoryTail}`
+    : instructions
 }
 
 async function participantWorktree(cwd: string): Promise<{ cwd: string; branch: string }> {
@@ -1456,7 +1461,8 @@ export async function createExternalProtocolRun(
     }
   })
   notifyRunChanged(runId)
-  return { ...result, instructions: externalParticipantInstructions(result.participant) }
+  const memoryTail = await readProjectMemoryTail(await projectRepoRoot(worktree.cwd))
+  return { ...result, instructions: externalParticipantInstructions(result.participant, memoryTail) }
 }
 
 /**
@@ -1532,7 +1538,8 @@ export async function joinExternalProtocolRun(
     }
   })
   notifyRunChanged(result.participant.runId)
-  return { ...result, instructions: externalParticipantInstructions(result.participant) }
+  const memoryTail = await readProjectMemoryTail(joinerRoot ?? path.resolve(worktree.cwd))
+  return { ...result, instructions: externalParticipantInstructions(result.participant, memoryTail) }
 }
 
 export async function resumeExternalProtocolParticipant(
@@ -1969,7 +1976,7 @@ export async function createExternalProtocolTask(
     roleDescription?: string
   },
 ): Promise<ExternalProtocolTaskCreateResult> {
-  const result = await enqueueWrite((db) => {
+  const result = await enqueueWrite(async (db) => {
     const agent = requireExternalParticipantSync(db, identity)
     const runRow = db.prepare('SELECT status FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
     if (!runRow) throw new Error('Coordinator run not found')
@@ -1983,12 +1990,19 @@ export async function createExternalProtocolTask(
     const title = params.title.trim()
     const detail = params.detail.trim()
     if (!title || !detail) throw new Error('task title and detail are required')
+    const roleName = params.roleName?.trim() || undefined
+    let roleDescription = roleName ? params.roleDescription?.trim() || undefined : undefined
+    // A role_name with no inline description falls back to a saved template
+    // (coord_save_role) — reuse a lane's persona instead of re-authoring it.
+    if (roleName && !roleDescription) {
+      const saved = await readSavedRole(await projectRepoRoot(agent.worktreePath), roleName)
+      roleDescription = saved?.description
+    }
     db.exec('BEGIN IMMEDIATE')
     try {
       const blockedBy = [...new Set((params.dependsOn ?? []).map((entry) => entry.trim()).filter(Boolean))]
       validateTaskDependenciesSync(db, identity.runId, nextTaskIdSync(db, identity.runId), blockedBy)
       const similarTasks = findSimilarTasksSync(db, identity.runId, title, detail)
-      const roleName = params.roleName?.trim() || undefined
       const task = insertTaskSync(db, identity.runId, {
         title,
         prompt: detail,
@@ -1997,7 +2011,7 @@ export async function createExternalProtocolTask(
         phase: params.phase?.trim() || undefined,
         targetRole: params.targetRole ?? (reopening ? 'lead' : 'teammate'),
         roleName,
-        roleDescription: roleName ? params.roleDescription?.trim() || undefined : undefined,
+        roleDescription,
       })
       insertEventSync(db, {
         version: AGENT_PROTOCOL_VERSION,
@@ -2501,8 +2515,66 @@ export async function queryExternalProtocolContext(
     }
   }
 
+  const runRow = db.prepare('SELECT base_cwd FROM protocol_runs WHERE id = ?').get(identity.runId) as Row | undefined
+  if (runRow?.base_cwd) {
+    const repoRoot = await projectRepoRoot(String(runRow.base_cwd))
+    for (const section of await readProjectMemorySections(repoRoot)) {
+      const score = queryOverlapScore(queryTokens, new Set(searchTokens(section.body)))
+      if (score > 0) {
+        matches.push({
+          kind: 'project_memory',
+          summary: section.heading,
+          detail: section.body,
+          timestamp: nowIso(),
+          score,
+        })
+      }
+    }
+  }
+
   matches.sort((a, b) => b.score - a.score)
   return { results: matches.slice(0, limit) }
+}
+
+/**
+ * Record a fact into this project's durable memory (.agent-viewer/memory.md)
+ * — unlike coord_publish_finding, this outlives the run: every future
+ * coordinator run in this project starts with it in view. Use sparingly for
+ * genuinely durable context (architecture decisions, gotchas, established
+ * patterns), not routine progress — that belongs in coord_publish_finding.
+ */
+export async function rememberExternalProtocolMemory(
+  identity: ExternalProtocolIdentity,
+  params: { summary: string; detail?: string },
+): Promise<ExternalProtocolMutationResult> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  const summary = params.summary.trim()
+  if (!summary) throw new Error('summary is required')
+  const repoRoot = await projectRepoRoot(agent.worktreePath)
+  await appendProjectMemory(repoRoot, agent.name, summary, params.detail?.trim() || undefined)
+  return externalMutationResult(identity)
+}
+
+export async function saveExternalProtocolRole(
+  identity: ExternalProtocolIdentity,
+  params: { name: string; description: string },
+): Promise<{ role: SavedRoleTemplate }> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  const name = params.name.trim()
+  const description = params.description.trim()
+  if (!name || !description) throw new Error('role name and description are required')
+  const repoRoot = await projectRepoRoot(agent.worktreePath)
+  const role = await writeSavedRole(repoRoot, agent.name, name, description)
+  return { role }
+}
+
+export async function listExternalProtocolRoles(identity: ExternalProtocolIdentity): Promise<{ roles: SavedRoleTemplate[] }> {
+  const db = await getDatabase()
+  const agent = requireExternalParticipantSync(db, identity)
+  const repoRoot = await projectRepoRoot(agent.worktreePath)
+  return { roles: await listSavedRoles(repoRoot) }
 }
 
 export async function submitExternalProtocolPlan(
@@ -2993,6 +3065,230 @@ export async function finalizeExternalProtocolRun(
   })
   notifyRunChanged(identity.runId)
   return result
+}
+
+// ---------------------------------------------------------------------------
+// Cross-run project memory + role templates — unlike protocol_findings
+// (scoped to one run_id, gone once the run ends), these live as files at the
+// repo root under .agent-viewer/ so every future coordinator run in this
+// project — and every worktree checkout any participant works from — reads
+// the same durable state. Resolved via findRepoRoot (git-common-dir), not
+// the caller's raw cwd, because teammates run from separate `git worktree`
+// checkouts that would otherwise each see their own on-disk copy.
+
+async function projectRepoRoot(cwd: string): Promise<string> {
+  return (await findRepoRoot(cwd).catch(() => null)) ?? path.resolve(cwd)
+}
+
+function projectMemoryFilePath(repoRoot: string): string {
+  return path.join(repoRoot, '.agent-viewer', 'memory.md')
+}
+
+const PROJECT_MEMORY_HEADER = '# Coordinator project memory\n\nDurable facts, decisions, and gotchas coordinator agents have recorded for this project. Persists across every run — edit freely.\n'
+// Bounds how much of the file rides into a fresh participant's initial
+// instructions; the full file is still readable (and, once query_context
+// searches it too, findable) even past this tail.
+const PROJECT_MEMORY_INJECT_CHARS = 3000
+
+async function readProjectMemoryTail(repoRoot: string): Promise<string | null> {
+  let content: string
+  try {
+    content = await readFile(projectMemoryFilePath(repoRoot), 'utf8')
+  } catch {
+    return null
+  }
+  const body = content.trim()
+  if (!body) return null
+  if (body.length <= PROJECT_MEMORY_INJECT_CHARS) return body
+  return `…(truncated; read .agent-viewer/memory.md for the full history)\n${body.slice(-PROJECT_MEMORY_INJECT_CHARS)}`
+}
+
+async function appendProjectMemory(repoRoot: string, authorName: string, summary: string, detail?: string): Promise<void> {
+  const file = projectMemoryFilePath(repoRoot)
+  let existing = ''
+  try {
+    existing = await readFile(file, 'utf8')
+  } catch {
+    existing = PROJECT_MEMORY_HEADER
+  }
+  const entry = `\n## ${nowIso()} — ${authorName}\n${summary}\n${detail ? `\n${detail}\n` : ''}`
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, `${existing.replace(/\s+$/, '')}\n${entry}`, 'utf8')
+}
+
+/** Parse memory.md into its `## <date> — <author>` sections for query_context search. */
+async function readProjectMemorySections(repoRoot: string): Promise<Array<{ heading: string; body: string }>> {
+  let content: string
+  try {
+    content = await readFile(projectMemoryFilePath(repoRoot), 'utf8')
+  } catch {
+    return []
+  }
+  const sections: Array<{ heading: string; body: string }> = []
+  const parts = content.split(/^## /m).slice(1)
+  for (const part of parts) {
+    const newline = part.indexOf('\n')
+    if (newline === -1) continue
+    sections.push({ heading: part.slice(0, newline).trim(), body: part.slice(newline + 1).trim() })
+  }
+  return sections
+}
+
+function slugifyRoleName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+}
+
+function rolesDir(repoRoot: string): string {
+  return path.join(repoRoot, '.agent-viewer', 'roles')
+}
+
+type SavedRoleTemplate = { name: string; description: string; createdBy: string; createdAt: string; updatedAt: string }
+
+async function readSavedRole(repoRoot: string, name: string): Promise<SavedRoleTemplate | null> {
+  const slug = slugifyRoleName(name)
+  if (!slug) return null
+  try {
+    const raw = await readFile(path.join(rolesDir(repoRoot), `${slug}.json`), 'utf8')
+    return JSON.parse(raw) as SavedRoleTemplate
+  } catch {
+    return null
+  }
+}
+
+async function writeSavedRole(repoRoot: string, authorName: string, name: string, description: string): Promise<SavedRoleTemplate> {
+  const slug = slugifyRoleName(name)
+  if (!slug) throw new Error('role name must contain at least one letter or digit')
+  const existing = await readSavedRole(repoRoot, name)
+  const ts = nowIso()
+  const template: SavedRoleTemplate = {
+    name: name.trim(),
+    description,
+    createdBy: existing?.createdBy ?? authorName,
+    createdAt: existing?.createdAt ?? ts,
+    updatedAt: ts,
+  }
+  const dir = rolesDir(repoRoot)
+  await mkdir(dir, { recursive: true })
+  await writeFile(path.join(dir, `${slug}.json`), `${JSON.stringify(template, null, 2)}\n`, 'utf8')
+  return template
+}
+
+async function listSavedRoles(repoRoot: string): Promise<SavedRoleTemplate[]> {
+  let entries: string[]
+  try {
+    entries = await readdir(rolesDir(repoRoot))
+  } catch {
+    return []
+  }
+  const templates: SavedRoleTemplate[] = []
+  for (const entry of entries.sort()) {
+    if (!entry.endsWith('.json')) continue
+    try {
+      templates.push(JSON.parse(await readFile(path.join(rolesDir(repoRoot), entry), 'utf8')) as SavedRoleTemplate)
+    } catch {
+      // Skip a corrupt file rather than failing the whole listing.
+    }
+  }
+  return templates
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle webhooks — observer-only external notification, human-configured
+// (not a coord_* tool: like playbooks/roles, this is infra a lead sets up
+// once, not something an agent calls). A project opts in by creating
+// .agent-viewer/hooks.json:
+//   { "webhooks": [ { "url": "https://...", "events"?: [...], "secret"?: "..." } ] }
+// Omitting `events` subscribes to every kind below. Delivery is fire-and-
+// forget with no retry — a broken webhook must never affect coordinator
+// correctness, so failures are swallowed. Driven by a single global cursor
+// over protocol_events (not per-run) on the existing mailbox sweep timer, so
+// a run transitioning to a terminal status still gets its final event even
+// though sweepMailboxes itself stops polling that run afterward.
+
+type ProjectWebhookConfig = { url: string; events?: string[]; secret?: string }
+
+function webhooksFilePath(repoRoot: string): string {
+  return path.join(repoRoot, '.agent-viewer', 'hooks.json')
+}
+
+async function readProjectWebhooks(repoRoot: string): Promise<ProjectWebhookConfig[]> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await readFile(webhooksFilePath(repoRoot), 'utf8'))
+  } catch {
+    return []
+  }
+  const list = parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>).webhooks)
+    ? (parsed as Record<string, unknown>).webhooks as unknown[]
+    : []
+  return list.filter((entry): entry is ProjectWebhookConfig => (
+    Boolean(entry) && typeof entry === 'object' && typeof (entry as Record<string, unknown>).url === 'string'
+    && ((entry as Record<string, unknown>).url as string).trim().length > 0
+  ))
+}
+
+/** Event kinds a webhook may subscribe to — a curated subset of protocol_events types, not every event. */
+const WEBHOOK_EVENT_KINDS = new Set(['run.completed', 'run.failed', 'task.completed', 'task.failed', 'handoff', 'review.requested'])
+
+async function dispatchProjectWebhook(webhook: ProjectWebhookConfig, payload: Record<string, unknown>): Promise<void> {
+  if (webhook.events && !webhook.events.includes(String(payload.kind))) return
+  try {
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    if (webhook.secret) {
+      headers['x-agent-viewer-signature'] = createHash('sha256').update(`${webhook.secret}.${JSON.stringify(payload)}`).digest('hex')
+    }
+    await fetch(webhook.url, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(5000) })
+  } catch {
+    // Best-effort, no retry — see the section comment above.
+  }
+}
+
+let lastWebhookEventCursor: number | null = null
+
+async function dispatchNewProjectWebhookEvents(): Promise<void> {
+  const db = await getDatabase()
+  if (lastWebhookEventCursor === null) {
+    // First tick after (re)start: start from "now" rather than replaying
+    // this project's entire event history through every configured webhook.
+    const latest = db.prepare('SELECT COALESCE(MAX(rowid), 0) AS cursor FROM protocol_events').get() as Row
+    lastWebhookEventCursor = Number(latest.cursor) || 0
+    return
+  }
+  const rows = db.prepare('SELECT rowid AS cursor, * FROM protocol_events WHERE rowid > ? ORDER BY rowid ASC LIMIT 200')
+    .all(lastWebhookEventCursor) as Row[]
+  if (!rows.length) return
+  lastWebhookEventCursor = Number(rows.at(-1)!.cursor)
+  const repoRootByRun = new Map<string, string>()
+  for (const row of rows) {
+    const event = rowToEvent(row)
+    let kind: string = event.type
+    if (kind === 'run.status') {
+      const status = (event.payload as Record<string, unknown> | undefined)?.status
+      if (status === 'completed') kind = 'run.completed'
+      else if (status === 'failed') kind = 'run.failed'
+      else continue
+    }
+    if (!WEBHOOK_EVENT_KINDS.has(kind)) continue
+    let repoRoot = repoRootByRun.get(event.runId)
+    if (!repoRoot) {
+      const runRow = db.prepare('SELECT base_cwd FROM protocol_runs WHERE id = ?').get(event.runId) as Row | undefined
+      if (!runRow?.base_cwd) continue
+      repoRoot = await projectRepoRoot(String(runRow.base_cwd))
+      repoRootByRun.set(event.runId, repoRoot)
+    }
+    const webhooks = await readProjectWebhooks(repoRoot)
+    if (!webhooks.length) continue
+    const payload = {
+      kind,
+      runId: event.runId,
+      agentId: event.agentId,
+      taskId: event.taskId,
+      summary: event.summary,
+      detail: event.detail,
+      timestamp: event.timestamp,
+    }
+    for (const webhook of webhooks) void dispatchProjectWebhook(webhook, payload)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -4395,6 +4691,7 @@ async function sweepMailboxes(): Promise<void> {
 export async function runProtocolMaintenanceSweep(): Promise<void> {
   await sweepMailboxes()
   await sweepPushNotifications().catch(() => {})
+  await dispatchNewProjectWebhookEvents().catch(() => {})
 }
 
 let mailSweepTimer: ReturnType<typeof setInterval> | null = null
@@ -4404,6 +4701,7 @@ function ensureMailSweep(): void {
   mailSweepTimer = setInterval(() => {
     void sweepMailboxes().catch(() => {})
     void sweepPushNotifications().catch(() => {})
+    void dispatchNewProjectWebhookEvents().catch(() => {})
   }, MAIL_SWEEP_INTERVAL_MS)
   mailSweepTimer.unref?.()
 }

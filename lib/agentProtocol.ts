@@ -580,7 +580,7 @@ export type ExternalProtocolTaskCreateResult = ExternalProtocolMutationResult & 
 
 /** One match from coord_query_context's lexical search over findings/learnings/tasks. */
 export type ProtocolContextMatch = {
-  kind: 'finding' | 'learning' | 'handoff' | 'review.requested' | 'task.completed' | 'task.failed' | 'plan.approved' | 'plan.rejected' | 'task'
+  kind: 'finding' | 'learning' | 'handoff' | 'review.requested' | 'task.completed' | 'task.failed' | 'plan.approved' | 'plan.rejected' | 'task' | 'project_memory'
   taskId?: string
   agentId?: string
   summary: string

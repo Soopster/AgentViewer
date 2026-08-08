@@ -11,17 +11,20 @@ import {
   listProtocolRuns,
   listRunPlaybooks,
   loadRunPlaybook,
+  listExternalProtocolRoles,
   publishExternalProtocolFinding,
   queryExternalProtocolContext,
   readExternalProtocolInbox,
   readExternalProtocolStatus,
   releaseExternalProtocolTask,
+  rememberExternalProtocolMemory,
   reportExternalProtocolProgress,
   requestExternalProtocolLocks,
   resumeExternalProtocolParticipant,
   reviewExternalProtocolPlan,
   runExternalProtocolIdempotent,
   saveExternalProtocolPlaybook,
+  saveExternalProtocolRole,
   sendExternalProtocolMessage,
   submitExternalProtocolPlan,
   waitForExternalProtocolChange,
@@ -233,6 +236,19 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       limit: Number(body.limit) || undefined,
     })
   }
+  if (action === 'remember') {
+    return mutate(() => rememberExternalProtocolMemory(participantIdentity!, {
+      summary: text(body.summary),
+      detail: optionalText(body.detail),
+    }))
+  }
+  if (action === 'save_role') {
+    return mutate(() => saveExternalProtocolRole(participantIdentity!, {
+      name: text(body.name),
+      description: text(body.description),
+    }))
+  }
+  if (action === 'list_roles') return listExternalProtocolRoles(participantIdentity!)
   if (action === 'submit_plan') {
     return mutate(() => submitExternalProtocolPlan(participantIdentity!, {
       taskId: text(body.taskId),

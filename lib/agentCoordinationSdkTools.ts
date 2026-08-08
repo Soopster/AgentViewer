@@ -237,6 +237,33 @@ const COORD_TOOL_SPECS: ToolSpec[] = [
     mapArgs: (a) => ({ query: a.query, limit: a.limit }),
   },
   {
+    name: 'coord_remember',
+    description: 'Record a durable fact into this project\'s persistent memory (.agent-viewer/memory.md) — unlike coord_publish_finding, this outlives the run: every future coordinator run in this project starts with it in view. Use for genuinely durable context (architecture decisions, gotchas, established patterns), not routine progress.',
+    fields: {
+      summary: { t: 'string', min: 1, max: 2000 },
+      detail: { t: 'string', max: 8000, optional: true },
+    },
+    action: 'remember',
+    mapArgs: (a) => ({ summary: a.summary, detail: a.detail }),
+  },
+  {
+    name: 'coord_save_role',
+    description: 'Save a role_name/role_description pairing for reuse across coord_create_task calls (this run and future ones) — invent the persona once, then pass just role_name and it will be filled in automatically.',
+    fields: {
+      name: { t: 'string', min: 1, max: 80 },
+      description: { t: 'string', min: 1, max: 1000 },
+    },
+    action: 'save_role',
+    mapArgs: (a) => ({ name: a.name, description: a.description }),
+  },
+  {
+    name: 'coord_list_roles',
+    description: 'List saved role templates (name + description) available for coord_create_task\'s role_name in this project.',
+    fields: {},
+    action: 'list_roles',
+    mapArgs: () => ({}),
+  },
+  {
     name: 'coord_submit_plan',
     description: 'Submit an implementation plan for your claimed task before editing (when plan approval is required).',
     fields: {
