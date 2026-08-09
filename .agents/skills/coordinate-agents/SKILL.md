@@ -120,6 +120,7 @@ When the participant role is `teammate`:
 7. Call `coord_complete_task` only after verification. If completion is rejected, address the stated gate failure and retry (the same `request_id` is safe — rejections are never replayed from cache); never bypass the gate or claim work that was not performed.
 8. If you cannot finish a claimed task but it remains achievable, hand it back with `coord_release_task` and a reason so someone else can claim it. Call `coord_fail_task` only when the task genuinely cannot be completed, with a useful reason and recovery detail.
 9. After a provider-level failure, checkpoint and return resumable work with `coord_handoff_task` plus the classified failure. This releases locks and alerts the lead without incorrectly marking the task failed.
+10. Once your lane is done and no more work is expected, call `coord_leave_run` to step aside cleanly (it releases your locks and fails if you still own a claimed task — release or hand it off first). Don't just go silent: staleness detection exists for crashes, not for an intentional, orderly exit.
 
 ## Autonomous coordination loop
 

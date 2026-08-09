@@ -50,12 +50,15 @@ const IDEMPOTENT_COORDINATOR_ACTIONS = new Set([
   'finalize_run',
   'finding',
   'handoff_task',
+  'leave_run',
   'progress',
   'read_inbox',
   'release_task',
+  'remember',
   'request_locks',
   'review_plan',
   'save_playbook',
+  'save_role',
   'send_message',
   'submit_plan',
 ])
@@ -1028,6 +1031,28 @@ server.registerTool('coord_release_task', {
   reason,
   requestId: request_id,
 })))
+
+server.registerTool('coord_leave_run', {
+  description: 'Cleanly exit this Coordinator run as the current participant, releasing any active locks. Fails if you still own a claimed task — release_task or hand it off first. '
+    + 'A lead leaving marks the whole run failed and stops every other participant, so only the lead should call this to abort a run outright; teammates use it to step aside once their lane is done and no more work is expected.',
+  inputSchema: {
+    reason: z.string().max(1000).optional(),
+    request_id: requestIdField,
+  },
+}, async ({ reason, request_id }) => {
+  const result = await coordinatorRequest('leave_run', {
+    reason,
+    requestId: request_id,
+  })
+  // A successful leave frees this bridge to create/join a different run next.
+  // The participant row survives server-side (status 'stopped') for audit, so
+  // requireUnboundBridge can't infer this locally — unbind explicitly instead
+  // of waiting for a status check that would otherwise still refuse rebinding.
+  coordinatorIdentity = null
+  coordinatorCursor = null
+  if (!process.env.AGENT_VIEWER_COORD_IDENTITY_FILE?.trim()) coordinatorIdentityFile = null
+  return textResult(result)
+})
 
 server.registerTool('coord_read_inbox', {
   description: 'Read and acknowledge direct Coordinator mailbox messages for this participant. '
