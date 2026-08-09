@@ -1064,7 +1064,10 @@ server.registerTool('coord_leave_run', {
 server.registerTool('coord_read_inbox', {
   description: 'Read and acknowledge direct Coordinator mailbox messages for this participant. '
     + 'Any message with replyRequired=true needs a coord_send_message reply before you do anything else — '
-    + 'the sender treats silence as dropped, not busy. Print one line per message to your own terminal, '
+    + 'the sender treats silence as dropped, not busy. A status-kind/status-priority message can be held back '
+    + 'up to 15s (or until 3 accumulate) before it appears here — an empty or short result right after someone '
+    + 'says they sent something is not proof nothing arrived; call again shortly before assuming it was lost. '
+    + 'Print one line per message to your own terminal, '
     + '"<- <fromAgentId>: <body>" — the human watching this terminal cannot see the mailbox otherwise.',
   inputSchema: {
     after: z.string().min(1).optional().describe('Message cursor returned by the previous call'),
