@@ -279,12 +279,12 @@ const COORD_TOOL_SPECS: ToolSpec[] = [
     description: 'Lead-only: approve or reject a submitted plan.',
     fields: {
       task_id: { t: 'string', min: 1 },
-      approve: { t: 'boolean' },
+      approved: { t: 'boolean' },
       summary: { t: 'string', max: 2000, optional: true },
       detail: { t: 'string', max: 8000, optional: true },
     },
     action: 'review_plan',
-    mapArgs: (a) => ({ taskId: a.task_id, approve: a.approve, summary: a.summary, detail: a.detail }),
+    mapArgs: (a) => ({ taskId: a.task_id, approved: a.approved, summary: a.summary, detail: a.detail }),
   },
   {
     name: 'coord_complete_task',
@@ -543,9 +543,18 @@ async function dispatchByRegistry(
   args: Record<string, unknown>,
 ): Promise<{ text: string; isError: boolean } | null> {
   const identity = registry.get(sessionId)
+  const invocation = resolveCoordinatorToolCall(toolName, args)
+  if (!identity || !invocation) return null
+  return callJson(identity, invocation.action, invocation.args)
+}
+
+/** Resolve the shared provider-facing tool contract into a Coordinator action. */
+export function resolveCoordinatorToolCall(
+  toolName: string,
+  args: Record<string, unknown>,
+): { action: string; args: Record<string, unknown> } | null {
   const spec = COORD_TOOL_SPECS.find((entry) => entry.name === toolName)
-  if (!identity || !spec) return null
-  return callJson(identity, spec.action, spec.mapArgs(args))
+  return spec ? { action: spec.action, args: spec.mapArgs(args) } : null
 }
 
 /** Dispatch a codex item/tool/call for a registered thread. Returns null if the tool name isn't one of ours. */

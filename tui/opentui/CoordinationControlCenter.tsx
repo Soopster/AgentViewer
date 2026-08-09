@@ -296,7 +296,9 @@ export function CoordinationControlCenter({
   const leftW = Math.max(24, Math.floor(innerW * 0.27))
   const rightW = Math.max(31, Math.floor(innerW * 0.29))
   const centerW = Math.max(innerW - leftW - rightW - 2, 20)
-  const inspectorH = Math.min(13, Math.max(12, Math.floor(bodyH * 0.30)))
+  // Keep enough room below for Live Activity's fixed detail region. The
+  // inspector has a deliberately reduced compact layout at this height.
+  const inspectorH = 12
   const showProviderHealth = innerW >= 165
   const showTaskColumns = centerW >= 58
   const showInspectorDetails = rightW >= 40 && inspectorH >= 20
@@ -502,10 +504,24 @@ export function CoordinationControlCenter({
   // tree instead of hard-coding both. The topology only needs one row per agent,
   // so on a small roster the leftover rows go to mail exchanges — previously
   // they were left blank while the mail log was clipped to a single line.
-  const inspectorFixedRows = (showInspectorDetails ? 9 : 8) + (inspectedBlockedReason ? 1 : 0)
-  const inspectorFreeRows = Math.max(inspectorH - inspectorFixedRows, 3)
-  const topologyRows = Math.max(Math.min(topologyAgents.length, inspectorFreeRows - 1), 2)
-  const inspectorMailRows = Math.max(Math.min(inspectorFreeRows - topologyRows, recentInspectedMessages.length), 1)
+  // `height` includes the inspector's top/bottom border. Inside it, fixed rows
+  // are: header(2), agent/session/state/tasks/locks(5), mail header(1), and
+  // topology header(1), plus optional detail rows. Reserve a compact mail row
+  // before giving the remainder to topology so the sum can never exceed the
+  // actual inner height.
+  const inspectorContentRows = Math.max(inspectorH - 2, 0)
+  const compactInspector = inspectorH <= 13
+  const showCompactLocks = selectedLocks.length > 0 || inspectedDeniedLocks.length > 0
+  // Compact: header(2), agent/state/tasks/locks(4), topology header(1).
+  // Session and the verbose mail heading are omitted; one combined mail row is
+  // budgeted below. Expanded mode retains the complete nine-row fixed set.
+  const inspectorFixedRows = (compactInspector ? 6 + (showCompactLocks ? 1 : 0) : 9 + (showInspectorDetails ? 1 : 0)) + (inspectedBlockedReason ? 1 : 0)
+  const inspectorFreeRows = Math.max(inspectorContentRows - inspectorFixedRows, 0)
+  const compactMailRows = compactInspector ? 1 : 0
+  const topologyRows = Math.min(topologyAgents.length, Math.max(inspectorFreeRows - compactMailRows, 0))
+  const inspectorMailRows = compactInspector
+    ? compactMailRows
+    : Math.min(recentInspectedMessages.length, Math.max(inspectorFreeRows - topologyRows, 0))
   const selectedEventAgent = selectedEvent ? agentsById.get(selectedEvent.agentId) : undefined
   const selectedEventMessage = selectedEvent ? messageMetaByEvent.get(selectedEvent) : undefined
   const selectedEventBody = selectedEventMessage?.body ?? selectedEvent?.detail ?? selectedEvent?.summary ?? 'No detail'
@@ -747,32 +763,32 @@ export function CoordinationControlCenter({
             onMouseUp={() => onFocusSection?.('team')}
             onMouseScroll={(event) => onScrollSection?.('team', event.scroll?.direction === 'up' ? -1 : 1)}
           >
-            <box height={2} border={['bottom']} borderStyle="single" borderColor={section === 'team' ? theme.cyan : theme.border} backgroundColor={section === 'team' ? theme.surface3 : theme.surface} flexDirection="row" alignItems="center">
+            <box height={2} flexShrink={0} border={['bottom']} borderStyle="single" borderColor={section === 'team' ? theme.cyan : theme.border} backgroundColor={section === 'team' ? theme.surface3 : theme.surface} flexDirection="row" alignItems="center">
               <text fg={section === 'team' ? theme.cyan : theme.text} wrapMode="none">[3] AGENT INSPECTOR</text>
               <box flexGrow={1} />
               <text fg={theme.dim} wrapMode="none">{`[${Math.max(inspectedAgentIndex + 1, 0)}/${agents.length}]`}</text>
             </box>
             {inspectedAgent ? (
               <>
-                <box flexDirection="row"><box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">Agent:    </text></box><text fg={getProviderAccent(inspectedAgent.provider)} wrapMode="none">{fit(`${inspectedAgent.name} · ${String(inspectedAgent.provider).toUpperCase()} · ${inspectedAgent.role}`, rightW - 14)}</text></box>
-                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Session:  </text><text fg={inspectedAgent.sessionId.startsWith('external:') ? theme.amber : theme.muted} wrapMode="none">{fit(`${inspectedSessionIdentity} · ${inspectedAgent.client?.name ?? 'managed'}`, rightW - 12)}</text></box>
-                <box flexDirection="row">
-                  <text fg={theme.dim} wrapMode="none">State:    </text>
-                  <text fg={inspectedLiveness === 'dead' ? theme.red : inspectedLiveness === 'stale' ? theme.amber : inspectedAgent.turnActive ? theme.green : theme.cyan} wrapMode="none">
-                    {fit(`${inspectedAgent.status}${inspectedAgent.turnActive ? ' · streaming' : ''} · heartbeat ${age(inspectedAgent.lastSeenAt, now)} ago · ${inspectedLiveness}`, rightW - 12)}
-                  </text>
+                <box height={1} flexShrink={0} flexDirection="row" overflow="hidden"><box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">Agent:</text></box><box flexGrow={1} minWidth={0} overflow="hidden"><text fg={getProviderAccent(inspectedAgent.provider)} wrapMode="none">{fit(`${inspectedAgent.name} · ${String(inspectedAgent.provider).toUpperCase()} · ${inspectedAgent.role}`, rightW - 14)}</text></box></box>
+                {!compactInspector ? <box height={1} flexShrink={0} flexDirection="row" overflow="hidden"><box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">Session:</text></box><box flexGrow={1} minWidth={0} overflow="hidden"><text fg={inspectedAgent.sessionId.startsWith('external:') ? theme.amber : theme.muted} wrapMode="none">{fit(`${inspectedSessionIdentity} · ${inspectedAgent.client?.name ?? 'managed'}`, rightW - 14)}</text></box></box> : null}
+                <box height={1} flexShrink={0} flexDirection="row" overflow="hidden">
+                  <box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">State:</text></box>
+                  <box flexGrow={1} minWidth={0} overflow="hidden"><text fg={inspectedLiveness === 'dead' ? theme.red : inspectedLiveness === 'stale' ? theme.amber : inspectedAgent.turnActive ? theme.green : theme.cyan} wrapMode="none">
+                    {fit(`${inspectedAgent.status}${inspectedAgent.turnActive ? ' · streaming' : ''} · heartbeat ${age(inspectedAgent.lastSeenAt, now)} ago · ${inspectedLiveness}`, rightW - 14)}
+                  </text></box>
                 </box>
-                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Tasks:    </text><text fg={theme.text} wrapMode="none">{fit(`claimed ${inspectedActiveTasks.map((task) => task.id).join(',') || '—'} · completed ${inspectedCompletedTasks.map((task) => task.id).join(',') || '—'}`, rightW - 12)}</text></box>
-                <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Locks:    </text><text fg={inspectedDeniedLocks.length > 0 ? theme.amber : selectedLocks.length > 0 ? theme.cyan : theme.muted} wrapMode="none">{fit(`held ${selectedLocks.map((lock) => lock.path).join(',') || '—'} · denied ${inspectedDeniedLocks.map((lock) => lock.path).join(',') || '—'}`, rightW - 12)}</text></box>
+                <box height={1} flexShrink={0} flexDirection="row" overflow="hidden"><box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">Tasks:</text></box><box flexGrow={1} minWidth={0} overflow="hidden"><text fg={theme.text} wrapMode="none">{fit(`claimed ${inspectedActiveTasks.map((task) => task.id).join(',') || '—'} · completed ${inspectedCompletedTasks.map((task) => task.id).join(',') || '—'}`, rightW - 14)}</text></box></box>
+                {!compactInspector || showCompactLocks ? <box height={1} flexShrink={0} flexDirection="row" overflow="hidden"><box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">Locks:</text></box><box flexGrow={1} minWidth={0} overflow="hidden"><text fg={inspectedDeniedLocks.length > 0 ? theme.amber : selectedLocks.length > 0 ? theme.cyan : theme.muted} wrapMode="none">{fit(`held ${selectedLocks.map((lock) => lock.path).join(',') || '—'} · denied ${inspectedDeniedLocks.map((lock) => lock.path).join(',') || '—'}`, rightW - 14)}</text></box></box> : null}
                 {inspectedBlockedReason ? (
-                  <box flexDirection="row"><text fg={theme.red} wrapMode="none">Blocker:  </text><text fg={theme.red} wrapMode="none">{fit(inspectedBlockedReason, rightW - 12)}</text></box>
+                  <box height={1} flexShrink={0} flexDirection="row" overflow="hidden"><box width={10} flexShrink={0}><text fg={theme.red} wrapMode="none">Blocker:</text></box><box flexGrow={1} minWidth={0} overflow="hidden"><text fg={theme.red} wrapMode="none">{fit(inspectedBlockedReason, rightW - 14)}</text></box></box>
                 ) : null}
                 {showInspectorDetails ? (
-                  <box flexDirection="row"><text fg={theme.dim} wrapMode="none">Checkout: </text><text fg={theme.muted} wrapMode="none">{fit(`${inspectedAgent.worktreeBranch || 'main'} · ${worktree ? `${worktree.dirtyFiles} dirty, ${worktree.aheadCommits} ahead` : 'shared'} · ${latestAgentEvent?.type ?? 'idle'}`, rightW - 12)}</text></box>
+                  <box height={1} flexShrink={0} flexDirection="row" overflow="hidden"><box width={10} flexShrink={0}><text fg={theme.dim} wrapMode="none">Checkout:</text></box><box flexGrow={1} minWidth={0} overflow="hidden"><text fg={theme.muted} wrapMode="none">{fit(`${inspectedAgent.worktreeBranch || 'main'} · ${worktree ? `${worktree.dirtyFiles} dirty, ${worktree.aheadCommits} ahead` : 'shared'} · ${latestAgentEvent?.type ?? 'idle'}`, rightW - 14)}</text></box></box>
                 ) : null}
-                <box flexDirection="row"><text fg={theme.violet} wrapMode="none">MAIL      </text><text fg={theme.muted} wrapMode="none">{fit(`sent ${inspectedMailSent} · received ${inspectedMailReceived} · latest exchanges`, rightW - 12)}</text></box>
-                {inspectorH <= 13 && compactInspectedMessage ? (
-                  <text fg={theme.violet} wrapMode="none">{fit(`MAIL  ${compactInspectedMessage}`, rightW - 2)}</text>
+                {!compactInspector ? <box height={1} flexShrink={0} flexDirection="row" overflow="hidden"><box width={10} flexShrink={0}><text fg={theme.violet} wrapMode="none">MAIL</text></box><box flexGrow={1} minWidth={0} overflow="hidden"><text fg={theme.muted} wrapMode="none">{fit(`sent ${inspectedMailSent} · received ${inspectedMailReceived} · latest exchanges`, rightW - 14)}</text></box></box> : null}
+                {compactInspector ? (
+                  <box height={1} flexShrink={0} overflow="hidden"><text fg={theme.violet} wrapMode="none">{fit(compactInspectedMessage ? `MAIL  ${compactInspectedMessage}` : `MAIL  sent ${inspectedMailSent} · received ${inspectedMailReceived}`, rightW - 4)}</text></box>
                 ) : recentInspectedMessages.slice(0, inspectorMailRows).map((message) => {
                   const outbound = message.fromAgentId === inspectedAgent.id
                   const counterpartyId = outbound ? message.toAgentId : message.fromAgentId
@@ -790,12 +806,12 @@ export function CoordinationControlCenter({
                     </box>
                   )
                 })}
-                <box height={1} flexDirection="row">
+                <box height={1} flexShrink={0} flexDirection="row" overflow="hidden">
                   <text fg={theme.border} wrapMode="none">{'─'}</text>
                   <text fg={theme.cyan} wrapMode="none">{topologyLabel}</text>
                   <text fg={theme.border} wrapMode="none">{'─'.repeat(Math.max(rightW - topologyLabel.length - 3, 1))}</text>
                 </box>
-                {visibleWindow(topologyAgents, Math.max(topologyAgentIndex, 0), Math.max(topologyRows, 2)).map((agent, index, visible) => {
+                {visibleWindow(topologyAgents, Math.max(topologyAgentIndex, 0), topologyRows).map((agent, index, visible) => {
                   const agentTask = (agent.taskId ? taskById.get(agent.taskId) : undefined)
                     ?? tasks.find((task) => task.ownerAgentId === agent.id && ACTIVE_TASKS.has(task.status))
                     ?? tasks.find((task) => task.ownerAgentId === agent.id)
@@ -807,11 +823,11 @@ export function CoordinationControlCenter({
                     ? `${agentTask.id}${dependencies.length > 0 ? ` ←${dependencies.join(',')}` : ''}${dependents.length > 0 ? ` →${dependents.join(',')}` : ''}`
                     : agent.role === 'lead' ? run ? runTitle(run) : 'workflow' : 'unassigned'
                   return (
-                    <box key={agent.id} height={1} flexDirection="row" overflow="hidden"
+                    <box key={agent.id} height={1} flexShrink={0} flexDirection="row" overflow="hidden"
                       onMouseUp={() => { onFocusSection?.('team'); if (agent.id === inspectedAgent.id && section === 'team') onActivateSelection?.('team'); else onSelectAgent?.(agent.id) }}
                     >
                       <text fg={agent.id === inspectedAgent.id ? theme.cyan : theme.dim} wrapMode="none">{`${agent.id === inspectedAgent.id ? '▶' : ' '} ${branchGlyph} `}</text>
-                      <text fg={getProviderAccent(agent.provider)} wrapMode="none">{fit(agent.name, 10)}</text>
+                      <box width={10} flexShrink={0} overflow="hidden"><text fg={getProviderAccent(agent.provider)} wrapMode="none">{fit(agent.name, 10)}</text></box>
                       <text fg={agent.status === 'blocked' || agent.status === 'failed' ? theme.amber : agent.turnActive || agent.status === 'working' ? theme.green : theme.dim} wrapMode="none">{` ${agent.turnActive || agent.status === 'working' ? '●' : '○'} `}</text>
                       <text fg={theme.violet} wrapMode="none">{`m→${mail.sent}←${mail.received} `}</text>
                       <text fg={theme.muted} wrapMode="none">{fit(edge, Math.max(rightW - 29, 8))}</text>

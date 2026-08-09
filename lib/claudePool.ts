@@ -13,6 +13,21 @@ import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { getCoordinatorMcpServers } from './agentCoordinationSdkTools'
 
+/**
+ * Coordinator-owned Claude sessions must not inherit the user's ordinary MCP
+ * configuration. A separately configured agent-viewer bridge exposes the same
+ * coord_* names but has no participant identity, so Claude can select it on a
+ * later turn and receive the misleading "Join, create, or resume" error even
+ * though the run-bound in-process server is still healthy.
+ */
+export function coordinatorClaudeMcpOptions(sessionId: string): {
+  mcpServers?: ReturnType<typeof getCoordinatorMcpServers>
+  strictMcpConfig?: true
+} {
+  const mcpServers = getCoordinatorMcpServers(sessionId)
+  return mcpServers ? { mcpServers, strictMcpConfig: true } : {}
+}
+
 // Per-turn MCP elicitation handler. Mirrors the canUseTool bridge: the warm
 // Query's onElicitation delegates to this so the long-lived subprocess can route
 // each turn's elicitation requests through the current turn's SSE controller.
@@ -357,7 +372,7 @@ class ClaudePool {
         // session's lifetime, so this needs no entry in compatible()/EntryState;
         // a pool entry only ever exists for a session id that was already
         // spawned with this same lookup.
-        mcpServers: getCoordinatorMcpServers(opts.sessionId),
+        ...coordinatorClaudeMcpOptions(opts.sessionId),
       },
     })
 

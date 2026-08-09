@@ -1,4 +1,6 @@
 import type { ClientRequest } from '../lib/codex-schema'
+import { CODEX_INITIALIZE_CAPABILITIES } from '../lib/codexClient'
+import { isCodexActiveWriterError } from '../lib/sessionBackend'
 import type {
   BrowserUseRequirements,
   FeedbackRequirements,
@@ -36,6 +38,13 @@ const newRequests = [
     },
   },
 ] satisfies ClientRequest[]
+
+if (CODEX_INITIALIZE_CAPABILITIES.experimentalApi !== true) {
+  throw new Error('Codex dynamic tools require initialize.capabilities.experimentalApi')
+}
+if (!isCodexActiveWriterError(new Error('thread thread-1 already has an active writer'))) {
+  throw new Error('Codex active-writer conflicts must remain a recoverable session-detail condition')
+}
 
 const generatedRequirementAdditions: {
   browser: BrowserUseRequirements | null

@@ -9,6 +9,16 @@ import {
   type CodexResponseFor,
   type CodexServerRequest,
 } from './codexProtocol'
+import type { InitializeCapabilities } from './codex-schema'
+
+// Coordinator-owned Codex threads declare dynamicTools at thread/start. The
+// app-server gates that field behind the connection-level experimentalApi
+// capability, and this client is a process-wide singleton that may initialize
+// on an ordinary thread before a Coordinator run starts.
+export const CODEX_INITIALIZE_CAPABILITIES = {
+  experimentalApi: true,
+  requestAttestation: false,
+} satisfies InitializeCapabilities
 
 type PendingRequest = {
   resolve: (value: unknown) => void
@@ -139,7 +149,7 @@ class CodexAppServerClient {
           title: 'Agent Viewer',
           version: '0.1.0',
         },
-        capabilities: null,
+        capabilities: CODEX_INITIALIZE_CAPABILITIES,
       }, true)
     })()
 

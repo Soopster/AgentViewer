@@ -168,6 +168,22 @@ if (!frame.includes('nova') || !frame.includes('finding') || !frame.includes('1 
   process.exit(1)
 }
 
+// Compact inspector rows must retain independent terminal cells. Yoga used to
+// shrink the unlabeled one-row flex children to zero height, leaving stale
+// glyphs and painting State/MAIL/TOPOLOGY on top of adjacent rows.
+const inspectorRowMarkers = ['Agent:', 'State:', 'Tasks:', 'MAIL  ', 'TOPOLOGY']
+const inspectorRowIndexes = inspectorRowMarkers.map((marker) => frame.split('\n').findIndex((line) => line.includes(marker)))
+if (
+  inspectorRowIndexes.some((index) => index < 0)
+  || new Set(inspectorRowIndexes).size !== inspectorRowIndexes.length
+  || !frame.includes('Agent:    nova')
+  || !frame.includes('State:    working')
+  || !frame.includes('MAIL  → lead')
+) {
+  console.error(`Compact Agent Inspector rows overlapped or lost their fixed columns:\n${frame}`)
+  process.exit(1)
+}
+
 const spanBackground = (marker: string): string | null => {
   for (const line of captureSpans().lines) {
     const span = line.spans.find((entry) => entry.text.includes(marker))

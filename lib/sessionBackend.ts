@@ -42,6 +42,7 @@ import {
   type ClaudePoolEntry,
   claudePoolSize,
   CLAUDE_QUERY_ENV,
+  coordinatorClaudeMcpOptions,
   createInputStream,
   effortToSdk,
   interruptClaudeQuery,
@@ -58,7 +59,7 @@ import {
 } from './claudeHarness'
 import { getClaudeCommandsOverride, noteClaudeCommandsChanged } from './claudeCommandsStore'
 import { createClaudeViewerQueryExtensions } from './claudeViewerIntegration'
-import { getCoordinatorMcpServers, dispatchCoordinatorCodexToolCall } from './agentCoordinationSdkTools'
+import { dispatchCoordinatorCodexToolCall } from './agentCoordinationSdkTools'
 import {
   broadcastLiveSessionActivity,
   broadcastLiveSessionRecycled,
@@ -327,6 +328,15 @@ function readMappedMessagesCache(key: string, signature: string): SessionMessage
     return cached.messages
   }
   return null
+}
+
+function readLatestMappedMessagesCache(key: string): SessionMessage[] | null {
+  const cached = mappedMessageCache.get(key)
+  if (!cached) return null
+  cached.ts = Date.now()
+  mappedMessageCache.delete(key)
+  mappedMessageCache.set(key, cached)
+  return cached.messages
 }
 
 function writeMappedMessagesCache(key: string, signature: string, messages: SessionMessage[]): SessionMessage[] {
@@ -2421,6 +2431,11 @@ function isCodexMissingRolloutError(err: unknown): boolean {
   )
 }
 
+export function isCodexActiveWriterError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return /thread .+ already has an active writer/i.test(message)
+}
+
 function pendingCodexSessionInfo(sessionId: string, tag: string | null): SessionInfo {
   return {
     sessionId,
@@ -2577,16 +2592,16 @@ export async function readViewSessionInfo(sessionId: string, providerOverride?: 
   if (provider === 'codex') {
     const tag = await getCodexStoredTag(sessionId)
     let thread: CodexThread | null = null
-    let resume: CodexThreadResumeResponse | null = null
+    let resume: { model: string | null } | null = null
     try {
       thread = await readCodexThread(sessionId, false)
     } catch (err) {
-      if (!isCodexMissingRolloutError(err)) throw err
+      if (!isCodexMissingRolloutError(err) && !isCodexActiveWriterError(err)) throw err
     }
     try {
-      resume = await resumeCodexThread(sessionId)
+      resume = await ensureCodexThreadResumed(sessionId)
     } catch (err) {
-      if (!isCodexMissingRolloutError(err)) throw err
+      if (!isCodexMissingRolloutError(err) && !isCodexActiveWriterError(err)) throw err
     }
     if (!thread) return pendingCodexSessionInfo(sessionId, tag)
     return mapCodexThreadToSessionInfo(thread, tag, resume?.model ?? null)
@@ -3194,6 +3209,7 @@ async function readCodexMessagesAll(sessionId: string): Promise<SessionMessage[]
     thread = await readCodexThreadWithFullTurns(sessionId)
   } catch (err) {
     if (isCodexMissingRolloutError(err)) return []
+    if (isCodexActiveWriterError(err)) return readLatestMappedMessagesCache(`codex:${sessionId}`) ?? []
     throw err
   }
   const turns = thread.turns
@@ -3833,7 +3849,7 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           // See lib/claudePool.ts's spawn() for why this needs no compat-check
           // entry: a Coordinator-owned session's tools are bound once here, on
           // its first (cold) turn, and never change for its lifetime.
-          mcpServers: getCoordinatorMcpServers(sessionId),
+          ...coordinatorClaudeMcpOptions(sessionId),
         },
       })
 
@@ -6627,6 +6643,10 @@ export async function createNewViewSession({
       cwd: resolvedCwd,
     })
     const newId = response.thread.id
+    // thread/start already loads the thread into this app-server process. Mark
+    // it before the TUI can poll session detail so metadata reads reuse the
+    // loaded writer instead of issuing thread/resume against an active turn.
+    codexResumedThreads.set(newId, response.model)
     if (title && title.trim()) {
       await client.request('thread/name/set', { threadId: newId, name: title.trim() }).catch(() => {})
     }
@@ -6784,7 +6804,7 @@ export async function readViewSessionModels(sessionId: string, providerOverride?
   if (provider === 'codex') {
     const client = getCodexClient()
     const modelsResponse = await client.request('model/list', {})
-    const resume = await resumeCodexThread(sessionId).catch(() => null)
+    const resume = await ensureCodexThreadResumed(sessionId).catch(() => null)
     return {
       models: mapCodexModelsToSessionModels(modelsResponse.data),
       currentModel: resume?.model ?? null,
@@ -7037,7 +7057,10 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
     // repeated opens of the diagnostics panel share one HTTP round-trip.
     const [thread, resume, project] = await Promise.all([
       readCodexThread(sessionId, false),
-      resumeCodexThread(sessionId),
+      ensureCodexThreadResumed(sessionId).catch((error) => {
+        if (isCodexActiveWriterError(error)) return { model: null }
+        throw error
+      }),
       getCodexProjectDiagnostics(),
     ])
 
