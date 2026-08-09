@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import {
   buildCoordinatorCodexDynamicTools,
+  COORD_FINDING_DETAIL_MAX_CHARS,
   registerCoordinatorMcpServer,
   resolveCoordinatorToolCall,
   unregisterCoordinatorMcpServer,
@@ -59,6 +60,30 @@ assert.equal(
   resolveCoordinatorToolCall('coord_send_message', { to: 'teammate', body: 'Compatibility body' })?.args.message,
   'Compatibility body',
   'the bridge compatibility body field must still deliver a message',
+)
+
+const publishFindingTool = buildCoordinatorCodexDynamicTools().find((candidate) => candidate.name === 'coord_publish_finding')
+assert.ok(publishFindingTool, 'Coordinator providers must expose coord_publish_finding')
+if (publishFindingTool.type !== 'function') throw new Error('coord_publish_finding has an invalid dynamic tool type')
+const publishFindingSchema = publishFindingTool.inputSchema as {
+  properties?: Record<string, { maxLength?: number }>
+}
+assert.equal(
+  publishFindingSchema.properties?.detail?.maxLength,
+  COORD_FINDING_DETAIL_MAX_CHARS,
+  'coord_publish_finding must accept detailed audit reports larger than the old 8K limit',
+)
+const detailedFinding = 'ranked hotspot evidence\n'.repeat(500)
+assert.ok(detailedFinding.length > 8000)
+assert.equal(
+  resolveCoordinatorToolCall('coord_publish_finding', {
+    kind: 'finding',
+    summary: 'Heap-profiler audit',
+    detail: detailedFinding,
+    task_id: 'task-2',
+  })?.args.detail,
+  detailedFinding,
+  'finding detail must reach the Coordinator action unchanged',
 )
 
 assert.deepEqual(

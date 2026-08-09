@@ -363,6 +363,26 @@ try {
     const claimedPayload = JSON.parse(claimed.content?.[0]?.text ?? '{}')
     if (claimedPayload.task?.ownerAgentId !== 'external-claude') throw new Error('External teammate did not claim the shared task')
 
+    const detailedFinding = 'ranked hotspot evidence\n'.repeat(500)
+    if (detailedFinding.length <= 8000) throw new Error('Detailed finding smoke did not exceed the former schema limit')
+    await secondClient.callTool({
+      name: 'coord_publish_finding',
+      arguments: {
+        kind: 'finding',
+        task_id: 'task-1',
+        summary: 'Heap-profiler audit',
+        detail: detailedFinding,
+      },
+    })
+    const findingRequest = seen.find((entry) => (
+      entry.url === '/api/agent-protocol/external'
+      && entry.body?.action === 'finding'
+      && entry.body?.summary === 'Heap-profiler audit'
+    ))
+    if (findingRequest?.body?.detail !== detailedFinding) {
+      throw new Error('Detailed Coordinator finding did not cross the MCP bridge unchanged')
+    }
+
     await client.callTool({
       name: 'coord_send_message',
       arguments: {

@@ -30,6 +30,8 @@ import type { DynamicToolSpec } from './codex-schema/v2'
 import type { JsonValue } from './codex-schema/serde_json/JsonValue'
 import type { ExternalProtocolIdentity } from './agentProtocol'
 
+export const COORD_FINDING_DETAIL_MAX_CHARS = 32_000
+
 function textResult(value: unknown) {
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(value) }],
@@ -226,11 +228,11 @@ const COORD_TOOL_SPECS: ToolSpec[] = [
   },
   {
     name: 'coord_publish_finding',
-    description: 'Publish a fact (`finding`) or reusable context (`learning`) other agents need.',
+    description: 'Publish a fact (`finding`) or reusable context (`learning`) other agents need. Detailed audit evidence may be up to 32,000 characters; split anything larger across focused findings.',
     fields: {
       kind: { t: 'enum', values: ['finding', 'learning'] },
       summary: { t: 'string', min: 1, max: 2000 },
-      detail: { t: 'string', max: 8000, optional: true },
+      detail: { t: 'string', max: COORD_FINDING_DETAIL_MAX_CHARS, optional: true },
       task_id: { t: 'string', optional: true },
     },
     action: 'finding',

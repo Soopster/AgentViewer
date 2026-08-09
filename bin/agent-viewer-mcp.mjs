@@ -38,6 +38,7 @@ const coordinatorSkillDescription = coordinatorSkillMarkdown.match(/^description
   ?? 'Operate an Agent Viewer Coordinator run through the agent-viewer MCP.'
 const DEFAULT_MCP_TASK_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const DEFAULT_MCP_TASK_POLL_INTERVAL_MS = 2_000
+const COORD_FINDING_DETAIL_MAX_CHARS = 32_000
 const MISSING_REQUIRED_TASK_CAPABILITY = -32003
 const MCP_TASK_METHODS = new Set(['tasks/get', 'tasks/update', 'tasks/cancel'])
 const taskStores = new Map()
@@ -1150,11 +1151,11 @@ server.registerTool('coord_progress', {
 })))
 
 server.registerTool('coord_publish_finding', {
-  description: 'Publish reusable knowledge, a handoff, or a review request into the shared Coordinator event log.',
+  description: 'Publish reusable knowledge, a handoff, or a review request into the shared Coordinator event log. Detailed audit evidence may be up to 32,000 characters; split anything larger across focused findings.',
   inputSchema: {
     kind: z.enum(['finding', 'learning', 'handoff', 'review.requested']),
     summary: z.string().min(1).max(1000),
-    detail: z.string().max(8000).optional(),
+    detail: z.string().max(COORD_FINDING_DETAIL_MAX_CHARS).optional(),
     task_id: z.string().min(1).optional(),
     request_id: requestIdField,
   },
