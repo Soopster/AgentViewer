@@ -112,6 +112,7 @@ import {
   listTuiProtocolRuns,
   listTuiRunPlaybooks,
   readTuiProtocolRun,
+  subscribeTuiProtocolRunChanges,
   startTuiProtocolRun,
   stopTuiProtocolRun,
   cleanupTuiProtocolRunWorktrees,
@@ -553,6 +554,9 @@ const DETAIL_REFRESH_MS = 2000
 // Cadence for reconciling against the in-process running-turn registry (a
 // cheap synchronous read — the TUI and its backend share one process).
 const REATTACH_POLL_MS = 1500
+const COORDINATOR_FALLBACK_POLL_MS = 2000
+const COORDINATOR_RECONCILE_MS = 30_000
+const COORDINATOR_PUSH_DEBOUNCE_MS = 25
 // Remote attach (agent-viewer --attach <url>): backend calls route through a
 // running web daemon; shown in the footer so the mode is always visible.
 const ATTACHED_DAEMON_HOST = (() => {
@@ -8468,23 +8472,86 @@ export default function OpenTuiApp() {
     return idx >= 0 ? idx : 0
   }, [sidebarEntries, selectedIndex])
 
-  // Coordinator tab: only poll while it's the visible sidebar view, same
-  // cadence as CoordinationPopover's own POLL_MS, so the always-on sidebar
-  // doesn't pay this cost while showing the plain session list.
+  // Coordinator tab: local ledger writes and attached-daemon SSE frames push
+  // immediate refreshes. Retain a slow reconciliation poll for cross-process
+  // SQLite writes, with the old 2s cadence only if subscription setup fails.
   useEffect(() => {
     if (sidebarView !== 'coordinator') return
     let cancelled = false
+    let refreshInFlight = false
+    let refreshQueued = false
+    let pushTimer: ReturnType<typeof setTimeout> | null = null
+    const changedRunIds = new Set<string>()
     const refresh = async () => {
-      const runs = await listTuiProtocolRuns(20).catch(() => [] as ProtocolRun[])
-      if (cancelled) return
-      setCoordinatorRuns(runs)
-      const snapshots = await Promise.all(runs.map((run) => readTuiProtocolRun(run.id).catch(() => null)))
-      if (cancelled) return
-      setCoordinatorSnapshots(new Map(snapshots.flatMap((snapshot) => snapshot ? [[snapshot.run.id, snapshot] as const] : [])))
+      if (refreshInFlight) {
+        refreshQueued = true
+        return
+      }
+      refreshInFlight = true
+      try {
+        do {
+          refreshQueued = false
+          const runs = await listTuiProtocolRuns(20).catch(() => [] as ProtocolRun[])
+          if (cancelled) return
+          setCoordinatorRuns(runs)
+          const snapshots = await Promise.all(runs.map((run) => readTuiProtocolRun(run.id).catch(() => null)))
+          if (cancelled) return
+          setCoordinatorSnapshots(new Map(snapshots.flatMap((snapshot) => snapshot ? [[snapshot.run.id, snapshot] as const] : [])))
+        } while (refreshQueued && !cancelled)
+      } finally {
+        refreshInFlight = false
+      }
+    }
+    const refreshChangedRun = async (runId: string) => {
+      const snapshot = await readTuiProtocolRun(runId).catch(() => undefined)
+      if (cancelled || snapshot === undefined) return
+      if (!snapshot) {
+        setCoordinatorRuns((current) => current.filter((run) => run.id !== runId))
+        setCoordinatorSnapshots((current) => {
+          const updated = new Map(current)
+          updated.delete(runId)
+          return updated
+        })
+        return
+      }
+      setCoordinatorRuns((current) => {
+        const existingIndex = current.findIndex((run) => run.id === runId)
+        if (existingIndex >= 0) {
+          const updated = [...current]
+          updated[existingIndex] = snapshot.run
+          return updated
+        }
+        return [snapshot.run, ...current]
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(0, 20)
+      })
+      setCoordinatorSnapshots((current) => {
+        const updated = new Map(current)
+        updated.set(runId, snapshot)
+        return updated
+      })
     }
     void refresh()
-    const timer = setInterval(refresh, 2_000)
-    return () => { cancelled = true; clearInterval(timer) }
+    const unsubscribe = subscribeTuiProtocolRunChanges((runId) => {
+      if (runId === null) {
+        void refresh()
+        return
+      }
+      changedRunIds.add(runId)
+      if (pushTimer) clearTimeout(pushTimer)
+      pushTimer = setTimeout(() => {
+        const ids = [...changedRunIds]
+        changedRunIds.clear()
+        void Promise.all(ids.map(refreshChangedRun))
+      }, COORDINATOR_PUSH_DEBOUNCE_MS)
+    })
+    const timer = setInterval(refresh, unsubscribe ? COORDINATOR_RECONCILE_MS : COORDINATOR_FALLBACK_POLL_MS)
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+      if (pushTimer) clearTimeout(pushTimer)
+      clearInterval(timer)
+    }
   }, [sidebarView])
 
   const coordinatorEntries = useMemo(

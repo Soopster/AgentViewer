@@ -19,6 +19,7 @@ import {
   mergeTuiWorktreeTask,
   readTuiProtocolRun,
   stopTuiProtocolRun,
+  subscribeTuiProtocolRunChanges,
   type WorktreeTask,
 } from '../../lib/tui/service'
 
@@ -51,7 +52,8 @@ type PendingAction =
   | { kind: 'rerun-task'; task: ProtocolTask }
   | { kind: 'rerun-agent'; agent: ProtocolAgent; task: ProtocolTask | null }
 
-const POLL_MS = 2000
+const FALLBACK_POLL_MS = 2000
+const RECONCILE_MS = 30_000
 const WORKTREE_STATS_MS = 10_000
 const FLEET_LIMIT = 20
 const SECTIONS: Section[] = ['overview', 'tasks', 'team', 'events']
@@ -152,6 +154,39 @@ export function CoordinationPopover({
     return next
   }, [])
 
+  const refreshChangedRun = useCallback(async (targetRunId: string) => {
+    const next = await readTuiProtocolRun(targetRunId)
+    if (!next) {
+      await refreshRuns()
+      if (targetRunId === runId) {
+        setSnapshot(null)
+        setLoadError('Run not found')
+      }
+      return
+    }
+    setRuns((current) => {
+      const existingIndex = current.findIndex((run) => run.id === targetRunId)
+      if (existingIndex >= 0) {
+        const updated = [...current]
+        updated[existingIndex] = next.run
+        return updated
+      }
+      return [next.run, ...current]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, FLEET_LIMIT)
+    })
+    setFleetSnapshots((current) => {
+      const updated = new Map(current)
+      updated.set(targetRunId, next)
+      return updated
+    })
+    if (targetRunId === runId) {
+      setSnapshot(next)
+      setLoadError(null)
+      setNow(Date.now())
+    }
+  }, [refreshRuns, runId])
+
   useEffect(() => {
     let cancelled = false
     void refreshRuns().catch((err) => {
@@ -161,20 +196,48 @@ export function CoordinationPopover({
   }, [refreshRuns])
 
   useEffect(() => {
-    if (!runId) {
-      setSnapshot(null)
-      return
-    }
     let cancelled = false
-    const poll = () => {
-      void refreshSnapshot(runId).catch((err) => {
+    const reconcile = () => {
+      const refresh = runId ? refreshSnapshot(runId) : refreshRuns()
+      void refresh.catch((err) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to load run')
       })
     }
-    poll()
-    const timer = setInterval(poll, POLL_MS)
-    return () => { cancelled = true; clearInterval(timer) }
-  }, [refreshSnapshot, runId])
+    const changedRunIds = new Set<string>()
+    let refreshInFlight = false
+    const refreshChangedRuns = async () => {
+      if (refreshInFlight) return
+      refreshInFlight = true
+      try {
+        while (changedRunIds.size > 0 && !cancelled) {
+          const ids = [...changedRunIds]
+          changedRunIds.clear()
+          await Promise.all(ids.map(refreshChangedRun))
+        }
+      } finally {
+        refreshInFlight = false
+      }
+    }
+    reconcile()
+    const unsubscribe = subscribeTuiProtocolRunChanges((changedRunId) => {
+      if (changedRunId === null) {
+        void Promise.all([refreshRuns(), runId ? refreshSnapshot(runId) : Promise.resolve(null)]).catch((err) => {
+          if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to load run')
+        })
+        return
+      }
+      changedRunIds.add(changedRunId)
+      void refreshChangedRuns().catch((err) => {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to load run')
+      })
+    })
+    const timer = setInterval(reconcile, unsubscribe ? RECONCILE_MS : FALLBACK_POLL_MS)
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+      clearInterval(timer)
+    }
+  }, [refreshChangedRun, refreshRuns, refreshSnapshot, runId])
 
   useEffect(() => {
     const baseCwd = snapshot?.run.baseCwd

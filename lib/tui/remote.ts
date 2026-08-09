@@ -23,6 +23,63 @@ export function isRemoteAttached(): boolean {
   return getAttachBaseUrl() !== null
 }
 
+/** Subscribe to daemon-side Coordinator ledger changes over SSE. */
+export function subscribeRemoteProtocolRunChanges(
+  onRunChanged: (runId: string) => void,
+  onReconnect: () => void,
+): (() => void) | null {
+  const baseUrl = getAttachBaseUrl()
+  if (!baseUrl) return null
+  const controller = new AbortController()
+  let stopped = false
+
+  const run = async () => {
+    let retryMs = 250
+    while (!stopped) {
+      try {
+        const response = await fetch(`${baseUrl}/api/agent-protocol/runs/changes`, {
+          headers: { Accept: 'text/event-stream' },
+          signal: controller.signal,
+        })
+        if (!response.ok || !response.body) throw new Error(`Coordinator change stream failed: ${response.status}`)
+        retryMs = 250
+        onReconnect()
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        while (!stopped) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue
+            const raw = line.slice(5).trim()
+            if (!raw) continue
+            try {
+              const payload = JSON.parse(raw) as { runId?: unknown }
+              if (typeof payload.runId === 'string' && payload.runId) onRunChanged(payload.runId)
+            } catch {
+              // Ignore malformed frames; the next durable snapshot reconciles state.
+            }
+          }
+        }
+      } catch {
+        if (stopped || controller.signal.aborted) return
+      }
+      await new Promise((resolve) => setTimeout(resolve, retryMs))
+      retryMs = Math.min(retryMs * 2, 5_000)
+    }
+  }
+
+  void run()
+  return () => {
+    stopped = true
+    controller.abort()
+  }
+}
+
 function extractError(payload: unknown, status: number): string {
   if (payload && typeof payload === 'object' && 'error' in payload) {
     const message = (payload as { error?: unknown }).error

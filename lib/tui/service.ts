@@ -65,6 +65,7 @@ import {
   providerQuery,
   remoteJson,
   remoteStream,
+  subscribeRemoteProtocolRunChanges,
 } from './remote'
 import {
   getSessionBookmarkIds,
@@ -117,6 +118,7 @@ import {
   readProtocolRun,
   startProtocolRun,
   stopProtocolRun,
+  subscribeProtocolRunChanges,
   validateWorktreeTaskLocks,
   writeRunPlaybook,
 } from '../agentCoordination'
@@ -609,6 +611,14 @@ export async function listTuiProtocolRuns(limit?: number): Promise<ProtocolRun[]
     return runs
   }
   return listProtocolRuns(limit)
+}
+
+/** Subscribe to Coordinator changes locally or through the attached daemon. */
+export function subscribeTuiProtocolRunChanges(listener: (runId: string | null) => void): (() => void) | null {
+  if (isRemoteAttached()) {
+    return subscribeRemoteProtocolRunChanges(listener, () => listener(null))
+  }
+  return subscribeProtocolRunChanges(listener)
 }
 
 export async function stopTuiProtocolRun(runId: string): Promise<ProtocolRunSnapshot | null> {

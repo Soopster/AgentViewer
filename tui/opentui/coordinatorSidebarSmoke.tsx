@@ -41,7 +41,7 @@ await act(async () => {
 act(() => { setup.mockInput.pressKey('a') })
 await act(async () => {
   await setup.flush()
-  await new Promise((resolve) => setTimeout(resolve, 2200)) // let the 2s coordinator poll land
+  await new Promise((resolve) => setTimeout(resolve, 250))
 })
 let frame = captureCharFrame()
 if (!frame.includes('COORDINATOR')) {
@@ -57,11 +57,35 @@ if (!frame.includes('Sidebar Lead') || !frame.includes('Sidebar Nova')) {
   process.exit(1)
 }
 
+// A local ledger mutation must refresh the visible sidebar from the change
+// signal, without waiting for the 30s reconciliation poll.
+await act(async () => {
+  await coordination.joinExternalProtocolRun({
+    runId: leadResult.participant.runId,
+    provider: 'pi',
+    cwd: process.cwd(),
+    participantName: 'Sidebar Orion',
+  })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+})
+const pushDeadline = Date.now() + 1_000
+while (Date.now() < pushDeadline && !captureCharFrame().includes('Sidebar Orion')) {
+  await act(async () => {
+    await setup.flush()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  })
+}
+frame = captureCharFrame()
+if (!frame.includes('Sidebar Orion')) {
+  console.error(`Coordinator sidebar did not react to the pushed run change:\n${frame}`)
+  process.exit(1)
+}
+
 // j moves the selection off the lead row and onto the teammate row.
 act(() => { setup.mockInput.pressKey('j') })
 await act(async () => { await setup.flush() })
 frame = captureCharFrame()
-if (!frame.includes('▎└─ Sidebar Nova')) {
+if (!frame.includes('▎├─ Sidebar Nova')) {
   console.error(`j did not move the Coordinator selection onto the teammate row:\n${frame}`)
   process.exit(1)
 }

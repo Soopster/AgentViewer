@@ -330,6 +330,17 @@ runNotifier.setMaxListeners(0)
 
 function notifyRunChanged(runId: string): void {
   runNotifier.emit(`run:${runId}`)
+  runNotifier.emit('run:changed', runId)
+}
+
+/**
+ * Subscribe to durable Coordinator ledger changes made in this process.
+ * Consumers must still reconcile periodically because another process can
+ * write the shared SQLite ledger without touching this emitter.
+ */
+export function subscribeProtocolRunChanges(listener: (runId: string) => void): () => void {
+  runNotifier.on('run:changed', listener)
+  return () => { runNotifier.off('run:changed', listener) }
 }
 
 function waitForRunSignal(runId: string, ms: number): Promise<void> {

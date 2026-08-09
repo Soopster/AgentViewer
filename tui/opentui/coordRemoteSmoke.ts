@@ -38,6 +38,16 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   const method = init?.method ?? 'GET'
   requests.push({ url, method, body })
 
+  if (url.endsWith('/api/agent-protocol/runs/changes')) {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`: connected\n\ndata: ${JSON.stringify({ runId: snapshot.run.id })}\n\n`))
+        controller.close()
+      },
+    })
+    return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+  }
+
   const payload = url.endsWith('/api/agent-protocol/runs?limit=7')
     ? { runs: [snapshot.run] }
     : method === 'DELETE'
@@ -63,6 +73,7 @@ try {
     readTuiProtocolRun,
     startTuiProtocolRun,
     stopTuiProtocolRun,
+    subscribeTuiProtocolRunChanges,
   } = await import('../../lib/tui/service')
 
   await startTuiProtocolRun({
@@ -90,6 +101,13 @@ try {
   await stopTuiProtocolRun(snapshot.run.id)
   await cleanupTuiProtocolRunWorktrees(snapshot.run.id, { force: true })
   await deleteTuiProtocolRun(snapshot.run.id)
+  const pushedRunIds: Array<string | null> = []
+  const unsubscribe = subscribeTuiProtocolRunChanges((runId) => { pushedRunIds.push(runId) })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  unsubscribe?.()
+  if (JSON.stringify(pushedRunIds) !== JSON.stringify([null, snapshot.run.id])) {
+    throw new Error(`Remote Coordinator change stream did not reconcile then push: ${JSON.stringify(pushedRunIds)}`)
+  }
 
   const base = 'http://daemon.example.test/api/agent-protocol/runs'
   const encodedRun = 'run%20%2F%20remote'
@@ -106,6 +124,7 @@ try {
     { url: `${base}/${encodedRun}/stop`, method: 'POST', body: null },
     { url: `${base}/${encodedRun}/cleanup`, method: 'POST', body: { force: true } },
     { url: `${base}/${encodedRun}`, method: 'DELETE', body: null },
+    { url: `${base}/changes`, method: 'GET', body: null },
   ]
   if (JSON.stringify(requests) !== JSON.stringify(expected)) {
     throw new Error(`Coordinator calls did not stay on the daemon:\n${JSON.stringify(requests, null, 2)}`)

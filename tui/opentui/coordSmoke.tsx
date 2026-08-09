@@ -26,7 +26,7 @@ writeFileSync(path.join(agentWorktreePath, 'agent-change.txt'), 'changed again b
 process.chdir(smokeRepo)
 
 const { CoordinationPopover } = await import('./CoordinationPopover')
-const { listTuiProtocolRuns, readTuiProtocolRun } = await import('../../lib/tui/service')
+const { appendTuiProtocolEvent, listTuiProtocolRuns, readTuiProtocolRun } = await import('../../lib/tui/service')
 const { LIGHT_THEME } = await import('../theme')
 
 // Force schema creation, then seed a run directly.
@@ -206,6 +206,33 @@ const waitForFrameMarker = async (marker: string, timeoutMs = 2_000): Promise<bo
     if (captureCharFrame().includes(marker)) return true
   }
   return false
+}
+
+// Coordinator ledger changes made in-process should paint immediately through
+// the push subscription, well before the 30s cross-process reconciliation poll.
+let pushedSnapshot: Awaited<ReturnType<typeof appendTuiProtocolEvent>> = null
+const eventCountBeforePush = (await readTuiProtocolRun('run-smoke'))?.events.length ?? 0
+await act(async () => {
+  pushedSnapshot = await appendTuiProtocolEvent({
+    version: '1.0',
+    runId: 'run-smoke',
+    agentId: 'agent-1',
+    type: 'finding',
+    summary: 'push refresh verified',
+    // Keep the existing tail event selected so later navigation assertions
+    // retain their original event order; this still lands in the visible row window.
+    timestamp: new Date(new Date(ts).getTime() + 10_500).toISOString(),
+  })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+})
+const committedPushSnapshot = pushedSnapshot as Awaited<ReturnType<typeof appendTuiProtocolEvent>>
+if (!committedPushSnapshot?.events.some((event) => event.summary === 'push refresh verified')) {
+  console.error('Push refresh smoke mutation was not committed to the Coordinator snapshot')
+  process.exit(1)
+}
+if (committedPushSnapshot.events.length <= eventCountBeforePush || !await waitForFrameMarker(`${committedPushSnapshot.events.length} events`, 1_000)) {
+  console.error(`Agent Operations did not react to the pushed run change:\n${captureCharFrame()}`)
+  process.exit(1)
 }
 
 // The keyboard handler remains active for pane focus even though all panes are
