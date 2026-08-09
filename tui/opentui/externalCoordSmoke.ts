@@ -61,6 +61,7 @@ process.env.AGENT_VIEWER_COORD_PRUNE_INTERVAL_MS = '100'
 process.env.AGENT_VIEWER_COORD_DB_BUSY_TIMEOUT_MS = '1000'
 process.env.AGENT_VIEWER_COORD_TEAM_IDLE_GRACE_MS = '100'
 const coordination = await import('../../lib/agentCoordination')
+const externalActions = await import('../../lib/agentCoordinationExternal')
 const sessionRuntime = await import('../../lib/sessionRuntime')
 
 const leadResult = await coordination.createExternalProtocolRun({
@@ -1634,5 +1635,46 @@ assert.equal(Number(prunedDb.prepare('SELECT COUNT(*) AS n FROM protocol_runs WH
   .get(expiredRun.participant.runId)?.n ?? 0), 0)
 prunedDb.close()
 await coordination.stopProtocolRun(pruneTrigger.participant.runId)
+
+// Provider SDKs previously exposed summary/detail while the external action
+// consumed message. Preserve old live-session calls and the explicit body
+// compatibility field while new schemas converge on canonical `message`.
+const messageCompatRun = await coordination.createExternalProtocolRun({
+  prompt: 'Verify Coordinator message argument compatibility',
+  provider: 'codex',
+  baseCwd: testCwd,
+  participantName: 'Message lead',
+  maxAgents: 2,
+})
+const messageCompatLead = messageCompatRun.participant
+const messageCompatTeammate = (await coordination.joinExternalProtocolRun({
+  runId: messageCompatLead.runId,
+  provider: 'claude',
+  cwd: testCwd,
+  participantName: 'Message teammate',
+})).participant
+await externalActions.executeExternalCoordinatorAction({
+  action: 'send_message',
+  runId: messageCompatLead.runId,
+  agentId: messageCompatLead.agentId,
+  token: messageCompatLead.token,
+  to: messageCompatTeammate.agentId,
+  summary: 'Legacy summary',
+  detail: 'Legacy detail',
+})
+await externalActions.executeExternalCoordinatorAction({
+  action: 'send_message',
+  runId: messageCompatLead.runId,
+  agentId: messageCompatLead.agentId,
+  token: messageCompatLead.token,
+  to: messageCompatTeammate.agentId,
+  body: 'Compatibility body',
+})
+const compatibilityInbox = await coordination.readExternalProtocolInbox(messageCompatTeammate)
+assert.deepEqual(
+  compatibilityInbox.messages.map((message) => message.body),
+  ['Legacy summary\n\nLegacy detail', 'Compatibility body'],
+)
+await coordination.stopProtocolRun(messageCompatLead.runId)
 
 console.log('External Coordinator smoke passed')

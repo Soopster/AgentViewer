@@ -22,6 +22,15 @@ The bridge exposes this workflow through ordinary MCP primitives as well as `coo
 - `coord_await_run` creates a whole-run monitor for work that an unattended worker or external supervisor is already driving. It can surface pending lead plan reviews as `input_required` elicitations and apply the user's approve/reject response. Do not call it as an interactive lead's next action—the monitor does not claim tasks, answer mail, perform implementation, or synthesize. `tasks/cancel` cancels only the wait/monitor and never stops the Coordinator run or changes board-task state.
 - MCP task handles wrap protocol operations; Coordinator board tasks remain the source of truth for ownership, dependencies, locks, progress, completion, and synthesis. Never create a one-to-one shadow MCP task for every Coordinator task.
 
+## A2A and MCP boundary
+
+Use the two protocols as complementary layers, not interchangeable transports:
+
+- `coord_*` MCP calls are this CLI agent’s structured tools for operating the Coordinator core: board reads and mutations, mailbox delivery, locks, findings, progress, and completion. Keep these operations on MCP over the default persistent AHP connection.
+- The gated A2A 1.0 facade is for a separate autonomous peer or client agent to submit and monitor a higher-level, stateful task. An A2A-created task lands on the same durable Coordinator board and is then claimed and completed through the normal `coord_*` MCP workflow; do not create a shadow MCP task for it.
+- MCP Resources expose `a2a://agent-viewer/coordinator/agent-card.json`, a live projection of the daemon’s public Agent Card. Read it when an MCP host needs to discover the Coordinator’s A2A skills or preferred interface. If the facade is disabled, the resource read fails closed; do not infer that A2A is available merely because the resource URI is listed.
+- Do not wrap `SendMessage` or other conversational A2A operations as ordinary MCP tools. A2A retains task identity, context, streaming, and push semantics across peer-agent turns; reducing it to a stateless tool call loses the distinction the protocols are designed to preserve.
+
 ## Enter the run
 
 1. For unattended work, prefer the bounded supervisor. It persists identity and provider sessions, heartbeats during turns, waits without token usage, and restarts failed ticks:

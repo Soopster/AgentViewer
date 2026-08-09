@@ -16,6 +16,11 @@ function isLocalOrigin(origin: string): boolean {
 }
 
 export function proxy(request: NextRequest) {
+  // A2A is an explicitly enabled, bearer-authenticated external facade. It
+  // must accept non-local origins; handleA2AHttpRequest owns its auth gate.
+  if (request.nextUrl.pathname === '/api/a2a' || request.nextUrl.pathname.startsWith('/api/a2a/')) {
+    return NextResponse.next()
+  }
   if (MUTATION_METHODS.has(request.method)) {
     const origin = request.headers.get('origin')
     if (origin && !isLocalOrigin(origin)) {

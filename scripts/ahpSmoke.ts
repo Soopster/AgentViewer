@@ -43,7 +43,7 @@ const initialized = await request(1, 'initialize', {
   clientInfo: { name: 'ahp-smoke', title: 'AHP smoke client' },
   initialSubscriptions: ['ahp-root://'],
 })
-assert.equal(initialized.result.protocolVersion, '0.6.0')
+assert.equal(initialized.result.protocolVersion, '0.7.0')
 assert.equal(initialized.result.serverSeq, 0)
 assert.equal(initialized.result.snapshots[0].resource, 'ahp-root://')
 assert.equal(initialized.result.snapshots[0].state.agents.length, 5)

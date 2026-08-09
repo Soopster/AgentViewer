@@ -52,6 +52,14 @@ function optionalText(value: unknown): string | undefined {
   return result || undefined
 }
 
+function messageText(body: Record<string, unknown>): string {
+  const canonical = text(body.message)
+  if (canonical) return canonical
+  const compatibilityBody = text(body.body)
+  if (compatibilityBody) return compatibilityBody
+  return [text(body.summary), text(body.detail)].filter(Boolean).join('\n\n')
+}
+
 function strings(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).map((entry) => entry.trim())
@@ -179,7 +187,8 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     }))
   }
   if (action === 'send_message') {
-    const kind = text(body.kind) || 'request'
+    const requestedKind = text(body.kind)
+    const kind = requestedKind === 'alert' ? 'request' : requestedKind || 'request'
     const priority = text(body.priority) || (kind === 'status' ? 'status' : 'normal')
     if (!['request', 'response', 'status', 'finding', 'handoff', 'review_request', 'review_result'].includes(kind)) {
       throw new Error('Invalid message kind')
@@ -187,7 +196,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     if (!['urgent', 'normal', 'status'].includes(priority)) throw new Error('Invalid message priority')
     return mutate(() => sendExternalProtocolMessage(participantIdentity!, {
       to: text(body.to),
-      body: text(body.message),
+      body: messageText(body),
       kind: kind as ProtocolMessageKind,
       priority: priority as ProtocolMessagePriority,
       replyRequired: body.replyRequired === true,

@@ -108,7 +108,15 @@ export type A2AStreamResponse =
 export type A2AAgentCapabilities = {
   streaming?: boolean
   pushNotifications?: boolean
-  stateTransitionHistory?: boolean
+  extensions?: A2AAgentExtension[]
+  extendedAgentCard?: boolean
+}
+
+export type A2AAgentExtension = {
+  uri: string
+  description?: string
+  required?: boolean
+  params?: Record<string, unknown>
 }
 
 export type A2AAgentSkill = {
@@ -128,22 +136,37 @@ export type A2AAgentCardProvider = {
 
 export type A2AAgentInterface = {
   url: string
-  transport: string
+  protocolBinding: string
+  protocolVersion: string
+  tenant?: string
+}
+
+export type A2ASecurityScheme = {
+  httpAuthSecurityScheme?: {
+    scheme: string
+    bearerFormat?: string
+    description?: string
+  }
+}
+
+export type A2ASecurityRequirement = {
+  schemes: Record<string, { list: string[] }>
 }
 
 export type A2AAgentCard = {
-  protocolVersion: string
   name: string
   description: string
-  url: string
-  preferredTransport?: string
-  additionalInterfaces?: A2AAgentInterface[]
+  supportedInterfaces: A2AAgentInterface[]
   provider?: A2AAgentCardProvider
   version: string
+  documentationUrl?: string
   capabilities: A2AAgentCapabilities
+  securitySchemes?: Record<string, A2ASecurityScheme>
+  securityRequirements?: A2ASecurityRequirement[]
   defaultInputModes: string[]
   defaultOutputModes: string[]
   skills: A2AAgentSkill[]
+  iconUrl?: string
 }
 
 export type ProtocolRunStatus = 'planning' | 'running' | 'synthesizing' | 'blocked' | 'completed' | 'failed' | 'stopped'

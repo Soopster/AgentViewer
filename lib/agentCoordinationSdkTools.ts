@@ -101,6 +101,16 @@ type ToolSpec = {
   mapArgs: (args: Record<string, any>) => Record<string, unknown>
 }
 
+function coordinatorMessage(args: Record<string, any>): string {
+  const canonical = typeof args.message === 'string' ? args.message.trim() : ''
+  if (canonical) return canonical
+  const body = typeof args.body === 'string' ? args.body.trim() : ''
+  if (body) return body
+  const summary = typeof args.summary === 'string' ? args.summary.trim() : ''
+  const detail = typeof args.detail === 'string' ? args.detail.trim() : ''
+  return [summary, detail].filter(Boolean).join('\n\n')
+}
+
 const COORD_TOOL_SPECS: ToolSpec[] = [
   {
     name: 'coord_wait',
@@ -135,21 +145,21 @@ const COORD_TOOL_SPECS: ToolSpec[] = [
     description: 'Send a typed direct message to a teammate by name, "lead", or "all".',
     fields: {
       to: { t: 'string', min: 1 },
-      summary: { t: 'string', min: 1, max: 2000 },
-      detail: { t: 'string', max: 8000, optional: true },
-      kind: { t: 'enum', values: ['status', 'request', 'response', 'alert'], optional: true },
+      message: { t: 'string', min: 1, max: 8000 },
+      kind: { t: 'enum', values: ['request', 'response', 'status', 'finding', 'handoff', 'review_request', 'review_result'], optional: true },
       priority: { t: 'enum', values: ['status', 'normal', 'urgent'], optional: true },
       reply_required: { t: 'boolean', optional: true },
+      correlation_id: { t: 'string', min: 1, max: 160, optional: true },
       in_reply_to: { t: 'string', optional: true },
     },
     action: 'send_message',
     mapArgs: (a) => ({
       to: a.to,
-      summary: a.summary,
-      detail: a.detail,
-      kind: a.kind,
+      message: coordinatorMessage(a),
+      kind: a.kind === 'alert' ? 'request' : a.kind,
       priority: a.priority,
       replyRequired: a.reply_required,
+      correlationId: a.correlation_id,
       inReplyTo: a.in_reply_to,
     }),
   },

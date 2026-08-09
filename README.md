@@ -139,11 +139,23 @@ MCP Tasks wrap long-running protocol operations; they do not replace Coordinator
 
 Coordinator operations—including run discovery—use a persistent AHP WebSocket by default. `agent-viewer web`, `npm run dev`, and `npm start` start that host automatically on the web port plus one (`ws://127.0.0.1:3001` for the default web port). MCP bridges and workers reconnect with the same AHP client identity and run subscriptions; reads and idempotent mutations get one safe transport retry, and the bridge supplies an idempotency key when a tool call omits one. Use `--ahp-port` or `AGENT_VIEWER_AHP_PORT` to choose another sidecar port, and set the matching `AGENT_VIEWER_AHP_URL` on remote MCP bridges or workers. `--no-ahp` disables the sidecar; `AGENT_VIEWER_COORD_TRANSPORT=http` keeps the previous HTTP Coordinator transport as an explicit compatibility mode.
 
+These internal transports do not become public when A2A is enabled. CLI hosts retain the `coord_*` MCP surface, and the app and bridges retain persistent AHP connections to the same SQLite-backed Coordinator ledger. A2A 1.0 is a separate, default-off external facade over that core:
+
+```bash
+AGENT_VIEWER_A2A_ENABLED=1 \
+AGENT_VIEWER_A2A_TOKEN='replace-with-a-long-random-token' \
+npm run dev
+```
+
+When enabled, `/.well-known/agent-card.json` advertises the JSON-RPC interface at `/api/a2a`. Operation requests require `Authorization: Bearer ...`, `Content-Type: application/json`, and `A2A-Version: 1.0`. The facade implements the A2A 1.0 PascalCase task methods, streaming over SSE, cursor-style task listing, and persisted push configurations for task status updates while intentionally refusing to create runs or launch CLI processes. `SendMessage` therefore requires `message.contextId` for an existing Coordinator run; set `configuration.returnImmediately` when the caller wants the submitted task immediately. Continuing an existing task through `SendMessage` is not currently supported and returns A2A’s unsupported-operation error. The legacy A2A 0.3 method names are not accepted.
+
+This follows the protocols’ complementary roles: a remote autonomous peer uses A2A for the high-level, stateful task, while each hosted CLI agent uses MCP tools internally to claim it, coordinate with teammates, access locks and mail, and report completion. MCP hosts can discover the enabled facade by reading the live `a2a://agent-viewer/coordinator/agent-card.json` resource, which proxies the daemon’s public Agent Card. Agent Viewer deliberately does not wrap A2A conversational operations as stateless MCP tools or duplicate an A2A task as an MCP Task.
+
 For interactive collaboration, one client calls `coord_create_run` and shares only the returned run ID. Additional clients call `coord_join_run`. The bridge persists each capability in a mode-0600 identity file and authenticates later `coord_*` calls without exposing the token to the model. Use `coord_wait` when no action is ready; it long-polls for meaningful inbox, task, plan, lock, participant, or run changes without token-heavy status polling.
 
 External clients negotiate the Coordinator protocol when they create, join, or resume a run. Current MCP bridges advertise protocol v2, session resume, tool families, and concurrency; managed workers additionally advertise unattended execution plus filesystem/git access. Omitted negotiation remains compatible as legacy v1. The negotiated version and capabilities appear on the participant roster so leads can make provider-aware assignments, while clients newer than the server fail early with an upgrade instruction instead of silently drifting.
 
-Coordinator mail is typed and durable. `coord_send_message` accepts `kind` (`request`, `response`, `status`, `finding`, `handoff`, `review_request`, or `review_result`), `priority` (`urgent`, `normal`, or `status`), `reply_required`, `correlation_id`, and `in_reply_to`. Status messages are held until three updates accumulate or 15 seconds elapse, then delivered as one summary. Reply-required requests stay in the recipient's actionable digest until a correlated response resolves them.
+Coordinator mail is typed and durable. `coord_send_message` requires the message body in `message` and accepts `kind` (`request`, `response`, `status`, `finding`, `handoff`, `review_request`, or `review_result`), `priority` (`urgent`, `normal`, or `status`), `reply_required`, `correlation_id`, and `in_reply_to`. Status messages are held until three updates accumulate or 15 seconds elapse, then delivered as one summary. Reply-required requests stay in the recipient's actionable digest until a correlated response resolves them.
 
 Agent Viewer also exposes Coordinator runs directly through the Microsoft Agent Host Protocol. The standalone commands are useful when the Next.js UI is not running:
 
@@ -158,7 +170,7 @@ agent-viewer ahp --listen 127.0.0.1:8765
 agent-viewer ahp --ws 127.0.0.1:8765
 ```
 
-The host negotiates the protocol versions exported by the installed AHP reference SDK (currently published AHP `0.6.0`, with its supported `0.5.x` fallbacks); it does not advertise the unreleased `0.7.0` draft. A Coordinator run is an `ahp-session:` channel, its lead and teammates are `ahp-chat:` channels, and external participants appear as session `activeClients`. The task board, path locks, durable mailbox, plan approvals, and completion gates are preserved under the namespaced `dev.agent-viewer.coordinator` session metadata key. Standard snapshots, ordered and version-filtered `action` envelopes, write-ahead rejection reconciliation, and reconnect replay/snapshot fallback keep multiple AHP clients converged. See `docs/ahp-coordinator.md` for the mapping.
+The host negotiates the protocol versions exported by the installed AHP reference SDK (currently AHP `0.7.0`, with its supported compatibility fallbacks) rather than maintaining a second hard-coded version list. A Coordinator run is an `ahp-session:` channel, its lead and teammates are `ahp-chat:` channels, and external participants appear as session `activeClients`. The task board, path locks, durable mailbox, plan approvals, and completion gates are preserved under the namespaced `dev.agent-viewer.coordinator` session metadata key. Standard snapshots, ordered and version-filtered `action` envelopes, write-ahead rejection reconciliation, and reconnect replay/snapshot fallback keep multiple AHP clients converged. See `docs/ahp-coordinator.md` for the mapping.
 
 For unattended work, use the bounded supervisor. It resumes the same provider session for one useful tick, heartbeats while the CLI works, waits for the next Coordinator event, retries crashes with backoff, and exits when the run is terminal:
 

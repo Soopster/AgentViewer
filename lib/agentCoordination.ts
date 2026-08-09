@@ -152,7 +152,7 @@ const LOCK_LEASE_MS = 20 * 60_000
 // v11 → v12: protocol_push_configs table (A2A tasks/pushNotificationConfig/*)
 // — a new IF-NOT-EXISTS table needs no ALTER migration, but the version bump
 // keeps the meta row honest for anyone diagnosing schema drift.
-const SCHEMA_VERSION = 13
+const SCHEMA_VERSION = 15
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Idempotency is a retry window, not an audit log. Bound it per participant so
@@ -533,6 +533,9 @@ function initializeSchema(db: SqliteDatabase): void {
       task_id TEXT NOT NULL,
       url TEXT NOT NULL,
       token TEXT,
+      auth_scheme TEXT,
+      auth_credentials TEXT,
+      last_task_updated_at TEXT,
       created_at TEXT NOT NULL,
       fired_at TEXT
     );
@@ -568,6 +571,10 @@ function initializeSchema(db: SqliteDatabase): void {
 // synthesis do not depend on a bounded event-history window.
 // v12 → v13: task role affinity keeps leads on supervision/integration lanes
 // and teammates on execution lanes without relying on prompt interpretation.
+// v13 → v14: A2A 1.0 separates a webhook verification token from HTTP
+// authentication scheme/credentials.
+// v14 → v15: remember the task revision last delivered to each webhook so
+// every observed status change can be pushed, not only terminal completion.
 function migrateSchema(db: SqliteDatabase): void {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version') as Row | undefined
   const version = row ? Number(row.value) || 0 : 0
@@ -640,6 +647,17 @@ function migrateSchema(db: SqliteDatabase): void {
     db.exec("ALTER TABLE protocol_tasks ADD COLUMN target_role TEXT NOT NULL DEFAULT 'teammate'")
   } catch {
     // column already exists
+  }
+  for (const statement of [
+    'ALTER TABLE protocol_push_configs ADD COLUMN auth_scheme TEXT',
+    'ALTER TABLE protocol_push_configs ADD COLUMN auth_credentials TEXT',
+    'ALTER TABLE protocol_push_configs ADD COLUMN last_task_updated_at TEXT',
+  ]) {
+    try {
+      db.exec(statement)
+    } catch {
+      // column already exists
+    }
   }
 }
 
@@ -1036,6 +1054,39 @@ function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapsho
 export async function readProtocolRun(runId: string): Promise<ProtocolRunSnapshot | null> {
   const db = await getDatabase()
   return readSnapshotSync(db, runId)
+}
+
+export async function listProtocolTasksForFacade(params: {
+  runId?: string
+  statuses?: ProtocolTaskStatus[]
+  updatedAfter?: string
+  offset: number
+  limit: number
+}): Promise<{ tasks: ProtocolTask[]; total: number }> {
+  const db = await getDatabase()
+  const where: string[] = []
+  const values: Array<string | number> = []
+  if (params.runId) {
+    where.push('run_id = ?')
+    values.push(params.runId)
+  }
+  if (params.statuses?.length) {
+    where.push(`status IN (${params.statuses.map(() => '?').join(', ')})`)
+    values.push(...params.statuses)
+  }
+  if (params.updatedAfter) {
+    where.push('updated_at >= ?')
+    values.push(params.updatedAfter)
+  }
+  const predicate = where.length ? ` WHERE ${where.join(' AND ')}` : ''
+  const totalRow = db.prepare(`SELECT COUNT(*) AS count FROM protocol_tasks${predicate}`)
+    .get(...values) as Row | undefined
+  const offset = Math.max(0, Math.trunc(params.offset))
+  const limit = Math.max(1, Math.min(100, Math.trunc(params.limit)))
+  const rows = db.prepare(
+    `SELECT * FROM protocol_tasks${predicate} ORDER BY updated_at DESC, run_id DESC, id DESC LIMIT ? OFFSET ?`,
+  ).all(...values, limit, offset) as Row[]
+  return { tasks: rows.map(rowToTask), total: Number(totalRow?.count) || 0 }
 }
 
 export async function listProtocolRuns(limit = 20): Promise<ProtocolRun[]> {
@@ -2838,6 +2889,7 @@ export type ProtocolPushConfig = {
   taskId: string
   url: string
   token?: string
+  authentication?: { scheme: string; credentials?: string }
   createdAt: string
 }
 
@@ -2848,6 +2900,14 @@ function rowToPushConfig(row: Row): ProtocolPushConfig {
     taskId: String(row.task_id),
     url: String(row.url),
     token: typeof row.token === 'string' && row.token ? row.token : undefined,
+    authentication: typeof row.auth_scheme === 'string' && row.auth_scheme
+      ? {
+          scheme: String(row.auth_scheme),
+          credentials: typeof row.auth_credentials === 'string' && row.auth_credentials
+            ? row.auth_credentials
+            : undefined,
+        }
+      : undefined,
     createdAt: String(row.created_at),
   }
 }
@@ -2856,7 +2916,12 @@ function rowToPushConfig(row: Row): ProtocolPushConfig {
 export async function setProtocolPushConfig(
   runId: string,
   taskId: string,
-  params: { url: string; token?: string; id?: string },
+  params: {
+    url: string
+    token?: string
+    id?: string
+    authentication?: { scheme: string; credentials?: string }
+  },
 ): Promise<ProtocolPushConfig> {
   const db = await getDatabase()
   const taskRow = db.prepare('SELECT id FROM protocol_tasks WHERE run_id = ? AND id = ?').get(runId, taskId) as Row | undefined
@@ -2866,10 +2931,26 @@ export async function setProtocolPushConfig(
   const id = params.id?.trim() || randomUUID()
   const ts = nowIso()
   db.prepare(`
-    INSERT INTO protocol_push_configs (id, run_id, task_id, url, token, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET url = excluded.url, token = excluded.token, fired_at = NULL
-  `).run(id, runId, taskId, url, params.token?.trim() || null, ts)
+    INSERT INTO protocol_push_configs (
+      id, run_id, task_id, url, token, auth_scheme, auth_credentials, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      url = excluded.url,
+      token = excluded.token,
+      auth_scheme = excluded.auth_scheme,
+      auth_credentials = excluded.auth_credentials,
+      last_task_updated_at = NULL,
+      fired_at = NULL
+  `).run(
+    id,
+    runId,
+    taskId,
+    url,
+    params.token?.trim() || null,
+    params.authentication?.scheme.trim() || null,
+    params.authentication?.credentials?.trim() || null,
+    ts,
+  )
   return rowToPushConfig(db.prepare('SELECT * FROM protocol_push_configs WHERE id = ?').get(id) as Row)
 }
 
@@ -2900,11 +2981,9 @@ export async function deleteProtocolPushConfig(runId: string, taskId: string, co
   return (result?.changes ?? 0) > 0
 }
 
-const PUSH_TERMINAL_TASK_STATUSES = new Set<ProtocolTaskStatus>(['completed', 'failed', 'cancelled'])
-
 /**
- * Fires each pending push config once its task reaches a terminal state,
- * then marks it fired so it never re-sends. Piggybacks on the mailbox sweep
+ * Fires each push config whenever its task's durable updated_at revision
+ * changes. Piggybacks on the mailbox sweep
  * timer (see ensureMailSweep below) rather than adding a second process-wide
  * interval, and polls like the A2A SSE streams do rather than hooking every
  * task-status call site — task status changes happen across ~8 functions
@@ -2913,7 +2992,7 @@ const PUSH_TERMINAL_TASK_STATUSES = new Set<ProtocolTaskStatus>(['completed', 'f
  */
 async function sweepPushNotifications(): Promise<void> {
   const db = await getDatabase()
-  const pending = db.prepare('SELECT * FROM protocol_push_configs WHERE fired_at IS NULL').all() as Row[]
+  const pending = db.prepare('SELECT * FROM protocol_push_configs').all() as Row[]
   if (pending.length === 0) return
   const deliveries: Promise<void>[] = []
   for (const row of pending) {
@@ -2922,26 +3001,29 @@ async function sweepPushNotifications(): Promise<void> {
       .get(config.runId, config.taskId) as Row | undefined
     if (!taskRow) continue
     const task = rowToTask(taskRow)
-    if (!PUSH_TERMINAL_TASK_STATUSES.has(task.status)) continue
+    if (row.last_task_updated_at === task.updatedAt) continue
     const payload = {
-      taskId: task.id,
-      contextId: task.runId,
-      status: { state: taskStateFromStatus(task.status), timestamp: task.updatedAt },
-      final: true,
+      statusUpdate: {
+        taskId: `${task.runId}:${task.id}`,
+        contextId: task.runId,
+        status: { state: taskStateFromStatus(task.status), timestamp: task.updatedAt },
+      },
     }
     deliveries.push((async () => {
       const response = await fetch(config.url, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}),
+          'Content-Type': 'application/a2a+json',
+          ...(config.authentication
+            ? { Authorization: `${config.authentication.scheme}${config.authentication.credentials ? ` ${config.authentication.credentials}` : ''}` }
+            : {}),
         },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(PUSH_NOTIFICATION_TIMEOUT_MS),
       })
       if (!response.ok) throw new Error(`Push target returned HTTP ${response.status}`)
-      db.prepare('UPDATE protocol_push_configs SET fired_at = ? WHERE id = ? AND fired_at IS NULL')
-        .run(nowIso(), config.id)
+      db.prepare('UPDATE protocol_push_configs SET fired_at = ?, last_task_updated_at = ? WHERE id = ?')
+        .run(nowIso(), task.updatedAt, config.id)
     })())
   }
   await Promise.allSettled(deliveries)

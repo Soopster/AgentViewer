@@ -29,6 +29,38 @@ assert.equal(reviewPlanInvocation?.action, 'review_plan')
 assert.equal(reviewPlanInvocation?.args.approved, true, 'approved=true must reach the Coordinator action unchanged')
 assert.equal(reviewPlanInvocation && 'approve' in reviewPlanInvocation.args, false)
 
+const sendMessageTool = buildCoordinatorCodexDynamicTools().find((candidate) => candidate.name === 'coord_send_message')
+assert.ok(sendMessageTool, 'Coordinator providers must expose coord_send_message')
+if (sendMessageTool.type !== 'function') throw new Error('coord_send_message has an invalid dynamic tool type')
+const sendMessageSchema = sendMessageTool.inputSchema as {
+  properties?: Record<string, unknown>
+  required?: string[]
+}
+assert.ok(sendMessageSchema.properties?.message, 'coord_send_message must expose the canonical message field')
+assert.equal(sendMessageSchema.properties?.summary, undefined, 'coord_send_message must not advertise the broken summary field')
+assert.equal(sendMessageSchema.properties?.detail, undefined, 'coord_send_message must not advertise the broken detail field')
+assert.ok(sendMessageSchema.required?.includes('message'), 'coord_send_message must require a message body')
+
+const sendMessageInvocation = resolveCoordinatorToolCall('coord_send_message', {
+  to: 'teammate',
+  message: 'Canonical mailbox body',
+  kind: 'review_request',
+  correlation_id: 'review-1',
+})
+assert.equal(sendMessageInvocation?.args.message, 'Canonical mailbox body')
+assert.equal(sendMessageInvocation?.args.kind, 'review_request')
+assert.equal(sendMessageInvocation?.args.correlationId, 'review-1')
+assert.equal(
+  resolveCoordinatorToolCall('coord_send_message', { to: 'teammate', summary: 'Legacy summary', detail: 'Legacy detail' })?.args.message,
+  'Legacy summary\n\nLegacy detail',
+  'sessions holding the old summary/detail schema must still deliver a body',
+)
+assert.equal(
+  resolveCoordinatorToolCall('coord_send_message', { to: 'teammate', body: 'Compatibility body' })?.args.message,
+  'Compatibility body',
+  'the bridge compatibility body field must still deliver a message',
+)
+
 assert.deepEqual(
   coordinatorClaudeMcpOptions(sessionId),
   {},

@@ -31,6 +31,7 @@ const MCP_TASKS_EXTENSION = 'io.modelcontextprotocol/tasks'
 const COORDINATOR_APP_URI = 'ui://agent-viewer/coordinator-dashboard.html'
 const COORDINATOR_SKILL_INDEX_URI = 'skill://index.json'
 const COORDINATOR_SKILL_URI = 'skill://coordinate-agents/SKILL.md'
+const COORDINATOR_A2A_CARD_URI = 'a2a://agent-viewer/coordinator/agent-card.json'
 const coordinatorAppHtml = await readFile(new URL('./agent-viewer-coordinator-app.html', import.meta.url), 'utf8')
 const coordinatorSkillMarkdown = await readFile(new URL('../.agents/skills/coordinate-agents/SKILL.md', import.meta.url), 'utf8')
 const coordinatorSkillDescription = coordinatorSkillMarkdown.match(/^description:\s*(.+)$/m)?.[1]?.trim()
@@ -640,6 +641,24 @@ server.registerResource('Coordinate agents skill', COORDINATOR_SKILL_URI, {
 }, async (uri) => ({
   contents: [{ uri: uri.href, mimeType: 'text/markdown', text: coordinatorSkillMarkdown }],
 }))
+
+server.registerResource('Agent Viewer Coordinator A2A Agent Card', COORDINATOR_A2A_CARD_URI, {
+  title: 'Coordinator A2A Agent Card',
+  description: 'A2A 1.0 discovery document for peer agents. Read this resource to discover the '
+    + 'high-level A2A task interface; keep using coord_* MCP tools for this CLI agent’s internal board, mailbox, and lock operations.',
+  mimeType: 'application/json',
+  cacheHint: { ttlMs: 30_000, cacheScope: 'public' },
+}, async (uri) => {
+  const card = await requestJson('/.well-known/agent-card.json')
+  return {
+    contents: [{
+      uri: uri.href,
+      mimeType: 'application/json',
+      text: JSON.stringify(card),
+      _meta: { a2aAgentCardUrl: `${baseUrl}/.well-known/agent-card.json` },
+    }],
+  }
+})
 
 server.registerResource('Agent Viewer Coordinator dashboard', COORDINATOR_APP_URI, {
   title: 'Coordinator dashboard',

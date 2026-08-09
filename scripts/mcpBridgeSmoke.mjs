@@ -56,6 +56,23 @@ const daemon = createServer(async (request, response) => {
     response.end(JSON.stringify({ attention: { id: 'attention-1', ...body } }))
     return
   }
+  if (request.url === '/.well-known/agent-card.json') {
+    response.end(JSON.stringify({
+      name: 'agent-viewer-coordinator',
+      description: 'A gated A2A 1.0 facade over Agent Viewer Coordinator.',
+      supportedInterfaces: [{
+        url: `http://127.0.0.1:${daemon.address().port}/api/a2a`,
+        protocolBinding: 'JSONRPC',
+        protocolVersion: '1.0',
+      }],
+      version: '1.0.0',
+      capabilities: { streaming: true },
+      defaultInputModes: ['text/plain'],
+      defaultOutputModes: ['application/json'],
+      skills: [{ id: 'submit-coordinator-task', name: 'Submit Coordinator task', description: 'Submit work.', tags: ['coordination'] }],
+    }))
+    return
+  }
   if (request.url === '/api/agent-protocol/external') {
     const participant = body?.agentId === 'external-claude'
       ? { runId: 'run-1', agentId: 'external-claude', token: 'token-claude', name: 'claude-cli', role: 'teammate', provider: 'claude', cwd: '/tmp/claude', serverProtocolVersion: 2, negotiatedProtocolVersion: body?.client?.protocolVersion ?? 1, capabilities: body?.capabilities ?? {} }
@@ -186,6 +203,9 @@ try {
   if (missingTools.length > 0) {
     throw new Error(`Bridge tools missing: ${missingTools.join(',')}`)
   }
+  for (const a2aMethod of ['SendMessage', 'SendStreamingMessage', 'GetTask', 'ListTasks', 'CancelTask']) {
+    if (names.has(a2aMethod)) throw new Error(`A2A peer operation leaked into MCP tools: ${a2aMethod}`)
+  }
   const statusTool = listed.tools.find((tool) => tool.name === 'coord_status')
   if (statusTool?._meta?.ui?.resourceUri !== 'ui://agent-viewer/coordinator-dashboard.html') {
     throw new Error('coord_status did not advertise its MCP App resource')
@@ -196,6 +216,7 @@ try {
   for (const uri of [
     'skill://index.json',
     'skill://coordinate-agents/SKILL.md',
+    'a2a://agent-viewer/coordinator/agent-card.json',
     'ui://agent-viewer/coordinator-dashboard.html',
   ]) {
     if (!resourceUris.has(uri)) throw new Error(`Bridge resource missing: ${uri}`)
@@ -206,11 +227,18 @@ try {
     && entry.text?.includes('## Shared-checkout guardrails')
     && entry.text?.includes('## Autonomous coordination loop')
     && entry.text?.includes('## MCP discovery and host features')
+    && entry.text?.includes('## A2A and MCP boundary')
     && entry.text?.includes('structuredContent')
     && entry.text?.includes('ui://agent-viewer/coordinator-dashboard.html')
     && entry.text?.includes('tasks/get')
   ))) {
     throw new Error('Coordinator skill resource did not expose the canonical Agent Viewer workflow')
+  }
+  const a2aCard = await client.readResource({ uri: 'a2a://agent-viewer/coordinator/agent-card.json' })
+  const a2aCardPayload = JSON.parse(a2aCard.contents.find((entry) => entry.mimeType === 'application/json')?.text ?? '{}')
+  if (a2aCardPayload.supportedInterfaces?.[0]?.protocolVersion !== '1.0'
+    || a2aCardPayload.skills?.[0]?.id !== 'submit-coordinator-task') {
+    throw new Error('MCP A2A Agent Card resource did not proxy live peer-agent discovery')
   }
   const app = await client.readResource({ uri: 'ui://agent-viewer/coordinator-dashboard.html' })
   if (!app.contents.some((entry) => entry.mimeType === 'text/html;profile=mcp-app' && entry.text?.includes('ui/initialize'))) {
