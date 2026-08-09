@@ -22,6 +22,7 @@ type Pending =
       kind: 'detail'
       sessionKey: string
       cardsVariant: string
+      previousDelivery?: LastDeliveredDetail
       resolve: (payload: SessionDetailPayload) => void
       reject: (error: Error) => void
     }
@@ -44,9 +45,18 @@ type WorkerResponse =
       rawMessages: SessionMessage[]
       threadedMessages: ThreadedMessage[]
       transcriptCards: TuiTranscriptCard[]
+      deliveryToken: number
+      baseDeliveryToken?: number
       rawPrefix: number
       threadedPrefix: number
       cardsPrefix: number
+    }
+  | {
+      id: number
+      ok: true
+      info: SessionInfo | null
+      unchanged: true
+      deliveryToken: number
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[] }
   | { id: number; ok: true; sessions: Session[] }
@@ -74,6 +84,7 @@ type LastDeliveredDetail = {
   threaded: ThreadedMessage[]
   cards: TuiTranscriptCard[]
   cardsVariant: string
+  deliveryToken: number
 }
 const lastDeliveredByKey = new Map<string, LastDeliveredDetail>()
 
@@ -148,8 +159,23 @@ function ensureWorker(): Worker {
       entry.reject(new Error(data.error))
       return
     }
-    if (entry.kind === 'detail' && 'rawMessages' in data) {
-      const prev = lastDeliveredByKey.get(entry.sessionKey)
+    if (entry.kind === 'detail' && 'unchanged' in data) {
+      const prev = entry.previousDelivery
+      if (!prev || prev.cardsVariant !== entry.cardsVariant || prev.deliveryToken !== data.deliveryToken) {
+        entry.reject(new Error('threading worker returned an unknown unchanged delivery'))
+        return
+      }
+      if (lastDeliveredByKey.get(entry.sessionKey) === prev) touchLastDelivered(entry.sessionKey, prev)
+      entry.resolve({
+        info: data.info,
+        rawMessages: prev.raw,
+        threadedMessages: prev.threaded,
+        transcriptCards: prev.cards,
+      })
+    } else if (entry.kind === 'detail' && 'rawMessages' in data) {
+      const prev = entry.previousDelivery?.deliveryToken === data.baseDeliveryToken
+        ? entry.previousDelivery
+        : undefined
       const variantMatches = prev?.cardsVariant === entry.cardsVariant
       const rawMessages = spliceDelivered(prev?.raw, data.rawMessages, data.rawPrefix ?? 0)
       const threadedMessages = spliceDelivered(prev?.threaded, data.threadedMessages, data.threadedPrefix ?? 0)
@@ -163,6 +189,7 @@ function ensureWorker(): Worker {
         threaded: threadedMessages,
         cards: transcriptCards,
         cardsVariant: entry.cardsVariant,
+        deliveryToken: data.deliveryToken,
       })
       entry.resolve({
         info: data.info,
@@ -219,11 +246,16 @@ export function readAndBuildTranscriptAsync(
   const key = cacheKey(session)
   const id = ++requestCounter
   const w = ensureWorker()
+  const cardsVariant = variantKey(density, showToolCalls)
+  const previousDelivery = lastDeliveredByKey.get(key)
   return new Promise<SessionDetailPayload>((resolve, reject) => {
     pending.set(id, {
       kind: 'detail',
       sessionKey: key,
-      cardsVariant: variantKey(density, showToolCalls),
+      cardsVariant,
+      previousDelivery: previousDelivery?.cardsVariant === cardsVariant
+        ? previousDelivery
+        : undefined,
       resolve: (payload) => {
         const cacheEntry = {
           threadedMessages: payload.threadedMessages,
@@ -235,7 +267,16 @@ export function readAndBuildTranscriptAsync(
       },
       reject,
     })
-    w.postMessage({ kind: 'detail', id, session, density, showToolCalls })
+    w.postMessage({
+      kind: 'detail',
+      id,
+      session,
+      density,
+      showToolCalls,
+      previousDeliveryToken: previousDelivery?.cardsVariant === cardsVariant
+        ? previousDelivery.deliveryToken
+        : undefined,
+    })
   })
 }
 

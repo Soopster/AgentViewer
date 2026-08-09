@@ -5,8 +5,11 @@ import { compactStableFingerprint } from '../../lib/compactFingerprint'
 const SEPARATOR = '\x1f'
 const sessionMessageFingerprintCache = new WeakMap<SessionMessage, string>()
 const threadedMessageFingerprintCache = new WeakMap<ThreadedMessage, string>()
-const sessionMessageSequenceFingerprintCache = new WeakMap<SessionMessage[], string>()
-const durableSessionMessageSummaryCache = new WeakMap<SessionMessage[], SessionMessageSequenceSummary>()
+type SessionMessageSequenceCacheEntry = {
+  full?: SessionMessageSequenceSummary
+  durable?: SessionMessageSequenceSummary
+}
+const sessionMessageSequenceCache = new WeakMap<SessionMessage[], SessionMessageSequenceCacheEntry>()
 
 export type SessionMessageSequenceSummary = {
   count: number
@@ -52,13 +55,20 @@ function updateSequenceHash(hash: number, value: string, multiplier: number): nu
   return Math.imul(next ^ 0x1f, multiplier)
 }
 
-function fingerprintSequence(messages: SessionMessage[], durableOnly: boolean): SessionMessageSequenceSummary {
+function fingerprintSequence(messages: SessionMessage[], durableOnly: boolean): {
+  summary: SessionMessageSequenceSummary
+  hasEphemeral: boolean
+} {
   let count = 0
   let lastFingerprint: string | null = null
   let hashA = 0x811c9dc5
   let hashB = 0x9e3779b9
+  let hasEphemeral = false
   for (const message of messages) {
-    if (durableOnly && message.ephemeral === true) continue
+    if (message.ephemeral === true) {
+      hasEphemeral = true
+      if (durableOnly) continue
+    }
     const fingerprint = sessionMessageFingerprint(message)
     count++
     lastFingerprint = fingerprint
@@ -66,25 +76,34 @@ function fingerprintSequence(messages: SessionMessage[], durableOnly: boolean): 
     hashB = updateSequenceHash(hashB, fingerprint, 0x5bd1e995)
   }
   return {
-    count,
-    lastFingerprint,
-    sequenceFingerprint: `${count}:${(hashA >>> 0).toString(16)}:${(hashB >>> 0).toString(16)}`,
+    summary: {
+      count,
+      lastFingerprint,
+      sequenceFingerprint: `${count}:${(hashA >>> 0).toString(16)}:${(hashB >>> 0).toString(16)}`,
+    },
+    hasEphemeral,
   }
 }
 
 export function sessionMessageSequenceFingerprint(messages: SessionMessage[]): string {
-  const cached = sessionMessageSequenceFingerprintCache.get(messages)
-  if (cached !== undefined) return cached
-  const fingerprint = fingerprintSequence(messages, false).sequenceFingerprint
-  sessionMessageSequenceFingerprintCache.set(messages, fingerprint)
-  return fingerprint
+  const cached = sessionMessageSequenceCache.get(messages)
+  if (cached?.full) return cached.full.sequenceFingerprint
+  const { summary, hasEphemeral } = fingerprintSequence(messages, false)
+  const entry = cached ?? {}
+  entry.full = summary
+  if (!hasEphemeral) entry.durable = summary
+  sessionMessageSequenceCache.set(messages, entry)
+  return summary.sequenceFingerprint
 }
 
 export function summarizeDurableSessionMessages(messages: SessionMessage[]): SessionMessageSequenceSummary {
-  const cached = durableSessionMessageSummaryCache.get(messages)
-  if (cached !== undefined) return cached
-  const summary = fingerprintSequence(messages, true)
-  durableSessionMessageSummaryCache.set(messages, summary)
+  const cached = sessionMessageSequenceCache.get(messages)
+  if (cached?.durable) return cached.durable
+  const { summary, hasEphemeral } = fingerprintSequence(messages, true)
+  const entry = cached ?? {}
+  entry.durable = summary
+  if (!hasEphemeral) entry.full = summary
+  sessionMessageSequenceCache.set(messages, entry)
   return summary
 }
 

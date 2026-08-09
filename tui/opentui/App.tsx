@@ -6301,6 +6301,21 @@ const noopSendDiffNote = () => {}
 const noopSetDiffRow = () => {}
 const noopSetDiffAnchor = () => {}
 
+export function shouldPollSplitPaneDetail(
+  previous: { key: string; variant: string; lastModified: number } | null,
+  key: string,
+  variant: string,
+  lastModified: number | undefined,
+  active: boolean,
+): boolean {
+  return active
+    || previous === null
+    || previous.key !== key
+    || previous.variant !== variant
+    || lastModified === undefined
+    || previous.lastModified < lastModified
+}
+
 // Imperative scroll surface a focused pane hands to the root key dispatcher.
 // The pane keeps its own tail-follow flag inside these methods, so scrolling up
 // detaches from the live tail and G re-attaches — the root never has to know.
@@ -6373,13 +6388,20 @@ function SplitTranscriptPaneInner({
   const scrollRef = useRef<ScrollBoxRenderable>(null)
   const selectionVariantCacheRef = useRef(new WeakMap<TuiTranscriptCard, TranscriptCardVariantCacheEntry>())
   const key = sessionKey(session)
-
+  const variant = `${density}|${showToolCalls ? 1 : 0}`
+  const activityVisible = running || liveMessages.length > 0 || Boolean(liveText)
+  const lastLoadedRef = useRef<{ key: string; variant: string; lastModified: number } | null>(null)
 
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
 
     const load = async () => {
+      const lastModified = typeof session.lastModified === 'number' ? session.lastModified : undefined
+      if (!shouldPollSplitPaneDetail(lastLoadedRef.current, key, variant, lastModified, activityVisible)) {
+        timer = setTimeout(() => { void load() }, SPLIT_PANE_POLL_MS)
+        return
+      }
       try {
         const detail = await readTuiSessionDetailAsync(session, density, showToolCalls)
         if (cancelled) return
@@ -6392,6 +6414,7 @@ function SplitTranscriptPaneInner({
           // display-data + card subtree rebuild below.
           return preserveArrayIdentity(prev, next)
         })
+        if (lastModified !== undefined) lastLoadedRef.current = { key, variant, lastModified }
         setStatus('ready')
         setError(null)
       } catch (err) {
@@ -6409,7 +6432,7 @@ function SplitTranscriptPaneInner({
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [key, session, density, showToolCalls])
+  }, [activityVisible, key, session, density, showToolCalls, variant])
 
   // Tail window. A pane starts at the last SPLIT_PANE_CARD_WINDOW cards (the
   // mount budget that keeps a pane cheap) and grows a page at a time as the

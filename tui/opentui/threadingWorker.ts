@@ -21,6 +21,7 @@ type DetailRequest = {
   session: Session
   density: TuiDensity
   showToolCalls: boolean
+  previousDeliveryToken?: number
 }
 type FormatRequest = {
   kind: 'format'
@@ -45,6 +46,8 @@ type WorkerResponse =
       rawMessages: SessionMessage[]
       threadedMessages: ThreadedMessage[]
       transcriptCards: TuiTranscriptCard[]
+      deliveryToken: number
+      baseDeliveryToken?: number
       // How many leading entries of each array are object-identical (in this
       // worker) to the previous detail response for the same session. postMessage
       // cloning destroys identity, so the client uses these counts to splice its
@@ -53,6 +56,13 @@ type WorkerResponse =
       rawPrefix: number
       threadedPrefix: number
       cardsPrefix: number
+    }
+  | {
+      id: number
+      ok: true
+      info: SessionInfo | null
+      unchanged: true
+      deliveryToken: number
     }
   | { id: number; ok: true; transcriptCards: TuiTranscriptCard[] }
   | { id: number; ok: true; sessions: Session[] }
@@ -79,6 +89,7 @@ type LastSentDetail = {
   threaded: ThreadedMessage[]
   cards: TuiTranscriptCard[]
   cardsVariant: string
+  deliveryToken: number
 }
 const lastSentByKey = new Map<string, LastSentDetail>()
 
@@ -276,12 +287,34 @@ self.onmessage = async (event) => {
     const cardsPrefix = prev && prev.cardsVariant === cardsVariant
       ? sharedIdentityPrefix(transcriptCards, prev.cards)
       : 0
+    // A token binds the worker baseline to the exact arrays the client still
+    // owns. Prefix/length equality proves the transcript is unchanged; the
+    // token prevents concurrent reads or a client eviction from reusing a
+    // different baseline. Mutations, truncations and card-variant changes all
+    // fall through to the full response below.
+    const canReusePreviousDelivery = Boolean(
+      prev
+      && data.previousDeliveryToken === prev.deliveryToken
+      && prev.cardsVariant === cardsVariant
+      && prev.raw.length === alignedMessages.length
+      && prev.threaded.length === threadedMessages.length
+      && prev.cards.length === transcriptCards.length
+      && rawPrefix === alignedMessages.length
+      && threadedPrefix === threadedMessages.length
+      && cardsPrefix === transcriptCards.length,
+    )
+    const deliveryToken = canReusePreviousDelivery && prev ? prev.deliveryToken : data.id
     lastSentByKey.set(sessionCacheKey, {
       raw: alignedMessages,
       threaded: threadedMessages,
       cards: transcriptCards,
       cardsVariant,
+      deliveryToken,
     })
+    if (canReusePreviousDelivery) {
+      self.postMessage({ id: data.id, ok: true, info, unchanged: true, deliveryToken })
+      return
+    }
     self.postMessage({
       id: data.id,
       ok: true,
@@ -289,6 +322,8 @@ self.onmessage = async (event) => {
       rawMessages: alignedMessages,
       threadedMessages,
       transcriptCards,
+      deliveryToken,
+      baseDeliveryToken: prev?.deliveryToken,
       rawPrefix,
       threadedPrefix,
       cardsPrefix,

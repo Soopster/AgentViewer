@@ -1864,15 +1864,16 @@ function cardLineLimit(density: TuiDensity): number {
   }
 }
 
-function formatDayLabel(value?: string): string | undefined {
-  if (!value) return undefined
-  const parsed = new Date(value)
+const DAY_LABEL_FORMATTER = new Intl.DateTimeFormat('en-AU', {
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short',
+})
+
+function formatDayLabel(parsed: Date | null): string | undefined {
+  if (!parsed) return undefined
   if (Number.isNaN(parsed.getTime())) return undefined
-  return new Intl.DateTimeFormat('en-AU', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-  }).format(parsed)
+  return DAY_LABEL_FORMATTER.format(parsed)
 }
 
 function compactCardLines(lines: TuiTranscriptCardLine[], density: TuiDensity): TuiTranscriptCardLine[] {
@@ -1948,30 +1949,52 @@ function formatUsageSummary(message: ThreadedMessage): string | undefined {
 
 const INSIGHT_RE = /`★\s*Insight\s*─+`/
 
-function classifyCardCategory(message: ThreadedMessage): TuiTranscriptCardCategory {
-  if (message.role === 'system') return 'system'
-  if (message.blocks.some((block) => block.type === 'tool_thread' && DIFF_TOOL_NAMES.has(canonicalToolName(block.toolUse.name)))) {
-    return 'diff'
+type CardBlockAnalysis = {
+  category: TuiTranscriptCardCategory
+  hasSyntheticEdit: boolean
+  pending: boolean
+}
+
+function analyzeCardBlocks(message: ThreadedMessage): CardBlockAnalysis {
+  let hasDiff = false
+  let hasInsight = false
+  let hasOperationalBlock = false
+  let hasSyntheticEdit = false
+  let pending = false
+
+  for (const block of message.blocks) {
+    if (block.type === 'tool_thread') {
+      const toolName = canonicalToolName(block.toolUse.name)
+      hasDiff ||= DIFF_TOOL_NAMES.has(toolName)
+      hasSyntheticEdit ||= toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write'
+      pending ||= !block.result
+      hasOperationalBlock = true
+      continue
+    }
+    if (block.type === 'text') {
+      hasInsight ||= INSIGHT_RE.test(block.text)
+      hasOperationalBlock ||= isAgentProtocolText(block.text)
+      continue
+    }
+    hasOperationalBlock ||= block.type === 'task_notification'
+      || block.type === 'system_reminder'
+      || block.type === 'slash_command'
+      || block.type === 'local_command_stdout'
+      || block.type === 'bash_input'
+      || block.type === 'bash_output'
+      || block.type === 'claude_system'
   }
 
-  const hasInsight = message.blocks.some(
-    (block) => block.type === 'text' && INSIGHT_RE.test(block.text),
-  )
-  if (hasInsight) return 'insight'
-
-  const hasOperationalBlock = message.blocks.some((block) => (
-    block.type === 'tool_thread'
-    || block.type === 'task_notification'
-    || block.type === 'system_reminder'
-    || block.type === 'slash_command'
-    || block.type === 'local_command_stdout'
-    || block.type === 'bash_input'
-    || block.type === 'bash_output'
-    || block.type === 'claude_system'
-    || (block.type === 'text' && isAgentProtocolText(block.text))
-  ))
-
-  return hasOperationalBlock ? 'technical' : 'conversation'
+  const category = message.role === 'system'
+    ? 'system'
+    : hasDiff
+    ? 'diff'
+    : hasInsight
+    ? 'insight'
+    : hasOperationalBlock
+    ? 'technical'
+    : 'conversation'
+  return { category, hasSyntheticEdit, pending }
 }
 
 function makeUnifiedDiffHunk(filePath: string, oldStr: string, newStr: string): string {
@@ -2037,10 +2060,12 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     ? ` · req:${message.requestId.slice(0, 10)}`
     : ''
   const label = `${subagentLabel}${taskSuffix}${requestSuffix}`
-  const previewLines = message.blocks.flatMap((b) => formatBlock(b, activeForms, taskRegistry))
+  const previewLines: TuiTranscriptCardLine[] = []
+  for (const block of message.blocks) previewLines.push(...formatBlock(block, activeForms, taskRegistry))
   const { processedLines: expandedLines, codeBlocks, hasMermaidDiagrams } = extractCodeBlocksFromBlocks(message.blocks, activeForms, taskRegistry)
   const parsedTimestamp = message.timestamp ? new Date(message.timestamp) : null
-  const category = classifyCardCategory(message)
+  const blockAnalysis = analyzeCardBlocks(message)
+  const category = blockAnalysis.category
   const autoFold = category !== 'conversation' && category !== 'insight'
   const previewSourceLines = previewLines
   const collapsedLines = hasMermaidDiagrams
@@ -2063,19 +2088,19 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
     timestamp: message.timestamp ? formatTimestamp(message.timestamp) : undefined,
     timestampMs: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.getTime() : undefined,
     dayKey: parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime()) ? parsedTimestamp.toISOString().slice(0, 10) : undefined,
-    dayLabel: formatDayLabel(message.timestamp),
+    dayLabel: formatDayLabel(parsedTimestamp),
     lines: collapsedLines,
     expandedLines,
     searchText,
     searchHaystackLower: `${label}\n${searchText}`.toLowerCase(),
     codeBlocks: codeBlocks.length > 0 ? codeBlocks : undefined,
-    editDiff: synthesizeEditDiff(message),
+    editDiff: blockAnalysis.hasSyntheticEdit ? synthesizeEditDiff(message) : undefined,
     markdownContent: (category === 'conversation' || category === 'insight')
       ? extractMarkdownContent(message.blocks)
       : undefined,
     hasMermaidDiagrams,
     subagentDepth: subagentDepth > 0 ? subagentDepth : undefined,
-    pending: message.blocks.some((block) => block.type === 'tool_thread' && !block.result) || undefined,
+    pending: blockAnalysis.pending || undefined,
   }
 }
 
