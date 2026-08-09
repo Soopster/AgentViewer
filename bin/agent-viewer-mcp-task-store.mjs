@@ -50,6 +50,12 @@ export class DurableMcpTaskStore {
   }
 
   async create({ operation, statusMessage, ttlMs, pollIntervalMs }) {
+    // Long-lived bridge processes (an unattended worker can run for days)
+    // create one of these per coord_wait/coord_await_run call. load() only
+    // prunes once at startup, so without a periodic sweep here the ledger —
+    // and the full-file rewrite every mutate() does — grows without bound
+    // for the life of the process.
+    await this.pruneExpired()
     return this.mutate(() => {
       const now = new Date().toISOString()
       const record = {
@@ -119,17 +125,23 @@ export class DurableMcpTaskStore {
 
   async pruneExpired() {
     if (!this.loaded) return
-    let changed = false
-    const now = Date.now()
-    for (const [taskId, task] of this.tasks) {
-      if (task.ttlMs !== null
-        && Number.isFinite(task.ttlMs)
-        && Date.parse(task.createdAt) + task.ttlMs < now) {
-        this.tasks.delete(taskId)
-        changed = true
+    // Routed through mutate() (not a bare read-modify-persist) so this can't
+    // race a concurrent create()/update() persist — both would otherwise
+    // write the full ledger snapshot from their own point-in-time view and
+    // the loser's changes could be clobbered.
+    await this.mutate(() => {
+      let changed = false
+      const now = Date.now()
+      for (const [taskId, task] of this.tasks) {
+        if (task.ttlMs !== null
+          && Number.isFinite(task.ttlMs)
+          && Date.parse(task.createdAt) + task.ttlMs < now) {
+          this.tasks.delete(taskId)
+          changed = true
+        }
       }
-    }
-    if (changed) await this.persist()
+      return changed ? { record: true, value: null } : { value: null }
+    })
   }
 
   async mutate(callback) {

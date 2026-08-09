@@ -946,7 +946,14 @@ server.registerTool('coord_wait', {
       agentId: coordinatorIdentity?.agentId,
       cursor: cursor ?? coordinatorCursor ?? undefined,
       timeoutMs: timeout_ms,
-    }, 'Waiting durably for another participant to change the Coordinator run.')
+    }, 'Waiting durably for another participant to change the Coordinator run.', {
+      // A worker calls this every ~25s for the run's whole lifetime (days for
+      // an unattended run); the 7-day default TTL would let the ledger grow
+      // to tens of thousands of records. Each wait is normally consumed via
+      // tasks/get within moments, so an hour of slack for a slow/distracted
+      // client is generous without letting steady-state size run away.
+      ttlMs: 60 * 60 * 1000,
+    })
   }
   const { snapshot: _snapshot, ...compact } = await coordinatorRequest('wait', {
     cursor: cursor ?? coordinatorCursor ?? undefined,
