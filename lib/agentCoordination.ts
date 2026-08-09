@@ -155,6 +155,14 @@ const LOCK_LEASE_MS = 20 * 60_000
 const SCHEMA_VERSION = 15
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
+// Non-terminal tasks (pending/claimed/blocked) are always returned in full —
+// that's exactly what claim eligibility and dependency display need. Terminal
+// tasks (completed/failed/cancelled) are audit trail, windowed the same way
+// LOCK_HISTORY_WINDOW bounds inactive locks, so a run that stays open for a
+// long time (heavy discovered-work reuse, an autonomous loop that never
+// finalizes) doesn't grow every coord_status/coord_wait payload — and the
+// per-call DB/serialization cost with it — for the rest of its life.
+const TERMINAL_TASK_HISTORY_WINDOW = 300
 // Idempotency is a retry window, not an audit log. Bound it per participant so
 // long-lived autonomous workers cannot retain an unbounded series of compact
 // response snapshots while still leaving ample room for delayed retries.
@@ -1037,7 +1045,15 @@ function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapsho
   const runRow = db.prepare('SELECT * FROM protocol_runs WHERE id = ?').get(runId) as Row | undefined
   if (!runRow) return null
   const agents = annotateLiveTurns(runId, db.prepare('SELECT * FROM protocol_agents WHERE run_id = ? ORDER BY created_at ASC').all(runId).map(rowToAgent))
-  const tasks = db.prepare('SELECT * FROM protocol_tasks WHERE run_id = ? ORDER BY created_at ASC').all(runId).map(rowToTask)
+  const activeTasks = db.prepare(`
+    SELECT * FROM protocol_tasks WHERE run_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
+    ORDER BY created_at ASC
+  `).all(runId).map(rowToTask)
+  const recentTerminalTasks = (db.prepare(`
+    SELECT * FROM protocol_tasks WHERE run_id = ? AND status IN ('completed', 'failed', 'cancelled')
+    ORDER BY created_at DESC LIMIT ?
+  `).all(runId, TERMINAL_TASK_HISTORY_WINDOW) as Row[]).map(rowToTask).reverse()
+  const tasks = [...recentTerminalTasks, ...activeTasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   const activeLocks = (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND status = 'active' AND lease_expires_at > ? ORDER BY created_at ASC")
     .all(runId, nowIso()) as Row[]).map(rowToLock)
   const recentInactiveLocks = (db.prepare("SELECT * FROM protocol_locks WHERE run_id = ? AND status != 'active' ORDER BY created_at DESC LIMIT ?")
@@ -1785,7 +1801,11 @@ export async function readExternalProtocolStatus(identity: ExternalProtocolIdent
     snapshot,
     actionable: externalActionableSync(db, identity.runId, identity.agentId),
     cursor: latestRunCursorSync(db, identity.runId),
-    phases: phaseRollups(snapshot.tasks),
+    // Rolled up from the full unbounded task list (a cheap DB read), not
+    // snapshot.tasks — that field is windowed for terminal tasks (see
+    // readSnapshotSync) and would silently undercount completed/failed once
+    // old terminal tasks age out of the window.
+    phases: phaseRollups(listTasksSync(db, identity.runId)),
   }
 }
 
