@@ -1007,9 +1007,11 @@ function rowToEvent(row: Row): AgentProtocolEvent {
 }
 
 /**
- * Mark agents whose turn is streaming right now. Best-effort and process-local
- * (like the running-turn registry itself): accurate in the process that runs
- * the work loop, which is where web routes and the in-process TUI read from.
+ * Mark agents whose turn is streaming right now (best-effort, process-local —
+ * accurate in the process that runs the work loop, where web routes and the
+ * in-process TUI read from) and attach each agent's fresh/stale/dead liveness
+ * classification, so a lead can see who is actually reachable directly from
+ * coord_status/coord_wait instead of sending a probe message first.
  */
 function annotateLiveTurns(runId: string, agents: ProtocolAgent[]): ProtocolAgent[] {
   const controller = controllers.get(runId)
@@ -1017,7 +1019,8 @@ function annotateLiveTurns(runId: string, agents: ProtocolAgent[]): ProtocolAgen
     const sessionId = controller?.sessionIds.get(agent.id) ?? agent.sessionId
     const turnActive = controller?.turnInFlight.has(agent.id) === true
       || getRunningSessionInfo(sessionId).running
-    return turnActive ? { ...agent, turnActive } : agent
+    const withTurn = turnActive ? { ...agent, turnActive } : agent
+    return { ...withTurn, liveness: classifyAgentLiveness(withTurn) }
   })
 }
 
@@ -1038,7 +1041,7 @@ function deliveryHintsSync(db: SqliteDatabase, runId: string, recipientIds: stri
   const rows = db.prepare(`SELECT * FROM protocol_agents WHERE run_id = ? AND id IN (${placeholders})`)
     .all(runId, ...recipientIds) as Row[]
   const agents = annotateLiveTurns(runId, rows.map(rowToAgent))
-  return agents.map((agent) => ({ name: agent.name, ...classifyAgentLiveness(agent) }))
+  return agents.map((agent) => ({ name: agent.name, ...(agent.liveness ?? classifyAgentLiveness(agent)) }))
 }
 
 function readSnapshotSync(db: SqliteDatabase, runId: string): ProtocolRunSnapshot | null {

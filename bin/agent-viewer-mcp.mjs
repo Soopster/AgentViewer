@@ -1078,18 +1078,20 @@ server.registerTool('coord_read_inbox', {
 })))
 
 server.registerTool('coord_send_message', {
-  description: 'Send a typed direct message. Status messages are batched; reply-required requests remain actionable until answered with in_reply_to. '
+  description: 'Send a typed direct message. Setting EITHER kind:"status" OR priority:"status" (independently — either one alone is enough) holds the message back from the recipient\'s inbox until 3 such messages accumulate or 15 seconds pass, so a one-off status message can sit invisible for a while; use a different kind/priority for anything the recipient should see right away. Reply-required requests remain actionable until answered with in_reply_to. '
     + 'The result includes `delivery`: each recipient\'s liveness (fresh/stale/dead) at send time. If stale or dead, do not assume silence means '
     + 'ignored — escalate to the lead or route around them instead of waiting on a reply that may never come. '
     + 'Print one line to your own terminal after sending, "-> <to>: <one-line summary>" — this is the only way the human watching this terminal sees you communicating.',
   inputSchema: {
-    to: z.string().min(1),
+    to: z.string().min(1).describe('Agent name or id from coord_status\'s roster, or one of two broadcast aliases: "all" (every other active participant — the lead\'s way to announce a priority change or new context to the whole team at once) or "lead" (the current lead, from any teammate; the lead itself has no "lead" to address). Reused names resolve to whichever active participant holds that name now.'),
     message: z.string().min(1).max(8000),
-    kind: z.enum(['request', 'response', 'status', 'finding', 'handoff', 'review_request', 'review_result']).optional(),
-    priority: z.enum(['urgent', 'normal', 'status']).optional(),
+    kind: z.enum(['request', 'response', 'status', 'finding', 'handoff', 'review_request', 'review_result']).optional()
+      .describe('"status" alone batches/delays delivery (see tool description) regardless of priority — use "request" (default) for anything that should appear immediately, "status" only for routine progress the recipient can see whenever they next check mail'),
+    priority: z.enum(['urgent', 'normal', 'status']).optional()
+      .describe('"status" alone batches/delays delivery (see tool description) regardless of kind. "urgent" does not bypass batching if kind is also "status" — never combine kind:"status" with something you need seen promptly'),
     reply_required: z.boolean().optional(),
     correlation_id: z.string().min(1).max(160).optional(),
-    in_reply_to: z.string().min(1).optional(),
+    in_reply_to: z.string().min(1).optional().describe('Must address exactly one participant — not valid with to: "all"'),
     request_id: requestIdField,
   },
 }, async ({ to, message, kind, priority, reply_required, correlation_id, in_reply_to, request_id }) => textResult(await coordinatorRequest('send_message', {

@@ -332,6 +332,13 @@ export type ProtocolAgent = {
    * — distinguishes "actively working" from "marked working but stalled".
    */
   turnActive?: boolean
+  /**
+   * Liveness at snapshot time (same fresh/stale/dead classification returned
+   * in coord_send_message's `delivery` field), computed here too so a lead
+   * can tell who is actually reachable directly from coord_status/coord_wait
+   * instead of having to send a probe message first to find out.
+   */
+  liveness?: { status: ProtocolAgentLivenessStatus; ageSeconds: number | null }
   createdAt: string
   updatedAt: string
 }
