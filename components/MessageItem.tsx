@@ -6344,17 +6344,23 @@ function MessageItemInner({ message, showSession }: { message: ThreadedMessage; 
           )}
           {message.origin?.kind && message.origin.kind !== 'task-notification' && (() => {
             const isSubagent = message.origin.kind.startsWith('subagent:')
+            const isPeerSend = message.origin.subkind === 'peer-send-message'
             // Origin kind carries the spawn chain (`subagent:parent/child`);
             // repeat the arrow per nesting level for depth-2+ agents.
             const spawnPath = isSubagent ? message.origin.kind.slice('subagent:'.length).split('/') : []
             const depth = spawnPath.length
-            const label = isSubagent ? `${'↪'.repeat(Math.min(Math.max(depth, 1), 3))} SUBAGENT` : message.origin.kind.toUpperCase()
+            const label = isSubagent
+              ? `${'↪'.repeat(Math.min(Math.max(depth, 1), 3))} SUBAGENT`
+              : isPeerSend ? '⇄ PEER SEND' : message.origin.kind.toUpperCase()
             const color = isSubagent ? 'var(--t-agent)' : 'var(--t-other)'
             const bg    = isSubagent ? 'rgba(244,114,182,0.08)' : 'rgba(139,128,240,0.08)'
             const bdr   = isSubagent ? '1px solid rgba(244,114,182,0.22)' : '1px solid rgba(139,128,240,0.2)'
+            const title = depth > 1
+              ? `spawned via ${spawnPath.join(' ▸ ')}`
+              : isPeerSend ? 'Pushed in by another session’s SendMessage tool' : undefined
             return (
               <span
-                title={depth > 1 ? `spawned via ${spawnPath.join(' ▸ ')}` : undefined}
+                title={title}
                 style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', color, background: bg, border: bdr, borderRadius: 3, padding: '1px 5px' }}
               >
                 {label}

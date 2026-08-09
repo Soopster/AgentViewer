@@ -1,18 +1,25 @@
 import {
   type AgentInfo,
+  type ChatOrigin,
   type ChatState,
   type ChatSummary,
   type MessageKind,
+  type ResponsePart,
   type RootState,
   type SessionLifecycle,
   type SessionState,
   type SessionStatus,
   type SessionSummary,
   type Snapshot,
+  type ToolCallCompletedState,
+  type ToolInput,
+  type ToolResultSubagentContent,
   type Turn,
   type TurnState,
   type URI,
 } from '@microsoft/agent-host-protocol'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type {
   ProtocolAgent,
@@ -20,6 +27,7 @@ import type {
   ProtocolRun,
   ProtocolRunSnapshot,
   ProtocolRunStatus,
+  ProtocolTask,
 } from './agentProtocol'
 import type { AgentProvider } from './types'
 
@@ -38,6 +46,48 @@ const AHP_STATUS_INPUT_NEEDED = 24 as SessionStatus
 const AHP_CHAT_INTERACTIVITY_READ_ONLY = 'read-only' as NonNullable<ChatSummary['interactivity']>
 const AHP_MESSAGE_KIND_AGENT = 'agent' as MessageKind
 const AHP_TURN_STATE_COMPLETE = 'complete' as TurnState
+const AHP_TOOL_CALL_STATUS_COMPLETED = 'completed' as ToolCallCompletedState['status']
+const AHP_TOOL_CALL_CONFIRMED_NOT_NEEDED = 'not-needed' as ToolCallCompletedState['confirmed']
+const AHP_TOOL_RESULT_CONTENT_TYPE_SUBAGENT = 'subagent' as ToolResultSubagentContent['type']
+
+// Materialized task prompts backing ContentRef-lazy-loaded tool input (see
+// spawnToolInput below) — written under the server cwd so AhpResourceAccess's
+// existing file:// root grants (which always include process.cwd()) can
+// resolve them without a bespoke resource scheme.
+const AHP_TASK_PROMPT_DIR = path.join(process.cwd(), '.agent-viewer-data', 'ahp-task-prompts')
+// Inline tool input below this size; larger prompts get a ContentRef instead,
+// matching the SDK's guidance to lazy-load large tool inputs rather than
+// inline them in every snapshot/diff.
+const AHP_CONTENT_REF_THRESHOLD = 4000
+
+function spawnToolCallId(agentId: string): string {
+  return `spawn:${agentId}`
+}
+
+// Writes the task's prompt to a stable per-task file (idempotent — skipped if
+// already present, since task prompts are immutable after creation) and
+// returns a ContentRef pointing at it. Falls back to inline JSON when the
+// prompt is small enough that a lazy-loaded reference isn't worth the file.
+function spawnToolInput(run: ProtocolRun, agent: ProtocolAgent, task: ProtocolTask | undefined): ToolInput {
+  const summary = { name: agent.name, role: agent.role, provider: agent.provider, task: task?.title }
+  const prompt = task?.prompt
+  if (!prompt || prompt.length < AHP_CONTENT_REF_THRESHOLD) {
+    return JSON.stringify(prompt ? { ...summary, prompt } : summary)
+  }
+  try {
+    const dir = path.join(AHP_TASK_PROMPT_DIR, run.id)
+    const file = path.join(dir, `${task.id}.md`)
+    if (!existsSync(file)) {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(file, prompt, 'utf8')
+    }
+    return { uri: pathToFileURL(file).href, sizeHint: prompt.length, contentType: 'text/markdown' }
+  } catch {
+    // Disk unavailable/read-only — fall back to inline rather than reference
+    // a ContentRef the client can never resolve.
+    return JSON.stringify({ ...summary, prompt })
+  }
+}
 
 const PROVIDERS: ReadonlyArray<{ provider: AgentProvider; displayName: string }> = [
   { provider: 'claude', displayName: 'Claude' },
@@ -119,8 +169,15 @@ function fileUri(filePath: string): URI {
   return pathToFileURL(filePath).href
 }
 
-function chatSummary(run: ProtocolRun, agent: ProtocolAgent): ChatSummary {
-  const workingDirectory = agent.worktreePath ? fileUri(agent.worktreePath) : undefined
+function chatSummary(run: ProtocolRun, agent: ProtocolAgent, leadAgent: ProtocolAgent | undefined): ChatSummary {
+  const workingDirectories = agent.worktreePath ? [fileUri(agent.worktreePath)] : undefined
+  // Non-lead chats report themselves as spawned by the lead's synthetic
+  // spawn_agent tool call (see agentSpawnTurn) — an AHP client renders them as
+  // side chats under the lead instead of flat session-level siblings. The
+  // toolCallId must match the one the lead's turn uses for the same agent.
+  const origin: ChatOrigin | undefined = agent.role !== 'lead' && leadAgent
+    ? { kind: 'tool', chat: coordinatorChatUri(run.id, leadAgent.id), toolCallId: spawnToolCallId(agent.id) } as ChatOrigin
+    : undefined
   return {
     resource: coordinatorChatUri(run.id, agent.id),
     title: agent.role === 'lead' ? 'Lead' : agent.name,
@@ -136,7 +193,46 @@ function chatSummary(run: ProtocolRun, agent: ProtocolAgent): ChatSummary {
     // Coordinator participants exchange work through the durable mailbox and
     // task tools. These AHP chats are projections, not agent prompt streams.
     interactivity: AHP_CHAT_INTERACTIVITY_READ_ONLY,
-    workingDirectory,
+    workingDirectories,
+    origin,
+  }
+}
+
+// The lead's synthetic view of spawning a teammate — a completed tool call
+// whose ToolResultSubagentContent points at the teammate's chat. Consistent
+// with the teammate chat's own ChatOrigin (same toolCallId), as the spec
+// requires for the tool/sideChat edge to resolve in both directions.
+function agentSpawnTurn(run: ProtocolRun, agent: ProtocolAgent, task: ProtocolTask | undefined): Turn {
+  const toolCallId = spawnToolCallId(agent.id)
+  const toolCall: ToolCallCompletedState = {
+    toolCallId,
+    toolName: 'spawn_agent',
+    displayName: 'Spawn teammate',
+    status: AHP_TOOL_CALL_STATUS_COMPLETED,
+    confirmed: AHP_TOOL_CALL_CONFIRMED_NOT_NEEDED,
+    invocationMessage: `Spawning ${agent.name} (${agent.provider})`,
+    toolInput: spawnToolInput(run, agent, task),
+    success: true,
+    pastTenseMessage: `Spawned ${agent.name}`,
+    content: [{
+      type: AHP_TOOL_RESULT_CONTENT_TYPE_SUBAGENT,
+      resource: coordinatorChatUri(run.id, agent.id),
+      title: agent.name,
+      agentName: agent.provider,
+      description: task?.title,
+    }],
+  }
+  return {
+    id: `spawn-turn:${agent.id}`,
+    startedAt: agent.createdAt,
+    duration: 0,
+    message: {
+      text: `Spawn ${agent.name}`,
+      origin: { kind: AHP_MESSAGE_KIND_AGENT },
+    },
+    responseParts: [{ kind: 'toolCall', toolCall } as ResponsePart],
+    usage: undefined,
+    state: AHP_TURN_STATE_COMPLETE,
   }
 }
 
@@ -209,8 +305,8 @@ export function coordinatorSessionSummary(run: ProtocolRun): SessionSummary {
 }
 
 export function coordinatorSessionState(snapshot: ProtocolRunSnapshot): SessionState {
-  const chats = snapshot.agents.map((agent) => chatSummary(snapshot.run, agent))
   const lead = snapshot.agents.find((agent) => agent.role === 'lead')
+  const chats = snapshot.agents.map((agent) => chatSummary(snapshot.run, agent, lead))
   const activeClients = snapshot.agents.flatMap((agent) => agent.capabilities?.ahpClientId ? [{
     clientId: agent.capabilities.ahpClientId,
     displayName: agent.name,
@@ -245,13 +341,24 @@ export function coordinatorChatState(
   snapshot: ProtocolRunSnapshot,
   agent: ProtocolAgent,
 ): ChatState {
-  const summary = chatSummary(snapshot.run, agent)
+  const lead = snapshot.agents.find((candidate) => candidate.role === 'lead')
+  const summary = chatSummary(snapshot.run, agent, lead)
+  const mailboxTurns = snapshot.messages
+    .filter((message) => message.fromAgentId === agent.id || message.toAgentId === agent.id)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    .map(coordinatorChatTurn)
+  // The lead's chat additionally carries one synthetic spawn_agent turn per
+  // teammate, interleaved chronologically with its mailbox turns, so the
+  // side-chat edges declared in chatSummary() resolve to a real tool call.
+  const spawnTurns = agent.role === 'lead'
+    ? snapshot.agents
+      .filter((candidate) => candidate.id !== agent.id)
+      .map((candidate) => agentSpawnTurn(snapshot.run, candidate, snapshot.tasks.find((task) => task.id === candidate.taskId)))
+    : []
+  const turns = [...mailboxTurns, ...spawnTurns].sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? ''))
   return {
     ...summary,
-    turns: snapshot.messages
-      .filter((message) => message.fromAgentId === agent.id || message.toAgentId === agent.id)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
-      .map(coordinatorChatTurn),
+    turns,
     _meta: {
       [AHP_COORDINATOR_META_KEY]: {
         version: AHP_COORDINATOR_META_VERSION,

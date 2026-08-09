@@ -7,7 +7,26 @@
 // Keep this conservative: a false positive auto-retries a genuinely fatal error
 // (wasting one round-trip before surfacing it), while a false negative just
 // shows the error a few seconds sooner. Bias toward not retrying when unsure.
-export function isTransientSendError(message: string | null | undefined): boolean {
+// Thrown by SSE consumers when a turn's `error` frame carries a structural
+// HTTP status (Claude's api_error_status) alongside the message text, so
+// isTransientSendError can classify it without parsing prose.
+export class TransientAwareSendError extends Error {
+  apiErrorStatus?: number
+  constructor(message: string, apiErrorStatus?: number | null) {
+    super(message)
+    this.name = 'TransientAwareSendError'
+    if (typeof apiErrorStatus === 'number') this.apiErrorStatus = apiErrorStatus
+  }
+}
+
+export function isTransientSendError(message: string | null | undefined, apiErrorStatus?: number | null): boolean {
+  // Structural signal first: Claude's SDK now reports the HTTP status of a
+  // recovered-but-errored API call directly (api_error_status on result
+  // messages) instead of only embedding it in prose. Prefer it over the
+  // string match below when available — it can't be fooled by wording changes.
+  if (typeof apiErrorStatus === 'number' && (apiErrorStatus === 429 || (apiErrorStatus >= 500 && apiErrorStatus < 600))) {
+    return true
+  }
   if (!message) return false
   const m = message.toLowerCase()
   // Network-layer hiccups.

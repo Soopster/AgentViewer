@@ -34,7 +34,7 @@ import { getProviderComposer, pickProviderExample } from '@/lib/providerComposer
 import { extractCopilotPushedAttachments, extractPendingPermission, extractPendingPermissions, extractPermissionReply, type PendingPermission, type PendingQuestionAnswers } from '@/lib/permissions'
 import { extractClaudeReadFileSummary } from '@/lib/claudeSdkFeatures'
 import { parseClaudeCommandLifecycle, type ClaudeCommandLifecycleState } from '@/lib/claudeCommandLifecycle'
-import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs } from '@/lib/transientError'
+import { isTransientSendError, MAX_TRANSIENT_SEND_RETRIES, transientRetryBackoffMs, TransientAwareSendError } from '@/lib/transientError'
 import { respondToChannelPermission, readBridgeConfigFromEnv, type ChannelPermissionRequestEvent } from '@/lib/channelBridge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -4657,7 +4657,7 @@ export default function MessageView({
           if (frame.event === 'error') {
             try {
               const parsed = JSON.parse(frame.data)
-              throw new Error(parsed.error ?? 'Unknown agent error')
+              throw new TransientAwareSendError(parsed.error ?? 'Unknown agent error', parsed.apiErrorStatus)
             } catch (e) { throw e }
           }
 
@@ -4975,7 +4975,7 @@ export default function MessageView({
           if (frame.event !== 'error') continue
           try {
             const parsed = JSON.parse(frame.data)
-            throw new Error(parsed.error ?? 'Unknown agent error')
+            throw new TransientAwareSendError(parsed.error ?? 'Unknown agent error', parsed.apiErrorStatus)
           } catch (e) { throw e }
         }
       }
@@ -5007,12 +5007,13 @@ export default function MessageView({
         return
       }
       const errorMessage = err instanceof Error ? err.message : 'Failed to send message'
+      const apiErrorStatus = err instanceof TransientAwareSendError ? err.apiErrorStatus : undefined
       // Visible auto-retry: native CLIs quietly ride out transient API/network
       // blips. Mirror that — but only when the error is transient AND the turn
       // streamed no output (so a retry can't duplicate a tool call or partial
       // reply) AND we're under the retry budget. Show a "Retrying…" badge so a
       // multi-second wait reads as recovery, not a hang.
-      const canRetry = isTransientSendError(errorMessage)
+      const canRetry = isTransientSendError(errorMessage, apiErrorStatus)
         && !turnProducedOutputRef.current
         && transientRetryCountRef.current < MAX_TRANSIENT_SEND_RETRIES
       if (canRetry) {

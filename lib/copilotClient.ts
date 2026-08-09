@@ -131,16 +131,27 @@ export function copilotSessionConfigOverrides(sessionId?: string): Partial<Sessi
     overrides.sessionLimits = { maxAiCredits }
   }
 
+  // Grant read/write access to extra directories beyond the session's working
+  // directory — e.g. a coordinator teammate's worktree plus the shared repo
+  // checkout. Must be re-supplied on every resume (the SDK doesn't persist it).
+  const additionalDirectories = normalizedEnv(process.env.COPILOT_ADDITIONAL_DIRECTORIES)
+  if (additionalDirectories) {
+    overrides.additionalDirectories = additionalDirectories.split(',').map((dir) => dir.trim()).filter(Boolean)
+  }
+
   return overrides
 }
 
-export function copilotIntegrationDiagnostics(): string[] {
+export function copilotIntegrationDiagnostics(sessionId?: string): string[] {
   const items = ['Config discovery enabled']
   if (readCustomAgents()) items.push('Custom agents configured')
   if (readCopilotTelemetry()) items.push('OpenTelemetry tracing enabled')
   else items.push('OpenTelemetry tracing disabled (set COPILOT_OTEL_FILE or COPILOT_OTEL_ENDPOINT)')
   if (isEnvFlagEnabled(process.env.COPILOT_AUTO_APPROVE_PLAN)) items.push('Plan exit auto-approval enabled')
   if (isEnvFlagEnabled(process.env.COPILOT_AUTO_MODE_SWITCH)) items.push('Rate-limit auto-mode switching enabled')
+  if (normalizedEnv(process.env.COPILOT_ADDITIONAL_DIRECTORIES)) items.push('Additional directories granted')
+  const stopReason = sessionId ? copilotLastStopReason.get(sessionId) : undefined
+  if (stopReason) items.push(`Last agent stop: ${stopReason}`)
   return items
 }
 
@@ -165,12 +176,24 @@ declare global {
   var __agentViewerCopilotSessionPool: Map<string, CopilotPoolEntry> | undefined
   // eslint-disable-next-line no-var
   var __agentViewerCopilotSessionInflight: Map<string, Promise<CopilotSession>> | undefined
+  // eslint-disable-next-line no-var
+  var __agentViewerCopilotLastStopReason: Map<string, string> | undefined
 }
 
 const copilotPermissionHandlers = globalThis.__agentViewerCopilotPermissionHandlers
   ?? (globalThis.__agentViewerCopilotPermissionHandlers = new Map<string, PermissionHandler>())
 const copilotElicitationHandlers = globalThis.__agentViewerCopilotElicitationHandlers
   ?? (globalThis.__agentViewerCopilotElicitationHandlers = new Map<string, ElicitationHandler>())
+// AgentStop fires once per turn when the top-level agent reaches a natural
+// terminal stop (not aborted, not blocked by a rejected tool) — a definitive
+// completion signal the event stream's turn_end doesn't distinguish from an
+// interrupted/errored end. Last reason per session, surfaced in diagnostics.
+const copilotLastStopReason = globalThis.__agentViewerCopilotLastStopReason
+  ?? (globalThis.__agentViewerCopilotLastStopReason = new Map<string, string>())
+
+export function getCopilotLastStopReason(sessionId: string): string | undefined {
+  return copilotLastStopReason.get(sessionId)
+}
 
 export function setCopilotPermissionHandler(sessionId: string, handler: PermissionHandler): void {
   copilotPermissionHandlers.set(sessionId, handler)
@@ -240,6 +263,11 @@ async function resumeCopilotSession(
         (copilotPermissionHandlers.get(sessionId) ?? approveAll)(request, invocation),
       onElicitationRequest: (context) =>
         (copilotElicitationHandlers.get(sessionId) ?? (() => ({ action: 'decline' as const })))(context),
+      hooks: {
+        onAgentStop: (input) => {
+          if (input.stopReason) copilotLastStopReason.set(sessionId, input.stopReason)
+        },
+      },
       suppressResumeEvent: true,
       // We're a read-mostly observer; suppress duplicate telemetry events
       // that would otherwise fire on every resume from session list polls.
@@ -280,6 +308,7 @@ function scheduleCopilotEviction(sessionId: string): void {
     copilotSessionPool.delete(sessionId)
     clearCopilotPermissionHandler(sessionId)
     clearCopilotElicitationHandler(sessionId)
+    copilotLastStopReason.delete(sessionId)
     await current.session.disconnect().catch(() => {})
   }, COPILOT_SESSION_TTL_MS)
   if (typeof entry.timer === 'object' && entry.timer && 'unref' in entry.timer) {

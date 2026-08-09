@@ -3512,21 +3512,24 @@ function parseClaudePermissionMode(body: Record<string, unknown>): ClaudePermiss
 // (max-turns / budget / execution error) or a recovered-but-errored API call
 // (subtype 'success' with is_error + api_error_status). The SDK surfaces these
 // inline in the CLI; without this the turn just goes quiet. Returns a
-// human-readable error string, or null when the result is a clean success.
-function claudeResultErrorMessage(msg: Record<string, unknown>): string | null {
+// human-readable error string plus the raw HTTP status when the SDK reported
+// one, so callers can classify retryability structurally instead of parsing
+// the message text; null when the result is a clean success.
+function claudeResultErrorMessage(msg: Record<string, unknown>): { message: string; apiErrorStatus?: number } | null {
   if (msg.type !== 'result') return null
   const subtype = typeof msg.subtype === 'string' ? msg.subtype : ''
-  if (subtype === 'error_max_turns') return 'Claude reached the maximum number of turns before finishing.'
-  if (subtype === 'error_max_budget_usd') return 'Claude reached the task budget before finishing.'
-  if (subtype === 'error_max_structured_output_retries') return 'Claude could not produce a valid structured response.'
+  if (subtype === 'error_max_turns') return { message: 'Claude reached the maximum number of turns before finishing.' }
+  if (subtype === 'error_max_budget_usd') return { message: 'Claude reached the task budget before finishing.' }
+  if (subtype === 'error_max_structured_output_retries') return { message: 'Claude could not produce a valid structured response.' }
   if (subtype === 'error_during_execution') {
     const errors = Array.isArray(msg.errors) ? msg.errors.filter((entry): entry is string => typeof entry === 'string') : []
-    return errors.length ? `Claude hit an error: ${errors.join('; ')}` : 'Claude hit an error during execution.'
+    return { message: errors.length ? `Claude hit an error: ${errors.join('; ')}` : 'Claude hit an error during execution.' }
   }
   if (subtype === 'success' && msg.is_error === true) {
-    const status = typeof msg.api_error_status === 'number' ? ` (HTTP ${msg.api_error_status})` : ''
+    const apiErrorStatus = typeof msg.api_error_status === 'number' ? msg.api_error_status : undefined
+    const status = apiErrorStatus != null ? ` (HTTP ${apiErrorStatus})` : ''
     const detail = typeof msg.result === 'string' && msg.result.trim() ? `: ${msg.result.trim()}` : ''
-    return `Claude API error${status}${detail}`
+    return { message: `Claude API error${status}${detail}`, apiErrorStatus }
   }
   return null
 }
@@ -3958,7 +3961,9 @@ async function createClaudeStreamCold(args: ClaudeStreamColdArgs): Promise<Respo
           // and for future turns.
           if (msg.type === 'result') {
             const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
-            if (resultError) safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: resultError })}\n\n`)
+            if (resultError) {
+              safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: resultError.message, apiErrorStatus: resultError.apiErrorStatus })}\n\n`)
+            }
             break
           }
         }
@@ -4237,7 +4242,7 @@ async function createClaudeStreamPooled(args: ClaudeStreamPooledArgs): Promise<R
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(msg)}\n\n`))
               const resultError = claudeResultErrorMessage(msg as unknown as Record<string, unknown>)
               if (resultError) {
-                controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: resultError })}\n\n`))
+                controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: resultError.message, apiErrorStatus: resultError.apiErrorStatus })}\n\n`))
               }
             } catch {
               /* downstream closed; ignore — the turn keeps running in the pool */
@@ -7126,7 +7131,7 @@ export async function readViewSessionDiagnostics(sessionId: string, providerOver
         tools: tools.tools,
         currentTools: currentTools.tools ?? [],
         quotaItems,
-        integrationItems: copilotIntegrationDiagnostics(),
+        integrationItems: copilotIntegrationDiagnostics(sessionId),
         metadata,
         events,
         workspacePath: session.workspacePath,

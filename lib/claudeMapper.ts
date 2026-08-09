@@ -182,9 +182,13 @@ function normalizeTimestamp(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function asOrigin(value: unknown): { kind: string } | undefined {
+function asOrigin(value: unknown): { kind: string; subkind?: string } | undefined {
   const record = asObject(value)
-  return typeof record.kind === 'string' ? { kind: record.kind } : undefined
+  if (typeof record.kind !== 'string') return undefined
+  // subkind discriminates within a kind — currently 'scheduled-trigger' and
+  // 'peer-send-message' (a message pushed in by another session's SendMessage
+  // tool, held for approval when the recipient runs with bypassed permissions).
+  return typeof record.subkind === 'string' ? { kind: record.kind, subkind: record.subkind } : { kind: record.kind }
 }
 
 function readString(record: Record<string, unknown>, ...keys: string[]): string | undefined {

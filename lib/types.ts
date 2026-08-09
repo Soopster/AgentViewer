@@ -82,7 +82,7 @@ export type SessionMessage = {
   message: ApiMessage | SystemMessagePayload
   parent_tool_use_id: null
   timestamp?: string
-  origin?: { kind: string }
+  origin?: { kind: string; subkind?: string }
   provider?: AgentProvider
   turnId?: string
   taskDescription?: string

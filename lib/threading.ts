@@ -74,7 +74,7 @@ export type ThreadedMessage = {
   uuid: string
   sessionId?: string
   timestamp?: string
-  origin?: { kind: string }
+  origin?: { kind: string; subkind?: string }
   usage?: ApiMessage['usage']
   provider?: AgentProvider
   taskDescription?: string

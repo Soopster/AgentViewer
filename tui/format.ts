@@ -2026,7 +2026,10 @@ export function formatTranscriptCard(message: ThreadedMessage, density: TuiDensi
   // Origin kind carries the spawn chain (`subagent:parent/child`); repeat the
   // arrow per nesting level for depth-2+ agents.
   const subagentDepth = isSubagent ? originKind.slice('subagent:'.length).split('/').length : 0
-  const subagentLabel = isSubagent ? `${baseLabel} ${'↪'.repeat(Math.min(Math.max(subagentDepth, 1), 3))} sub` : baseLabel
+  const isPeerSend = message.origin?.subkind === 'peer-send-message'
+  const subagentLabel = isSubagent
+    ? `${baseLabel} ${'↪'.repeat(Math.min(Math.max(subagentDepth, 1), 3))} sub`
+    : isPeerSend ? `${baseLabel} ⇄ peer` : baseLabel
   const taskSuffix = isSubagent && message.taskDescription
     ? ` · task: ${truncateLine(message.taskDescription, 48)}`
     : ''
