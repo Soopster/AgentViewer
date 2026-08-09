@@ -22,6 +22,14 @@ The bridge exposes this workflow through ordinary MCP primitives as well as `coo
 - `coord_await_run` creates a whole-run monitor for work that an unattended worker or external supervisor is already driving. It can surface pending lead plan reviews as `input_required` elicitations and apply the user's approve/reject response. Do not call it as an interactive lead's next action—the monitor does not claim tasks, answer mail, perform implementation, or synthesize. `tasks/cancel` cancels only the wait/monitor and never stops the Coordinator run or changes board-task state.
 - MCP task handles wrap protocol operations; Coordinator board tasks remain the source of truth for ownership, dependencies, locks, progress, completion, and synthesis. Never create a one-to-one shadow MCP task for every Coordinator task.
 
+## Provider compatibility
+
+Every `coord_*` tool has one implementation and one JSON Schema — there is no provider-specific tool subset, and the `provider` field on `coord_create_run`/`coord_join_run` only labels which CLI is driving that participant for the roster and for provider-level failure handling (`coord_handoff_task`'s `failure_class`); it never gates which tools that participant can call.
+
+- If a tool call is rejected, trust the error message over any assumption about your provider — every rejection (invalid enum, ownership check, gate failure, capability mismatch) is a specific, actionable string, not a generic failure, and holds regardless of which CLI you are.
+- The MCP Tasks extension (`coord_wait`/`coord_await_run` durable handles) only activates when your MCP client declares `io.modelcontextprotocol/tasks`; clients that don't simply get the blocking result instead — this is a capability check, not a provider allowlist, so don't infer anything about provider support from whether you receive a task handle.
+- If your provider's MCP client behaves unexpectedly on a specific tool (schema rejected, structured content ignored, elicitation not surfaced) where another provider handles the same call fine, that is a client-side MCP implementation gap in that CLI, not a Coordinator-side special case to work around — report it via `coord_publish_finding` so the lead and other lanes know, rather than silently avoiding the tool.
+
 ## A2A and MCP boundary
 
 Use the two protocols as complementary layers, not interchangeable transports:
