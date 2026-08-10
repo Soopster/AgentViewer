@@ -3600,11 +3600,13 @@ async function createClaudeStream(sessionId: string, signal: AbortSignal, body: 
   const manualPermissions = body.manualPermissions === true
   const detachOnClientAbort = body.detachOnClientAbort === true
   const permissionMode = parseClaudePermissionMode(body)
-  // For pending (newly created) sessions there is no prior model on disk, so we
-  // need an explicit default. For existing/resumed sessions we leave model
-  // unset so the SDK reuses whatever the session was last running with — same
-  // as `claude --resume` from the CLI.
-  const model = explicitModel ?? (isPendingSession ? 'claude-sonnet-4-6' : undefined)
+  // Leave model unset when the composer hasn't picked one yet — for both
+  // pending and resumed sessions. The SDK/CLI already falls back to its own
+  // configured default (respecting ANTHROPIC_MODEL, settings.json, or a
+  // custom base URL/Bedrock/Vertex deployment) when `model` is omitted; a
+  // hardcoded literal here would override that and throw "invalid model" on
+  // machines where that literal isn't a recognized model id.
+  const model = explicitModel
   const fallbackModel = claudeFallbackModelChain()
   const effort = parseEffort(body)
   const attachments = parseAttachments(body)
@@ -4385,7 +4387,10 @@ async function readClaudeSupportedModelsOnce(): Promise<SessionModelInfo[]> {
     : query({
         prompt: openPrompt(),
         options: {
-          model: 'claude-sonnet-4-6',
+          // No explicit model — let the CLI boot with its own default so this
+          // works on custom deployments (Bedrock/Vertex, proxied base URLs,
+          // non-default ANTHROPIC_MODEL) instead of a literal that may not
+          // resolve there.
           ...(fallbackModel ? { fallbackModel } : {}),
           persistSession: false,
           maxTurns: 0,
@@ -6481,7 +6486,9 @@ export async function prewarmViewSession(params: {
     acquireClaudeSession({
       sessionId: params.sessionId,
       cwd: params.cwd,
-      model: params.model ?? (params.isPending ? 'claude-sonnet-4-6' : undefined),
+      // Leave model unset when not provided — see createClaudeStream for why
+      // a hardcoded literal breaks custom-model deployments.
+      model: params.model,
       fallbackModel: claudeFallbackModelChain(),
       effort: params.effort,
       isPendingSession: params.isPending,
@@ -7354,7 +7361,7 @@ export async function rewindOrRollbackViewSession({ sessionId, body, provider }:
   }
 
   const userMessageId = typeof body.userMessageId === 'string' ? body.userMessageId : undefined
-  const model = typeof body.model === 'string' ? body.model : 'claude-sonnet-4-6'
+  const model = typeof body.model === 'string' ? body.model : undefined
   if (!userMessageId) {
     throw new Error('userMessageId is required')
   }

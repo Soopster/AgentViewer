@@ -22,12 +22,16 @@ export function openPrompt(): AsyncIterable<SDKUserMessage> {
   }
 }
 
-export function createSessionControlQuery(sessionId: string, model = 'claude-sonnet-4-6'): Query {
+export function createSessionControlQuery(sessionId: string, model?: string): Query {
   return query({
     prompt: openPrompt(),
     options: {
       resume: sessionId,
-      model,
+      // Omit when unset so the CLI resumes with whatever model the session was
+      // last running — forcing a literal default here would override custom
+      // deployments (Bedrock/Vertex, proxied base URLs, non-default
+      // ANTHROPIC_MODEL) with a model id they may not recognize.
+      ...(model ? { model } : {}),
       maxTurns: 0,
       enableFileCheckpointing: true,
       // Read-only control queries (context usage, supported commands, MCP
@@ -54,7 +58,10 @@ export function createSessionControlQuery(sessionId: string, model = 'claude-son
 // next call is hot too.
 
 const READ_MODELS_WARM_OPTIONS = {
-  model: 'claude-sonnet-4-6',
+  // No explicit model: this only asks the CLI what models it knows about, so
+  // it should boot with whatever default it would normally pick (respecting
+  // custom ANTHROPIC_MODEL/base URL/Bedrock/Vertex config) rather than a
+  // literal that may not be valid on that deployment.
   persistSession: false,
   maxTurns: 0,
   enableFileCheckpointing: true,
