@@ -6189,9 +6189,9 @@ button.av-session-viz-graph-node:disabled {
   .av-coord-provider-chip { display: none; }
   .av-coord-grid { grid-template-columns: minmax(460px, 1fr) 320px; }
   .av-coord-task-panel .av-coord-filterbar,
-  .av-coord-task-row { grid-template-columns: 100px minmax(160px, 1fr) minmax(90px, .7fr) 78px; }
-  .av-coord-task-panel .av-coord-filterbar > :nth-child(5),
-  .av-coord-task-row > :nth-child(5) { display: none; }
+  .av-coord-task-row { grid-template-columns: 100px minmax(160px, 1fr) minmax(90px, .7fr) 78px 58px; }
+  .av-coord-task-panel .av-coord-filterbar > :nth-child(6),
+  .av-coord-task-row > :nth-child(7) { display: none; }
 }
 
 @media (max-width: 980px) {
@@ -6321,12 +6321,18 @@ button.av-session-viz-graph-node:disabled {
 .av-coord-task-panel { position: relative; border-right: 1px solid var(--av-coord-line); }
 .av-coord-task-panel .av-coord-panel-head { min-height: 48px; }
 .av-coord-board-filters > button { border: 1px solid var(--av-coord-line); border-radius: 4px; background: transparent; color: var(--cyan); font: 9px "IBM Plex Mono", monospace; padding: 4px 7px; text-transform: uppercase; }
+.av-coord-task-panel {
+  --av-coord-board-columns: minmax(86px, .8fr) minmax(0, 1.6fr) minmax(96px, .8fr) 88px 68px minmax(0, .9fr);
+}
 .av-coord-task-panel .av-coord-filterbar,
 .av-coord-task-row {
-  grid-template-columns: 112px minmax(220px, 1.4fr) minmax(110px, .75fr) 90px 70px minmax(120px, .75fr);
+  grid-template-columns: var(--av-coord-board-columns);
   gap: 12px;
 }
 .av-coord-task-panel .av-coord-filterbar { padding-left: 38px; }
+.av-coord-task-panel .av-coord-filterbar > *,
+.av-coord-task-row > * { min-width: 0; }
+.av-coord-task-row > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .av-coord-task-panel > .av-coord-board-list { max-height: none; flex: 1 1 auto; }
 .av-coord-board-list { position: relative; padding: 8px 12px 4px; }
 .av-coord-task-group { position: relative; border-bottom: 0; padding: 4px 0 12px 26px; }
@@ -6564,7 +6570,7 @@ button.av-session-viz-graph-node:disabled {
 @media (max-width: 1500px) {
   .av-coord-main { grid-template-columns: minmax(0, 1fr) 390px; }
   .av-coord-task-panel .av-coord-filterbar,
-  .av-coord-task-row { grid-template-columns: 96px minmax(180px, 1.2fr) minmax(90px, .7fr) 78px 58px minmax(90px, .6fr); gap: 8px; }
+  .av-coord-task-row { --av-coord-board-columns: minmax(78px, .8fr) minmax(0, 1.45fr) minmax(88px, .75fr) 78px 58px minmax(0, .7fr); gap: 8px; }
   .av-coord-provider-chip { min-width: 74px; }
 }
 
@@ -6576,6 +6582,13 @@ button.av-session-viz-graph-node:disabled {
   .av-coord-team-panel, .av-coord-events-panel { min-height: 360px; }
   .av-coord-right-attention { min-height: 120px; }
   .av-coord-throughput { grid-template-columns: minmax(240px, 1.3fr) repeat(3, minmax(90px, .6fr)); }
+}
+
+@media (max-width: 760px) {
+  .av-coord-task-panel .av-coord-filterbar,
+  .av-coord-task-row { --av-coord-board-columns: minmax(82px, .9fr) minmax(0, 1.4fr); gap: 8px; }
+  .av-coord-task-panel .av-coord-filterbar > :nth-child(n+3),
+  .av-coord-task-row > :nth-child(n+4) { display: none; }
 }
 
 /* ── Mermaid diagrams ──────────────────────────────────────────────────── */
