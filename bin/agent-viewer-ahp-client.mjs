@@ -5,6 +5,7 @@ const ROOT_CHANNEL = 'ahp-root://'
 const COORDINATOR_METHOD = 'agent-viewer/coordinator'
 const SAFE_RETRY_ACTIONS = new Set(['list_playbooks', 'list_runs', 'resume', 'status', 'wait'])
 const IDEMPOTENT_RETRY_ACTIONS = new Set([
+  'cancel_turn',
   'claim_task',
   'complete_task',
   'create_task',

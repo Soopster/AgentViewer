@@ -339,9 +339,37 @@ export type ProtocolAgent = {
    * instead of having to send a probe message first to find out.
    */
   liveness?: { status: ProtocolAgentLivenessStatus; ageSeconds: number | null }
+  /**
+   * Timestamp of this participant's last event that actually reached the
+   * team — an explicit send_message/publish_finding, or any event that
+   * queued a message to the lead (heartbeat with content, blocked, plan
+   * submitted, ...). Drives the reply guard (see externalActionableSync's
+   * replyGuardDue): undefined/stale here while owning a task for a while
+   * means real work may be happening with nobody told.
+   */
+  lastReportAt?: string
+  /**
+   * Set by the lead (coord_cancel_turn) to interrupt this participant's
+   * in-flight turn without releasing its owned task — the external worker
+   * supervisor polls this and aborts the current provider tick, then starts
+   * a fresh one. Cleared once the worker observes and acts on it.
+   */
+  cancelRequestedAt?: string
+  /** Which senders' mailbox messages actually reach this participant — see ProtocolAgentRespondToMode. */
+  respondTo?: { mode: ProtocolAgentRespondToMode; allowlist: string[] }
   createdAt: string
   updatedAt: string
 }
+
+/**
+ * Mirrors buzz-acp's respond-to author gate: which senders' mailbox messages
+ * are delivered to this participant. `owner-only`/`allowlist` are meant for
+ * externally-facing agents that should ignore chatter from anyone but their
+ * operator or an approved list; `nobody` is the broadcast-only case (act on
+ * heartbeats/schedule, ignore all inbound mail). Default (unset) is `anyone`
+ * — today's behavior, unchanged for every run that doesn't opt in.
+ */
+export type ProtocolAgentRespondToMode = 'owner-only' | 'allowlist' | 'anyone' | 'nobody'
 
 export type ProtocolTask = {
   id: string
@@ -504,6 +532,8 @@ export type CreateExternalProtocolRunParams = {
   playbook?: RunPlaybook
   /** Interpolated into {{args}} / {{args.<key>}} in playbook task text. */
   playbookArgs?: unknown
+  /** Which senders' mailbox messages reach this participant. Omitted means `anyone` (today's behavior). */
+  respondTo?: { mode: ProtocolAgentRespondToMode; allowlist?: string[] }
 }
 
 export type JoinExternalProtocolRunParams = {
@@ -514,6 +544,8 @@ export type JoinExternalProtocolRunParams = {
   cwd: string
   client?: ExternalProtocolClient
   capabilities?: ExternalProtocolCapabilities
+  /** Which senders' mailbox messages reach this participant. Omitted means `anyone` (today's behavior). */
+  respondTo?: { mode: ProtocolAgentRespondToMode; allowlist?: string[] }
 }
 
 export type ExternalProtocolParticipantResult = {
@@ -549,6 +581,9 @@ export type ExternalProtocolActionable = {
   myTask: { id: string; status: ProtocolTaskStatus; planState: ProtocolTaskPlanState } | null
   /** Every task is completed/failed/cancelled — the lead should finalize. */
   allTasksTerminal: boolean
+  /** Reply guard: owns a task, has been silent past the threshold — see replyGuardReminder for the text to surface. */
+  replyGuardDue: boolean
+  replyGuardReminder?: string
 }
 
 export type ExternalProtocolWaitResult = {

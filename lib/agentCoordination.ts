@@ -57,6 +57,7 @@ import {
   type PlaybookSummary,
   type ProtocolAgent,
   type ProtocolAgentLivenessStatus,
+  type ProtocolAgentRespondToMode,
   type ProtocolAgentStatus,
   type ProtocolContextMatch,
   type ProtocolDeliveryHint,
@@ -152,7 +153,12 @@ const LOCK_LEASE_MS = 20 * 60_000
 // v11 → v12: protocol_push_configs table (A2A tasks/pushNotificationConfig/*)
 // — a new IF-NOT-EXISTS table needs no ALTER migration, but the version bump
 // keeps the meta row honest for anyone diagnosing schema drift.
-const SCHEMA_VERSION = 15
+// v15 → v16: last_report_at (reply guard — has this participant told the
+// team anything since claiming its current task?), cancel_requested_at (lead
+// can cancel a teammate's in-flight turn without releasing the task), and
+// respond_to_mode/respond_to_allowlist_json (per-participant mailbox sender
+// gating, mirroring buzz-acp's respond-to modes).
+const SCHEMA_VERSION = 16
 const EVENT_WINDOW = 300
 const LOCK_HISTORY_WINDOW = 200
 // Non-terminal tasks (pending/claimed/blocked) are always returned in full —
@@ -667,6 +673,18 @@ function migrateSchema(db: SqliteDatabase): void {
       // column already exists
     }
   }
+  for (const statement of [
+    'ALTER TABLE protocol_agents ADD COLUMN last_report_at TEXT',
+    'ALTER TABLE protocol_agents ADD COLUMN cancel_requested_at TEXT',
+    'ALTER TABLE protocol_agents ADD COLUMN respond_to_mode TEXT',
+    'ALTER TABLE protocol_agents ADD COLUMN respond_to_allowlist_json TEXT',
+  ]) {
+    try {
+      db.exec(statement)
+    } catch {
+      // column already exists
+    }
+  }
 }
 
 function hasSingleColumnPk(db: SqliteDatabase, table: string): boolean {
@@ -877,9 +895,18 @@ function rowToAgent(row: Row): ProtocolAgent {
         }
       : undefined,
     capabilities,
+    lastReportAt: typeof row.last_report_at === 'string' ? row.last_report_at : undefined,
+    cancelRequestedAt: typeof row.cancel_requested_at === 'string' ? row.cancel_requested_at : undefined,
+    respondTo: isRespondToMode(row.respond_to_mode)
+      ? { mode: row.respond_to_mode, allowlist: parseJsonArray(row.respond_to_allowlist_json) }
+      : undefined,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
+}
+
+function isRespondToMode(value: unknown): value is ProtocolAgentRespondToMode {
+  return value === 'owner-only' || value === 'allowlist' || value === 'anyone' || value === 'nobody'
 }
 
 const SEARCH_STOPWORDS = new Set([
@@ -1282,6 +1309,7 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
     WHERE run_id = ? AND to_agent_id = ? AND reply_required = 1 AND resolved_at IS NULL
   `).get(runId, agentId) as Row | undefined)?.n) || 0
   const myTaskRow = agent?.taskId ? tasksById.get(agent.taskId) : undefined
+  const replyGuard = agent && myTaskRow ? replyGuardCheckSync(db, runId, agent, myTaskRow.id) : null
   return {
     runStatus: run.status,
     claimableTasks: claimable.map((task) => ({ id: task.id, title: task.title, targetRole: task.targetRole })),
@@ -1297,6 +1325,50 @@ function externalActionableSync(db: SqliteDatabase, runId: string, agentId: stri
       : null,
     allTasksTerminal: tasks.length > 0
       && tasks.every((task) => ['completed', 'failed', 'cancelled'].includes(task.status)),
+    replyGuardDue: replyGuard?.due ?? false,
+    replyGuardReminder: replyGuard?.reminder,
+  }
+}
+
+// How long a participant may hold a task while working without telling the
+// team anything before the reply guard fires. Long enough that one slow
+// provider tick isn't a false positive; short enough to catch a genuinely
+// silent worker within a couple of tick cycles.
+const REPLY_GUARD_SILENCE_MS = 3 * 60_000
+// Cap consecutive reminders — advisory, not a trap, mirroring buzz-agent's
+// reply guard: nag a couple of times, then let the participant work in
+// peace rather than nag every single tick forever.
+const REPLY_GUARD_MAX_REMINDERS = 2
+
+/**
+ * Reply guard: has this participant told the team anything (an explicit
+ * report, or any event that queued a message to the lead — see
+ * REPLY_GUARD_REPORT_EVENT_TYPES / appendProtocolEvent) since it claimed its
+ * current task? Claim time comes from protocol_task_baselines, written at
+ * claim (claimExternalProtocolTask) — the same row the outside-paths
+ * completion gate already relies on, so no extra bookkeeping is needed.
+ */
+function replyGuardCheckSync(
+  db: SqliteDatabase,
+  runId: string,
+  agent: ProtocolAgent,
+  taskId: string,
+): { due: boolean; reminder?: string } | null {
+  if (agent.status !== 'working') return null
+  const baselineRow = db.prepare(
+    'SELECT created_at FROM protocol_task_baselines WHERE run_id = ? AND task_id = ? AND agent_id = ?',
+  ).get(runId, taskId, agent.id) as Row | undefined
+  const claimedAt = typeof baselineRow?.created_at === 'string' ? new Date(baselineRow.created_at).getTime() : NaN
+  if (!Number.isFinite(claimedAt)) return null
+  if (Date.now() - claimedAt < REPLY_GUARD_SILENCE_MS) return null
+  const reportedAt = agent.lastReportAt ? new Date(agent.lastReportAt).getTime() : NaN
+  const reportedSinceClaim = Number.isFinite(reportedAt) && reportedAt >= claimedAt
+  if (reportedSinceClaim) return null
+  const remindersSoFar = Math.floor((Date.now() - claimedAt) / REPLY_GUARD_SILENCE_MS)
+  if (remindersSoFar > REPLY_GUARD_MAX_REMINDERS) return { due: false }
+  return {
+    due: true,
+    reminder: `Reply guard: you have been working on ${taskId} for a while without telling the team anything (no coord_progress, coord_send_message, or coord_publish_finding since you claimed it). If you have made real progress, report it now with coord_progress or coord_send_message — your reasoning and tool output are invisible to teammates until you do. If you have genuinely made no progress yet, this reminder can be ignored.`,
   }
 }
 
@@ -1368,6 +1440,8 @@ function issueParticipant(
     agentId?: string
     client?: ExternalProtocolClient
     capabilities?: ExternalProtocolCapabilities
+    /** Which senders' mailbox messages reach this participant — see ProtocolAgentRespondToMode. Omitted/undefined means `anyone` (today's behavior). */
+    respondTo?: { mode: ProtocolAgentRespondToMode; allowlist?: string[] }
   },
 ): ExternalProtocolParticipant {
   const negotiated = negotiateExternalClient(params.client, params.capabilities)
@@ -1378,8 +1452,8 @@ function issueParticipant(
     INSERT INTO protocol_agents (
       id, run_id, name, role, provider, session_id, worktree_path, worktree_branch,
       task_id, status, last_seen_at, client_name, client_version, protocol_version,
-      capabilities_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ready', ?, ?, ?, ?, ?, ?, ?)
+      capabilities_json, respond_to_mode, respond_to_allowlist_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     agentId,
     params.runId,
@@ -1394,6 +1468,8 @@ function issueParticipant(
     negotiated.client.version ?? null,
     negotiated.client.protocolVersion,
     JSON.stringify(negotiated.capabilities),
+    params.respondTo?.mode ?? null,
+    params.respondTo?.mode ? JSON.stringify(params.respondTo.allowlist ?? []) : null,
     ts,
     ts,
   )
@@ -1425,20 +1501,36 @@ function issueParticipant(
  * in phase N+1 blocked by every task in phase N (barrier), plus explicit
  * key-based dependencies. The plan is held by the artifact, not a lead turn.
  */
-function seedPlaybookTasksSync(
-  db: SqliteDatabase,
-  runId: string,
-  agentId: string,
-  playbook: RunPlaybook,
-  args: unknown,
-): void {
+/** Pure planning output for one playbook task — see planPlaybookTasks. */
+type PlaybookTaskPlan = {
+  /** Deterministic `task-${n}` id this task will get when actually inserted (see insertTaskSync/nextTaskIdSync) — reliable because planning and insertion both run inside the same open transaction, so no other insert can land between them. */
+  id: string
+  key?: string
+  title: string
+  prompt: string
+  paths: string[]
+  blockedBy: string[]
+  phase: string
+  targetRole: ProtocolTaskTargetRole
+}
+
+/**
+ * Pure decision logic for playbook seeding — no DB access. Interpolates
+ * `{{args}}`, resolves phase-barrier + explicit key dependencies, and
+ * predicts each task's id. Two callers apply this differently (the seam
+ * buzz-workflow's ActionSink models, adapted to this codebase's synchronous
+ * SQL style rather than an async trait object): seedPlaybookTasksSync
+ * actually inserts the rows; previewExternalProtocolPlaybook returns the
+ * plan as-is for a dry-run coord_preview_playbook call, so a caller can sanity-check
+ * a playbook + args combination before committing to coord_create_run.
+ */
+function planPlaybookTasks(playbook: RunPlaybook, args: unknown, startCount: number): PlaybookTaskPlan[] {
   const argumentContext = args === undefined
     ? ''
     : `\n\nPlaybook arguments:\n${typeof args === 'string' ? args : JSON.stringify(args, null, 2)}`
   // Pre-assign every task id in insertion order so key references resolve
   // regardless of declaration order within a phase. (Later-phase references
   // are rejected at parse time — they would deadlock against the barrier.)
-  const startCount = Number((db.prepare('SELECT COUNT(*) AS n FROM protocol_tasks WHERE run_id = ?').get(runId) as Row | undefined)?.n) || 0
   const keyToId = new Map<string, string>()
   let assigned = startCount
   for (const phase of playbook.phases) {
@@ -1447,16 +1539,22 @@ function seedPlaybookTasksSync(
       if (entry.key) keyToId.set(entry.key, `task-${assigned}`)
     }
   }
+  const plans: PlaybookTaskPlan[] = []
   let previousPhaseIds: string[] = []
+  let nextId = startCount
   for (const phase of playbook.phases) {
     const phaseIds: string[] = []
     for (const entry of phase.tasks) {
+      nextId += 1
+      const id = `task-${nextId}`
       const explicitDeps = (entry.dependsOn ?? []).map((key) => {
-        const id = keyToId.get(key)
-        if (!id) throw new Error(`playbook task "${entry.title}" depends on unknown key: ${key}`)
-        return id
+        const depId = keyToId.get(key)
+        if (!depId) throw new Error(`playbook task "${entry.title}" depends on unknown key: ${key}`)
+        return depId
       })
-      const task = insertTaskSync(db, runId, {
+      plans.push({
+        id,
+        key: entry.key,
         title: interpolatePlaybookText(entry.title, args),
         prompt: `${interpolatePlaybookText(entry.detail, args)}${argumentContext}`,
         paths: (entry.paths ?? []).map((lockPath) => interpolatePlaybookText(lockPath, args)),
@@ -1464,22 +1562,70 @@ function seedPlaybookTasksSync(
         phase: phase.title,
         targetRole: entry.role ?? 'teammate',
       })
-      if (entry.key) keyToId.set(entry.key, task.id)
-      phaseIds.push(task.id)
-      insertEventSync(db, {
-        version: AGENT_PROTOCOL_VERSION,
-        runId,
-        agentId,
-        type: 'task.created',
-        taskId: task.id,
-        title: task.title,
-        detail: task.prompt,
-        paths: task.paths,
-        dependsOn: task.blockedBy,
-        payload: { phase: phase.title, playbook: playbook.name, targetRole: task.targetRole },
-      })
+      phaseIds.push(id)
     }
     previousPhaseIds = phaseIds
+  }
+  return plans
+}
+
+/**
+ * Dry-run playbook seeding: computes exactly what seedPlaybookTasksSync would
+ * create (task ids, titles, prompts, dependency graph) without touching the
+ * database or requiring a run to exist. Same planPlaybookTasks the real
+ * seeding path uses — this function just doesn't apply the plan.
+ */
+export async function previewExternalProtocolPlaybook(
+  params: { cwd: string; playbookName?: string; playbook?: RunPlaybook; args?: unknown },
+): Promise<{ tasks: PlaybookTaskPlan[] }> {
+  const playbook = params.playbookName
+    ? await loadRunPlaybook(params.cwd, params.playbookName)
+    : params.playbook
+  if (!playbook) throw new Error('playbookName or playbook is required')
+  if (params.args === undefined && playbookExpectsArgs(playbook)) {
+    throw new Error(
+      `Playbook "${playbook.name}" expects args (${playbook.argsHint ?? 'see the {{args}} placeholders in its task text'}) — pass args to preview it`,
+    )
+  }
+  return { tasks: planPlaybookTasks(playbook, params.args, 0) }
+}
+
+function seedPlaybookTasksSync(
+  db: SqliteDatabase,
+  runId: string,
+  agentId: string,
+  playbook: RunPlaybook,
+  args: unknown,
+): void {
+  const startCount = Number((db.prepare('SELECT COUNT(*) AS n FROM protocol_tasks WHERE run_id = ?').get(runId) as Row | undefined)?.n) || 0
+  const plans = planPlaybookTasks(playbook, args, startCount)
+  const keyToId = new Map<string, string>()
+  for (const plan of plans) {
+    const task = insertTaskSync(db, runId, {
+      title: plan.title,
+      prompt: plan.prompt,
+      paths: plan.paths,
+      // blockedBy was computed from predicted ids (see planPlaybookTasks);
+      // resolve any that were themselves re-keyed by an earlier iteration of
+      // this same loop, same as the pre-refactor keyToId overwrite did.
+      blockedBy: plan.blockedBy.map((depId) => keyToId.get(depId) ?? depId),
+      phase: plan.phase,
+      targetRole: plan.targetRole,
+    })
+    if (plan.key) keyToId.set(plan.key, task.id)
+    keyToId.set(plan.id, task.id)
+    insertEventSync(db, {
+      version: AGENT_PROTOCOL_VERSION,
+      runId,
+      agentId,
+      type: 'task.created',
+      taskId: task.id,
+      title: task.title,
+      detail: task.prompt,
+      paths: task.paths,
+      dependsOn: task.blockedBy,
+      payload: { phase: task.phase, playbook: playbook.name, targetRole: task.targetRole },
+    })
   }
 }
 
@@ -1532,6 +1678,7 @@ export async function createExternalProtocolRun(
         branch: worktree.branch,
         client: params.client,
         capabilities: params.capabilities,
+        respondTo: params.respondTo,
       })
       if (playbook) seedPlaybookTasksSync(db, runId, agentId, playbook, params.playbookArgs)
       db.exec('COMMIT')
@@ -1609,6 +1756,7 @@ export async function joinExternalProtocolRun(
         branch: worktree.branch,
         client: params.client,
         capabilities: params.capabilities,
+        respondTo: params.respondTo,
       })
       db.prepare('UPDATE protocol_runs SET updated_at = ? WHERE id = ?').run(nowIso(), run.id)
       db.exec('COMMIT')
@@ -2082,6 +2230,14 @@ export async function createExternalProtocolTask(
     if (roleName && !roleDescription) {
       const saved = await readSavedRole(await projectRepoRoot(agent.worktreePath), roleName)
       roleDescription = saved?.description
+      // Persona-pack-style default nudge (see SavedRoleTemplate) — surfaced
+      // in the task text itself since we cannot mechanically switch an
+      // external CLI worker's provider/model mid-run; the claiming agent
+      // decides whether to act on it.
+      if (saved?.defaultProvider || saved?.defaultModel) {
+        const suggestion = [saved.defaultProvider, saved.defaultModel].filter(Boolean).join(' / ')
+        roleDescription = `${roleDescription ? `${roleDescription}\n\n` : ''}Suggested provider/model for this role: ${suggestion}.`
+      }
     }
     db.exec('BEGIN IMMEDIATE')
     try {
@@ -2380,9 +2536,13 @@ export async function sendExternalProtocolMessage(
   requireExternalParticipantSync(db, identity)
   const body = params.body.trim()
   if (!body) throw new Error('message body is required')
-  const recipients = resolveRecipientsSync(db, identity.runId, identity.agentId, params.to)
-  if (recipients.length === 0) {
+  const resolvedRecipients = resolveRecipientsSync(db, identity.runId, identity.agentId, params.to)
+  if (resolvedRecipients.length === 0) {
     throw new Error(`Coordinator message recipient not found: ${params.to}`)
+  }
+  const recipients = resolvedRecipients.filter((recipientId) => respondToAllowsSync(db, identity.runId, recipientId, identity.agentId))
+  if (recipients.length === 0) {
+    throw new Error(`${params.to} is not accepting messages from you right now (respond-to gate)`)
   }
   if (params.inReplyTo && recipients.length !== 1) {
     throw new Error('A correlated reply must address exactly one participant')
@@ -2643,7 +2803,7 @@ export async function rememberExternalProtocolMemory(
 
 export async function saveExternalProtocolRole(
   identity: ExternalProtocolIdentity,
-  params: { name: string; description: string },
+  params: { name: string; description: string; defaultProvider?: AgentProvider; defaultModel?: string },
 ): Promise<{ role: SavedRoleTemplate }> {
   const db = await getDatabase()
   const agent = requireExternalParticipantSync(db, identity)
@@ -2651,7 +2811,10 @@ export async function saveExternalProtocolRole(
   const description = params.description.trim()
   if (!name || !description) throw new Error('role name and description are required')
   const repoRoot = await projectRepoRoot(agent.worktreePath)
-  const role = await writeSavedRole(repoRoot, agent.name, name, description)
+  const role = await writeSavedRole(repoRoot, agent.name, name, description, {
+    provider: params.defaultProvider,
+    model: params.defaultModel?.trim() || undefined,
+  })
   return { role }
 }
 
@@ -2854,6 +3017,57 @@ export async function releaseExternalProtocolTask(
       throw err
     }
   })
+  notifyRunChanged(identity.runId)
+  return result
+}
+
+/**
+ * Lead-only: interrupt a teammate's in-flight turn without releasing its
+ * owned task — mirrors buzz-acp's owner `!cancel` (cancel only the current
+ * turn, task/ownership untouched) rather than `!shutdown`/release, which
+ * always relinquish work. Sets `cancel_requested_at`; the target's own
+ * worker supervisor (bin/agent-viewer-coord-worker.mjs's runCheckTimer,
+ * which already polls `wait` during a tick to detect a terminal run) picks
+ * this up, kills the current provider turn, and starts a fresh one — task
+ * ownership and status are untouched throughout. The flag is cleared as a
+ * side effect of the target's next progress report (see
+ * reportExternalProtocolProgress), not here, since only the target — having
+ * actually observed and acted on it — can say it was handled.
+ */
+export async function cancelExternalProtocolTurn(
+  identity: ExternalProtocolIdentity,
+  params: { agentId: string },
+): Promise<ExternalProtocolMutationResult> {
+  const readDb = await getDatabase()
+  const agent = requireExternalParticipantSync(readDb, identity)
+  if (agent.role !== 'lead') throw new Error('Only the Coordinator lead can cancel another participant\'s turn')
+  const targetId = resolveRecipientsSync(readDb, identity.runId, identity.agentId, params.agentId)[0]
+    ?? listAgentsSync(readDb, identity.runId).find((entry) => entry.id === params.agentId)?.id
+  if (!targetId) throw new Error(`Coordinator participant not found: ${params.agentId}`)
+  if (targetId === identity.agentId) throw new Error('Cannot cancel your own turn — just stop and report')
+  await enqueueWrite((db) => {
+    const targetRow = db.prepare('SELECT status FROM protocol_agents WHERE run_id = ? AND id = ?')
+      .get(identity.runId, targetId) as Row | undefined
+    if (!targetRow || targetRow.status !== 'working') {
+      throw new Error(`${params.agentId} has no in-flight turn to cancel (status: ${targetRow?.status ?? 'unknown'})`)
+    }
+    const ts = nowIso()
+    db.prepare('UPDATE protocol_agents SET cancel_requested_at = ?, updated_at = ? WHERE run_id = ? AND id = ?')
+      .run(ts, ts, identity.runId, targetId)
+  })
+  // Delivered through the standard message pipeline (appendProtocolEvent),
+  // not a bare event row, so it actually lands in the target's inbox and can
+  // steer a live session the same as any other urgent status message.
+  await appendProtocolEvent({
+    version: AGENT_PROTOCOL_VERSION,
+    runId: identity.runId,
+    agentId: identity.agentId,
+    type: 'message',
+    to: targetId,
+    summary: 'Lead cancelled your in-flight turn — you still own your task; start a fresh turn.',
+    payload: { kind: 'status', priority: 'urgent' },
+  })
+  const result = await externalMutationResult(identity)
   notifyRunChanged(identity.runId)
   return result
 }
@@ -3258,7 +3472,27 @@ function rolesDir(repoRoot: string): string {
   return path.join(repoRoot, '.agent-viewer', 'roles')
 }
 
-type SavedRoleTemplate = { name: string; description: string; createdBy: string; createdAt: string; updatedAt: string }
+/**
+ * Persona-pack-style defaults: a role can suggest a provider/model a task in
+ * that role is best worked by (mirrors buzz's Persona Pack `defaults` object
+ * — model/temperature/triggers a persona inherits and can override). We have
+ * no "pack" grouping to inherit from, so this is single-level: a role either
+ * sets its own defaults or doesn't, no fallback chain. Applied as a nudge in
+ * the task prompt text (see createExternalProtocolTask), not a mechanical
+ * override — an external CLI worker's provider/model is fixed for its
+ * process lifetime, so the claiming agent (human or automated) is the one
+ * who decides whether to act on the suggestion, e.g. by running its own
+ * native model-switch command.
+ */
+type SavedRoleTemplate = {
+  name: string
+  description: string
+  defaultProvider?: AgentProvider
+  defaultModel?: string
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+}
 
 async function readSavedRole(repoRoot: string, name: string): Promise<SavedRoleTemplate | null> {
   const slug = slugifyRoleName(name)
@@ -3271,7 +3505,13 @@ async function readSavedRole(repoRoot: string, name: string): Promise<SavedRoleT
   }
 }
 
-async function writeSavedRole(repoRoot: string, authorName: string, name: string, description: string): Promise<SavedRoleTemplate> {
+async function writeSavedRole(
+  repoRoot: string,
+  authorName: string,
+  name: string,
+  description: string,
+  defaults: { provider?: AgentProvider; model?: string } = {},
+): Promise<SavedRoleTemplate> {
   const slug = slugifyRoleName(name)
   if (!slug) throw new Error('role name must contain at least one letter or digit')
   const existing = await readSavedRole(repoRoot, name)
@@ -3279,6 +3519,11 @@ async function writeSavedRole(repoRoot: string, authorName: string, name: string
   const template: SavedRoleTemplate = {
     name: name.trim(),
     description,
+    // Omitting provider/model on an update keeps the existing defaults
+    // rather than clearing them — matches how updating description alone
+    // shouldn't silently drop a previously-set persona default.
+    defaultProvider: defaults.provider ?? existing?.defaultProvider,
+    defaultModel: defaults.model ?? existing?.defaultModel,
     createdBy: existing?.createdBy ?? authorName,
     createdAt: existing?.createdAt ?? ts,
     updatedAt: ts,
@@ -4014,6 +4259,33 @@ function resolveRecipientsSync(db: SqliteDatabase, runId: string, fromAgentId: s
   return match && match.id !== fromAgentId ? [match.id] : []
 }
 
+/**
+ * Respond-to gate (see ProtocolAgentRespondToMode) — mirrors buzz-acp's
+ * owner-only/allowlist/anyone/nobody inbound author gate. `owner-only` means
+ * only this run's lead; `allowlist` means the lead plus the recipient's own
+ * allowlist (owner always implicitly included, same as buzz); unset/`anyone`
+ * (today's default) and `nobody` are exactly what they say. Only used for
+ * participant-to-participant sends — see appendProtocolEvent's 'message'
+ * branch and sendExternalProtocolMessage.
+ */
+function respondToAllowsSync(db: SqliteDatabase, runId: string, recipientAgentId: string, fromAgentId: string): boolean {
+  if (recipientAgentId === fromAgentId) return true
+  const row = db.prepare('SELECT respond_to_mode, respond_to_allowlist_json FROM protocol_agents WHERE run_id = ? AND id = ?')
+    .get(runId, recipientAgentId) as Row | undefined
+  const mode = row?.respond_to_mode
+  if (!isRespondToMode(mode)) return true // unset — today's default behavior
+  if (mode === 'anyone') return true
+  if (mode === 'nobody') return false
+  const isLead = listAgentsSync(db, runId).find((agent) => agent.id === fromAgentId)?.role === 'lead'
+  if (mode === 'owner-only') return isLead
+  // allowlist: lead is always implicitly included, matching buzz's "owner is
+  // always implicitly included even in allowlist mode".
+  if (isLead) return true
+  const allowlist = parseJsonArray(row?.respond_to_allowlist_json).map((entry) => entry.toLowerCase())
+  const fromAgent = listAgentsSync(db, runId).find((agent) => agent.id === fromAgentId)
+  return allowlist.includes(fromAgentId.toLowerCase()) || Boolean(fromAgent && allowlist.includes(fromAgent.name.toLowerCase()))
+}
+
 function insertMessageSync(db: SqliteDatabase, params: {
   runId: string
   fromAgentId: string
@@ -4053,6 +4325,11 @@ function insertMessageSync(db: SqliteDatabase, params: {
   return id
 }
 
+/** Event types that always count as "told the team something" for the reply guard, regardless of whether they happened to queue a message. */
+const REPLY_GUARD_REPORT_EVENT_TYPES = new Set<AgentProtocolEvent['type']>([
+  'message', 'finding', 'learning', 'handoff', 'review.requested',
+])
+
 /**
  * Apply one protocol event to the ledger. All state effects (agent status,
  * task lifecycle, claims, locks, mailbox rows) happen in one transaction;
@@ -4087,7 +4364,11 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
       if (event.type !== 'agent.heartbeat' || event.summary || event.detail) {
         insertEventSync(db, { ...event, timestamp: ts })
       }
-      db.prepare('UPDATE protocol_agents SET last_seen_at = ?, updated_at = ? WHERE id = ? AND run_id = ?')
+      // Any event this agent produces (heartbeat included) proves it is
+      // actively running a turn again, so a pending cancel_requested_at from
+      // before that turn started has definitionally been observed and acted
+      // on — clear it here rather than requiring a dedicated ack call.
+      db.prepare('UPDATE protocol_agents SET last_seen_at = ?, updated_at = ?, cancel_requested_at = NULL WHERE id = ? AND run_id = ?')
         .run(ts, ts, event.agentId, event.runId)
       if (event.type === 'agent.heartbeat') {
         db.prepare(`
@@ -4360,17 +4641,26 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
         const body = [event.summary, event.detail].filter(Boolean).join(' — ') || '(empty message)'
         const messageKind = typeof event.payload?.kind === 'string' ? event.payload.kind as ProtocolMessageKind : 'request'
         const messagePriority = typeof event.payload?.priority === 'string' ? event.payload.priority as ProtocolMessagePriority : undefined
-        const recipients = resolveRecipientsSync(db, event.runId, event.agentId, event.to)
+        const resolvedRecipients = resolveRecipientsSync(db, event.runId, event.agentId, event.to)
         const target = (event.to ?? 'lead').trim()
+        // Respond-to gating (see ProtocolAgentRespondToMode) applies only to
+        // participant-to-participant sends, not the coordinator-authored
+        // system messages elsewhere in this function (cancel notices, blocked
+        // alerts, plan reviews, ...) — those always reach their target.
+        const recipients = resolvedRecipients.filter((recipientId) => respondToAllowsSync(db, event.runId, recipientId, event.agentId))
+        const gatedOut = resolvedRecipients.filter((id) => !recipients.includes(id))
         if (recipients.length === 0 && target.toLowerCase() !== 'all') {
           // A typo'd or stale teammate name must not vanish a message with no
           // trace — tell the sender delivery failed instead of silently
           // dropping it (the external send path already throws on this).
+          const reason = gatedOut.length > 0
+            ? `${target} is not accepting messages from you right now (respond-to gate)`
+            : `no teammate named "${target}" in this run. Check the roster and resend`
           newMessageIds.push(insertMessageSync(db, {
             runId: event.runId,
             fromAgentId: 'coordinator',
             toAgentId: event.agentId,
-            body: `Delivery failed: no teammate named "${target}" in this run. Check the roster and resend.`,
+            body: `Delivery failed: ${reason}.`,
             ts,
             kind: 'status',
           }))
@@ -4411,6 +4701,16 @@ export async function appendProtocolEvent(event: AgentProtocolEvent): Promise<Pr
         }
       } else if (event.type === 'shutdown.requested') {
         setAgentStatusSync(db, event.runId, event.agentId, 'stopped', ts)
+      }
+
+      // Reply guard bookkeeping: this event counted as "telling the team
+      // something" if it's an explicit report type, or if it queued at least
+      // one message to the lead above (a heartbeat/start_work/stop_work with
+      // real content, a blocked report, a submitted plan, ...). A bare
+      // content-less heartbeat does neither and correctly does not count.
+      if (REPLY_GUARD_REPORT_EVENT_TYPES.has(event.type) || newMessageIds.length > 0) {
+        db.prepare('UPDATE protocol_agents SET last_report_at = ? WHERE id = ? AND run_id = ?')
+          .run(ts, event.agentId, event.runId)
       }
 
       pruneLiveNoiseSync(db, event.runId)

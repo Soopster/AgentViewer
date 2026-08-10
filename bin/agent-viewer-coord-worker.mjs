@@ -299,8 +299,17 @@ function appendWorkerLog(state, chunk) {
   return logDrainPromise
 }
 
+/** Shared by both transports' cancel-turn handling — see cancelExternalProtocolTurn. */
+function makeTurnCancelledError(command, providerOutput) {
+  const error = new Error(`${command} turn cancelled by the Coordinator lead (coord_cancel_turn) — task ownership is unaffected, retrying with a fresh turn`)
+  error.code = 'COORDINATOR_TURN_CANCELLED'
+  error.providerOutput = providerOutput
+  return error
+}
+
 function classifyProviderFailure(error) {
   const text = `${error?.message || error}\n${error?.providerOutput || ''}`.toLowerCase()
+  if (error?.code === 'COORDINATOR_TURN_CANCELLED') return 'turn_cancelled'
   if (error?.code === 'COORDINATOR_PROVIDER_TURN_TIMEOUT') return 'provider_timeout'
   if (error?.code === 'ENOENT' || /enoent|command not found|not recognized as/.test(text)) return 'cli_missing'
   if (/rate.?limit|quota|usage limit|credit balance|insufficient credits|billing|too many requests|429/.test(text)) return 'rate_limited'
@@ -370,7 +379,7 @@ function gitCommonDir(cwd) {
   return resolved ? path.resolve(cwd, resolved) : null
 }
 
-function tickPrompt(state) {
+function tickPrompt(state, actionable) {
   const skillPath = path.join(state.cwd, '.agents', 'skills', 'coordinate-agents', 'SKILL.md')
   const checkoutGuidance = state.checkoutMode === 'isolated'
     ? `You are working in an isolated git worktree at ${state.cwd}; stay within granted paths and leave integration to the lead.`
@@ -391,13 +400,19 @@ function tickPrompt(state) {
     'If your task work will take several steps, call coord_read_inbox again partway through rather than only at the start — a reply_required message from the lead can arrive mid-task and change your plan; you will not be woken for it until you check.',
     'Use stable request_id values before retrying mutations. If no action is ready, return control to the supervisor; do not poll or sleep.',
     'If all tasks are terminal and you are lead, review every durable task result, synthesize the run, and finalize it. Never print participant credentials.',
+    ...(actionable?.replyGuardReminder ? [actionable.replyGuardReminder] : []),
   ].join(' ')
 }
 
-async function providerTick(state, baseUrl) {
+async function providerTick(state, baseUrl, actionable) {
   if (shutdownRequested) throw supervisorStoppedError()
   const config = mcpConfig(state, baseUrl)
-  const prompt = tickPrompt(state)
+  const prompt = tickPrompt(state, actionable)
+  // Baseline for the runCheckTimer's cancel-turn detection below: only a
+  // cancel_requested_at newer than this tick's own start counts — an older
+  // one belongs to a cancel this same tick already acted on (or one aimed at
+  // a now-finished prior tick) and must not retrigger.
+  const tickStartedAtIso = new Date().toISOString()
   const previousProviderSessionId = state.providerSessionId
   // A linked worktree's checkout lives under state.cwd, but commits also write
   // its branch, index, and objects through the parent repository's common Git
@@ -408,7 +423,7 @@ async function providerTick(state, baseUrl) {
   const isolatedGitDir = state.checkoutMode === 'isolated' ? gitCommonDir(state.cwd) : null
   const gitDirectoryArgs = isolatedGitDir ? ['--add-dir', isolatedGitDir] : []
   if (state.transport === 'acp') {
-    return acpProviderTick(state, baseUrl, config, prompt, isolatedGitDir ? [isolatedGitDir] : [])
+    return acpProviderTick(state, baseUrl, config, prompt, isolatedGitDir ? [isolatedGitDir] : [], tickStartedAtIso)
   }
   let command
   let args
@@ -527,14 +542,28 @@ async function providerTick(state, baseUrl) {
     let providerReportedError = null
     let sessionStateSave = Promise.resolve()
     let turnTimedOut = false
+    let turnCancelled = false
     let providerTimeoutDetail = null
     let timeoutKillTimer = null
     let runCheckInFlight = false
     let lastProviderActivityAt = Date.now()
     const beginProviderTimeout = (detail) => {
-      if (turnTimedOut) return
+      if (turnTimedOut || turnCancelled) return
       turnTimedOut = true
       providerTimeoutDetail = detail
+      signalProviderChild(child, 'SIGTERM')
+      timeoutKillTimer = setTimeout(() => {
+        if (providerChildRunning(child)) signalProviderChild(child, 'SIGKILL')
+      }, PROVIDER_STOP_GRACE_MS)
+      timeoutKillTimer.unref?.()
+    }
+    // Lead-issued coord_cancel_turn (see cancelExternalProtocolTurn):
+    // interrupt this turn but leave task ownership alone — distinct from
+    // beginProviderTimeout, whose class DOES count toward the durable-failure
+    // threshold that eventually hands the task back to the board.
+    const beginCancelledTurn = () => {
+      if (turnTimedOut || turnCancelled) return
+      turnCancelled = true
       signalProviderChild(child, 'SIGTERM')
       timeoutKillTimer = setTimeout(() => {
         if (providerChildRunning(child)) signalProviderChild(child, 'SIGKILL')
@@ -556,6 +585,10 @@ async function providerTick(state, baseUrl) {
       try {
         const current = await api(baseUrl, 'wait', { ...state, cursor: null, timeoutMs: 0 }, 10_000)
         if (isTerminal(current)) requestShutdown('terminal Coordinator run', 'SIGTERM')
+        else {
+          const self = current.snapshot?.agents?.find((entry) => entry.id === state.agentId)
+          if (self?.cancelRequestedAt && self.cancelRequestedAt > tickStartedAtIso) beginCancelledTurn()
+        }
       } catch (error) {
         if (isTerminalCoordinatorError(error)) requestShutdown('deleted Coordinator run', 'SIGTERM')
       } finally {
@@ -575,6 +608,7 @@ async function providerTick(state, baseUrl) {
       error.providerOutput = providerOutput
       return error
     }
+    const turnCancelledError = () => makeTurnCancelledError(command, providerOutput)
     child.stdout.on('data', (chunk) => {
       lastProviderActivityAt = Date.now()
       process.stdout.write(chunk)
@@ -636,7 +670,7 @@ async function providerTick(state, baseUrl) {
       error.providerOutput = providerOutput
       try {
         await sessionStateSave
-        reject(turnTimedOut ? providerTimeoutError() : error)
+        reject(turnCancelled ? turnCancelledError() : turnTimedOut ? providerTimeoutError() : error)
       } catch (saveError) {
         reject(saveError)
       }
@@ -647,7 +681,8 @@ async function providerTick(state, baseUrl) {
       clearProviderChild(child)
       try {
         await sessionStateSave
-        if (turnTimedOut) reject(providerTimeoutError())
+        if (turnCancelled) reject(turnCancelledError())
+        else if (turnTimedOut) reject(providerTimeoutError())
         else if (code === 0 && !providerReportedError) resolve()
         else {
           const error = new Error(providerReportedError
@@ -679,7 +714,7 @@ async function providerTick(state, baseUrl) {
  * equivalent of the raw transport's `--add-dir` for isolated-worktree git
  * access.
  */
-async function acpProviderTick(state, baseUrl, config, prompt, additionalDirectories) {
+async function acpProviderTick(state, baseUrl, config, prompt, additionalDirectories, tickStartedAtIso) {
   const abortController = new AbortController()
   const forwardShutdown = () => abortController.abort(supervisorStoppedError())
   if (shutdownController.signal.aborted) forwardShutdown()
@@ -687,12 +722,24 @@ async function acpProviderTick(state, baseUrl, config, prompt, additionalDirecto
 
   let lastActivityAt = Date.now()
   let turnTimedOut = false
+  let turnCancelled = false
   let providerTimeoutDetail = null
   const beginProviderTimeout = (detail) => {
-    if (turnTimedOut) return
+    if (turnTimedOut || turnCancelled) return
     turnTimedOut = true
     providerTimeoutDetail = detail
     abortController.abort(new Error(detail))
+  }
+  // See providerTick's beginCancelledTurn — same lead-issued coord_cancel_turn
+  // signal, ACP transport variant. The actual thrown error is constructed in
+  // the catch block below from the turnCancelled flag (matching how
+  // turnTimedOut is handled) rather than from the abort reason, since the ACP
+  // SDK's cancellationSignal plumbing doesn't guarantee the reason object
+  // survives to the rejected/resolved promise.
+  const beginCancelledTurn = () => {
+    if (turnTimedOut || turnCancelled) return
+    turnCancelled = true
+    abortController.abort(new Error('cancelled by Coordinator lead'))
   }
   const turnTimeoutTimer = setTimeout(() => {
     beginProviderTimeout(`exceeded the ${PROVIDER_TURN_TIMEOUT_MS}ms Coordinator provider-turn deadline`)
@@ -710,6 +757,10 @@ async function acpProviderTick(state, baseUrl, config, prompt, additionalDirecto
     try {
       const current = await api(baseUrl, 'wait', { ...state, cursor: null, timeoutMs: 0 }, 10_000)
       if (isTerminal(current)) requestShutdown('terminal Coordinator run', 'SIGTERM')
+      else {
+        const self = current.snapshot?.agents?.find((entry) => entry.id === state.agentId)
+        if (self?.cancelRequestedAt && self.cancelRequestedAt > tickStartedAtIso) beginCancelledTurn()
+      }
     } catch (error) {
       if (isTerminalCoordinatorError(error)) requestShutdown('deleted Coordinator run', 'SIGTERM')
     } finally {
@@ -766,6 +817,7 @@ async function acpProviderTick(state, baseUrl, config, prompt, additionalDirecto
       throw error
     }
   } catch (error) {
+    if (turnCancelled) throw makeTurnCancelledError(resolveAcpAgentCommand(state.provider), providerOutput)
     if (turnTimedOut) {
       const timeoutError = new Error(`${resolveAcpAgentCommand(state.provider)} ${providerTimeoutDetail}`)
       timeoutError.code = 'COORDINATOR_PROVIDER_TURN_TIMEOUT'
@@ -970,6 +1022,10 @@ let cursor = null
 let providerFailures = 0
 let coordinatorFailures = 0
 let finalStatus = 'stopped'
+// Actionable digest from the most recent `wait`, threaded into the next
+// providerTick's prompt (reply guard reminder) — null on the very first
+// tick, before anything has been claimed.
+let lastActionable = null
 const role = state.role === 'lead' ? 'lead' : 'teammate'
 
 async function leaveRunBeforeExit(reason, status = 'stopped') {
@@ -1037,7 +1093,7 @@ outer: for (;;) {
   }
   try {
     const recoveringProvider = providerFailures > 0
-    await providerTick(state, baseUrl)
+    await providerTick(state, baseUrl, lastActionable)
     providerFailures = 0
     if (recoveringProvider) {
       delete state.lastFailureClass
@@ -1055,6 +1111,24 @@ outer: for (;;) {
     if (shutdownRequested) {
       await checkpointForSupervisorStop(`Supervisor received ${shutdownSignal ?? 'a shutdown request'} and stopped the active provider turn.`)
       break
+    }
+    if (classifyProviderFailure(error) === 'turn_cancelled') {
+      // Lead-issued coord_cancel_turn (see cancelExternalProtocolTurn): an
+      // intentional interrupt, not a real failure. Task ownership was never
+      // touched, so skip the whole failure-classification/backoff/handoff
+      // apparatus below and just start a fresh tick immediately — except in
+      // --once mode, which always checkpoints owned work before exiting
+      // regardless of why the single tick ended, same as every other
+      // --once exit path.
+      await workerLog(state, error.message)
+      if (options.once) {
+        await checkpointBeforeExit(
+          'The bounded supervisor\'s single provider turn was cancelled by the lead while the task was still owned.',
+          `${state.provider} worker completed its bounded --once turn without owned work`,
+        )
+        break
+      }
+      continue
     }
     providerFailures += 1
     const failureClass = classifyProviderFailure(error)
@@ -1075,6 +1149,7 @@ outer: for (;;) {
       try {
         current = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 0 })
         cursor = current.cursor
+        lastActionable = current.actionable ?? lastActionable
         if (isTerminal(current)) break outer
       } catch (waitError) {
         if (isTerminalCoordinatorError(waitError)) break outer
@@ -1195,6 +1270,7 @@ outer: for (;;) {
       }
     }
     cursor = current.cursor
+    lastActionable = current.actionable ?? lastActionable
     if (isTerminal(current)) break
     // The provider turn may have claimed a task, received mail, or left owned
     // work open. Act on that returned digest immediately instead of entering a
@@ -1203,6 +1279,7 @@ outer: for (;;) {
     for (;;) {
       const next = await api(baseUrl, 'wait', { ...state, cursor, timeoutMs: 55_000 })
       cursor = next.cursor
+      lastActionable = next.actionable ?? lastActionable
       if (isTerminal(next)) break outer
       if (shouldTick(next.actionable, role)) break
     }

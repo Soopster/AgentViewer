@@ -845,8 +845,11 @@ server.registerTool('coord_create_run', {
     playbook_name: z.string().min(1).max(64).optional().describe('Saved playbook in <cwd>/.agent-viewer/playbooks/ to seed the board from'),
     playbook: z.record(z.string(), z.unknown()).optional().describe('Inline playbook object: { name, description?, phases: [{ title, tasks: [{ key?, title, detail, paths?, dependsOn? }] }] }'),
     args: z.unknown().optional().describe('Interpolated into {{args}} / {{args.<key>}} in playbook task text'),
+    respond_to_mode: z.enum(['owner-only', 'allowlist', 'anyone', 'nobody']).optional()
+      .describe('Which senders\' mailbox messages reach this CLI. Defaults to anyone (today\'s behavior). owner-only/allowlist always implicitly include the lead.'),
+    respond_to_allowlist: z.array(z.string()).optional().describe('Participant names or ids to accept messages from — required when respond_to_mode is allowlist'),
   },
-}, async ({ prompt, name, provider, max_agents, cwd, gate_command, require_plan_approval, playbook_name, playbook, args }) => {
+}, async ({ prompt, name, provider, max_agents, cwd, gate_command, require_plan_approval, playbook_name, playbook, args, respond_to_mode, respond_to_allowlist }) => {
   await requireUnboundBridge('coord_create_run')
   const result = await bindCoordinatorParticipant(await coordinatorRequest('create_run', {
     prompt,
@@ -859,10 +862,28 @@ server.registerTool('coord_create_run', {
     playbookName: playbook_name,
     playbook,
     args,
+    respondToMode: respond_to_mode,
+    respondToAllowlist: respond_to_allowlist,
     ...coordinatorNegotiation(),
   }, false))
   return textResult(result)
 })
+
+server.registerTool('coord_preview_playbook', {
+  description: 'Dry-run a saved or inline playbook + args: returns the exact task ids, titles, prompts, and dependency graph coord_create_run would seed, without creating a run. Use to sanity-check args before committing.',
+  inputSchema: {
+    playbook_name: z.string().min(1).max(64).optional().describe('Saved playbook in <cwd>/.agent-viewer/playbooks/'),
+    playbook: z.record(z.string(), z.unknown()).optional().describe('Inline playbook object instead of playbook_name'),
+    args: z.unknown().optional().describe('Interpolated into {{args}} / {{args.<key>}} in playbook task text'),
+    cwd: z.string().min(1).optional().describe('Checkout to search for playbook_name; defaults to this CLI project directory'),
+  },
+  annotations: { readOnlyHint: true },
+}, async ({ playbook_name, playbook, args, cwd }) => textResult(await coordinatorRequest('preview_playbook', {
+  playbookName: playbook_name,
+  playbook,
+  args,
+  cwd: cwd ?? bridgeCwd,
+}, false)))
 
 server.registerTool('coord_list_playbooks', {
   description: 'List saved Coordinator playbooks (reusable run definitions) for a checkout. Run one with coord_create_run playbook_name + args.',
@@ -894,14 +915,19 @@ server.registerTool('coord_join_run', {
     name: z.string().min(1).max(80),
     provider: z.enum(PROVIDERS).optional().describe('Defaults to codex'),
     cwd: z.string().min(1).optional().describe('Working checkout; defaults to this CLI project directory'),
+    respond_to_mode: z.enum(['owner-only', 'allowlist', 'anyone', 'nobody']).optional()
+      .describe('Which senders\' mailbox messages reach this CLI. Defaults to anyone (today\'s behavior). owner-only/allowlist always implicitly include the lead.'),
+    respond_to_allowlist: z.array(z.string()).optional().describe('Participant names or ids to accept messages from — required when respond_to_mode is allowlist'),
   },
-}, async ({ run_id, name, provider, cwd }) => {
+}, async ({ run_id, name, provider, cwd, respond_to_mode, respond_to_allowlist }) => {
   await requireUnboundBridge('coord_join_run')
   const result = await bindCoordinatorParticipant(await coordinatorRequest('join_run', {
     runId: run_id,
     name,
     provider: provider ?? 'codex',
     cwd: cwd ?? bridgeCwd,
+    respondToMode: respond_to_mode,
+    respondToAllowlist: respond_to_allowlist,
     ...coordinatorNegotiation(),
   }, false))
   return textResult(result)
@@ -1190,15 +1216,19 @@ server.registerTool('coord_remember', {
 })))
 
 server.registerTool('coord_save_role', {
-  description: 'Save a role_name/role_description pairing for reuse across coord_create_task calls (this run and future ones) — invent the persona once, then pass just role_name and it will be filled in automatically.',
+  description: 'Save a role_name/role_description pairing for reuse across coord_create_task calls (this run and future ones) — invent the persona once, then pass just role_name and it will be filled in automatically. Optionally set a suggested provider/model for the role (persona-pack-style default) — surfaced in the task text for whoever claims it; omitting provider/model on an update keeps whatever was set before.',
   inputSchema: {
     name: z.string().min(1).max(80),
     description: z.string().min(1).max(1000),
+    default_provider: z.enum(PROVIDERS).optional().describe('Suggested provider for tasks in this role'),
+    default_model: z.string().min(1).max(200).optional().describe('Suggested model for tasks in this role'),
     request_id: requestIdField,
   },
-}, async ({ name, description, request_id }) => textResult(await coordinatorRequest('save_role', {
+}, async ({ name, description, default_provider, default_model, request_id }) => textResult(await coordinatorRequest('save_role', {
   name,
   description,
+  defaultProvider: default_provider,
+  defaultModel: default_model,
   requestId: request_id,
 })))
 
@@ -1236,6 +1266,17 @@ server.registerTool('coord_review_plan', {
   approved,
   summary,
   detail,
+  requestId: request_id,
+})))
+
+server.registerTool('coord_cancel_turn', {
+  description: 'Lead-only: interrupt a teammate\'s in-flight turn without releasing its owned task. The teammate\'s worker supervisor kills the current turn and starts a fresh one; task ownership and status are untouched. Use this instead of coord_handoff_task when you just want a stuck or looping turn restarted, not the work handed back to the board.',
+  inputSchema: {
+    agent_id: z.string().min(1).describe('Target participant name or id — not yourself.'),
+    request_id: requestIdField,
+  },
+}, async ({ agent_id, request_id }) => textResult(await coordinatorRequest('cancel_turn', {
+  agentId: agent_id,
   requestId: request_id,
 })))
 

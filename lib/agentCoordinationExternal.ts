@@ -1,4 +1,5 @@
 import {
+  cancelExternalProtocolTurn,
   claimExternalProtocolTask,
   completeExternalProtocolTask,
   createExternalProtocolRun,
@@ -12,6 +13,7 @@ import {
   listRunPlaybooks,
   loadRunPlaybook,
   listExternalProtocolRoles,
+  previewExternalProtocolPlaybook,
   publishExternalProtocolFinding,
   queryExternalProtocolContext,
   readExternalProtocolInbox,
@@ -35,6 +37,7 @@ import {
   type ExternalProtocolCapabilities,
   type ExternalProtocolClient,
   type ExternalProtocolIdentity,
+  type ProtocolAgentRespondToMode,
   type ProtocolFailureClass,
   type ProtocolMessageKind,
   type ProtocolMessagePriority,
@@ -64,6 +67,19 @@ function strings(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).map((entry) => entry.trim())
     : []
+}
+
+const RESPOND_TO_MODES = ['owner-only', 'allowlist', 'anyone', 'nobody']
+
+/** Parses the optional respond-to gate from create_run/join_run body fields. Undefined means "not set" (defaults to `anyone` downstream). */
+function respondTo(body: Record<string, unknown>): { mode: ProtocolAgentRespondToMode; allowlist?: string[] } | undefined {
+  const mode = optionalText(body.respondToMode)
+  if (!mode) return undefined
+  if (!RESPOND_TO_MODES.includes(mode)) throw new Error(`Invalid respondToMode: ${mode}`)
+  if (mode === 'allowlist' && strings(body.respondToAllowlist).length === 0) {
+    throw new Error('respondToMode "allowlist" requires a non-empty respondToAllowlist')
+  }
+  return { mode: mode as ProtocolAgentRespondToMode, allowlist: strings(body.respondToAllowlist) }
 }
 
 function identity(body: Record<string, unknown>): ExternalProtocolIdentity {
@@ -109,12 +125,22 @@ function negotiation(body: Record<string, unknown>): {
 export async function executeExternalCoordinatorAction(body: Record<string, unknown>): Promise<unknown> {
   const action = text(body.action)
   const requestId = optionalText(body.requestId)
-  const participantIdentity = ['create_run', 'join_run', 'list_playbooks', 'list_runs'].includes(action) ? null : identity(body)
+  const participantIdentity = ['create_run', 'join_run', 'list_playbooks', 'list_runs', 'preview_playbook'].includes(action) ? null : identity(body)
   const mutate = <T>(operation: () => Promise<T>) => {
     if (!participantIdentity) return operation()
     return runExternalProtocolIdempotent(participantIdentity, action, requestId, operation)
   }
 
+  if (action === 'preview_playbook') {
+    const cwd = text(body.cwd) || process.cwd()
+    const playbookName = optionalText(body.playbookName)
+    return previewExternalProtocolPlaybook({
+      cwd,
+      playbookName,
+      playbook: !playbookName && body.playbook !== undefined ? parseRunPlaybook(body.playbook) : undefined,
+      args: body.args,
+    })
+  }
   if (action === 'create_run') {
     if (!isAgentProvider(body.provider)) throw new Error('Valid provider is required')
     const cwd = text(body.cwd) || process.cwd()
@@ -135,6 +161,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       requirePlanApproval: body.requirePlanApproval === true ? true : undefined,
       playbook,
       playbookArgs: body.args,
+      respondTo: respondTo(body),
     })
   }
   if (action === 'join_run') {
@@ -145,6 +172,7 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       participantName: text(body.name),
       cwd: text(body.cwd) || process.cwd(),
       ...negotiation(body),
+      respondTo: respondTo(body),
     })
   }
   if (action === 'resume') return resumeExternalProtocolParticipant(participantIdentity!, negotiation(body))
@@ -178,6 +206,9 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
       taskId: text(body.taskId),
       reason: optionalText(body.reason),
     }))
+  }
+  if (action === 'cancel_turn') {
+    return mutate(() => cancelExternalProtocolTurn(participantIdentity!, { agentId: text(body.agentId) }))
   }
   if (action === 'read_inbox') {
     return mutate(() => readExternalProtocolInbox(participantIdentity!, {
@@ -252,9 +283,13 @@ export async function executeExternalCoordinatorAction(body: Record<string, unkn
     }))
   }
   if (action === 'save_role') {
+    const defaultProvider = optionalText(body.defaultProvider)
+    if (defaultProvider && !isAgentProvider(defaultProvider)) throw new Error('Invalid defaultProvider')
     return mutate(() => saveExternalProtocolRole(participantIdentity!, {
       name: text(body.name),
       description: text(body.description),
+      defaultProvider: defaultProvider as AgentProvider | undefined,
+      defaultModel: optionalText(body.defaultModel),
     }))
   }
   if (action === 'list_roles') return listExternalProtocolRoles(participantIdentity!)

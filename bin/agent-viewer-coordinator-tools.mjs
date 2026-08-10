@@ -4,6 +4,7 @@
 export const COORDINATOR_MCP_TOOL_NAMES = Object.freeze([
   'coord_list_runs',
   'coord_create_run',
+  'coord_preview_playbook',
   'coord_list_playbooks',
   'coord_save_playbook',
   'coord_join_run',
@@ -27,6 +28,7 @@ export const COORDINATOR_MCP_TOOL_NAMES = Object.freeze([
   'coord_list_roles',
   'coord_submit_plan',
   'coord_review_plan',
+  'coord_cancel_turn',
   'coord_complete_task',
   'coord_fail_task',
   'coord_finalize_run',
