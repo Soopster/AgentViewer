@@ -6158,9 +6158,9 @@ button.av-session-viz-graph-node:disabled {
   padding: 7px 9px;
 }
 .av-coord-task-row.av-selected { border-color: var(--cyan); border-left-color: var(--cyan); box-shadow: inset 3px 0 0 var(--cyan); }
-.av-coord-task-title { display: grid; min-width: 0; gap: 2px; }
+.av-coord-task-title { display: grid; min-width: 0; gap: 2px; overflow: hidden; }
 .av-coord-task-title strong { color: var(--text); font-size: 11px; }
-.av-coord-task-title small { grid-column: auto; color: var(--text-3); font-size: 9px; }
+.av-coord-task-title small { grid-column: auto; overflow: hidden; color: var(--text-3); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .av-coord-provider-name { font: 700 9px "IBM Plex Mono", monospace; }
 .av-coord-task-row > span:last-child { color: var(--text-3); font-size: 9px; text-align: right; }
 .av-coord-task-detail { max-height: 190px; overflow: auto; }
